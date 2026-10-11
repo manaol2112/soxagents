@@ -99,6 +99,18 @@ export function noticeForStatus(status: number, detail: string): string {
   if (status === 409 && detail === "agent key is already in use") {
     return "key";
   }
+  if (
+    status === 409 &&
+    detail === "standard agents are managed by the platform"
+  ) {
+    return "locked";
+  }
+  if (
+    status === 409 &&
+    detail === "agent key is reserved for the standard workforce"
+  ) {
+    return "reserved";
+  }
   if (status === 409 && detail === "agent changed") {
     return "conflict";
   }

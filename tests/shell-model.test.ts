@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  canManageAgents,
   canManageProjects,
   chosenOrganizationId,
   deriveShell,
@@ -106,7 +107,8 @@ describe("workspace shell", () => {
     }
     assert.equal(model.organization.id, organization.id);
     assert.equal(model.selectedProject?.id, project.id);
-    assert.equal(model.section, "overview");
+    // An unknown section falls back to the engagement's home, the agent console.
+    assert.equal(model.section, "console");
   });
 
   it("keeps a requested organization that is in the membership list", () => {
@@ -137,6 +139,10 @@ describe("workspace shell", () => {
     assert.equal(taskStatusChoices("RUNNING").includes("DRAFT"), false);
     assert.equal(canManageProjects("PROJECT_MANAGER"), true);
     assert.equal(canManageProjects("REVIEWER"), false);
+    assert.equal(canManageAgents("OWNER"), true);
+    assert.equal(canManageAgents("ADMIN"), true);
+    assert.equal(canManageAgents("PROJECT_MANAGER"), false);
+    assert.equal(canManageAgents("CONTRIBUTOR"), false);
   });
 
   it("shows an agent that belongs to the organization", () => {

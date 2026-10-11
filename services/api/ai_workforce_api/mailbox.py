@@ -3,6 +3,8 @@
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
+from email.utils import parseaddr
 from typing import Any, Literal, Protocol
 from uuid import UUID, uuid4
 
@@ -22,6 +24,7 @@ _EMAIL = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 _REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,200}$")
 _MOCK_PROVIDERS = frozenset({"", "mock"})
 _METADATA_KEY = re.compile(r"^[a-z][a-z_]{0,40}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class MailboxUnavailable(Exception):
@@ -39,6 +42,7 @@ class AttachmentDraft:
     file_name: str
     content_type: str
     size_bytes: int
+    content_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -51,6 +55,7 @@ class MailMessage:
     recipient: str
     subject: str
     body: str
+    recorded_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +64,7 @@ class MailAttachment:
     file_name: str
     content_type: str
     size_bytes: int
+    content_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -108,6 +114,10 @@ class MailboxProvider(Protocol):
     def search(self, query: str) -> tuple[MailMessage, ...]: ...
 
     def retrieve_attachment(self, attachment_ref: str) -> MailAttachment: ...
+
+    def list_attachments(self, provider_message_id: str) -> tuple[MailAttachment, ...]: ...
+
+    def list_received(self, limit: int) -> tuple[MailMessage, ...]: ...
 
     def receive_notification(
         self, notification_key: str, provider_message_id: str, kind: str
@@ -221,6 +231,12 @@ class UnavailableMailbox:
     def retrieve_attachment(self, attachment_ref: str) -> MailAttachment:
         raise MailboxUnavailable()
 
+    def list_attachments(self, provider_message_id: str) -> tuple[MailAttachment, ...]:
+        raise MailboxUnavailable()
+
+    def list_received(self, limit: int) -> tuple[MailMessage, ...]:
+        raise MailboxUnavailable()
+
     def receive_notification(
         self, notification_key: str, provider_message_id: str, kind: str
     ) -> MailNotification:
@@ -330,20 +346,114 @@ class MockMailbox:
     def retrieve_attachment(self, attachment_ref: str) -> MailAttachment:
         row = self._connection.execute(
             """
-            SELECT attachment_ref, file_name, content_type, size_bytes
+            SELECT attachment_ref, file_name, content_type, size_bytes, content_sha256
             FROM mailbox_attachments
             WHERE project_id = %s AND attachment_ref = %s
             """,
             (self._project_id, attachment_ref),
         ).fetchone()
-        if row is None or not isinstance(row[0], str) or not isinstance(row[3], int):
+        if row is None:
             raise NotVisible()
-        return MailAttachment(
-            attachment_ref=row[0],
-            file_name=str(row[1]),
-            content_type=str(row[2]),
-            size_bytes=row[3],
-        )
+        return _attachment(row)
+
+    def list_attachments(self, provider_message_id: str) -> tuple[MailAttachment, ...]:
+        rows = self._connection.execute(
+            """
+            SELECT a.attachment_ref, a.file_name, a.content_type, a.size_bytes, a.content_sha256
+            FROM mailbox_attachments a
+            JOIN mailbox_messages m
+              ON m.id = a.message_id AND m.project_id = a.project_id
+            WHERE a.project_id = %s AND m.provider_message_id = %s
+            ORDER BY a.created_at, a.id
+            """,
+            (self._project_id, provider_message_id),
+        ).fetchall()
+        return tuple(_attachment(row) for row in rows)
+
+    def list_received(self, limit: int) -> tuple[MailMessage, ...]:
+        rows = self._connection.execute(
+            f"""
+            SELECT {_MESSAGE_COLUMNS}
+            FROM mailbox_messages
+            WHERE project_id = %s AND status = 'RECEIVED'
+            ORDER BY created_at, id
+            LIMIT %s
+            """,
+            (self._project_id, max(1, min(limit, 500))),
+        ).fetchall()
+        return tuple(_message(row) for row in rows)
+
+    def deliver_inbound(
+        self,
+        *,
+        notification_key: str,
+        sender: str,
+        subject: str,
+        body: str,
+        thread_id: str | None,
+        attachments: tuple[AttachmentDraft, ...] = (),
+    ) -> MailMessage:
+        """Simulate mail arriving in the shared mailbox. The content is untrusted."""
+        key = notification_key.strip()
+        clean_sender = " ".join(sender.split())
+        address = parseaddr(clean_sender)[1].strip().lower()
+        clean_subject = " ".join(subject.split())
+        thread = uuid4().hex if thread_id is None or thread_id.strip() == "" else thread_id.strip()
+        if (
+            key == ""
+            or len(key) > 190
+            or len(clean_sender) > 320
+            or _EMAIL.fullmatch(address) is None
+            or address == MOCK_SENDER
+            or len(clean_subject) > 200
+            or len(body) > 200000
+            or len(thread) > 80
+            or len(attachments) > 20
+        ):
+            raise MailboxState("mailbox fields are invalid")
+        for attachment in attachments:
+            _validate_attachment(attachment)
+        idempotency_key = f"inbound:{key}"
+        message = self._by_key(idempotency_key)
+        if message is None:
+            try:
+                with transaction(self._connection) as cursor:
+                    row = cursor.execute(
+                        f"""
+                        INSERT INTO mailbox_messages (
+                            organization_id, project_id, idempotency_key, provider_message_id,
+                            thread_id, status, sender, recipient, subject, body
+                        )
+                        VALUES (%s, %s, %s, %s, %s, 'RECEIVED', %s, %s, %s, %s)
+                        RETURNING {_MESSAGE_COLUMNS}
+                        """,
+                        (
+                            self._organization_id,
+                            self._project_id,
+                            idempotency_key,
+                            f"mock-{uuid4().hex}",
+                            thread,
+                            clean_sender,
+                            MOCK_SENDER,
+                            clean_subject or "(no subject)",
+                            body,
+                        ),
+                    ).fetchone()
+                    if row is None:
+                        raise NotVisible()
+                    message = _message(row)
+                    for attachment in attachments:
+                        _insert_attachment(
+                            cursor, self._organization_id, self._project_id, message.id, attachment
+                        )
+            except UniqueViolation:
+                message = self._by_key(idempotency_key)
+                if message is None:
+                    raise NotVisible() from None
+        if message.status != "RECEIVED":
+            raise MailboxState("mailbox fields are invalid")
+        self.receive_notification(key, message.provider_message_id, "created")
+        return message
 
     def receive_notification(
         self, notification_key: str, provider_message_id: str, kind: str
@@ -444,23 +554,8 @@ class MockMailbox:
                     raise NotVisible()
                 message = _message(row)
                 for attachment in attachments:
-                    cursor.execute(
-                        """
-                        INSERT INTO mailbox_attachments (
-                            organization_id, project_id, message_id, attachment_ref,
-                            file_name, content_type, size_bytes
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            self._organization_id,
-                            self._project_id,
-                            message.id,
-                            attachment.attachment_ref,
-                            attachment.file_name,
-                            attachment.content_type,
-                            attachment.size_bytes,
-                        ),
+                    _insert_attachment(
+                        cursor, self._organization_id, self._project_id, message.id, attachment
                     )
         except UniqueViolation:
             raced = self._by_key(key)
@@ -536,12 +631,58 @@ def _validate_attachment(attachment: AttachmentDraft) -> None:
         or len(attachment.content_type) > 100
         or attachment.size_bytes < 0
         or attachment.size_bytes > 25000000
+        or (
+            attachment.content_sha256 is not None
+            and _SHA256.fullmatch(attachment.content_sha256) is None
+        )
         or contains_secret({"file_name": attachment.file_name})
     ):
         raise MailboxState("mailbox fields are invalid")
 
 
-_MESSAGE_COLUMNS = "id, provider_message_id, thread_id, status, sender, recipient, subject, body"
+def _insert_attachment(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    message_id: UUID,
+    attachment: AttachmentDraft,
+) -> None:
+    cursor.execute(
+        """
+        INSERT INTO mailbox_attachments (
+            organization_id, project_id, message_id, attachment_ref,
+            file_name, content_type, size_bytes, content_sha256
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            organization_id,
+            project_id,
+            message_id,
+            attachment.attachment_ref,
+            attachment.file_name,
+            attachment.content_type,
+            attachment.size_bytes,
+            attachment.content_sha256,
+        ),
+    )
+
+
+def _attachment(row: tuple[object, ...]) -> MailAttachment:
+    if not isinstance(row[0], str) or not isinstance(row[3], int):
+        raise NotVisible()
+    return MailAttachment(
+        attachment_ref=row[0],
+        file_name=str(row[1]),
+        content_type=str(row[2]),
+        size_bytes=row[3],
+        content_sha256=row[4] if isinstance(row[4], str) else None,
+    )
+
+
+_MESSAGE_COLUMNS = (
+    "id, provider_message_id, thread_id, status, sender, recipient, subject, body, created_at"
+)
 
 
 def _message(row: tuple[object, ...]) -> MailMessage:
@@ -556,6 +697,7 @@ def _message(row: tuple[object, ...]) -> MailMessage:
         recipient=str(row[5]),
         subject=str(row[6]),
         body=str(row[7]),
+        recorded_at=row[8] if isinstance(row[8], datetime) else None,
     )
 
 
@@ -570,6 +712,7 @@ def _message_without_body(row: tuple[object, ...]) -> MailMessage:
         recipient=message.recipient,
         subject=message.subject,
         body="",
+        recorded_at=message.recorded_at,
     )
 
 

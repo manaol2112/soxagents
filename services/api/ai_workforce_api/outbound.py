@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from string import Template
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 import psycopg
@@ -32,6 +32,18 @@ from ai_workforce_api.authorization import (
     authorize,
 )
 from ai_workforce_api.db import transaction
+from ai_workforce_api.followups import (
+    REMINDABLE,
+    FollowUpBody,
+    FollowUpState,
+    FollowUpTimer,
+    close_open,
+    lock_follow_up,
+    mark_sent,
+    mark_submitted,
+    read_follow_up,
+    schedule,
+)
 from ai_workforce_api.mailbox import (
     MOCK_SENDER,
     MailboxProvider,
@@ -52,6 +64,7 @@ logger = logging.getLogger(__name__)
 
 MailboxFactory = Callable[[Settings, psycopg.Connection[Any], UUID, UUID], MailboxProvider]
 ACTION_ID = "mail.pbc"
+REMINDER_ACTION_ID = "mail.reminder"
 CLAIM_SECONDS = 120
 _EMAIL = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 _DOMAIN = re.compile(
@@ -95,7 +108,25 @@ PBC_REQUEST = MessageTemplate(
         "Thank you."
     ),
 )
-TEMPLATES: tuple[MessageTemplate, ...] = (PBC_REQUEST,)
+PBC_REMINDER = MessageTemplate(
+    template_id="pbc-reminder",
+    version=1,
+    subject="[$reference] Reminder: Evidence request: $control",
+    body=(
+        "Hello,\n\n"
+        "This is reminder $sequence of $limit for the evidence the audit team for "
+        "$engagement requested.\n\n"
+        "Request: $reference\n"
+        "Control: $control\n"
+        "Due: $due\n\n"
+        "Evidence requested:\n"
+        "$description\n\n"
+        "Please reply to this email with the evidence attached. Keep $reference in the "
+        "subject so your response is matched to this request.\n\n"
+        "If you have already replied, thank you, and you can ignore this reminder."
+    ),
+)
+TEMPLATES: tuple[MessageTemplate, ...] = (PBC_REQUEST, PBC_REMINDER)
 
 
 @dataclass(frozen=True)
@@ -108,6 +139,8 @@ class RenderedMessage:
     content_sha256: str
     request_ref: str
     metadata: dict[str, str]
+    action_id: str = ACTION_ID
+    thread_id: str | None = None
 
     def parameters(self) -> dict[str, str]:
         return {
@@ -138,6 +171,12 @@ class SubmitResult(BaseModel):
     preview: OutboundPreview
 
 
+class ReminderSubmitResult(BaseModel):
+    follow_up: FollowUpBody
+    approval: ApprovalBody
+    preview: OutboundPreview
+
+
 class SendBody(BaseModel):
     approval_id: UUID
 
@@ -146,6 +185,8 @@ class OutboundBody(BaseModel):
     id: UUID
     pbc_request_id: UUID
     approval_id: UUID
+    kind: Literal["request", "reminder"]
+    follow_up_id: UUID | None
     template_id: str
     template_version: int
     recipient: str
@@ -163,7 +204,10 @@ class OutboundBody(BaseModel):
 
 
 def register_outbound(
-    app: FastAPI, settings: Settings, mailbox: MailboxFactory = open_mailbox
+    app: FastAPI,
+    settings: Settings,
+    mailbox: MailboxFactory = open_mailbox,
+    timer: FollowUpTimer | None = None,
 ) -> None:
     base = "/organizations/{organization_id}/projects/{project_id}"
 
@@ -215,6 +259,54 @@ def register_outbound(
                 request_id,
                 body.approval_id,
                 mailbox,
+                timer,
+            ),
+        )
+
+    @app.post(f"{base}/pbc-requests/{{request_id}}/follow-ups/{{follow_up_id}}/submit")
+    def submit_follow_up(
+        organization_id: UUID,
+        project_id: UUID,
+        request_id: UUID,
+        follow_up_id: UUID,
+        request: Request,
+    ) -> ReminderSubmitResult:
+        principal = _session_principal(request)
+        return _run(
+            settings,
+            lambda connection: submit_reminder(
+                connection,
+                settings,
+                principal,
+                organization_id,
+                project_id,
+                request_id,
+                follow_up_id,
+            ),
+        )
+
+    @app.post(f"{base}/pbc-requests/{{request_id}}/follow-ups/{{follow_up_id}}/send")
+    def send_follow_up(
+        organization_id: UUID,
+        project_id: UUID,
+        request_id: UUID,
+        follow_up_id: UUID,
+        body: SendBody,
+        request: Request,
+    ) -> OutboundBody:
+        principal = _session_principal(request)
+        return _run(
+            settings,
+            lambda connection: send_reminder(
+                connection,
+                settings,
+                principal,
+                organization_id,
+                project_id,
+                request_id,
+                follow_up_id,
+                body.approval_id,
+                mailbox,
             ),
         )
 
@@ -232,7 +324,7 @@ def register_outbound(
 def _run[T](settings: Settings, work: Callable[[psycopg.Connection[Any]], T]) -> T:
     try:
         return _call(settings, work)
-    except (OutboundState, ApprovalState, PbcState) as error:
+    except (OutboundState, ApprovalState, PbcState, FollowUpState) as error:
         raise HTTPException(status_code=409, detail=error.detail) from None
     except ValueError as error:
         raise HTTPException(status_code=422, detail="outbound fields are invalid") from error
@@ -240,20 +332,8 @@ def _run[T](settings: Settings, work: Callable[[psycopg.Connection[Any]], T]) ->
 
 def render(request: PbcBody, engagement: str) -> RenderedMessage:
     template = PBC_REQUEST
-    reference = f"PBC-{request.id.hex[-8:].upper()}"
-    due = request.due_at.astimezone(UTC)
-    values = {
-        "reference": reference,
-        "control": request.control_ref.strip()[:120],
-        "engagement": " ".join(engagement.split())[:200] or "this engagement",
-        "due": f"{due.day} {due:%B %Y}",
-        "description": request.evidence_description.strip(),
-    }
-    subject = Template(template.subject).substitute(values)
-    body = Template(template.body).substitute(values)
+    reference, subject, body = _compose(template, request, engagement, {})
     recipient = request.recipient.strip()
-    if len(subject) > 200 or len(body) > 4000:
-        raise ValueError("message is too long")
     digest = hashlib.sha256(f"{recipient}\n{subject}\n{body}".encode()).hexdigest()
     return RenderedMessage(
         template=template,
@@ -269,6 +349,62 @@ def render(request: PbcBody, engagement: str) -> RenderedMessage:
             "template": f"{template.template_id}.v{template.version}",
         },
     )
+
+
+def render_reminder(
+    request: PbcBody, engagement: str, follow_up_id: UUID, sequence: int
+) -> RenderedMessage:
+    """Reminders reply in the request's thread so the recipient sees one conversation."""
+    if request.thread_id is None:
+        raise ValueError("request has no thread")
+    template = PBC_REMINDER
+    reference, subject, body = _compose(
+        template,
+        request,
+        engagement,
+        {"sequence": str(sequence), "limit": str(max(sequence, request.max_follow_ups))},
+    )
+    recipient = request.recipient.strip()
+    digest = hashlib.sha256(f"{recipient}\n{subject}\n{body}".encode()).hexdigest()
+    version = f"{template.template_id}-v{template.version}"
+    return RenderedMessage(
+        template=template,
+        recipient=recipient,
+        subject=subject,
+        body=body,
+        reference=reference,
+        content_sha256=digest,
+        request_ref=f"pbc/{request.id}/{version}/{follow_up_id}/{digest[:16]}",
+        metadata={
+            "request_id": str(request.id),
+            "request_reference": reference,
+            "template": f"{template.template_id}.v{template.version}",
+            "follow_up_id": str(follow_up_id),
+            "follow_up_sequence": str(sequence),
+        },
+        action_id=REMINDER_ACTION_ID,
+        thread_id=request.thread_id,
+    )
+
+
+def _compose(
+    template: MessageTemplate, request: PbcBody, engagement: str, extra: dict[str, str]
+) -> tuple[str, str, str]:
+    reference = f"PBC-{request.id.hex[-8:].upper()}"
+    due = request.due_at.astimezone(UTC)
+    values = {
+        "reference": reference,
+        "control": request.control_ref.strip()[:120],
+        "engagement": " ".join(engagement.split())[:200] or "this engagement",
+        "due": f"{due.day} {due:%B %Y}",
+        "description": request.evidence_description.strip(),
+        **extra,
+    }
+    subject = Template(template.subject).substitute(values)
+    body = Template(template.body).substitute(values)
+    if len(subject) > 200 or len(body) > 4000:
+        raise ValueError("message is too long")
+    return reference, subject, body
 
 
 def recipient_allowed(settings: Settings, recipient: str) -> bool:
@@ -371,6 +507,7 @@ def send_request(
     request_id: UUID,
     approval_id: UUID,
     mailbox: MailboxFactory = open_mailbox,
+    timer: FollowUpTimer | None = None,
 ) -> OutboundBody:
     """Commit the outbound record before the provider is called."""
     authorize(
@@ -380,11 +517,123 @@ def send_request(
         organization_id=organization_id,
         project_id=project_id,
     )
+    result = _send_once(
+        connection,
+        settings,
+        principal,
+        organization_id,
+        project_id,
+        approval_id,
+        mailbox,
+        lambda: _record(
+            connection, settings, principal, organization_id, project_id, request_id, approval_id
+        ),
+        lambda current: current.pbc_request_id == request_id and current.follow_up_id is None,
+    )
+    if result.status == "ACCEPTED":
+        schedule(timer, organization_id, project_id, request_id)
+    return result
+
+
+def submit_reminder(
+    connection: psycopg.Connection[Any],
+    settings: Settings,
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    request_id: UUID,
+    follow_up_id: UUID,
+) -> ReminderSubmitResult:
+    authorize(
+        connection,
+        principal=principal,
+        action=Action.TASK_UPDATE,
+        organization_id=organization_id,
+        project_id=project_id,
+    )
+    pbc = _read_pbc(connection, organization_id, project_id, request_id)
+    if pbc.status not in REMINDABLE:
+        raise OutboundState("request is not open")
+    follow_up = read_follow_up(connection, organization_id, project_id, request_id, follow_up_id)
+    if follow_up.status != "DUE":
+        raise OutboundState("reminder is not due")
+    message = render_reminder(
+        pbc, _engagement(connection, organization_id, project_id), follow_up.id, follow_up.sequence
+    )
+    if not recipient_allowed(settings, message.recipient):
+        raise OutboundState("recipient is not allowed")
+    approval = _request(
+        connection,
+        principal,
+        organization_id,
+        project_id,
+        ApprovalCreate(action_id=REMINDER_ACTION_ID, parameters=message.parameters()),
+    )
+    updated = mark_submitted(
+        connection, organization_id, project_id, principal.id, follow_up, approval.id
+    )
+    return ReminderSubmitResult(
+        follow_up=updated, approval=approval, preview=_preview_body(settings, message)
+    )
+
+
+def send_reminder(
+    connection: psycopg.Connection[Any],
+    settings: Settings,
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    request_id: UUID,
+    follow_up_id: UUID,
+    approval_id: UUID,
+    mailbox: MailboxFactory = open_mailbox,
+) -> OutboundBody:
+    authorize(
+        connection,
+        principal=principal,
+        action=Action.TASK_UPDATE,
+        organization_id=organization_id,
+        project_id=project_id,
+    )
+    return _send_once(
+        connection,
+        settings,
+        principal,
+        organization_id,
+        project_id,
+        approval_id,
+        mailbox,
+        lambda: _record_reminder(
+            connection,
+            settings,
+            principal,
+            organization_id,
+            project_id,
+            request_id,
+            follow_up_id,
+            approval_id,
+        ),
+        lambda current: (
+            current.pbc_request_id == request_id and current.follow_up_id == follow_up_id
+        ),
+    )
+
+
+def _send_once(
+    connection: psycopg.Connection[Any],
+    settings: Settings,
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    approval_id: UUID,
+    mailbox: MailboxFactory,
+    record: Callable[[], OutboundBody | None],
+    matches: Callable[[OutboundBody], bool],
+) -> OutboundBody:
+    """One approval owns one outbound record. A repeat call resumes or returns it."""
     current = _by_approval(connection, organization_id, project_id, approval_id)
     if current is None:
-        current = _record(
-            connection, settings, principal, organization_id, project_id, request_id, approval_id
-        )
+        current = record()
         if current is not None:
             connection.commit()
             return _deliver(
@@ -393,9 +642,53 @@ def send_request(
         current = _by_approval(connection, organization_id, project_id, approval_id)
         if current is None:
             raise NotVisible()
-    if current.pbc_request_id != request_id:
+    if not matches(current):
         raise OutboundState("approval does not match")
     return _resume(connection, settings, principal, organization_id, project_id, current, mailbox)
+
+
+def _record_reminder(
+    connection: psycopg.Connection[Any],
+    settings: Settings,
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    request_id: UUID,
+    follow_up_id: UUID,
+    approval_id: UUID,
+) -> OutboundBody | None:
+    try:
+        with transaction(connection) as cursor:
+            pbc = _lock_pbc(cursor, organization_id, project_id, request_id)
+            if pbc.status not in REMINDABLE:
+                raise OutboundState("request is not open")
+            follow_up = lock_follow_up(
+                cursor, organization_id, project_id, request_id, follow_up_id
+            )
+            if follow_up.status != "APPROVAL_PENDING" or follow_up.approval_id != approval_id:
+                raise OutboundState("reminder is not awaiting approval")
+            message = render_reminder(
+                pbc,
+                _engagement(connection, organization_id, project_id),
+                follow_up.id,
+                follow_up.sequence,
+            )
+            if not recipient_allowed(settings, message.recipient):
+                raise OutboundState("recipient is not allowed")
+            digest = _lock_approval(cursor, organization_id, project_id, approval_id, message)
+            _require_policy(connection, principal, organization_id, project_id, message)
+            return _insert(
+                cursor,
+                organization_id,
+                project_id,
+                principal.id,
+                request_id,
+                approval_id,
+                digest,
+                message,
+            )
+    except UniqueViolation:
+        return None
 
 
 def _record(
@@ -417,42 +710,64 @@ def _record(
                 raise OutboundState("recipient is not allowed")
             digest = _lock_approval(cursor, organization_id, project_id, approval_id, message)
             _require_policy(connection, principal, organization_id, project_id, message)
-            row = cursor.execute(
-                f"""
-                INSERT INTO outbound_messages (
-                    organization_id, project_id, pbc_request_id, approval_id, actor_user_id,
-                    operation_key, template_id, template_version, recipient, subject,
-                    content_sha256, metadata, claimed_until
-                )
-                VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    clock_timestamp() + make_interval(secs => %s)
-                )
-                RETURNING {_COLUMNS}
-                """,
-                (
-                    organization_id,
-                    project_id,
-                    request_id,
-                    approval_id,
-                    principal.id,
-                    digest,
-                    message.template.template_id,
-                    message.template.version,
-                    message.recipient,
-                    message.subject,
-                    message.content_sha256,
-                    Json(message.metadata),
-                    CLAIM_SECONDS,
-                ),
-            ).fetchone()
-            if row is None:
-                raise NotVisible()
-            recorded = _outbound(row)
-            _audit(cursor, organization_id, project_id, principal.id, recorded, "outbound.recorded")
-            return recorded
+            return _insert(
+                cursor,
+                organization_id,
+                project_id,
+                principal.id,
+                request_id,
+                approval_id,
+                digest,
+                message,
+            )
     except UniqueViolation:
         return None
+
+
+def _insert(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    actor_id: UUID,
+    request_id: UUID,
+    approval_id: UUID,
+    digest: str,
+    message: RenderedMessage,
+) -> OutboundBody:
+    row = cursor.execute(
+        f"""
+        INSERT INTO outbound_messages (
+            organization_id, project_id, pbc_request_id, approval_id, actor_user_id,
+            operation_key, template_id, template_version, recipient, subject,
+            content_sha256, metadata, claimed_until
+        )
+        VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+            clock_timestamp() + make_interval(secs => %s)
+        )
+        RETURNING {_COLUMNS}
+        """,
+        (
+            organization_id,
+            project_id,
+            request_id,
+            approval_id,
+            actor_id,
+            digest,
+            message.template.template_id,
+            message.template.version,
+            message.recipient,
+            message.subject,
+            message.content_sha256,
+            Json(message.metadata),
+            CLAIM_SECONDS,
+        ),
+    ).fetchone()
+    if row is None:
+        raise NotVisible()
+    recorded = _outbound(row)
+    _audit(cursor, organization_id, project_id, actor_id, recorded, "outbound.recorded")
+    return recorded
 
 
 def _resume(
@@ -466,13 +781,12 @@ def _resume(
 ) -> OutboundBody:
     if current.status not in _OPEN:
         return current
-    pbc = _read_pbc(connection, organization_id, project_id, current.pbc_request_id)
     _require_policy(
         connection,
         principal,
         organization_id,
         project_id,
-        render(pbc, _engagement(connection, organization_id, project_id)),
+        _message_for(connection, organization_id, project_id, current),
     )
     with transaction(connection) as cursor:
         row = cursor.execute(
@@ -529,17 +843,15 @@ def _deliver(
                     connection, principal, organization_id, project_id, outbound, "approval_expired"
                 )
             attempts = min(attempts + 1, 10)
-        message = _verified(connection, organization_id, project_id, outbound)
+        message, code = _verified(connection, organization_id, project_id, outbound)
         if message is None:
-            return _fail(
-                connection, principal, organization_id, project_id, outbound, "invalid_message"
-            )
+            return _fail(connection, principal, organization_id, project_id, outbound, code)
         sent = provider.send(
             idempotency_key=key,
             recipient=message.recipient,
             subject=message.subject,
             body=message.body,
-            thread_id=None,
+            thread_id=message.thread_id,
             metadata={**message.metadata, "outbound_id": str(outbound.id)},
         )
     except MailboxUnavailable:
@@ -588,20 +900,40 @@ def _finish(
             message.thread_id,
         )
         _settle(cursor, organization_id, project_id, principal.id, updated, "SUCCEEDED", None)
-        row = cursor.execute(
-            """
-            UPDATE pbc_requests
-            SET status = 'SENT', outbound_message_id = %s, thread_id = %s,
-                updated_at = clock_timestamp(), version = version + 1
-            WHERE id = %s AND project_id = %s AND status = 'APPROVAL_PENDING'
-            RETURNING id
-            """,
-            (message.provider_message_id, message.thread_id, outbound.pbc_request_id, project_id),
-        ).fetchone()
-        if row is not None:
-            _pbc_audit(
-                cursor, organization_id, project_id, principal.id, outbound.pbc_request_id, "SENT"
+        if outbound.follow_up_id is not None:
+            mark_sent(
+                cursor,
+                organization_id,
+                project_id,
+                principal.id,
+                outbound.follow_up_id,
+                outbound.id,
             )
+        else:
+            row = cursor.execute(
+                """
+                UPDATE pbc_requests
+                SET status = 'SENT', outbound_message_id = %s, thread_id = %s,
+                    updated_at = clock_timestamp(), version = version + 1
+                WHERE id = %s AND project_id = %s AND status = 'APPROVAL_PENDING'
+                RETURNING id
+                """,
+                (
+                    message.provider_message_id,
+                    message.thread_id,
+                    outbound.pbc_request_id,
+                    project_id,
+                ),
+            ).fetchone()
+            if row is not None:
+                _pbc_audit(
+                    cursor,
+                    organization_id,
+                    project_id,
+                    principal.id,
+                    outbound.pbc_request_id,
+                    "SENT",
+                )
         _audit(cursor, organization_id, project_id, principal.id, updated, "outbound.updated")
     return updated
 
@@ -618,6 +950,29 @@ def _fail(
         updated = _update(cursor, outbound, "FAILED", code, outbound.attempt_count, None, None)
         reason = "live_email_disabled" if code == "live_email_disabled" else "not_available"
         _settle(cursor, organization_id, project_id, principal.id, updated, "REFUSED", reason)
+        if outbound.follow_up_id is not None:
+            if code == "request_resolved":
+                close_open(
+                    cursor,
+                    organization_id,
+                    project_id,
+                    principal.id,
+                    outbound.follow_up_id,
+                    "CANCELLED",
+                    "request_resolved",
+                    outbound.id,
+                )
+            else:
+                close_open(
+                    cursor,
+                    organization_id,
+                    project_id,
+                    principal.id,
+                    outbound.follow_up_id,
+                    "FAILED",
+                    "approval_expired" if code == "approval_expired" else "delivery_failed",
+                    outbound.id,
+                )
         _audit(cursor, organization_id, project_id, principal.id, updated, "outbound.updated")
     return updated
 
@@ -728,8 +1083,10 @@ def _lock_approval(
     if row is None or not isinstance(row[1], str):
         raise NotVisible()
     agent_id = row[2] if isinstance(row[2], UUID) else None
-    digest = payload_hash(organization_id, project_id, ACTION_ID, agent_id, message.parameters())
-    if row[0] != ACTION_ID or row[1] != digest:
+    digest = payload_hash(
+        organization_id, project_id, message.action_id, agent_id, message.parameters()
+    )
+    if row[0] != message.action_id or row[1] != digest:
         raise OutboundState("approval does not match")
     if row[5] is True:
         raise OutboundState("approval has expired")
@@ -754,10 +1111,26 @@ def _require_policy(
     message: RenderedMessage,
 ) -> None:
     decision = evaluate(
-        connection, principal, organization_id, project_id, ACTION_ID, message.parameters()
+        connection, principal, organization_id, project_id, message.action_id, message.parameters()
     )
     if decision.decision != "ALLOW":
         raise OutboundState("action is not allowed")
+
+
+def _message_for(
+    connection: psycopg.Connection[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    outbound: OutboundBody,
+) -> RenderedMessage:
+    pbc = _read_pbc(connection, organization_id, project_id, outbound.pbc_request_id)
+    engagement = _engagement(connection, organization_id, project_id)
+    if outbound.follow_up_id is None:
+        return render(pbc, engagement)
+    follow_up = read_follow_up(
+        connection, organization_id, project_id, outbound.pbc_request_id, outbound.follow_up_id
+    )
+    return render_reminder(pbc, engagement, follow_up.id, follow_up.sequence)
 
 
 def _verified(
@@ -765,15 +1138,22 @@ def _verified(
     organization_id: UUID,
     project_id: UUID,
     outbound: OutboundBody,
-) -> RenderedMessage | None:
-    pbc = _read_pbc(connection, organization_id, project_id, outbound.pbc_request_id)
+) -> tuple[RenderedMessage | None, str]:
+    """Re-render right before the provider call. A resolved request is never reminded."""
+    if outbound.follow_up_id is not None:
+        pbc = _read_pbc(connection, organization_id, project_id, outbound.pbc_request_id)
+        follow_up = read_follow_up(
+            connection, organization_id, project_id, outbound.pbc_request_id, outbound.follow_up_id
+        )
+        if pbc.status not in REMINDABLE or follow_up.status != "APPROVAL_PENDING":
+            return None, "request_resolved"
     try:
-        message = render(pbc, _engagement(connection, organization_id, project_id))
+        message = _message_for(connection, organization_id, project_id, outbound)
     except ValueError:
-        return None
+        return None, "invalid_message"
     if message.content_sha256 != _content(connection, outbound.id):
-        return None
-    return message
+        return None, "invalid_message"
+    return message, ""
 
 
 def _content(connection: psycopg.Connection[Any], outbound_id: UUID) -> str:
@@ -905,10 +1285,13 @@ def _outbound(row: tuple[Any, ...]) -> OutboundBody:
     if not isinstance(row[0], UUID) or not isinstance(row[7], str):
         raise NotVisible()
     metadata = row[12] if isinstance(row[12], dict) else {}
+    follow_up = metadata.get("follow_up_id")
     return OutboundBody(
         id=row[0],
         pbc_request_id=row[1],
         approval_id=row[2],
+        kind="reminder" if row[3] == PBC_REMINDER.template_id else "request",
+        follow_up_id=UUID(follow_up) if isinstance(follow_up, str) else None,
         template_id=str(row[3]),
         template_version=int(row[4]),
         recipient=str(row[5]),

@@ -11,9 +11,15 @@ export type IconName =
   | "clock"
   | "grid"
   | "inbox"
+  | "info"
+  | "logo"
+  | "mail"
+  | "plus"
   | "risk"
   | "shield"
   | "sparkles"
+  | "table"
+  | "upload"
   | "x";
 
 const PATHS: Record<IconName, ReactNode> = {
@@ -60,6 +66,25 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z" />
     </>
   ),
+  info: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5M12 8h.01" />
+    </>
+  ),
+  logo: (
+    <>
+      <path d="M12 3 4.5 7.5v9L12 21l7.5-4.5v-9L12 3Z" />
+      <path d="m8.5 12 2.5 2.5 4.5-5" />
+    </>
+  ),
+  mail: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="m4 7 8 6 8-6" />
+    </>
+  ),
+  plus: <path d="M12 5v14M5 12h14" />,
   shield: (
     <>
       <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" />
@@ -67,6 +92,13 @@ const PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   x: <path d="M18 6 6 18M6 6l12 12" />,
+  table: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M3 10h18M3 15h18M9 10v10" />
+    </>
+  ),
+  upload: <path d="M12 15V4m-5 5 5-5 5 5M4 20h16" />,
   risk: (
     <>
       <path d="M12 3 2.8 19h18.4L12 3Z" />

@@ -16,6 +16,8 @@ import {
   deliveryLabel,
   evidenceNoticeFor,
   evidenceWrite,
+  inboundNoticeFor,
+  inboundWrite,
   isLateEvidence,
   latestOutbound,
   outboundNoticeFor,
@@ -24,8 +26,10 @@ import {
   parseDecisionNotice,
   parseEvidence,
   parseEvidenceNotice,
+  parseInbound,
   parseMailboxMode,
   parseOutbound,
+  parseWorkforce,
   pendingApprovals,
   readyToSend,
 } from "../apps/web/src/workflow-model.ts";
@@ -432,5 +436,183 @@ describe("outbound evidence requests", () => {
     );
     assert.equal(outboundNoticeFor("send", 0, "", ""), "unavailable");
     assert.equal(parseEvidenceNotice("uncertain"), "uncertain");
+  });
+});
+
+const inboundId = "44444444-4444-7444-8444-444444444444";
+const replyRequestId = "55555555-5555-7555-8555-555555555555";
+
+function reply(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: inboundId,
+    pbc_request_id: replyRequestId,
+    suggested_pbc_request_id: null,
+    request_reference: "PBC-55555555",
+    match_status: "MATCHED",
+    match_method: "thread",
+    unmatched_reason: "",
+    review_state: "NEEDS_REVIEW",
+    untrusted: true,
+    sender: "owner@client.example",
+    subject: "RE: Evidence request",
+    body_text: "<b>not markup</b>",
+    body_truncated: false,
+    content_redacted: false,
+    attachments: [
+      {
+        id: "77777777-7777-7777-8777-777777777777",
+        file_name: "listing.csv",
+        content_type: "text/csv",
+        size_bytes: 2048,
+        content_sha256: null,
+      },
+    ],
+    received_at: "2026-10-10T11:00:00Z",
+    triage_reason: "",
+    triaged_at: null,
+    reviewed_at: null,
+    version: 1,
+    ...extra,
+  };
+}
+
+describe("inbound replies", () => {
+  it("parses replies only when the API marks them untrusted", () => {
+    const [parsed] = parseInbound([reply()]) ?? [];
+    assert.equal(parsed?.requestId, replyRequestId);
+    assert.equal(parsed?.bodyText, "<b>not markup</b>");
+    assert.deepEqual(parsed?.attachments, [
+      {
+        id: "77777777-7777-7777-8777-777777777777",
+        fileName: "listing.csv",
+        contentType: "text/csv",
+        sizeBytes: 2048,
+      },
+    ]);
+    assert.equal(parseInbound([reply({ untrusted: false })]), null);
+    assert.equal(parseInbound([reply({ untrusted: undefined })]), null);
+    assert.equal(parseInbound([reply({ match_status: "AUTO" })]), null);
+    assert.equal(parseInbound([reply({ attachments: [{}] })]), null);
+    assert.equal(parseInbound({}), null);
+  });
+
+  it("puts unmatched mail and replies to review in the queue", () => {
+    const items =
+      parseInbound([
+        reply(),
+        reply({
+          id: "66666666-6666-7666-8666-666666666666",
+          pbc_request_id: null,
+          request_reference: null,
+          match_status: "UNMATCHED",
+          match_method: "none",
+          unmatched_reason: "sender_mismatch",
+          review_state: "NOT_APPLICABLE",
+        }),
+        reply({
+          id: "77777777-7777-7777-8777-777777777777",
+          review_state: "REVIEWED",
+        }),
+      ]) ?? [];
+    const queue = attentionQueue({
+      tasks: [],
+      evidence: [],
+      approvals: [],
+      now,
+      inbound: items,
+    });
+    assert.deepEqual(
+      queue.map((item) => item.kind),
+      ["triage", "reply"],
+    );
+    assert.match(
+      queue[0]?.detail ?? "",
+      /sender is not the request's recipient/,
+    );
+  });
+
+  it("builds triage and review writes from form fields", () => {
+    const fields = {
+      organization_id: organizationId,
+      project_id: projectId,
+      inbound_id: inboundId,
+      version: "2",
+    };
+    assert.deepEqual(inboundWrite({ ...fields, intent: "review" }), {
+      organizationId,
+      projectId,
+      intent: "review",
+      path: `/organizations/${organizationId}/projects/${projectId}/inbound-messages/${inboundId}/review`,
+      body: { version: 2 },
+    });
+    const assign = inboundWrite({
+      ...fields,
+      intent: "assign",
+      reason: " Owner's delegate ",
+      pbc_request_id: replyRequestId,
+    });
+    assert.ok(!("error" in assign));
+    assert.deepEqual(assign.body, {
+      version: 2,
+      reason: "Owner's delegate",
+      pbc_request_id: replyRequestId,
+    });
+    for (const bad of [
+      { ...fields, intent: "assign", reason: "x" },
+      { ...fields, intent: "dismiss", reason: "" },
+      { ...fields, intent: "dismiss", reason: "password: hunter2" },
+      { ...fields, intent: "delete", reason: "x" },
+      { ...fields, intent: "review", version: "0" },
+      { ...fields, intent: "review", inbound_id: "../approvals" },
+    ]) {
+      assert.deepEqual(inboundWrite(bad), { error: "invalid" });
+    }
+  });
+
+  it("maps API results to notices", () => {
+    assert.equal(inboundNoticeFor("assign", 200), "reply-assigned");
+    assert.equal(inboundNoticeFor("dismiss", 200), "reply-dismissed");
+    assert.equal(inboundNoticeFor("review", 200), "reply-reviewed");
+    assert.equal(inboundNoticeFor("review", 409), "reply-changed");
+    assert.equal(inboundNoticeFor("assign", 403), "denied");
+    assert.equal(inboundNoticeFor("assign", 0), "unavailable");
+    assert.equal(parseEvidenceNotice("reply-reviewed"), "reply-reviewed");
+  });
+});
+
+describe("standard workforce", () => {
+  const worker = {
+    agent_key: "itgc-access-tester",
+    name: "ITGC tester: access",
+    role: "Tests logical access controls",
+    description: "Tests user provisioning.",
+    allowed_tool_ids: ["file.read", "workpaper.update"],
+    model_tier: "standard",
+    installed: true,
+    definition_id: "88888888-8888-7888-8888-888888888888",
+    definition_status: "ACTIVE",
+    staffed: true,
+  };
+
+  it("parses the roster and rejects malformed workers", () => {
+    const parsed = parseWorkforce({ roster_version: 1, workers: [worker] });
+    assert.equal(parsed?.workers[0]?.tools.length, 2);
+    assert.equal(parsed?.workers[0]?.staffed, true);
+    assert.equal(parsed?.workers[0]?.definitionStatus, "ACTIVE");
+    assert.equal(
+      parseWorkforce({
+        roster_version: 1,
+        workers: [{ ...worker, staffed: "yes" }],
+      }),
+      null,
+    );
+    assert.equal(
+      parseWorkforce({
+        roster_version: 1,
+        workers: [{ ...worker, allowed_tool_ids: [1] }],
+      }),
+      null,
+    );
+    assert.equal(parseWorkforce({ workers: [] }), null);
   });
 });

@@ -11,7 +11,7 @@ help:
 	@echo "make toolchain  Show pinned Node.js, pnpm, Python, and uv versions"
 	@echo "make check      Fail if the local toolchain does not match the pins"
 	@echo "make install    Install locked dependencies with pnpm and uv"
-	@echo "make start      Start PostgreSQL and Temporal, then migrate"
+	@echo "make start      Start PostgreSQL, Temporal, and MinIO, then migrate"
 	@echo "make migrate    Apply SQL migrations without deleting data"
 	@echo "make stop       Stop PostgreSQL without deleting data"
 	@echo "make status     Show Compose service status"
@@ -88,8 +88,8 @@ lint:
 
 typecheck:
 	uv run mypy
-	pnpm exec tsc --noEmit
-	pnpm exec tsc -p apps/web/tsconfig.json --noEmit
+	pnpm exec tsc --noEmit --incremental false
+	pnpm exec tsc -p apps/web/tsconfig.json --noEmit --incremental false
 
 api: require-env
 	set -a && . ./.env && set +a && uv run --package ai-workforce-api uvicorn ai_workforce_api.main:app --host 127.0.0.1 --port 8000
@@ -99,7 +99,7 @@ web:
 
 test: migrate
 	set -a && . ./.env && set +a && uv run pytest
-	pnpm exec node --test tests/smoke.test.ts tests/shell-model.test.ts tests/project-form.test.ts tests/agent-form.test.ts tests/task-form.test.ts tests/directory.test.ts tests/workflow-model.test.ts
+	pnpm exec node --test tests/smoke.test.ts tests/shell-model.test.ts tests/project-form.test.ts tests/agent-form.test.ts tests/task-form.test.ts tests/directory.test.ts tests/workflow-model.test.ts tests/follow-ups.test.ts tests/format.test.ts tests/routes.test.ts tests/onboarding-model.test.ts tests/draft-model.test.ts tests/engagement-model.test.ts tests/analysis-model.test.ts tests/testing-model.test.ts tests/console-model.test.ts
 	$(COMPOSE) exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -c "SELECT 1"'
 
 ci: lint typecheck test

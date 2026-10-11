@@ -37,4 +37,6 @@ Review the app registration, the admin consent, and the application access polic
 
 `EMAIL_LIVE_SEND_ENABLED` stays `false`. `GET /health` reports `live_email_enabled: false` even when the flag and the Graph values are all set. `GET /mailbox/configuration` reports whether the four Graph values are present. It does not return the mailbox address, the tenant id, the application id, or the secret. A signed-in caller can read that status. An anonymous caller cannot.
 
+`EMAIL_MOCK_INBOUND_ENABLED` lets a team member simulate inbound mail in the mock mailbox for local testing. It has no effect with any other provider.
+
 `EMAIL_ALLOWED_RECIPIENT_DOMAINS` optionally limits evidence requests to a comma-separated list of exact recipient domains. The shared mailbox can never be a recipient. See `docs/pbc.md` for how requests are sent and tracked.

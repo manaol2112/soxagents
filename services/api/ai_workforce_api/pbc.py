@@ -21,6 +21,7 @@ from ai_workforce_api.authorization import (
     authorize,
 )
 from ai_workforce_api.db import transaction
+from ai_workforce_api.followups import REMINDABLE, cancel_open
 from ai_workforce_api.settings import Settings
 
 PbcStatus = str
@@ -393,6 +394,8 @@ def _update(
             raise PbcState("pbc request changed")
         updated = _body(row)
         _audit(cursor, organization_id, project_id, principal.id, updated.id, status)
+        if status not in REMINDABLE:
+            cancel_open(cursor, organization_id, project_id, principal.id, updated.id)
     return updated
 
 

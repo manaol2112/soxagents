@@ -44,6 +44,22 @@ services:
       start_period: 20s
     restart: "no"
 
+  minio:
+    image: quay.io/minio/aistor/minio:RELEASE.2026-09-19T17-05-25Z
+    container_name: ai-workforce-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-local-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-local-minio-secret}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    restart: "no"
+
 volumes:
   postgres_data:
     name: ai_workforce_postgres_data
+  minio_data:
+    name: ai_workforce_minio_data

@@ -69,12 +69,24 @@ class SecretMaterial(Exception):
     """The definition includes a secret value."""
 
 
+class AgentLocked(Exception):
+    """A standard worker is managed by the platform. Only its status can change."""
+
+
+class AgentReserved(Exception):
+    """The key belongs to a standard worker."""
+
+
+AgentSource = Literal["custom", "standard"]
+
+
 class AgentSummaryBody(BaseModel):
     id: UUID
     agent_key: str
     name: str
     role: str
     status: str
+    source: AgentSource = "custom"
 
 
 class AgentDetailBody(BaseModel):
@@ -92,6 +104,7 @@ class AgentDetailBody(BaseModel):
     time_budget_seconds: int
     status: str
     version: int
+    source: AgentSource = "custom"
 
 
 class AgentFields(BaseModel):
@@ -206,10 +219,10 @@ def list_agents(
     )
     rows = connection.execute(
         """
-        SELECT id, agent_key, name, role, status::text
+        SELECT id, agent_key, name, role, status::text, source
         FROM agent_definitions
         WHERE organization_id = %s
-        ORDER BY agent_key
+        ORDER BY source DESC, agent_key
         """,
         (organization_id,),
     ).fetchall()
@@ -243,6 +256,7 @@ def create_agent(
         action=Action.AGENT_UPDATE,
         organization_id=organization_id,
     )
+    _reject_reserved(connection, body.agent_key)
     with transaction(connection) as cursor:
         try:
             cursor.execute(
@@ -283,7 +297,7 @@ def update_agent(
     with transaction(connection) as cursor:
         cursor.execute(
             """
-            SELECT status::text
+            SELECT status::text, source, agent_key
             FROM agent_definitions
             WHERE id = %s AND organization_id = %s
             FOR UPDATE
@@ -295,6 +309,12 @@ def update_agent(
             raise NotVisible()
         if body.status not in _TRANSITIONS.get(current[0], frozenset()):
             raise AgentStateError()
+        if current[1] == "standard":
+            return _update_standard_status(
+                connection, cursor, principal, organization_id, agent_id, body, current[0]
+            )
+        if body.agent_key != current[2]:
+            _reject_reserved(connection, body.agent_key)
         try:
             cursor.execute(
                 """
@@ -341,6 +361,69 @@ def update_agent(
             revised[0],
         )
     return _load_detail(connection, organization_id, agent_id)
+
+
+def _update_standard_status(
+    connection: psycopg.Connection[Any],
+    cursor: psycopg.Cursor[Any],
+    principal: Principal,
+    organization_id: UUID,
+    agent_id: UUID,
+    body: AgentUpdateBody,
+    previous: str,
+) -> AgentDetailBody:
+    """An admin may switch a standard worker off or on. Nothing else about it changes."""
+    current = _load_detail(connection, organization_id, agent_id)
+    if _fields_of(current) != _fields_of(body):
+        raise AgentLocked()
+    cursor.execute(
+        """
+        UPDATE agent_definitions
+        SET status = %s, revision = revision + 1, version = version + 1,
+            updated_at = clock_timestamp()
+        WHERE id = %s AND organization_id = %s AND version = %s
+        RETURNING revision
+        """,
+        (body.status, agent_id, organization_id, body.version),
+    )
+    revised = cursor.fetchone()
+    if revised is None or not isinstance(revised[0], int):
+        raise AgentVersionError()
+    _audit(
+        cursor,
+        organization_id,
+        principal.id,
+        agent_id,
+        _update_action(previous, body.status),
+        body.status,
+        revised[0],
+    )
+    return current.model_copy(
+        update={"status": body.status, "revision": revised[0], "version": body.version + 1}
+    )
+
+
+def _fields_of(value: AgentFields | AgentDetailBody) -> tuple[Any, ...]:
+    return (
+        value.agent_key,
+        value.name,
+        value.role,
+        value.description,
+        value.input_schema,
+        value.output_schema,
+        value.allowed_tool_ids,
+        value.model_config_ref,
+        value.max_iterations,
+        value.time_budget_seconds,
+    )
+
+
+def _reject_reserved(connection: psycopg.Connection[Any], agent_key: str) -> None:
+    row = connection.execute(
+        "SELECT 1 FROM standard_agents WHERE agent_key = %s", (agent_key.strip(),)
+    ).fetchone()
+    if row is not None:
+        raise AgentReserved()
 
 
 def _update_action(previous: str, status: str) -> str:
@@ -403,7 +486,7 @@ def _load_detail(
         """
         SELECT id, agent_key, name, role, description, revision, input_schema, output_schema,
                allowed_tool_ids, model_config_ref, max_iterations, time_budget_seconds,
-               status::text, version
+               status::text, version, source
         FROM agent_definitions
         WHERE id = %s AND organization_id = %s
         """,
@@ -415,7 +498,7 @@ def _load_detail(
 
 
 def _summary(row: tuple[Any, ...]) -> AgentSummaryBody:
-    agent_id, agent_key, name, role, status = row
+    agent_id, agent_key, name, role, status, source = row
     if (
         not isinstance(agent_id, UUID)
         or not isinstance(agent_key, str)
@@ -424,7 +507,14 @@ def _summary(row: tuple[Any, ...]) -> AgentSummaryBody:
         or not isinstance(status, str)
     ):
         raise NotVisible()
-    return AgentSummaryBody(id=agent_id, agent_key=agent_key, name=name, role=role, status=status)
+    return AgentSummaryBody(
+        id=agent_id,
+        agent_key=agent_key,
+        name=name,
+        role=role,
+        status=status,
+        source="standard" if source == "standard" else "custom",
+    )
 
 
 def _detail(row: tuple[Any, ...]) -> AgentDetailBody:
@@ -443,6 +533,7 @@ def _detail(row: tuple[Any, ...]) -> AgentDetailBody:
         time_budget_seconds,
         status,
         version,
+        source,
     ) = row
     if (
         not isinstance(agent_id, UUID)
@@ -477,6 +568,7 @@ def _detail(row: tuple[Any, ...]) -> AgentDetailBody:
         time_budget_seconds=time_budget_seconds,
         status=status,
         version=version,
+        source="standard" if source == "standard" else "custom",
     )
 
 
@@ -506,6 +598,14 @@ def _run[T](settings: Settings, work: Callable[[psycopg.Connection[Any]], T]) ->
         raise HTTPException(status_code=409, detail="agent key is already in use") from None
     except AgentVersionError:
         raise HTTPException(status_code=409, detail="agent changed") from None
+    except AgentLocked:
+        raise HTTPException(
+            status_code=409, detail="standard agents are managed by the platform"
+        ) from None
+    except AgentReserved:
+        raise HTTPException(
+            status_code=409, detail="agent key is reserved for the standard workforce"
+        ) from None
     except ValueError:
         raise HTTPException(status_code=422, detail="agent fields are invalid") from None
     return result

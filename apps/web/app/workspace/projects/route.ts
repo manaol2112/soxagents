@@ -54,6 +54,20 @@ export async function POST(request: Request) {
   } catch {
     status = 0;
   }
+  if (
+    fields.intent === "create" &&
+    (status === 200 || status === 201) &&
+    projectId !== null &&
+    projectId !== ""
+  ) {
+    // A new engagement goes straight into guided setup.
+    const setup = new URL("/", request.url);
+    setup.searchParams.set("section", "setup");
+    setup.searchParams.set("organization", write.organizationId);
+    setup.searchParams.set("project", projectId);
+    setup.searchParams.set("step", "scope");
+    return NextResponse.redirect(setup, 303);
+  }
   return redirectNotice(
     request,
     write.organizationId,
