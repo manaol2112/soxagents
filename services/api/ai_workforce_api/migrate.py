@@ -121,6 +121,15 @@ def main() -> None:
         print("applied " + ", ".join(applied))
     else:
         print("migrations are current")
+    # The standard workforce is part of every deploy, so no firm sets it up by hand.
+    from ai_workforce_api.workforce import sync_standard_workforce
+
+    with psycopg.connect(settings.database_url, connect_timeout=3) as connection:
+        result = sync_standard_workforce(connection)
+    print(
+        f"standard workforce: {result.roster_workers} workers, {result.installed} installed, "
+        f"{result.updated} updated, {result.retired} retired, {result.staffed} staffed"
+    )
 
 
 if __name__ == "__main__":

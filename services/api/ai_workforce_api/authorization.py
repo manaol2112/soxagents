@@ -130,7 +130,6 @@ _ROLE_ACTIONS: dict[Role, frozenset[Action]] = {
             Action.TASK_READ,
             Action.TASK_UPDATE,
             Action.AGENT_READ,
-            Action.AGENT_UPDATE,
         }
     ),
     Role.REVIEWER: frozenset(

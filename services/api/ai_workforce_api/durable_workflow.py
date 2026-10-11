@@ -90,6 +90,161 @@ class DurableEffectWorkflow:
         return outcome
 
 
+class FollowUpRequest(TypedDict):
+    organization_id: str
+    project_id: str
+    request_id: str
+
+
+FOLLOW_UP_MIN_SECONDS = 60
+FOLLOW_UP_MAX_SECONDS = 86400
+FOLLOW_UP_LOOPS = 200
+
+
+@workflow.defn(name="pbc_follow_up")
+class FollowUpWorkflow:
+    """Keeps time for one PBC request. The database decides whether a reminder is due."""
+
+    @workflow.run
+    async def run(self, payload: FollowUpRequest) -> str:
+        for _ in range(FOLLOW_UP_LOOPS):
+            seconds = await workflow.execute_activity(
+                "advance_follow_up",
+                args=[
+                    payload["organization_id"],
+                    payload["project_id"],
+                    payload["request_id"],
+                    workflow.now().isoformat(),
+                ],
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_interval=timedelta(minutes=10)),
+            )
+            if not isinstance(seconds, int):
+                raise ApplicationError("follow-up fields are invalid", non_retryable=True)
+            if seconds < 0:
+                return "DONE"
+            wait = min(max(seconds, FOLLOW_UP_MIN_SECONDS), FOLLOW_UP_MAX_SECONDS)
+            await workflow.sleep(timedelta(seconds=wait))
+        workflow.continue_as_new(payload)
+
+
 def _rejected(error: ActivityError) -> bool:
     cause = error.cause
     return isinstance(cause, ApplicationError) and cause.type == "NonRetryableEffect"
+
+
+class DraftRequest(TypedDict):
+    draft_id: str
+
+
+DRAFT_ATTEMPTS = 3
+
+
+class ScanRequest(TypedDict):
+    import_id: str
+
+
+@workflow.defn(name="rcm_system_scan")
+class RcmSystemScanWorkflow:
+    """Identifies the systems in one uploaded RCM, with retries."""
+
+    @workflow.run
+    async def run(self, payload: ScanRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "scan_rcm_systems",
+                args=[payload["import_id"]],
+                start_to_close_timeout=timedelta(minutes=4),
+                retry_policy=RetryPolicy(
+                    maximum_attempts=DRAFT_ATTEMPTS, maximum_interval=timedelta(minutes=2)
+                ),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_rcm_system_scan",
+                args=[payload["import_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
+class AnalysisRequest(TypedDict):
+    analysis_id: str
+
+
+@workflow.defn(name="evidence_analysis")
+class EvidenceAnalysisWorkflow:
+    """Reads and classifies one stored evidence file, with retries."""
+
+    @workflow.run
+    async def run(self, payload: AnalysisRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "analyze_evidence_file",
+                args=[payload["analysis_id"]],
+                start_to_close_timeout=timedelta(minutes=8),
+                retry_policy=RetryPolicy(
+                    maximum_attempts=DRAFT_ATTEMPTS, maximum_interval=timedelta(minutes=2)
+                ),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_evidence_analysis",
+                args=[payload["analysis_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
+class TurnRequest(TypedDict):
+    message_id: str
+
+
+@workflow.defn(name="console_turn")
+class ConsoleTurnWorkflow:
+    """Answers one message in the agent console, with one retry."""
+
+    @workflow.run
+    async def run(self, payload: TurnRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "answer_console_turn",
+                args=[payload["message_id"]],
+                start_to_close_timeout=timedelta(minutes=10),
+                retry_policy=RetryPolicy(maximum_attempts=2),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_console_turn",
+                args=[payload["message_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
+@workflow.defn(name="pbc_draft")
+class PbcDraftWorkflow:
+    """Drafts one evidence request, with retries. The database decides whether to draft."""
+
+    @workflow.run
+    async def run(self, payload: DraftRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "draft_pbc_request",
+                args=[payload["draft_id"]],
+                start_to_close_timeout=timedelta(minutes=4),
+                retry_policy=RetryPolicy(
+                    maximum_attempts=DRAFT_ATTEMPTS, maximum_interval=timedelta(minutes=2)
+                ),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_pbc_draft",
+                args=[payload["draft_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)

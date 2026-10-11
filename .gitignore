@@ -12,6 +12,8 @@ secrets/
 
 # Private client evidence and local fixtures
 evidence/
+# Application code, not client evidence. Keep exceptions this narrow.
+!apps/web/app/workspace/evidence/
 private/
 **/client-evidence/
 tests/fixtures/private/

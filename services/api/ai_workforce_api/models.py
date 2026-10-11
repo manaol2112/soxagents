@@ -44,6 +44,8 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
     "audit-model": ModelConfig("audit-model", "local", "local", 0, 0),
     "local": ModelConfig("local", "local", "local", 0, 0),
 }
+# The single tool a structured generation must answer through.
+OUTPUT_TOOL = "record_output"
 
 
 class ModelTimeout(Exception):
@@ -69,6 +71,14 @@ class ToolProposal:
 
 
 @dataclass(frozen=True)
+class ModelImage:
+    """One image for a provider that reads images. PNG or JPEG bytes."""
+
+    media_type: Literal["image/png", "image/jpeg"]
+    data: bytes
+
+
+@dataclass(frozen=True)
 class ModelRequest:
     operation: ModelOperation
     prompt: str
@@ -76,6 +86,10 @@ class ModelRequest:
     allowed_tool_ids: tuple[str, ...]
     timeout_seconds: int
     cancelled: bool
+    system: str = ""
+    # Shown to the model before the prompt. Only callers that are allowed to send images
+    # to the provider set this.
+    images: tuple[ModelImage, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -90,6 +104,45 @@ class ModelProvider(Protocol):
     """One model provider. A live provider is not included."""
 
     def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw: ...
+
+
+# A conversation with tools, for the agent console. The provider proposes tool calls;
+# the caller decides which run. Messages are provider-neutral:
+#   {"role": "user" | "assistant", "content": [block, ...]}
+# where a block is {"type": "text", "text"}, {"type": "tool_call", "id", "name",
+# "arguments"}, or {"type": "tool_result", "id", "content", "is_error"}.
+
+
+@dataclass(frozen=True)
+class ChatTool:
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ChatReply:
+    text: str
+    tool_calls: tuple[ToolCall, ...]
+    input_tokens: int
+    output_tokens: int
+
+
+class ChatProvider(Protocol):
+    def converse(
+        self,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: tuple[ChatTool, ...],
+        timeout_seconds: int,
+    ) -> ChatReply: ...
 
 
 class LocalModelProvider:
@@ -211,6 +264,41 @@ def _provider_for(settings: Settings) -> ModelProvider:
     return UnavailableModelProvider()
 
 
+def complete(
+    provider: ModelProvider, request: ModelRequest, config: ModelConfig
+) -> tuple[str, ModelRaw]:
+    """Run one generation and name its outcome. A malformed answer is the caller's call."""
+    status, raw = _complete(provider, request, config)
+    if status == "SUCCEEDED" and request.operation == "generate":
+        if raw.output is None or not _matches(request.output_schema, raw.output):
+            return "MALFORMED", raw
+    return status, raw
+
+
+def record_call(
+    connection: psycopg.Connection[Any],
+    actor_id: UUID,
+    organization_id: UUID,
+    project_id: UUID,
+    model_config_ref: str,
+    status: str,
+    raw: ModelRaw,
+    config: ModelConfig,
+) -> UUID:
+    """Record a model call made for a person, such as drafting after their kickoff."""
+    return _record_for(
+        connection,
+        actor_id,
+        organization_id,
+        project_id,
+        model_config_ref,
+        "generate",
+        status,
+        raw,
+        config,
+    )
+
+
 def _create(
     connection: psycopg.Connection[Any],
     provider: ModelProvider,
@@ -325,6 +413,30 @@ def _record(
     raw: ModelRaw,
     config: ModelConfig,
 ) -> UUID:
+    return _record_for(
+        connection,
+        principal.id,
+        organization_id,
+        project_id,
+        model_config_ref,
+        operation,
+        status,
+        raw,
+        config,
+    )
+
+
+def _record_for(
+    connection: psycopg.Connection[Any],
+    actor_id: UUID,
+    organization_id: UUID,
+    project_id: UUID,
+    model_config_ref: str,
+    operation: str,
+    status: str,
+    raw: ModelRaw,
+    config: ModelConfig,
+) -> UUID:
     with transaction(connection) as cursor:
         cursor.execute(
             """
@@ -338,7 +450,7 @@ def _record(
             (
                 organization_id,
                 project_id,
-                principal.id,
+                actor_id,
                 model_config_ref,
                 operation,
                 status,
@@ -360,7 +472,7 @@ def _record(
             (
                 organization_id,
                 project_id,
-                principal.id,
+                actor_id,
                 row[0],
                 Json({"status": status}),
             ),

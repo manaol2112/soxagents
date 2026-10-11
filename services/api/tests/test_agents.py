@@ -107,12 +107,17 @@ def test_reviewer_can_read_and_cannot_change_definitions(migrated: Database) -> 
         json=_definition("other-agent"),
     )
     assert denied.status_code == 403
+    # Custom agents are an admin decision. A project manager assigns agents to tasks
+    # and can read definitions, but cannot create or change them.
     manager_client = _client(migrated, manager)
     managed = manager_client.post(
         f"/organizations/{seeded['organization_id']}/agents",
         json=_definition("pbc-chaser"),
     )
-    assert managed.status_code == 201
+    assert managed.status_code == 403
+    assert (
+        manager_client.get(f"/organizations/{seeded['organization_id']}/agents").status_code == 200
+    )
 
 
 def test_secret_values_duplicate_keys_and_other_tenants_are_rejected(migrated: Database) -> None:

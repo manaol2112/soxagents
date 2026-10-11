@@ -1,10 +1,16 @@
 export const SECTIONS = [
+  "console",
   "overview",
   "projects",
   "agents",
   "tasks",
   "evidence",
   "approvals",
+  "setup",
+  "controls",
+  "plan",
+  "timeline",
+  "deficiencies",
 ] as const;
 
 export type SectionId = (typeof SECTIONS)[number];
@@ -59,12 +65,15 @@ export type ProjectDetail = {
   activity: ProjectActivity[];
 };
 
+export type AgentSource = "custom" | "standard";
+
 export type AgentSummary = {
   id: string;
   agentKey: string;
   name: string;
   role: string;
   status: string;
+  source: AgentSource;
 };
 
 export type AgentDetail = {
@@ -82,6 +91,7 @@ export type AgentDetail = {
   timeBudgetSeconds: number;
   status: string;
   version: number;
+  source: AgentSource;
 };
 
 export type ProjectNotice =
@@ -101,7 +111,11 @@ export type AgentNotice =
   | "status"
   | "denied"
   | "unavailable"
-  | "secret";
+  | "secret"
+  | "locked"
+  | "reserved"
+  | "ocr-saved"
+  | "ocr-changed";
 
 export type TaskSummary = {
   id: string;
@@ -279,7 +293,12 @@ export function deriveShell(snapshot: WorkspaceSnapshot): ShellModel {
     projects.find((item) => item.id === snapshot.requestedProjectId) ??
     projects[0] ??
     null;
-  const section = parseSection(snapshot.requestedSection);
+  const requested = parseSection(snapshot.requestedSection);
+  // The console works inside an engagement. Without one, the firm overview opens.
+  const section =
+    requested === "console" && selectedProject === null
+      ? "overview"
+      : requested;
   const agents = loadAgents(section, snapshot);
   if (agents === "denied") {
     return { status: "denied" };
@@ -349,7 +368,7 @@ export function canManageProjects(role: string): boolean {
 }
 
 export function canManageAgents(role: string): boolean {
-  return role === "OWNER" || role === "ADMIN" || role === "PROJECT_MANAGER";
+  return role === "OWNER" || role === "ADMIN";
 }
 
 const TASK_STATUS_CHOICES: Record<string, string[]> = {
@@ -605,7 +624,11 @@ function parseAgentNotice(value: string | null): AgentNotice | null {
     value === "status" ||
     value === "denied" ||
     value === "unavailable" ||
-    value === "secret"
+    value === "secret" ||
+    value === "locked" ||
+    value === "reserved" ||
+    value === "ocr-saved" ||
+    value === "ocr-changed"
   ) {
     return value;
   }
@@ -815,6 +838,7 @@ export function parseAgents(value: unknown): AgentSummary[] | null {
       name: item.name,
       role: item.role,
       status: item.status,
+      source: item.source === "standard" ? "standard" : "custom",
     });
   }
   return agents;
@@ -863,6 +887,7 @@ export function parseAgentDetail(value: unknown): AgentDetail | null {
     timeBudgetSeconds: value.time_budget_seconds,
     status: value.status,
     version: value.version,
+    source: value.source === "standard" ? "standard" : "custom",
   };
 }
 
@@ -1001,11 +1026,18 @@ function parseSection(value: string | null): SectionId {
     value === "tasks" ||
     value === "evidence" ||
     value === "approvals" ||
-    value === "overview"
+    value === "setup" ||
+    value === "controls" ||
+    value === "plan" ||
+    value === "timeline" ||
+    value === "deficiencies" ||
+    value === "overview" ||
+    value === "console"
   ) {
     return value;
   }
-  return "overview";
+  // An engagement opens on the agent console.
+  return "console";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

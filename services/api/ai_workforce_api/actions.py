@@ -91,14 +91,14 @@ CATALOG: tuple[ActionType, ...] = (
     ),
     ActionType(
         "mail.reminder",
-        "Send reminder",
+        "Send PBC reminder",
         Action.TASK_UPDATE,
         "MODERATE",
         "PROJECT",
         (
             ActionField("recipient", "email", 200),
             ActionField("subject", "text", 200),
-            ActionField("thread_ref", "reference", 200),
+            ActionField("request_ref", "reference", 200),
         ),
     ),
     ActionType(

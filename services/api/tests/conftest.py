@@ -17,6 +17,7 @@ def workflow_address_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MODEL_PROVIDER", "")
     monkeypatch.setenv("MODEL_API_KEY", "")
     monkeypatch.setenv("MODEL_NAME", "")
+    monkeypatch.setenv("LOCAL_WORKER_ENABLED", "false")
 
 
 @pytest.fixture

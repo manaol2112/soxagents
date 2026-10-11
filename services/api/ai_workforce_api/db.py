@@ -25,6 +25,20 @@ def transaction(connection: psycopg.Connection[Any]) -> Iterator[psycopg.Cursor[
             yield cursor
 
 
+def independent_steps(connection: psycopg.Connection[Any]) -> None:
+    """Commit each transaction block on its own, for background jobs.
+
+    A connection opens a transaction as soon as it is used, so a later transaction
+    block would only be a savepoint and hold its locks until the connection closes.
+    A background job claims work, calls a model for up to a minute or two, then writes:
+    each step must commit by itself, so the claim is visible and no row stays locked
+    while the model works.
+    """
+    if not connection.autocommit:
+        connection.commit()
+        connection.autocommit = True
+
+
 def require_one_row(cursor: psycopg.Cursor[Any]) -> None:
     if cursor.rowcount != 1:
         raise ConcurrentUpdateError("expected exactly one row to change")

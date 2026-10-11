@@ -56,7 +56,9 @@ Every other business table belongs to an `organizations` row. Project-scoped row
 | `approvals` | pending project + requester + payload hash | One decision. Parameters and hash stay bound. Execution status moves once from `NOT_STARTED` to `SUCCEEDED` or `REFUSED` |
 | `action_executions` | project + payload hash | One recorded outcome. The row does not change |
 | `mailbox_messages` | project + idempotency key | Immutable mock message. Status is `DRAFT` or `ACCEPTED`, never delivered |
-| `mailbox_attachments` | project + attachment reference | Immutable metadata. File bytes are not stored |
+| `mailbox_attachments` | project + attachment reference | Immutable metadata. Bytes live in an evidence file, not on this row |
+| `evidence_files` | one inbound attachment | Immutable custody record. The object key is generated, and the hash is checked on download |
+| `mock_objects` | object key | Immutable bytes for the mock store. Unused while S3 settings are set |
 | `mailbox_notifications` | project + notification key | Immutable. A repeated key returns the first notice |
 | `pbc_requests` | project + operation key | One evidence request. Status follows the transitions in [pbc.md](pbc.md). A change does not send email |
 | `audit_events` | row id | Immutable. Updates, deletes, and truncates are rejected |

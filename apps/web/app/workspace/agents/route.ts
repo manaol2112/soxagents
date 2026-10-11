@@ -18,14 +18,14 @@ export async function POST(request: Request) {
       request,
       fields.organization_id ?? "",
       fields.project_id ?? "",
-      fields.agent_id ?? "",
+      fields.agent_id ?? (fields.intent === "create" ? "new" : ""),
       write.error === "secret" ? "secret" : "invalid",
     );
   }
   const session = sessionToken((await cookies()).get("aw_session")?.value);
   let status = 0;
   let detail = "";
-  let agentId = write.agentId ?? "";
+  let agentId = write.agentId ?? (fields.intent === "create" ? "new" : "");
   try {
     const headers = new Headers({ "content-type": "application/json" });
     if (session !== undefined) {

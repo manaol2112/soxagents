@@ -23,8 +23,8 @@ from ai_workforce_api.policy import evaluate
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.tasks import TaskCreateBody, create_task
 
-MAIL = frozenset({"mail.draft", "mail.reminder", "mail.external"})
-TEMPLATED = frozenset({"mail.pbc"})
+MAIL = frozenset({"mail.draft", "mail.external"})
+TEMPLATED = frozenset({"mail.pbc", "mail.reminder"})
 UNAVAILABLE = frozenset({"workpaper.update", "report.finalize"})
 
 
