@@ -1,0 +1,20 @@
+[project]
+name = "ai-workforce-api"
+version = "0.0.0"
+description = "AI Employee Workforce API"
+requires-python = ">=3.14.8,<3.15"
+dependencies = [
+    "fastapi==0.143.0",
+    "msal==1.39.0",
+    "psycopg[binary]==3.3.6",
+    "pydantic-settings==2.15.0",
+    "temporalio==1.34.0",
+    "uvicorn==0.54.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ai_workforce_api"]

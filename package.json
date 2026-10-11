@@ -1,0 +1,16 @@
+{
+  "name": "ai-workforce",
+  "version": "0.0.0",
+  "private": true,
+  "description": "AI Employee Workforce platform",
+  "packageManager": "pnpm@12.10.1",
+  "engines": {
+    "node": "24.21.0"
+  },
+  "type": "module",
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "24.19.1",
+    "typescript": "7.0.2"
+  }
+}

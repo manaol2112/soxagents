@@ -1,0 +1,62 @@
+# Credentials and local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets/
+.secrets/
+
+# Private client evidence and local fixtures
+evidence/
+private/
+**/client-evidence/
+tests/fixtures/private/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage/
+
+# Node
+node_modules/
+package-lock.json
+yarn.lock
+dist/
+build/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test and browser artifacts
+test-results/
+playwright-report/
+blob-report/
+junit.xml
+
+# Local infrastructure data
+.docker-data/
+tmp/
+*.log
+
+# OS and editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
