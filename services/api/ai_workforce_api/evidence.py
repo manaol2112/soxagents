@@ -1,6 +1,5 @@
 """Store inbound attachment bytes. The record is the chain of custody, not a workpaper."""
 
-import asyncio
 import re
 from collections.abc import Callable
 from datetime import datetime
@@ -25,14 +24,20 @@ from ai_workforce_api.db import transaction
 from ai_workforce_api.evidence_analysis import (
     EvidenceAnalysisScheduler,
     queue_analysis,
-    schedule_analyses,
 )
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import ObjectStore, StoreError, digest_of, open_store
 
 MAX_BYTES = 25_000_000
+EMAIL_EVIDENCE_REFUSED = (
+    "evidence is not taken from email; the owner uploads it through the secure link in the request"
+)
 _NAME = re.compile(r"[^A-Za-z0-9._-]")
 StoreFactory = Callable[[Settings, psycopg.Connection[Any]], ObjectStore]
+
+
+# The most text a preview shows of a spreadsheet or document.
+READING_LIMIT = 200_000
 
 
 class EvidenceState(Exception):
@@ -42,7 +47,7 @@ class EvidenceState(Exception):
 
 class EvidenceFileBody(BaseModel):
     id: UUID
-    mailbox_attachment_id: UUID
+    mailbox_attachment_id: UUID | None
     content_sha256: str
     size_bytes: int
     content_type: str
@@ -69,30 +74,16 @@ def register_evidence(
         )
 
     @app.post(f"{base}/mailbox-attachments/{{attachment_id}}/content")
-    async def store_file(
+    def store_file(
         organization_id: UUID,
         project_id: UUID,
         attachment_id: UUID,
         request: Request,
     ) -> EvidenceFileBody:
-        content = await request.body()
-        principal = _session_principal(request)
-        stored, queued = _run(
-            settings,
-            lambda connection: _store(
-                connection,
-                store(settings, connection),
-                principal,
-                organization_id,
-                project_id,
-                attachment_id,
-                content,
-            ),
-        )
-        # The evidence coordinator reads the new file in the background. Scheduling may
-        # start its own event loop, so it runs off this one.
-        await asyncio.to_thread(schedule_analyses, analyses, [] if queued is None else [queued])
-        return stored
+        # Milestone 8.12: evidence comes in only through the owner's secure upload link.
+        # An attachment on a reply is kept with the reply but never becomes evidence.
+        _session_principal(request)
+        raise HTTPException(status_code=409, detail=EMAIL_EVIDENCE_REFUSED)
 
     @app.get(f"{base}/evidence-files/{{file_id}}/content")
     def download(
@@ -118,6 +109,96 @@ def register_evidence(
                 "X-Content-Type-Options": "nosniff",
             },
         )
+
+    @app.get(f"{base}/evidence-files/{{file_id}}/preview")
+    def preview(
+        organization_id: UUID, project_id: UUID, file_id: UUID, request: Request
+    ) -> Response:
+        """A PDF or image to show in the page. Anything else is downloaded instead."""
+        principal = _session_principal(request)
+        stored, content = _run(
+            settings,
+            lambda connection: _download(
+                connection,
+                store(settings, connection),
+                principal,
+                organization_id,
+                project_id,
+                file_id,
+            ),
+        )
+        media = preview_type(content)
+        if media is None:
+            raise HTTPException(status_code=415, detail="this file cannot be previewed")
+        return Response(
+            content=content,
+            media_type=media,
+            headers={
+                "Content-Disposition": f'inline; filename="{_filename(stored.file_name)}"',
+                "X-Content-Type-Options": "nosniff",
+                # Shown, never run: no scripts, forms, or requests from the file.
+                "Content-Security-Policy": "sandbox; default-src 'none'; img-src data:",
+                "Cache-Control": "private, no-store",
+            },
+        )
+
+    @app.get(f"{base}/evidence-files/{{file_id}}/reading")
+    def reading(
+        organization_id: UUID, project_id: UUID, file_id: UUID, request: Request
+    ) -> ReadingBody:
+        """The text read from a file, for previewing a spreadsheet or document."""
+        principal = _session_principal(request)
+
+        def work(connection: psycopg.Connection[Any]) -> ReadingBody:
+            authorize(
+                connection,
+                principal=principal,
+                action=Action.TASK_READ,
+                organization_id=organization_id,
+                project_id=project_id,
+            )
+            stored = _by_id(connection, organization_id, project_id, file_id)
+            row = connection.execute(
+                "SELECT status, extracted_text FROM evidence_analyses WHERE evidence_file_id = %s",
+                (file_id,),
+            ).fetchone()
+            text = "" if row is None or row[1] is None else str(row[1])
+            return ReadingBody(
+                file_id=stored.id,
+                file_name=stored.file_name,
+                status=None if row is None else str(row[0]),
+                text=text[:READING_LIMIT],
+                truncated=len(text) > READING_LIMIT,
+            )
+
+        return _run(settings, work)
+
+
+# What a preview may show, by the file's own bytes, never its declared type.
+_PREVIEW_TYPES: tuple[tuple[bytes, str], ...] = (
+    (b"%PDF-", "application/pdf"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+
+
+def preview_type(content: bytes) -> str | None:
+    for magic, media in _PREVIEW_TYPES:
+        if content.startswith(magic):
+            return media
+    if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+class ReadingBody(BaseModel):
+    file_id: UUID
+    file_name: str
+    status: str | None
+    text: str
+    truncated: bool
 
 
 def _run[T](settings: Settings, work: Callable[[psycopg.Connection[Any]], T]) -> T:

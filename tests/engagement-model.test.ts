@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-
+import { groupHeadline } from "../apps/web/src/controls-register-model.ts";
 import {
   byApplication,
   byArea,
@@ -10,11 +10,19 @@ import {
   engagementNoticeFor,
   engagementWrite,
   filterControls,
+  filterOptions,
+  hasDraftInput,
   inQueue,
+  instanceLabel,
+  lifecycle,
+  openPhases,
+  type Phase,
   parseControls,
   parseDashboard,
   parseDeficiencies,
   parsePlan,
+  phaseOf,
+  recordAction,
   timelineMonths,
   timelinePercent,
 } from "../apps/web/src/engagement-model.ts";
@@ -273,6 +281,47 @@ describe("engagement workspace model", () => {
     assert.equal(engagementNoticeFor("phase", 0), "unavailable");
   });
 
+  it("lets the agent draft only from read evidence or signed-off testing", () => {
+    const files = {
+      files: [],
+      applications: [],
+      reviews: [],
+      analyses: [],
+    };
+    const analysis = (status: "PENDING" | "READY", fileId: string) =>
+      ({ status, fileId }) as unknown as (typeof files.analyses)[number];
+    const mine = [{ id: "f1" }] as unknown as typeof files.files;
+    assert.equal(hasDraftInput({ sheetStatus: null }, null), false);
+    assert.equal(hasDraftInput({ sheetStatus: "OPEN" }, files), false);
+    assert.equal(
+      hasDraftInput(
+        { sheetStatus: null },
+        { ...files, files: mine, analyses: [analysis("PENDING", "f1")] },
+      ),
+      false,
+    );
+    // Another control's read file is not this control's evidence.
+    assert.equal(
+      hasDraftInput(
+        { sheetStatus: null },
+        { ...files, files: mine, analyses: [analysis("READY", "f2")] },
+      ),
+      false,
+    );
+    assert.equal(
+      hasDraftInput(
+        { sheetStatus: null },
+        {
+          ...files,
+          files: mine,
+          analyses: [analysis("PENDING", "f2"), analysis("READY", "f1")],
+        },
+      ),
+      true,
+    );
+    assert.equal(hasDraftInput({ sheetStatus: "SIGNED_OFF" }, null), true);
+  });
+
   it("filters the register by type, stage, and text", () => {
     const row = (overrides: Partial<ControlRow>): ControlRow => ({
       ...(parseControls([{ id: "x" }])?.[0] as ControlRow),
@@ -291,6 +340,7 @@ describe("engagement workspace model", () => {
         controlRef: "OTC-01",
         category: "business",
         stage: "TESTING",
+        progress: "AGENT_TESTING",
         ownerName: "Dana",
       }),
     ];
@@ -300,7 +350,10 @@ describe("engagement workspace model", () => {
       ["a"],
     );
     assert.deepEqual(
-      filterControls(rows, { ...filters, stage: "TESTING" }).map((r) => r.id),
+      // The status filter is the stage the API works out for each control.
+      filterControls(rows, { ...filters, stage: ["AGENT_TESTING"] }).map(
+        (r) => r.id,
+      ),
       ["b"],
     );
     assert.deepEqual(
@@ -311,6 +364,55 @@ describe("engagement workspace model", () => {
       filterControls(rows, { ...filters, query: "dana" }).map((r) => r.id),
       ["b"],
     );
+    // Application, area, owner, and key control narrow the register too; "" means
+    // no application or the PBC coordinator.
+    const more = [
+      row({
+        id: "c",
+        applicationName: "SAP ERP",
+        area: "Logical access",
+        keyControl: true,
+        ownerName: "Dana",
+      }),
+      row({
+        id: "d",
+        applicationName: "",
+        area: "Entity level",
+        keyControl: false,
+        ownerName: "",
+        ownerEmail: "",
+      }),
+      row({
+        id: "e",
+        applicationName: "Workday",
+        area: "Logical access",
+        keyControl: true,
+        ownerName: "",
+        ownerEmail: "lee@client.example",
+      }),
+    ];
+    const ids = (overrides: Partial<typeof filters>) =>
+      filterControls(more, { ...filters, ...overrides }).map((r) => r.id);
+    assert.deepEqual(ids({ application: ["SAP ERP"] }), ["c"]);
+    assert.deepEqual(ids({ application: [""] }), ["d"]);
+    // Several values of one filter widen it; different filters narrow together.
+    assert.deepEqual(ids({ application: ["SAP ERP", ""] }), ["c", "d"]);
+    assert.deepEqual(ids({ area: ["Logical access"] }), ["c", "e"]);
+    assert.deepEqual(ids({ owner: [""] }), ["d"]);
+    assert.deepEqual(ids({ owner: ["lee@client.example"] }), ["e"]);
+    assert.deepEqual(ids({ keyOnly: true, application: ["Workday"] }), ["e"]);
+    // Search finds a control by its application and its owner's email too.
+    assert.deepEqual(ids({ query: "workday" }), ["e"]);
+    assert.deepEqual(ids({ query: "lee@client" }), ["e"]);
+    assert.deepEqual(
+      ids({ area: ["Logical access"], application: ["SAP ERP", "Workday"] }),
+      ["c", "e"],
+    );
+    assert.deepEqual(filterOptions(more), {
+      applications: ["SAP ERP", "Workday", ""],
+      areas: ["Logical access", "Entity level"],
+      owners: ["Dana", "lee@client.example", ""],
+    });
   });
 
   it("places dates on the timeline", () => {
@@ -342,6 +444,9 @@ describe("engagement workspace model", () => {
         included: true,
         next_step: "Approve the samples",
         waiting_on: "TEAM",
+        actor: "PREPARER",
+        yours: true,
+        progress: "EVIDENCE_RECEIVED",
         test_status: "PROPOSED",
         test_attributes: ["A request exists"],
         requests: [
@@ -370,6 +475,7 @@ describe("engagement workspace model", () => {
         waiting_on: "OWNER",
         overdue: true,
         deficiencies: 1,
+        exceptions: true,
       },
       {
         id: "c",
@@ -383,7 +489,16 @@ describe("engagement workspace model", () => {
     assert.equal(first.requests[1]?.kind, "EVIDENCE");
     assert.deepEqual(first.testAttributes, ["A request exists"]);
     assert.equal(third.waitingOn, "NONE");
+    assert.equal(first.actor, "PREPARER");
+    assert.equal(first.progress, "EVIDENCE_RECEIVED");
+    // Anything unknown from the API falls back to the plainest value.
+    assert.deepEqual(
+      [third.actor, third.progress, third.yours],
+      ["NONE", "TO_REQUEST", false],
+    );
     assert.equal(inQueue(first, "team"), true);
+    // A team step the API says is not the viewer's is not in their queue.
+    assert.equal(inQueue({ ...first, yours: false }, "team"), false);
     assert.equal(inQueue(second, "owner"), true);
     assert.equal(inQueue(second, "overdue"), true);
     assert.equal(inQueue(second, "findings"), true);
@@ -399,9 +514,19 @@ describe("engagement workspace model", () => {
         ["Change management", ["b"]],
       ],
     );
-    assert.equal(detailTab(first, null), "testing");
+    // The record opens on the control's phase; links from before the phases still land.
+    // A control opens on its overview, whatever phase it is in.
+    assert.equal(detailTab(first, null), "overview");
+    assert.equal(phaseOf(first), "testing");
     assert.equal(detailTab(second, null), "overview");
+    // The tabs are by function now; links from the phase tabs land on Testing.
     assert.equal(detailTab(second, "findings"), "findings");
+    assert.equal(detailTab(second, "testing"), "testing");
+    assert.equal(detailTab(second, "evidence"), "evidence");
+    assert.equal(detailTab(second, "activity"), "activity");
+    assert.equal(detailTab(second, "interim"), "testing");
+    assert.equal(detailTab(second, "rollforward"), "testing");
+    assert.equal(detailTab(second, "workpapers"), "testing");
     assert.equal(detailTab(second, "nonsense"), "overview");
     const filters = { ...EMPTY_ENGAGEMENT.filters, queue: "team" as const };
     assert.deepEqual(
@@ -409,28 +534,282 @@ describe("engagement workspace model", () => {
       ["a"],
     );
   });
-  it("groups by application, listing a shared control under each", () => {
+  it("groups the instances by application, with the areas inside", () => {
+    // A control over two systems is two instances with the same ID (Milestone 8.5).
     const rows = parseControls([
       {
         id: "a",
         control_ref: "AC-01",
-        systems: ["SAP ERP", "Active Directory"],
+        area: "Logical access",
+        application_id: "app-sap",
+        application_name: "SAP ERP",
+        label: "AC-01 · SAP ERP",
+        systems: ["SAP ERP"],
       },
-      { id: "b", control_ref: "AC-02", systems: ["SAP ERP"] },
-      { id: "c", control_ref: "EL-01", systems: [] },
+      {
+        id: "a2",
+        control_ref: "AC-01",
+        area: "Logical access",
+        application_name: "Active Directory",
+        systems: ["Active Directory"],
+      },
+      {
+        id: "b",
+        control_ref: "CM-01",
+        area: "Change management",
+        application_name: "SAP ERP",
+        systems: ["SAP ERP"],
+      },
+      { id: "c", control_ref: "EL-01", area: "Entity level", systems: [] },
     ]);
     assert.ok(rows !== null);
+    assert.equal(rows[0]?.label, "AC-01 · SAP ERP");
+    assert.equal(rows[0]?.applicationId, "app-sap");
+    assert.equal(rows[1]?.label, "AC-01");
     assert.deepEqual(
       byApplication(rows).map((group) => [
         group.area,
-        group.controls.map((control) => control.id),
+        group.areas.map((area) => [
+          area.area,
+          area.controls.map((control) => control.id),
+        ]),
       ]),
       [
-        ["Active Directory", ["a"]],
-        ["SAP ERP", ["a", "b"]],
-        ["No application", ["c"]],
+        ["Active Directory", [["Logical access", ["a2"]]]],
+        [
+          "SAP ERP",
+          [
+            ["Logical access", ["a"]],
+            ["Change management", ["b"]],
+          ],
+        ],
+        ["Process and entity-level controls", [["Entity level", ["c"]]]],
       ],
     );
-    assert.equal(EMPTY_ENGAGEMENT.filters.group, "area");
+    assert.deepEqual(
+      byArea(rows).map((group) => group.controls.map((c) => c.id)),
+      [["a", "a2"], ["b"], ["c"]],
+    );
+    assert.equal(EMPTY_ENGAGEMENT.filters.group, "application");
+    assert.equal(instanceLabel("AC-01", "Oracle"), "AC-01 · Oracle");
+    assert.equal(instanceLabel("AC-01", ""), "AC-01");
+    assert.equal(instanceLabel(null, "Oracle"), null);
+  });
+  it("queues controls under independent review and reads the review progress", () => {
+    const rows = parseControls([
+      {
+        id: "a",
+        control_ref: "AC-01",
+        review_status: "OPEN",
+        review_left: "DECIDE",
+        progress: "AWAITING_REVIEW",
+      },
+      {
+        id: "b",
+        control_ref: "AC-02",
+        review_status: "OPEN",
+        review_left: "REPERFORMING",
+        progress: "AWAITING_REVIEW",
+      },
+      {
+        id: "c",
+        control_ref: "AC-03",
+        review_status: "SIGNED_OFF",
+        review_left: "SIGNED",
+        progress: "CONCLUDED",
+      },
+      { id: "d", control_ref: "AC-04", review_left: "nonsense" },
+    ]);
+    assert.ok(rows !== null);
+    assert.deepEqual(
+      rows.map((row) => [row.reviewStatus, row.reviewLeft]),
+      [
+        ["OPEN", "DECIDE"],
+        ["OPEN", "REPERFORMING"],
+        ["SIGNED_OFF", "SIGNED"],
+        [null, null],
+      ],
+    );
+    // In review is the two review stages, so its count matches the progress summary:
+    // the reviewer's turn (a re-performing reviewer agent included) or notes to answer.
+    assert.deepEqual(
+      rows.filter((row) => inQueue(row, "review")).map((row) => row.id),
+      ["a", "b"],
+    );
+    const dashboard = parseDashboard({
+      controls: {},
+      review: {
+        in_scope: 16,
+        signed_off: 3,
+        to_decide: 2,
+        open_notes: 5,
+        complete: false,
+      },
+    });
+    assert.deepEqual(dashboard?.review, {
+      inScope: 16,
+      notStarted: 0,
+      reperforming: 0,
+      toDecide: 2,
+      toAddress: 0,
+      toClear: 0,
+      toSign: 0,
+      signedOff: 3,
+      openNotes: 5,
+      complete: false,
+    });
+  });
+});
+
+describe("the redesigned register and record", () => {
+  it("derives the lifecycle, the record's main action, and group summaries", () => {
+    const rows = parseControls([
+      {
+        id: "a",
+        control_ref: "AC-01",
+        included: true,
+        conclusion: "NOT_CONCLUDED",
+        waiting_on: "TEAM",
+        yours: true,
+        progress: "AWAITING_EVIDENCE",
+        stages: {
+          walkthrough: "NONE",
+          evidence: "REQUESTED",
+          test: "NONE",
+          review: "NONE",
+        },
+      },
+      {
+        id: "b",
+        control_ref: "AC-05",
+        included: true,
+        waiting_on: "TEAM",
+        yours: true,
+        progress: "AWAITING_REVIEW",
+        exceptions: true,
+        sheet_status: "SIGNED_OFF",
+        review_status: "OPEN",
+        review_left: "DECIDE",
+        stages: {
+          walkthrough: "SUCCEEDED",
+          evidence: "RECEIVED",
+          test: "SUCCEEDED",
+        },
+        deficiencies: 1,
+      },
+      {
+        id: "c",
+        control_ref: "AC-06",
+        included: true,
+        test_status: "PROPOSED",
+        waiting_on: "TEAM",
+        yours: true,
+        progress: "EVIDENCE_RECEIVED",
+        stages: {},
+      },
+      {
+        id: "d",
+        control_ref: "AC-07",
+        included: true,
+        sheet_status: "SIGNED_OFF",
+        stages: {},
+      },
+      {
+        id: "e",
+        control_ref: "AC-08",
+        included: true,
+        sheet_status: "OPEN",
+        sheet_left: "DECIDE",
+        stages: {},
+      },
+      {
+        id: "f",
+        control_ref: "AC-09",
+        included: true,
+        conclusion: "EFFECTIVE",
+        progress: "CONCLUDED",
+        stages: {},
+      },
+    ]);
+    assert.ok(rows !== null);
+    const [first, second, third, fourth, fifth, sixth] = rows;
+    assert.ok(first && second && third && fourth && fifth && sixth);
+    assert.deepEqual(
+      lifecycle(first).map((step) => step.state),
+      ["todo", "active", "todo", "todo", "todo"],
+    );
+    assert.deepEqual(
+      lifecycle(second).map((step) => step.state),
+      ["done", "done", "done", "active", "todo"],
+    );
+    assert.equal(lifecycle(sixth)[4]?.state, "done");
+    assert.deepEqual(recordAction(first), {
+      label: "Open evidence requests",
+      tab: "evidence",
+    });
+    assert.deepEqual(recordAction(second), {
+      label: "Open the review",
+      tab: "review",
+    });
+    assert.deepEqual(recordAction(third), {
+      label: "Review samples",
+      tab: "testing",
+    });
+    assert.deepEqual(recordAction(fourth), {
+      label: "Prepare the workpaper",
+      tab: "testing",
+    });
+    assert.deepEqual(recordAction(fifth), {
+      label: "Open the test sheet",
+      tab: "testing",
+    });
+    assert.equal(recordAction(sixth), null);
+    assert.deepEqual(groupHeadline(rows), {
+      total: 6,
+      concluded: 1,
+      blocked: 0,
+      needYou: 3,
+      overdue: 0,
+      inReview: 1,
+      exceptions: 1,
+    });
+  });
+});
+
+describe("the project plan opens on the current work", () => {
+  const phase = (key: string, status: Phase["status"], overdue = 0): Phase => ({
+    key,
+    name: key,
+    plannedStart: "2027-01-01",
+    plannedEnd: "2027-02-01",
+    version: 1,
+    tasks: 3,
+    done: 0,
+    overdue,
+    status,
+  });
+
+  it("opens the phases under way, and any with overdue work", () => {
+    const open = openPhases([
+      phase("PLANNING", "DONE"),
+      phase("DESIGN", "NOT_STARTED", 2),
+      phase("EVIDENCE", "IN_PROGRESS"),
+      phase("INTERIM", "AT_RISK"),
+      phase("ROLLFORWARD", "NOT_STARTED"),
+    ]);
+    assert.deepEqual([...open].sort(), ["DESIGN", "EVIDENCE", "INTERIM"]);
+  });
+
+  it("opens the next phase to start when nothing is under way", () => {
+    const open = openPhases([
+      phase("PLANNING", "DONE"),
+      phase("DESIGN", "NOT_STARTED"),
+      phase("INTERIM", "NOT_STARTED"),
+    ]);
+    assert.deepEqual([...open], ["DESIGN"]);
+  });
+
+  it("opens nothing when every phase is done", () => {
+    assert.equal(openPhases([phase("PLANNING", "DONE")]).size, 0);
   });
 });

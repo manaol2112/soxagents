@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-
+import { statusActions } from "../apps/web/src/engagement-lifecycle.ts";
 import {
   canManageAgents,
   canManageProjects,
   chosenOrganizationId,
   deriveShell,
+  lockedBeforeLaunch,
   type Organization,
   type Project,
-  statusChoices,
+  projectLabels,
+  showsSignInPrompt,
   taskStatusChoices,
   type WorkspaceSnapshot,
   workspaceHref,
@@ -33,6 +35,18 @@ const project: Project = {
   name: "SOX 2026",
   slug: "sox-2026",
   status: "ACTIVE",
+  clientName: "Acme",
+  kind: "SOX_ITGC",
+  periodEnd: "2027-12-31",
+  ownerName: "Pat Lee",
+  controls: 16,
+  openDeficiencies: 1,
+  clientId: null,
+  progress: [],
+  overdueRequests: 0,
+  nextMilestone: null,
+  missedMilestones: 0,
+  lastActivityAt: null,
 };
 
 function snapshot(
@@ -88,6 +102,59 @@ describe("workspace shell", () => {
     );
   });
 
+  it("reads where each engagement's work stands, for its card", () => {
+    const model = deriveShell(
+      snapshot({
+        projects: [
+          {
+            id: project.id,
+            name: project.name,
+            slug: project.slug,
+            status: "ACTIVE",
+            client_id: "55555555-5555-7555-8555-555555555555",
+            progress: [
+              { status: "SUCCEEDED", count: 3 },
+              { status: "READY", count: "nine" },
+            ],
+            overdue_requests: 2,
+            next_milestone: {
+              name: "Walkthroughs complete",
+              due: "2026-11-26",
+            },
+            missed_milestones: 1,
+            last_activity_at: "2026-10-16T21:03:30+00:00",
+          },
+          // An older API, or a malformed reply, leaves the card's extras empty.
+          {
+            id: "44444444-4444-7444-8444-444444444444",
+            name: "Old",
+            slug: "old",
+            status: "ACTIVE",
+            next_milestone: { name: "No date" },
+          },
+        ],
+      }),
+    );
+    assert.equal(model.status, "ready");
+    if (model.status !== "ready") {
+      return;
+    }
+    const [card, old] = model.projects;
+    assert.deepEqual(card?.progress, [{ status: "SUCCEEDED", count: 3 }]);
+    assert.equal(card?.clientId, "55555555-5555-7555-8555-555555555555");
+    assert.equal(card?.overdueRequests, 2);
+    assert.deepEqual(card?.nextMilestone, {
+      name: "Walkthroughs complete",
+      due: "2026-11-26",
+    });
+    assert.equal(card?.missedMilestones, 1);
+    assert.equal(card?.lastActivityAt, "2026-10-16T21:03:30+00:00");
+    assert.deepEqual(old?.progress, []);
+    assert.equal(old?.overdueRequests, 0);
+    assert.equal(old?.nextMilestone, null);
+    assert.equal(old?.lastActivityAt, null);
+  });
+
   it("shows an empty state when the caller has no organization", () => {
     const model = deriveShell(snapshot({ organizations: [] }));
     assert.deepEqual(model, { status: "empty", email: "owner@example.com" });
@@ -109,6 +176,23 @@ describe("workspace shell", () => {
     assert.equal(model.selectedProject?.id, project.id);
     // An unknown section falls back to the engagement's home, the agent console.
     assert.equal(model.section, "console");
+  });
+
+  it("links to the dashboard explicitly, since the console is the default", () => {
+    const dashboard = new URL(
+      workspaceHref("overview", organization.id, project.id),
+      "http://x",
+    );
+    assert.equal(dashboard.searchParams.get("section"), "overview");
+    const model = deriveShell(
+      snapshot({ requestedSection: dashboard.searchParams.get("section") }),
+    );
+    assert.equal(model.status === "ready" && model.section, "overview");
+    const home = new URL(
+      workspaceHref("console", organization.id, project.id),
+      "http://x",
+    );
+    assert.equal(home.searchParams.get("section"), null);
   });
 
   it("keeps a requested organization that is in the membership list", () => {
@@ -133,8 +217,8 @@ describe("workspace shell", () => {
   });
 
   it("offers only legal project status changes", () => {
-    assert.deepEqual(statusChoices("ACTIVE"), ["ACTIVE", "PAUSED", "ARCHIVED"]);
-    assert.deepEqual(statusChoices("ARCHIVED"), ["ARCHIVED"]);
+    assert.deepEqual(statusActions("ACTIVE"), ["pause", "archive"]);
+    assert.deepEqual(statusActions("ARCHIVED"), []);
     assert.deepEqual(taskStatusChoices("CANCELLED"), ["CANCELLED"]);
     assert.equal(taskStatusChoices("RUNNING").includes("DRAFT"), false);
     assert.equal(canManageProjects("PROJECT_MANAGER"), true);
@@ -220,5 +304,71 @@ describe("workspace shell", () => {
     if (model.status === "ready") {
       assert.equal(model.notifications, "unavailable");
     }
+  });
+});
+
+describe("projectLabels", () => {
+  const project = (
+    id: string,
+    name: string,
+    clientName: string,
+    periodEnd: string | null,
+  ) => ({ id, name, clientName, periodEnd }) as Project;
+
+  it("puts the client first, and tells apart engagements that still match", () => {
+    const labels = projectLabels([
+      project("a", "SOX FY 2027", "Contoso Ltd", "2027-03-31"),
+      project("b", "SOX FY 2027", "Northwind", "2027-06-30"),
+      project("c", "SOX FY 2027", "Contoso Ltd", "2027-12-31"),
+      project("d", "Internal review", "", null),
+    ]);
+    assert.equal(labels.get("b"), "Northwind · SOX FY 2027");
+    assert.equal(
+      labels.get("a"),
+      "Contoso Ltd · SOX FY 2027 (period end 2027-03-31)",
+    );
+    assert.equal(
+      labels.get("c"),
+      "Contoso Ltd · SOX FY 2027 (period end 2027-12-31)",
+    );
+    assert.equal(labels.get("d"), "Internal review");
+  });
+});
+
+describe("lockedBeforeLaunch", () => {
+  it("keeps the engagement sections closed until the engagement launches", () => {
+    const draft = { status: "DRAFT" };
+    const active = { status: "ACTIVE" };
+    const sections = [
+      "controls",
+      "evidence",
+      "plan",
+      "timeline",
+      "approvals",
+      "overview",
+      "console",
+      "deficiencies",
+    ] as const;
+    for (const section of sections) {
+      assert.equal(lockedBeforeLaunch(section, draft), true, section);
+      assert.equal(lockedBeforeLaunch(section, active), false, section);
+    }
+    // Setup, the workforce, and the engagements list stay open.
+    assert.equal(lockedBeforeLaunch("setup", draft), false);
+    assert.equal(lockedBeforeLaunch("agents", draft), false);
+    assert.equal(lockedBeforeLaunch("projects", draft), false);
+    assert.equal(lockedBeforeLaunch("controls", null), false);
+  });
+});
+
+describe("sign-in prompt", () => {
+  it("never asks a member to sign in while a page is loading", () => {
+    assert.equal(showsSignInPrompt({ status: "loading" }), false);
+    assert.equal(showsSignInPrompt({ status: "denied" }), true);
+    assert.equal(showsSignInPrompt({ status: "error" }), true);
+    assert.equal(
+      showsSignInPrompt({ status: "empty", email: "a@example.com" }),
+      true,
+    );
   });
 });

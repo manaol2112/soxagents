@@ -29,10 +29,13 @@ from ai_workforce_api.authorization import (
 )
 from ai_workforce_api.db import transaction
 from ai_workforce_api.evidence_extraction import Table, read_table
+from ai_workforce_api.evidence_links import file_request
+from ai_workforce_api.evidence_withdrawn import is_withdrawn
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.sampling import build_frame, explanation, new_seed, select
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import ObjectStore, StoreError, digest_of, open_store
+from ai_workforce_api.testing_engine import create_sample_sheet
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +66,11 @@ def propose(
     proposer: UUID,
     tester: str,
     seed: int | None = None,
+    test_round_id: UUID | None = None,
+    window: tuple[date, date] | None = None,
 ) -> UUID | None:
     """Propose or redraw a test plan. An approved plan is never replaced."""
-    frame = build_frame(table, period_end, frequency)
+    frame = build_frame(table, period_end, frequency, window=window)
     chosen_seed = new_seed() if seed is None else seed
     picked = select(frame.rows, size, chosen_seed)
     text = explanation(
@@ -79,15 +84,25 @@ def propose(
         frequency=frequency,
         nature=nature,
     )
+    if window is not None:
+        text = (f"Sampled only from {window[0].isoformat()} to {window[1].isoformat()}. " + text)[
+            :2000
+        ]
+    conflict = (
+        "(test_round_id) WHERE test_round_id IS NOT NULL"
+        if test_round_id is not None
+        else "(project_id, engagement_control_id) WHERE test_round_id IS NULL"
+    )
     row = cursor.execute(
-        """
+        f"""
         INSERT INTO control_tests (
             organization_id, project_id, engagement_control_id, sample_size,
             population_file_id, population_sha256, population_rows, frame_rows, key_column,
-            date_column, columns, checks, seed, explanation, proposed_by
+            date_column, columns, checks, seed, explanation, proposed_by, test_round_id,
+            covered_to
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (project_id, engagement_control_id) DO UPDATE
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT {conflict} DO UPDATE
         SET sample_size = EXCLUDED.sample_size,
             population_file_id = EXCLUDED.population_file_id,
             population_sha256 = EXCLUDED.population_sha256,
@@ -95,6 +110,7 @@ def propose(
             key_column = EXCLUDED.key_column, date_column = EXCLUDED.date_column,
             columns = EXCLUDED.columns, checks = EXCLUDED.checks, seed = EXCLUDED.seed,
             explanation = EXCLUDED.explanation, proposed_by = EXCLUDED.proposed_by,
+            covered_to = EXCLUDED.covered_to,
             version = control_tests.version + 1, updated_at = clock_timestamp()
         WHERE control_tests.status = 'PROPOSED'
         RETURNING id
@@ -115,6 +131,8 @@ def propose(
             str(chosen_seed),
             text,
             proposer,
+            test_round_id,
+            frame.covered_to,
         ),
     ).fetchone()
     if row is None:
@@ -187,7 +205,8 @@ def control_for_population(
 
 def approved(connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID) -> bool:
     row = connection.execute(
-        "SELECT status FROM control_tests WHERE project_id = %s AND engagement_control_id = %s",
+        "SELECT status FROM control_tests WHERE project_id = %s AND engagement_control_id = %s "
+        "AND test_round_id IS NULL",
         (project_id, control_id),
     ).fetchone()
     return row is not None and row[0] == "APPROVED"
@@ -236,6 +255,9 @@ class TestBody(BaseModel):
     sample_request_status: str | None
     samples: list[SampleBody]
     version: int
+    # The roll-forward or retest round this plan is for; None for interim testing.
+    test_round_id: UUID | None = None
+    application_name: str = ""
 
 
 class ProposeBody(BaseModel):
@@ -334,27 +356,36 @@ def _person(
         raise NotVisible()
 
 
+def _round_kind(connection: psycopg.Connection[Any], round_id: UUID | None) -> str | None:
+    """ROLLFORWARD or RETEST for a round's plan; None for interim testing."""
+    if round_id is None:
+        return None
+    row = connection.execute("SELECT kind FROM test_rounds WHERE id = %s", (round_id,)).fetchone()
+    return None if row is None else str(row[0])
+
+
 def _population(
     connection: psycopg.Connection[Any], store: ObjectStore, project_id: UUID, file_id: UUID
-) -> tuple[Table, str, str, UUID]:
+) -> tuple[Table, str, str]:
     """The stored population, read through the custody check."""
     row = connection.execute(
         """
-        SELECT object_key, content_sha256, size_bytes, content_type, file_name,
-               mailbox_attachment_id
+        SELECT object_key, content_sha256, size_bytes, content_type, file_name
         FROM evidence_files WHERE id = %s AND project_id = %s
         """,
         (file_id, project_id),
     ).fetchone()
     if row is None:
         raise NotVisible()
+    if is_withdrawn(connection, file_id):
+        raise TestState("the population file is withdrawn")
     content = store.get(str(row[0]))
     if digest_of(content) != row[1] or len(content) != int(row[2]):
         raise TestState("the stored population no longer matches its custody record")
     table = read_table(content, str(row[4]), str(row[3]))
     if table is None or not table.rows:
         raise TestState("the file is not a population table")
-    return table, str(row[4]), str(row[1]), UUID(str(row[5]))
+    return table, str(row[4]), str(row[1])
 
 
 def _propose(
@@ -365,17 +396,21 @@ def _propose(
     project_id: UUID,
     file_id: UUID,
 ) -> TestBody:
-    from ai_workforce_api.evidence_analysis import _request_for
-
     _person(connection, principal, organization_id, project_id)
-    table, name, sha256, attachment_id = _population(connection, store, project_id, file_id)
-    request = _request_for(connection, project_id, attachment_id)
+    table, name, sha256 = _population(connection, store, project_id, file_id)
+    request = file_request(connection, project_id, file_id)
     if request is None or request[3] is None:
-        raise TestState("the file's reply is not linked to a control's request")
+        raise TestState("the file is not linked to a control's request")
     control = control_for_population(connection, project_id, request[3])
     if control is None:
         raise TestState("this control is not sampled")
     period_end, frequency, nature, size, tester = control
+    from ai_workforce_api.test_rounds import round_for_request
+
+    found = round_for_request(connection, request[0])
+    window = None if found is None else (found.window_start, found.window_end)
+    if found is not None:
+        size = found.sample_size
     with transaction(connection) as cursor:
         test_id = propose(
             cursor,
@@ -392,6 +427,8 @@ def _propose(
             size=size,
             proposer=principal.id,
             tester=tester,
+            test_round_id=None if found is None else found.id,
+            window=window,
         )
     if test_id is None:
         raise TestState("the samples are already approved")
@@ -416,9 +453,7 @@ def _replace(
         raise TestState("the samples are already approved")
     if not any(sample.position == position for sample in current.samples):
         raise NotVisible()
-    table, _name, sha256, _attachment = _population(
-        connection, store, project_id, current.population_file_id
-    )
+    table, _name, sha256 = _population(connection, store, project_id, current.population_file_id)
     if sha256 != current.population_sha256:
         raise TestState("the population changed")
     if body.row_number > len(table.rows):
@@ -479,8 +514,6 @@ def _approve(
     test_id: UUID,
     body: VersionBody,
 ) -> TestBody:
-    from ai_workforce_api.evidence_analysis import _request_for
-
     _person(connection, principal, organization_id, project_id)
     current = _one(connection, organization_id, project_id, test_id)
     if current.version != body.version:
@@ -489,13 +522,26 @@ def _approve(
         raise TestState("the samples are already approved")
     if not current.samples:
         raise TestState("there are no samples to approve")
-    attachment = connection.execute(
-        "SELECT mailbox_attachment_id FROM evidence_files WHERE id = %s",
-        (current.population_file_id,),
-    ).fetchone()
-    population_request = (
-        None if attachment is None else _request_for(connection, project_id, attachment[0])
-    )
+    # Testing starts only when the control is ready (readiness.py): its criteria defined,
+    # its process understood where it depends on one, and no conflict between sources
+    # left open. A narrative is one source of understanding, never a requirement.
+    from ai_workforce_api.readiness import NotReady, require_testable
+
+    try:
+        require_testable(connection, project_id, current.engagement_control_id)
+    except NotReady as error:
+        raise TestState(error.detail) from None
+    if is_withdrawn(connection, current.population_file_id):
+        raise TestState("the population file is withdrawn; propose samples from its replacement")
+    # Samples come only from a population a person accepted as complete and accurate on
+    # the control's evidence plan: a file arriving does not validate it.
+    from ai_workforce_api.evidence_plans import on_samples_approved, population_gate
+
+    round_kind = _round_kind(connection, current.test_round_id)
+    blocked = population_gate(connection, current.engagement_control_id, round_kind)
+    if blocked is not None:
+        raise TestState(blocked)
+    population_request = file_request(connection, project_id, current.population_file_id)
     with transaction(connection) as cursor:
         locked = cursor.execute(
             "SELECT version FROM control_tests WHERE id = %s AND status = 'PROPOSED' FOR UPDATE",
@@ -504,8 +550,9 @@ def _approve(
         if locked is None or int(locked[0]) != body.version:
             raise TestState("test plan changed")
         request_id = _draft_sample_request(
-            cursor, organization_id, project_id, current, population_request, principal.id
-        )
+            cursor, organization_id, project_id, current, population_request, principal.id,
+            round_kind,
+        )  # fmt: skip
         cursor.execute(
             """
             UPDATE control_tests
@@ -515,6 +562,11 @@ def _approve(
             """,
             (principal.id, request_id, test_id),
         )
+        if request_id is not None:
+            # The sample request serves its phase and carries the plan's sample evidence.
+            on_samples_approved(
+                cursor, current.engagement_control_id, project_id, round_kind, request_id
+            )
         _audit(
             cursor,
             organization_id,
@@ -524,6 +576,12 @@ def _approve(
             test_id,
             {"samples": len(current.samples), "sample_request_drafted": request_id is not None},
         )
+        # The tester opens the test sheet: one item per approved sample.
+        create_sample_sheet(cursor, organization_id, project_id, test_id, principal.id)
+        if current.test_round_id is not None:
+            from ai_workforce_api.test_rounds import mark_testing
+
+            mark_testing(cursor, current.test_round_id)
     return _one(connection, organization_id, project_id, test_id)
 
 
@@ -534,10 +592,13 @@ def _draft_sample_request(
     test: TestBody,
     population_request: tuple[UUID, str, str, UUID | None] | None,
     approver: UUID,
+    round_kind: str | None = None,
 ) -> UUID | None:
     """The sample evidence request, as a draft that needs the usual approval to send."""
     if population_request is None:
         return None
+    from ai_workforce_api.evidence_plans import sample_asks
+
     original = cursor.execute(
         "SELECT owner_user_id, recipient, follow_up_after_days, max_follow_ups "
         "FROM pbc_requests WHERE id = %s",
@@ -549,7 +610,8 @@ def _draft_sample_request(
     if original is None or control is None:
         return None
     items = [str(item) for item in control[0]]
-    ask = (
+    # What the evidence plan asks for each selected item, or the RCM's own words.
+    ask = sample_asks(cursor, test.engagement_control_id, round_kind) or (
         items[1]
         if len(items) > 1
         else "the evidence that the control operated for each item, such as the approval "
@@ -561,9 +623,9 @@ def _draft_sample_request(
         INSERT INTO pbc_requests (
             organization_id, project_id, operation_key, control_ref, owner_user_id,
             recipient, due_at, evidence_description, follow_up_after_days, max_follow_ups,
-            engagement_control_id
+            engagement_control_id, drafted_by
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'AGENT')
         ON CONFLICT (project_id, operation_key) DO NOTHING
         RETURNING id
         """,
@@ -626,7 +688,8 @@ _COLUMNS = """
     t.id, t.engagement_control_id, c.control_ref, c.title, t.status, t.sample_size,
     t.population_file_id, f.file_name, t.population_sha256, t.population_rows, t.frame_rows,
     t.key_column, t.date_column, t.columns, t.checks, t.seed, t.explanation, a.display_name,
-    t.approved_at, t.sample_request_id, r.status, t.version
+    t.approved_at, t.sample_request_id, r.status, t.version, t.test_round_id,
+    (SELECT a.name FROM engagement_applications a WHERE a.id = c.engagement_application_id)
 """
 _FROM = """
     FROM control_tests t
@@ -695,6 +758,8 @@ def _bodies(connection: psycopg.Connection[Any], rows: list[tuple[Any, ...]]) ->
             sample_request_status=None if row[20] is None else str(row[20]),
             samples=samples[row[0]],
             version=int(row[21]),
+            test_round_id=row[22],
+            application_name="" if row[23] is None else str(row[23]),
         )
         for row in rows
     ]

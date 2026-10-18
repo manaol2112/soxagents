@@ -26,7 +26,7 @@ from ai_workforce_api.authorization import (
     _session_principal,
     authorize,
 )
-from ai_workforce_api.controls import DOMAIN_AGENTS, default_templates
+from ai_workforce_api.controls import DOMAIN_AGENTS, runs_on_a_system
 from ai_workforce_api.db import transaction
 from ai_workforce_api.model_providers import live_model
 from ai_workforce_api.onboarding import (
@@ -38,6 +38,7 @@ from ai_workforce_api.onboarding import (
     _reset_templates,
     _run,
     _snapshot,
+    pending_reviews,
 )
 from ai_workforce_api.rcm_import import (
     FIELDS,
@@ -51,6 +52,7 @@ from ai_workforce_api.rcm_import import (
     build,
     check_fields,
     check_values,
+    column_values,
     data_rows,
     detect_header,
     headers,
@@ -68,6 +70,11 @@ from ai_workforce_api.rcm_systems import (
 )
 from ai_workforce_api.rcm_terms import reset_terms
 from ai_workforce_api.settings import Settings
+from ai_workforce_api.system_review_queue import (
+    schedule_system_reviews,
+    track_reviews_for_project,
+)
+from ai_workforce_api.workpapers import default_template
 
 logger = logging.getLogger(__name__)
 _UNSAFE = re.compile(r"(?i)\b(?:https?://|www\.)|[<>]")
@@ -222,6 +229,9 @@ class MappingUpdate(BaseModel):
 
 class ImportConfirm(BaseModel):
     version: int = Field(ge=1)
+    # REPLACE: the engagement's controls become this sheet's. ADD: this sheet joins the
+    # controls already imported (a control with the same ID is replaced by its new row).
+    mode: Literal["REPLACE", "ADD"] = "REPLACE"
 
 
 class OwnerEmail(BaseModel):
@@ -337,10 +347,12 @@ def register_rcm_uploads(
         body: ImportConfirm,
         request: Request,
     ) -> OnboardingBody:
-        return run(
+        result = run(
             request,
             lambda c, p: _import(c, p, organization_id, project_id, import_id, body),
         )
+        schedule_system_reviews(scans, pending_reviews(result))
+        return result
 
     @app.post(f"{base}/rcm/uploads/{{import_id}}/discard")
     def discard(
@@ -485,7 +497,9 @@ def _upload(
     header_row = detect_header(sheets[index].rows)
     names = headers(sheets[index].rows, header_row)
     remembered_columns, remembered_values = _remembered(connection, project_id)
-    fields = suggest_fields(names, remembered_columns)
+    fields = suggest_fields(
+        names, remembered_columns, column_values(sheets[index].rows, header_row)
+    )
     values = _suggested_values(sheets[index].rows, header_row, fields, remembered_values)
     with transaction(connection) as cursor:
         cursor.execute(
@@ -570,7 +584,7 @@ def _layout(
         if body.header_row > max(len(rows), 1):
             raise ValueError("header row is outside the sheet")
         names = headers(rows, body.header_row)
-        fields = suggest_fields(names, remembered_columns)
+        fields = suggest_fields(names, remembered_columns, column_values(rows, body.header_row))
         values = _suggested_values(rows, body.header_row, fields, remembered_values)
         cursor.execute(
             """
@@ -627,7 +641,8 @@ def _import(
     import_id: UUID,
     body: ImportConfirm,
 ) -> OnboardingBody:
-    """Replace the engagement's controls with the mapped rows, all at once or not at all."""
+    """Import the mapped rows, all at once or not at all: replacing the engagement's
+    controls, or adding to the ones an earlier sheet imported."""
     _authorize_setup(connection, principal, organization_id, project_id)
     existing = {app.name.lower(): app.id for app in _applications(connection, project_id)}
     with transaction(connection) as cursor:
@@ -661,59 +676,80 @@ def _import(
             if created is not None:
                 existing[name.lower()] = created[0]
         every_app = list(dict.fromkeys(existing.values()))
-        cursor.execute("DELETE FROM engagement_controls WHERE project_id = %s", (project_id,))
+        if body.mode == "ADD":
+            # Library controls still give way to the upload; same control IDs are replaced.
+            cursor.execute(
+                """
+                DELETE FROM engagement_controls
+                WHERE project_id = %s AND (source <> 'UPLOAD' OR upper(control_ref) = ANY(%s))
+                """,
+                (project_id, [control.control_ref.upper() for control in result.controls]),
+            )
+        else:
+            cursor.execute("DELETE FROM engagement_controls WHERE project_id = %s", (project_id,))
         for control in result.controls:
-            design, effectiveness = default_templates(control.nature)
             apps = [
                 existing[name.lower()]
                 for name in _control_systems(control.control_ref, control.applications, confirmed)
                 if name.lower() in existing
             ]
-            cursor.execute(
-                """
-                INSERT INTO engagement_controls (
-                    organization_id, project_id, library_key, library_version, control_ref,
-                    domain, title, risk, activity, frequency, nature, key_control,
-                    owner_name, owner_email, application_ids, test_attributes, pbc_items,
-                    design_template_key, effectiveness_template_key, agent_key, source,
-                    rcm_import_id, source_row, domain_label, frequency_label, nature_label,
-                    custom_fields
-                )
-                VALUES (
-                    %s, %s, %s, 0, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, 'UPLOAD', %s, %s, %s, %s, %s, %s
-                )
-                """,
-                (
-                    organization_id,
-                    project_id,
-                    f"upload:{import_id.hex[:12]}:{control.row}",
-                    control.control_ref,
-                    control.domain,
-                    control.title,
-                    control.risk,
-                    control.activity,
-                    control.frequency,
-                    control.nature,
-                    control.key_control,
-                    control.owner_name,
-                    control.owner_email,
-                    list(dict.fromkeys(apps)) or every_app,
-                    Json(control.test_attributes),
-                    Json(control.pbc_items),
-                    design,
-                    effectiveness,
-                    DOMAIN_AGENTS[control.domain],
-                    import_id,
-                    control.row,
-                    control.domain_label,
-                    control.frequency_label,
-                    control.nature_label,
-                    Json(
-                        [{"label": label, "value": value} for label, value in control.custom_fields]
-                    ),
-                ),
+            # One instance per system the control relies on (Milestone 8.5); a control
+            # that names none covers every in-scope system. A business process control
+            # belongs to its process: one row, no system.
+            targets: list[UUID | None] = (
+                list(dict.fromkeys(apps)) or list(every_app) or [None]
+                if runs_on_a_system(control.domain)
+                else [None]
             )
+            for app in targets:
+                cursor.execute(
+                    """
+                    INSERT INTO engagement_controls (
+                        organization_id, project_id, library_key, library_version,
+                        control_ref, domain, title, risk, activity, frequency, nature,
+                        key_control, owner_name, owner_email, application_ids,
+                        test_attributes, pbc_items, template_key, agent_key, source,
+                        rcm_import_id, source_row, domain_label, frequency_label,
+                        nature_label, custom_fields, engagement_application_id
+                    )
+                    VALUES (
+                        %s, %s, %s, 0, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, 'UPLOAD', %s, %s, %s, %s, %s, %s, %s
+                    )
+                    """,
+                    (
+                        organization_id,
+                        project_id,
+                        f"upload:{import_id.hex[:12]}:{control.row}",
+                        control.control_ref,
+                        control.domain,
+                        control.title,
+                        control.risk,
+                        control.activity,
+                        control.frequency,
+                        control.nature,
+                        control.key_control,
+                        control.owner_name,
+                        control.owner_email,
+                        [] if app is None else [app],
+                        Json(control.test_attributes),
+                        Json(control.pbc_items),
+                        default_template(control.domain),
+                        DOMAIN_AGENTS[control.domain],
+                        import_id,
+                        control.row,
+                        control.domain_label,
+                        control.frequency_label,
+                        control.nature_label,
+                        Json(
+                            [
+                                {"label": label, "value": value}
+                                for label, value in control.custom_fields
+                            ]
+                        ),
+                        app,
+                    ),
+                )
         cursor.execute(
             """
             UPDATE rcm_imports
@@ -724,6 +760,8 @@ def _import(
             (principal.id, len(result.controls), import_id),
         )
         _reset_templates(cursor, project_id)
+        # Every system, new or not, is scoped again against the imported controls.
+        track_reviews_for_project(cursor, organization_id, project_id, principal.id)
         _audit(
             cursor,
             organization_id,
@@ -732,6 +770,7 @@ def _import(
             "onboarding.rcm_imported",
             {
                 "controls": len(result.controls),
+                "mode": body.mode,
                 "skipped_rows": len(result.skipped),
                 "new_applications": len(new_names),
                 "systems_source": stored.systems_source if confirmed is not None else None,
@@ -990,9 +1029,10 @@ def _body(connection: psycopg.Connection[Any], project_id: UUID, stored: _Stored
     names = headers(rows, stored.header_row)
     body_rows = data_rows(rows, stored.header_row)
     fields = stored.column_fields
+    samples = column_values(rows, stored.header_row)
     if len(fields) != len(names):
-        fields = suggest_fields(names)
-    suggested = suggest_fields(names)
+        fields = suggest_fields(names, samples=samples)
+    suggested = suggest_fields(names, samples=samples)
     columns = [
         ImportColumn(
             index=index,

@@ -14,26 +14,46 @@ from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.worker import Worker
 
 from ai_workforce_api.console import fail_turn, open_turns
+from ai_workforce_api.control_reviews import fail_reperformance, open_reperformances
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.durable_workflow import (
     AnalysisRequest,
     ConsoleTurnWorkflow,
+    ControlReviewWorkflow,
+    ControlTestingWorkflow,
     DraftRequest,
     DurableEffectWorkflow,
     EffectRequest,
     EvidenceAnalysisWorkflow,
+    EvidencePlanRunWorkflow,
     FollowUpRequest,
     FollowUpWorkflow,
     PbcDraftWorkflow,
+    PlanRunRequest,
     RcmSystemScanWorkflow,
+    ReviewRequest,
     ScanRequest,
+    SetupDraftRequest,
+    SetupDraftWorkflow,
+    SystemReviewRequest,
+    SystemReviewWorkflow,
+    TestRunRequest,
     TurnRequest,
+    WorkpaperDraftWorkflow,
+    WorkpaperRequest,
 )
 from ai_workforce_api.evidence_analysis import fail_analysis, open_analyses
 from ai_workforce_api.followups import advance, remindable_requests
 from ai_workforce_api.pbc_drafting import fail_draft, open_drafts
 from ai_workforce_api.rcm_systems import fail_scan, open_scans
+from ai_workforce_api.setup_drafting import fail_draft as fail_setup
+from ai_workforce_api.setup_drafting import open_drafts as open_setups
+from ai_workforce_api.system_review_queue import fail_review as fail_scoping
+from ai_workforce_api.system_review_queue import open_reviews as open_scopings
+from ai_workforce_api.testing_engine import fail_run, open_runs
 from ai_workforce_api.workflow import DurableUnavailable, WorkflowRunBody
+from ai_workforce_api.workpaper_service import fail_draft as fail_workpaper
+from ai_workforce_api.workpaper_service import open_drafts as open_workpapers
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +118,42 @@ class TemporalAdapter:
         except Exception as error:
             raise DurableUnavailable() from error
 
+    def schedule_test_runs(self, sheet_ids: list[UUID]) -> None:
+        try:
+            asyncio.run(_schedule_tests(self._address, sheet_ids))
+        except Exception as error:
+            raise DurableUnavailable() from error
+
+    def schedule_workpaper_drafts(self, workpaper_ids: list[UUID]) -> None:
+        try:
+            asyncio.run(_schedule_workpapers(self._address, workpaper_ids))
+        except Exception as error:
+            raise DurableUnavailable() from error
+
+    def schedule_system_reviews(self, application_ids: list[UUID]) -> None:
+        try:
+            asyncio.run(_schedule_scopings(self._address, application_ids))
+        except Exception as error:
+            raise DurableUnavailable() from error
+
+    def schedule_setup_drafts(self, project_ids: list[UUID]) -> None:
+        try:
+            asyncio.run(_schedule_setups(self._address, project_ids))
+        except Exception as error:
+            raise DurableUnavailable() from error
+
+    def schedule_reviews(self, review_ids: list[UUID]) -> None:
+        try:
+            asyncio.run(_schedule_reviews(self._address, review_ids))
+        except Exception as error:
+            raise DurableUnavailable() from error
+
+    def schedule_plan_runs(self, plan_ids: list[UUID]) -> None:
+        try:
+            asyncio.run(_schedule_plan_runs(self._address, plan_ids))
+        except Exception as error:
+            raise DurableUnavailable() from error
+
 
 @asynccontextmanager
 async def serve(
@@ -107,6 +163,12 @@ async def serve(
     scan: Callable[[UUID], str] | None = None,
     analyze: Callable[[UUID], str] | None = None,
     converse: Callable[[UUID], str] | None = None,
+    test: Callable[[UUID], str] | None = None,
+    workpaper: Callable[[UUID], str] | None = None,
+    setup: Callable[[UUID], str] | None = None,
+    review: Callable[[UUID], str] | None = None,
+    scoping: Callable[[UUID], str] | None = None,
+    plan: Callable[[UUID], str] | None = None,
 ) -> AsyncIterator[None]:
     client = await Client.connect(address)
     worker = Worker(
@@ -119,8 +181,27 @@ async def serve(
             RcmSystemScanWorkflow,
             EvidenceAnalysisWorkflow,
             ConsoleTurnWorkflow,
+            ControlTestingWorkflow,
+            WorkpaperDraftWorkflow,
+            SetupDraftWorkflow,
+            ControlReviewWorkflow,
+            SystemReviewWorkflow,
+            EvidencePlanRunWorkflow,
         ],
-        activities=activities_for(database_url, draft, scan, analyze, converse),
+        activities=activities_for(
+            database_url,
+            draft,
+            scan,
+            analyze,
+            converse,
+            test,
+            address,
+            workpaper,
+            setup,
+            review,
+            scoping,
+            plan,
+        ),
     )
     async with worker:
         await resume_follow_ups(client, database_url)
@@ -128,7 +209,201 @@ async def serve(
         await resume_scans(client, database_url)
         await resume_analyses(client, database_url)
         await resume_turns(client, database_url)
+        await resume_tests(client, database_url)
+        await resume_workpapers(client, database_url)
+        await resume_setups(client, database_url)
+        await resume_reviews(client, database_url)
+        await resume_scopings(client, database_url)
+        await resume_plan_runs(client, database_url)
         yield
+
+
+async def resume_plan_runs(client: Client, database_url: str) -> int:
+    from ai_workforce_api.evidence_plans import open_plan_runs
+
+    try:
+        with connect(database_url) as connection:
+            ids = open_plan_runs(connection)
+        for plan_id in ids:
+            await start_plan_run(client, plan_id)
+    except Exception:
+        logger.warning("evidence plan runs could not be resumed")
+        return 0
+    return len(ids)
+
+
+async def start_plan_run(client: Client, plan_id: UUID) -> None:
+    payload: PlanRunRequest = {"plan_id": str(plan_id)}
+    try:
+        await client.start_workflow(
+            EvidencePlanRunWorkflow.run,
+            payload,
+            id=f"evidence-plan-run:{plan_id}",
+            task_queue=TASK_QUEUE,
+        )
+    except WorkflowAlreadyStartedError:
+        return
+
+
+async def _schedule_plan_runs(address: str, plan_ids: list[UUID]) -> None:
+    client = await Client.connect(address)
+    for plan_id in plan_ids:
+        await start_plan_run(client, plan_id)
+
+
+async def resume_scopings(client: Client, database_url: str) -> int:
+    try:
+        with connect(database_url) as connection:
+            ids = open_scopings(connection)
+        for application_id in ids:
+            await start_scoping(client, application_id)
+    except Exception:
+        logger.warning("system scoping reviews could not be resumed")
+        return 0
+    return len(ids)
+
+
+async def start_scoping(client: Client, application_id: UUID) -> None:
+    payload: SystemReviewRequest = {"application_id": str(application_id)}
+    try:
+        await client.start_workflow(
+            SystemReviewWorkflow.run,
+            payload,
+            id=f"system-review:{application_id}",
+            task_queue=TASK_QUEUE,
+        )
+    except WorkflowAlreadyStartedError:
+        return
+
+
+async def _schedule_scopings(address: str, application_ids: list[UUID]) -> None:
+    client = await Client.connect(address)
+    for application_id in application_ids:
+        await start_scoping(client, application_id)
+
+
+async def resume_setups(client: Client, database_url: str) -> int:
+    try:
+        with connect(database_url) as connection:
+            ids = open_setups(connection)
+        for project_id in ids:
+            await start_setup(client, project_id)
+    except Exception:
+        logger.warning("setup drafts could not be resumed")
+        return 0
+    return len(ids)
+
+
+async def start_setup(client: Client, project_id: UUID) -> None:
+    payload: SetupDraftRequest = {"project_id": str(project_id)}
+    try:
+        await client.start_workflow(
+            SetupDraftWorkflow.run,
+            payload,
+            id=f"setup-draft:{project_id}",
+            task_queue=TASK_QUEUE,
+        )
+    except WorkflowAlreadyStartedError:
+        return
+
+
+async def _schedule_setups(address: str, project_ids: list[UUID]) -> None:
+    client = await Client.connect(address)
+    for project_id in project_ids:
+        await start_setup(client, project_id)
+
+
+async def resume_workpapers(client: Client, database_url: str) -> int:
+    try:
+        with connect(database_url) as connection:
+            ids = open_workpapers(connection)
+        for workpaper_id in ids:
+            await start_workpaper(client, workpaper_id)
+    except Exception:
+        logger.warning("workpaper drafts could not be resumed")
+        return 0
+    return len(ids)
+
+
+async def start_workpaper(client: Client, workpaper_id: UUID) -> None:
+    payload: WorkpaperRequest = {"workpaper_id": str(workpaper_id)}
+    try:
+        await client.start_workflow(
+            WorkpaperDraftWorkflow.run,
+            payload,
+            id=f"workpaper-draft:{workpaper_id}",
+            task_queue=TASK_QUEUE,
+        )
+    except WorkflowAlreadyStartedError:
+        return
+
+
+async def _schedule_workpapers(address: str, workpaper_ids: list[UUID]) -> None:
+    client = await Client.connect(address)
+    for workpaper_id in workpaper_ids:
+        await start_workpaper(client, workpaper_id)
+
+
+async def resume_reviews(client: Client, database_url: str) -> int:
+    try:
+        with connect(database_url) as connection:
+            ids = open_reperformances(connection)
+        for review_id in ids:
+            await start_review(client, review_id)
+    except Exception:
+        logger.warning("review re-performances could not be resumed")
+        return 0
+    return len(ids)
+
+
+async def start_review(client: Client, review_id: UUID) -> None:
+    payload: ReviewRequest = {"review_id": str(review_id)}
+    try:
+        await client.start_workflow(
+            ControlReviewWorkflow.run,
+            payload,
+            id=f"control-review:{review_id}",
+            task_queue=TASK_QUEUE,
+        )
+    except WorkflowAlreadyStartedError:
+        return
+
+
+async def _schedule_reviews(address: str, review_ids: list[UUID]) -> None:
+    client = await Client.connect(address)
+    for review_id in review_ids:
+        await start_review(client, review_id)
+
+
+async def resume_tests(client: Client, database_url: str) -> int:
+    try:
+        with connect(database_url) as connection:
+            ids = open_runs(connection)
+        for sheet_id in ids:
+            await start_test(client, sheet_id)
+    except Exception:
+        logger.warning("test runs could not be resumed")
+        return 0
+    return len(ids)
+
+
+async def start_test(client: Client, sheet_id: UUID) -> None:
+    payload: TestRunRequest = {"sheet_id": str(sheet_id)}
+    try:
+        await client.start_workflow(
+            ControlTestingWorkflow.run,
+            payload,
+            id=f"control-testing:{sheet_id}",
+            task_queue=TASK_QUEUE,
+        )
+    except WorkflowAlreadyStartedError:
+        return
+
+
+async def _schedule_tests(address: str, sheet_ids: list[UUID]) -> None:
+    client = await Client.connect(address)
+    for sheet_id in sheet_ids:
+        await start_test(client, sheet_id)
 
 
 async def resume_turns(client: Client, database_url: str) -> int:
@@ -303,7 +578,14 @@ def activities_for(
     scan: Callable[[UUID], str] | None = None,
     analyze: Callable[[UUID], str] | None = None,
     converse: Callable[[UUID], str] | None = None,
-) -> list[Callable[..., Any]]:
+    test: Callable[[UUID], str] | None = None,
+    address: str = "",
+    workpaper: Callable[[UUID], str] | None = None,
+    setup: Callable[[UUID], str] | None = None,
+    review: Callable[[UUID], str] | None = None,
+    scoping: Callable[[UUID], str] | None = None,
+    plan: Callable[[UUID], str] | None = None,
+) -> list[Any]:
     @activity.defn(name="record_effect")
     async def record_effect(
         organization_id: str,
@@ -381,13 +663,138 @@ def activities_for(
         if analyze is None:
             return "SKIPPED"
         # Reading calls OCR, the model, and the database, so it runs off the event loop.
-        return await asyncio.to_thread(analyze, UUID(analysis_id))
+        result = await asyncio.to_thread(analyze, UUID(analysis_id))
+        if address and test is not None:
+            # A read file may give its control's tester new evidence to test.
+            def pending() -> list[UUID]:
+                with connect(database_url) as connection:
+                    return open_runs(connection)
+
+            try:
+                await _schedule_tests(address, await asyncio.to_thread(pending))
+            except Exception:
+                logger.warning("test runs could not be scheduled; they will resume on restart")
+        if address and workpaper is not None:
+            # A control's first read file gives the drafting agent its walkthrough to write.
+            from ai_workforce_api.workpaper_service import draft_design_after_analysis
+
+            def design() -> list[UUID]:
+                with connect(database_url) as connection:
+                    return draft_design_after_analysis(connection, UUID(analysis_id))
+
+            try:
+                await _schedule_workpapers(address, await asyncio.to_thread(design))
+            except Exception:
+                logger.warning("the design draft could not be scheduled; it resumes on restart")
+        return result
 
     @activity.defn(name="fail_evidence_analysis")
     async def fail_evidence_analysis(analysis_id: str) -> None:
         def fail() -> None:
             with connect(database_url) as connection:
                 fail_analysis(connection, UUID(analysis_id))
+
+        await asyncio.to_thread(fail)
+
+    @activity.defn(name="draft_workpaper")
+    async def draft_workpaper(workpaper_id: str) -> str:
+        if workpaper is None:
+            return "SKIPPED"
+        # Drafting calls the model and the database, so it runs off the event loop.
+        return await asyncio.to_thread(workpaper, UUID(workpaper_id))
+
+    @activity.defn(name="fail_workpaper_draft")
+    async def fail_workpaper_draft(workpaper_id: str) -> None:
+        def fail() -> None:
+            with connect(database_url) as connection:
+                fail_workpaper(connection, UUID(workpaper_id))
+
+        await asyncio.to_thread(fail)
+
+    @activity.defn(name="draft_setup")
+    async def draft_setup(project_id: str) -> str:
+        if setup is None:
+            return "SKIPPED"
+        return await asyncio.to_thread(setup, UUID(project_id))
+
+    @activity.defn(name="review_system")
+    async def review_system(application_id: str) -> str:
+        if scoping is None:
+            return "SKIPPED"
+        return await asyncio.to_thread(scoping, UUID(application_id))
+
+    @activity.defn(name="fail_system_review")
+    async def fail_system_review(application_id: str) -> None:
+        def fail() -> None:
+            with connect(database_url) as connection:
+                fail_scoping(connection, UUID(application_id))
+
+        await asyncio.to_thread(fail)
+
+    @activity.defn(name="run_evidence_plan")
+    async def run_evidence_plan(plan_id: str) -> str:
+        if plan is None:
+            return "SKIPPED"
+        return await asyncio.to_thread(plan, UUID(plan_id))
+
+    @activity.defn(name="fail_evidence_plan_run")
+    async def fail_evidence_plan_run(plan_id: str) -> None:
+        from ai_workforce_api.evidence_plans import fail_plan_run
+
+        def fail() -> None:
+            with connect(database_url) as connection:
+                fail_plan_run(connection, UUID(plan_id))
+
+        await asyncio.to_thread(fail)
+
+    @activity.defn(name="fail_setup_draft")
+    async def fail_setup_draft(project_id: str) -> None:
+        def fail() -> None:
+            with connect(database_url) as connection:
+                fail_setup(connection, UUID(project_id))
+
+        await asyncio.to_thread(fail)
+
+    @activity.defn(name="reperform_review")
+    async def reperform_review(review_id: str) -> str:
+        if review is None:
+            return "SKIPPED"
+        return await asyncio.to_thread(review, UUID(review_id))
+
+    @activity.defn(name="fail_review")
+    async def fail_review(review_id: str) -> None:
+        def fail() -> None:
+            with connect(database_url) as connection:
+                fail_reperformance(connection, UUID(review_id))
+
+        await asyncio.to_thread(fail)
+
+    @activity.defn(name="test_control")
+    async def test_control(sheet_id: str) -> str:
+        if test is None:
+            return "SKIPPED"
+        # Testing calls the model and the database, so it runs off the event loop.
+        result = await asyncio.to_thread(test, UUID(sheet_id))
+        if address and workpaper is not None:
+            # The tester's first results start the effectiveness workpaper while testing
+            # is still open.
+            from ai_workforce_api.workpaper_service import draft_effectiveness_after_run
+
+            def effectiveness() -> list[UUID]:
+                with connect(database_url) as connection:
+                    return draft_effectiveness_after_run(connection, UUID(sheet_id))
+
+            try:
+                await _schedule_workpapers(address, await asyncio.to_thread(effectiveness))
+            except Exception:
+                logger.warning("the testing draft could not be scheduled; it resumes on restart")
+        return result
+
+    @activity.defn(name="fail_test_run")
+    async def fail_test_run(sheet_id: str) -> None:
+        def fail() -> None:
+            with connect(database_url) as connection:
+                fail_run(connection, UUID(sheet_id))
 
         await asyncio.to_thread(fail)
 
@@ -406,6 +813,18 @@ def activities_for(
         await asyncio.to_thread(fail)
 
     return [
+        draft_workpaper,
+        fail_workpaper_draft,
+        draft_setup,
+        fail_setup_draft,
+        run_evidence_plan,
+        fail_evidence_plan_run,
+        review_system,
+        fail_system_review,
+        test_control,
+        reperform_review,
+        fail_review,
+        fail_test_run,
         answer_console_turn,
         fail_console_turn,
         record_effect,

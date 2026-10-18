@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-
+import { browserUrl } from "../../../src/browser-url";
 import {
   engagementNoticeFor,
   engagementWrite,
@@ -81,7 +81,7 @@ function redirect(
   notice: string,
   deficiency: string | null,
 ) {
-  const destination = new URL("/", request.url);
+  const destination = browserUrl("/", request);
   destination.searchParams.set("section", section);
   const organizationId = fields.organization_id ?? "";
   const projectId = fields.project_id ?? "";

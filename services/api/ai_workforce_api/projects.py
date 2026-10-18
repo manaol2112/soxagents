@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, field_validator
 
+from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -18,20 +19,45 @@ from ai_workforce_api.authorization import (
     _session_principal,
     authorize,
 )
+from ai_workforce_api.clients import (
+    assign_client,
+    carry_client_details,
+    client_of,
+    roll_forward,
+)
 from ai_workforce_api.db import ConcurrentUpdateError, require_one_row, transaction
 from ai_workforce_api.settings import Settings
 
-ProjectStatus = Literal["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]
+ProjectStatus = Literal["DRAFT", "ACTIVE", "PAUSED", "COMPLETED", "ARCHIVED"]
+# The engagement lifecycle (Milestones 8.13 and 8.14). A draft becomes active only by
+# launching from setup (onboarding.launch_engagement), which records the kickoff and the
+# plan in the same transaction; nothing here can skip that. An active engagement can pause
+# and resume. Completing and reopening have their own actions (engagement_close.py): a
+# completed engagement is read-only until reopened, and can be archived. Archiving closes
+# it for good: an archived engagement is read-only.
 _TRANSITIONS: dict[str, frozenset[str]] = {
-    "DRAFT": frozenset({"DRAFT", "ACTIVE", "ARCHIVED"}),
+    "DRAFT": frozenset({"DRAFT", "ARCHIVED"}),
     "ACTIVE": frozenset({"ACTIVE", "PAUSED", "ARCHIVED"}),
     "PAUSED": frozenset({"PAUSED", "ACTIVE", "ARCHIVED"}),
-    "ARCHIVED": frozenset({"ARCHIVED"}),
+    "COMPLETED": frozenset({"ARCHIVED"}),
+    "ARCHIVED": frozenset(),
 }
 
 
 class ProjectStateError(Exception):
     """The requested status is not a legal next state."""
+
+
+class ProjectLaunchRequired(Exception):
+    """A draft becomes active only by launching it from setup."""
+
+
+class ProjectArchived(Exception):
+    """An archived engagement is closed: nothing about it changes."""
+
+
+class ProjectCompleted(Exception):
+    """A completed engagement is read-only until an owner or admin reopens it."""
 
 
 class ProjectConflict(Exception):
@@ -40,6 +66,10 @@ class ProjectConflict(Exception):
 
 class ProjectVersionError(Exception):
     """The project version no longer matches the caller's copy."""
+
+
+class ProjectDetailsLocked(Exception):
+    """The client and the period end are part of the launched plan; they no longer change."""
 
 
 class ProgressItem(BaseModel):
@@ -71,6 +101,11 @@ class ProjectDetailBody(BaseModel):
     version: int
     progress: list[ProgressItem]
     activity: list[ActivityItem]
+    # The engagement's profile from its settings, for the edit form (Milestone 8.15).
+    client_id: UUID | None = None
+    client_name: str = ""
+    period_end: date | None = None
+    launched: bool = False
 
 
 class ProjectFields(BaseModel):
@@ -105,11 +140,40 @@ class ProjectFields(BaseModel):
 
 class ProjectCreateBody(ProjectFields):
     status: Literal["DRAFT", "ACTIVE"] = "DRAFT"
+    # The engagement's profile (Milestone 8.3c), kept on its settings.
+    client_name: str = Field(default="", max_length=200)
+    # A new engagement covers IT general controls and business process controls.
+    engagement_type: Literal["SOX_ITGC", "SOX_FULL", "IT_AUDIT"] = "SOX_FULL"
+    period_end: date | None = None
+    # The firm's client it is for (Milestone 8.18); else the client named, found or added.
+    client_id: UUID | None = None
+    # An earlier engagement of the same client whose setup the new one starts from.
+    rollforward_from: UUID | None = None
 
 
 class ProjectUpdateBody(ProjectFields):
     status: ProjectStatus
     version: int = Field(ge=1)
+
+
+class ProjectDetailsBody(BaseModel):
+    """What the engagement form edits (Milestone 8.15): the same fields it creates with,
+    and the fieldwork dates. The status changes by its own actions; the slug stays."""
+
+    version: int = Field(ge=1)
+    name: str = Field(min_length=1, max_length=200)
+    owner_user_id: UUID
+    client_name: str = Field(default="", max_length=200)
+    # The firm's client, when the form picked one; else the client named.
+    client_id: UUID | None = None
+    period_end: date | None = None
+    starts_on: date | None = None
+    ends_on: date | None = None
+
+    @field_validator("name", "client_name")
+    @classmethod
+    def trimmed(cls, value: str) -> str:
+        return " ".join(value.split())
 
 
 def register_projects(app: FastAPI, settings: Settings) -> None:
@@ -150,6 +214,24 @@ def register_projects(app: FastAPI, settings: Settings) -> None:
         )
 
     @app.patch(
+        "/organizations/{organization_id}/projects/{project_id}/details",
+        response_model=ProjectDetailBody,
+    )
+    def details(
+        organization_id: UUID,
+        project_id: UUID,
+        body: ProjectDetailsBody,
+        request: Request,
+    ) -> ProjectDetailBody:
+        principal = _session_principal(request)
+        return _run(
+            settings,
+            lambda connection: update_details(
+                connection, principal, organization_id, project_id, body
+            ),
+        )
+
+    @app.patch(
         "/organizations/{organization_id}/projects/{project_id}",
         response_model=ProjectDetailBody,
     )
@@ -166,6 +248,118 @@ def register_projects(app: FastAPI, settings: Settings) -> None:
                 connection, principal, organization_id, project_id, body
             ),
         )
+
+
+def update_details(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    body: ProjectDetailsBody,
+) -> ProjectDetailBody:
+    """The engagement's details and profile in one transaction. A completed or archived
+    engagement is refused before this runs (engagement_close). After launch the client and
+    the period end belong to the launched plan and stay as they are."""
+    if body.name == "":
+        raise ValueError("name is blank")
+    if body.starts_on is not None and body.ends_on is not None and body.ends_on < body.starts_on:
+        raise ValueError("ends_on precedes starts_on")
+    if contains_secret({"name": body.name, "client": body.client_name}):
+        raise ValueError("details hold a secret")
+    authorize(
+        connection,
+        principal=principal,
+        action=Action.PROJECT_UPDATE,
+        organization_id=organization_id,
+        project_id=project_id,
+    )
+    with transaction(connection) as cursor:
+        if not _active_member(cursor, organization_id, body.owner_user_id):
+            raise NotVisible()
+        row = cursor.execute(
+            """
+            SELECT p.status::text, p.version, p.name, p.owner_user_id, p.starts_on, p.ends_on,
+                   s.client_name, s.period_end, s.kicked_off_at IS NOT NULL
+            FROM projects p JOIN engagement_settings s ON s.project_id = p.id
+            WHERE p.id = %s AND p.organization_id = %s AND p.deleted_at IS NULL
+            FOR UPDATE OF p, s
+            """,
+            (project_id, organization_id),
+        ).fetchone()
+        if row is None:
+            raise NotVisible()
+        status, version, name, owner, starts, ends, client, period_end, launched = row
+        current_client = client_of(cursor, project_id)
+        if body.client_id is not None:
+            named = cursor.execute(
+                "SELECT name FROM clients WHERE id = %s AND organization_id = %s",
+                (body.client_id, organization_id),
+            ).fetchone()
+            if named is None:
+                raise NotVisible()
+            body.client_name = str(named[0])
+        if str(status) == "ARCHIVED":
+            raise ProjectArchived()
+        if str(status) == "COMPLETED":
+            raise ProjectCompleted()
+        if int(version) != body.version:
+            raise ProjectVersionError()
+        same_client = (
+            body.client_id == current_client
+            if body.client_id is not None
+            else body.client_name.casefold() == str(client).casefold()
+        )
+        if launched and (not same_client or body.period_end != period_end):
+            raise ProjectDetailsLocked()
+        before = {
+            "name": name, "owner": owner, "starts_on": starts, "ends_on": ends,
+            "client": client, "period_end": period_end,
+        }  # fmt: skip
+        after = {
+            "name": body.name, "owner": body.owner_user_id, "starts_on": body.starts_on,
+            "ends_on": body.ends_on, "client": body.client_name, "period_end": body.period_end,
+        }  # fmt: skip
+        changed = sorted(
+            key for key in after
+            if after[key] != before[key] and not (key == "client" and same_client)
+        )  # fmt: skip
+        cursor.execute(
+            """
+            UPDATE projects
+            SET name = %s, owner_user_id = %s, starts_on = %s, ends_on = %s,
+                version = version + 1
+            WHERE id = %s
+            """,
+            (body.name, body.owner_user_id, body.starts_on, body.ends_on, project_id),
+        )
+        if not launched:
+            if not same_client:
+                assign_client(
+                    cursor, organization_id, project_id, principal.id,
+                    client_id=body.client_id, name=body.client_name,
+                )  # fmt: skip
+            cursor.execute(
+                """
+                UPDATE engagement_settings
+                SET period_end = %s, version = version + 1, updated_at = clock_timestamp()
+                WHERE project_id = %s
+                """,
+                (body.period_end, project_id),
+            )
+        cursor.execute(
+            """
+            INSERT INTO audit_events (
+                organization_id, project_id, actor_user_id, action, target_type, target_id,
+                payload
+            )
+            VALUES (%s, %s, %s, 'project.updated', 'project', %s, %s)
+            """,
+            (
+                organization_id, project_id, principal.id, project_id,
+                Json({"status": str(status), "fields": changed}),
+            ),
+        )  # fmt: skip
+    return _load_detail(connection, organization_id, project_id)
 
 
 def get_project(
@@ -227,6 +421,18 @@ def create_project(
         action=Action.PROJECT_CREATE,
         organization_id=organization_id,
     )
+    if body.status != "DRAFT":
+        # Every engagement starts as a draft; launching it from setup makes it active.
+        raise ProjectLaunchRequired()
+    if body.rollforward_from is not None:
+        # The engagement it starts from is one the person can open.
+        authorize(
+            connection,
+            principal=principal,
+            action=Action.PROJECT_READ,
+            organization_id=organization_id,
+            project_id=body.rollforward_from,
+        )
     with transaction(connection) as cursor:
         if not _active_member(cursor, organization_id, body.owner_user_id):
             raise NotVisible()
@@ -264,7 +470,42 @@ def create_project(
                 """,
                 (organization_id, project_id, member_id),
             )
+        # The settings row comes from the projects trigger; the profile goes on it.
+        cursor.execute(
+            """
+            UPDATE engagement_settings
+            SET engagement_type = %s, period_end = %s,
+                version = version + 1, updated_at = clock_timestamp()
+            WHERE project_id = %s
+            """,
+            (body.engagement_type, body.period_end, project_id),
+        )
+        client_id = assign_client(
+            cursor, organization_id, project_id, principal.id,
+            client_id=body.client_id, name=body.client_name,
+        )  # fmt: skip
         _audit(cursor, organization_id, project_id, principal.id, "project.created", body.status)
+        if body.rollforward_from is not None:
+            if client_id is None or client_of(cursor, body.rollforward_from) != client_id:
+                raise ValueError("an engagement rolls forward from its own client's")
+            copied = roll_forward(
+                cursor, organization_id, body.rollforward_from, project_id, principal.id
+            )
+            cursor.execute(
+                """
+                INSERT INTO audit_events (
+                    organization_id, project_id, actor_user_id, action, target_type,
+                    target_id, payload
+                )
+                VALUES (%s, %s, %s, 'project.rolled_forward', 'project', %s, %s)
+                """,
+                (
+                    organization_id, project_id, principal.id, project_id,
+                    Json({"from": str(body.rollforward_from), **copied}),
+                ),
+            )  # fmt: skip
+        if client_id is not None:
+            carry_client_details(cursor, project_id, client_id, body.rollforward_from)
     return _load_detail(connection, organization_id, project_id)
 
 
@@ -290,7 +531,7 @@ def update_project(
             """
             SELECT status::text
             FROM projects
-            WHERE id = %s AND organization_id = %s
+            WHERE id = %s AND organization_id = %s AND deleted_at IS NULL
             FOR UPDATE
             """,
             (project_id, organization_id),
@@ -298,6 +539,13 @@ def update_project(
         current = cursor.fetchone()
         if current is None or not isinstance(current[0], str):
             raise NotVisible()
+        if current[0] == "ARCHIVED":
+            raise ProjectArchived()
+        if current[0] == "DRAFT" and body.status in ("ACTIVE", "PAUSED"):
+            raise ProjectLaunchRequired()
+        if current[0] == "COMPLETED" and body.status != "ARCHIVED":
+            # Its details are kept as completed; it is reopened by its own action.
+            raise ProjectCompleted()
         if body.status not in _TRANSITIONS.get(current[0], frozenset()):
             raise ProjectStateError()
         try:
@@ -350,8 +598,6 @@ def _update_action(previous: str, status: str) -> str:
         return "project.resumed"
     if status == "ARCHIVED" and previous != "ARCHIVED":
         return "project.archived"
-    if status == "ACTIVE" and previous == "DRAFT":
-        return "project.started"
     return "project.updated"
 
 
@@ -396,10 +642,13 @@ def _load_detail(
     row = connection.execute(
         """
         SELECT p.id, p.name, p.slug, p.scope, p.owner_user_id, u.display_name,
-               p.status::text, p.starts_on, p.ends_on, p.version
+               p.status::text, p.starts_on, p.ends_on, p.version,
+               coalesce(s.client_name, ''), s.period_end, s.kicked_off_at IS NOT NULL,
+               s.client_id
         FROM projects AS p
         JOIN users AS u ON u.id = p.owner_user_id
-        WHERE p.id = %s AND p.organization_id = %s
+        LEFT JOIN engagement_settings AS s ON s.project_id = p.id
+        WHERE p.id = %s AND p.organization_id = %s AND p.deleted_at IS NULL
         """,
         (project_id, organization_id),
     ).fetchone()
@@ -416,6 +665,10 @@ def _load_detail(
         starts_on,
         ends_on,
         version,
+        client_name,
+        period_end,
+        launched,
+        client_id,
     ) = row
     if (
         not isinstance(project_id_value, UUID)
@@ -480,6 +733,10 @@ def _load_detail(
         version=version,
         progress=progress,
         activity=activity,
+        client_id=client_id if isinstance(client_id, UUID) else None,
+        client_name=str(client_name),
+        period_end=period_end if isinstance(period_end, date) else None,
+        launched=launched is True,
     )
 
 
@@ -494,10 +751,26 @@ def _run[T](settings: Settings, work: Callable[[psycopg.Connection[Any]], T]) ->
         raise HTTPException(
             status_code=409, detail="project status cannot change that way"
         ) from None
+    except ProjectLaunchRequired:
+        raise HTTPException(
+            status_code=409, detail="launch the engagement from setup to make it active"
+        ) from None
+    except ProjectArchived:
+        raise HTTPException(
+            status_code=409, detail="the engagement is archived and cannot change"
+        ) from None
+    except ProjectCompleted:
+        raise HTTPException(
+            status_code=409, detail="the engagement is completed; reopen it to change it"
+        ) from None
     except ProjectConflict:
         raise HTTPException(status_code=409, detail="project slug is already in use") from None
     except ProjectVersionError:
         raise HTTPException(status_code=409, detail="project changed") from None
+    except ProjectDetailsLocked:
+        raise HTTPException(
+            status_code=409, detail="client and period end are locked after launch"
+        ) from None
     except ValueError:
         raise HTTPException(status_code=422, detail="project fields are invalid") from None
     return result

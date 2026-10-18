@@ -508,7 +508,7 @@ def _draft_follow_up(
     """One draft per file. It is rewritten while still a draft, and sent only on approval."""
     original = cursor.execute(
         """
-        SELECT owner_user_id, recipient, follow_up_after_days, max_follow_ups
+        SELECT owner_user_id, recipient, follow_up_after_days, max_follow_ups, testing_phase
         FROM pbc_requests WHERE id = %s AND project_id = %s
         """,
         (request[0], project_id),
@@ -522,9 +522,9 @@ def _draft_follow_up(
         INSERT INTO pbc_requests (
             organization_id, project_id, operation_key, control_ref, owner_user_id,
             recipient, due_at, evidence_description, follow_up_after_days, max_follow_ups,
-            engagement_control_id
+            engagement_control_id, testing_phase, drafted_by
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'AGENT')
         ON CONFLICT (project_id, operation_key) DO UPDATE
         SET evidence_description = EXCLUDED.evidence_description,
             version = pbc_requests.version + 1, updated_at = clock_timestamp()
@@ -543,6 +543,8 @@ def _draft_follow_up(
             original[2],
             original[3],
             request[3],
+            # A follow-up serves the phase of the request it follows up.
+            original[4],
         ),
     ).fetchone()
     if row is None:

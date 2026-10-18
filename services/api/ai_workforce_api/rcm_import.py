@@ -12,6 +12,7 @@ import csv
 import io
 import re
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from typing import Any
@@ -125,6 +126,10 @@ SYNONYMS: dict[str, tuple[str, ...]] = {
         "itgc category",
         "control category",
         "cycle",
+        "business process",
+        "business cycle",
+        "process name",
+        "domain process",
     ),
     "frequency": (
         "frequency",
@@ -438,11 +443,41 @@ VALUE_RULES: dict[str, tuple[tuple[tuple[str, ...], str], ...]] = {
                 "physical",
                 "data center",
                 "datacenter",
+                "vendor management",
+                "third party",
+                "service organization",
+                "soc 1",
+                "soc report",
             ),
             "OPERATIONS",
         ),
     ),
 }
+
+# What a category column says about a control: which areas its process can be in. A
+# category that is itself an area (ITAC, key reports, entity-level) decides outright.
+IT_AREAS = ("ACCESS", "CHANGE", "OPERATIONS")
+BUSINESS_AREAS = (
+    "ENTITY",
+    "ORDER_TO_CASH",
+    "PROCURE_TO_PAY",
+    "HIRE_TO_RETIRE",
+    "TREASURY",
+    "INVENTORY",
+    "FIXED_ASSETS",
+    "TAX",
+    "RECORD_TO_REPORT",
+    "OTHER_BUSINESS",
+)
+_CATEGORY_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("itac", "application control", "it application"), "ITAC"),
+    (("ipe", "key report", "information produced"), "IPE"),
+    (("elc", "entity level", "entity wide", "company level"), "ENTITY"),
+    (("itgc", "general control", "it general", "general computer"), "IT"),
+    (("business process", "business cycle", "process control", "bp", "financial"), "BUSINESS"),
+)
+# Words that make a column the control's type (preventive or detective), never its nature.
+_CONTROL_TYPE_WORDS = ("preventive", "preventative", "detective", "corrective", "directive")
 
 DEFAULT_ATTRIBUTE = "The control operated as described in the control activity."
 DEFAULT_EVIDENCE = "Evidence that the control operated for each selected sample."
@@ -632,7 +667,8 @@ def _trim(rows: list[list[str]]) -> list[list[str]]:
 
 
 def normalize(header: str) -> str:
-    return " ".join(re.sub(r"[^a-z0-9]+", " ", header.lower()).split())
+    text = header.lower().replace("(s)", "s")
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", text).split())
 
 
 # Single words distinctive enough to name a field inside a longer heading.
@@ -705,34 +741,165 @@ def data_rows(rows: list[list[str]], header_row: int) -> list[tuple[int, list[st
     ]
 
 
-def suggest_fields(names: list[str], remembered: dict[str, str] | None = None) -> list[str]:
-    """One choice per column. Each platform field goes to at most one column."""
+# Fields whose values are distinctive enough to name a column without a heading.
+_VALUE_NAMED = ("nature", "frequency", "key_control")
+
+# The area may come from two columns: a category (ITGC, Business Process, Key Report)
+# and the process itself (Order to cash, Program change). They are read together.
+DOMAIN_COLUMNS = 2
+
+
+def column_values(rows: list[list[str]], header_row: int, limit: int = 60) -> list[list[str]]:
+    """The distinct non-blank values in each column, in the order they appear."""
+    width = max((len(row) for row in rows), default=0)
+    values: list[list[str]] = [[] for _ in range(width)]
+    seen: list[set[str]] = [set() for _ in range(width)]
+    for _number, row in data_rows(rows, header_row):
+        for index, cell in enumerate(row[:width]):
+            text = " ".join(cell.split())
+            key = text.lower()
+            if text and key not in seen[index] and len(values[index]) < limit:
+                seen[index].add(key)
+                values[index].append(text)
+    return values
+
+
+def _id_like(value: str) -> bool:
+    text = value.strip()
+    return len(text) <= 30 and any(ch.isdigit() for ch in text) and len(text.split()) <= 3
+
+
+def looks_like_control_type(values: list[str]) -> bool:
+    """Preventive or detective: the control's type, which is not its nature."""
+    if not values:
+        return False
+    hits = sum(1 for v in values if any(w in v.lower() for w in _CONTROL_TYPE_WORDS))
+    return hits / len(values) >= 0.6
+
+
+def _share(values: list[str], fits: Callable[[str], bool]) -> int:
+    """2 when most values fit, 1 when a good share do, else 0."""
+    if not values:
+        return 0
+    share = sum(1 for v in values if fits(v)) / len(values)
+    return 2 if share >= 0.7 else 1 if share >= 0.35 else 0
+
+
+def value_fit(key: str, values: list[str]) -> int:
+    """How well a column's values look like the field: 0 (no), 1 (somewhat), 2 (clearly)."""
+    if not values:
+        return 0
+    if key == "nature":
+        if looks_like_control_type(values):
+            return 0
+        return _share(values, lambda v: suggest_value("nature", v) is not None)
+    if key == "frequency":
+        return _share(values, lambda v: suggest_value("frequency", v) is not None)
+    if key == "domain":
+        # A category such as ITGC or Business Process is an area column too.
+        return _share(
+            values,
+            lambda v: (
+                suggest_value("domain", v) is not None
+                or _rule(normalize(v), _CATEGORY_RULES) is not None
+            ),
+        )
+    if key == "key_control":
+        return _share(values, lambda v: normalize(v) in _YES | {"no", "n", "false", "non key", "0"})
+    if key == "control_ref":
+        unique = len({v.lower() for v in values}) == len(values)
+        return _share(values, _id_like) if unique else 0
+    if key in ("risk", "activity"):
+        # Prose: a sentence, not an identifier or a one-word code.
+        if _share(values, _id_like) == 2:
+            return 0
+        return _share(values, lambda v: len(v) >= 25 and " " in v)
+    if key == "title":
+        if _share(values, _id_like) == 2:
+            return 0
+        return _share(values, lambda v: 8 <= len(v) < 120)
+    return 0
+
+
+def suggest_fields(
+    names: list[str],
+    remembered: dict[str, str] | None = None,
+    samples: list[list[str]] | None = None,
+) -> list[str]:
+    """One choice per column, from the headings and the values together.
+
+    A heading names a field; the values confirm or veto it: a "Nature" column holding
+    preventive and detective is the control's type, not its nature, and "Risk ID" is an
+    identifier, not the risk. Each field goes to one column, except the area, which can
+    come from a category column and a process column together.
+    """
     memory = remembered or {}
+    values = samples if samples is not None else [[] for _ in names]
     choices = [CUSTOM] * len(names)
-    taken: set[str] = set()
+    counts: dict[str, int] = {}
     for index, name in enumerate(names):
         known = memory.get(normalize(name))
-        if known in FIELD_KEYS and known not in taken:
+        if known in FIELD_KEYS and counts.get(known, 0) < (
+            DOMAIN_COLUMNS if known == "domain" else 1
+        ):
             choices[index] = known
-            taken.add(known)
+            counts[known] = counts.get(known, 0) + 1
         elif known == IGNORE:
             choices[index] = IGNORE
-    for strength in (2, 1):
-        for index, name in enumerate(names):
-            if choices[index] != CUSTOM or normalize(name) in memory:
-                continue
-            match = _synonym_field(name)
-            if match is not None and match[1] == strength and match[0] not in taken:
-                choices[index] = match[0]
-                taken.add(match[0])
+    candidates: list[tuple[int, int, int, int, str]] = []
+    for index, name in enumerate(names):
+        if choices[index] != CUSTOM or normalize(name) in memory:
+            continue
+        column = values[index] if index < len(values) else []
+        if looks_like_control_type(column):
+            continue
+        match = _synonym_field(name)
+        for key in FIELD_KEYS:
+            strength = match[1] if match is not None and match[0] == key else 0
+            fit = value_fit(key, column)
+            if column and fit == 0 and key in (*VALUE_FIELDS, "key_control", "risk"):
+                # The values say otherwise. Another column that fits wins over a phrase
+                # in this heading, and one that fits clearly wins over an exact heading.
+                better = max(
+                    (value_fit(key, other) for j, other in enumerate(values) if j != index),
+                    default=0,
+                )
+                if (strength < 2 and better >= 1) or (strength == 2 and better == 2):
+                    continue
+            score = 2 * strength + 2 * fit
+            # Values alone name a column only where the vocabulary is distinctive.
+            if score >= 2 and (strength > 0 or (fit == 2 and key in _VALUE_NAMED)):
+                candidates.append((score, strength, -index, index, key))
+    for _score, _strength, _order, index, key in sorted(candidates, reverse=True):
+        if choices[index] != CUSTOM:
+            continue
+        if counts.get(key, 0) >= (DOMAIN_COLUMNS if key == "domain" else 1):
+            continue
+        choices[index] = key
+        counts[key] = counts.get(key, 0) + 1
     return choices
+
+
+def field_columns(column_fields: list[str], key: str) -> list[int]:
+    """The columns mapped to a field: one, or two for the area."""
+    return [index for index, choice in enumerate(column_fields) if choice == key]
+
+
+def field_value(row: list[str], column_fields: list[str], key: str) -> str:
+    """A row's value for a field. The area's two columns read as "category / process"."""
+    parts = [
+        " ".join(row[index].split())
+        for index in field_columns(column_fields, key)
+        if index < len(row) and row[index].strip()
+    ]
+    return " / ".join(parts)
 
 
 def check_fields(column_fields: list[str], width: int) -> list[str]:
     if len(column_fields) != width or any(choice not in CHOICES for choice in column_fields):
         raise ValueError("column mapping is invalid")
     mapped = [choice for choice in column_fields if choice in FIELD_KEYS]
-    if len(mapped) != len(set(mapped)):
+    if any(mapped.count(key) > (DOMAIN_COLUMNS if key == "domain" else 1) for key in set(mapped)):
         raise ValueError("a field is mapped twice")
     labels = dict(FIELDS)
     return [f"Choose the column for {labels[key]}." for key in REQUIRED if key not in mapped]
@@ -741,17 +908,59 @@ def check_fields(column_fields: list[str], width: int) -> list[str]:
 # Values
 
 
-def suggest_value(field_key: str, value: str) -> str | None:
-    text = f" {normalize(value)} "
-    if text.strip() == "":
-        return None
-    canonical = text.strip().upper().replace(" ", "_")
-    if canonical in VALUE_FIELDS[field_key]:
-        return canonical
-    for words, result in VALUE_RULES[field_key]:
-        if any(word in text if len(word) > 3 else f" {word} " in text for word in words):
+def _rule(text: str, rules: tuple[tuple[tuple[str, ...], str], ...]) -> str | None:
+    padded = f" {text} "
+    for words, result in rules:
+        if any(word in padded if len(word) > 3 else f" {word} " in padded for word in words):
             return result
     return None
+
+
+def suggest_value(field_key: str, value: str) -> str | None:
+    text = normalize(value)
+    if text == "":
+        return None
+    canonical = text.upper().replace(" ", "_")
+    if canonical in VALUE_FIELDS[field_key]:
+        return canonical
+    if field_key == "domain":
+        return _suggest_domain(value)
+    return _rule(text, VALUE_RULES[field_key])
+
+
+def _suggest_domain(value: str) -> str | None:
+    """The area for a term, or for "category / process" read from two columns.
+
+    A category that is an area (ITAC, key report, entity-level) decides. One that is a
+    kind (ITGC, business process) narrows the process to that kind's areas, so "ITGC /
+    Vendor management" is IT operations, not procure to pay.
+    """
+    parts = [normalize(part) for part in value.split(" / ") if normalize(part)]
+    if not parts:
+        return None
+    kind: str | None = None
+    process: list[str] = []
+    for part in parts:
+        category = _rule(part, _CATEGORY_RULES)
+        if category in ("ITAC", "IPE", "ENTITY"):
+            return category
+        if category is not None and _rule(part, VALUE_RULES["domain"]) is None:
+            kind = category
+        else:
+            if category is not None:
+                kind = category
+            process.append(part)
+    allowed = IT_AREAS if kind == "IT" else BUSINESS_AREAS if kind == "BUSINESS" else None
+    rules = (
+        VALUE_RULES["domain"]
+        if allowed is None
+        else tuple(rule for rule in VALUE_RULES["domain"] if rule[1] in allowed)
+    )
+    for part in process or parts:
+        found = _rule(part, rules)
+        if found is not None:
+            return found
+    return _rule(" ".join(parts), rules)
 
 
 def value_key(value: str) -> str:
@@ -769,11 +978,9 @@ def value_choices(
         ref = column_fields.index("control_ref")
         body = [(number, row) for number, row in body if ref < len(row) and row[ref].strip()]
     for key in VALUE_FIELDS:
-        column = column_fields.index(key) if key in column_fields else None
         counts: dict[str, ValueChoice] = {}
         for _number, row in body:
-            raw = row[column] if column is not None and column < len(row) else ""
-            label = " ".join(raw.split())[:120]
+            label = field_value(row, column_fields, key)[:120]
             item = counts.get(value_key(label))
             if item is None:
                 if len(counts) >= MAX_DISTINCT:
@@ -862,7 +1069,7 @@ def build(
             email, owner = owner.lower(), ""
         mapped: dict[str, tuple[str, str]] = {}
         for key in VALUE_FIELDS:
-            label = " ".join(cell(key).split())[:120]
+            label = field_value(row, column_fields, key)[:120]
             mapped[key] = (value_maps[key][value_key(label)], label)
         key_text = normalize(cell("key_control"))
         result.controls.append(

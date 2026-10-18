@@ -1,0 +1,447 @@
+"""The engagement profile: the period agrees with the engagement's own words or a person
+confirms it, the methodology is chosen before launch, independence cannot be switched off
+in production, and team and scope changes say what they affect first."""
+
+from collections.abc import Iterator
+from datetime import date
+from typing import Any
+from uuid import UUID
+
+import pytest
+from support import Database, approve_evidence_plans
+from test_execution import _add_project_member, _add_user
+from test_onboarding import _base, _complete_setup, _control_fields, _new_engagement
+from test_outbound import migrated
+
+from ai_workforce_api import independence
+from ai_workforce_api.db import connect
+from ai_workforce_api.main import create_app
+from ai_workforce_api.profile_checks import basis, period_conflicts
+from ai_workforce_api.settings import Settings
+from ai_workforce_api.setup_drafting import _Answer, _checked
+from ai_workforce_api.setup_suggest import SetupFacts, rules_draft
+
+__all__ = ["migrated"]
+
+TODAY = date(2026, 10, 17)
+
+
+@pytest.fixture(autouse=True)
+def _restore() -> Iterator[None]:
+    yield
+    independence.configure(True)
+
+
+def _readiness(owner: Any, base: str) -> dict[str, dict[str, Any]]:
+    return {item["step"]: item for item in owner.get(base).json()["readiness"]}
+
+
+def _launch(owner: Any, base: str) -> None:
+    preview = owner.get(base).json()["plan_preview"]
+    started = owner.post(f"{base}/plan/launch", json={"fingerprint": preview["fingerprint"]})
+    assert started.status_code == 200, started.text
+
+
+# The checks themselves
+
+
+def test_a_name_and_scope_that_name_another_year_disagree_with_the_period() -> None:
+    conflicts = period_conflicts(
+        "2027 SOX Audit",
+        "IT general controls for the fiscal year ending December 31, 2027.",
+        None,
+        date(2026, 12, 31),
+        "",
+        TODAY,
+    )
+    assert {c.kind for c in conflicts} == {"NAME_YEAR", "SCOPE_DATE"}
+    assert all(c.blocking for c in conflicts)
+    assert "31 December 2026" in conflicts[0].message
+
+
+def test_an_interim_date_or_an_agreeing_period_is_not_flagged() -> None:
+    assert (
+        period_conflicts(
+            "SOX FY27",
+            "Interim testing through 30 September 2027; period ending 31 December 2027.",
+            date(2027, 1, 1),
+            date(2027, 12, 31),
+            "FY2027",
+            TODAY,
+        )
+        == []
+    )
+
+
+def test_the_fiscal_year_label_order_and_length_are_checked() -> None:
+    labelled = period_conflicts("Audit", "", None, date(2026, 12, 31), "FY2027", TODAY)
+    assert [c.kind for c in labelled] == ["FISCAL_YEAR"]
+    short = period_conflicts("Audit", "", date(2026, 7, 1), date(2026, 12, 31), "", TODAY)
+    assert [(c.kind, c.blocking) for c in short] == [("PERIOD_LENGTH", False)]
+    backwards = period_conflicts("Audit", "", date(2027, 1, 1), date(2026, 12, 31), "", TODAY)
+    assert [c.kind for c in backwards] == ["PERIOD_ORDER"]
+
+
+def test_the_basis_changes_with_any_of_the_words_or_dates() -> None:
+    first = basis("SOX 2027", "Scope", None, date(2027, 12, 31), "")
+    assert first == basis("SOX  2027", "Scope ", None, date(2027, 12, 31), "")
+    assert first != basis("SOX 2027", "Scope.", None, date(2027, 12, 31), "")
+    assert first != basis("SOX 2027", "Scope", None, date(2026, 12, 31), "")
+
+
+def test_the_planner_never_keeps_a_narrative_that_names_another_period() -> None:
+    facts = SetupFacts(
+        project_name="2027 SOX Audit",
+        client_name="Acme Corp",
+        engagement_type="SOX_ITGC",
+        scope="",
+        period_end=date(2026, 12, 31),
+        today=TODAY,
+        systems=["SAP ECC"],
+    )
+    rules = rules_draft(facts)
+    answer = _Answer(
+        scope_text="ITGCs over SAP ECC through December 31, 2027.",
+        period_end=date(2027, 12, 31),
+        pbc_due_days=10,
+        pbc_follow_up_days=3,
+        pbc_max_follow_ups=2,
+    )
+    checked = _checked(answer, rules, facts)
+    # The recorded period stands, and the narrative is the rules' own.
+    assert checked["period_end"] == date(2026, 12, 31)
+    assert checked["scope_text"] == rules["scope_text"]
+    assert checked["note"] != ""
+    agreeing = answer.model_copy(update={"scope_text": "ITGCs over SAP ECC for 2026."})
+    kept = _checked(agreeing, rules, facts)
+    assert kept["scope_text"] == "ITGCs over SAP ECC for 2026."
+    assert kept["note"] == ""
+
+
+# Before launch
+
+
+def test_launch_waits_for_the_methodology(migrated: Database) -> None:
+    team = _new_engagement(migrated, "methodology")
+    owner, base = team["owner"], _base(team["org"], team["project"])
+    _complete_setup(owner, team)
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE engagement_settings SET methodology = NULL WHERE project_id = %s",
+            (team["project"],),
+        )
+    state = owner.get(base).json()
+    assert state["ready"] is False
+    assert "Choose the audit methodology." in _readiness(owner, base)["scope"]["issues"]
+    refused = owner.patch(
+        f"{base}/profile",
+        json={"client_name": "Acme", "engagement_type": "SOX_ITGC", "methodology": "GUESSWORK"},
+    )
+    assert refused.status_code == 422
+    chosen = owner.patch(
+        f"{base}/profile",
+        json={
+            "client_name": "Acme",
+            "engagement_type": "SOX_ITGC",
+            "methodology": "MANAGEMENT_404",
+            "period_start": "2027-01-01",
+            "fiscal_year": "FY2027",
+            "reporting_objectives": "Management's assessment of ITGCs over SAP ERP.",
+        },
+    )
+    assert chosen.status_code == 200, chosen.text
+    settings = chosen.json()["settings"]
+    assert settings["methodology"] == "MANAGEMENT_404"
+    assert settings["period_start"] == "2027-01-01"
+    assert settings["fiscal_year"] == "FY2027"
+    assert chosen.json()["ready"] is True
+
+
+def test_a_period_that_starts_after_it_ends_is_refused(migrated: Database) -> None:
+    team = _new_engagement(migrated, "period-order")
+    owner, base = team["owner"], _base(team["org"], team["project"])
+    _complete_setup(owner, team)
+    refused = owner.patch(
+        f"{base}/profile",
+        json={"client_name": "Acme", "engagement_type": "SOX_ITGC", "period_start": "2028-01-01"},
+    )
+    assert refused.status_code == 422
+    assert owner.get(base).json()["settings"]["period_start"] is None
+
+
+def test_profile_dates_can_be_cleared_explicitly(migrated: Database) -> None:
+    team = _new_engagement(migrated, "period-clear")
+    owner, base = team["owner"], _base(team["org"], team["project"])
+    _complete_setup(owner, team)
+    current = owner.get(base).json()["settings"]
+    set_start = owner.patch(
+        f"{base}/profile",
+        json={
+            "client_name": current["client_name"],
+            "engagement_type": current["engagement_type"],
+            "period_start": "2027-01-01",
+        },
+    )
+    assert set_start.status_code == 200, set_start.text
+    cleared = owner.patch(
+        f"{base}/profile",
+        json={
+            "client_name": current["client_name"],
+            "engagement_type": current["engagement_type"],
+            "period_start": None,
+            "period_end": None,
+        },
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["settings"]["period_start"] is None
+    assert cleared.json()["settings"]["period_end"] is None
+    assert cleared.json()["ready"] is False
+    assert "Set the period end date." in _readiness(owner, base)["scope"]["issues"]
+
+
+def test_a_conflicting_period_blocks_launch_until_a_person_confirms_it(
+    migrated: Database,
+) -> None:
+    team = _new_engagement(migrated, "period-confirm")
+    owner, base = team["owner"], _base(team["org"], team["project"])
+    _complete_setup(owner, team)
+    # "SOX 2027" with a 2026 year end and a scope that says 2027: nothing is changed.
+    owner.patch(
+        f"{base}/scope",
+        json={"scope": "ITGCs through December 31, 2027.", "period_end": "2026-12-31"},
+    )
+    state = owner.get(base).json()
+    assert state["ready"] is False
+    assert state["settings"]["period_end"] == "2026-12-31"
+    assert {c["kind"] for c in state["period"]["conflicts"]} == {"NAME_YEAR", "SCOPE_DATE"}
+    issues = _readiness(owner, base)["scope"]["issues"]
+    assert any("name points to 2027" in issue for issue in issues)
+    stale = owner.post(f"{base}/period/confirm", json={"basis": "0" * 32})
+    assert stale.status_code == 409
+    confirmed = owner.post(f"{base}/period/confirm", json={"basis": state["period"]["basis"]})
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["period"]["confirmed"] is True
+    assert confirmed.json()["ready"] is True
+    # Any change to the words or dates asks again.
+    owner.patch(
+        f"{base}/scope",
+        json={"scope": "ITGCs through 31 December 2027.", "period_end": "2026-12-31"},
+    )
+    again = owner.get(base).json()
+    assert again["period"]["confirmed"] is False and again["ready"] is False
+    # Fixing the dates instead clears the conflict; there is nothing left to confirm.
+    owner.patch(
+        f"{base}/scope",
+        json={"scope": "ITGCs through 31 December 2027.", "period_end": "2027-12-31"},
+    )
+    fixed = owner.get(base).json()
+    assert fixed["period"]["conflicts"] == [] and fixed["ready"] is True
+    nothing = owner.post(f"{base}/period/confirm", json={"basis": fixed["period"]["basis"]})
+    assert nothing.status_code == 409
+    with connect(migrated.url) as connection:
+        actions = [
+            row[0]
+            for row in connection.execute(
+                "SELECT action FROM audit_events WHERE project_id = %s ORDER BY created_at",
+                (team["project"],),
+            ).fetchall()
+        ]
+    assert actions.count("onboarding.period_confirmed") == 1
+
+
+def test_development_mode_is_said_plainly_in_readiness(migrated: Database) -> None:
+    team = _new_engagement(migrated, "dev-mode")
+    owner, base = team["owner"], _base(team["org"], team["project"])
+    assert _readiness(owner, base)["team"]["advisories"] == []
+    independence.configure(False)
+    advisories = _readiness(owner, base)["team"]["advisories"]
+    assert any(advice.startswith("Development mode") for advice in advisories)
+
+
+def test_independence_cannot_be_switched_off_in_production(migrated: Database) -> None:
+    with pytest.raises(independence.IndependenceOff):
+        create_app(
+            Settings(
+                database_url=migrated.url,
+                app_env="production",
+                review_independence_required=False,
+            )
+        )
+    assert independence.required() is True
+    create_app(
+        Settings(
+            database_url=migrated.url, app_env="development", review_independence_required=False
+        )
+    )
+    assert independence.required() is False
+
+
+# After launch
+
+
+def test_a_running_engagement_with_a_conflicting_period_is_flagged_and_confirmed(
+    migrated: Database,
+) -> None:
+    team = _new_engagement(migrated, "period-running")
+    owner, base = team["owner"], _base(team["org"], team["project"])
+    _complete_setup(owner, team)
+    _launch(owner, base)
+    workspace = f"/organizations/{team['org']}/projects/{team['project']}/workspace/dashboard"
+    assert owner.get(workspace).json()["period_conflicts"] == []
+    # An engagement launched before the checks existed, with its period as created.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE engagement_settings SET period_end = '2026-12-31' WHERE project_id = %s",
+            (team["project"],),
+        )
+    flagged = owner.get(workspace).json()["period_conflicts"]
+    assert len(flagged) == 2
+    state = owner.get(base).json()
+    confirmed = owner.post(f"{base}/period/confirm", json={"basis": state["period"]["basis"]})
+    assert confirmed.status_code == 200, confirmed.text
+    assert owner.get(workspace).json()["period_conflicts"] == []
+    with connect(migrated.url) as connection:
+        period_end = connection.execute(
+            "SELECT period_end FROM engagement_settings WHERE project_id = %s",
+            (team["project"],),
+        ).fetchone()
+    assert period_end == (date(2026, 12, 31),)
+
+
+def test_the_last_reviewer_stays_and_a_leavers_open_work_goes_back_to_the_team(
+    migrated: Database,
+) -> None:
+    team = _new_engagement(migrated, "team-impact")
+    owner, org, project = team["owner"], team["org"], team["project"]
+    base = _base(org, project)
+    _complete_setup(owner, team)
+    with connect(migrated.url) as connection:
+        preparer = _add_user(connection, org, "prep-impact@example.com", "CONTRIBUTOR")
+        _add_project_member(connection, org, project, preparer)
+    owner.post(f"{base}/team", json={"user_id": str(preparer), "engagement_role": "PREPARER"})
+    _launch(owner, base)
+    reviewer = team["reviewer_id"]
+    impact = owner.get(f"{base}/team/{reviewer}/impact").json()
+    assert impact["last_reviewer"] is True
+    refused = owner.post(f"{base}/team/{reviewer}/remove")
+    assert refused.status_code == 409
+    assert "reviewer" in refused.json()["detail"]
+    with connect(migrated.url) as connection:
+        assigned = connection.execute(
+            """
+            UPDATE tasks SET assignee_user_id = %s
+            WHERE id IN (SELECT id FROM tasks WHERE project_id = %s
+                         AND status::text IN ('DRAFT', 'READY', 'WAITING') LIMIT 2)
+            RETURNING id
+            """,
+            (preparer, project),
+        ).fetchall()
+    assert len(assigned) == 2
+    impact = owner.get(f"{base}/team/{preparer}/impact").json()
+    assert impact == {"assigned_tasks": 2, "last_reviewer": False}
+    removed = owner.post(f"{base}/team/{preparer}/remove")
+    assert removed.status_code == 200, removed.text
+    with connect(migrated.url) as connection:
+        left = connection.execute(
+            "SELECT count(*) FROM tasks WHERE project_id = %s AND assignee_user_id = %s",
+            (project, preparer),
+        ).fetchone()
+        audit = connection.execute(
+            "SELECT payload FROM audit_events WHERE project_id = %s AND action = 'onboarding.team'"
+            " ORDER BY created_at DESC LIMIT 1",
+            (project,),
+        ).fetchone()
+    assert left == (0,)
+    assert audit is not None and audit[0]["released_tasks"] == 2
+
+
+def test_taking_a_control_with_work_on_record_out_of_scope_needs_a_reason(
+    migrated: Database,
+) -> None:
+    team = _new_engagement(migrated, "scope-reason")
+    owner, org, project = team["owner"], team["org"], team["project"]
+    base = _base(org, project)
+    _complete_setup(owner, team)
+    _launch(owner, base)
+    # Nothing is requested before a person approves each control's evidence plan.
+    approve_evidence_plans(migrated, project)
+    control_id = owner.get(base).json()["controls"][0]["id"]
+    quiet = owner.get(f"{base}/scope-impact", params={"control_id": control_id}).json()
+    assert quiet["controls"] == 1 and quiet["material"] is False
+    # Unsent requests and open tasks are not work on record; a recorded deficiency is.
+    assert quiet["open_tasks"] > 0 and quiet["unsent_requests"] > 0
+    with connect(migrated.url) as connection:
+        connection.execute(
+            """
+            INSERT INTO deficiencies (
+                organization_id, project_id, reference, engagement_control_id, title,
+                deficiency_type, identified_by
+            )
+            VALUES (%s, %s, 'D-001', %s, 'Late review', 'OPERATING', %s)
+            """,
+            (org, project, control_id, team["owner_id"]),
+        )
+    impact = owner.get(f"{base}/scope-impact", params={"control_id": control_id}).json()
+    assert impact["deficiencies"] == 1 and impact["material"] is True
+    unexplained = owner.post(f"{base}/controls/{control_id}/scope", json={"included": False})
+    assert unexplained.status_code == 409
+    assert "say why" in unexplained.json()["detail"]
+    explained = owner.post(
+        f"{base}/controls/{control_id}/scope",
+        json={"included": False, "reason": "Control retired in Q3; replaced by AC-07."},
+    )
+    assert explained.status_code == 200, explained.text
+    with connect(migrated.url) as connection:
+        audit = connection.execute(
+            "SELECT payload FROM audit_events WHERE project_id = %s "
+            "AND action = 'onboarding.control_scope' ORDER BY created_at DESC LIMIT 1",
+            (project,),
+        ).fetchone()
+    assert audit is not None
+    payload: dict[str, Any] = audit[0]
+    assert payload["reason"] == "Control retired in Q3; replaced by AC-07."
+    assert payload["impact"]["deficiencies"] == 1
+
+
+def test_scope_changes_before_launch_need_no_reason(migrated: Database) -> None:
+    team = _new_engagement(migrated, "scope-early")
+    owner, base = team["owner"], _base(team["org"], team["project"])
+    _complete_setup(owner, team)
+    control_id = owner.get(base).json()["controls"][0]["id"]
+    out = owner.post(f"{base}/controls/{control_id}/scope", json={"included": False})
+    assert out.status_code == 200, out.text
+    assert UUID(control_id) not in {UUID(c["id"]) for c in out.json()["controls"] if c["included"]}
+
+
+def test_the_control_editor_asks_for_the_same_reason(migrated: Database) -> None:
+    team = _new_engagement(migrated, "editor-reason")
+    owner, org, project = team["owner"], team["org"], team["project"]
+    base = _base(org, project)
+    _complete_setup(owner, team)
+    _launch(owner, base)
+    control = owner.get(base).json()["controls"][0]
+    with connect(migrated.url) as connection:
+        connection.execute(
+            """
+            INSERT INTO deficiencies (
+                organization_id, project_id, reference, engagement_control_id, title,
+                deficiency_type, identified_by
+            )
+            VALUES (%s, %s, 'D-001', %s, 'Late review', 'OPERATING', %s)
+            """,
+            (org, project, control["id"], team["owner_id"]),
+        )
+    fields = {**_control_fields(control), "included": False}
+    unexplained = owner.patch(f"{base}/controls/{control['id']}", json=fields)
+    assert unexplained.status_code == 409
+    assert "say why" in unexplained.json()["detail"]
+    explained = owner.patch(
+        f"{base}/controls/{control['id']}", json={**fields, "reason": "Retired in Q3."}
+    )
+    assert explained.status_code == 200, explained.text
+    # Keeping it in scope while changing other fields needs no reason.
+    other = explained.json()["controls"][1]
+    kept = owner.patch(
+        f"{base}/controls/{other['id']}", json={**_control_fields(other), "key_control": True}
+    )
+    assert kept.status_code == 200, kept.text

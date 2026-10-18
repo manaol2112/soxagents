@@ -2,6 +2,15 @@ import { Inter } from "next/font/google";
 import type { ReactNode } from "react";
 
 import "./globals.css";
+import "./controls.css";
+import "./controls-register.css";
+import "./control-workspace.css";
+import "./evidence-center.css";
+import "./loading.css";
+import "./console.css";
+import "./engagements.css";
+import "./portal.css";
+import "./planning.css";
 
 const inter = Inter({
   subsets: ["latin"],

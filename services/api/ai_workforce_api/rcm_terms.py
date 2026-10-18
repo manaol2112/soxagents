@@ -28,6 +28,7 @@ from ai_workforce_api.rcm_import import (
     FIELD_KEYS,
     VALUE_FIELDS,
     data_rows,
+    field_value,
     value_choices,
     value_key,
 )
@@ -62,6 +63,9 @@ value decides who tests the control, how many samples are tested, and which work
 
 - Use the example controls to understand a term. A term like "IT" or "Ops" is resolved by \
 what its controls actually do.
+- A process area term may read "category / process", from two columns: the category \
+(ITGC, business process, key report) and the process (order to cash, program change). \
+Map it to the process's area within that category; an ITGC is never a business cycle.
 - Prefer the value that is safest for testing when a term is genuinely ambiguous: a higher \
 frequency for sampling, and IT-dependent manual over manual when controls rely on reports.
 - If one term's controls clearly belong to different areas, choose the value that fits most \
@@ -127,9 +131,8 @@ def term_examples(
             continue
         text = " - ".join(row[i] for i in readable if i < len(row) and row[i])[:220]
         for key in VALUE_FIELDS:
-            column = column_fields.index(key) if key in column_fields else None
-            raw = row[column] if column is not None and column < len(row) else ""
-            bucket = examples[key].setdefault(value_key(" ".join(raw.split())), [])
+            raw = field_value(row, column_fields, key)
+            bucket = examples[key].setdefault(value_key(raw), [])
             if text and len(bucket) < EXAMPLES:
                 bucket.append(text)
     return examples

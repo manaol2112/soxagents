@@ -105,7 +105,7 @@ export function draftLabel(
     return { label: "Drafting did not finish", tone: "warning" };
   }
   return draft.source === "MODEL"
-    ? { label: "Drafted with Claude", tone: "success" }
+    ? { label: "Drafted by an agent", tone: "success" }
     : { label: "Drafted from the RCM", tone: "neutral" };
 }
 

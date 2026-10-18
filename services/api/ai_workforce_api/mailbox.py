@@ -1,4 +1,5 @@
-"""Mock mailbox. This module does not call Microsoft Graph or send live email."""
+"""The mailbox: the mock, and the live SMTP mailbox (smtp_mailbox.py) once every live
+condition holds. This module does not call Microsoft Graph."""
 
 import re
 from collections.abc import Mapping
@@ -93,6 +94,7 @@ class MailboxProvider(Protocol):
         thread_id: str | None,
         attachments: tuple[AttachmentDraft, ...] = (),
         metadata: Mapping[str, str] | None = None,
+        cc: tuple[str, ...] = (),
     ) -> MailMessage: ...
 
     def create_draft(
@@ -127,7 +129,7 @@ class MailboxProvider(Protocol):
 
 
 class MailboxConfigurationBody(BaseModel):
-    provider: Literal["mock", "unavailable"]
+    provider: Literal["mock", "smtp", "unavailable"]
     configuration_complete: bool
     shared_mailbox_restricted: bool
     live_email_enabled: bool
@@ -141,9 +143,15 @@ def register_mailbox(app: FastAPI, settings: Settings) -> None:
 
 
 def mailbox_configuration(settings: Settings) -> MailboxConfigurationBody:
+    from ai_workforce_api.smtp_mailbox import smtp_live, uses_smtp
+
     complete = configuration_complete(settings)
-    provider: Literal["mock", "unavailable"] = (
-        "mock" if settings.email_provider.strip().lower() in _MOCK_PROVIDERS else "unavailable"
+    provider: Literal["mock", "smtp", "unavailable"] = (
+        "mock"
+        if settings.email_provider.strip().lower() in _MOCK_PROVIDERS
+        else "smtp"
+        if uses_smtp(settings) and smtp_live(settings)
+        else "unavailable"
     )
     return MailboxConfigurationBody(
         provider=provider,
@@ -170,14 +178,26 @@ def mailbox_is_intended(settings: Settings, address: str) -> bool:
 
 
 def live_send_enabled(settings: Settings) -> bool:
-    """The readiness check reads the flag and still withholds live send."""
-    _ = (settings.email_live_send_enabled, configuration_complete(settings))
-    return False
+    """Live email is on only over SMTP, with every condition met (smtp_mailbox.smtp_live).
+    The Graph mailbox stays unavailable."""
+    from ai_workforce_api.smtp_mailbox import smtp_live
+
+    return smtp_live(settings)
 
 
 def _present(value: str) -> bool:
     text = value.strip()
     return text != "" and len(text) <= 200 and "\n" not in value and "\r" not in value
+
+
+def mailbox_available(settings: Settings) -> bool:
+    """A message can be sent: the mock, or live email with every condition met. Read
+    from the settings alone, without opening a mailbox."""
+    from ai_workforce_api.smtp_mailbox import smtp_live, uses_smtp
+
+    if uses_smtp(settings):
+        return smtp_live(settings)
+    return settings.email_provider.strip().lower() in _MOCK_PROVIDERS
 
 
 def open_mailbox(
@@ -186,6 +206,12 @@ def open_mailbox(
     organization_id: UUID,
     project_id: UUID,
 ) -> MailboxProvider:
+    from ai_workforce_api.smtp_mailbox import SmtpMailbox, smtp_live, uses_smtp
+
+    if uses_smtp(settings):
+        if smtp_live(settings):
+            return SmtpMailbox(settings, connection, organization_id, project_id)
+        return UnavailableMailbox()
     if settings.email_provider.strip().lower() not in _MOCK_PROVIDERS:
         return UnavailableMailbox()
     return MockMailbox(connection, organization_id, project_id)
@@ -202,6 +228,7 @@ class UnavailableMailbox:
         thread_id: str | None,
         attachments: tuple[AttachmentDraft, ...] = (),
         metadata: Mapping[str, str] | None = None,
+        cc: tuple[str, ...] = (),
     ) -> MailMessage:
         raise MailboxUnavailable()
 
@@ -267,6 +294,7 @@ class MockMailbox:
         thread_id: str | None,
         attachments: tuple[AttachmentDraft, ...] = (),
         metadata: Mapping[str, str] | None = None,
+        cc: tuple[str, ...] = (),
     ) -> MailMessage:
         return self._write(
             "ACCEPTED",
@@ -277,6 +305,7 @@ class MockMailbox:
             thread_id,
             attachments,
             metadata or {},
+            cc,
         )
 
     def create_draft(
@@ -511,6 +540,7 @@ class MockMailbox:
         thread_id: str | None,
         attachments: tuple[AttachmentDraft, ...],
         metadata: Mapping[str, str],
+        cc: tuple[str, ...] = (),
     ) -> MailMessage:
         key = idempotency_key.strip()
         clean_recipient = recipient.strip()
@@ -521,6 +551,12 @@ class MockMailbox:
         for attachment in attachments:
             _validate_attachment(attachment)
         _validate_metadata(metadata)
+        copied = [item.strip() for item in cc]
+        if len(copied) > 10 or any(
+            _EMAIL.fullmatch(item) is None or item.lower() == clean_recipient.lower()
+            for item in copied
+        ):
+            raise MailboxState("mailbox fields are invalid")
         existing = self._by_key(key)
         if existing is not None:
             return existing
@@ -547,7 +583,7 @@ class MockMailbox:
                         clean_recipient,
                         clean_subject,
                         clean_body,
-                        Json(dict(metadata)),
+                        Json({**metadata, **({"cc": copied} if copied else {})}),
                     ),
                 ).fetchone()
                 if row is None:

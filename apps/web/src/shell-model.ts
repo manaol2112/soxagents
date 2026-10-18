@@ -1,3 +1,7 @@
+import type { Client } from "./client-model.ts";
+import type { Completion } from "./engagement-lifecycle.ts";
+import type { ProjectNoticeCode } from "./project-form.ts";
+
 export const SECTIONS = [
   "console",
   "overview",
@@ -8,6 +12,7 @@ export const SECTIONS = [
   "approvals",
   "setup",
   "controls",
+  "planning",
   "plan",
   "timeline",
   "deficiencies",
@@ -32,6 +37,22 @@ export type Project = {
   name: string;
   slug: string;
   status: string;
+  /** What the engagements page shows on a card; "" or null when not set. */
+  clientName: string;
+  kind: string;
+  periodEnd: string | null;
+  ownerName: string;
+  controls: number;
+  openDeficiencies: number;
+  /** The firm's client it belongs to, for "New engagement for" this client. */
+  clientId: string | null;
+  /** Where the work stands, for the card: agent tasks by status, evidence past due by
+   * the metrics rulebook, the next milestone not done, and the last activity. */
+  progress: ProjectProgress[];
+  overdueRequests: number;
+  nextMilestone: { name: string; due: string } | null;
+  missedMilestones: number;
+  lastActivityAt: string | null;
 };
 
 export type AssignableMember = {
@@ -51,6 +72,14 @@ export type ProjectActivity = {
 };
 
 export type ProjectDetail = {
+  /** Where it stands on completion; loaded on the Engagements page only. */
+  completion: Completion | null;
+  /** The engagement's profile, for the edit form (Milestone 8.15). */
+  clientId: string | null;
+  clientName: string;
+  periodEnd: string | null;
+  /** Launched: the client and the period end no longer change. */
+  launched: boolean;
   id: string;
   name: string;
   slug: string;
@@ -94,14 +123,34 @@ export type AgentDetail = {
   source: AgentSource;
 };
 
-export type ProjectNotice =
-  | "saved"
-  | "invalid"
-  | "conflict"
-  | "slug"
-  | "status"
-  | "denied"
-  | "unavailable";
+export type ProjectNotice = ProjectNoticeCode;
+
+const PROJECT_NOTICES: ReadonlySet<string> = new Set<ProjectNoticeCode>([
+  "saved",
+  "completed-done",
+  "reopened",
+  "deleted",
+  "invalid",
+  "conflict",
+  "slug",
+  "status",
+  "launch",
+  "archived",
+  "completed",
+  "open-work",
+  "launched",
+  "setup-running",
+  "work-on-record",
+  "reason",
+  "delete-name",
+  "locked",
+  "rollforward",
+  "client-renamed",
+  "client-exists",
+  "client-changed",
+  "denied",
+  "unavailable",
+]);
 
 export type AgentNotice =
   | "saved"
@@ -187,6 +236,8 @@ export type ShellModel =
       notifications: "empty" | "unavailable";
       canManageProjects: boolean;
       members: AssignableMember[];
+      /** The firm's clients, for the engagement form (Milestone 8.18). */
+      clients: Client[];
       projectDetail: ProjectDetail | null;
       notice: ProjectNotice | null;
       canManageAgents: boolean;
@@ -203,6 +254,12 @@ export type ShellModel =
       taskNotice: TaskNotice | null;
     };
 
+/** Whether the shell says to sign in. Never while the page is still loading: a member
+ * moving between pages is not signed out, so the loading shell shows placeholders. */
+export function showsSignInPrompt(model: ShellModel): boolean {
+  return model.status !== "ready" && model.status !== "loading";
+}
+
 export type WorkspaceSnapshot = {
   meStatus: number;
   me: unknown;
@@ -216,6 +273,7 @@ export type WorkspaceSnapshot = {
   notifications: "empty" | "unavailable";
   canManageProjects: boolean;
   members: AssignableMember[];
+  clients?: Client[];
   projectDetail: ProjectDetail | null;
   notice: string | null;
   agentsStatus: number;
@@ -324,6 +382,7 @@ export function deriveShell(snapshot: WorkspaceSnapshot): ShellModel {
     notifications: snapshot.notifications,
     canManageProjects: snapshot.canManageProjects,
     members: snapshot.members,
+    clients: snapshot.clients ?? [],
     projectDetail:
       snapshot.projectDetail !== null &&
       selectedProject !== null &&
@@ -347,20 +406,61 @@ export function deriveShell(snapshot: WorkspaceSnapshot): ShellModel {
   };
 }
 
-export function statusChoices(current: string): string[] {
-  if (current === "DRAFT") {
-    return ["DRAFT", "ACTIVE", "ARCHIVED"];
+/**
+ * What the engagement switcher shows for each engagement: the client, then the name.
+ * Two engagements can share a name, so the client comes first; when both still match,
+ * the period end tells them apart.
+ */
+export function projectLabels(
+  projects: readonly Project[],
+): Map<string, string> {
+  const base = (project: Project) =>
+    project.clientName.trim() === ""
+      ? project.name
+      : `${project.clientName.trim()} · ${project.name}`;
+  const seen = new Map<string, number>();
+  for (const project of projects) {
+    const label = base(project).toLowerCase();
+    seen.set(label, (seen.get(label) ?? 0) + 1);
   }
-  if (current === "ACTIVE") {
-    return ["ACTIVE", "PAUSED", "ARCHIVED"];
-  }
-  if (current === "PAUSED") {
-    return ["PAUSED", "ACTIVE", "ARCHIVED"];
-  }
-  if (current === "ARCHIVED") {
-    return ["ARCHIVED"];
-  }
-  return [];
+  return new Map(
+    projects.map((project) => {
+      const label = base(project);
+      if ((seen.get(label.toLowerCase()) ?? 0) < 2) {
+        return [project.id, label];
+      }
+      const period =
+        project.periodEnd === null
+          ? "no period end"
+          : `period end ${project.periodEnd}`;
+      return [project.id, `${label} (${period})`];
+    }),
+  );
+}
+
+/** The sections that open once the engagement has launched. Before that, setup is the work. */
+export const LAUNCHED_SECTIONS: readonly SectionId[] = [
+  "console",
+  "overview",
+  "controls",
+  "planning",
+  "plan",
+  "timeline",
+  "evidence",
+  "deficiencies",
+  "approvals",
+];
+
+/** A draft engagement has not launched: its controls, evidence, plan, and approvals wait. */
+export function lockedBeforeLaunch(
+  section: SectionId,
+  project: Pick<Project, "status"> | null,
+): boolean {
+  return (
+    project !== null &&
+    project.status === "DRAFT" &&
+    LAUNCHED_SECTIONS.includes(section)
+  );
 }
 
 export function canManageProjects(role: string): boolean {
@@ -414,7 +514,8 @@ export function workspaceHref(
   if (taskId !== null) {
     params.set("task", taskId);
   }
-  if (section !== "overview") {
+  // The console is the default page, so only it can leave the section out.
+  if (section !== "console") {
     params.set("section", section);
   }
   return `/?${params.toString()}`;
@@ -524,7 +625,44 @@ function parseProjects(value: unknown): Project[] | null {
     ) {
       return null;
     }
-    projects.push({ id, name, slug, status });
+    projects.push({
+      id,
+      name,
+      slug,
+      status,
+      clientName: typeof item.client_name === "string" ? item.client_name : "",
+      kind:
+        typeof item.engagement_type === "string" ? item.engagement_type : "",
+      periodEnd: typeof item.period_end === "string" ? item.period_end : null,
+      ownerName: typeof item.owner_name === "string" ? item.owner_name : "",
+      controls: typeof item.controls === "number" ? item.controls : 0,
+      openDeficiencies:
+        typeof item.open_deficiencies === "number" ? item.open_deficiencies : 0,
+      clientId: typeof item.client_id === "string" ? item.client_id : null,
+      progress: Array.isArray(item.progress)
+        ? item.progress.flatMap((entry) =>
+            isRecord(entry) &&
+            typeof entry.status === "string" &&
+            typeof entry.count === "number"
+              ? [{ status: entry.status, count: entry.count }]
+              : [],
+          )
+        : [],
+      overdueRequests:
+        typeof item.overdue_requests === "number" ? item.overdue_requests : 0,
+      nextMilestone:
+        isRecord(item.next_milestone) &&
+        typeof item.next_milestone.name === "string" &&
+        typeof item.next_milestone.due === "string"
+          ? { name: item.next_milestone.name, due: item.next_milestone.due }
+          : null,
+      missedMilestones:
+        typeof item.missed_milestones === "number" ? item.missed_milestones : 0,
+      lastActivityAt:
+        typeof item.last_activity_at === "string"
+          ? item.last_activity_at
+          : null,
+    });
   }
   return projects;
 }
@@ -636,18 +774,9 @@ function parseAgentNotice(value: string | null): AgentNotice | null {
 }
 
 function parseNotice(value: string | null): ProjectNotice | null {
-  if (
-    value === "saved" ||
-    value === "invalid" ||
-    value === "conflict" ||
-    value === "slug" ||
-    value === "status" ||
-    value === "denied" ||
-    value === "unavailable"
-  ) {
-    return value;
-  }
-  return null;
+  return value !== null && PROJECT_NOTICES.has(value)
+    ? (value as ProjectNotice)
+    : null;
 }
 
 export function parseTasks(value: unknown): TaskSummary[] | null {
@@ -959,6 +1088,11 @@ export function parseProjectDetail(value: unknown): ProjectDetail | null {
     return null;
   }
   return {
+    completion: null,
+    clientId: typeof value.client_id === "string" ? value.client_id : null,
+    clientName: typeof value.client_name === "string" ? value.client_name : "",
+    periodEnd: typeof value.period_end === "string" ? value.period_end : null,
+    launched: value.launched === true,
     id: value.id,
     name: value.name,
     slug: value.slug,
@@ -1028,6 +1162,7 @@ function parseSection(value: string | null): SectionId {
     value === "approvals" ||
     value === "setup" ||
     value === "controls" ||
+    value === "planning" ||
     value === "plan" ||
     value === "timeline" ||
     value === "deficiencies" ||

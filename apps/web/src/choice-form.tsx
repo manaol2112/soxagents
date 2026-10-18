@@ -14,7 +14,7 @@ export function ChoiceForm({
   hidden: Array<{ name: string; value: string }>;
 }) {
   return (
-    <form method="get" action="/">
+    <form autoComplete="off" method="get" action="/">
       {hidden.map((field) => (
         <input
           key={field.name}

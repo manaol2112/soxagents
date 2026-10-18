@@ -17,15 +17,17 @@ client content in them is marked as data.
 import json
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 import psycopg
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from ai_workforce_api.authorization import NotVisible, Principal
+from ai_workforce_api.control_instances import FAMILY_FILES, control_label, parse_control_name
+from ai_workforce_api.evidence_withdrawn import in_force
 from ai_workforce_api.models import ChatTool
 from ai_workforce_api.settings import Settings
 
@@ -47,6 +49,14 @@ class ToolContext:
     drafts: Any = None
     analyses: Any = None
     timer: Any = None
+    # Changes this turn has already proposed to a request (its wording, its recipient), so
+    # a later step in the same plan is checked against the request as it will be.
+    planned: dict[UUID, dict[str, str]] = field(default_factory=dict)
+
+
+# The longest message body an evidence request email may have (outbound._compose), with room
+# kept for the upload link.
+MESSAGE_CHARS = 4000 - 200
 
 
 class ToolFailed(Exception):
@@ -62,6 +72,11 @@ class Tool:
     arguments: type[BaseModel]
     run: Callable[[ToolContext, Any], dict[str, Any]]
     summary: Callable[[Any], str]
+    # Whether the step could run as things stand, asked before it is proposed, so the
+    # person is never offered a step that would fail. Raises ToolFailed with the reason.
+    check: Callable[[ToolContext, Any], None] | None = None
+    # What a proposed step will change, kept for the checks of the steps after it.
+    plans: Callable[[ToolContext, Any], None] | None = None
 
     def chat_tool(self) -> ChatTool:
         schema = self.arguments.model_json_schema()
@@ -82,16 +97,143 @@ class NoArgs(BaseModel):
 
 
 class ControlArgs(BaseModel):
-    control_ref: str = Field(min_length=1, max_length=60, description="The control ID.")
-
-
-class ListControlsArgs(BaseModel):
-    queue: Literal["team", "owner", "overdue", "findings", "concluded"] | None = Field(
-        default=None, description="team = waiting on the audit team."
+    control_ref: str = Field(
+        min_length=1,
+        max_length=60,
+        description="The control ID. A control tested per application is named with its "
+        "application after ' · ', such as 'ITGC-AC-01 · Oracle'.",
     )
-    area: str | None = Field(default=None, max_length=100)
+
+
+class EngagementArg(BaseModel):
+    engagement: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Another engagement the person can open in this firm, by its name or its "
+        "client. Leave it out for this engagement.",
+    )
+
+
+class ControlQuery(BaseModel):
+    testing_status: (
+        Literal["complete", "awaiting_review", "in_testing", "awaiting_evidence", "not_started"]
+        | None
+    ) = Field(default=None, description="Where testing stands, by the rulebook.")
+    stage: str | None = Field(default=None, max_length=40)
     application: str | None = Field(default=None, max_length=100)
+    owner: str | None = Field(default=None, max_length=100, description="Control owner.")
+    process: str | None = Field(
+        default=None, max_length=100, description="Business process or control area."
+    )
+    control_ref: str | None = Field(default=None, max_length=60)
+    failed_only: bool = False
+    key_only: bool = False
     search: str | None = Field(default=None, max_length=100)
+
+
+class ListControlsArgs(ControlQuery, EngagementArg):
+    offset: int = Field(default=0, ge=0, le=100_000)
+    limit: int = Field(default=40, ge=1, le=100)
+
+
+class RequestQuery(BaseModel):
+    status: str | None = Field(
+        default=None,
+        max_length=40,
+        description="One exact status: DRAFT, APPROVAL_PENDING, SENT, WAITING_FOR_RESPONSE, "
+        "PARTIALLY_RECEIVED, RECEIVED, OVERDUE, ESCALATED, CANCELLED, CLOSED.",
+    )
+    status_group: list[
+        Literal[
+            "draft",
+            "awaiting_approval",
+            "with_client",
+            "partly_received",
+            "received",
+            "closed",
+            "cancelled",
+        ]
+    ] = Field(default_factory=list, max_length=7)
+    phase: (
+        Literal["DESIGN", "INTERIM", "ROLLFORWARD", "RETEST", "REMEDIATION", "NOT_RECORDED"] | None
+    ) = None
+    application: str | None = Field(default=None, max_length=100)
+    owner: str | None = Field(
+        default=None, max_length=100, description="Control owner or the request's recipient."
+    )
+    process: str | None = Field(
+        default=None, max_length=100, description="Business process or control area."
+    )
+    control_ref: str | None = Field(default=None, max_length=60)
+    overdue_only: bool = False
+    evidence_review: Literal["not_reviewed", "insufficient", "accepted"] | None = Field(
+        default=None,
+        description="not_reviewed = files received but not yet judged sufficient.",
+    )
+    search: str | None = Field(default=None, max_length=100)
+
+
+class ListRequestsArgs(RequestQuery, EngagementArg):
+    sort: Literal["most_overdue", "due", "control", "status"] = "most_overdue"
+    offset: int = Field(default=0, ge=0, le=100_000)
+    limit: int = Field(default=40, ge=1, le=100)
+
+
+class ListExceptionsArgs(EngagementArg):
+    include_closed: bool = False
+    application: str | None = Field(default=None, max_length=100)
+    control_ref: str | None = Field(default=None, max_length=60)
+    offset: int = Field(default=0, ge=0, le=100_000)
+    limit: int = Field(default=40, ge=1, le=100)
+
+
+class ListReviewArgs(EngagementArg):
+    control_ref: str | None = Field(default=None, max_length=60)
+    offset: int = Field(default=0, ge=0, le=100_000)
+    limit: int = Field(default=40, ge=1, le=100)
+
+
+class StatusArgs(EngagementArg):
+    pass
+
+
+class ReportArgs(EngagementArg):
+    report: Literal[
+        "status_report",
+        "evidence_tracker",
+        "control_summary",
+        "exceptions_report",
+        "executive_summary",
+    ]
+    file_format: Literal["pdf", "docx"] = Field(
+        default="pdf", description="pdf (the default), or docx for an editable Word file."
+    )
+    filters: dict[str, Any] = Field(
+        default_factory=dict,
+        description="For evidence_tracker the list_requests filters (pending requests when "
+        "left out), for control_summary the list_controls filters, for exceptions_report "
+        "include_closed, application, or control_ref. The status report and the executive "
+        "summary cover the whole engagement.",
+    )
+    narrative: str | None = Field(
+        default=None,
+        max_length=3000,
+        description="Optional: your short reading of the figures, a few sentences. It is "
+        "printed in its own section marked as AI-written and not verified. Only what the "
+        "figures show; no audit opinion, severity, or effectiveness conclusion.",
+    )
+
+
+class ExportArgs(EngagementArg):
+    dataset: Literal["evidence_requests", "controls", "exceptions", "review_items"]
+    file_format: Literal["xlsx", "csv"] = Field(
+        default="xlsx", description="xlsx for Excel (the default), csv for a plain data file."
+    )
+    filters: dict[str, Any] = Field(
+        default_factory=dict,
+        description="The same filters as the list tool for that dataset (for example "
+        '{"phase": "INTERIM", "overdue_only": true}), so the file holds what was just shown.',
+    )
 
 
 class EvidenceArgs(BaseModel):
@@ -101,11 +243,6 @@ class EvidenceArgs(BaseModel):
 
 class RequestArgs(BaseModel):
     request_id: UUID
-
-
-class ListRequestsArgs(BaseModel):
-    status: str | None = Field(default=None, max_length=40)
-    control_ref: str | None = Field(default=None, max_length=60)
 
 
 class FileArgs(BaseModel):
@@ -156,6 +293,45 @@ class SignOffArgs(BaseModel):
     note: str = Field(default="", max_length=1000)
 
 
+class TestResultArgs(BaseModel):
+    control_ref: str = Field(min_length=1, max_length=60)
+    item: str = Field(
+        min_length=1, max_length=200, description="The sample's key as the test sheet shows it."
+    )
+    attribute_index: int = Field(ge=0, lt=12, description="The attribute's index, from 0.")
+    result: Literal["PASS", "EXCEPTION", "UNABLE", "REVIEW", "NOT_APPLICABLE"] = Field(
+        description="UNABLE is insufficient evidence; REVIEW is human review required. A "
+        "person may record an item that cannot be tested after follow-up as an EXCEPTION."
+    )
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class TestLinkArgs(BaseModel):
+    control_ref: str = Field(min_length=1, max_length=60)
+    evidence_file_id: UUID
+    action: Literal["LINK", "UNLINK", "EXCLUDE"] = Field(
+        description="LINK or UNLINK the file on one item; EXCLUDE sets it aside as not test "
+        "evidence."
+    )
+    item: str | None = Field(default=None, max_length=200, description="For LINK and UNLINK.")
+    reason: str = Field(default="", max_length=300)
+
+
+class TestSignOffArgs(BaseModel):
+    control_ref: str = Field(min_length=1, max_length=60)
+    note: str = Field(default="", max_length=1000)
+
+
+class TestDeficiencyArgs(BaseModel):
+    control_ref: str = Field(min_length=1, max_length=60)
+    action: Literal["LOG", "DISMISS"]
+    reason: str = Field(default="", max_length=500, description="Required to dismiss.")
+    severity: (
+        Literal["CONTROL_DEFICIENCY", "SIGNIFICANT_DEFICIENCY", "MATERIAL_WEAKNESS"] | None
+    ) = None
+    cause: str | None = Field(default=None, max_length=4000)
+
+
 class DeficiencyArgs(BaseModel):
     control_ref: str = Field(min_length=1, max_length=60)
     title: str = Field(min_length=1, max_length=200)
@@ -178,11 +354,25 @@ class PhaseArgs(BaseModel):
 
 class EditRequestArgs(BaseModel):
     request_id: UUID
-    description: str = Field(
+    description: str | None = Field(
+        default=None,
         min_length=10,
         max_length=4000,
-        description="The full new wording of what the owner is asked for.",
+        description="The full new wording of what the owner is asked for. Leave it out to "
+        "keep the wording.",
     )
+    recipient: str | None = Field(
+        default=None,
+        max_length=200,
+        description="The email address the request goes to. Only an address the person "
+        "gave or the engagement records show; never a guess.",
+    )
+
+    @model_validator(mode="after")
+    def changes_something(self) -> EditRequestArgs:
+        if self.description is None and self.recipient is None:
+            raise ValueError("give new wording, a recipient, or both")
+        return self
 
 
 class DraftRequestArgs(BaseModel):
@@ -196,12 +386,50 @@ class DraftRequestArgs(BaseModel):
         description="Defaults to whoever received the control's latest request.",
     )
     due_date: date | None = Field(default=None, description="Defaults to 7 days from today.")
+    phase: Literal["DESIGN", "INTERIM", "ROLLFORWARD"] | None = Field(
+        default=None,
+        description="The testing phase this evidence serves: design, interim testing, or "
+        "the roll-forward to period end.",
+    )
 
 
 class RequestStatusArgs(BaseModel):
     request_id: UUID
     status: Literal["PARTIALLY_RECEIVED", "RECEIVED", "CLOSED", "CANCELLED"]
     reason: str = Field(default="", max_length=500, description="Needed to cancel.")
+
+
+class ReviewNoteArgs(BaseModel):
+    control_ref: str = Field(min_length=1, max_length=60)
+    note: int = Field(ge=1, le=10_000, description="The note's number on the review.")
+    action: Literal["ACCEPT", "DISMISS"]
+    reason: str = Field(default="", max_length=500)
+
+
+class RaiseNoteArgs(BaseModel):
+    control_ref: str = Field(min_length=1, max_length=60)
+    text: str = Field(min_length=3, max_length=2000)
+    severity: Literal["MUST_FIX", "SHOULD_FIX", "OBSERVATION"] = "SHOULD_FIX"
+    about: Literal["RESULT", "SAMPLE", "WORKPAPER", "DEFICIENCY", "GENERAL"] = "GENERAL"
+    item: str | None = Field(default=None, max_length=200, description="The sample or application.")
+
+
+class RespondNoteArgs(BaseModel):
+    control_ref: str = Field(min_length=1, max_length=60)
+    note: int = Field(ge=1, le=10_000)
+    response: str = Field(min_length=3, max_length=2000)
+
+
+class ClearNoteArgs(BaseModel):
+    control_ref: str = Field(min_length=1, max_length=60)
+    note: int = Field(ge=1, le=10_000)
+    action: Literal["CLEAR", "RETURN"] = "CLEAR"
+    reason: str = Field(default="", max_length=500)
+
+
+class ReviewSignOffArgs(BaseModel):
+    control_ref: str = Field(min_length=1, max_length=60)
+    note: str = Field(default="", max_length=1000)
 
 
 class MilestoneArgs(BaseModel):
@@ -214,16 +442,27 @@ class MilestoneArgs(BaseModel):
 
 
 def _control(context: ToolContext, control_ref: str) -> tuple[UUID, str]:
-    row = context.connection.execute(
+    """A control by its ID, and its application when it has one instance per application."""
+    ref, application = parse_control_name(control_ref)
+    rows = context.connection.execute(
         """
-        SELECT id, control_ref FROM engagement_controls
-        WHERE project_id = %s AND lower(control_ref) = lower(%s)
+        SELECT c.id, c.control_ref, a.name FROM engagement_controls c
+        LEFT JOIN engagement_applications a ON a.id = c.engagement_application_id
+        WHERE c.project_id = %s AND lower(c.control_ref) = lower(%s)
+        ORDER BY a.name NULLS FIRST
         """,
-        (context.project_id, control_ref.strip()),
-    ).fetchone()
-    if row is None:
+        (context.project_id, ref.strip()),
+    ).fetchall()
+    if not rows:
         raise ToolFailed(f"No control {control_ref} in this engagement.")
-    return UUID(str(row[0])), str(row[1])
+    if application is not None:
+        wanted = application.strip().lower()
+        rows = [row for row in rows if row[2] is not None and wanted in str(row[2]).lower()] or rows
+    if len(rows) > 1:
+        names = ", ".join(control_label(str(row[1]), row[2]) for row in rows)
+        raise ToolFailed(f"{ref} is tested per application. Name one: {names}.")
+    row = rows[0]
+    return UUID(str(row[0])), control_label(str(row[1]), row[2])
 
 
 def _analysis(context: ToolContext, file_id: UUID) -> tuple[UUID, int]:
@@ -247,62 +486,75 @@ def _dump(value: Any) -> Any:
 # Read tools
 
 
-def _summary(context: ToolContext, _args: NoArgs) -> dict[str, Any]:
-    from ai_workforce_api.workspace import _dashboard
+def _engagement(context: ToolContext, args: EngagementArg) -> UUID:
+    """The engagement a read is about: this one, or another the person can open."""
+    from ai_workforce_api.engagement_data import EngagementUnclear, resolve_engagement
 
-    body = _dashboard(
-        context.connection, context.principal, context.organization_id, context.project_id
+    try:
+        return resolve_engagement(
+            context.connection,
+            context.principal,
+            context.organization_id,
+            context.project_id,
+            args.engagement,
+        )
+    except EngagementUnclear as error:
+        raise ToolFailed(str(error)) from None
+
+
+def _read(work: Callable[[], dict[str, Any]], rows: str | None = None) -> dict[str, Any]:
+    """A read that says when it could not be done, and fits the answer it goes into: rows
+    that do not fit are left for the next page, never cut part way."""
+    from ai_workforce_api.engagement_data import DataUnavailable
+
+    try:
+        result = work()
+    except DataUnavailable as error:
+        raise ToolFailed(str(error)) from None
+    if rows is None:
+        return result
+    # The answer needs the gist of each record; the full text is on its page and in a file.
+    for row in result[rows]:
+        for key in ("description", "detail"):
+            if isinstance(row.get(key), str) and len(row[key]) > 160:
+                row[key] = row[key][:159].rstrip() + "…"
+    while len(json.dumps(result, default=str)) > RESULT_CHARS - 400 and len(result[rows]) > 1:
+        result[rows] = result[rows][: max(len(result[rows]) * 3 // 4, 1)]
+        result["returned"] = len(result[rows])
+        result["more"] = True
+    return result
+
+
+def _status(context: ToolContext, args: StatusArgs) -> dict[str, Any]:
+    from ai_workforce_api import engagement_data
+
+    project = _engagement(context, args)
+    return _read(
+        lambda: engagement_data.status(
+            context.connection, context.principal, context.organization_id, project
+        )
     )
-    data = _dump(body)
-    return {key: data[key] for key in data if key not in {"work"}}
 
 
 def _list_controls(context: ToolContext, args: ListControlsArgs) -> dict[str, Any]:
-    from ai_workforce_api.workspace import _controls
+    from ai_workforce_api import engagement_data
 
-    rows = _controls(
-        context.connection, context.principal, context.organization_id, context.project_id
+    project = _engagement(context, args)
+    filters = engagement_data.ControlFilters(
+        **args.model_dump(include=set(ControlQuery.model_fields))
     )
-    found = []
-    for row in rows:
-        if not row.included:
-            continue
-        if args.queue == "team" and row.waiting_on != "TEAM":
-            continue
-        if args.queue == "owner" and row.waiting_on != "OWNER":
-            continue
-        if args.queue == "overdue" and not row.overdue:
-            continue
-        if args.queue == "findings" and row.deficiencies == 0:
-            continue
-        if args.queue == "concluded" and row.conclusion == "NOT_CONCLUDED":
-            continue
-        if args.area and args.area.lower() not in row.area.lower():
-            continue
-        if args.application and not any(
-            args.application.lower() in system.lower() for system in row.systems
-        ):
-            continue
-        text = " ".join([row.control_ref, row.title, row.owner_name, *row.systems]).lower()
-        if args.search and args.search.lower() not in text:
-            continue
-        found.append(
-            {
-                "control_ref": row.control_ref,
-                "title": row.title,
-                "area": row.area,
-                "applications": row.systems,
-                "owner": row.owner_name or row.owner_email or "PBC coordinator",
-                "stage": row.stage,
-                "next_step": row.next_step,
-                "waiting_on": row.waiting_on,
-                "overdue": row.overdue,
-                "evidence": f"{row.evidence_received}/{row.evidence_requests} received",
-                "open_deficiencies": row.deficiencies,
-                "conclusion": row.conclusion,
-            }
-        )
-    return {"count": len(found), "controls": found[:100]}
+    return _read(
+        lambda: engagement_data.controls(
+            context.connection,
+            context.principal,
+            context.organization_id,
+            project,
+            filters,
+            offset=args.offset,
+            limit=args.limit,
+        ),
+        "controls",
+    )
 
 
 def _get_control(context: ToolContext, args: ControlArgs) -> dict[str, Any]:
@@ -324,23 +576,21 @@ def _get_control(context: ToolContext, args: ControlArgs) -> dict[str, Any]:
     ).fetchall()
     files = context.connection.execute(
         """
-        SELECT f.id, f.file_name, f.created_at, i.pbc_request_id,
+        SELECT f.id, f.file_name, f.created_at, l.pbc_request_id,
                a.status, a.extraction, a.extraction_status, a.ocr_engine, a.classification,
                a.confirmed_kind, a.note, char_length(a.extracted_text),
                v.status, v.checks, v.attributes, v.proposed, v.feedback, v.decision,
                v.conclusion
         FROM evidence_files f
-        JOIN mailbox_attachments m ON m.id = f.mailbox_attachment_id
-        JOIN inbound_messages i
-          ON i.mailbox_message_id = m.message_id AND i.project_id = m.project_id
-        JOIN pbc_requests r ON r.id = i.pbc_request_id
+        JOIN evidence_file_links l ON l.evidence_file_id = f.id
         LEFT JOIN evidence_analyses a ON a.evidence_file_id = f.id
         LEFT JOIN evidence_reviews v ON v.evidence_file_id = f.id
-        WHERE f.project_id = %s AND r.engagement_control_id = %s
+        WHERE f.project_id = %s AND f.id IN ({family})
         ORDER BY f.created_at
-        """,
+        """.replace("{family}", FAMILY_FILES),
         (context.project_id, control_id),
     ).fetchall()
+    applications = _file_applications(context, [UUID(str(item[0])) for item in files])
     tests = [
         _dump(test)
         for test in list_tests(
@@ -366,6 +616,8 @@ def _get_control(context: ToolContext, args: ControlArgs) -> dict[str, Any]:
     return {
         "control": {
             "control_ref": row.control_ref,
+            "application": row.application_name,
+            "label": row.label or row.control_ref,
             "title": row.title,
             "activity": row.activity,
             "risk": row.risk,
@@ -394,127 +646,292 @@ def _get_control(context: ToolContext, args: ControlArgs) -> dict[str, Any]:
             }
             for item in requests
         ],
+        # Every file in brief, so none is cut off; read_evidence gives one file in full.
         "evidence_files": [
             {
                 "evidence_file_id": str(item[0]),
                 "file_name": item[1],
                 "received": item[2].date().isoformat(),
                 "request_id": None if item[3] is None else str(item[3]),
+                "application": applications.get(item[0], "not known"),
                 "reading": None
                 if item[4] is None
                 else {
                     "status": item[4],
-                    "read_as": item[5],
-                    "read_status": item[6],
-                    "ocr_engine": item[7],
-                    "classification": item[8],
-                    "confirmed_kind": item[9],
-                    "note": item[10],
+                    "kind": item[9] or (item[8] or {}).get("kind"),
+                    "summary": _short(str((item[8] or {}).get("summary", "")), 240),
+                    "follow_up_points": len((item[8] or {}).get("gaps", [])),
                     "text_characters": item[11],
                 },
                 "screenshot_review": None
                 if item[12] is None
                 else {
-                    "status": item[12],
-                    "checks": item[13],
-                    "attributes": item[14],
                     "proposed": item[15],
-                    "feedback": item[16],
-                    "signed_off": item[17],
-                    "conclusion": item[18],
+                    "signed_off_conclusion": item[18],
+                    "feedback": _short(str(item[16] or ""), 400),
                 },
             }
             for item in files
         ],
         "test_plan": tests[0] if tests else None,
+        "test_sheet": _sheet_summary(context, control_id),
+        "workpapers": [
+            {"stage": row[0], "status": row[1], "version": row[2], "drafting": row[3]}
+            for row in context.connection.execute(
+                "SELECT stage, status, current_version, draft_status <> 'IDLE' FROM workpapers "
+                "WHERE project_id = %s AND engagement_control_id = %s ORDER BY stage",
+                (context.project_id, control_id),
+            ).fetchall()
+        ],
         "deficiencies": findings,
+    }
+
+
+def _file_applications(context: ToolContext, file_ids: list[UUID]) -> dict[UUID, str]:
+    rows = context.connection.execute(
+        """
+        SELECT t.evidence_file_id, t.scope, a.name FROM evidence_file_applications t
+        LEFT JOIN engagement_applications a ON a.id = t.engagement_application_id
+        WHERE t.evidence_file_id = ANY(%s)
+        """,
+        (file_ids,),
+    ).fetchall()
+    return {
+        row[0]: "all applications" if row[1] == "ALL" else str(row[2] or "not known")
+        for row in rows
     }
 
 
 def _read_evidence(context: ToolContext, args: EvidenceArgs) -> dict[str, Any]:
     row = context.connection.execute(
         """
-        SELECT f.file_name, a.extracted_text, a.text_truncated, a.content_redacted
+        SELECT f.file_name, a.extracted_text, a.text_truncated, a.content_redacted,
+               a.classification, a.confirmed_kind, a.note,
+               v.checks, v.attributes, v.proposed, v.feedback, v.conclusion
         FROM evidence_files f JOIN evidence_analyses a ON a.evidence_file_id = f.id
-        WHERE f.id = %s AND f.project_id = %s
-        """,
+        LEFT JOIN evidence_reviews v ON v.evidence_analysis_id = a.id
+        WHERE f.id = %s AND f.project_id = %s AND NOT """
+        + in_force("f"),
         (args.evidence_file_id, context.project_id),
     ).fetchone()
     if row is None:
         raise ToolFailed("That file is not in this engagement or has not been read.")
     text = str(row[1])
     chunk = text[args.offset : args.offset + EVIDENCE_CHARS]
+    first = args.offset == 0
     return {
         "file_name": row[0],
+        "application": _file_applications(context, [args.evidence_file_id]).get(
+            args.evidence_file_id, "not known"
+        ),
         "offset": args.offset,
         "total_characters": len(text),
         "more": args.offset + EVIDENCE_CHARS < len(text),
         "redacted": bool(row[3]),
         "file_was_cut": bool(row[2]),
+        # The full reading and review come with the first part of the text.
+        "reading": {"classification": row[4], "confirmed_kind": row[5], "note": row[6]}
+        if first
+        else None,
+        "screenshot_review": {
+            "checks": row[7],
+            "attributes": row[8],
+            "proposed": row[9],
+            "feedback": row[10],
+            "signed_off_conclusion": row[11],
+        }
+        if first and row[9] is not None
+        else None,
         "text": f"<client_evidence>\n{chunk}\n</client_evidence>",
     }
 
 
 def _list_requests(context: ToolContext, args: ListRequestsArgs) -> dict[str, Any]:
-    rows = context.connection.execute(
-        """
-        SELECT r.id, r.control_ref, r.status, r.recipient, r.due_at,
-               left(r.evidence_description, 160), r.operation_key
-        FROM pbc_requests r
-        WHERE r.project_id = %s
-          AND (%s::text IS NULL OR r.status = %s::text)
-          AND (%s::text IS NULL OR lower(r.control_ref) = lower(%s::text))
-        ORDER BY r.control_ref, r.created_at
-        LIMIT 200
-        """,
-        (
-            context.project_id,
-            args.status,
-            args.status,
-            args.control_ref,
-            args.control_ref,
+    from ai_workforce_api import engagement_data
+
+    project = _engagement(context, args)
+    filters = engagement_data.RequestFilters(
+        **args.model_dump(include=set(RequestQuery.model_fields))
+    )
+    return _read(
+        lambda: engagement_data.evidence_requests(
+            context.connection,
+            context.principal,
+            context.organization_id,
+            project,
+            filters,
+            sort=args.sort,
+            offset=args.offset,
+            limit=args.limit,
         ),
-    ).fetchall()
+        "requests",
+    )
+
+
+def _list_exceptions(context: ToolContext, args: ListExceptionsArgs) -> dict[str, Any]:
+    from ai_workforce_api import engagement_data
+
+    project = _engagement(context, args)
+    return _read(
+        lambda: engagement_data.exceptions(
+            context.connection,
+            context.principal,
+            context.organization_id,
+            project,
+            include_closed=args.include_closed,
+            application=args.application,
+            control_ref=args.control_ref,
+            offset=args.offset,
+            limit=args.limit,
+        ),
+        "exceptions",
+    )
+
+
+def _list_review(context: ToolContext, args: ListReviewArgs) -> dict[str, Any]:
+    from ai_workforce_api import engagement_data
+
+    project = _engagement(context, args)
+    return _read(
+        lambda: engagement_data.review_items(
+            context.connection,
+            context.principal,
+            context.organization_id,
+            project,
+            control_ref=args.control_ref,
+            offset=args.offset,
+            limit=args.limit,
+        ),
+        "items",
+    )
+
+
+EXPORT_FILTERS: dict[str, type[BaseModel]] = {
+    "evidence_requests": RequestQuery,
+    "controls": ControlQuery,
+}
+
+
+REPORT_FILTERS: dict[str, type[BaseModel] | None] = {
+    "evidence_tracker": RequestQuery,
+    "control_summary": ControlQuery,
+    "exceptions_report": None,
+    "status_report": None,
+    "executive_summary": None,
+}
+
+
+def _report(context: ToolContext, args: ReportArgs) -> dict[str, Any]:
+    from ai_workforce_api.exports import ExportFailed, create_export
+
+    project = _engagement(context, args)
+    model = REPORT_FILTERS[args.report]
+    try:
+        if model is not None:
+            filters = model.model_validate(args.filters).model_dump(exclude_defaults=True)
+        elif args.report == "exceptions_report":
+            unknown = set(args.filters) - {"include_closed", "application", "control_ref"}
+            if unknown:
+                raise ToolFailed(
+                    f"The exceptions report cannot be filtered by {', '.join(sorted(unknown))}."
+                )
+            filters = dict(args.filters)
+        elif args.filters:
+            raise ToolFailed("This report covers the whole engagement; it takes no filters.")
+        else:
+            filters = {}
+    except ValidationError as error:
+        first = error.errors()[0]
+        field_name = ".".join(str(part) for part in first.get("loc", ()))
+        raise ToolFailed(f"The filter {field_name} is not valid.") from None
+    try:
+        made = create_export(
+            context.connection,
+            context.settings,
+            context.principal,
+            context.organization_id,
+            project,
+            args.report,
+            args.file_format,
+            filters,
+            narrative=args.narrative or "",
+        )
+    except ExportFailed as error:
+        raise ToolFailed(str(error)) from None
     return {
-        "count": len(rows),
-        "requests": [
-            {
-                "request_id": str(row[0]),
-                "control_ref": row[1],
-                "status": row[2],
-                "recipient": row[3],
-                "due": row[4].date().isoformat(),
-                "first_line": str(row[5]).split("\n")[0].lstrip("- "),
-                "kind": "samples"
-                if str(row[6]).startswith("samples-")
-                else "follow_up"
-                if str(row[6]).startswith("recapture-")
-                else "evidence",
-            }
-            for row in rows
-        ],
+        "export": {
+            "id": str(made.id),
+            "project_id": str(project),
+            "file_name": made.file_name,
+            "file_format": made.file_format,
+            "dataset": made.dataset,
+            "rows": made.rows,
+            "filters": made.filters,
+            "as_of": made.as_of.isoformat(timespec="seconds"),
+            "expires": made.expires_at.date().isoformat(),
+        },
+        "note": "The report is ready; the person downloads it from the answer.",
     }
 
 
-def _list_deficiencies(context: ToolContext, _args: NoArgs) -> dict[str, Any]:
-    from ai_workforce_api.workspace import _deficiencies
+def _report_summary(args: ReportArgs) -> str:
+    from ai_workforce_api.reports import REPORTS
 
-    items = _deficiencies(
-        context.connection, context.principal, context.organization_id, context.project_id
-    )
+    kind = "PDF" if args.file_format == "pdf" else "Word"
+    return f"Made the {REPORTS[args.report].lower()} as {kind}"
+
+
+def _export(context: ToolContext, args: ExportArgs) -> dict[str, Any]:
+    from ai_workforce_api.engagement_data import DataUnavailable
+    from ai_workforce_api.exports import ExportFailed, create_export
+
+    project = _engagement(context, args)
+    model = EXPORT_FILTERS.get(args.dataset)
+    try:
+        if model is not None:
+            filters = model.model_validate(args.filters).model_dump(exclude_defaults=True)
+        else:
+            allowed = (
+                {"include_closed", "application", "control_ref"}
+                if args.dataset == "exceptions"
+                else {"control_ref"}
+            )
+            unknown = set(args.filters) - allowed
+            if unknown:
+                raise ToolFailed(
+                    f"{args.dataset} cannot be filtered by {', '.join(sorted(unknown))}."
+                )
+            filters = dict(args.filters)
+    except ValidationError as error:
+        first = error.errors()[0]
+        field_name = ".".join(str(part) for part in first.get("loc", ()))
+        raise ToolFailed(f"The filter {field_name} is not valid.") from None
+    try:
+        made = create_export(
+            context.connection,
+            context.settings,
+            context.principal,
+            context.organization_id,
+            project,
+            args.dataset,
+            args.file_format,
+            filters,
+        )
+    except (ExportFailed, DataUnavailable) as error:
+        raise ToolFailed(str(error)) from None
     return {
-        "count": len(items),
-        "deficiencies": [
-            {
-                "reference": item.reference,
-                "control_ref": item.control_ref,
-                "title": item.title,
-                "severity": item.severity,
-                "status": item.status,
-                "pending_change": item.pending_change,
-            }
-            for item in items
-        ],
+        "export": {
+            "id": str(made.id),
+            "project_id": str(project),
+            "file_name": made.file_name,
+            "file_format": made.file_format,
+            "dataset": made.dataset,
+            "rows": made.rows,
+            "filters": made.filters,
+            "as_of": made.as_of.isoformat(timespec="seconds"),
+            "expires": made.expires_at.date().isoformat(),
+        },
+        "note": "The file is ready; the person downloads it from the answer.",
     }
 
 
@@ -579,6 +996,384 @@ def _redraft(context: ToolContext, args: RequestArgs) -> dict[str, Any]:
     return {"draft": "queued", "request_id": str(args.request_id)}
 
 
+# Testing (8.2)
+
+
+def _sheet_for(context: ToolContext, control_ref: str) -> tuple[UUID, Any]:
+    from ai_workforce_api.test_sheets import _sheet
+
+    control_id, ref = _control(context, control_ref)
+    row = context.connection.execute(
+        "SELECT id FROM test_sheets WHERE project_id = %s AND engagement_control_id = %s "
+        "ORDER BY (status = 'OPEN') DESC, (test_round_id IS NOT NULL) DESC, created_at DESC "
+        "LIMIT 1",
+        (context.project_id, control_id),
+    ).fetchone()
+    if row is None:
+        raise ToolFailed(
+            f"{ref} has no test sheet yet. It opens when samples are approved, or for an "
+            "automated control when its evidence is read."
+        )
+    return UUID(str(row[0])), _sheet(context.connection, context.project_id, UUID(str(row[0])))
+
+
+def _sheet_summary(context: ToolContext, control_id: UUID) -> dict[str, Any] | None:
+    from ai_workforce_api.test_sheets import _sheet
+
+    row = context.connection.execute(
+        "SELECT id FROM test_sheets WHERE project_id = %s AND engagement_control_id = %s "
+        "ORDER BY (status = 'OPEN') DESC, (test_round_id IS NOT NULL) DESC, created_at DESC "
+        "LIMIT 1",
+        (context.project_id, control_id),
+    ).fetchone()
+    if row is None:
+        return None
+    sheet = _sheet(context.connection, context.project_id, UUID(str(row[0])))
+    return {
+        "method": sheet.method,
+        "status": sheet.status,
+        "testing_now": sheet.running,
+        "proposed_conclusion": sheet.proposed_conclusion,
+        "signed_off_conclusion": sheet.conclusion,
+        "counts": sheet.counts,
+        "blocking": sheet.blocking,
+        "attributes": sheet.attributes,
+        "items": [
+            {
+                "item": item.label,
+                "state": item.state,
+                "files": [{"id": str(f.id), "name": f.file_name} for f in item.files],
+                "results": [
+                    {
+                        "index": cell.index,
+                        "final": cell.final,
+                        "note": cell.note,
+                        "override_reason": cell.override_reason,
+                    }
+                    for cell in item.cells
+                ],
+            }
+            for item in sheet.items
+        ],
+        "unplaced_files": [
+            {"id": str(entry.file_id), "name": entry.file_name, "reason": entry.reason}
+            for entry in sheet.placements
+            if entry.placement == "UNPLACED"
+        ],
+        "proposed_deficiency": sheet.proposal if sheet.proposal_status == "PROPOSED" else None,
+        "deficiency": sheet.deficiency_reference,
+    }
+
+
+def _item_id(sheet: Any, label: str) -> tuple[UUID, int]:
+    for item in sheet.items:
+        if item.label.lower() == label.strip().lower():
+            return item.id, item.version
+    raise ToolFailed(f"No item {label} on this test sheet.")
+
+
+def _schedule_test(context: ToolContext, queued: UUID | None) -> None:
+    from ai_workforce_api.testing_engine import TestScheduler, schedule_runs
+
+    scheduler = context.drafts if isinstance(context.drafts, TestScheduler) else None
+    schedule_runs(scheduler, [] if queued is None else [queued])
+
+
+def _sheet_change(context: ToolContext, sheet_id: UUID, work: Any) -> tuple[Any, UUID | None]:
+    from ai_workforce_api.test_sheets import SheetState, change_sheet
+
+    try:
+        return change_sheet(
+            context.connection,
+            context.principal,
+            context.organization_id,
+            context.project_id,
+            sheet_id,
+            work,
+        )
+    except SheetState as error:
+        raise ToolFailed(f"The test sheet could not change: {error.detail}.") from None
+
+
+# Independent review (9.2)
+
+
+def _review_for(context: ToolContext, control_ref: str) -> Any:
+    from ai_workforce_api.control_reviews import _is_reviewer, _review
+
+    control_id, ref = _control(context, control_ref)
+    row = context.connection.execute(
+        "SELECT id FROM control_reviews WHERE project_id = %s AND engagement_control_id = %s",
+        (context.project_id, control_id),
+    ).fetchone()
+    if row is None:
+        raise ToolFailed(
+            f"{ref} is not under review yet. The review opens when its effectiveness "
+            "workpaper is prepared."
+        )
+    return _review(
+        context.connection,
+        context.project_id,
+        UUID(str(row[0])),
+        context.principal.id,
+        _is_reviewer(context.connection, context.project_id, context.principal.id),
+    )
+
+
+def _review_summary(review: Any) -> dict[str, Any]:
+    return {
+        "control": review.label,
+        "status": review.status,
+        "reperforming": review.reperforming,
+        "reperformed_at": review.reperformed_at,
+        "reperform_source": review.reperform_source,
+        "reperform_note": review.reperform_note,
+        "testing": review.sheet_status,
+        "workpapers": [
+            {"stage": paper.stage, "status": paper.status} for paper in review.workpapers
+        ],
+        "counts": review.counts,
+        "blocking": review.blocking,
+        "you_are_the_reviewer": review.viewer_is_reviewer,
+        "you_prepared_this_work": review.viewer_prepared,
+        "signed_by": review.signed_by,
+        "notes": [
+            {
+                "number": note.number,
+                "severity": note.severity,
+                "about": note.target_kind,
+                "status": note.status,
+                "raised_by": note.raised_by_name or note.raised_by,
+                "text": note.text,
+                "reviewer_result": note.target.get("reviewer_result"),
+                "citations": [
+                    {"file": c.get("file_name"), "quote": c.get("quote")}
+                    for c in note.target.get("citations", [])
+                    if isinstance(c, dict)
+                ][:4],
+                "response": note.response,
+                "decision_reason": note.decision_reason,
+                "clear_reason": note.clear_reason,
+                "reopened": note.reopened,
+            }
+            for note in review.notes
+        ],
+    }
+
+
+def _note_id(review: Any, number: int) -> UUID:
+    for note in review.notes:
+        if note.number == number:
+            return UUID(str(note.id))
+    raise ToolFailed(f"The review of {review.label} has no note #{number}.")
+
+
+def _review_change(context: ToolContext, work: Any) -> dict[str, Any]:
+    from ai_workforce_api.control_reviews import ReviewState, schedule_reviews
+
+    try:
+        body, queued = work()
+    except ReviewState as error:
+        raise ToolFailed(f"The review could not change: {error.detail}.") from None
+    schedule_reviews(context.drafts, queued)
+    return _review_summary(body)
+
+
+def _get_review(context: ToolContext, args: ControlArgs) -> dict[str, Any]:
+    return _review_summary(_review_for(context, args.control_ref))
+
+
+def _reperform_review(context: ToolContext, args: ControlArgs) -> dict[str, Any]:
+    from ai_workforce_api.control_reviews import VersionBody, _reperform
+
+    review = _review_for(context, args.control_ref)
+    result = _review_change(
+        context,
+        lambda: _reperform(
+            context.connection, context.principal, context.organization_id, context.project_id,
+            review.id, VersionBody(version=review.version),
+        ),
+    )  # fmt: skip
+    return {"control": review.label, "reperforming": result["reperforming"]}
+
+
+def _decide_review_note(context: ToolContext, args: ReviewNoteArgs) -> dict[str, Any]:
+    from ai_workforce_api.control_reviews import NoteDecision, _decide_note
+
+    review = _review_for(context, args.control_ref)
+    note_id = _note_id(review, args.note)
+    return _review_change(
+        context,
+        lambda: _decide_note(
+            context.connection, context.principal, context.organization_id, context.project_id,
+            review.id, note_id,
+            NoteDecision(version=review.version, action=args.action, reason=args.reason),
+        ),
+    )  # fmt: skip
+
+
+def _raise_review_note(context: ToolContext, args: RaiseNoteArgs) -> dict[str, Any]:
+    from ai_workforce_api.control_reviews import NoteCreate, _add_note
+
+    review = _review_for(context, args.control_ref)
+    item_id: UUID | None = None
+    if args.item:
+        _sheet_id, sheet = _sheet_for(context, args.control_ref)
+        item_id, _version = _item_id(sheet, args.item)
+    return _review_change(
+        context,
+        lambda: _add_note(
+            context.connection, context.principal, context.organization_id, context.project_id,
+            review.id,
+            NoteCreate(
+                version=review.version, target_kind=args.about, severity=args.severity,
+                text=args.text, item_id=item_id,
+            ),
+        ),
+    )  # fmt: skip
+
+
+def _respond_review_note(context: ToolContext, args: RespondNoteArgs) -> dict[str, Any]:
+    from ai_workforce_api.control_reviews import NoteResponse, _respond_note
+
+    review = _review_for(context, args.control_ref)
+    note_id = _note_id(review, args.note)
+    return _review_change(
+        context,
+        lambda: _respond_note(
+            context.connection, context.principal, context.organization_id, context.project_id,
+            review.id, note_id, NoteResponse(version=review.version, response=args.response),
+        ),
+    )  # fmt: skip
+
+
+def _clear_review_note(context: ToolContext, args: ClearNoteArgs) -> dict[str, Any]:
+    from ai_workforce_api.control_reviews import NoteClear, _clear_note
+
+    review = _review_for(context, args.control_ref)
+    note_id = _note_id(review, args.note)
+    return _review_change(
+        context,
+        lambda: _clear_note(
+            context.connection, context.principal, context.organization_id, context.project_id,
+            review.id, note_id,
+            NoteClear(version=review.version, action=args.action, reason=args.reason),
+        ),
+    )  # fmt: skip
+
+
+def _sign_off_review(context: ToolContext, args: ReviewSignOffArgs) -> dict[str, Any]:
+    from ai_workforce_api.control_reviews import SignOffBody as ReviewSignOffBody
+    from ai_workforce_api.control_reviews import _sign_off as sign_off_review
+
+    review = _review_for(context, args.control_ref)
+    result = _review_change(
+        context,
+        lambda: sign_off_review(
+            context.connection, context.principal, context.organization_id, context.project_id,
+            review.id, ReviewSignOffBody(version=review.version, note=args.note),
+        ),
+    )  # fmt: skip
+    return {"control": review.label, "status": result["status"], "signed_by": result["signed_by"]}
+
+
+def _draft_workpapers(context: ToolContext, args: ControlArgs) -> dict[str, Any]:
+    from ai_workforce_api.db import transaction
+    from ai_workforce_api.workpaper_service import ensure, schedule_drafts
+
+    control_id, ref = _control(context, args.control_ref)
+    with transaction(context.connection) as cursor:
+        queued = ensure(
+            cursor, context.organization_id, context.project_id, control_id, context.principal.id
+        )
+    schedule_drafts(context.drafts, queued)
+    return {"control": ref, "drafting": len(queued)}
+
+
+def _retest(context: ToolContext, args: ControlArgs) -> dict[str, Any]:
+    from ai_workforce_api.test_sheets import retest_work
+
+    sheet_id, sheet = _sheet_for(context, args.control_ref)
+    body, queued = _sheet_change(context, sheet_id, retest_work(sheet.version))
+    _schedule_test(context, queued)
+    return {"testing": "queued", "items": len(body.items)}
+
+
+def _override_result(context: ToolContext, args: TestResultArgs) -> dict[str, Any]:
+    from ai_workforce_api.test_sheets import OverrideBody, override_work
+
+    sheet_id, sheet = _sheet_for(context, args.control_ref)
+    item_id, version = _item_id(sheet, args.item)
+    body, _queued = _sheet_change(
+        context,
+        sheet_id,
+        override_work(
+            item_id,
+            OverrideBody(
+                version=version,
+                index=args.attribute_index,
+                result=args.result,
+                reason=args.reason,
+            ),
+        ),
+    )
+    return {"proposed_conclusion": body.proposed_conclusion, "blocking": body.blocking}
+
+
+def _link_evidence(context: ToolContext, args: TestLinkArgs) -> dict[str, Any]:
+    from ai_workforce_api.test_sheets import LinkBody, link_work
+
+    sheet_id, sheet = _sheet_for(context, args.control_ref)
+    item_id = None if args.item is None else _item_id(sheet, args.item)[0]
+    link = LinkBody(
+        file_id=args.evidence_file_id, item_id=item_id, action=args.action, reason=args.reason
+    )
+    body, queued = _sheet_change(context, sheet_id, link_work(link))
+    _schedule_test(context, queued)
+    return {"counts": body.counts}
+
+
+def _sign_off_testing(context: ToolContext, args: TestSignOffArgs) -> dict[str, Any]:
+    from ai_workforce_api.test_sheets import SignOffBody, sign_off_work
+
+    sheet_id, sheet = _sheet_for(context, args.control_ref)
+    from ai_workforce_api.workpaper_service import open_drafts, schedule_drafts
+
+    body, _queued = _sheet_change(
+        context, sheet_id, sign_off_work(SignOffBody(version=sheet.version, note=args.note))
+    )
+    # Signing off opens the effectiveness workpaper; the agent drafts it.
+    schedule_drafts(context.drafts, open_drafts(context.connection))
+    return {
+        "conclusion": body.conclusion,
+        "proposed_deficiency": body.proposal_status == "PROPOSED",
+    }
+
+
+def _decide_test_deficiency(context: ToolContext, args: TestDeficiencyArgs) -> dict[str, Any]:
+    from ai_workforce_api.test_sheets import DeficiencyDecision, SheetState, decide_deficiency
+
+    sheet_id, sheet = _sheet_for(context, args.control_ref)
+    try:
+        body = decide_deficiency(
+            context.connection,
+            context.principal,
+            context.organization_id,
+            context.project_id,
+            sheet_id,
+            DeficiencyDecision(
+                version=sheet.version,
+                action=args.action,
+                reason=args.reason,
+                severity=args.severity,
+                cause=args.cause,
+            ),
+        )
+    except SheetState as error:
+        raise ToolFailed(f"The proposed deficiency could not be decided: {error.detail}.") from None
+    return {"status": body.proposal_status, "deficiency": body.deficiency_reference}
+
+
 def _reread(context: ToolContext, args: FileArgs) -> dict[str, Any]:
     from ai_workforce_api.evidence_analysis import VersionBody, _reanalyze, schedule_analyses
 
@@ -609,6 +1404,9 @@ def _propose_samples(context: ToolContext, args: ProposeArgs) -> dict[str, Any]:
             JOIN pbc_requests r ON r.id = a.pbc_request_id
             WHERE a.project_id = %s AND r.engagement_control_id = %s AND a.status = 'READY'
               AND coalesce(a.confirmed_kind, a.classification->>'kind') = 'population'
+              AND NOT """
+            + in_force("f")
+            + """
             ORDER BY f.created_at DESC LIMIT 1
             """,
             (context.project_id, control_id),
@@ -640,6 +1438,8 @@ def _submit(context: ToolContext, args: RequestArgs) -> dict[str, Any]:
     from ai_workforce_api.outbound import SubmitBody
     from ai_workforce_api.outbound import _submit as submit
 
+    # The same check as when it was proposed: things may have changed since.
+    _check_submit(context, args)
     row = context.connection.execute(
         "SELECT version FROM pbc_requests WHERE id = %s AND project_id = %s",
         (args.request_id, context.project_id),
@@ -719,7 +1519,8 @@ def _test_for(context: ToolContext, control_ref: str) -> tuple[UUID, int]:
     control_id, ref = _control(context, control_ref)
     row = context.connection.execute(
         "SELECT id, version FROM control_tests "
-        "WHERE project_id = %s AND engagement_control_id = %s",
+        "WHERE project_id = %s AND engagement_control_id = %s "
+        "ORDER BY (status = 'PROPOSED') DESC, created_at DESC LIMIT 1",
         (context.project_id, control_id),
     ).fetchone()
     if row is None:
@@ -904,6 +1705,7 @@ def _update_request(
     *,
     status: str | None = None,
     description: str | None = None,
+    recipient: str | None = None,
     reason: str = "",
 ) -> str:
     from ai_workforce_api.pbc import PbcUpdate
@@ -919,7 +1721,7 @@ def _update_request(
         PbcUpdate(
             version=int(row[0]),
             status=status or str(row[1]),
-            recipient=str(row[2]),
+            recipient=recipient if recipient is not None else str(row[2]),
             due_at=row[3],
             evidence_description=description or str(row[4]),
             control_ref=str(row[5]),
@@ -934,12 +1736,115 @@ def _update_request(
     return body.status
 
 
-def _edit_request(context: ToolContext, args: EditRequestArgs) -> dict[str, Any]:
+def _sendable(
+    context: ToolContext,
+    request_id: UUID,
+    *,
+    description: str | None = None,
+    recipient: str | None = None,
+    need_recipient: bool = True,
+) -> None:
+    """Whether the request's message could be submitted: it fits in one email and, when
+    asked, goes to an allowed address. The reasons are said plainly, with what to change."""
+    from ai_workforce_api.outbound import _engagement, _read_pbc, recipients_allowed, render
+
+    pbc = _read_pbc(context.connection, context.organization_id, context.project_id, request_id)
+    changes = {"evidence_description": description, "recipient": recipient}
+    pbc = pbc.model_copy(update={key: value for key, value in changes.items() if value is not None})
+    engagement = _engagement(context.connection, context.organization_id, context.project_id)
+    ref = pbc.control_ref
+    try:
+        message = render(pbc, engagement)
+    except ValueError:
+        # How much wording fits: the email allows the rest once the template is around it.
+        around = len(render(pbc.model_copy(update={"evidence_description": "x"}), engagement).body)
+        limit = max(MESSAGE_CHARS - around + 1, 0)
+        raise ToolFailed(
+            f"The request for {ref} is too long to send: its wording is "
+            f"{len(pbc.evidence_description.strip()):,} characters and can be at most "
+            f"{limit:,}. Shorten the wording first."
+        ) from None
+    if not need_recipient and recipient is None:
+        return
+    if not recipients_allowed(context.settings, message):
+        if message.recipient.strip() == "":
+            raise ToolFailed(
+                f"The request for {ref} has no recipient. Set the owner's email address first."
+            )
+        raise ToolFailed(
+            f"The request for {ref} cannot go to {message.recipient.strip()}: the address is "
+            "not valid or its domain is not allowed in this workspace."
+        )
+
+
+def _check_submit(context: ToolContext, args: RequestArgs) -> None:
+    row = _current_request(context, args.request_id)
+    if row[1] not in ("DRAFT", "APPROVAL_PENDING"):
+        raise ToolFailed("That request has already gone out, so it cannot be submitted again.")
+    # Checked as the request will be once the plan's earlier edits to it have run.
+    planned = context.planned.get(args.request_id, {})
+    _sendable(
+        context,
+        args.request_id,
+        description=planned.get("description"),
+        recipient=planned.get("recipient"),
+    )
+
+
+def _plan_edit(context: ToolContext, args: EditRequestArgs) -> None:
+    planned = context.planned.setdefault(args.request_id, {})
+    if args.description is not None:
+        planned["description"] = args.description.strip()
+    if args.recipient is not None:
+        planned["recipient"] = args.recipient.strip()
+
+
+def _check_edit(context: ToolContext, args: EditRequestArgs) -> None:
     row = _current_request(context, args.request_id)
     if row[1] != "DRAFT":
-        raise ToolFailed("Only a draft can be reworded. This request has gone further.")
-    _update_request(context, args.request_id, description=args.description.strip())
-    return {"request_id": str(args.request_id), "status": "DRAFT", "reworded": True}
+        raise ToolFailed("Only a draft can be edited. This request has gone further.")
+    _sendable(
+        context,
+        args.request_id,
+        description=None if args.description is None else args.description.strip(),
+        recipient=None if args.recipient is None else args.recipient.strip(),
+        need_recipient=False,
+    )
+
+
+def _edit_request(context: ToolContext, args: EditRequestArgs) -> dict[str, Any]:
+    _check_edit(context, args)
+    _update_request(
+        context,
+        args.request_id,
+        description=None if args.description is None else args.description.strip(),
+        recipient=None if args.recipient is None else args.recipient.strip(),
+    )
+    return {
+        "request_id": str(args.request_id),
+        "status": "DRAFT",
+        "reworded": args.description is not None,
+        "recipient": args.recipient,
+    }
+
+
+def _export_summary(args: ExportArgs) -> str:
+    names = {
+        "evidence_requests": "evidence requests",
+        "controls": "controls",
+        "exceptions": "exceptions",
+        "review_items": "open review items",
+    }
+    kind = "Excel" if args.file_format == "xlsx" else "CSV"
+    return f"Exported {names[args.dataset]} to {kind}"
+
+
+def _edit_summary(args: EditRequestArgs) -> str:
+    if args.description is not None and args.recipient is not None:
+        return f"Reword the drafted request and send it to {args.recipient.strip()}"
+    if args.recipient is not None:
+        return f"Send the drafted request to {args.recipient.strip()}"
+    return "Reword the drafted request"
 
 
 def _draft_request(context: ToolContext, args: DraftRequestArgs) -> dict[str, Any]:
@@ -976,8 +1881,8 @@ def _draft_request(context: ToolContext, args: DraftRequestArgs) -> dict[str, An
         ),
     )
     context.connection.execute(
-        "UPDATE pbc_requests SET engagement_control_id = %s WHERE id = %s",
-        (control_id, body.id),
+        "UPDATE pbc_requests SET engagement_control_id = %s, testing_phase = %s WHERE id = %s",
+        (control_id, args.phase, body.id),
     )
     return {"request_id": str(body.id), "status": body.status, "recipient": recipient}
 
@@ -1003,12 +1908,19 @@ def _short(text: str, limit: int = 80) -> str:
 
 
 TOOLS: tuple[Tool, ...] = (
-    Tool("engagement_summary", "Engagement summary",
-         "Headline status: controls in scope and concluded, evidence, deficiencies, schedule.",
-         "READ", NoArgs, _summary, lambda a: "Read the engagement summary"),
+    Tool("engagement_status", "Engagement status",
+         "Where the engagement stands, worked out from its records: controls in scope and "
+         "their testing status (complete, awaiting review, in testing, awaiting evidence, not "
+         "started) with the completion rate and its rule; evidence requests pending, overdue, "
+         "and received but not reviewed; open deficiencies and failed tests; open review "
+         "notes; missed milestones; the blockers with the records behind them; and data "
+         "checks where records contradict each other. Says when the records were read.",
+         "READ", StatusArgs, _status, lambda a: "Read the engagement status"),
     Tool("list_controls", "List controls",
-         "Controls with their stage, next step, who they wait on, evidence, and findings. "
-         "Filter by queue, area, application, or text.",
+         "Controls in scope with their testing status, test sheet, review, workpapers, "
+         "evidence pending by phase, and deficiencies. Filter by testing status, stage, "
+         "application, owner, process, failed or key controls, or text. Totals cover every "
+         "match; rows come a page at a time (offset).",
          "READ", ListControlsArgs, _list_controls, lambda a: "Listed controls"),
     Tool("get_control", "Open a control",
          "Everything about one control: its definition, test attributes, evidence requests, "
@@ -1020,18 +1932,42 @@ TOOLS: tuple[Tool, ...] = (
          "client data.",
          "READ", EvidenceArgs, _read_evidence, lambda a: "Read evidence text"),
     Tool("list_requests", "List evidence requests",
-         "Evidence requests with their status, recipient, and due date. Filter by status "
-         "(DRAFT, APPROVAL_PENDING, SENT, WAITING_FOR_RESPONSE, PARTIALLY_RECEIVED, RECEIVED, "
-         "OVERDUE) or control.",
+         "Evidence requests with their control, application, process, testing phase, "
+         "evidence type, owner, recipient, request and due dates, status, days overdue, files "
+         "received, and whether what came in has been reviewed. Filter by status or status "
+         "group, phase, application, owner, process, control, overdue only, review state, or "
+         "text. Totals and counts by group cover every match; rows come a page at a time "
+         "(offset). Cancelled requests are left out unless asked for.",
          "READ", ListRequestsArgs, _list_requests, lambda a: "Listed evidence requests"),
-    Tool("list_deficiencies", "List deficiencies",
-         "The deficiency register.", "READ", NoArgs, _list_deficiencies,
-         lambda a: "Listed deficiencies"),
+    Tool("list_exceptions", "List exceptions",
+         "Open deficiencies as recorded, with their control, application, status, and "
+         "remediation; and failed tests that have no deficiency logged. include_closed adds "
+         "closed ones.",
+         "READ", ListExceptionsArgs, _list_exceptions, lambda a: "Listed exceptions"),
+    Tool("list_review_items", "List open review items",
+         "Open review notes across the engagement, and prepared workpapers whose control's "
+         "independent review is not signed off.",
+         "READ", ListReviewArgs, _list_review, lambda a: "Listed open review items"),
     Tool("get_plan", "Read the plan", "Phases and milestones with their dates and status.",
          "READ", NoArgs, _get_plan, lambda a: "Read the plan"),
     Tool("list_approvals", "List pending approvals",
          "Approvals waiting for a decision, and who asked for each.", "READ", NoArgs,
          _list_approvals, lambda a: "Listed pending approvals"),
+    Tool("export_records", "Export to a file",
+         "Make an Excel (xlsx) or CSV file of evidence requests, controls, exceptions, or "
+         "review items, with the same filters as the list just shown. The file is checked, "
+         "stored, and offered to the person to download for 30 days. It changes no records.",
+         "ROUTINE", ExportArgs, _export, _export_summary),
+    Tool("generate_report", "Make a report",
+         "Make a PDF or Word report from the engagement's records: status_report (scope, "
+         "testing progress, evidence, exceptions, review items, blockers, next actions), "
+         "evidence_tracker (pending evidence requests with their control, application, phase, "
+         "type, owner, dates, status, and days overdue), control_summary (testing status per "
+         "control), exceptions_report (deficiencies and failed tests with remediation), or "
+         "executive_summary (progress, accomplishments, outstanding items, risks, decisions "
+         "needed, milestones, limitations). Figures come from the records; the file is "
+         "checked, stored, and offered for 30 days. It changes no records.",
+         "ROUTINE", ReportArgs, _report, _report_summary),
     Tool("redraft_request", "Redraft a request",
          "Ask the evidence coordinator to draft a request again from its control. Only a "
          "draft can be redrafted.",
@@ -1046,7 +1982,8 @@ TOOLS: tuple[Tool, ...] = (
          lambda a: f"Propose samples for {a.control_ref}"),
     Tool("submit_request", "Submit for approval",
          "Submit a drafted evidence request for an approver to check the exact message.",
-         "CONFIRM", RequestArgs, _submit, lambda a: "Submit the evidence request for approval"),
+         "CONFIRM", RequestArgs, _submit, lambda a: "Submit the evidence request for approval",
+         _check_submit),
     Tool("send_request", "Send a request",
          "Send an evidence request whose message an approver has approved.",
          "CONFIRM", RequestArgs, _send, lambda a: "Send the approved evidence request"),
@@ -1074,15 +2011,47 @@ TOOLS: tuple[Tool, ...] = (
          lambda a: "Accept the screenshot review"
          if a.decision == "ACCEPTED"
          else f"Override the screenshot review: {_short(a.note, 60)}"),
+    Tool("draft_workpapers", "Draft workpapers",
+         "Open a control's design and effectiveness workpapers, filled from the records, and "
+         "have the agent draft their narratives with citations. Sections a person wrote stay.",
+         "ROUTINE", ControlArgs, _draft_workpapers,
+         lambda a: f"Draft workpapers for {a.control_ref}"),
+    Tool("retest_control", "Test again",
+         "Ask the control's tester to place its evidence and test every item again.",
+         "ROUTINE", ControlArgs, _retest, lambda a: f"Test {a.control_ref} again"),
+    Tool("override_test_result", "Set a test result",
+         "Set one result on a control's test sheet (pass, exception, unable, not applicable) "
+         "with the reason, for example after checking the evidence.",
+         "CONFIRM", TestResultArgs, _override_result,
+         lambda a: f"Set {a.control_ref} {a.item}, attribute {a.attribute_index + 1}, to "
+         f"{a.result.replace('_', ' ').lower()}: {_short(a.reason, 50)}"),
+    Tool("link_test_evidence", "Link test evidence",
+         "Put an evidence file on a sample of a control's test sheet, take it off, or set it "
+         "aside as not test evidence.",
+         "CONFIRM", TestLinkArgs, _link_evidence,
+         lambda a: f"{a.action.capitalize()} a file on {a.control_ref}"
+         + (f" {a.item}" if a.item else "")),
+    Tool("sign_off_testing", "Sign off testing",
+         "Sign off a control's test sheet. The conclusion follows the results, with zero "
+         "tolerance; exceptions draft a deficiency.",
+         "CONFIRM", TestSignOffArgs, _sign_off_testing,
+         lambda a: f"Sign off the testing of {a.control_ref}"),
+    Tool("decide_test_deficiency", "Log or dismiss a proposed deficiency",
+         "Log the deficiency the tester drafted from a control's exceptions, or dismiss it with "
+         "a reason.",
+         "CONFIRM", TestDeficiencyArgs, _decide_test_deficiency,
+         lambda a: f"{'Log' if a.action == 'LOG' else 'Dismiss'} the proposed deficiency on "
+         f"{a.control_ref}"),
     Tool("log_deficiency", "Log a deficiency",
          "Log a deficiency on a control. Severity follows likelihood and magnitude; a "
          "significant deficiency or material weakness still needs the reviewer.",
          "CONFIRM", DeficiencyArgs, _log_deficiency,
          lambda a: f"Log a deficiency on {a.control_ref}: {_short(a.title, 60)}"),
-    Tool("edit_request", "Reword a draft request",
-         "Replace the wording of a drafted evidence request, for example to add questions "
-         "for the owner. Only a draft can be reworded.",
-         "CONFIRM", EditRequestArgs, _edit_request, lambda a: "Reword the drafted request"),
+    Tool("edit_request", "Edit a draft request",
+         "Change a drafted evidence request: replace its wording (for example to add "
+         "questions for the owner, or to shorten it to fit one email), set the email address "
+         "it goes to, or both. Only a draft can be edited.",
+         "CONFIRM", EditRequestArgs, _edit_request, _edit_summary, _check_edit, _plan_edit),
     Tool("draft_request", "Draft a new request",
          "Draft a new evidence request or follow-up to a control's owner. It is saved as a "
          "draft and goes out only after the usual approval.",
@@ -1092,6 +2061,42 @@ TOOLS: tuple[Tool, ...] = (
          "Mark a request partly received, received, or closed, or cancel it with a reason.",
          "CONFIRM", RequestStatusArgs, _request_status,
          lambda a: f"Mark the request {a.status.replace('_', ' ').lower()}"),
+    Tool("get_review", "Open a control's independent review",
+         "The control's independent review: the reviewer agent's re-performance, every review "
+         "note with its status, what blocks sign-off, and whether you are its reviewer.",
+         "READ", ControlArgs, _get_review, lambda a: f"Opened the review of {a.control_ref}"),
+    Tool("reperform_review", "Re-perform the review",
+         "Ask the independent reviewer agent to re-perform a control's testing again and "
+         "propose notes.",
+         "ROUTINE", ControlArgs, _reperform_review,
+         lambda a: f"Re-perform the review of {a.control_ref}"),
+    Tool("decide_review_note", "Accept or dismiss a proposed review note",
+         "Accept a note the reviewer agent proposed (a must-fix note reopens the work it is "
+         "about) or dismiss it with a reason. Only the engagement reviewer can.",
+         "CONFIRM", ReviewNoteArgs, _decide_review_note,
+         lambda a: f"{'Accept' if a.action == 'ACCEPT' else 'Dismiss'} review note #{a.note} on "
+         f"{a.control_ref}"),
+    Tool("raise_review_note", "Raise a review note",
+         "Raise a review note on a control's testing, sample, workpaper, or deficiency. A "
+         "must-fix note reopens the work it is about. Only the engagement reviewer can.",
+         "CONFIRM", RaiseNoteArgs, _raise_review_note,
+         lambda a: f"Raise a {a.severity.replace('_', ' ').lower()} note on {a.control_ref}: "
+         f"{_short(a.text, 60)}"),
+    Tool("respond_review_note", "Answer a review note",
+         "Answer an open review note as the preparer, saying what was done about it.",
+         "CONFIRM", RespondNoteArgs, _respond_review_note,
+         lambda a: f"Answer review note #{a.note} on {a.control_ref}"),
+    Tool("clear_review_note", "Clear or return a review note",
+         "Clear an answered review note, or return it with what is still missing. Only the "
+         "engagement reviewer can.",
+         "CONFIRM", ClearNoteArgs, _clear_review_note,
+         lambda a: f"{'Clear' if a.action == 'CLEAR' else 'Return'} review note #{a.note} on "
+         f"{a.control_ref}"),
+    Tool("sign_off_control_review", "Sign off a control review",
+         "Sign off a control's independent review once every note is cleared. Only the "
+         "engagement reviewer can, and never on work they prepared.",
+         "CONFIRM", ReviewSignOffArgs, _sign_off_review,
+         lambda a: f"Sign off the review of {a.control_ref}"),
     Tool("update_phase", "Change phase dates", "Change a phase's planned dates.",
          "CONFIRM", PhaseArgs, _update_phase,
          lambda a: f"Move {a.phase_key} to {a.planned_start} – {a.planned_end}"),
@@ -1145,17 +2150,45 @@ def execute(tool: Tool, arguments: BaseModel, context: ToolContext) -> dict[str,
         return tool.run(context, arguments)
     except ToolFailed:
         raise
-    except NotVisible:
-        raise ToolFailed("That is not in this engagement, or you cannot see it.") from None
     except Exception as error:
-        detail = getattr(error, "detail", None)
-        if isinstance(detail, str) and len(detail) < 200:
-            raise ToolFailed(detail[0].upper() + detail[1:] + ".") from None
-        name = type(error).__name__
-        if name == "AccessDenied":
-            raise ToolFailed("Your role does not allow this.") from None
-        logger.warning("console tool %s failed with %s", tool.name, name)
-        raise ToolFailed("That could not be done. Check its current state and try again.") from None
+        raise _failed(tool, error) from None
+
+
+def check(tool: Tool, arguments: BaseModel, context: ToolContext) -> None:
+    """Whether a step could run as things stand, before it is proposed. A step that would
+    fail is refused with its reason, so the agent explains instead of offering it."""
+    if tool.check is None:
+        return
+    try:
+        tool.check(context, arguments)
+    except ToolFailed:
+        raise
+    except Exception as error:
+        raise _failed(tool, error) from None
+
+
+def planned(tool: Tool, arguments: BaseModel, context: ToolContext) -> None:
+    """Remember what a proposed step will change, for the checks of the steps after it."""
+    if tool.plans is not None:
+        tool.plans(context, arguments)
+
+
+def _failed(tool: Tool, error: Exception) -> ToolFailed:
+    """A failure as words the person and the model can act on, never a leaked detail."""
+    if isinstance(error, NotVisible):
+        return ToolFailed("That is not in this engagement, or you cannot see it.")
+    detail = getattr(error, "detail", None)
+    if not isinstance(detail, str) and isinstance(error, ValueError):
+        # A service's own short reason, never a validation dump with the values in it.
+        if not isinstance(error, ValidationError) and "\n" not in str(error):
+            detail = str(error)
+    if isinstance(detail, str) and 0 < len(detail) < 200:
+        return ToolFailed(detail[0].upper() + detail[1:].rstrip(".") + ".")
+    name = type(error).__name__
+    if name == "AccessDenied":
+        return ToolFailed("Your role does not allow this.")
+    logger.warning("console tool %s failed with %s", tool.name, name)
+    return ToolFailed("That could not be done. Check its current state and try again.")
 
 
 def result_text(result: dict[str, Any]) -> str:

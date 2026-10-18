@@ -3,7 +3,7 @@
 import re
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 import psycopg
@@ -84,7 +84,8 @@ _COLUMNS = """
     id, project_id, operation_key, control_ref, owner_user_id, recipient, due_at,
     evidence_description, status, outbound_message_id, thread_id, first_response_at,
     received_at, attachment_refs, follow_up_after_days, max_follow_ups, escalation_state,
-    cancellation_reason, version
+    cancellation_reason, version, provided_directly, testing_phase, engagement_control_id,
+    cc_recipients, request_type, title, priority, drafted_by
 """
 
 
@@ -98,11 +99,19 @@ class PbcCreate(BaseModel):
     control_ref: str
     recipient: str
     due_at: datetime
-    evidence_description: str = Field(min_length=1, max_length=4000)
+    evidence_description: str = Field(min_length=1, max_length=80_000)
     owner_user_id: UUID | None = None
     attachment_refs: list[str] = Field(default_factory=list, max_length=20)
     follow_up_after_days: int = Field(default=3, ge=1, le=30)
     max_follow_ups: int = Field(default=2, ge=0, le=10)
+    testing_phase: Literal["DESIGN", "INTERIM", "ROLLFORWARD"] | None = None
+    # Migration 0076: a person's request may name its control, type, title, priority, and
+    # the people copied. It stays the person's: its approver is someone else.
+    engagement_control_id: UUID | None = None
+    request_type: str | None = Field(default=None, pattern=r"^[A-Z][A-Z_]{1,39}$")
+    title: str = Field(default="", max_length=160)
+    priority: Literal["NORMAL", "HIGH", "URGENT"] = "NORMAL"
+    cc_recipients: list[str] = Field(default_factory=list, max_length=10)
 
     @field_validator("due_at")
     @classmethod
@@ -117,7 +126,7 @@ class PbcUpdate(BaseModel):
     status: str
     recipient: str
     due_at: datetime
-    evidence_description: str = Field(min_length=1, max_length=4000)
+    evidence_description: str = Field(min_length=1, max_length=80_000)
     control_ref: str
     attachment_refs: list[str] = Field(default_factory=list, max_length=20)
     outbound_message_id: str | None = None
@@ -154,6 +163,21 @@ class PbcBody(BaseModel):
     escalation_state: str
     cancellation_reason: str
     version: int
+    # Received from evidence the team uploaded, without an email.
+    provided_directly: bool = False
+    # The testing phase the request serves: DESIGN, INTERIM, ROLLFORWARD, RETEST, or
+    # REMEDIATION (evidence_plans.py). None for a request not tied to a control.
+    testing_phase: str | None = None
+    # The control it asks evidence for; its record opens the request for review.
+    engagement_control_id: UUID | None = None
+    # People copied on the request besides its recipient (migration 0075).
+    cc_recipients: list[str] = Field(default_factory=list)
+    # The confirmed request type; None until a person confirms it (request_details.py).
+    request_type: str | None = None
+    title: str = ""
+    priority: str = "NORMAL"
+    # Who drafted it: the evidence coordinator (AGENT) or a person (migration 0076).
+    drafted_by: str = "PERSON"
 
 
 def register_pbc(app: FastAPI, settings: Settings) -> None:
@@ -174,6 +198,18 @@ def register_pbc(app: FastAPI, settings: Settings) -> None:
         return _run(
             settings,
             lambda connection: _list(connection, principal, organization_id, project_id),
+        )
+
+    @app.get("/organizations/{organization_id}/projects/{project_id}/pbc-requests/{request_id}")
+    def read_request(
+        organization_id: UUID, project_id: UUID, request_id: UUID, request: Request
+    ) -> PbcBody:
+        principal = _session_principal(request)
+        return _run(
+            settings,
+            lambda connection: _read(
+                connection, principal, organization_id, project_id, request_id
+            ),
         )
 
     @app.post("/organizations/{organization_id}/projects/{project_id}/pbc-requests/{request_id}")
@@ -217,9 +253,38 @@ def _create(
         organization_id=organization_id,
         project_id=project_id,
     )
-    _fields(body.operation_key, body.control_ref, body.recipient, body.attachment_refs)
+    # A draft may be written before anyone is assigned to receive it.
+    _fields(
+        body.operation_key,
+        body.control_ref,
+        body.recipient,
+        body.attachment_refs,
+        blank_recipient=True,
+    )
+    copied = [item.strip().lower() for item in body.cc_recipients if item.strip()]
+    if (
+        len(set(copied)) != len(copied)
+        or any(_EMAIL.fullmatch(item) is None for item in copied)
+        or body.recipient.strip().lower() in copied
+    ):
+        raise ValueError("pbc fields are invalid")
     if _project_status(connection, organization_id, project_id) != "ACTIVE":
         raise PbcState("project is not active")
+    if body.engagement_control_id is not None:
+        control = connection.execute(
+            "SELECT included FROM engagement_controls WHERE id = %s AND project_id = %s",
+            (body.engagement_control_id, project_id),
+        ).fetchone()
+        if control is None:
+            raise NotVisible()
+        if not control[0]:
+            raise PbcState("control is not in scope")
+    if body.request_type is not None:
+        known = connection.execute(
+            "SELECT 1 FROM evidence_request_types WHERE request_type = %s", (body.request_type,)
+        ).fetchone()
+        if known is None:
+            raise ValueError("pbc fields are invalid")
     owner_id = body.owner_user_id or principal.id
     _require_owner(connection, organization_id, project_id, owner_id)
     existing = _by_key(connection, organization_id, project_id, body.operation_key)
@@ -237,9 +302,15 @@ def _create(
             INSERT INTO pbc_requests (
                 organization_id, project_id, operation_key, control_ref, owner_user_id,
                 recipient, due_at, evidence_description, attachment_refs,
-                follow_up_after_days, max_follow_ups
+                follow_up_after_days, max_follow_ups, testing_phase, engagement_control_id,
+                request_type, request_type_basis, request_type_confirmed, title, priority,
+                cc_recipients, drafted_by
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                CASE WHEN %s::text IS NULL THEN 'RULES' ELSE 'PERSON' END, %s::text IS NOT NULL,
+                %s, %s, %s, 'PERSON'
+            )
             RETURNING {_COLUMNS}
             """,
             (
@@ -254,6 +325,14 @@ def _create(
                 body.attachment_refs,
                 body.follow_up_after_days,
                 body.max_follow_ups,
+                body.testing_phase,
+                body.engagement_control_id,
+                body.request_type,
+                body.request_type,
+                body.request_type,
+                " ".join(body.title.split()),
+                body.priority,
+                copied,
             ),
         ).fetchone()
         if row is None:
@@ -288,6 +367,34 @@ def _list(
     return [_body(row) for row in rows]
 
 
+def _read(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    request_id: UUID,
+) -> PbcBody:
+    """One request, whole: what the review panel shows before it is submitted."""
+    authorize(
+        connection,
+        principal=principal,
+        action=Action.TASK_READ,
+        organization_id=organization_id,
+        project_id=project_id,
+    )
+    row = connection.execute(
+        f"""
+        SELECT {_COLUMNS}
+        FROM pbc_requests
+        WHERE organization_id = %s AND project_id = %s AND id = %s
+        """,
+        (organization_id, project_id, request_id),
+    ).fetchone()
+    if row is None:
+        raise NotVisible()
+    return _body(row)
+
+
 def _update(
     connection: psycopg.Connection[Any],
     principal: Principal,
@@ -306,7 +413,14 @@ def _update(
     status = body.status.strip()
     if status not in _TRANSITIONS:
         raise ValueError("pbc fields are invalid")
-    _fields("draft-key", body.control_ref, body.recipient, body.attachment_refs)
+    # A draft can be reworded before anyone is assigned to receive it.
+    _fields(
+        "draft-key",
+        body.control_ref,
+        body.recipient,
+        body.attachment_refs,
+        blank_recipient=status == "DRAFT",
+    )
     reason = body.cancellation_reason.strip()
     if status == "CANCELLED" and reason == "":
         raise ValueError("pbc fields are invalid")
@@ -332,7 +446,11 @@ def _update(
             message_id != current.outbound_message_id or thread_id != current.thread_id
         ):
             raise PbcState("pbc message is bound")
-        if status in _NEEDS_MESSAGE:
+        if current.provided_directly and status in _RESPONSE:
+            # Evidence was uploaded, not emailed: there is no message to bind.
+            message_id = None
+            thread_id = None
+        elif status in _NEEDS_MESSAGE:
             if message_id is None or thread_id is None:
                 raise PbcState("outbound message is required")
             _require_message(cursor, project_id, message_id, thread_id)
@@ -399,12 +517,19 @@ def _update(
     return updated
 
 
-def _fields(operation_key: str, control_ref: str, recipient: str, attachments: list[str]) -> None:
+def _fields(
+    operation_key: str,
+    control_ref: str,
+    recipient: str,
+    attachments: list[str],
+    *,
+    blank_recipient: bool = False,
+) -> None:
     if _KEY.fullmatch(operation_key.strip()) is None:
         raise ValueError("pbc fields are invalid")
-    if (
-        _REFERENCE.fullmatch(control_ref.strip()) is None
-        or _EMAIL.fullmatch(recipient.strip()) is None
+    addressed = _EMAIL.fullmatch(recipient.strip()) is not None
+    if _REFERENCE.fullmatch(control_ref.strip()) is None or not (
+        addressed or (blank_recipient and recipient.strip() == "")
     ):
         raise ValueError("pbc fields are invalid")
     seen: set[str] = set()
@@ -569,4 +694,12 @@ def _body(row: tuple[Any, ...]) -> PbcBody:
         escalation_state=str(row[16]),
         cancellation_reason=str(row[17]),
         version=int(row[18]),
+        provided_directly=bool(row[19]),
+        testing_phase=row[20] if isinstance(row[20], str) else None,
+        engagement_control_id=row[21] if isinstance(row[21], UUID) else None,
+        cc_recipients=[str(item) for item in row[22]] if isinstance(row[22], list) else [],
+        request_type=row[23] if isinstance(row[23], str) else None,
+        title=str(row[24] or ""),
+        priority=str(row[25] or "NORMAL"),
+        drafted_by=str(row[26] or "PERSON"),
     )

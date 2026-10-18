@@ -126,7 +126,8 @@ export function directoryHref(input: {
   if (input.projectId !== null && input.projectId !== "") {
     params.set("project", input.projectId);
   }
-  if (input.section !== "overview") {
+  // The console is the default page, so only it can leave the section out.
+  if (input.section !== "console") {
     params.set("section", input.section);
   }
   if (input.agentId) {

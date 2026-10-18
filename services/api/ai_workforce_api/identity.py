@@ -1,7 +1,9 @@
 """OIDC identity. Tokens never appear on this type."""
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
+
+Issuer = Literal["entra", "google"]
 
 
 class IdentityError(Exception):
@@ -15,6 +17,8 @@ class IdentityError(Exception):
 class Identity:
     subject: str
     email: str
+    issuer: Issuer = "entra"
+    display_name: str | None = None
 
 
 @dataclass(frozen=True)

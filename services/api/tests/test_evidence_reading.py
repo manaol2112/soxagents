@@ -506,3 +506,30 @@ def _classify_context(**overrides: Any) -> ClassifyContext:
     }
     values.update(overrides)
     return ClassifyContext(**values)
+
+
+def test_a_garbled_coverage_list_keeps_the_rest_of_the_answer() -> None:
+    # Seen live: the model sent "items" as a fragment of text, with a good summary and gaps.
+    context = _classify_context(
+        items=(
+            RequestedItem(kind="population", title="Access changes", fields=(), period=""),
+            RequestedItem(kind="policy", title="Password standard", fields=(), period=""),
+        )
+    )
+    answer = {
+        "kind": "configuration",
+        "confidence": "high",
+        "summary": "AWS IAM account password policy output.",
+        "reason": "A system configuration capture.",
+        "items": '\n<parameter name="index">2',
+        "coverage": "NOT_COVERED",
+        "gaps": ["The capture is dated outside the audit period."],
+    }
+    checked = check_classification(answer, context)
+    assert checked.kind == "configuration"
+    assert checked.gaps == ["The capture is dated outside the audit period."]
+    # Coverage is not guessed: every requested item stays not covered for a person.
+    assert [(item.title, item.coverage) for item in checked.items] == [
+        ("Access changes", "NOT_COVERED"),
+        ("Password standard", "NOT_COVERED"),
+    ]

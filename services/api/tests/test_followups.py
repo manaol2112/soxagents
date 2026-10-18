@@ -24,7 +24,8 @@ from ai_workforce_api.migrate import apply_migrations, migrations_dir
 from ai_workforce_api.outbound import PBC_REMINDER, render_reminder, send_reminder
 from ai_workforce_api.settings import Settings
 
-_APPROVED_REMINDER = "218c32e995682d02a05ab598cbd12195ca3c46b132d7ba3459185a36acaf2ab5"
+# Version 2 (Milestone 8.12): the reminder carries the secure upload link.
+_APPROVED_REMINDER = "38f73066ede3f916e7eef8f3c0bb52f1f62d2bf629ffecb9e032ae9745e9fa50"
 _SENT_AT = datetime(2026, 10, 1, 9, tzinfo=UTC)
 
 
@@ -45,7 +46,7 @@ def test_reminders_render_in_the_request_thread() -> None:
     assert message.thread_id == "thread-1"
     assert message.subject == f"[{reference}] Reminder: Evidence request: control/access-review"
     assert "This is reminder 1 of 2 for the evidence the audit team for SOX 2026" in message.body
-    assert message.request_ref.startswith(f"pbc/{request.id}/pbc-reminder-v1/{follow_up_id}/")
+    assert message.request_ref.startswith(f"pbc/{request.id}/pbc-reminder-v2/{follow_up_id}/")
     assert message.metadata["follow_up_id"] == str(follow_up_id)
     assert message.metadata["follow_up_sequence"] == "1"
     assert render_reminder(request, "SOX 2026", follow_up_id, 1) == message

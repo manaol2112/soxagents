@@ -1,4 +1,6 @@
 import { cookies } from "next/headers";
+import { type Client, parseClients } from "./client-model";
+import { parseCompletion } from "./engagement-lifecycle";
 
 import {
   agentIdInList,
@@ -54,7 +56,7 @@ export async function loadWorkspace(
     organizationId,
     request.section,
     projects.body,
-    visibleProjectId,
+    request.projectId,
   );
   if (management === "error") {
     return deriveShell({
@@ -98,6 +100,7 @@ export async function loadWorkspace(
     notifications: "empty",
     canManageProjects: management.canManageProjects,
     members: management.members,
+    clients: management.clients ?? [],
     projectDetail: management.projectDetail,
     notice: request.notice,
     agentsStatus: agents.status,
@@ -276,6 +279,7 @@ async function loadProjectManagement(
       canManageProjects: boolean;
       members: ReturnType<typeof parseAssignableMembers> & object;
       projectDetail: ReturnType<typeof parseProjectDetail>;
+      clients?: Client[];
     }
   | "error"
 > {
@@ -323,9 +327,24 @@ async function loadProjectManagement(
   } else if (membersResponse.status !== 403) {
     return "error";
   }
-  const projectId = projectIdInList(projectsBody, requestedProjectId);
+  // The firm's clients, for the engagement form; the page works without them.
+  let clients: Client[] = [];
+  if (canManageProjects) {
+    const listed = await apiGet(
+      `/organizations/${organizationId}/clients`,
+      session,
+    );
+    clients = listed.status === 200 ? (parseClients(listed.body) ?? []) : [];
+  }
+  // On the engagements page an engagement opens only when it is chosen (its card's menu,
+  // or the edit form), never by default.
+  const projectId =
+    requestedProjectId !== null &&
+    projectIdInList(projectsBody, requestedProjectId) === requestedProjectId
+      ? requestedProjectId
+      : null;
   if (projectId === null) {
-    return { canManageProjects, members, projectDetail: null };
+    return { canManageProjects, members, clients, projectDetail: null };
   }
   const detailResponse = await apiGet(
     `/organizations/${organizationId}/projects/${projectId}`,
@@ -338,7 +357,14 @@ async function loadProjectManagement(
   if (projectDetail === null) {
     return "error";
   }
-  return { canManageProjects, members, projectDetail };
+  // Where it stands on completion, for the settings card; the page works without it.
+  const completion = await apiGet(
+    `/organizations/${organizationId}/projects/${projectId}/completion`,
+    session,
+  );
+  projectDetail.completion =
+    completion.status === 200 ? parseCompletion(completion.body) : null;
+  return { canManageProjects, members, clients, projectDetail };
 }
 
 export function apiBaseUrl(): string {

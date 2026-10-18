@@ -55,7 +55,8 @@ KIND_LABELS = {
     "other": "Other",
 }
 EXCERPT_CHARS = 12_000
-MAX_ITEMS = 8
+# One per item a request can carry (pbc_drafting.DraftContent).
+MAX_ITEMS = 14
 Coverage = Literal["COVERED", "PARTIAL", "NOT_COVERED"]
 Confidence = Literal["high", "medium", "low"]
 
@@ -103,6 +104,10 @@ class RequestedItem:
     title: str
     fields: tuple[str, ...]
     period: str
+    # The plan requirement the item asks for, when the request carries planned evidence,
+    # and its full wording for the reader.
+    requirement_id: str = ""
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -130,7 +135,9 @@ class ClassifyContext:
 
 class ItemCoverage(BaseModel):
     index: int = Field(ge=0, lt=MAX_ITEMS)
-    title: str = Field(default="", max_length=160)
+    title: str = Field(default="", max_length=220)
+    # Set from the request's own items, never from an answer (with_requirements).
+    requirement_id: str = Field(default="", max_length=36)
     coverage: Coverage
     note: str = Field(default="", max_length=300)
 
@@ -143,6 +150,9 @@ class Classification(BaseModel):
     items: list[ItemCoverage] = Field(default_factory=list, max_length=MAX_ITEMS)
     gaps: list[str] = Field(default_factory=list, max_length=6)
     period: str = Field(default="", max_length=160)
+    # Which of the control's applications the file shows: its exact name, "ALL" when it
+    # applies to all of them (such as a policy), or "" when it cannot be told.
+    application: str = Field(default="", max_length=200)
 
 
 def _text(limit: int, description: str = "") -> dict[str, Any]:
@@ -181,6 +191,11 @@ CLASSIFY_SCHEMA: dict[str, Any] = {
             "description": "What a person should follow up with the control owner.",
         },
         "period": _text(160, "The period or date range the file covers, if it shows one."),
+        "application": _text(
+            200,
+            "Which of the control's systems the file shows, by its exact name; ALL when it "
+            "applies to every one (such as a policy); empty when you cannot tell.",
+        ),
     },
     "required": ["kind", "confidence", "summary", "items", "gaps"],
     "additionalProperties": False,
@@ -202,6 +217,9 @@ proof that a report is complete); NOT_COVERED otherwise.
 first. Check the requested fields, the period, and, for reports, the parameters and \
 completeness. Be specific.
 - Say what period the file covers when it shows one.
+- Say which of the control's systems the file shows, by its exact name from the list. \
+Use ALL for a document that applies to all of them, such as a policy. Leave it empty when \
+the file does not show which system it is.
 - Do not conclude whether the control works. That is testing, which comes later.
 - The extracted text may be partial: a long file is cut, and text read by OCR can contain \
 mistakes. Say so in the reason when it matters.
@@ -367,6 +385,7 @@ def prompt_for(context: ClassifyContext) -> str:
                     "index": index,
                     "kind": item.kind,
                     "title": item.title,
+                    **({"detail": item.detail[:1500]} if item.detail else {}),
                     "fields": list(item.fields),
                     "period": item.period,
                 }
@@ -428,7 +447,35 @@ def check_classification(output: dict[str, Any], context: ClassifyContext) -> Cl
         items=items,
         gaps=[gap for gap in (_clean(gap, 300) for gap in answer.gaps) if gap][:6],
         period=_clean(answer.period, 160),
+        application=_application(answer.application, context),
     )
+
+
+def with_requirements(classification: Classification, context: ClassifyContext) -> Classification:
+    """Name the plan requirement of each covered item, by its index in the request. The
+    answer never says which requirement an item is: the request does."""
+    items = [
+        item.model_copy(
+            update={
+                "requirement_id": context.items[item.index].requirement_id
+                if item.index < len(context.items)
+                else ""
+            }
+        )
+        for item in classification.items
+    ]
+    return classification.model_copy(update={"items": items})
+
+
+def _application(value: str, context: ClassifyContext) -> str:
+    """Only one of the control's own systems, or ALL. Anything else is left for the rules."""
+    cleaned = value.strip()
+    if cleaned.upper() == "ALL":
+        return "ALL"
+    for system in context.systems:
+        if system.lower() == cleaned.lower():
+            return system
+    return ""
 
 
 def _clipped(output: dict[str, Any], context: ClassifyContext) -> dict[str, Any]:
@@ -438,7 +485,7 @@ def _clipped(output: dict[str, Any], context: ClassifyContext) -> dict[str, Any]
     while guessing a kind or a coverage value is not.
     """
     data = dict(output)
-    for key, limit in (("summary", 300), ("reason", 400), ("period", 160)):
+    for key, limit in (("summary", 300), ("reason", 400), ("period", 160), ("application", 200)):
         if isinstance(data.get(key), str):
             data[key] = data[key][:limit]
     items = data.get("items")
@@ -451,6 +498,11 @@ def _clipped(output: dict[str, Any], context: ClassifyContext) -> dict[str, Any]
         ]
     elif not context.items and items in (None, "", {}):
         # Nothing was itemised, so there is nothing to cover.
+        data["items"] = []
+    elif items is not None:
+        # A garbled coverage list (seen live: a fragment of text instead of a list) is
+        # dropped, not guessed: every requested item stays not covered for a person to
+        # check, and the rest of the answer is kept.
         data["items"] = []
     gaps = data.get("gaps")
     if isinstance(gaps, list):

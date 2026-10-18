@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import {
   CATEGORIES,
   type ControlRow,
+  type Dashboard,
   DEFICIENCY_STATUSES,
   type Deficiency,
   type EngagementNotice,
@@ -10,6 +11,7 @@ import {
   LIKELIHOODS,
   MAGNITUDES,
   type Milestone,
+  openPhases,
   type Phase,
   type Plan,
   type PlanTask,
@@ -19,8 +21,10 @@ import {
   timelinePercent,
 } from "./engagement-model";
 import { formatDate } from "./format";
+import { PlanMissingButton } from "./plan-missing";
 import { canManageProjects, type ShellModel } from "./shell-model";
 import { UiIcon } from "./ui-icon";
+import { canRequestEvidence } from "./workflow-model";
 import {
   Banner,
   CardHeader,
@@ -82,6 +86,86 @@ const SEVERITY_TONE: Record<string, string> = {
   SIGNIFICANT_DEFICIENCY: "tone-danger",
   MATERIAL_WEAKNESS: "tone-critical",
 };
+
+/** The independent review across the engagement: who it waits on, and whether it is
+ * complete (Milestone 9.2). */
+function ReviewProgress({
+  model,
+  review,
+}: {
+  model: Ready;
+  review: Dashboard["review"];
+}) {
+  if (review.inScope === 0) {
+    return null;
+  }
+  // Before any control reaches review, the card is its heading: seven zeros say less
+  // than one line.
+  if (review.notStarted === review.inScope) {
+    return (
+      <section className="card review-progress" aria-labelledby="review-title">
+        <CardHeader
+          title="Independent review"
+          titleId="review-title"
+          description={`Not started for any of the ${review.inScope} controls. A control enters review once its testing workpaper is prepared.`}
+        />
+      </section>
+    );
+  }
+  const steps: Array<[string, number, string]> = [
+    ["Not started", review.notStarted, ""],
+    ["Re-performing", review.reperforming, ""],
+    ["Notes to decide", review.toDecide, "tone-warning"],
+    ["Notes to answer", review.toAddress, "tone-warning"],
+    ["Notes to clear", review.toClear, "tone-warning"],
+    ["Ready to sign off", review.toSign, "tone-info"],
+    ["Signed off", review.signedOff, "tone-success"],
+  ];
+  return (
+    <section className="card review-progress" aria-labelledby="review-title">
+      <CardHeader
+        title="Independent review"
+        titleId="review-title"
+        description={
+          review.complete
+            ? "Every in-scope control is reviewed and signed off."
+            : `${review.signedOff} of ${review.inScope} controls signed off${
+                review.openNotes > 0
+                  ? ` · ${review.openNotes} open note${review.openNotes === 1 ? "" : "s"}`
+                  : ""
+              }.`
+        }
+        aside={
+          <a
+            className="text-link"
+            href={pageHref(model, "controls", { queue: "review" })}
+          >
+            In review
+          </a>
+        }
+      />
+      <div className="card-body">
+        <span
+          className="progress-track"
+          role="img"
+          aria-label={`${percent(review.signedOff, review.inScope)}% of reviews signed off`}
+        >
+          <span
+            style={{ width: `${percent(review.signedOff, review.inScope)}%` }}
+          />
+        </span>
+        <ul className="review-steps">
+          {steps.map(([label, count, tone]) => (
+            <li key={label} className={count > 0 ? tone : "is-empty"}>
+              <strong>{count}</strong>
+              <span>{label}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
+  );
+}
 
 function pageHref(
   model: Ready,
@@ -146,7 +230,7 @@ function NotStarted({ model, what }: { model: Ready; what: string }) {
       <EmptyState
         icon="briefcase"
         title={`The ${what} starts with the engagement`}
-        detail="Finish setup and approve the kickoff plan. The planner then lays out the phases, milestones, tasks, and controls this page shows."
+        detail="Finish setup and launch the engagement to see the phases, milestones, and tasks here."
         action={
           <a className="btn" href={sectionHref(model, "setup")}>
             Open setup <UiIcon name="arrow" size={15} />
@@ -200,7 +284,7 @@ export function EngagementDashboard({
   if (data === null) {
     return (
       <div className="page">
-        <PageHeader context="Dashboard" title={project.name} />
+        <PageHeader context={project.name} title="Dashboard" />
         <Unavailable what="dashboard" />
         {attention}
       </div>
@@ -218,8 +302,8 @@ export function EngagementDashboard({
   return (
     <div className="page">
       <PageHeader
-        context="Dashboard"
-        title={project.name}
+        context={project.name}
+        title="Dashboard"
         badge={<StatusPill status={project.status} />}
         description={
           <>
@@ -241,6 +325,99 @@ export function EngagementDashboard({
           </>
         }
       />
+      {data.periodConflicts.length > 0 ? (
+        // A div, not Banner's paragraph: the alert holds a list.
+        <div className="banner banner-warning period-alert" role="status">
+          <UiIcon name="risk" size={16} />
+          <div>
+            <strong>Review the audit period.</strong> The recorded period is
+            inconsistent with the engagement's name or scope:
+            <ul>
+              {data.periodConflicts.map((message) => (
+                <li key={message}>{message}</li>
+              ))}
+            </ul>
+            <a
+              href={`/?${new URLSearchParams({
+                organization: model.organization.id,
+                project: project.id,
+                section: "setup",
+                step: "profile",
+              }).toString()}`}
+            >
+              Review the period
+            </a>
+          </div>
+        </div>
+      ) : null}
+      {data.unplannedControls + data.unrequestedControls > 0 ? (
+        // A div, not Banner's paragraph: the alert holds a button.
+        <div className="banner banner-warning period-alert" role="status">
+          <UiIcon name="risk" size={16} />
+          <div>
+            {data.unplannedControls > 0 ? (
+              <>
+                <strong>
+                  {data.unplannedControls} control
+                  {data.unplannedControls === 1 ? " has" : "s have"} no evidence
+                  plan.
+                </strong>{" "}
+                This engagement launched before evidence planning was
+                introduced, so any requests drafted for these controls were
+                prepared without a plan. Plan the evidence; each kickoff draft
+                is then reconciled with its plan.{" "}
+              </>
+            ) : null}
+            {data.unrequestedControls > 0 ? (
+              <>
+                <strong>
+                  {data.unrequestedControls} control
+                  {data.unrequestedControls === 1 ? " has" : "s have"} planned
+                  evidence that has not been requested.
+                </strong>{" "}
+                No recipient was available at launch, so no requests were
+                drafted. Draft the requests now; each awaits a recipient and
+                approval.{" "}
+              </>
+            ) : null}
+            No request is sent or replaced without approval.
+            {canRequestEvidence(model.organization.role) ? (
+              <div className="banner-action">
+                <PlanMissingButton
+                  organizationId={model.organization.id}
+                  projectId={project.id}
+                  unplanned={data.unplannedControls}
+                  unrequested={data.unrequestedControls}
+                />
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+      {data.unaddressedRequests > 0 ? (
+        <div className="banner banner-warning period-alert" role="status">
+          <UiIcon name="mail" size={16} />
+          <div>
+            <strong>
+              {data.unaddressedRequests} drafted request
+              {data.unaddressedRequests === 1 ? " has" : "s have"} no recipient.
+            </strong>{" "}
+            No control owner email or evidence coordinator is set. Assigning an
+            evidence coordinator addresses all of them; requests cannot be
+            approved until a recipient is set.{" "}
+            <a
+              href={`/?${new URLSearchParams({
+                organization: model.organization.id,
+                project: project.id,
+                section: "evidence",
+                tab: "requests",
+              }).toString()}#contacts-title`}
+            >
+              Assign the evidence coordinator
+            </a>
+          </div>
+        </div>
+      ) : null}
       {schedule.scheduleMissing ? (
         <Banner tone="warning">
           This engagement started before project plans existed.{" "}
@@ -294,11 +471,11 @@ export function EngagementDashboard({
         />
         <Metric
           icon="clock"
-          label="Schedule"
+          label="Phases at risk"
           value={schedule.atRisk}
           detail={
             schedule.atRisk > 0
-              ? `${schedule.atRisk === 1 ? "phase" : "phases"} at risk`
+              ? "Behind their planned dates"
               : next !== undefined
                 ? `On track · next ${formatDate(next.dueDate)}`
                 : "On track"
@@ -306,6 +483,8 @@ export function EngagementDashboard({
           tone={schedule.atRisk > 0 ? "risk" : "positive"}
         />
       </section>
+      {attention}
+      <ReviewProgress model={model} review={data.review} />
       <div className="layout-two dashboard-row">
         <section className="card" aria-labelledby="testing-title">
           <CardHeader
@@ -509,7 +688,6 @@ export function EngagementDashboard({
           </div>
         </section>
       </div>
-      {attention}
     </div>
   );
 }
@@ -577,13 +755,13 @@ function PlanMissing({
         <div>
           <h2>Create the standard plan</h2>
           <p className="form-hint">
-            This engagement started before project plans existed. The planner
-            lays out the standard SOX calendar from the kickoff date and the
-            period end, and gives every task its phase's deadline.
+            Create a project plan from the standard SOX calendar, based on the
+            kickoff date and the period end. Each task gets its phase's
+            deadline.
           </p>
         </div>
         {canManageProjects(model.organization.role) ? (
-          <form method="post" action="/workspace/engagement">
+          <form autoComplete="off" method="post" action="/workspace/engagement">
             <Identity
               model={model}
               intent="create-schedule"
@@ -632,6 +810,7 @@ export function PlanMain({
   const done = plan.tasks.filter(
     (task) => task.status === "SUCCEEDED" || task.status === "CANCELLED",
   ).length;
+  const opened = openPhases(plan.phases);
   return (
     <div className="page">
       <PageHeader
@@ -656,6 +835,7 @@ export function PlanMain({
           key={phase.key}
           model={model}
           phase={phase}
+          open={opened.has(phase.key)}
           tasks={plan.tasks.filter((task) => task.phaseKey === phase.key)}
           milestones={plan.milestones.filter((m) => m.phaseKey === phase.key)}
           editable={editable}
@@ -677,12 +857,14 @@ export function PlanMain({
 function PhaseCard({
   model,
   phase,
+  open,
   tasks,
   milestones,
   editable,
 }: {
   model: Ready;
   phase: Phase;
+  open: boolean;
   tasks: PlanTask[];
   milestones: Milestone[];
   editable: boolean;
@@ -717,13 +899,13 @@ function PhaseCard({
       {tasks.length === 0 ? (
         <p className="phase-empty form-hint">
           {phase.key === "PLANNING"
-            ? "Done in engagement setup: scope and period, team, RCM, systems, workpaper templates, and the PBC plan."
+            ? "Completed during setup: scope, period, team, controls, systems, workpaper templates, and the evidence request plan."
             : phase.key === "ROLLFORWARD" || phase.key === "REMEDIATION"
               ? "Tasks are added when interim testing is reviewed and its results are known."
               : "No tasks in this phase yet."}
         </p>
       ) : (
-        <details className="phase-tasks" open={phase.status !== "DONE"}>
+        <details className="phase-tasks" open={open}>
           <summary>
             {tasks.length} task{tasks.length === 1 ? "" : "s"}
             {phase.overdue > 0 ? ` · ${phase.overdue} overdue` : ""}
@@ -735,6 +917,7 @@ function PhaseCard({
         <details className="phase-edit">
           <summary>Change dates</summary>
           <form
+            autoComplete="off"
             method="post"
             action="/workspace/engagement"
             className="toolbar"
@@ -1041,49 +1224,65 @@ export function TimelineMain({
                   </td>
                   {editable ? (
                     <td className="cell-end">
-                      <form
-                        method="post"
-                        action="/workspace/engagement"
-                        className="milestone-form"
-                      >
-                        <Identity
-                          model={model}
-                          intent="milestone"
-                          section="timeline"
-                        />
-                        <input
-                          type="hidden"
-                          name="milestone_key"
-                          value={milestone.key}
-                        />
-                        <input
-                          type="hidden"
-                          name="version"
-                          value={milestone.version}
-                        />
-                        <input
-                          type="date"
-                          name="due_date"
-                          defaultValue={milestone.dueDate}
-                          aria-label={`Due date for ${milestone.name}`}
-                          required
-                        />
-                        <label
-                          className="check"
-                          htmlFor={`done-${milestone.key}`}
+                      <details className="milestone-edit">
+                        <summary className="btn btn-ghost btn-sm">
+                          <span className="when-closed">
+                            Change
+                            <span className="sr-only"> {milestone.name}</span>
+                          </span>
+                          <span className="when-open">
+                            Cancel
+                            <span className="sr-only">
+                              {" "}
+                              changing {milestone.name}
+                            </span>
+                          </span>
+                        </summary>
+                        <form
+                          autoComplete="off"
+                          method="post"
+                          action="/workspace/engagement"
+                          className="milestone-form"
                         >
-                          <input
-                            id={`done-${milestone.key}`}
-                            type="checkbox"
-                            name="completed"
-                            defaultChecked={milestone.completedAt !== null}
+                          <Identity
+                            model={model}
+                            intent="milestone"
+                            section="timeline"
                           />
-                          Done
-                        </label>
-                        <button type="submit" className="btn-secondary btn-sm">
-                          Save
-                        </button>
-                      </form>
+                          <input
+                            type="hidden"
+                            name="milestone_key"
+                            value={milestone.key}
+                          />
+                          <input
+                            type="hidden"
+                            name="version"
+                            value={milestone.version}
+                          />
+                          <input
+                            type="date"
+                            name="due_date"
+                            defaultValue={milestone.dueDate}
+                            aria-label={`Due date for ${milestone.name}`}
+                            required
+                          />
+                          <label
+                            className="check"
+                            htmlFor={`done-${milestone.key}`}
+                          >
+                            <input
+                              id={`done-${milestone.key}`}
+                              type="checkbox"
+                              name="completed"
+                              defaultChecked={milestone.completedAt !== null}
+                            />
+                            Done
+                          </label>
+                          <button type="submit" className="btn-sm">
+                            Save
+                          </button>
+                        </form>
+                      </details>
                     </td>
                   ) : null}
                 </tr>
@@ -1133,7 +1332,7 @@ export function DeficienciesMain({
       <PageHeader
         context={project.name}
         title="Deficiencies"
-        description="Every control deficiency found, its severity under the SOX evaluation, and its remediation. The engagement reviewer approves any significant deficiency or material weakness, and every closure."
+        description="Every deficiency found, its severity, and its remediation. The engagement reviewer approves significant deficiencies, material weaknesses, and every closure."
       />
       <Notice notice={engagement.notice} />
       <section className="kpis kpis-five" aria-label="Deficiency summary">
@@ -1141,14 +1340,14 @@ export function DeficienciesMain({
           icon="risk"
           label="Material weaknesses"
           value={count("MATERIAL_WEAKNESS")}
-          detail="Open"
+          detail={count("MATERIAL_WEAKNESS") > 0 ? "Open" : "None open"}
           tone={count("MATERIAL_WEAKNESS") > 0 ? "risk" : "positive"}
         />
         <Metric
           icon="risk"
           label="Significant deficiencies"
           value={count("SIGNIFICANT_DEFICIENCY")}
-          detail="Open"
+          detail={count("SIGNIFICANT_DEFICIENCY") > 0 ? "Open" : "None open"}
           tone={count("SIGNIFICANT_DEFICIENCY") > 0 ? "risk" : "positive"}
         />
         <Metric
@@ -1174,17 +1373,18 @@ export function DeficienciesMain({
         <DeficiencyDetail model={model} item={selected} controls={controls} />
       ) : null}
       <section className="card" aria-labelledby="log-title">
-        <details
-          className="log-deficiency"
-          open={logFor !== null || items.length === 0}
-        >
+        <details className="log-deficiency" open={logFor !== null}>
           <summary>
+            <span className="log-deficiency-icon" aria-hidden="true">
+              <UiIcon name="plus" size={14} />
+            </span>
             <span>
               <strong id="log-title">Log a deficiency</strong>
               <small className="cell-sub">
                 Condition, criteria, cause, and effect, then its severity.
               </small>
             </span>
+            <UiIcon name="chevron" size={15} />
           </summary>
           <DeficiencyForm
             model={model}
@@ -1204,7 +1404,7 @@ export function DeficienciesMain({
           <EmptyState
             icon="check"
             title="No deficiencies logged"
-            detail="Findings from walkthroughs and testing are logged here, by people now and by the testing agents later."
+            detail="Deficiencies from walkthroughs and testing appear here."
           />
         ) : (
           <div className="table-wrap">
@@ -1228,8 +1428,8 @@ export function DeficienciesMain({
                       <div className="cell-request">
                         <span className="mono item-ref">
                           {item.reference}
-                          {item.controlRef !== null
-                            ? ` · ${item.controlRef}`
+                          {item.controlLabel !== null
+                            ? ` · ${item.controlLabel}`
                             : ""}
                         </span>
                         <a
@@ -1304,6 +1504,7 @@ function DeficiencyForm({
   const id = item?.id ?? "new";
   return (
     <form
+      autoComplete="off"
       method="post"
       action="/workspace/engagement"
       className="form deficiency-form"
@@ -1498,7 +1699,7 @@ function DeficiencyDetail({
         titleId="deficiency-detail-title"
         description={
           <>
-            {item.controlRef !== null ? `${item.controlRef} · ` : ""}
+            {item.controlLabel !== null ? `${item.controlLabel} · ` : ""}
             {item.type === "DESIGN"
               ? "Design deficiency"
               : "Operating deficiency"}{" "}
@@ -1540,6 +1741,7 @@ function DeficiencyDetail({
             </div>
             {item.canDecide ? (
               <form
+                autoComplete="off"
                 method="post"
                 action="/workspace/engagement"
                 className="toolbar"
@@ -1600,6 +1802,9 @@ function DeficiencyDetail({
             <dt>Status</dt>
             <dd>
               {STATUS_LABEL[item.status]}
+              {item.remediatedOn !== null
+                ? ` · fixed ${formatDate(item.remediatedOn)}`
+                : ""}
               {item.retestResult !== "NOT_STARTED"
                 ? ` · retest ${item.retestResult.toLowerCase()} ${item.retestedAt ? formatDate(item.retestedAt) : ""}`
                 : ""}
@@ -1609,6 +1814,7 @@ function DeficiencyDetail({
         {!closed ? (
           <div className="deficiency-actions">
             <form
+              autoComplete="off"
               method="post"
               action="/workspace/engagement"
               className="toolbar"
@@ -1631,14 +1837,38 @@ function DeficiencyDetail({
                 </button>
               ) : null}
               {item.status === "REMEDIATION_IN_PROGRESS" ? (
-                <button
-                  type="submit"
-                  name="status"
-                  value="READY_FOR_RETEST"
-                  className="btn-sm"
-                >
-                  Ready for retest
-                </button>
+                item.controlId !== null ? (
+                  <>
+                    <label htmlFor={`fixed-${item.id}`}>
+                      Fix took effect on
+                      <input
+                        id={`fixed-${item.id}`}
+                        type="date"
+                        name="remediated_on"
+                        required
+                        max={new Date().toISOString().slice(0, 10)}
+                        defaultValue={item.remediatedOn ?? ""}
+                      />
+                    </label>
+                    <button
+                      type="submit"
+                      name="status"
+                      value="READY_FOR_RETEST"
+                      className="btn-sm"
+                    >
+                      Ready for retest
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="submit"
+                    name="status"
+                    value="READY_FOR_RETEST"
+                    className="btn-sm"
+                  >
+                    Ready for retest
+                  </button>
+                )
               ) : null}
               {item.status === "READY_FOR_RETEST" ? (
                 <>
@@ -1663,6 +1893,7 @@ function DeficiencyDetail({
             </form>
             {item.pending === null ? (
               <form
+                autoComplete="off"
                 method="post"
                 action="/workspace/engagement"
                 className="toolbar"

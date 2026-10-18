@@ -16,15 +16,43 @@ class Settings(BaseSettings):
     graph_client_id: str = ""
     graph_client_secret: str = Field(default="", repr=False)
     shared_mailbox_address: str = ""
+    # Live email over SMTP (smtp_mailbox.py): send only, to the allowed domains.
+    smtp_host: str = ""
+    smtp_port: int = Field(default=465, ge=1, le=65535)
+    # True: TLS from the start (port 465). False: STARTTLS on a plain connection (587).
+    smtp_secure: bool = True
+    smtp_user: str = Field(default="", repr=False)
+    smtp_password: str = Field(default="", repr=False)
+    email_from: str = ""
     app_base_url: str = ""
+    # Where links that leave the app point (the secure upload link and the welcome email's
+    # sign-in link), when that differs from app_base_url: for example the machine's address
+    # on the local network. Empty uses app_base_url.
+    public_base_url: str = ""
+
+    def link_base_url(self) -> str:
+        """The base of links sent outside the app, without a trailing slash."""
+        return (self.public_base_url.strip() or self.app_base_url.strip()).rstrip("/")
+
     oidc_issuer_url: str = ""
     oidc_client_id: str = ""
     oidc_client_secret: str = ""
     oidc_redirect_url: str = ""
+    google_client_id: str = ""
+    google_client_secret: str = Field(default="", repr=False)
+    google_redirect_url: str = ""
+    # Comma-separated DNS servers for the invitation mail-domain check. Empty uses the
+    # machine's own resolvers.
+    dns_nameservers: str = ""
     session_ttl_seconds: int = Field(default=28800, ge=60)
     login_attempt_ttl_seconds: int = Field(default=600, ge=60)
     session_cookie_secure: bool = True
     preview_login_enabled: bool = False
+    # Where the process runs: "production" for real engagements. Development switches,
+    # like turning the independence rules off, are refused there.
+    app_env: str = ""
+    # The independent-review rules (see independence.py). Leave true for real engagements.
+    review_independence_required: bool = True
     workflow_provider: str = ""
     workflow_address: str = ""
     model_provider: str = ""
@@ -33,6 +61,11 @@ class Settings(BaseSettings):
     # Runs background work, such as drafting evidence requests, in the API process when
     # no workflow engine is configured. For local development.
     local_worker_enabled: bool = False
+    # How many background jobs the local worker runs at once: evidence request drafts,
+    # scoping reviews, system scans, and evidence analyses share these threads. Each
+    # draft is one model call of a few seconds, so 80 requests take minutes on 2 threads
+    # and well under one on 6.
+    local_worker_threads: int = Field(default=6, ge=1, le=16)
     # The local OCR engine for screenshots and scanned pages. Empty means `tesseract` on
     # the PATH. Without it, such files are marked for a person to read.
     ocr_tesseract_path: str = ""
@@ -57,4 +90,11 @@ class Settings(BaseSettings):
             and self.oidc_client_id != ""
             and self.oidc_client_secret != ""
             and self.oidc_redirect_url != ""
+        )
+
+    def google_configured(self) -> bool:
+        return (
+            self.google_client_id != ""
+            and self.google_client_secret != ""
+            and self.google_redirect_url != ""
         )

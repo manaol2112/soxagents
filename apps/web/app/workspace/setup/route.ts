@@ -1,8 +1,12 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-
+import { browserUrl } from "../../../src/browser-url";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
-import { setupNoticeFor, setupWrite } from "../../../src/onboarding-model";
+import {
+  returnAnchor,
+  setupNoticeFor,
+  setupWrite,
+} from "../../../src/onboarding-model";
 
 export async function POST(request: Request) {
   const form = await request.formData();
@@ -33,9 +37,16 @@ export async function POST(request: Request) {
       body: JSON.stringify(write.body),
       cache: "no-store",
       signal: AbortSignal.timeout(
-        write.intent === "approve" || write.intent.startsWith("rcm-")
-          ? 15000
-          : 5000,
+        // Launching writes every control's evidence plan and its tasks: it can take
+        // a while for a large scope.
+        write.intent === "launch" || write.intent === "approve"
+          ? 60000
+          : write.intent.startsWith("rcm-") ||
+              // Invitations and firm domains wait on a mail-domain lookup.
+              write.intent === "invite-member" ||
+              write.intent === "add-domain"
+            ? 15000
+            : 5000,
       ),
     });
     status = response.status;
@@ -47,8 +58,9 @@ export async function POST(request: Request) {
         detail = payload.detail;
       }
     }
-  } catch {
-    status = 0;
+  } catch (error) {
+    // Out of time is not a failure: the API may finish the work after the wait ends.
+    status = error instanceof Error && error.name === "TimeoutError" ? -1 : 0;
   }
   return redirect(
     request,
@@ -64,7 +76,11 @@ function redirect(
   step: string,
   notice: string,
 ) {
-  const destination = new URL("/", request.url);
+  // A form saved in the background (setup-form.tsx) gets the outcome, not a new page.
+  if (request.headers.get("x-setup-fetch") === "1") {
+    return NextResponse.json({ notice });
+  }
+  const destination = browserUrl("/", request);
   destination.searchParams.set("section", "setup");
   const organizationId = fields.organization_id ?? "";
   const projectId = fields.project_id ?? "";
@@ -79,6 +95,20 @@ function redirect(
   if (notice !== "setup-saved" && control !== "") {
     destination.searchParams.set("control", control);
   }
+  // The tab open in the Controls step stays open after its forms post.
+  const category = fields.return_category ?? "";
+  if (category === "it" || category === "business" || category === "reports") {
+    destination.searchParams.set("category", category);
+  }
+  // The system open in the Controls step stays open after its forms post.
+  const system = fields.return_system ?? "";
+  if (/^[0-9a-f-]{36}$/i.test(system)) {
+    destination.searchParams.set("system", system);
+  }
   destination.searchParams.set("notice", notice);
+  const anchor = returnAnchor(fields.return_anchor);
+  if (anchor !== null) {
+    destination.hash = anchor;
+  }
   return NextResponse.redirect(destination, 303);
 }

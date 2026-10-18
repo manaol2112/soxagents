@@ -57,7 +57,7 @@ describe("drafted evidence requests", () => {
     const drafts = parseDrafts([draft()]);
     assert.equal(
       draftLabel(drafts.get(requestId))?.label,
-      "Drafted with Claude",
+      "Drafted by an agent",
     );
     const rules = parseDrafts([draft({ source: "RULES" })]).get(requestId);
     assert.equal(draftLabel(rules)?.label, "Drafted from the RCM");

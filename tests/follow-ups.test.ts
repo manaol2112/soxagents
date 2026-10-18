@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   attentionQueue,
+  canFollowUpNow,
   followUpNoticeFor,
   followUpWrite,
   latestOutbound,
@@ -13,6 +14,7 @@ import {
   parseOutbound,
   reminderStep,
   remindersSent,
+  supersededSend,
 } from "../apps/web/src/workflow-model.ts";
 
 const organizationId = "11111111-1111-7111-8111-111111111111";
@@ -270,5 +272,112 @@ describe("follow-up reminders", () => {
     assert.equal(followUpNoticeFor("submit", 404, "", ""), "invalid");
     assert.equal(followUpNoticeFor("submit", 0, "", ""), "unavailable");
     assert.equal(parseEvidenceNotice("reminder-sent"), "reminder-sent");
+  });
+});
+
+describe("a reminder asked for now", () => {
+  const ORG_ID = "01a13253-ec1a-7604-8944-a06dd7633ce0";
+  const PROJECT_ID = "01a1327d-b92a-7bd1-b34b-845a8d89c879";
+  const REQUEST_ID = "01a14cee-0a97-711a-a949-6cce92e257fd";
+
+  it("asks the API to write one and submit it for approval", () => {
+    const write = followUpWrite({
+      organization_id: ORG_ID,
+      project_id: PROJECT_ID,
+      request_id: REQUEST_ID,
+      intent: "now",
+    });
+    assert.ok(!("error" in write));
+    assert.equal(
+      write.path,
+      `/organizations/${ORG_ID}/projects/${PROJECT_ID}/pbc-requests/${REQUEST_ID}/follow-ups/now`,
+    );
+    // Sent in one step; held, still approved, while email sending is off.
+    assert.equal(
+      followUpNoticeFor("now", 200, "", "ACCEPTED"),
+      "reminder-sent",
+    );
+    assert.equal(followUpNoticeFor("now", 200, "", ""), "reminder-held");
+    assert.equal(
+      followUpNoticeFor("remind", 200, "", "ACCEPTED"),
+      "reminder-sent",
+    );
+    // A due reminder is sent in one step too.
+    const FOLLOW_UP_ID = "01a14cee-0000-7000-8000-0000000000f1";
+    const remind = followUpWrite({
+      organization_id: ORG_ID,
+      project_id: PROJECT_ID,
+      request_id: REQUEST_ID,
+      follow_up_id: FOLLOW_UP_ID,
+      intent: "remind",
+    });
+    assert.ok(!("error" in remind));
+    assert.match(
+      remind.path,
+      new RegExp(`/follow-ups/${FOLLOW_UP_ID}/remind$`),
+    );
+    assert.equal(
+      followUpNoticeFor("now", 409, "a reminder already awaits approval", ""),
+      "reminder-open",
+    );
+    // Other intents still need the reminder they act on.
+    assert.deepEqual(
+      followUpWrite({
+        organization_id: ORG_ID,
+        project_id: PROJECT_ID,
+        request_id: REQUEST_ID,
+        intent: "submit",
+      }),
+      { error: "invalid" },
+    );
+  });
+
+  it("is offered only while the request is with the recipient and none is open", () => {
+    assert.equal(canFollowUpNow("SENT", false), true);
+    assert.equal(canFollowUpNow("OVERDUE", false), true);
+    assert.equal(canFollowUpNow("SENT", true), false);
+    assert.equal(canFollowUpNow("DRAFT", false), false);
+    assert.equal(canFollowUpNow("RECEIVED", false), false);
+  });
+
+  it("treats a refused send as history once the request is submitted again", () => {
+    const failed = {
+      id: "01a14cee-0000-7000-8000-000000000001",
+      requestId: REQUEST_ID,
+      approvalId: "01a14cee-0000-7000-8000-0000000000a1",
+      kind: "request" as const,
+      followUpId: null,
+      reference: "PBC-92E257FD",
+      status: "FAILED",
+      deliveryConfirmed: false,
+      errorCode: "live_email_disabled",
+      updatedAt: "2026-10-18T03:50:46Z",
+    };
+    const approval = (id: string, executionStatus: string) => ({
+      id,
+      actionId: "mail.pbc",
+      targetResource: "",
+      risk: "HIGH",
+      decision: "PENDING",
+      decisionReason: null,
+      executionStatus,
+      expiresAt: "2026-10-25T00:00:00Z",
+      requestingUserId: "01a14cee-0000-7000-8000-0000000000b1",
+      requestedByAgent: false,
+      parameters: [
+        ["request_ref", `pbc/${REQUEST_ID}/pbc-request-v1/abc`],
+      ] as Array<[string, string]>,
+    });
+    assert.equal(
+      supersededSend(failed, [approval(failed.approvalId, "REFUSED")]),
+      false,
+    );
+    assert.equal(
+      supersededSend(failed, [
+        approval(failed.approvalId, "REFUSED"),
+        approval("01a14cee-0000-7000-8000-0000000000a2", "NOT_STARTED"),
+      ]),
+      true,
+    );
   });
 });

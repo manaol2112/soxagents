@@ -251,6 +251,60 @@ def advance(
         return step.seconds
 
 
+MAX_SEQUENCE = 10
+
+
+def follow_up_now(
+    connection: psycopg.Connection[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    request_id: UUID,
+    actor: UUID,
+) -> FollowUpBody:
+    """A person asks for a reminder now, ahead of the schedule. The reminder is due at
+    once and goes through the same approval as a scheduled one; nothing is sent here.
+    An open reminder is returned instead of making a second one."""
+    with transaction(connection) as cursor:
+        row = cursor.execute(
+            "SELECT status FROM pbc_requests WHERE id = %s AND organization_id = %s "
+            "AND project_id = %s FOR UPDATE",
+            (request_id, organization_id, project_id),
+        ).fetchone()
+        if row is None:
+            raise NotVisible()
+        if str(row[0]) not in REMINDABLE:
+            raise FollowUpState("the request is not with the recipient")
+        found = cursor.execute(
+            f"SELECT {_COLUMNS} FROM pbc_follow_ups WHERE pbc_request_id = %s "
+            "AND status IN ('DUE', 'APPROVAL_PENDING')",
+            (request_id,),
+        ).fetchone()
+        if found is not None:
+            return _body(found)
+        last = cursor.execute(
+            "SELECT coalesce(max(sequence), 0) FROM pbc_follow_ups WHERE pbc_request_id = %s",
+            (request_id,),
+        ).fetchone()
+        sequence = (0 if last is None else int(last[0])) + 1
+        if sequence > MAX_SEQUENCE:
+            raise FollowUpState("the most reminders for this request are sent")
+        created = cursor.execute(
+            f"""
+            INSERT INTO pbc_follow_ups (
+                organization_id, project_id, pbc_request_id, sequence, due_at
+            )
+            VALUES (%s, %s, %s, %s, clock_timestamp())
+            RETURNING {_COLUMNS}
+            """,
+            (organization_id, project_id, request_id, sequence),
+        ).fetchone()
+        if created is None:
+            raise FollowUpState("the reminder could not be made")
+        body = _body(created)
+        _audit(cursor, organization_id, project_id, actor, body, "follow_up.requested")
+        return body
+
+
 def remindable_requests(
     connection: psycopg.Connection[Any],
     organization_id: UUID | None = None,

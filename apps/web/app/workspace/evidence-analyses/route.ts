@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { analysisNoticeFor, analysisWrite } from "../../../src/analysis-model";
+import { browserUrl } from "../../../src/browser-url";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 
 export async function POST(request: Request) {
@@ -49,7 +50,7 @@ function redirect(
   section: string,
   notice: string,
 ) {
-  const destination = new URL("/", request.url);
+  const destination = browserUrl("/", request);
   destination.searchParams.set("section", section);
   const organizationId = fields.organization_id ?? "";
   const projectId = fields.project_id ?? "";
@@ -58,6 +59,17 @@ function redirect(
   }
   if (projectId !== "") {
     destination.searchParams.set("project", projectId);
+  }
+  // Back to the same tab and open file the form was sent from.
+  for (const key of ["tab", "file", "queue", "q", "group", "control"]) {
+    const value = fields[`keep_${key}`] ?? "";
+    if (value !== "" && value.length <= 120) {
+      destination.searchParams.set(key, value);
+    }
+  }
+  // Sent from a control's record: back to that control.
+  if (fields.keep_section === "controls" && section === "evidence") {
+    destination.searchParams.set("section", "controls");
   }
   destination.searchParams.set("notice", notice);
   return NextResponse.redirect(destination, 303);

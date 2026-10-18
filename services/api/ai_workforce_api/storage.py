@@ -2,7 +2,7 @@
 
 import hashlib
 import logging
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 import psycopg
 
@@ -20,6 +20,13 @@ class ObjectStore(Protocol):
     def put(self, key: str, content: bytes) -> str: ...
 
     def get(self, key: str) -> bytes: ...
+
+
+@runtime_checkable
+class DeletableStore(Protocol):
+    """A store that can also remove an object, for files kept only for a while (exports)."""
+
+    def delete(self, key: str) -> None: ...
 
 
 class MockObjectStore:
@@ -54,6 +61,9 @@ class MockObjectStore:
         if row is None or not isinstance(row[0], (bytes, memoryview)):
             raise StoreError("stored object is missing")
         return bytes(row[0])
+
+    def delete(self, key: str) -> None:
+        self._connection.execute("DELETE FROM mock_objects WHERE object_key = %s", (key,))
 
 
 class S3ObjectStore:
@@ -109,6 +119,15 @@ class S3ObjectStore:
         if not isinstance(body, bytes):
             raise StoreError("stored object is missing")
         return body
+
+    def delete(self, key: str) -> None:
+        from botocore.exceptions import ClientError
+
+        try:
+            self._client.delete_object(Bucket=self._bucket, Key=key)
+        except ClientError:
+            logger.warning("object storage could not be cleaned up")
+            raise StoreError("object storage is unavailable") from None
 
 
 def open_store(settings: Settings, connection: psycopg.Connection[Any]) -> ObjectStore:

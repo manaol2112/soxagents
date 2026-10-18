@@ -1,9 +1,11 @@
 """Reading and classifying stored evidence: the background job and its API.
 
-When a person stores an attachment, the evidence coordinator reads it in the
-background: the file's text (by OCR for screenshots and scanned pages), what kind of
-evidence it is, and how it covers each item its request asked for. A person confirms
-the kind. Nothing here changes a request: a person still marks it received.
+When a person stores an attachment or uploads a file, the evidence coordinator reads it
+in the background: the file's text (by OCR for screenshots and scanned pages), what kind
+of evidence it is, and how it covers each item its request asked for. A person confirms
+the kind. An uploaded file is first matched to its control (evidence_matching.py). A
+filed upload marks its request received (evidence_receipts.py); a mailbox attachment
+never changes its request: a person marks it received.
 
 The custody record is never changed. The bytes are read through the custody check, and
 the job stops if the stored object no longer matches its hash.
@@ -29,10 +31,13 @@ from ai_workforce_api.authorization import (
     _session_principal,
     authorize,
 )
+from ai_workforce_api.control_instances import family_applications
 from ai_workforce_api.control_tests import approved, control_for_population, propose
 from ai_workforce_api.db import connect, independent_steps, transaction
+from ai_workforce_api.evidence_apps import model_tag, rules_tag, save_tag
 from ai_workforce_api.evidence_classify import (
     CLASSIFY_SCHEMA,
+    MAX_ITEMS,
     SYSTEM_PROMPT,
     Classification,
     ClassifyContext,
@@ -41,6 +46,7 @@ from ai_workforce_api.evidence_classify import (
     check_classification,
     prompt_for,
     rules_classify,
+    with_requirements,
 )
 from ai_workforce_api.evidence_extraction import (
     Extraction,
@@ -50,6 +56,23 @@ from ai_workforce_api.evidence_extraction import (
     with_ocr,
     without_ocr,
 )
+from ai_workforce_api.evidence_links import (
+    RequestRef,
+    control_request,
+    evidence_hint,
+    file_request,
+)
+from ai_workforce_api.evidence_matching import (
+    MATCH_SCHEMA,
+    FileFacts,
+    Match,
+    candidates,
+    check_match,
+    no_match,
+    rules_match,
+)
+from ai_workforce_api.evidence_matching import SYSTEM_PROMPT as MATCH_PROMPT
+from ai_workforce_api.evidence_matching import prompt_for as match_prompt
 from ai_workforce_api.evidence_ocr import (
     Engine,
     OcrFactory,
@@ -59,6 +82,7 @@ from ai_workforce_api.evidence_ocr import (
     local_ocr_available,
     model_jpeg,
 )
+from ai_workforce_api.evidence_receipts import apply_receipt
 from ai_workforce_api.evidence_review import (
     Review,
     ReviewContext,
@@ -68,11 +92,13 @@ from ai_workforce_api.evidence_review import (
     save_review,
     unable_review,
 )
+from ai_workforce_api.evidence_withdrawn import is_withdrawn
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.model_providers import CLAUDE_CONFIG, call_note, live_model, provider_for
 from ai_workforce_api.models import ModelProvider, ModelRaw, ModelRequest, complete, record_call
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import ObjectStore, StoreError, digest_of, open_store
+from ai_workforce_api.testing_engine import runs_for_file
 
 logger = logging.getLogger(__name__)
 
@@ -174,14 +200,14 @@ def run_analysis(
     stored = connection.execute(
         """
         SELECT object_key, content_sha256, size_bytes, content_type, file_name,
-               mailbox_attachment_id
+               source, folder_path
         FROM evidence_files WHERE id = %s AND project_id = %s
         """,
         (file_id, project_id),
     ).fetchone()
     if stored is None:
         raise NotVisible()
-    key, digest, size, content_type, file_name, attachment_id = stored
+    key, digest, size, content_type, file_name, source_kind, folder = stored
     # A storage outage raises, so the attempt is retried.
     content = store(settings, connection).get(str(key))
     if digest_of(content) != digest or len(content) != int(size):
@@ -209,7 +235,8 @@ def run_analysis(
             CLAUDE_CONFIG,
         )
 
-    request = _request_for(connection, project_id, attachment_id)
+    request = file_request(connection, project_id, file_id)
+    filing = _filing(connection, file_id) if source_kind == "UPLOAD" else None
     extraction = extract(content, str(file_name), str(content_type))
     ocr_engine: Engine | None = None
     ocr_call_id: UUID | None = None
@@ -220,6 +247,24 @@ def run_analysis(
         extraction, ocr_engine, ocr_call_id = _read_images(
             connection, organization_id, provider, ocr, record, extraction
         )
+    decided: tuple[Match, UUID | None] | None = None
+    if filing is not None and filing[1] == "PENDING":
+        # An upload names no request: the coordinator matches it to its control first.
+        facts = FileFacts(
+            file_name=str(file_name),
+            folder_path=str(folder),
+            file_kind=file_kind,
+            text=extraction.text,
+            columns=extraction.columns,
+        )
+        decided = _match(connection, project_id, provider, record, facts)
+        if decided[0].control is not None:
+            request = control_request(
+                connection,
+                project_id,
+                decided[0].control.control_id,
+                evidence_hint(str(file_name), file_kind, extraction.text),
+            )
     context = _context(connection, project_id, str(file_name), extraction, request)
     classification: Classification | None = None
     source = "RULES"
@@ -251,6 +296,7 @@ def run_analysis(
         note = "Nothing could be read from the file, so the rules were used."
     if classification is None:
         classification = rules_classify(context)
+    classification = with_requirements(classification, context)
     review: tuple[Review, str, ReviewContext, UUID | None, str, str] | None = None
     if is_screenshot(file_kind, bool(images)):
         review = _review(
@@ -302,6 +348,18 @@ def run_analysis(
         ).fetchone()
         if saved is None:
             return "SKIPPED"
+        if filing is not None:
+            filed = _save_filing(cursor, filing[0], decided, request)
+            if filed is not None and request is not None:
+                apply_receipt(
+                    cursor,
+                    organization_id,
+                    project_id,
+                    filing[0],
+                    request[0],
+                    requester,
+                    filed,
+                )
         if review is not None:
             result, status_text, review_context, review_call, review_note, tester = review
             save_review(
@@ -320,7 +378,7 @@ def run_analysis(
                 tester=tester,
             )
         if sampling is not None and request is not None and request[3] is not None:
-            (period_end, frequency, nature, size, tester), table = sampling
+            (period_end, frequency, nature, size, tester), table, round_id, window = sampling
             propose(
                 cursor,
                 organization_id=organization_id,
@@ -336,6 +394,8 @@ def run_analysis(
                 size=size,
                 proposer=requester,
                 tester=tester,
+                test_round_id=round_id,
+                window=window,
             )
         cursor.execute(
             """
@@ -362,28 +422,71 @@ def run_analysis(
                 ),
             ),
         )
+        # Which of the control's applications the file shows: Claude's answer, else rules.
+        if request is not None and request[3] is not None:
+            apps = family_applications(cursor, project_id, request[3])
+            if apps:
+                tag = model_tag(apps, classification.application) if len(apps) > 1 else None
+                save_tag(
+                    cursor,
+                    organization_id,
+                    project_id,
+                    file_id,
+                    tag
+                    or rules_tag(
+                        apps, str(file_name), str(folder), extraction.text, classification.kind
+                    ),
+                )
+        # The control's tester places the new file on its samples and tests them.
+        runs_for_file(cursor, organization_id, project_id, file_id, requester)
     return "READY"
 
 
 def _sampling(
     connection: psycopg.Connection[Any],
     project_id: UUID,
-    request: tuple[UUID, str, str, UUID | None] | None,
+    request: RequestRef | None,
     kind: str,
     content: bytes,
     file_name: Any,
     content_type: Any,
-) -> tuple[tuple[date | None, str, str, int, str], Table] | None:
-    """The control and table to sample, when this file is its population."""
+) -> (
+    tuple[
+        tuple[date | None, str, str, int, str],
+        Table,
+        UUID | None,
+        tuple[date, date] | None,
+    ]
+    | None
+):
+    """The control and table to sample, when this file is its population.
+
+    A population sent for a roll-forward or retest round is sampled for that round, in
+    its window and at its size; any other is interim testing's.
+    """
+    from ai_workforce_api.test_rounds import round_for_request
+
     if kind != "population" or request is None or request[3] is None:
         return None
     plan = control_for_population(connection, project_id, request[3])
-    if plan is None or approved(connection, project_id, request[3]):
+    if plan is None:
+        return None
+    found = round_for_request(connection, request[0])
+    window: tuple[date, date] | None = None
+    if found is not None:
+        decided = connection.execute(
+            "SELECT status FROM control_tests WHERE test_round_id = %s", (found.id,)
+        ).fetchone()
+        if found.method != "SAMPLE" or (decided is not None and decided[0] == "APPROVED"):
+            return None
+        plan = (plan[0], plan[1], plan[2], found.sample_size, plan[4])
+        window = (found.window_start, found.window_end)
+    elif approved(connection, project_id, request[3]):
         return None
     table = read_table(content, str(file_name), str(content_type))
     if table is None or not table.rows:
         return None
-    return plan, table
+    return plan, table, None if found is None else found.id, window
 
 
 def _review(
@@ -392,7 +495,7 @@ def _review(
     project_id: UUID,
     provider: ModelProvider | None,
     record: Callable[[str, ModelRaw], UUID],
-    request: tuple[UUID, str, str, UUID | None] | None,
+    request: RequestRef | None,
     context: ClassifyContext,
     images: tuple[bytes, ...],
     extraction: Extraction,
@@ -498,26 +601,122 @@ def ocr_choice(connection: psycopg.Connection[Any], organization_id: UUID) -> En
     return "MODEL" if row is not None and row[0] == "MODEL" else "LOCAL"
 
 
-def _request_for(
-    connection: psycopg.Connection[Any], project_id: UUID, attachment_id: UUID
-) -> tuple[UUID, str, str, UUID | None] | None:
-    """The request the attachment's reply is matched or assigned to, if any."""
+def _filing(connection: psycopg.Connection[Any], file_id: UUID) -> tuple[UUID, str] | None:
+    """An uploaded file's filing record and its status."""
     row = connection.execute(
-        """
-        SELECT r.id, r.control_ref, r.evidence_description, r.engagement_control_id
-        FROM mailbox_attachments ma
-        JOIN inbound_messages i
-          ON i.mailbox_message_id = ma.message_id AND i.project_id = ma.project_id
-        JOIN pbc_requests r ON r.id = i.pbc_request_id AND r.project_id = i.project_id
-        WHERE ma.id = %s AND ma.project_id = %s AND i.match_status IN ('MATCHED', 'ASSIGNED')
-        ORDER BY i.created_at DESC
-        LIMIT 1
-        """,
-        (attachment_id, project_id),
+        "SELECT id, status FROM evidence_matches WHERE evidence_file_id = %s",
+        (file_id,),
     ).fetchone()
-    if row is None:
+    return None if row is None else (UUID(str(row[0])), str(row[1]))
+
+
+def _match(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    provider: ModelProvider | None,
+    record: Callable[[str, ModelRaw], UUID],
+    facts: FileFacts,
+) -> tuple[Match, UUID | None]:
+    """Rules first (a control ID in the path or name), then Claude, then suggestions."""
+    pool = candidates(connection, project_id)
+    if not pool:
+        return no_match(facts, pool, "No controls are in scope yet."), None
+    found = rules_match(facts, pool)
+    if found is not None:
+        return found, None
+    if provider is None:
+        return no_match(facts, pool, "No model is configured, so a person chooses."), None
+    status, raw = complete(
+        provider,
+        ModelRequest(
+            operation="generate",
+            prompt=match_prompt(facts, pool),
+            output_schema=MATCH_SCHEMA,
+            allowed_tool_ids=(),
+            timeout_seconds=90,
+            cancelled=False,
+            system=MATCH_PROMPT,
+        ),
+        CLAUDE_CONFIG,
+    )
+    call_id = record(status, raw)
+    if status in ("SUCCEEDED", "MALFORMED") and raw.output is not None:
+        try:
+            return check_match(raw.output, pool), call_id
+        except ValueError as error:
+            return no_match(facts, pool, f"The agent's answer was rejected: {error}."), call_id
+    return no_match(facts, pool, call_note(status)), call_id
+
+
+def _save_filing(
+    cursor: psycopg.Cursor[Any],
+    match_id: UUID,
+    decided: tuple[Match, UUID | None] | None,
+    request: RequestRef | None,
+) -> Literal["AGENT", "PERSON", "OWNER"] | None:
+    """Record the coordinator's match. Returns who filed the file, if it is filed."""
+    if decided is not None:
+        found, call_id = decided
+        control = found.control
+        row = cursor.execute(
+            """
+            UPDATE evidence_matches
+            SET status = %s, engagement_control_id = %s, pbc_request_id = %s,
+                filed_by = %s, source = %s, confidence = %s, reason = %s, suggestions = %s,
+                model_call_id = %s, version = version + 1
+            WHERE id = %s AND status = 'PENDING'
+            RETURNING status
+            """,
+            (
+                "FILED" if control is not None else "NEEDS_MATCH",
+                None if control is None else control.control_id,
+                None if control is None or request is None else request[0],
+                None if control is None else "AGENT",
+                found.source,
+                found.confidence,
+                found.reason,
+                Json([item.dump() for item in found.suggestions]),
+                call_id,
+                match_id,
+            ),
+        ).fetchone()
+        return "AGENT" if row is not None and row[0] == "FILED" else None
+    row = cursor.execute(
+        "SELECT status, filed_by FROM evidence_matches WHERE id = %s", (match_id,)
+    ).fetchone()
+    if row is None or row[0] != "FILED":
         return None
-    return UUID(str(row[0])), str(row[1]), str(row[2]), row[3]
+    if row[1] == "PERSON":
+        return "PERSON"
+    return "OWNER" if row[1] == "OWNER" else "AGENT"
+
+
+def _planned_items(
+    connection: psycopg.Connection[Any], request_id: UUID
+) -> tuple[RequestedItem, ...]:
+    """The plan requirements a request carries, in the order its text lists them."""
+    from ai_workforce_api.pbc_drafting import PRIMARY_KIND
+
+    rows = connection.execute(
+        """
+        SELECT id, title, description, categories, period_label FROM evidence_requirements
+        WHERE pbc_request_id = %s AND status = 'REQUESTED'
+        ORDER BY CASE necessity WHEN 'REQUIRED' THEN 0 WHEN 'CONDITIONAL' THEN 1 ELSE 2 END,
+                 created_at, requirement_key
+        """,
+        (request_id,),
+    ).fetchall()
+    return tuple(
+        RequestedItem(
+            kind=PRIMARY_KIND.get(str(row[3][0]) if row[3] else "", "other"),
+            title=clean_line(str(row[1]), 220),
+            fields=(),
+            period=clean_line(str(row[4]), 200),
+            requirement_id=str(row[0]),
+            detail=clean_line(str(row[2]), 1500),
+        )
+        for row in rows[:MAX_ITEMS]
+    )
 
 
 def _context(
@@ -525,7 +724,7 @@ def _context(
     project_id: UUID,
     file_name: str,
     extraction: Extraction,
-    request: tuple[UUID, str, str, UUID | None] | None,
+    request: RequestRef | None,
 ) -> ClassifyContext:
     items: tuple[RequestedItem, ...] = ()
     control: dict[str, Any] = {}
@@ -535,7 +734,12 @@ def _context(
             "SELECT content FROM pbc_drafts WHERE pbc_request_id = %s AND status = 'DRAFTED'",
             (request[0],),
         ).fetchone()
-        if draft is not None and isinstance(draft[0], dict):
+        planned = _planned_items(connection, request[0])
+        if planned:
+            # A request made from the evidence plan: each item is a requirement, so what the
+            # file covers is recorded against the requirement itself.
+            items = planned
+        elif draft is not None and isinstance(draft[0], dict):
             items = tuple(
                 RequestedItem(
                     kind=str(item.get("kind", "other")),
@@ -543,7 +747,7 @@ def _context(
                     fields=tuple(clean_line(str(f), 80) for f in item.get("fields", [])[:15]),
                     period=clean_line(str(item.get("period", "")), 160),
                 )
-                for item in draft[0].get("items", [])[:8]
+                for item in draft[0].get("items", [])[:MAX_ITEMS]
                 if isinstance(item, dict)
             )
         if request[3] is not None:
@@ -901,24 +1105,18 @@ def _reanalyze(
             raise AnalysisState("analysis is confirmed")
         if review_decided(connection, analysis_id):
             raise AnalysisState("review is signed off")
-        # An unsigned review is derived data and is redone with the reading.
-        cursor.execute(
-            "DELETE FROM evidence_reviews WHERE evidence_analysis_id = %s AND decision IS NULL",
-            (analysis_id,),
-        )
+        if is_withdrawn(cursor, UUID(str(current[3]))):
+            raise AnalysisState("the file is withdrawn")
+        restart_analysis(cursor, analysis_id, principal.id)
+        # An upload that waits for a person is matched again with the new reading.
         cursor.execute(
             """
-            UPDATE evidence_analyses
-            SET status = 'PENDING', attempts = 0, lease_until = NULL, requested_by_user_id = %s,
-                extraction = NULL, extraction_status = NULL, ocr_engine = NULL,
-                extracted_text = '', text_truncated = false, content_redacted = false,
-                page_count = NULL, row_count = NULL, columns = '[]'::jsonb,
-                classification = NULL, source = NULL, model_call_id = NULL,
-                ocr_model_call_id = NULL, note = '',
-                version = version + 1, updated_at = clock_timestamp()
-            WHERE id = %s
+            UPDATE evidence_matches
+            SET status = 'PENDING', suggestions = '[]'::jsonb, reason = '', source = NULL,
+                confidence = NULL, model_call_id = NULL, version = version + 1
+            WHERE evidence_file_id = %s AND status = 'NEEDS_MATCH'
             """,
-            (principal.id, analysis_id),
+            (current[3],),
         )
         cursor.execute(
             """
@@ -931,6 +1129,29 @@ def _reanalyze(
             (organization_id, project_id, principal.id, current[3], Json({})),
         )
     return _select(connection, organization_id, project_id, analysis_id)
+
+
+def restart_analysis(cursor: psycopg.Cursor[Any], analysis_id: UUID, requester: UUID) -> None:
+    """Read the file again from the start. The caller has checked it may be reread."""
+    # An unsigned review is derived data and is redone with the reading.
+    cursor.execute(
+        "DELETE FROM evidence_reviews WHERE evidence_analysis_id = %s AND decision IS NULL",
+        (analysis_id,),
+    )
+    cursor.execute(
+        """
+        UPDATE evidence_analyses
+        SET status = 'PENDING', attempts = 0, lease_until = NULL, requested_by_user_id = %s,
+            extraction = NULL, extraction_status = NULL, ocr_engine = NULL,
+            extracted_text = '', text_truncated = false, content_redacted = false,
+            page_count = NULL, row_count = NULL, columns = '[]'::jsonb,
+            classification = NULL, source = NULL, model_call_id = NULL,
+            ocr_model_call_id = NULL, note = '',
+            version = version + 1, updated_at = clock_timestamp()
+        WHERE id = %s
+        """,
+        (requester, analysis_id),
+    )
 
 
 def _confirm(

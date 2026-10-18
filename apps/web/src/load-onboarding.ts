@@ -1,13 +1,14 @@
 import { cookies } from "next/headers";
 
+import { parseContext } from "./control-context-model";
 import { apiGet, sessionToken } from "./load-workspace";
 import {
   EMPTY_SETUP,
+  landingStep,
   parseImport,
   parseOnboarding,
   parsePreview,
   parseSetupNotice,
-  parseStep,
   type SetupState,
 } from "./onboarding-model";
 import type { ShellModel } from "./shell-model";
@@ -21,8 +22,11 @@ export async function loadOnboarding(
     step: string | null;
     category: string | null;
     control: string | null;
+    sample: string | null;
     template: string | null;
     notice: string | null;
+    system?: string | null;
+    edit?: string | null;
   },
 ): Promise<SetupState> {
   if (
@@ -36,25 +40,32 @@ export async function loadOnboarding(
   const base = `/organizations/${model.organization.id}/projects/${model.selectedProject.id}/onboarding`;
   const control =
     query.control !== null && UUID.test(query.control) ? query.control : null;
+  const sample =
+    query.sample !== null && UUID.test(query.sample) ? query.sample : null;
   const template =
     query.template !== null && TEMPLATE.test(query.template)
       ? query.template
       : null;
-  const [loaded, previewed] = await Promise.all([
+  const project = `/organizations/${model.organization.id}/projects/${model.selectedProject.id}`;
+  const [loaded, previewed, context] = await Promise.all([
     apiGet(base, session),
-    model.section === "setup" && control !== null && template !== null
+    model.section === "setup" && sample !== null && template !== null
       ? apiGet(
-          `${base}/workpaper-preview?template=${encodeURIComponent(template)}&control_id=${control}`,
+          `${base}/workpaper-preview?template=${encodeURIComponent(template)}&control_id=${sample}`,
           session,
         )
+      : null,
+    // The open control's statement, for its client values (8.9).
+    model.section === "setup" && control !== null
+      ? apiGet(`${project}/controls/${control}/context`, session)
       : null,
   ]);
   const onboarding =
     loaded.status === 200 ? parseOnboarding(loaded.body) : null;
-  const step = parseStep(query.step);
+  const step = landingStep(query.step, onboarding?.started === true);
   const importId = onboarding?.openImportId ?? null;
   const opened =
-    model.section === "setup" && step === "rcm" && importId !== null
+    model.section === "setup" && step === "controls" && importId !== null
       ? await apiGet(`${base}/rcm/uploads/${importId}`, session)
       : null;
   return {
@@ -62,6 +73,7 @@ export async function loadOnboarding(
     step,
     category: query.category,
     control,
+    sample,
     template,
     preview:
       previewed !== null && previewed.status === 200
@@ -72,5 +84,19 @@ export async function loadOnboarding(
         ? parseImport(opened.body)
         : null,
     notice: model.section === "setup" ? parseSetupNotice(query.notice) : null,
+    design:
+      context !== null && context.status === 200
+        ? (parseContext(context.body)?.design ?? null)
+        : null,
+    edit:
+      query.edit !== undefined && query.edit !== null && UUID.test(query.edit)
+        ? query.edit
+        : null,
+    system:
+      query.system !== undefined &&
+      query.system !== null &&
+      UUID.test(query.system)
+        ? query.system
+        : null,
   };
 }

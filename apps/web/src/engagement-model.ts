@@ -1,3 +1,23 @@
+import type { EvidenceAnalysis, EvidenceReview } from "./analysis-model.ts";
+import type { ActivityItem } from "./control-workspace-model.ts";
+import type { ChangeNotice } from "./evidence-change-model.ts";
+import type { RegisterApplication, RegisterFile } from "./evidence-model.ts";
+import type { RequestDetails } from "./request-details-model.ts";
+import type { TestRound } from "./round-model.ts";
+import type { SheetNotice, TestSheet } from "./sheet-model.ts";
+import type { Workpaper, WorkpaperNotice } from "./workpaper-model.ts";
+
+export type ControlFiles = {
+  files: RegisterFile[];
+  /** The applications the open control covers. */
+  applications: RegisterApplication[];
+  analyses: EvidenceAnalysis[];
+  reviews: EvidenceReview[];
+};
+
+import type { ControlContext } from "./control-context-model.ts";
+import type { EvidencePlan } from "./evidence-plan-model.ts";
+import type { ControlReview, ReviewNotice } from "./review-model.ts";
 import type { ControlTest, TestNotice } from "./testing-model.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -70,6 +90,25 @@ export type Phase = {
   status: "NOT_STARTED" | "IN_PROGRESS" | "DONE" | "AT_RISK";
 };
 
+/**
+ * The phases the project plan opens: the work under way (in progress, at risk, or with
+ * overdue tasks), or, when nothing is under way, the next phase to start. The rest stay
+ * closed so the plan opens on what matters now; each one still opens on request.
+ */
+export function openPhases(phases: Phase[]): Set<string> {
+  const active = phases.filter(
+    (phase) =>
+      phase.status === "IN_PROGRESS" ||
+      phase.status === "AT_RISK" ||
+      phase.overdue > 0,
+  );
+  if (active.length > 0) {
+    return new Set(active.map((phase) => phase.key));
+  }
+  const next = phases.find((phase) => phase.status === "NOT_STARTED");
+  return new Set(next === undefined ? [] : [next.key]);
+}
+
 export type Milestone = {
   key: string;
   name: string;
@@ -110,9 +149,189 @@ export type ControlRequest = {
   title: string;
   status: string;
   dueAt: string;
+  /** The testing phase it serves: DESIGN, INTERIM, ROLLFORWARD, RETEST, REMEDIATION. */
+  phase: string | null;
+  version: number;
+  recipient?: string;
+  /** Drafted at kickoff, before the control's evidence was planned. */
+  kickoff?: boolean;
+  /** The latest approval asked to send it, and its decision. */
+  approvalId?: string | null;
+  /** FAILED: approved, but the send was refused, so nothing went out. */
+  approvalDecision?:
+    | "PENDING"
+    | "APPROVED"
+    | "REJECTED"
+    | "EXPIRED"
+    | "FAILED"
+    | "RESEND"
+    | null;
+  approvalReason?: string | null;
+  approvalDecidedBy?: string | null;
+  /** PERSON: written by a person and sent directly; AGENT: approved by a person first. */
+  draftedBy?: "AGENT" | "PERSON";
+  /** The person reading may decide its open approval (the API enforces the same). */
+  viewerCanDecide?: boolean;
 };
 
 export type WaitingOn = "TEAM" | "OWNER" | "AGENT" | "NONE";
+
+/** A control's one stage in the work (workspace.progress_of), in order. The stages add
+ * up to the controls in scope. */
+export const PROGRESS = [
+  "TO_REQUEST",
+  "AWAITING_EVIDENCE",
+  "EVIDENCE_RECEIVED",
+  "READY_FOR_TESTING",
+  "AGENT_TESTING",
+  "RESULTS_TO_CONFIRM",
+  "AWAITING_REVIEW",
+  "REVIEW_NOTES",
+  "CONCLUDED",
+] as const;
+export type Progress = (typeof PROGRESS)[number];
+
+export const PROGRESS_LABELS: Record<Progress, string> = {
+  TO_REQUEST: "Not yet requested",
+  AWAITING_EVIDENCE: "Awaiting evidence",
+  EVIDENCE_RECEIVED: "Evidence received",
+  READY_FOR_TESTING: "Ready for testing",
+  AGENT_TESTING: "Agent testing",
+  RESULTS_TO_CONFIRM: "Results to confirm",
+  AWAITING_REVIEW: "Awaiting review",
+  REVIEW_NOTES: "Review notes",
+  CONCLUDED: "Concluded",
+};
+
+/** Who a control's next step belongs to (workspace.step_of). */
+export type Actor =
+  | "PREPARER"
+  | "APPROVER"
+  | "REVIEWER"
+  | "CLIENT"
+  | "AGENT"
+  | "NONE";
+
+/** A testing phase's evidence requests: how many, and how many are in. */
+export type PhaseEvidence = {
+  phase: string;
+  requests: number;
+  received: number;
+  drafted: number;
+  out: number;
+  late: number;
+};
+
+export const REVIEW_LEFT = [
+  "REPERFORMING",
+  "REPERFORM",
+  "DECIDE",
+  "ADDRESS",
+  "CLEAR",
+  "SIGN",
+  "SIGNED",
+] as const;
+export type ReviewLeft = (typeof REVIEW_LEFT)[number];
+
+export const SHEET_LEFT = [
+  "EVIDENCE",
+  "TESTING",
+  "DECIDE",
+  "SIGN_OFF",
+  "PLACE",
+  "DEFICIENCY",
+] as const;
+export type SheetLeft = (typeof SHEET_LEFT)[number];
+
+export type StepState = "done" | "active" | "todo" | "issue";
+
+const LIFECYCLE_STEPS: ReadonlyArray<
+  [keyof ControlRow["stages"] | "conclusion", string]
+> = [
+  ["walkthrough", "Design"],
+  ["evidence", "Evidence"],
+  ["test", "Interim"],
+  ["review", "Review"],
+  ["conclusion", "Conclusion"],
+];
+
+/** Where a control is in its lifecycle, one state per step. */
+export function lifecycle(
+  control: ControlRow,
+): Array<{ key: string; label: string; state: StepState }> {
+  return LIFECYCLE_STEPS.map(([key, label]) => ({
+    key,
+    label,
+    state: stepState(control, key),
+  }));
+}
+
+function stepState(control: ControlRow, step: string): StepState {
+  if (step === "conclusion") {
+    return control.conclusion === "EFFECTIVE"
+      ? "done"
+      : control.conclusion === "EXCEPTION"
+        ? "issue"
+        : "todo";
+  }
+  if (step === "review" && control.reviewLeft !== null) {
+    return control.reviewLeft === "SIGNED" ? "done" : "active";
+  }
+  const value = control.stages[step as keyof ControlRow["stages"]];
+  if (value === "SUCCEEDED" || value === "RECEIVED") {
+    return "done";
+  }
+  if (value === "FAILED" || value === "OVERDUE" || value === "BLOCKED") {
+    return "issue";
+  }
+  if (
+    [
+      "RUNNING",
+      "QUEUED",
+      "WAITING",
+      "REVIEW",
+      "REQUESTED",
+      "PARTIAL",
+      "DRAFTED",
+    ].includes(value)
+  ) {
+    return "active";
+  }
+  return "todo";
+}
+
+/** The record's main button: the tab where the next step is done. */
+export function recordAction(
+  control: ControlRow,
+): { label: string; tab: DetailTab } | null {
+  if (!control.included || control.conclusion !== "NOT_CONCLUDED") {
+    return null;
+  }
+  if (control.reviewLeft !== null && control.reviewLeft !== "SIGNED") {
+    return { label: "Open the review", tab: "review" };
+  }
+  if (control.testStatus === "PROPOSED") {
+    return { label: "Review samples", tab: "testing" };
+  }
+  if (control.sheetStatus === "SIGNED_OFF" && control.sheetLeft === null) {
+    return { label: "Prepare the workpaper", tab: "testing" };
+  }
+  if (control.sheetLeft !== null && control.sheetLeft !== "EVIDENCE") {
+    return { label: "Open the test sheet", tab: "testing" };
+  }
+  if (
+    control.testStatus === null &&
+    control.waitingOn === "TEAM" &&
+    control.nextStep === "Confirm the population"
+  ) {
+    return { label: "Confirm the population", tab: "testing" };
+  }
+  if (control.nextStep.startsWith("Settle the attributes")) {
+    // Operating evidence follows the attributes (the planning gate).
+    return { label: "Settle the attributes", tab: "design" };
+  }
+  return { label: "Open evidence requests", tab: "evidence" };
+}
 
 export type ControlRow = {
   id: string;
@@ -131,6 +350,10 @@ export type ControlRow = {
   ownerName: string;
   ownerEmail: string;
   systems: string[];
+  /** The one application this instance tests (Milestone 8.5), and "ID · application". */
+  applicationId: string | null;
+  applicationName: string;
+  label: string;
   sampleSize: number;
   stage: string;
   stages: {
@@ -148,17 +371,74 @@ export type ControlRow = {
   testAttributes: string[];
   pbcItems: string[];
   testStatus: string | null;
+  /** The test sheet (8.2): OPEN or SIGNED_OFF, and what it needs next. */
+  sheetStatus: "OPEN" | "SIGNED_OFF" | null;
+  /** Whether the control can be tested, and the first thing in the way (readiness). */
+  readinessState: string;
+  readinessLabel: string;
+  readinessBlocker: string;
+  sheetLeft: SheetLeft | null;
+  /** The independent review (9.1): OPEN or SIGNED_OFF, and what it waits for. */
+  reviewStatus: "OPEN" | "SIGNED_OFF" | null;
+  reviewLeft: ReviewLeft | null;
+  /** Per application the control covers: its evidence files and its test result. */
+  byApplication: Record<
+    string,
+    { files: number; result: "PASS" | "EXCEPTION" | "OPEN" | null }
+  >;
   nextStep: string;
   waitingOn: WaitingOn;
   overdue: boolean;
   requests: ControlRequest[];
+  /** The tester agent is testing (queued or working) now. */
+  testingRunning: boolean;
+  /** The interim population is not yet accepted, so samples cannot be approved. */
+  populationPending: boolean;
+  /** Its stage in the work, who the next step belongs to, and whether that is the person
+   * viewing (the API applies their role, the reviewer rules, and any assignment). */
+  progress: Progress;
+  actor: Actor;
+  yours: boolean;
+  /** The next step is submitting a drafted request, done together, not per control. */
+  drafted: boolean;
+  /** An exception in its testing or an open deficiency. */
+  exceptions: boolean;
+  evidencePhases: PhaseEvidence[];
+  /** Its application's layer and hosting (the system record), for the neutral icon. */
+  applicationLayer: string | null;
+  applicationHosting: string | null;
+  /** What its agents are doing, from their run records (workspace.agent_runs). */
+  agents: AgentRuns;
+  /** PROPOSED: planned, waiting for a person's approval; nothing is requested before
+   * then. NONE: a running engagement's control launched before evidence planning existed. */
+  evidencePlan?: "PLANNED" | "PROPOSED" | "NONE";
+  /** Its attributes are settled: operating evidence is requested only then. */
+  attributesSettled?: boolean;
+  /** A kickoff draft holds plan items until a person settles it. */
+  reconcile?: boolean;
 };
+
+export type RunState = "IDLE" | "QUEUED" | "RUNNING";
+
+export type AgentRuns = {
+  reading: number;
+  readFailed: number;
+  testing: RunState;
+  drafting: RunState;
+  reviewing: RunState;
+  stopped: Array<"drafting" | "reviewing">;
+};
+
+const runState = (value: unknown): RunState =>
+  value === "QUEUED" || value === "RUNNING" ? value : "IDLE";
 
 export type Deficiency = {
   id: string;
   reference: string;
   controlId: string | null;
   controlRef: string | null;
+  /** The control instance, "ID · application", when the control is per application. */
+  controlLabel: string | null;
   title: string;
   condition: string;
   criteria: string;
@@ -176,6 +456,8 @@ export type Deficiency = {
   remediationDue: string | null;
   retestResult: string;
   retestedAt: string | null;
+  /** The date the fix took effect; a retest samples only from then on. */
+  remediatedOn: string | null;
   source: string;
   pending: {
     kind: "SEVERITY" | "CLOSE";
@@ -229,6 +511,27 @@ export type Dashboard = {
     waiting: number;
     byAgent: Record<string, number>;
   };
+  /** The independent review across the engagement (9.2). */
+  review: {
+    inScope: number;
+    notStarted: number;
+    reperforming: number;
+    toDecide: number;
+    toAddress: number;
+    toClear: number;
+    toSign: number;
+    signedOff: number;
+    openNotes: number;
+    complete: boolean;
+  };
+  /** Where the period disagrees with the engagement's name or scope, unconfirmed. */
+  periodConflicts: string[];
+  /** In-scope controls with no evidence plan (launched before evidence planning). */
+  unplannedControls: number;
+  /** Planned controls whose design or interim evidence was never requested. */
+  unrequestedControls: number;
+  /** Drafted requests with no one to send them to: no owner email, no coordinator. */
+  unaddressedRequests: number;
 };
 
 export type EngagementNotice =
@@ -253,8 +556,31 @@ const NOTICES: readonly EngagementNotice[] = [
 ];
 
 export type EngagementState = {
+  /** The evidence request opened on the control (?request=), with its details. */
+  focusRequest?: RequestDetails | null;
+  /** The open control's activity, from the audit trail (controls/{id}/activity). */
+  activity: ActivityItem[] | null;
   tests: ControlTest[] | null;
   testNotice: TestNotice | null;
+  sheets: TestSheet[] | null;
+  /** Roll-forward and remediation retests, for every control. */
+  rounds: TestRound[] | null;
+  sheetNotice: SheetNotice | null;
+  /** An open control's evidence files, with what the agents read and reviewed. */
+  files: ControlFiles | null;
+  /** A file on the open control withdrawn or replaced, or why it could not be. */
+  changeNotice: ChangeNotice | null;
+  /** The open control's workpapers, and the version a person chose to look at. */
+  workpapers: Workpaper[] | null;
+  workpaperNotice: WorkpaperNotice | null;
+  workpaperViewing: { id: string; version: number } | null;
+  /** The independent reviews (9.1), for every control. */
+  reviews: ControlReview[] | null;
+  reviewNotice: ReviewNotice | null;
+  /** The open control's context: attributes, documents, process understanding, readiness. */
+  context: ControlContext | null;
+  /** The open control's evidence plan: each phase, its evidence, and where it stands. */
+  evidencePlan: EvidencePlan | null;
   plan: Plan | null;
   controls: ControlRow[] | null;
   deficiencies: Deficiency[] | null;
@@ -262,19 +588,47 @@ export type EngagementState = {
   notice: EngagementNotice | null;
   filters: {
     category: string | null;
-    stage: string | null;
+    /** Lifecycle stages to show; empty for all. The other lists work the same way. */
+    stage: string[];
     query: string;
     control: string | null;
     deficiency: string | null;
     queue: Queue | null;
     tab: string | null;
+    /** The Evidence tab's view (?ev=) and the request opened in it (?request=). */
+    evidenceView?: string | null;
+    request?: string | null;
     group: Grouping;
+    /** The register's order: control ID, stage in the work, what needs attention, owner,
+     * application, or the next evidence due date. */
+    sort: "control" | "stage" | "attention" | "owner" | "application" | "due";
+    /** The register as application groups (the everyday view) or one table. */
+    layout: "applications" | "table";
+    /** Application names; "" for controls that run on no system. */
+    application: string[];
+    area: string[];
+    /** Owner names or emails; "" for controls that go to the PBC coordinator. */
+    owner: string[];
+    keyOnly: boolean;
   };
 };
 
 export const EMPTY_ENGAGEMENT: EngagementState = {
+  activity: null,
   tests: null,
   testNotice: null,
+  sheets: null,
+  rounds: null,
+  sheetNotice: null,
+  files: null,
+  changeNotice: null,
+  workpapers: null,
+  workpaperNotice: null,
+  workpaperViewing: null,
+  reviews: null,
+  reviewNotice: null,
+  context: null,
+  evidencePlan: null,
   plan: null,
   controls: null,
   deficiencies: null,
@@ -282,13 +636,19 @@ export const EMPTY_ENGAGEMENT: EngagementState = {
   notice: null,
   filters: {
     category: null,
-    stage: null,
+    stage: [],
     query: "",
     control: null,
     deficiency: null,
     queue: null,
     tab: null,
-    group: "area",
+    group: "application",
+    sort: "control",
+    layout: "applications",
+    application: [],
+    area: [],
+    owner: [],
+    keyOnly: false,
   },
 };
 
@@ -420,6 +780,9 @@ export function parseControls(value: unknown): ControlRow[] | null {
       ownerName: str(item.owner_name),
       ownerEmail: str(item.owner_email),
       systems: strings(item.systems),
+      applicationId: maybe(item.application_id),
+      applicationName: str(item.application_name),
+      label: str(item.label) || str(item.control_ref),
       sampleSize: num(item.sample_size),
       stage: str(item.stage),
       stages: {
@@ -441,6 +804,46 @@ export function parseControls(value: unknown): ControlRow[] | null {
       testAttributes: strings(item.test_attributes),
       pbcItems: strings(item.pbc_items),
       testStatus: maybe(item.test_status),
+      sheetStatus:
+        item.sheet_status === "OPEN" || item.sheet_status === "SIGNED_OFF"
+          ? item.sheet_status
+          : null,
+      sheetLeft: SHEET_LEFT.find((left) => left === item.sheet_left) ?? null,
+      readinessState: str(item.readiness_state) || "READY",
+      readinessLabel: str(item.readiness_label),
+      readinessBlocker: str(item.readiness_blocker),
+      reviewStatus:
+        item.review_status === "OPEN" || item.review_status === "SIGNED_OFF"
+          ? item.review_status
+          : null,
+      reviewLeft: REVIEW_LEFT.find((left) => left === item.review_left) ?? null,
+      byApplication: Object.fromEntries(
+        Object.entries(
+          typeof item.by_application === "object" &&
+            item.by_application !== null &&
+            !Array.isArray(item.by_application)
+            ? (item.by_application as Record<string, unknown>)
+            : {},
+        ).map(([name, value]) => {
+          const entry =
+            typeof value === "object" && value !== null
+              ? (value as Record<string, unknown>)
+              : {};
+          const result =
+            entry.result === "PASS" ||
+            entry.result === "EXCEPTION" ||
+            entry.result === "OPEN"
+              ? entry.result
+              : null;
+          return [
+            name,
+            {
+              files: typeof entry.files === "number" ? entry.files : 0,
+              result,
+            },
+          ];
+        }),
+      ),
       nextStep: str(item.next_step),
       waitingOn: oneOf(
         item.waiting_on,
@@ -458,15 +861,180 @@ export function parseControls(value: unknown): ControlRow[] | null {
         title: str(request.title),
         status: str(request.status),
         dueAt: str(request.due_at),
+        phase: typeof request.phase === "string" ? request.phase : null,
+        version: typeof request.version === "number" ? request.version : 1,
+        recipient: str(request.recipient),
+        kickoff: request.kickoff === true,
+        approvalId:
+          typeof request.approval_id === "string" ? request.approval_id : null,
+        approvalDecision:
+          (
+            [
+              "PENDING",
+              "APPROVED",
+              "REJECTED",
+              "EXPIRED",
+              "FAILED",
+              "RESEND",
+            ] as const
+          ).find((decision) => decision === request.approval_decision) ?? null,
+        draftedBy: request.drafted_by === "PERSON" ? "PERSON" : "AGENT",
+        approvalReason:
+          typeof request.approval_reason === "string"
+            ? request.approval_reason
+            : null,
+        approvalDecidedBy:
+          typeof request.approval_decided_by === "string"
+            ? request.approval_decided_by
+            : null,
+        viewerCanDecide: request.viewer_can_decide === true,
       })),
+      testingRunning: item.testing_running === true,
+      populationPending: item.population_pending === true,
+      progress: oneOf(item.progress, PROGRESS, "TO_REQUEST"),
+      actor: oneOf(
+        item.actor,
+        [
+          "PREPARER",
+          "APPROVER",
+          "REVIEWER",
+          "CLIENT",
+          "AGENT",
+          "NONE",
+        ] as const,
+        "NONE",
+      ),
+      yours: item.yours === true,
+      drafted: item.drafted === true,
+      exceptions: item.exceptions === true,
+      evidencePhases: records(item.evidence_phases).map((phase) => ({
+        phase: str(phase.phase),
+        requests: typeof phase.requests === "number" ? phase.requests : 0,
+        received: typeof phase.received === "number" ? phase.received : 0,
+        drafted: typeof phase.drafted === "number" ? phase.drafted : 0,
+        out: typeof phase.out === "number" ? phase.out : 0,
+        late: typeof phase.late === "number" ? phase.late : 0,
+      })),
+      applicationLayer:
+        typeof item.application_layer === "string"
+          ? item.application_layer
+          : null,
+      applicationHosting:
+        typeof item.application_hosting === "string"
+          ? item.application_hosting
+          : null,
+      agents: parseAgentRuns(item.agents),
+      evidencePlan:
+        item.evidence_plan === "NONE" || item.evidence_plan === "PROPOSED"
+          ? item.evidence_plan
+          : "PLANNED",
+      attributesSettled: item.attributes_settled !== false,
+      reconcile: item.reconcile === true,
     };
   });
 }
 
+function parseAgentRuns(value: unknown): AgentRuns {
+  const raw =
+    typeof value === "object" && value !== null
+      ? (value as Record<string, unknown>)
+      : {};
+  return {
+    reading: typeof raw.reading === "number" ? raw.reading : 0,
+    readFailed: typeof raw.read_failed === "number" ? raw.read_failed : 0,
+    testing: runState(raw.testing),
+    drafting: runState(raw.drafting),
+    reviewing: runState(raw.reviewing),
+    stopped: Array.isArray(raw.stopped)
+      ? raw.stopped.filter(
+          (item): item is "drafting" | "reviewing" =>
+            item === "drafting" || item === "reviewing",
+        )
+      : [],
+  };
+}
+
+/** Where a control stands overall, in one of four states that add up to the controls in
+ * scope: completed (its review signed off), blocked (something stops it that a person
+ * must clear), not started (no evidence asked for yet), or in progress. Read from the
+ * API's stage, readiness, due dates, and agent runs; nothing is estimated. */
+export type OverallState =
+  | "completed"
+  | "blocked"
+  | "in_progress"
+  | "not_started";
+
+const BLOCKING_READINESS = new Set([
+  "NEEDS_INFORMATION",
+  "PLAN_NOT_APPROVED",
+  "PROCESS_UNDERSTANDING_INCOMPLETE",
+  "CONFLICT_REQUIRES_REVIEW",
+]);
+
+/** An agent's work on the control stopped and a person starts it again: the tester gave
+ * up with items untested, a draft or a re-performance did not finish, or a file could not
+ * be read. */
+export function agentStopped(control: ControlRow): boolean {
+  return (
+    control.agents.stopped.length > 0 ||
+    control.agents.readFailed > 0 ||
+    (control.sheetStatus === "OPEN" &&
+      control.sheetLeft === "TESTING" &&
+      !control.testingRunning)
+  );
+}
+
+/** An agent is working on the control now, or its work is queued. */
+export function agentActive(control: ControlRow): boolean {
+  const { agents } = control;
+  return (
+    agents.reading > 0 ||
+    agents.testing !== "IDLE" ||
+    agents.drafting !== "IDLE" ||
+    agents.reviewing !== "IDLE" ||
+    control.testingRunning
+  );
+}
+
+/** What stops the control, in words; empty when nothing does. */
+export function blockersOf(control: ControlRow): string[] {
+  if (control.progress === "CONCLUDED") {
+    return [];
+  }
+  const found: string[] = [];
+  if (BLOCKING_READINESS.has(control.readinessState)) {
+    found.push(control.readinessLabel || "Not ready for testing");
+  }
+  if (agentStopped(control)) {
+    found.push("Agent work stopped");
+  }
+  if (control.overdue) {
+    found.push("Evidence overdue");
+  }
+  return found;
+}
+
+export function overallState(control: ControlRow): OverallState {
+  if (control.progress === "CONCLUDED") {
+    return "completed";
+  }
+  if (blockersOf(control).length > 0) {
+    return "blocked";
+  }
+  return control.progress === "TO_REQUEST" ? "not_started" : "in_progress";
+}
+
 export const QUEUES = [
   "team",
+  "progress",
+  "blocked",
+  "notstarted",
+  "evidence",
+  "agents",
+  "stopped",
   "owner",
   "overdue",
+  "review",
   "findings",
   "concluded",
 ] as const;
@@ -477,28 +1045,100 @@ export function inQueue(control: ControlRow, queue: Queue | null): boolean {
     case null:
       return true;
     case "team":
-      return control.waitingOn === "TEAM";
+      // Only what the person viewing can do now, as the API works it out.
+      return control.yours;
+    case "progress":
+      return overallState(control) === "in_progress";
+    case "blocked":
+      return overallState(control) === "blocked";
+    case "notstarted":
+      return overallState(control) === "not_started";
+    case "evidence":
+      return control.progress === "AWAITING_EVIDENCE";
+    case "agents":
+      return agentActive(control);
+    case "stopped":
+      return agentStopped(control);
     case "owner":
       return control.waitingOn === "OWNER";
     case "overdue":
       return control.overdue;
+    case "review":
+      // Under independent review: the reviewer's turn, or notes to answer.
+      return (
+        control.progress === "AWAITING_REVIEW" ||
+        control.progress === "REVIEW_NOTES"
+      );
     case "findings":
-      return control.deficiencies > 0;
+      return control.exceptions;
     case "concluded":
       return control.conclusion !== "NOT_CONCLUDED";
   }
 }
 
+/** The record's tabs: an overview, then the control and its design, its evidence, its
+ * testing (interim and roll-forward), its findings, its review and conclusion, and its
+ * activity (control-workspace-model.ts). */
 export const DETAIL_TABS = [
   "overview",
+  "design",
   "evidence",
   "testing",
   "findings",
-  "work",
+  "review",
+  "activity",
 ] as const;
 export type DetailTab = (typeof DETAIL_TABS)[number];
 
-/** The tab to open: the asked-for one, or Testing when samples wait for approval. */
+/** Where a link from before the phases lands. */
+const LEGACY_TABS: Record<string, DetailTab> = {
+  interim: "testing",
+  rollforward: "testing",
+  workpapers: "testing",
+  work: "overview",
+};
+
+/** The phase a control is in, from its stage: where the next step is done. */
+/**
+ * Whether the drafting agent has anything to write from: an evidence file of the control
+ * that has been read, or its interim testing signed off. Until then the API fills the
+ * records only and the Draft button waits.
+ */
+export function hasDraftInput(
+  control: Pick<ControlRow, "sheetStatus">,
+  files: ControlFiles | null,
+): boolean {
+  if (control.sheetStatus === "SIGNED_OFF" || files === null) {
+    return control.sheetStatus === "SIGNED_OFF";
+  }
+  // The analyses are the engagement's; the files are the control's.
+  const mine = new Set(files.files.map((file) => file.id));
+  return files.analyses.some(
+    (analysis) => analysis.status === "READY" && mine.has(analysis.fileId),
+  );
+}
+
+export function phaseOf(control: ControlRow): DetailTab {
+  if (control.reviewLeft !== null || control.stage === "CONCLUDED") {
+    return "review";
+  }
+  if (
+    control.testStatus !== null ||
+    control.sheetStatus !== null ||
+    control.evidenceRequests > 0 ||
+    control.stage === "EVIDENCE_REQUESTED" ||
+    control.stage === "EVIDENCE_RECEIVED" ||
+    control.stage === "TESTING"
+  ) {
+    return "testing";
+  }
+  if (control.stage === "WALKTHROUGH") {
+    return "design";
+  }
+  return "overview";
+}
+
+/** The tab to open: the asked-for one (old names included), else the control's phase. */
 export function detailTab(
   control: ControlRow,
   asked: string | null,
@@ -507,38 +1147,53 @@ export function detailTab(
   if (found !== undefined) {
     return found;
   }
-  return control.testStatus === "PROPOSED" ? "testing" : "overview";
+  if (asked !== null && LEGACY_TABS[asked] !== undefined) {
+    return LEGACY_TABS[asked];
+  }
+  // Opening a control lands on its overview; the assistant and the next step point to
+  // the phase that needs work (phaseOf).
+  void control;
+  return "overview";
 }
 
 export const GROUPINGS = ["area", "application"] as const;
 export type Grouping = (typeof GROUPINGS)[number];
 
-/** Controls grouped by in-scope application. A control on several appears under each. */
-export function byApplication(
-  controls: readonly ControlRow[],
-): Array<{ area: string; controls: ControlRow[] }> {
+export type ControlGroup = {
+  area: string;
+  controls: ControlRow[];
+  /** Under "By application": the control areas inside the application. */
+  areas: Array<{ area: string; controls: ControlRow[] }>;
+};
+
+/** Controls grouped by the application each instance tests, with the areas inside.
+ * A control over several applications is one instance under each. */
+/** The group for controls that belong to a process, not a system. */
+export const NO_APPLICATION = "Process and entity-level controls";
+
+export function byApplication(controls: readonly ControlRow[]): ControlGroup[] {
   const groups = new Map<string, ControlRow[]>();
   const none: ControlRow[] = [];
   for (const control of controls) {
-    if (control.systems.length === 0) {
+    if (control.applicationName === "") {
       none.push(control);
+      continue;
     }
-    for (const system of control.systems) {
-      groups.set(system, [...(groups.get(system) ?? []), control]);
-    }
+    groups.set(control.applicationName, [
+      ...(groups.get(control.applicationName) ?? []),
+      control,
+    ]);
   }
   const named = [...groups.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([area, items]) => ({ area, controls: items }));
+    .map(([area, items]) => ({ area, controls: items, areas: byArea(items) }));
   return none.length > 0
-    ? [...named, { area: "No application", controls: none }]
+    ? [...named, { area: NO_APPLICATION, controls: none, areas: byArea(none) }]
     : named;
 }
 
 /** Controls grouped by process area, in register order. */
-export function byArea(
-  controls: readonly ControlRow[],
-): Array<{ area: string; controls: ControlRow[] }> {
+export function byArea(controls: readonly ControlRow[]): ControlGroup[] {
   const groups = new Map<string, ControlRow[]>();
   for (const control of controls) {
     const area = control.area || "Other";
@@ -547,7 +1202,19 @@ export function byArea(
   return [...groups.entries()].map(([area, items]) => ({
     area,
     controls: items,
+    areas: [],
   }));
+}
+
+/** How a control instance is named everywhere: its ID, then its application. */
+export function instanceLabel(
+  controlRef: string | null,
+  application: string,
+): string | null {
+  if (controlRef === null) {
+    return null;
+  }
+  return application === "" ? controlRef : `${controlRef} · ${application}`;
 }
 
 export function parseDeficiencies(value: unknown): Deficiency[] | null {
@@ -561,6 +1228,10 @@ export function parseDeficiencies(value: unknown): Deficiency[] | null {
       reference: str(item.reference),
       controlId: maybe(item.control_id),
       controlRef: maybe(item.control_ref),
+      controlLabel: instanceLabel(
+        maybe(item.control_ref),
+        str(item.application_name),
+      ),
       title: str(item.title),
       condition: str(item.condition),
       criteria: str(item.criteria),
@@ -578,6 +1249,7 @@ export function parseDeficiencies(value: unknown): Deficiency[] | null {
       remediationDue: maybe(item.remediation_due),
       retestResult: str(item.retest_result),
       retestedAt: maybe(item.retested_at),
+      remediatedOn: maybe(item.remediated_on),
       source: str(item.source),
       pending:
         pending === null
@@ -606,6 +1278,7 @@ export function parseDashboard(value: unknown): Dashboard | null {
   const deficiencies = isRecord(value.deficiencies) ? value.deficiencies : {};
   const schedule = isRecord(value.schedule) ? value.schedule : {};
   const work = isRecord(value.work) ? value.work : {};
+  const review = isRecord(value.review) ? value.review : {};
   const byCategory: Record<string, Record<string, number>> = {};
   if (isRecord(controls.by_category)) {
     for (const [key, item] of Object.entries(controls.by_category)) {
@@ -651,6 +1324,22 @@ export function parseDashboard(value: unknown): Dashboard | null {
       waiting: num(work.waiting),
       byAgent: counts(work.by_agent),
     },
+    review: {
+      inScope: num(review.in_scope),
+      notStarted: num(review.not_started),
+      reperforming: num(review.reperforming),
+      toDecide: num(review.to_decide),
+      toAddress: num(review.to_address),
+      toClear: num(review.to_clear),
+      toSign: num(review.to_sign),
+      signedOff: num(review.signed_off),
+      openNotes: num(review.open_notes),
+      complete: review.complete === true,
+    },
+    periodConflicts: strings(value.period_conflicts),
+    unplannedControls: num(value.unplanned_controls),
+    unrequestedControls: num(value.unrequested_controls),
+    unaddressedRequests: num(value.unaddressed_requests),
   };
 }
 
@@ -847,15 +1536,24 @@ export function engagementWrite(
       ) {
         return { error: "invalid" };
       }
+      const fixed = (fields.remediated_on ?? "").trim();
+      if (
+        (status === "READY_FOR_RETEST" && !/^\d{4}-\d{2}-\d{2}$/.test(fixed)) ||
+        (status !== "READY_FOR_RETEST" && fixed !== "")
+      ) {
+        return { error: "invalid" };
+      }
       return {
         intent,
         section: "deficiencies",
         method: "POST",
         path: `${path}/progress`,
         body:
-          status !== ""
-            ? { version: v, status }
-            : { version: v, retest_result: retest },
+          status === "READY_FOR_RETEST"
+            ? { version: v, status, remediated_on: fixed }
+            : status !== ""
+              ? { version: v, status }
+              : { version: v, retest_result: retest },
       };
     }
     const reason = text("reason", 1000);
@@ -908,7 +1606,11 @@ export function filterControls(
   return controls.filter(
     (control) =>
       (filters.category === null || control.category === filters.category) &&
-      (filters.stage === null || control.stage === filters.stage) &&
+      listed(filters.stage, control.progress) &&
+      listed(filters.application, control.applicationName) &&
+      listed(filters.area, control.area) &&
+      listed(filters.owner, ownerKey(control)) &&
+      (!filters.keyOnly || control.keyControl) &&
       inQueue(control, filters.queue) &&
       (query === "" ||
         [
@@ -916,9 +1618,41 @@ export function filterControls(
           control.title,
           control.area,
           control.ownerName,
+          control.ownerEmail,
+          control.applicationName,
           ...control.systems,
         ].some((value) => value.toLowerCase().includes(query))),
   );
+}
+
+/** A multi-value filter: nothing chosen means everything. */
+function listed(chosen: readonly string[], value: string): boolean {
+  return chosen.length === 0 || chosen.includes(value);
+}
+
+/** The value a control's owner filters by: the name, else the email, else "". */
+export function ownerKey(
+  control: Pick<ControlRow, "ownerName" | "ownerEmail">,
+): string {
+  return control.ownerName || control.ownerEmail;
+}
+
+/** The register's filter choices, from the controls in scope: every application
+ * (with "" for controls on no system), area, and owner, each in order. */
+export function filterOptions(controls: readonly ControlRow[]): {
+  applications: string[];
+  areas: string[];
+  owners: string[];
+} {
+  const sorted = (values: Iterable<string>) =>
+    [...new Set(values)].sort((a, b) =>
+      a === "" ? 1 : b === "" ? -1 : a.localeCompare(b),
+    );
+  return {
+    applications: sorted(controls.map((control) => control.applicationName)),
+    areas: [...new Set(controls.map((control) => control.area))],
+    owners: sorted(controls.map(ownerKey)),
+  };
 }
 
 /** Where a date falls on the timeline, from 0 to 100. */

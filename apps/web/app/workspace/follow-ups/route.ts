@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-
+import { browserUrl } from "../../../src/browser-url";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 import { followUpNoticeFor, followUpWrite } from "../../../src/workflow-model";
 
@@ -30,18 +30,29 @@ export async function POST(request: Request) {
       headers,
       body: JSON.stringify(write.body),
       cache: "no-store",
-      signal: AbortSignal.timeout(write.intent === "send" ? 8000 : 3000),
+      signal: AbortSignal.timeout(
+        write.intent === "send" ||
+          write.intent === "now" ||
+          write.intent === "remind"
+          ? 15000
+          : 3000,
+      ),
     });
     status = response.status;
     const payload = (await response.json().catch(() => null)) as {
       detail?: unknown;
       status?: unknown;
+      delivery?: { status?: unknown } | null;
     } | null;
     if (payload !== null && typeof payload.detail === "string") {
       detail = payload.detail;
     }
     if (payload !== null && typeof payload.status === "string") {
       delivery = payload.status;
+    }
+    // A reminder sent in one step reports its delivery beside the reminder.
+    if (payload !== null && typeof payload.delivery?.status === "string") {
+      delivery = payload.delivery.status;
     }
   } catch {
     status = 0;
@@ -58,8 +69,9 @@ function redirectNotice(
   fields: Record<string, string>,
   notice: string,
 ) {
-  const destination = new URL("/", request.url);
+  const destination = browserUrl("/", request);
   destination.searchParams.set("section", "evidence");
+  destination.searchParams.set("tab", "requests");
   const organizationId = fields.organization_id ?? "";
   const projectId = fields.project_id ?? "";
   if (organizationId !== "") {

@@ -43,6 +43,8 @@ export type ControlTest = {
   sampleRequestStatus: string | null;
   samples: Sample[];
   version: number;
+  /** The roll-forward or retest round this plan is for; null for interim testing. */
+  testRoundId: string | null;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -155,6 +157,7 @@ export function parseTests(value: unknown): ControlTest[] | null {
       sampleRequestStatus: maybe(item.sample_request_status),
       samples,
       version: int(item.version) ?? 1,
+      testRoundId: maybe(item.test_round_id),
     });
   }
   return tests;
@@ -164,7 +167,12 @@ export function testFor(
   tests: readonly ControlTest[] | null,
   controlId: string,
 ): ControlTest | null {
-  return (tests ?? []).find((test) => test.controlId === controlId) ?? null;
+  // Interim testing's plan; a round's plan shows with its round.
+  return (
+    (tests ?? []).find(
+      (test) => test.controlId === controlId && test.testRoundId === null,
+    ) ?? null
+  );
 }
 
 /** The few columns worth showing for a sample, after its key. */
@@ -260,6 +268,7 @@ export type TestNotice =
   | "test-changed"
   | "test-denied"
   | "test-invalid"
+  | "test-not-ready"
   | "test-unavailable";
 
 export const TEST_NOTICES: Record<TestNotice, string> = {
@@ -273,6 +282,8 @@ export const TEST_NOTICES: Record<TestNotice, string> = {
   "test-denied": "Your role cannot change this test plan.",
   "test-invalid":
     "Check the fields and try again. A replacement needs a row and a reason.",
+  "test-not-ready":
+    "This control is not ready for testing. Readiness on the Overview tab says what is missing and how to resolve it.",
   "test-unavailable": "That could not be saved. Try again.",
 };
 
@@ -284,7 +295,11 @@ export function parseTestNotice(value: string | null): TestNotice | null {
   );
 }
 
-export function testNoticeFor(intent: TestIntent, status: number): TestNotice {
+export function testNoticeFor(
+  intent: TestIntent,
+  status: number,
+  detail = "",
+): TestNotice {
   if (status === 200) {
     return intent === "propose"
       ? "samples-proposed"
@@ -293,7 +308,7 @@ export function testNoticeFor(intent: TestIntent, status: number): TestNotice {
         : "samples-approved";
   }
   if (status === 409) {
-    return "test-changed";
+    return detail === "control not ready" ? "test-not-ready" : "test-changed";
   }
   if (status === 403 || status === 404) {
     return "test-denied";

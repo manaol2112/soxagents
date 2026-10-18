@@ -6,6 +6,379 @@ Source specification: AI Employee Workforce Cursor Build Plan.
 
 ## Current milestone
 
+**Master test plans, milestone E: phase-based release.** Requested by the product owner ("proceed to next milestone"). Complete, pending review; migration 0081.
+
+- Every phase's evidence is planned and drafted in advance; requests are released progressively (`phase_release.py`, `phase_releases`). Design and implementation follows the test plan's approval. Interim and the roll-forward are released by a person (project.update) for each control; until then their prepared requests are held ("Release the interim phase for this control first"), and approving, submitting, or sending them is refused. Releasing never sends anything; each request is still approved and sent by a person. The agents never release a phase.
+- Decided by the product owner: interim is recommended for release once design and implementation testing is complete (the design workpaper prepared by a person), the roll-forward once interim testing is signed off, or once design is where interim does not apply. A reviewer may release earlier for one control with a reason of at least twenty characters, recorded with the release (`early`).
+- The platform recommends, never acts: "Design and implementation testing has been completed for N controls. The interim evidence requests are ready for review." The control's next step reads "Release the interim phase"; held requests no longer read as "Submit the evidence request".
+- The **Phases** view of the Test plans page: figures for what is ready and released, the recommendation with "Select the ready controls", and each control's three phases (not applicable, waiting for the test plan, waiting for the earlier phase, ready to release, released, released early, complete); a reviewer ticks controls and releases the chosen phase for each on its own (`POST …/phases/release`); early ones need the reason. Each plan's review shows its phases with Release or Release early.
+- Phase exceptions follow the plan's applicability: a phase that does not apply is never released or waited for; a control introduced after the interim date goes from design straight to the roll-forward; a configured control has no population in any phase (8.7).
+- Migration 0081 records as released the phases already under way (a request sent, testing started, a roll-forward round opened): 17 interim phases on the development database. Kickoff requests from before phases were planned are settled against the plan, not released.
+- Not built: withdrawing a release, and a separate reliance assessment for the roll-forward (its plan already asks only for the remaining period and changes since interim; files already held serve its requirements through the 8.7 links).
+
+**Master test plans, milestone D: specific requests, checked against the plan.** Requested by the product owner ("next milestone"). Complete, pending review; no migration.
+
+- Before approval, every request a person or the agent prepared is also checked (`request_quality.py`, in `request_details.request_checks`): its wording asks for something specific in the client's terms (no catch-all such as "all relevant supporting documentation", no plan codes, testing terms, agents, or standards); every item that evidences an attribute (a sample's, an execution's, a configuration) maps to an approved attribute of the test plan; each item's period lies within its phase's window; its phase still applies; no proposed change to one of its items waits; and no other open request of the same control and phase asks for the same items. Each says in words what to fix; approving refuses while one fails, and the bulk approval reports it per request.
+- The drafter's model draft is rejected when its wording would fail the same check (the rules' draft stands), so the agent never offers what approval would refuse.
+- The rules' population requests name the fields the sample is selected and traced by: access (user ID, name, access or role, request date, approver, approval date, date granted), change (change ID, description, requester, approver and approval date, test evidence reference, deployment date), operations, and transactions.
+- The reviewer sees, before approving, which approved attributes the request supports: on the request panel ("Supports A1, A2, A3", opening to each attribute and the items that evidence it) and on each row of the Evidence page's request list. Internal: the client's view of the request (`client_content`) never carries them.
+- Fixed from milestone A: a request whose plan had changes requested did not show as held on the request list.
+- Checked against the development data: of 1,096 requests, the wording check flags one ("test attribute" in the client's wording); lists that end "and any other filters applied" or "(standard, emergency, etc.)" pass.
+- Not built: a similarity measure for duplicates beyond identical wording, a length limit on wording (a request is still never cut), and rewording the sample-evidence items that list the attributes in plain words.
+
+**Master test plans, milestone C: the review screen and the planning queue.** Requested by the product owner ("proceed to next milestone"). Complete, pending review; no migration.
+
+- A **Test plans** page in the engagement navigation (`section=planning`): six figures that add up to the controls in scope and filter the list (ready for review, needs clarification, changes requested, approved, being planned), a search, and one compact row per control with its state, what it has to resolve, what holds its approval, and its last decision. **Review next plan** opens the first one waiting. **Plan again with the rules** plans every unapproved plan again.
+- Approving from the queue: a reviewer ticks the plans they reviewed; each is approved and recorded on its own, at the version shown, with an optional comment (`POST …/planning-review/approve`). A plan changed since the queue was read is refused and said so; nothing else is approved. Only someone with project.update sees the boxes, and the API refuses anyone else.
+- The **master test plan review** (`&control=`): the control, its system, type, frequency, state, revision, and last decision; one action bar (approve with an optional comment kept with the decision, request changes with a comment, submit for review for a preparer, accept or dismiss the planner's revision); what holds approval and the questions that do not, in one short block; four tabs (control understanding, test procedures, test attributes, required evidence) with counts and a flag for what needs a look; previous, next, and next waiting for review without going back.
+- The tabs are linked: every procedure, attribute, and requirement shows the codes it links to; choosing one opens its tab, outlines it, and lists what it traces to. Procedures, their attribute links, requirement links, and attribute criteria are edited in place; the plan is revised and an approved plan goes back for review. Each item says who wrote it (the planner agent, the reviewed rules, the library, a person); agent work is never shown as approved. Supporting sources (the quoted words and where they come from) show on request. The decision history folds under the page.
+- Refined from the review of real plans: evidence that supports the testing (a population, documentation, report support, change history) is no longer reported as supporting no attribute; only evidence of an attribute (a sample's, an execution's, a configuration) must say which. The control record's **Review the test plan** opens this page.
+- Checked in the running app (headless Chrome, development data): the queue (73 controls) and the review at 1440 px and 390 px wide, no sideways scroll; selecting I3 traced A1 to A4 and E5, and a chip opened the attribute's tab. Approving and requesting changes were exercised by the API tests, not on development data.
+- Not built: approving many plans from a filtered list without ticking each (by design), a person confirming one fact on its own, comparing two plan versions side by side.
+
+**Master test plans, milestone B: grounded planning.** Requested by the product owner after milestone A ("proceed with milestone b"). Complete; migration 0080.
+
+- The understanding of each control is twelve facts built from the records (objective, risk, description, manual or automated, preventive or detective, frequency, performer, reviewer, system, population, assertions or IT risks, dependencies), each with its basis (source, proposed, judgment, assumption, missing) and its source quoted. What no record states is missing with a targeted question, never filled in; the plan then reads Needs clarification. The facts are in the version a reviewer approves; recording a client value revises the plan.
+- Library controls are planned with their definitions' procedures, linked to the attributes they test; other controls link only the procedures that test the attributes. Design procedures trace to the risk, not to attributes. Requirements link to the procedures that test what they support, derived from the links.
+- The planner agent may propose criteria for attributes no library definition covers; they show as the agent's and never replace a person's. Vague criteria are left for a person.
+- A model plan is rejected (the rules' plan stands) when it cites a standard the records do not, treats prior-year work as evidence of operation, states a threshold or deadline no record gives, quotes a source that does not say it, or links what the control does not have. All 400 development controls' rules plans pass the same checks.
+- `POST …/evidence-plans/replan` plans every unapproved plan again with the rules.
+- Found: library statements leave the performer and reviewer as client values (a bracketed role) until the team records them, so most launched library controls read Needs clarification until those values are entered; the reviewer can still approve.
+- Not built: the review screen (milestone C) showing the facts, the links, and the criteria; a person confirming one fact on its own (the approval confirms them together).
+
+**Master test plans, milestone A of the agentic workflow review.** Requested by the product owner (an end-to-end review of the agentic IT SOX workflow: onboarding, planning, human review, evidence planning and approval, collection, validation, testing, review, and reporting). Complete; migration 0079. The product owner asked to proceed to milestone B. The onboarding integrity and planning-gate milestones below were accepted by the product owner before this one started.
+
+- Found in the review: testing was not gated on plan approval (readiness checked only approved attributes); library and RCM attributes entered as approved with no person (the 0061 trigger); approval was not bound to a stored version (it overwrote the approver and kept no copy); a person's edit to an approved plan, and a later planner run, changed it without review (the run rewrote its understanding and procedures and added requirements directly); procedures were plain text and requirements named attributes by wording; contributors could approve plans; there was no "request changes".
+- The evidence plan is the control's **master test plan** in four sections: understanding of the control (its own facts and the planner's understanding), test procedures per phase (`plan_procedures`, codes D1, I1, R1), test attributes (codes A1, with the condition, pass and fail criteria, whether judgment is required, whether automated testing suits it), and required evidence (codes E1). The sections link by identity, many to many (`plan_procedure_attributes`, `evidence_requirement_attributes`, `evidence_requirement_procedures`); what does not link up is a finding the reviewer sees and the decision records. Criteria not stated on the plan come from the library definition, marked as such.
+- A person with project.update approves the plan's current revision or requests changes with a comment; contributors edit and submit for review. Each decision is kept, unchangeable, with a hashed copy of the plan as the reviewer saw it (`plan_versions`, `plan_decisions`). Decided by the product owner: approving the plan approves the control's attributes with it, so it is refused while an attribute waits for a decision or a question about them is open.
+- A material change (procedures, approved attributes and their criteria, the links, the control's own facts, a person's edit to evidence or a phase, an accepted proposal) revises the plan, and an approved plan goes back for review; the database refuses an approved plan whose approved revision is not its current one. A later planner run never changes an approved plan: its understanding and procedures wait as a proposed revision, and new evidence as proposed additions, each accepted or dismissed by a person.
+- Nothing downstream runs on a plan no person approved, or one changed since: requests are drafted, approved, and sent only through the planning gate (as before), and now samples are approved, the tester runs, and test sheets are signed off only on an approved plan (readiness check **Test plan approval**, state **Test plan awaiting approval**). Requests and test sheets record the plan revision they were made under.
+- Seven planning states, derived from the records: not started, analyzing, needs clarification, draft ready, pending review, approved, changes requested. `GET …/planning-review` lists every in-scope control (none left out) with its state, counts that add up, and the next control waiting for a reviewer; `GET …/controls/{id}/master-plan` returns the four sections, findings, blockers, decisions, and whether the viewer may decide.
+- Decided by the product owner: every plan approved before this milestone is reviewed again (migration 0079 withdrew 5 approvals on the development database, each kept in the audit trail); a plan cannot be approved while the planner agent is still drafting it.
+- Not built in this milestone: the four-tab review screen and the planning queue page (milestone C; the control's plan panel gains Request changes and the proposed-revision decision only), the planner writing procedure-to-attribute links and criteria (milestone B), concise request wording and the evidence approval queue (D), phase release (E), and reassessing downstream work made under an earlier revision beyond recording it (F).
+- Next: milestone B, the planner's four sections with provenance and fabrication checks.
+
+**Engagement onboarding integrity and UX revamp.** Complete, accepted by the product owner; no migration. Requested by the product owner after review of the setup and launch journey.
+
+- Launch approval is bound to the complete launch-relevant setup, including the engagement profile and the workpaper templates a person reviewed. A stale browser tab cannot launch a materially changed engagement.
+- Reading onboarding data never schedules agent work. Pending evidence drafting resumes only from an authorized mutation or the worker's recovery path.
+- Profile fields distinguish "leave unchanged" from "clear this value". A person can remove an optional period start or clear an incorrect period end before launch, and readiness updates from the resulting records.
+- Setup is a decision-oriented journey: the overview gives one next action, the step rail separates complete, current, blocked, and optional work, each step explains its outcome before its mechanics, and launch puts blockers, advisories, and the approval decision in one scan path.
+- Dense setup content is progressively disclosed. Controls, systems, templates, and launch details keep their existing capabilities while using clearer hierarchy, shorter instructions, consistent action placement, accessible state text, and responsive layouts.
+- Acceptance: regression tests cover all three integrity defects; the onboarding model and route tests pass; TypeScript and Python checks pass; database-backed onboarding tests pass when the configured test database is available; no live email or other new external side effect is enabled.
+
+**Planning before requesting.** Complete, accepted by the product owner; migration 0077.
+
+Asked by the product owner ("why are evidences drafted before planning?").
+
+- Found: most development engagements hold kickoff drafts made before evidence planning existed (FY 2027 Audit 80, SOX FY 2027 184), and newer launches drafted every design and interim request at launch from the rules' plan, which no person had approved (SOX FY 2028: 160 requests from 80 proposed plans). The earlier choice "a validated plan is enough" meant the planner's own checks, not a person.
+- The planning gate (`evidence_plans.gate_reason`), decided by the product owner: nothing is drafted until a person approves the control's evidence plan. Design evidence (policy, narrative, walkthrough) is released on approval; operating evidence (population, samples, reports) also waits for the control's attributes to be settled (approved attributes, none proposed, no open conflict about them). Approving the plan, or settling the attributes, requests what the gate then allows (`release`), once.
+- At launch each control gets the reviewed rules' plan at once, and the planner agent refines it in the background (`evidence_plan_run`, the local worker and the workflow engine both; with no model the rules' plan stands). The plan waits for a person either way. Decided by the product owner.
+- Requests already drafted from an unapproved plan or before planning are held, not deleted: they show as awaiting plan approval and cannot be approved, submitted, or sent until the plan is approved (kickoff drafts are still reconciled against the plan). Decided by the product owner.
+- The control's next step says "Approve the evidence plan", then "Settle the attributes to request operating evidence" where that is what waits. Scope changes use the rules' plan; a person can ask the agent to plan again.
+- Not built: approving many plans at once, and the agent proposing attributes as part of the background run (it reads them; the attribute review stays on the control).
+
+**Evidence command center, increment A of three.** Requested by the product owner (the engagement's Evidence page listed 160 requests as expanded rows, with setup forms and a request form always open). Complete, pending review; migration 0076.
+
+- The page is Evidence Management: a compact header (New request, Generate requests with AI when the planner has work, More actions), eight figures that each filter the list, and three views: Requests (the default), Evidence Library, and Client Portal (coordinator, client domains, secure links, replies). A setup notice shows only when requests wait for a recipient and no coordinator is set.
+- Requests is one table filtered, sorted, and paged by the API (`evidence_center.py`, `GET …/evidence-requests`): search, filters by status, phase, evidence type, owner, and system, built-in and saved views, sticky header, 25 to 200 rows a page, and selecting every matching request. A request opens in a side panel (the request panel from the last milestone); its delivery and reminders show above it.
+- The owner is changed in place from the engagement's contacts, the control's owner first. Many requests are assigned, given a due date or priority, approved, submitted, or returned at once: each is checked first (what blocks each one, in words), then only those that pass change, one transaction each, with the same rules and audit trail as a single change. Approving never sends.
+- The stage is derived from the records, as decided: a file arriving never completes a request; it is completed once every planned item is judged sufficient or waived. Overdue and escalated are flags.
+- New request is a side panel: choose the control, request its planned evidence (the evidence coordinator drafts the wording), or write the request with phase, type, title, recipient, due date, reminders, and priority, with a preview of what the recipient receives. Reference materials are attached once it is saved.
+- Who drafted a request is now recorded (`drafted_by`), not inferred from its control: a person's request can name its control and still goes to someone else for approval. Saved views are stored per person per engagement.
+- Decided by the product owner: lifecycle derived with flags; evidence reuse through a link table (increment C); saved views stored per person; three increments.
+- Next: increment B (agent owner suggestions with source and confidence, duplicate detection, the insights panel, validation outcomes, Agent Activity), then C (one file serving several requests and controls, versions, the Client Portal view, follow-ups in bulk).
+
+**Evidence request details and recipients.** Requested by the product owner (the request panel mixed internal rationale with what the client receives, had no request type, and set the recipient only in an Edit mode). Complete, pending review; migration 0075.
+
+- Each request has an explicit type from twelve, held as data (`evidence_request_types`), separate from its phase. The type is worked out from the records (the plan's requirement categories, the drafter's item kinds, the request's purpose, the control's area) until a person confirms it; a type the records do not settle is a recommendation the reviewer confirms before approving the agent's draft. Decided by the product owner: one request per control and phase, its primary type its purpose, each deliverable showing its own type.
+- The panel shows a title, reference, type, phase, priority, and due date; the client checklist read back from the wording; submission instructions; and the audit team's planning (why each item is asked for, the drafter's assumptions) collapsed and marked internal.
+- Recipients are set inline, with no Edit mode: a search over the engagement's contacts (owners, coordinator, contacts added from requests, past recipients), the owner or coordinator suggested, a new contact added and saved to the engagement, people copied (Cc), due date, and priority, each saved as it changes. Addresses must be within the client's email domains (Engagement Setup's, else its owners' and coordinator's). Changing an approved request returns it for approval. Decided by the product owner: one recipient, people copied on the email, all bound by the approval.
+- Reference materials: upload, one of the engagement's files, or the prior-year workpaper of the same control from the same client's earlier engagement (never another client's, and only one the person can read). Internal by default; shown on the owner's secure upload page only when someone who may approve shares it. Removed, never deleted.
+- The lifecycle (draft to completed, with changes requested, partially received, clarification needed, rejected, cancelled) is derived from the records; no status migration. Decided by the product owner. Checks run before approval and again at sending.
+- Not built: copied people opening the secure link (the one-time code goes to the recipient), a reason on contact edits, and classifying an owner's reply as a question (clarification is an owner reply the team has not reviewed).
+
+**Evidence workflow integrity and navigation.** Requested by the product owner (ITAC-SF-03 on DocuSign: "Review and submit the evidence request I drafted" opened the Evidence tab on the wrong view, beside "Not planned yet" and "0 / 0 accepted"). Complete, pending review; no migration.
+
+- Root cause: twelve engagements launched before evidence planning existed (migration 0062) have kickoff drafts and no plans, and nothing planned them afterwards; the planner had not run, and the drafter had not bypassed it. Planning replaced a never-sent kickoff draft on its own. "Open" pointed at an anchor the Evidence redesign had removed. A rejected approval left the request awaiting approval.
+- Planning comes first: an unplanned control's next step is to plan it (one control, or all on request from the dashboard); a kickoff draft is settled by a person, replaced (kept on record, with why) or kept; the API refuses to submit it before then. Decided by the product owner: plan on request, a person settles each kickoff draft, rejection returns the request to draft, drafting from a validated plan stays (every request still needs a submitter and a different approver).
+- One derivation of the evidence work (`evidence-flow.ts`), from the records, read by the Overview, the record's header, and the Evidence tab; the server's next step (`workspace.step_of`) knows planning, settling, and an approved request still to send. Each record opens by its address, with a review panel for a request and its actions.
+- Requests are always drafted, even with no one to address them to (no owner email, no coordinator); they wait for the coordinator and cannot be submitted before then. Engagements launched while such requests were skipped are repaired on request from the dashboard.
+- Decided by the product owner: the agent drafts and the reviewer approves (no separate submit step, no second person); sending stays a separate click. Someone without the right to approve submits instead.
+- Not built: a background planner for unplanned controls (planning is on request), editing a request's attachments, and changing the report's "Submit N drafted" line to leave out held drafts.
+
+**Engagement setup and configuration.** Requested by the product owner (the "2027 SOX Audit" showed a period end of 31 December 2026 beside a scope that said 31 December 2027). Complete, pending review; migration 0074.
+
+- Root cause: the period end was set when the engagement was created, the planner kept it (as its rules require) but wrote a narrative for another year, and launch never compared them. At least nine development engagements disagree the same way. No date is changed.
+- The profile records the methodology, period start, fiscal year, and reporting objectives. The period check (`profile_checks.py`) flags a name, scope, or fiscal year label that names another period; launch waits until a person corrects it or confirms the period as recorded, and any later change asks again. A running engagement shows the disagreement on its dashboard and can be confirmed there. Decided by the product owner: block until confirmed; for launched engagements alert and confirm now, correct the period later; record the methodology and require independence under every one; impact preview and confirm for scope changes, a second approver later.
+- Readiness separates what holds launch from what is worth knowing. Development mode (independence off) is said in readiness and refused with `APP_ENV=production`.
+- After launch, removing a control or system shows what it affects and needs a reason where work is on record; removing a team member shows their open work, releases it, and never removes the only reviewer.
+- Not built: correcting a running engagement's period, a second approver for scope changes, template management beyond what exists, and a reason on the system wizard's exclusions.
+
+**Controls overview.** Requested by the product owner (the page read like a spreadsheet, repeated the drafted batch on every row, and used letter avatars for applications). Complete, pending review; no migration.
+
+- The page answers four things first: progress in four states that add up to the controls in scope (completed, in progress, blocked, not started, with the nine stages on request), what needs a person (one action center, the drafted batch once with **Submit all**), what the agents are doing (from their run records), and where to find a control (search, application, status presets, needs my attention).
+- Two views of the same rows and filters: application groups (everyday) and a table (columns, sorting, selection, batch actions, a hundred rows at a time). The view is in the address and kept in the browser.
+- Applications show a neutral system icon from their recorded layer and hosting, never letters. Decided by the product owner: neutral icons now; approved logos would need a stored asset per application, not built.
+- API: each control row carries its application's layer and hosting, its agents' runs (`agents`), and each request's version; `POST …/pbc-request-batches/submit` and `POST …/onboarding/controls/owner-batch`.
+- Fixed: the control record's reviewer agent never showed as stopped (it looked for the wrong failure text); the failure notes are now named constants the register reads.
+
+**Evidence workspace.** Requested by the product owner (the Evidence tab was procedural and listed every requirement twice). Complete, pending review; migration 0073.
+
+- The Evidence tab is one workspace: four figures, the agents on the evidence (planner, request drafter, reader) with the decisions they wait for and the reader's proposals, and Requirements, Requests, Files, and Plan details, one view at a time. The plan table, the three phase panels, and the per-phase request tables are gone; each requirement shows once.
+- The reader records what a file covers against each plan requirement (`requirement_id` on each coverage item, from the request), and each requirement carries its files and the reader's proposal (`files`, `assessment` on the plan's requirements). A proposal never changes a requirement: a person decides. Without a model, only a full field match proposes.
+- A person can link a file the control holds to another requirement, in any phase, with why (`evidence_requirement_files`; `POST …/evidence-requirements/{id}/files`, `…/files/{link}/remove`). A linked, planned requirement counts as received and is not requested again while the file stands.
+- Decided by the product owner: a request is never cut. It holds every planned item whole; an email too short for it carries every item in brief and the secure link to the full request. Decided: build the file-to-requirement link now.
+- Fixed: a phase whose requests were only drafted read "Evidence outstanding" while its items said "Drafted, ready for review"; it now reads "Requests drafted, not sent", the same as the overview and the register. The drafter clipped each planned item to 880 characters and dropped items past the eighth, and the reader judged only the first eight.
+
+**Control workspace: agents in parallel, progressive workpapers.** Requested by the product owner (a second review of the control workspace for agentic execution). Complete, pending review; no migration.
+
+- The tester's first results start the effectiveness workpaper while testing is still open (`workpaper_service.draft_effectiveness_after_run`, from both the local worker and the durable workflow). The draft treats the open sheet's results as proposed, its conclusion stays derived from the signed-off testing, preparing it still needs the sign-off, and the sign-off asks for a redraft from the confirmed results.
+- The test sheet, workpaper, and review say whether their agent's work is queued or running (`run_state`, `draft_state`, `reperform_state`; `agent_runs.py`). The old booleans remain.
+- The Overview shows each agent on the control with running, what it waits for, what it produced, and the person's decision kept apart, a workpaper's make-up by provenance, and the testing approach from the records. The single-agent box, the agents' "done" list, and the three figures are gone.
+- Found and shown, not changed: a control classified as an automated application control whose RCM nature is manual is planned as a sample, because the sample size follows the RCM nature.
+
+**Control workspace.** Requested by the product owner (the control page was a checklist with the agents nearly invisible). Complete, pending review; no migration.
+
+- The control record is a workspace: a compact header with the stage and the viewer's one next step, a lifecycle of six phases each in one real state, an agent workspace (what runs now, what the agents did, what needs a person), three figures, and tabs by function (Overview, Control & design, Evidence, Testing, Findings, Review & conclusion, Activity). The pop-up assistant is replaced by the agent workspace; its offers to do the work remain.
+- New: `GET …/controls/{id}/activity`, the control's audit trail, with agent work told apart.
+- Fixed: a control was concluded when its review task was marked done, even by hand through the Tasks page; it now needs a signed-off independent review. The old "steps done" count and the Overview's task table, which showed agent tasks as Ready after the agent had tested, are gone.
+
+**Controls page: status model and progress.** Requested by the product owner ("Needs your action" showed nearly every control). Complete, pending review; no migration.
+
+- The API gives each control one stage (nine, adding up to the controls in scope), who its next step belongs to, whether that is the viewer's (role, the reviewer and independence rules, the requester-never-approves rule, assignment), whether it has exceptions, and its evidence by testing phase (`workspace.step_of`, `progress_of`, `mark_yours`, `evidence_phases`).
+- Decided by the product owner: drafted requests are one batch, not each control's action.
+- Fixed: a request out with the client and past its due date is now overdue (it never was before: nothing set the OVERDUE status). Testing that stopped with items untested now says so, instead of showing the agent as still testing.
+- The page shows a progress summary by stage, stage and evidence-by-phase per control, AI marks on unconfirmed agent work, the viewer's own steps as links, sorting, and sticky headings. The control record uses the same stage and says "You" only for the viewer's own step.
+
+**Controls page redesign.** Requested by the product owner (the page was dense and hard to scan). Complete, pending review; presentation only, no API, permission, workflow state, or data change.
+
+- One header with Edit RCM as the primary action; the views as a light tab strip; one toolbar (search, application, a Filters popover, grouping) with filters in force as removable chips.
+- Application groups that open and close, with a one-line headline and no progress bars; the whole register starts as its headlines once it is long.
+- Rows with the ID and title first, quieter metadata, readiness and findings in words, the API's next step (a link to the record's tab when it is the team's), and evidence received as a count.
+- Search now also matches the application and the owner's email.
+- Found, not changed: a request that is sent and past due counts as overdue in the metrics rulebook and reports, but the register (and the Overdue view) counts it only once its status is set to OVERDUE.
+
+**Engagements page: smarter tiles.** Requested by the product owner (the side panel repeated the tile and took a quarter of the page). Complete, pending review; no migration.
+
+- The side panel is gone; tiles and the list use the full width and open their engagement in one click.
+- Each tile shows the agents' progress, overdue evidence (metrics rulebook), missed or next milestone, and when anything last happened, read with the projects list (`GET /organizations/{org}/projects` gains `progress`, `overdue_requests`, `next_milestone`, `missed_milestones`, `last_activity_at`).
+- A ⋯ menu on each tile and row holds the other ways in, and **Status and close-out**, which opens over the page only when chosen (`manage=engagement`).
+
+**Phase 8, Milestone 8.21: PDF and Word reports.** Requested by the product owner ("I can't produce a PDF"). Complete, pending review; migration 0072; new dependencies reportlab 4.5.1 and python-docx 1.2.0.
+
+- Five reports from the engagement's records, as PDF or Word, through one pipeline (`reports.py`): engagement status report, pending evidence tracker, control testing summary, exceptions and remediation report, executive summary.
+- Each report states its engagement, scope, data-as-of time, and rules; every table is checked against the records counted before the file is saved; data checks and an "About this report" section close it.
+- An optional AI narrative is printed only in its own labelled section and kept with the file's record (`engagement_exports.narrative`).
+- The agent makes a report when asked for a PDF, a report, or a summary to share (`generate_report`), and the answer offers it as a file, kept 30 days and audited, like exports.
+
+**Phase 8, Milestone 8.20: answers and files from the engagement's records.** Inserted by the product owner. Complete, pending review; migration 0071.
+
+Root cause found: the agent's read tools could not answer engagement-wide questions. The evidence request list stopped at 200 rows and reported that as the total; the control list showed only the first 100; workpapers, review notes, test results, and evidence state could be read only one control at a time, while a turn has eight tool rounds; there were no filters by testing phase, application, owner, or process, no overdue days, no as-of time, no way to tell "zero" from "not recorded", no other engagements, and no files. The model was left to count.
+
+- A read-only data layer (`engagement_data.py`) works every figure out from one read of the records, by a written rulebook ([metrics.md](metrics.md), v1 pending approval), with as-of times, record references, "not recorded" for missing values, and data checks for records that contradict each other.
+- The console's read tools now answer for the whole engagement, with filters, totals over every match, and pages; and for another engagement the person can open in the same firm.
+- Excel and CSV exports (`exports.py`): checked, stored, recorded, offered in the answer as a file, kept 30 days, audited. The development object store now also keeps exports.
+- The agent's instructions: read the records every time, use the application's figures, say as of, name the records, keep facts, figures, and its own reading apart, make no audit judgments, keep filters across follow-ups.
+
+Decisions for 8.20, confirmed by the product owner: two milestones (this one; PDF and Word reports in 8.21), reportlab and python-docx for 8.21, files kept 30 days, and the metrics rulebook drafted for approval at review.
+
+**Phase 8, Milestone 8.19: the agent console, redesigned.** Inserted by the product owner. Complete, pending review; no migration.
+
+- Answers stream: the model's text is saved on the answer as it is written and shown live, citations held back until they are checked, then replaced by the finished answer.
+- The console is the page, not a card in it: one reading column, the composer pinned to the bottom of the window, answers read as documents (no avatar, name, or time on each), the person's messages on the right.
+- A new chat opens on a greeting with the composer in the middle and suggestions under it. The composer grows with the message, with a round send button; its keyboard hints are gone. The agent's work shows as one line ("Opening ITGC-AC-01") instead of dots and placeholder bars.
+- Answers render headings, numbered and nested lists, code, quotes, rules, italics, and links (to the web or the app only).
+- The side panel groups chats by day; on a narrow screen it slides over the chat.
+- Steps that would fail are not proposed: submitting a request is checked for a recipient and for wording that fits in one email, also as earlier steps of the plan will leave it, and the agent hears why. A draft's recipient can now be set with Edit a draft request. A failed step says why instead of "That could not be done". Found by the product owner: two approved submissions failed on drafts with no recipient and wording too long to send.
+- Fixed: a long conversation could send the model a history that opened on an earlier answer's tool results, which the model refused (400), so the question failed.
+
+See [console.md](console.md#what-a-person-sees).
+
+Decision for 8.19, confirmed by the product owner: real streaming, not a reveal of the finished answer.
+
+**Phase 8, Milestone 8.18: clients and roll-forward.** Inserted by the product owner. Complete, pending review; migration 0070.
+
+- The firm has a client list, and each engagement belongs to one client.
+- A new engagement for an existing client is picked from that list, not retyped. It opens from the client or from the client's last engagement, with the client chosen. It takes the client's email domains, evidence coordinator, and request cadence.
+- It can start from one of the client's earlier engagements. That copies the systems, the controls with their owners and attributes, the team, and the workpaper templates. Testing, evidence, and results are never copied.
+- A typed name that matches an existing client is caught. Owners and admins rename a client once, and every engagement follows.
+- Guided setup shows the client instead of asking for it.
+- The Engagements page, redesigned after review:
+  - two views, Engagements and Clients, in place of a Clients card that repeated the engagements;
+  - the status boxes removed, since the filter carries the counts;
+  - tiles and list rows lead with the client, and the initials badges are gone;
+  - the opened engagement shows its facts, the scope cut to three lines, the agents' work as a progress bar, and recent activity with repeats folded and the system's bookkeeping left out.
+
+See [workspace.md](workspace.md#clients-and-roll-forward).
+
+Decisions for 8.18, confirmed by the product owner:
+
+- Clients are records: the firm's client list, with each engagement belonging to one client. Existing engagements are linked by name, ignoring case and spacing. A rename updates every engagement. The client's details fill new engagements.
+- A roll-forward carries the earlier engagement's scope and its templates' confirmation, and the form proposes the next period end; added after the product owner found a rolled-forward draft asking for the scope and the templates again.
+- A roll-forward is offered, never forced. Client details carry over automatically. Starting from an earlier engagement is optional and copies setup only, never testing, evidence, or results.
+
+**Phase 8, Milestone 8.17 — Controls in scope, opened over the page.** Inserted by the product owner. Complete, pending review; no migration. A system's or a process's controls in scope are a table: the ID, the control and its owner and whether it is key, its type, and how often and how it operates in plain words, with **Remove from scope**, which asks first and says what happens to the control's work. Opening a control opens it in a dialog over the page, as a template preview does; the page underneath keeps its tab, its open system, and its place, and closing or saving returns to it. Previously a control opened above the page and switched the page to the control's own tab, so a key report opened from a system's list left the page on the Key reports tab. The confirmation dialogs set their own text, so they read the same wherever they sit.
+
+**Phase 8, Milestone 8.16 — Workpaper templates after launch.** Inserted by the product owner. Complete, pending review; migration 0069. Workpaper templates can be customised, uploaded, applied, and removed after launch. A change reaches workpapers that have not started; a started workpaper keeps the template it began with. Confirming templates is a step before launch only, so a control added after launch no longer leaves the step showing work to do; engagements where it had been cleared are repaired. Also: a template action that succeeded no longer shows "That could not be saved", and an action's error wraps under its buttons. See [onboarding.md](onboarding.md#workpaper-templates-after-launch).
+
+Decision for 8.16, confirmed by the product owner: after launch, template changes apply to work not started; started workpapers keep their template.
+
+**Phase 8, Milestone 8.15 — Engagements as tiles or a list, edited with their form.** Inserted by the product owner. Complete, pending review; no migration. The Engagements page shows tiles or a list, remembered per person. Editing an engagement opens the form it was created with, filled in, and saves its details and profile in one transaction; after launch the client and the period end stay locked. The inline settings form is gone; the card keeps the status and its actions. See [workspace.md](workspace.md#the-engagements-page).
+
+Decision for 8.15, confirmed by the product owner: Edit opens the New engagement form, prefilled, rather than guided setup.
+
+**Phase 8, Milestone 8.14 — Completing and deleting engagements.** Inserted by the product owner. Complete, pending review; migration 0068. An engagement whose work is done is completed; until then the Engagements card lists what is still open. A completed engagement is read-only, enforced in one place in the API, and an owner or admin reopens it with a reason that is kept. A draft that never launched can be deleted by an owner or admin, who types its name; its setup is removed and only the audit record is kept. See [workspace.md](workspace.md#completing-and-deleting-an-engagement).
+
+Decisions for 8.14, confirmed by the product owner:
+
+- Complete only when the work is done: every in-scope control tested and reviewed and signed off, no deficiency or evidence request open, and no agent work running.
+- A completed engagement is read-only; an owner or admin can reopen it with a reason. The agents' open tasks are cancelled at completion.
+- Deleting a never-launched draft removes it and its setup and keeps only the audit entries, on a hidden placeholder.
+- Only owners and admins delete a draft.
+
+**Phase 8, Milestone 8.13 — Engagement, system, and control integrity.** Inserted by the product owner. Complete, pending review; migration 0067. One engagement lifecycle: Draft (setup), launched once into Active, Paused and resumed, and Archived for good. The project settings no longer activate a draft or offer a status list; a draft becomes active only by launching it, and the API and the database refuse any other way. An archived engagement is read-only. The setup page, its footer, the dashboard callout, and the settings read one lifecycle module (`engagement-lifecycle.ts`), so a launched engagement never shows a Launch button. A second launch is refused and said plainly. Systems and control IDs are unique however they are written, enforced in the API and the database; the system wizard refuses a system already in scope and its Cancel never removes an existing one. Changing the frequency, nature, or area of a tested control needs acknowledging and opens a question on it. Archiving and removing a system ask first and say what happens. See [onboarding.md](onboarding.md#changing-scope-after-launch) and [authorization.md](authorization.md).
+
+**Phase 8, Milestone 8.12 — Secure evidence upload links.** Inserted by the product owner. Complete, pending review; migration 0066. Evidence comes from the client only through a secure link in the request email: the owner confirms a one-time code sent to their address and uploads to their open requests, and each file is filed to its request's control and read by the evidence coordinator. Email attachments are no longer taken as evidence. The team sees who holds links and can turn them off. "Waiting on you" is one list: the dashboard shows the agent console's inbox, which now also lists test results to decide or sign off, replies to read, reminders due, late evidence, and blocked or finished agent work, each linking to the control record where it is about one control. Also: plain wording for open test results, the evidence plan's reasoning folded per item, the register's next steps marked as yours without a badge on every row, even breadcrumb spacing, the landing page's library figures read from the API, and the mobile navigation scrolled to the current page. See [evidence.md](evidence.md#secure-upload-links).
+
+Decisions for 8.12, confirmed by the product owner:
+
+- One link per owner on the engagement, opening every open request sent to that address.
+- The link plus a one-time code emailed to the owner's address before anything opens.
+- A request takes uploads until 30 days after its due date, and none once closed or cancelled; the team can revoke a link at any time.
+- The link is the only way evidence comes in from the client: attachments on replies are kept with the reply but not taken as evidence.
+
+**Phase 8, Milestone 8.11 — Workspace UI/UX refresh.** Inserted by the product owner. Complete, pending review. Presentation only: no API contract, permission, workflow state, or data change. One design system for the workspace (`docs/design-system.md`): a single set of tokens at the top of `apps/web/app/globals.css` that the scoped modules (controls `.cx`, console `.cv`, engagements `.eg`) alias, so the three accent blues and the hard-coded colors became one palette; text colors meet WCAG 2.2 AA; one definition each for buttons, badges, inputs, cards, and the page header. Every page uses the shared page header. Fixed: tab strips that showed a stray scrollbar, the controls register and timeline overflowing a phone screen (the register becomes cards there), clipped evidence values, the engagement detail panel, and misaligned console suggestions. The deficiency form, a settled PBC contact, and milestone date changes open on request; the project plan opens on the phases under way. Card links read as links; agent and rule proposals in the system wizard say who proposed them; motion stops for people who ask for less. A second review pass: finished workpaper steps fold so the test sheet comes up the page, the test sheet legend explains both result markers, Waiting on you sits under the dashboard KPIs as one line when empty, the console and control assistant lost their decorative gradients, the duplicate eyebrow under the breadcrumb is gone on desktop, and the record keeps clear of the agent launcher.
+
+**Phase 8, Milestone 8.10 — System applicability wizard.** Inserted by the product owner. Complete, pending review; migration 0065. The agent's recommendations and SOC 1 reading are a draft for a SOX methodology reviewer. Adding a system opens a guided wizard: the system's details, then its controls from the library (selected by hand, or recommended by the agent with the magic wand), then a review of the recommendations, the SOC 1 assessment, and any CUECs, before the selection is saved. The team is no longer asked upfront how a system is hosted or whether a SOC 1 report applies: the agent assesses it and says so, with an explicit Undetermined when the evidence is not there.
+
+Decisions for 8.10, confirmed by the product owner:
+
+- The agent may search the web to establish whether a system's vendor issues a SOC 1 report, citing each source it relied on; searches use the system or vendor name only, never the client's. A source the search did not return is never cited.
+- A vendor's SOC 1 report can be uploaded on its system (up to 25 MB). The agent reads it and records the report's facts and its CUECs, each with the report page the wording was found on, and maps each CUEC to the library's controls. CUECs come only from an uploaded report.
+- The generic CUECs and SOC guesses stored by earlier reviews are deleted (migration); controls already in scope stay as they are, and facts a person confirmed are kept.
+- Recommendations are proposals: nothing joins or leaves a system's scope until a person saves the wizard's selection, which is recorded with the agent's recommendation beside it.
+
+**Phase 8, Milestone 8.9 — Control statements (library version 3).** Inserted by the product owner. Complete, pending review; a draft for a SOX methodology reviewer, not validated by one. 53 library controls (four combined controls split into nine) each have a statement in `statements_*.py`, checked by `statement_registry.py`; client values are stored per control (migration 0064), filled from the setup control editor or the control record, and testing waits for the ones that define a population or a precision. Statements: [testing-definitions.md](testing-definitions.md). The standard controls are rewritten to the design documentation a methodology reviewer expects: for each control, its objective and the risk it addresses (relevant assertions for process controls, the IT risk for IT general controls, the COSO principle for entity-level controls), nature and type (preventive or detective), frequency, the operator and reviewer with the authority they need, the judgment involved, its precision and criteria for investigation, how outliers are investigated and resolved, the information it uses with its data elements, the IT general controls an automated or IT-dependent control relies on, and the evidence it leaves. Source for the list: KPMG ICFR Handbook (2025) Q5.4.30, Q7.3.30, and Q2.3.60.
+
+Decisions for 8.9, confirmed by the product owner:
+
+- A library control that combines several controls is split: the original ID keeps its main activity and each other part becomes a new control (for example ITGC-OP-03.1). Existing engagements see the split as part of the opt-in update.
+- Client-specific values (thresholds, roles, deadlines, report names) are named slots in the control statement, filled at setup; testing waits on an unfilled slot that matters.
+- Every control carries assertions and risk, type and owner, the reports and IT general controls it relies on, and its precision, evidence, and exception follow-up as structured fields (a migration).
+- The rewrite is folded into library version 3, which is not yet released: one comparison and one adoption for existing engagements.
+
+**Phase 8, Milestone 8.8 — Testing definitions (library version 3).** Inserted by the product owner. Complete, pending review; a draft for a SOX methodology reviewer, not validated by one. Attributes link to their definitions (migration 0063); the tester and reviewer receive them and may return human review required; blocking proposals and design confirmations hold readiness; a control copied from version 2 adopts version 3 from its Design tab. Definitions: [testing-definitions.md](testing-definitions.md). Every standard control gets a structured testing definition: objective, characteristics, design, operating, and roll-forward procedures, and attributes with their condition, rationale, evidence, decision rules, source basis, and confidence; an uncertainty register lists what a SOX methodology reviewer must decide. See [testing-framework-review.md](testing-framework-review.md).
+
+Decisions for 8.8, confirmed by the product owner:
+
+- The framework supports management's SOX testing (the client's SOX PMO, internal audit, or a firm doing that testing). SEC Release 33-8810 is management's basis; PCAOB AS 2201 is cited as the standard the external auditor will apply, not as management's requirement.
+- The agent's "unable to tell" splits into **insufficient evidence** (request more) and **human review required** (a person decides). After follow-up, a person can record an item that stays untestable as a deviation (AS 2315.40).
+- Revised definitions are library version 3 for new engagements; an existing engagement adopts them per control after seeing the comparison, and signed-off or open test sheets keep their attributes.
+- Low-confidence and not-established attributes enter a control as proposed attributes with their question, and nothing tests them until a person approves.
+
+**Phase 8, Milestone 8.7 — Evidence planning by phase.** Inserted by the product owner. Complete, pending review. Every in-scope control is planned across design, interim, and roll-forward testing before evidence is requested: each phase's applicability with its reason, objectives, procedures, period, and evidence requirements (category, objective, attributes, reason, period, dependency), made by control-aware rules or by Claude under schema and rule checks (migration 0062). Kickoff makes a design request and an interim request per control instead of one combined request; the roll-forward's items go out on its round's request; sample evidence on the sample request. Receipt and sufficiency are separate, samples are approved only from a population a person accepted, planning again never duplicates or silently changes sent or approved work, and a phase is complete only when its testing is. See [testing.md](testing.md#evidence-planning-by-phase-87).
+
+Decisions for 8.7 taken in the build, for the product owner to confirm:
+
+- Kickoff sends two requests per control (design and interim), replacing 7.1d's one request per control.
+- Approving samples requires the population, and its required completeness support, to be accepted on the evidence plan (or marked not applicable with a reason).
+- The roll-forward stays conditional until interim testing is signed off effective, as in 8.4; its requirements are planned from the start and go out on the round's request.
+- A cancelled request's requirements are requested again; a person stops asking by marking the requirement not applicable with a reason.
+- Controls launched before 0062 have no plan until a person plans them; an unsent combined kickoff request is then replaced by phase requests.
+
+**System scoping, part 1.** Inserted by the product owner. Complete, pending review. Each in-scope system records its hosting and whether a SOC 1 report is expected; the scoping agent reviews each system (coverage, CUECs, and per-system recommendations: take out what the SOC report covers, map each CUEC) and recommends the controls its CUECs call for, each with a rationale and its CUEC references; a person accepts each recommendation (migrations 0047 to 0054). Business process controls belong to a process, not a system, and each Controls tab scopes its own kind: systems, processes, or key reports. A client RCM on several sheets is imported sheet by sheet (add mode), and an uploaded RCM is scoped with the client's own controls rather than the library. Workpaper templates are their own setup step: one workbook template per kind of control (IT general controls, application controls, business process controls, key reports), each with design, interim testing, and roll-forward tabs, and a control keeps one template (migration 0056). A firm customises a standard workbook in the editor and saves it as its own, or uploads its own Word or Excel workpaper (migration 0055); previews open as a tabbed workbook, and the testers' workpaper, the exports, and the agent's drafting follow the template's tabs and sections. A system with no SOC 1 report gets the controls for its kind recommended instead, and every system offers the rest of the library to add. Reviewing the vendor's SOC 1 report is left to the entity-level controls, not recommended per system. Part 2, next: upload the vendor's SOC 1 report and have the agent read it, replacing the guess with the report's CUECs, carve-outs, period, and opinion, each cited. See [onboarding.md](onboarding.md#scoping-each-system).
+
+**Review independence switch.** Inserted by the product owner for development. `REVIEW_INDEPENDENCE_REQUIRED` (default true) can be set false so the tester can also review and sign off, and one person can hold several engagement roles (migration 0046); the pages warn while it is off. Set it back to true before real engagements. See [review.md](review.md#development-switch-review_independence_required).
+
+**Invite by email.** Inserted by the product owner. Complete, pending review. The Team step invites people by email with a role; invites go only to the firm's own email domains and are refused for malformed, temporary-mail, or no-mail domains, and past 20 an hour per inviter. People show as pending validation until they sign in with that address. The welcome email is written and held, since live email stays off (migration 0045). See [onboarding.md](onboarding.md#inviting-by-email).
+
+**Google sign-up.** Inserted by the product owner after 9.2. Complete, pending review. A Google account signs in or signs up (`/auth/google/*`, migration 0044); either provider's first sign-in creates the person's own workspace; the same verified email is one user across providers; the web app gains `/sign-in` and the landing page offers Google. See [decisions/0009-google-sign-in.md](decisions/0009-google-sign-in.md) and [development.md](development.md).
+
+**Phase 9, Milestone 9.2 — Review queue and console.** Complete, pending review. Milestones 8.5 and 9.1 were accepted by the product owner. See [review.md](review.md#across-the-engagement-92).
+
+**Phase 9, Milestone 9.1 — Independent review.** Complete, pending review. See [review.md](review.md).
+
+Decisions for Phase 9, confirmed by the product owner:
+
+- One review per control instance, covering its signed-off test sheet, both prepared workpapers, and its deficiencies together.
+- The independent reviewer agent re-performs the testing (each result against the evidence, the sample, the workpapers, the deficiency decision) and proposes review notes; a team member with the reviewer role, who did not sign off the sheet or prepare the workpaper, decides each note and signs the review off.
+- A note that must be fixed reopens the sheet or workpaper with the note as the reason; the preparer answers and prepares again; the reviewer clears the note. Sign-off is blocked while notes are open, with the full note history kept.
+- "Remediation" in Phase 9 means fixing what the review found. Deficiency remediation and retests stay as built in 8.4.
+
+Milestones: 9.1 the review record, the agent's re-performance, review notes, and the reviewer's sign-off; 9.2 the reviewer's queue, engagement-level completion, and the console's review tools.
+
+**Phase 8, Milestone 8.5 — Controls per application.** Complete, pending review. Inserted by the product owner. See [workspace.md](workspace.md), [onboarding.md](onboarding.md#rcm), [testing.md](testing.md#placing-evidence), and [evidence.md](evidence.md#evidence-by-application).
+
+Decisions for 8.5, confirmed by the product owner:
+
+- A control that covers several applications is one engagement control per application, with the same control ID: "ITGC-AC-01 · Active Directory" and "ITGC-AC-01 · Oracle" (migration 0041, `control_instances.py`).
+- Everything is per instance: the owner, the evidence request, the test plan and sheet, the conclusion, the workpapers, the deficiencies, and the roll-forward and retest rounds. The workpaper reference carries the application ("ITGC-AC-01-AD-TOE").
+- Existing engagements were split by the migration: the first application kept the original row with its requests and testing; each other application got a copy, with the files tagged as showing it and the test items for it.
+- The Controls register lists instances by application with the process areas inside; grouping by area remains a toggle.
+
+**Phase 8, Milestone 8.4b — Evidence preview and highlighted citations.** Complete, pending review. Inserted by the product owner. See [testing.md](testing.md#what-the-tester-relied-on-84b) and [evidence.md](evidence.md#previewing-evidence).
+
+Decisions for 8.4b, confirmed by the product owner:
+
+- Screenshots: Claude marks the region of each cited passage, checked to lie inside the image; a box that does not fit is dropped and the quote still shows.
+- Documents: PDFs are rendered with the highlight on the page (pdf.js); spreadsheets and CSVs show as tables with the cited rows highlighted.
+- Existing results gain citations when a person clicks Test again on an open sheet; nothing is re-tested without a click.
+- The preview opens as a pop-up over the page, with the document beside the list of cited passages.
+
+**Phase 8, Milestone 8.4 — Roll-forward and remediation.** Complete, pending review. Milestones 8.2, 8.3, 8.3b, and 8.3c were accepted by the product owner. See [testing.md](testing.md#roll-forward-and-remediation-84).
+
+Decisions for 8.4, confirmed by the product owner:
+
+- Roll-forward: when interim testing is signed off effective, the owner confirms nothing changed and provides the population for the rest of the period, and the tester tests an update sample sized for that remaining period.
+- Retest: a new sample drawn only from after the remediation date, once the control has operated long enough, sized by the standard remediation table. A pass marks the deficiency remediated; a fail sends it back to remediation.
+- Started automatically: signing off interim testing adds the roll-forward, and marking a deficiency ready for retest adds the retest. Their requests are drafted and wait for an approver.
+- A logged deficiency drafts a remediation request to its owner for the plan and, later, evidence of the fix.
+
+**Phase 8, Milestone 8.3c — Engagement onboarding revamp.** Complete, pending review. Inserted by the product owner. See [onboarding.md](onboarding.md).
+
+Decisions for 8.3c, confirmed by the product owner:
+
+- A full redesign of setup: a guided New engagement form (client, kind, period, lead), a setup overview as the first screen, every step rebuilt, the RCM and the workpaper templates in one step, and a launch review with an engagement memo. The setup records and APIs stay as they are.
+- The agents draft and a person confirms: the engagement planner drafts the scope narrative, the period end, and the evidence-request cadence with reasons; the client's email pattern suggests owner emails. Nothing is applied until a person accepts it.
+- An engagement does not start from a previous one yet; roll-forward stays in 8.4.
+
+**Phase 8, Milestone 8.3b — Withdrawing and replacing evidence.** Complete, pending review. Inserted by the product owner. See [evidence.md](evidence.md#withdrawing-and-replacing-evidence).
+
+Decisions for 8.3b, confirmed by the product owner:
+
+- Delete means withdraw: the file leaves the register, matching, testing, and workpapers, with a required reason. Its custody record and bytes stay, with who withdrew it and why, and it can be restored.
+- Replace stores a new version that takes the old file's place (control, request, application, and sample items). The old file is withdrawn and linked as the earlier version, and testing runs again.
+- Signed-off testing, a prepared workpaper, a signed-off screenshot review, or an approved sample keeps its file until a person reopens that work.
+- Anyone who can upload evidence on the project can withdraw, replace, or restore, with a reason, and every change is in the audit trail.
+
+**Phase 8, Milestone 8.3 — Workpapers.** Complete, pending review. See [testing.md](testing.md#workpapers-83).
+
+Decisions for 8.3, confirmed by the product owner:
+
+- Each control gets an operating effectiveness workpaper, opened when its testing is signed off, and a design and walkthrough workpaper drafted on request.
+- The records fill the factual sections in code. The agent drafts the narratives and the walkthrough with checked citations, and a person edits any section. Sections a person wrote are never overwritten. The effectiveness conclusion is derived from the signed-off testing.
+- Every change is a new version. A person prepares each workpaper, which freezes it until it is reopened with a reason.
+- Export: each workpaper as `.xlsx`, and an engagement binder with an index.
+
+**Phase 8, Milestone 8.2 — Testing engine.** Complete, pending review. See [testing.md](testing.md#the-testing-engine-82). Milestones 8.1, 8.1b, and 8.1c were accepted by the product owner.
+
+Decisions for 8.2, confirmed by the product owner:
+
+- The tester links each evidence file to the sample items it names (key in the file name, folder, or text). Files it cannot place wait for a person, who can relink any file. Samples without evidence show as missing.
+- For every sample, the tester proposes pass, exception, unable to tell, or not applicable for each test attribute, citing what it saw. A person reviews the whole sheet, can override any result with a reason, and signs off once per control.
+- Sampled controls are tested sample by sample; automated controls are tested once from their evidence, reusing the screenshot review where it covers every attribute.
+- Zero tolerance: any confirmed exception concludes the control as not effective and drafts a deficiency (condition, criteria, cause, effect, suggested severity) for a person to log or dismiss.
+
+**Phase 8, Milestone 8.1c — Evidence intake.** Complete, pending review. Inserted by the product owner. See [evidence.md](evidence.md#evidence-intake).
+
+Decisions for 8.1c, confirmed by the product owner:
+
+- Evidence is shown as a professional table: every file with its folder, control, request status, kind, and agent review, with queues (needs a match, filed by agent, being read, from email), search, grouping by control, and a side panel per file.
+- The team picks a local folder (or drops it, or chooses files). Cloud folders (SharePoint, OneDrive, Google Drive) are a later connector.
+- The agent files confident matches at once, marked as the agent's, and a person can change them. Unclear files wait for a person with suggestions.
+- A filed file marks its request received, or partly received while items are missing. A request that was never sent is marked as provided directly, and its pending send approval is withdrawn.
+
 **Phase 8, Milestone 8.1b — Agent console.** Complete, pending review. Inserted by the product owner: the platform is driven by agents. See [console.md](console.md).
 
 Decisions for 8.1b, confirmed by the product owner:
@@ -98,7 +471,7 @@ Decisions for 7.1b, confirmed by the product owner:
 - It pulls forward only the Phase 8 slice onboarding needs: the engagement RCM and the workpaper templates. Testing, filled workpapers, and conclusions stay in Phase 8.
 - The RCM starts from a reviewed standard ITGC library in code, which each engagement tailors.
 - Workpaper templates are reviewed standard templates in code, previewed with the engagement's own controls.
-- Start engagement requires every step to be ready. The planner proposes the kickoff plan from the RCM, a person approves it, and approval activates the engagement and creates the tasks and draft PBC requests. Nothing is emailed without the usual approval.
+- Start engagement requires every step to be ready. The planner proposes the kickoff plan from the RCM, a person approves it, and approval activates the engagement and creates the tasks and draft PBC requests. (Later, by the product owner: the plan is shown on the launch page as it stands and one Launch button records and approves it; the person's approval stays the gate. Systems and controls can change after launch; a control that joins gets its tasks and draft request, one that leaves has its open work cancelled. See [onboarding.md](onboarding.md#changing-scope-after-launch).) Nothing is emailed without the usual approval.
 
 Milestone 6.7 was accepted by the product owner. Extraction and classification stay later in this phase.
 
@@ -235,11 +608,25 @@ Objective: test each in-scope control from its evidence, with agents doing the f
 
 | Milestone | Scope | Status |
 | --- | --- | --- |
-| 8.1 Test plans and sample selection | Each control's test plan, population checks, seeded random sample proposal, person approval and replacement, and a drafted sample evidence request | Complete, pending review |
-| 8.1b Agent console | The engagement home: ask the agents in plain language, they answer from the records or propose actions, and a person confirms sensitive steps | Complete, pending review |
-| 8.2 Testing engine | The tester tests each sample's evidence against the attributes, for any file type, and proposes deficiencies from exceptions | Not started |
-| 8.3 Workpapers | Filled, versioned workpapers with preparer sign-off and `.xlsx` export | Not started |
-| 8.4 Roll-forward and remediation | Tasks added once interim results are known | Not started |
+| 8.1 Test plans and sample selection | Each control's test plan, population checks, seeded random sample proposal, person approval and replacement, and a drafted sample evidence request | Complete |
+| 8.1b Agent console | The engagement home: ask the agents in plain language, they answer from the records or propose actions, and a person confirms sensitive steps | Complete |
+| 8.1c Evidence intake | Upload a folder or files; the agent matches each file to its control, files confident matches, and marks requests received; an evidence register table | Complete |
+| 8.2 Testing engine | The tester tests each sample's evidence against the attributes, for any file type, and proposes deficiencies from exceptions | Complete, pending review |
+| 8.3 Workpapers | Filled, versioned workpapers with preparer sign-off and `.xlsx` export | Complete, pending review |
+| 8.3b Withdrawing and replacing evidence | Withdraw, restore, or replace an evidence file with a reason, keeping its custody record | Complete, pending review |
+| 8.3c Engagement onboarding revamp | Guided creation, a setup overview, rebuilt steps, agent-drafted scope, period, and cadence, and a launch review | Complete, pending review |
+| 8.4b Evidence preview and highlighted citations | Preview any evidence file; the tester cites, and boxes on screenshots, what each result rests on | Complete, pending review |
+| 8.4 Roll-forward and remediation | Roll-forward rounds after effective interim testing, remediation requests, and post-remediation retests that decide the deficiency | Complete, pending review |
+| 8.5 Controls per application | A control over several applications is one instance per application, each requested, tested, and concluded on its own; the register groups them by application | Complete, pending review |
+| 8.6 Control context and readiness | Attributes owned by controls with provenance and history; supporting documents linked to many controls; process understanding for business process controls only; a readiness gate in five checks that explains each blocker; a pass stands only on cited evidence ([testing](testing.md#control-context-and-readiness)) | Complete, pending review |
+| 8.7 Evidence planning by phase | Every control planned across design, interim, and roll-forward with applicability, objectives, procedures, and categorized evidence requirements; requests made per phase; population accepted before sampling; idempotent re-planning with proposed changes for review ([testing](testing.md#evidence-planning-by-phase-87)) | Complete, pending review |
+
+## Phase 9 — Independent review
+
+| Milestone | Scope | Status |
+| --- | --- | --- |
+| 9.1 Independent review | One review per control instance, opened when its effectiveness workpaper is prepared; the reviewer agent re-performs the testing and proposes notes; review notes are decided, answered, and cleared, with must-fix notes reopening the work; the engagement reviewer signs off, never on their own work | Complete, pending review |
+| 9.2 Review queue and console | The dashboard's review progress and the register's In review queue, the "Independent review complete" milestone kept by the reviews, the console's inbox items and review tools | Complete, pending review |
 
 ## Later phases
 
@@ -247,7 +634,6 @@ Do not implement these until their phase is accepted.
 
 | Phase | Objective |
 | --- | --- |
-| 9 | Independent review, review notes, and remediation |
 | 10 | Reporting from validated records and an end-to-end synthetic project |
 | 11 | Security, observability, recovery, cost controls, and a limited release |
 
@@ -263,7 +649,7 @@ Accepted before Phase 2. Implementation still waits for the milestone named in e
 
 - [Temporal](decisions/0002-workflow-engine.md), adapter in Milestone 4.2
 - [In-repository orchestration, not LangGraph](decisions/0003-agent-orchestration.md), Milestone 4.4
-- [Microsoft Entra ID](decisions/0004-authentication-provider.md), Milestone 2.3
+- [Microsoft Entra ID](decisions/0004-authentication-provider.md), Milestone 2.3; revised by [Google sign-in](decisions/0009-google-sign-in.md) after Milestone 9.2
 - [S3 API, MinIO locally](decisions/0005-object-storage.md), Milestone 7.1
 
 See [workforce.md](workforce.md) for the standard workforce roster.

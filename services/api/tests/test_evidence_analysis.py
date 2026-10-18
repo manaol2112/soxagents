@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+from evidence_store import store_attachment
 from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
 from support import Database
@@ -37,7 +38,9 @@ def test_a_stored_file_is_queued_read_by_the_rules_and_never_changes_the_request
     scheduler = _Scheduler()
     seeded, project_id, owner, sent = _sent_request(migrated, "read")
     client = _client(migrated, seeded["user_id"], scheduler)
-    file_id = _store(client, owner, seeded, project_id, sent, _LISTING, "access_listing.csv")
+    file_id = _store(
+        client, owner, seeded, project_id, sent, _LISTING, "access_listing.csv", scheduler
+    )
     analyses = _analyses(client, seeded, project_id)
     assert len(analyses) == 1
     analysis = analyses[0]
@@ -316,13 +319,13 @@ def test_a_file_with_no_matched_request_is_still_classified(migrated: Database) 
         ),
     )
     attachment_id = reply.json()["attachments"][0]["id"]
-    stored = client.post(
-        f"/organizations/{seeded['organization_id']}/projects/{project_id}"
-        f"/mailbox-attachments/{attachment_id}/content",
-        content=b"Information security policy\nAll access is approved.\n",
-        headers={"content-type": "application/octet-stream"},
+    store_attachment(
+        client,
+        seeded["organization_id"],
+        project_id,
+        attachment_id,
+        b"Information security policy\nAll access is approved.\n",
     )
-    assert stored.status_code == 200
     analysis_id = UUID(_analyses(client, seeded, project_id)[0]["id"])
     with connect(migrated.url) as connection:
         run_analysis(connection, _settings(migrated), None, analysis_id, _no_ocr)
@@ -536,6 +539,7 @@ def _store(
     sent: dict[str, Any],
     content: bytes,
     name: str,
+    scheduler: Any = None,
 ) -> str:
     reply = owner.post(
         _simulate(seeded, project_id),
@@ -543,14 +547,10 @@ def _store(
     )
     assert reply.status_code == 200
     attachment_id = reply.json()["attachments"][0]["id"]
-    stored = client.post(
-        f"/organizations/{seeded['organization_id']}/projects/{project_id}"
-        f"/mailbox-attachments/{attachment_id}/content",
-        content=content,
-        headers={"content-type": "application/octet-stream"},
+    stored = store_attachment(
+        client, seeded["organization_id"], project_id, attachment_id, content, scheduler
     )
-    assert stored.status_code == 200, stored.text
-    file_id = stored.json()["id"]
+    file_id = stored["id"]
     assert isinstance(file_id, str)
     return file_id
 

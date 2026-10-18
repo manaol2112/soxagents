@@ -403,7 +403,8 @@ _STAFF_OPEN_ENGAGEMENTS = """
         SELECT p.organization_id, p.id, d.id, d.revision
         FROM projects AS p
         JOIN agent_definitions AS d ON d.organization_id = p.organization_id
-        WHERE p.status <> 'ARCHIVED' AND d.source = 'standard' AND d.status = 'ACTIVE'
+        WHERE p.status <> 'ARCHIVED' AND p.deleted_at IS NULL
+          AND d.source = 'standard' AND d.status = 'ACTIVE'
         ORDER BY p.id, d.agent_key
         ON CONFLICT (project_id, agent_definition_id) DO NOTHING
         RETURNING id, organization_id, project_id, agent_definition_id

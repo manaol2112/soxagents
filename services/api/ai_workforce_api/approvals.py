@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Literal
@@ -365,10 +366,136 @@ def _decide(
                 "approval.decided",
                 body.decision,
             )
+            if body.decision == "REJECTED":
+                return_for_revision(
+                    cursor, organization_id, project_id, principal.id, current, reason
+                )
     recorded = _load(connection, organization_id, project_id, approval_id)
     if recorded is None:
         raise NotVisible()
     return recorded
+
+
+# An evidence request's first send: pbc/{request}/{template}-v{n}/{digest}. A reminder's
+# reference has a fourth part (outbound.py) and leaves the request as it is.
+_REQUEST_SEND = re.compile(r"^pbc/([0-9a-f-]{36})/[^/]+/[^/]+$", re.IGNORECASE)
+
+
+def return_for_revision(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    approver_id: UUID,
+    approval: ApprovalBody,
+    reason: str,
+) -> UUID | None:
+    """A rejected evidence request goes back to draft so it can be revised, unless another
+    approval of it is still open or approved. Returns the request, or None."""
+    if approval.action_id != "mail.pbc":
+        return None
+    match = _REQUEST_SEND.match(approval.parameters.get("request_ref", ""))
+    if match is None:
+        return None
+    request_id = UUID(match.group(1))
+    row = cursor.execute(
+        """
+        UPDATE pbc_requests r
+        SET status = 'DRAFT', version = r.version + 1, updated_at = clock_timestamp()
+        WHERE r.id = %s AND r.project_id = %s AND r.organization_id = %s
+          AND r.status = 'APPROVAL_PENDING'
+          AND NOT EXISTS (
+              SELECT 1 FROM approvals a
+              WHERE a.project_id = r.project_id AND a.id <> %s AND a.action_id = 'mail.pbc'
+                AND a.parameters ->> 'request_ref' LIKE 'pbc/' || r.id::text || '/%%'
+                AND (a.decision = 'PENDING'
+                     OR (a.decision = 'APPROVED' AND a.execution_status = 'NOT_STARTED'))
+          )
+        RETURNING r.id
+        """,
+        (request_id, project_id, organization_id, approval.id),
+    ).fetchone()
+    if row is None:
+        return None
+    cursor.execute(
+        """
+        INSERT INTO audit_events (
+            organization_id, project_id, actor_user_id, action, target_type, target_id, payload
+        )
+        VALUES (%s, %s, %s, 'pbc.returned_for_revision', 'pbc_request', %s, %s)
+        """,
+        (
+            organization_id,
+            project_id,
+            approver_id,
+            request_id,
+            Json({"approval_id": str(approval.id), "reason": reason, "status": "DRAFT"}),
+        ),
+    )
+    return request_id
+
+
+def approve_agent_request(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    approver_id: UUID,
+    approval_id: UUID,
+    reason: str,
+) -> None:
+    """A person approves what an agent asked for. Internal only: the caller has checked
+    the person's right to approve and that an agent drafted what is approved (the public
+    decision endpoint keeps its rule that a requester never approves)."""
+    row = cursor.execute(
+        """
+        UPDATE approvals
+        SET decision = 'APPROVED', decision_reason = %s, approver_user_id = %s,
+            decided_at = clock_timestamp(), version = version + 1
+        WHERE id = %s AND organization_id = %s AND project_id = %s
+          AND decision = 'PENDING' AND requesting_agent_id IS NOT NULL
+        RETURNING id
+        """,
+        (reason, approver_id, approval_id, organization_id, project_id),
+    ).fetchone()
+    if row is None:
+        raise ApprovalState("approval is already decided")
+    _audit(
+        cursor, organization_id, project_id, approver_id, approval_id, "approval.decided",
+        "APPROVED",
+    )  # fmt: skip
+
+
+def approve_own(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    person_id: UUID,
+    approval_id: UUID,
+    reason: str,
+) -> None:
+    """A person approves their own request, where the product owner decided a second
+    person adds nothing: a reminder of a request already approved, in the reviewed
+    reminder wording; and a message carried over unchanged from an approval whose send
+    was refused because email was off. Internal only: the caller checks which case it
+    is. The approval is recorded like any other, with the reason, and stays immutable;
+    an agent's request is never approved this way."""
+    row = cursor.execute(
+        """
+        UPDATE approvals
+        SET decision = 'APPROVED', decision_reason = %s, approver_user_id = %s,
+            decided_at = clock_timestamp(), version = version + 1
+        WHERE id = %s AND organization_id = %s AND project_id = %s
+          AND decision = 'PENDING' AND requesting_user_id = %s
+          AND requesting_agent_id IS NULL AND expires_at > clock_timestamp()
+        RETURNING id
+        """,
+        (reason[:500], person_id, approval_id, organization_id, project_id, person_id),
+    ).fetchone()
+    if row is None:
+        raise ApprovalState("approval is already decided")
+    _audit(
+        cursor, organization_id, project_id, person_id, approval_id, "approval.self_approved",
+        "APPROVED",
+    )  # fmt: skip
 
 
 def _organization_level(current: ApprovalBody) -> bool:

@@ -4,7 +4,7 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
 
 import psycopg
@@ -61,7 +61,16 @@ class ModelRateLimit(Exception):
 
 
 class ModelProviderError(Exception):
-    """The provider could not complete the call."""
+    """The provider could not complete the call.
+
+    `transient` marks a failure worth trying again (overloaded, a server error, a dropped
+    connection), as opposed to a request the provider rejected.
+    """
+
+    def __init__(self, transient: bool = False, status: int | None = None) -> None:
+        super().__init__(f"provider error (status {status})" if status else "provider error")
+        self.transient = transient
+        self.status = status
 
 
 @dataclass(frozen=True)
@@ -90,6 +99,11 @@ class ModelRequest:
     # Shown to the model before the prompt. Only callers that are allowed to send images
     # to the provider set this.
     images: tuple[ModelImage, ...] = ()
+    # How many web searches the model may run (milestone 8.10). Only callers allowed to
+    # reach the web set this, and they send no client names in the prompt it searches from.
+    web_search: int = 0
+    # A larger answer than the default, for long structured outputs. 0 keeps the default.
+    max_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -98,6 +112,10 @@ class ModelRaw:
     tool_calls: tuple[ToolProposal, ...]
     input_tokens: int
     output_tokens: int
+    # The pages a web search returned, as (url, title): the only sources a caller may cite.
+    sources: tuple[tuple[str, str], ...] = ()
+    # True when the web search ran; False when it was not asked for or was unavailable.
+    searched: bool = False
 
 
 class ModelProvider(Protocol):
@@ -142,6 +160,20 @@ class ChatProvider(Protocol):
         messages: list[dict[str, Any]],
         tools: tuple[ChatTool, ...],
         timeout_seconds: int,
+    ) -> ChatReply: ...
+
+
+@runtime_checkable
+class StreamingChatProvider(Protocol):
+    """A chat provider that also hands over its text as the model writes it."""
+
+    def converse_streaming(
+        self,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: tuple[ChatTool, ...],
+        timeout_seconds: int,
+        on_text: Callable[[str], None],
     ) -> ChatReply: ...
 
 

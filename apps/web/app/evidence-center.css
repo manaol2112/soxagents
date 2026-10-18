@@ -1,0 +1,828 @@
+/* The engagement's evidence command center: figures, toolbar, request table, bulk
+   changes, and the side panels for a request and a new request. */
+
+.ec {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.ec-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.ec-more {
+  position: relative;
+}
+
+.ec-more > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.ec-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ec-more-pop {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  right: 0;
+  display: grid;
+  min-width: 14rem;
+  padding: 0.3rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(16 24 40 / 12%);
+}
+
+.ec-more-pop a {
+  padding: 0.45rem 0.6rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  border-radius: 6px;
+}
+
+.ec-more-pop a:hover {
+  background: var(--surface-hover);
+}
+
+/* Figures: one compact strip, each a filter. */
+.ec-kpis {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.ec-kpis li + li {
+  border-left: 1px solid var(--border-subtle);
+}
+
+.ec-kpi {
+  display: grid;
+  gap: 0.15rem;
+  height: 100%;
+  padding: 0.6rem 0.75rem;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.ec-kpi:hover {
+  background: var(--surface-hover);
+}
+
+.ec-kpi strong {
+  color: var(--text-strong);
+  font-size: var(--fs-xl);
+  font-weight: 600;
+}
+
+.ec-kpi-label {
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ec-kpi.is-alert strong {
+  color: var(--warning);
+}
+
+.ec-kpi.is-active {
+  background: var(--accent-soft);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.ec-kpi.is-active .ec-kpi-label {
+  color: var(--accent-strong);
+}
+
+.ec-setup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+  border-radius: 8px;
+}
+
+.ec-setup > svg {
+  color: var(--warning);
+}
+
+.ec-setup a {
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+/* Toolbar: view, search, filters. */
+.ec-toolbar {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.ec-toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.ec-view {
+  max-width: 14rem;
+}
+
+.ec-search {
+  display: flex;
+  flex: 1 1 16rem;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 24rem;
+  padding: 0 0.55rem;
+  color: var(--text-tertiary);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+}
+
+.ec-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.ec-search input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  padding: 0.38rem 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  outline: none;
+}
+
+.ec-filter {
+  position: relative;
+}
+
+.ec-filter > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.32rem 0.6rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.ec-filter > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ec-filter > summary.is-on {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.ec-filter-count {
+  padding: 0 0.35rem;
+  font-size: var(--fs-2xs);
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+.ec-filter-pop {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 15rem;
+  max-height: 20rem;
+  overflow-y: auto;
+  padding: 0.35rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(16 24 40 / 12%);
+}
+
+.ec-filter-pop fieldset {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.ec-filter-pop label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.45rem;
+  font-size: var(--fs-sm);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.ec-filter-pop label:hover {
+  background: var(--surface-hover);
+}
+
+.ec-toolbar-end {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+.ec-save {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--fs-sm);
+}
+
+.ec-save input {
+  width: 16rem;
+  max-width: 100%;
+}
+
+.ec-muted {
+  color: var(--text-tertiary);
+}
+
+.ec-problem {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+
+/* Bulk changes. */
+.ec-bulk {
+  position: sticky;
+  z-index: 15;
+  top: 0.5rem;
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgb(16 24 40 / 10%);
+}
+
+.ec-bulk-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--fs-sm);
+}
+
+.ec-bulk-row select,
+.ec-bulk-row input {
+  width: auto;
+  max-width: 100%;
+}
+
+.ec-bulk-row input[type="text"] {
+  width: 18rem;
+}
+
+.ec-bulk-review {
+  display: grid;
+  gap: 0.35rem;
+  font-size: var(--fs-sm);
+}
+
+.ec-bulk-review p {
+  margin: 0;
+}
+
+.ec-bulk-review ul {
+  display: grid;
+  gap: 0.2rem;
+  max-height: 12rem;
+  margin: 0;
+  padding-left: 1.1rem;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
+.ec-result {
+  margin: 0;
+  color: var(--success);
+  font-size: var(--fs-sm);
+}
+
+/* The table: dense, one line per request, header kept in view. */
+.ec-table-wrap {
+  max-height: calc(100vh - 13rem);
+  min-height: 12rem;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.ec-select-all {
+  position: sticky;
+  z-index: 3;
+  left: 0;
+  margin: 0;
+  padding: 0.45rem 0.75rem;
+  font-size: var(--fs-sm);
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--accent-border);
+}
+
+.ec-table {
+  width: 100%;
+  min-width: 1080px;
+  font-size: var(--fs-sm);
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+
+.ec-table th {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  padding: 0.45rem 0.55rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.ec-table td {
+  padding: 0.42rem 0.55rem;
+  color: var(--text);
+  vertical-align: middle;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.ec-table tbody tr:hover td {
+  background: var(--surface-hover);
+}
+
+.ec-table tr.is-selected td {
+  background: var(--accent-soft);
+}
+
+.ec-table tr.is-open td {
+  box-shadow: inset 0 1px 0 var(--accent-border), inset 0 -1px 0 var(--accent-border);
+}
+
+.ec-table tr.is-open td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* The request takes what the other columns leave: about 300px at a 1440px screen. */
+.ec-table th:nth-child(1),
+.ec-table td.ec-check {
+  width: 2.25rem;
+}
+
+.ec-table th:nth-child(3) {
+  width: 8rem;
+}
+
+.ec-table th:nth-child(4) {
+  width: 6.25rem;
+}
+
+.ec-table th:nth-child(5) {
+  width: 7.75rem;
+}
+
+.ec-table th:nth-child(6) {
+  width: 8.25rem;
+}
+
+.ec-table th:nth-child(7) {
+  width: 8.75rem;
+}
+
+.ec-table th:nth-child(8) {
+  width: 7rem;
+}
+
+.ec-table th:nth-child(9) {
+  width: 7.5rem;
+}
+
+.ec-sort {
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.ec-sort:hover {
+  color: var(--text);
+}
+
+.ec-request {
+  overflow: hidden;
+}
+
+.ec-title {
+  display: block;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-decoration: none;
+}
+
+.ec-title:hover {
+  color: var(--accent-strong);
+  text-decoration: underline;
+}
+
+.ec-sub {
+  display: block;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ec-priority {
+  margin-left: 0.35rem;
+  padding: 0 0.3rem;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  border-radius: 4px;
+}
+
+.ec-priority.is-high {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.ec-priority.is-urgent {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.ec-clip {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ec-control {
+  display: block;
+  font-size: var(--fs-xs);
+}
+
+.ec-uncertain {
+  color: var(--warning);
+}
+
+.ec-uncertain::after {
+  content: " ?";
+}
+
+.ec-flag {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+}
+
+.ec-due {
+  white-space: nowrap;
+}
+
+.ec-flag.is-late,
+.ec-due.is-late {
+  color: var(--danger);
+}
+
+.ec-agent span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--ai);
+}
+
+.ec-table td.ec-actions {
+  text-align: right;
+}
+
+.ec-unassigned {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.ec-owner {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ec-owner-wrap {
+  position: relative;
+}
+
+.ec-owner-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  padding: 0.15rem 0.35rem;
+  margin-left: -0.35rem;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.ec-owner-button:hover {
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+.ec-owner-button > span {
+  min-width: 0;
+}
+
+.ec-owner-button > svg {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+}
+
+.ec-owner-pop {
+  position: absolute;
+  z-index: 25;
+  top: calc(100% + 4px);
+  left: -0.35rem;
+  display: grid;
+  gap: 0.35rem;
+  width: 20rem;
+  padding: 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(16 24 40 / 14%);
+  white-space: normal;
+}
+
+.ec-owner-cell {
+  overflow: visible;
+}
+
+.ec-empty {
+  display: grid;
+  justify-items: center;
+  gap: 0.5rem;
+  padding: 2.5rem 1rem;
+  color: var(--text-secondary);
+  text-align: center;
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+}
+
+.ec-empty p {
+  max-width: 32rem;
+  margin: 0;
+}
+
+.ec-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  font-size: var(--fs-sm);
+}
+
+/* A request, and a new request, open in the record dialog like every other record. */
+.ec-dialog-body {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.record-dialog .rr.is-in-dialog {
+  border-color: var(--border);
+  box-shadow: none;
+}
+
+/* The dialog names the request: the review's own heading row keeps its badges only. */
+.rr.is-in-dialog .rr-head {
+  align-items: center;
+}
+
+.ec-new {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem 1.125rem;
+  font-size: var(--fs-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.ec-new > label,
+.ec-new-form label {
+  display: grid;
+  gap: 0.25rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.ec-new select,
+.ec-new input,
+.ec-new textarea {
+  width: 100%;
+  min-width: 0;
+}
+
+.ec-planned {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--ai-soft);
+  border: 1px solid var(--ai-border);
+  border-radius: 8px;
+}
+
+.ec-planned p {
+  margin: 0;
+}
+
+.ec-planned .btn {
+  width: fit-content;
+}
+
+.ec-new-form {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0.75rem 0 0;
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ec-new-form legend {
+  padding: 0;
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.ec-new-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.6rem;
+}
+
+.ec-preview {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.65rem 0.75rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+
+.ec-preview p {
+  margin: 0;
+}
+
+.ec-preview-label {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ec-preview-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1100px) {
+  .ec-kpis {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .ec-kpis li:nth-child(5) {
+    border-left: 0;
+  }
+
+  .ec-kpis li:nth-child(n + 5) {
+    border-top: 1px solid var(--border-subtle);
+  }
+}
+
+@media (max-width: 760px) {
+  .ec-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ec-kpis li:nth-child(odd) {
+    border-left: 0;
+  }
+
+  .ec-kpis li:nth-child(n + 3) {
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .ec-kpis li:nth-child(5) {
+    border-left: 1px solid var(--border-subtle);
+  }
+
+  .ec-kpis li:nth-child(5):nth-child(odd) {
+    border-left: 0;
+  }
+
+  .ec-search {
+    flex-basis: 100%;
+    max-width: none;
+  }
+
+  .ec-view {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  .ec-toolbar-end {
+    margin-left: 0;
+  }
+
+  .ec-table-wrap {
+    max-height: none;
+  }
+
+  .ec-head-actions {
+    justify-content: flex-start;
+  }
+
+  .ec-owner-pop {
+    width: min(20rem, calc(100vw - 2rem));
+  }
+}
+
+.ec-delivery {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  font-size: var(--fs-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+/* The test plan attributes a request's items evidence (internal). */
+.ec-supports {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+}

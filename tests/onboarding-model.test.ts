@@ -6,18 +6,34 @@ import {
   categoryOf,
   DOMAINS,
   domainTester,
+  engagementTypeLabel,
+  families,
+  kindForDomain,
+  landingStep,
+  launchNextSteps,
+  parseLaunch as launchParse,
   parseImport,
   parseOnboarding,
   parsePreview,
   parseSetupNotice,
   parseStep,
+  parseTemplateDraft,
+  pendingSuggestions,
+  periodStartFor,
   pickCategory,
+  previewChoices,
   RCM_MAX_BYTES,
   rcmUploadNoticeFor,
   rcmUploadTarget,
+  scopeCounts,
+  setupAttention,
   setupNoticeFor,
   setupProgress,
   setupWrite,
+  stepReadiness,
+  stepStatusLabel,
+  templateUploadNoticeFor,
+  templateUploadTarget,
   uniqueKeys,
 } from "../apps/web/src/onboarding-model.ts";
 
@@ -68,8 +84,7 @@ function onboarding(
         application_ids: [appId],
         test_attributes: ["A request exists"],
         pbc_items: ["Population of new users"],
-        design_template_key: "design-walkthrough",
-        effectiveness_template_key: "oe-manual",
+        template_key: "itgc",
         agent_key: "itgc-access-tester",
         sample_size: 25,
         version: 2,
@@ -100,6 +115,16 @@ function onboarding(
   };
 }
 
+describe("period start from the period end", () => {
+  it("starts a calendar year on 1 January and a fiscal year the day after last year's end", () => {
+    assert.equal(periodStartFor("2026-12-31"), "2026-01-01");
+    assert.equal(periodStartFor("2027-03-31"), "2026-04-01");
+    assert.equal(periodStartFor("2024-02-29"), "2023-03-01");
+    assert.equal(periodStartFor("2026-02-31"), null);
+    assert.equal(periodStartFor(""), null);
+  });
+});
+
 describe("engagement setup model", () => {
   it("parses the setup and counts progress without the agents step", () => {
     const parsed = parseOnboarding(onboarding());
@@ -107,36 +132,137 @@ describe("engagement setup model", () => {
     assert.equal(parsed.periodEnd, "2027-12-31");
     assert.equal(parsed.controls[0]?.sampleSize, 25);
     assert.equal(parsed.templatesConfirmed, false);
-    assert.deepEqual(setupProgress(parsed), { done: 1, total: 2 });
+    // Four work steps (requests are drafted after a plan is approved, not set up):
+    // the profile is ready, the team is next, controls and workpapers are untouched.
+    assert.deepEqual(setupProgress(parsed), {
+      done: 1,
+      total: 4,
+      next: "team",
+    });
+    assert.deepEqual(stepReadiness(parsed, "controls"), {
+      complete: false,
+      issues: [],
+      advisories: [],
+    });
+    assert.equal(parsed.engagementType, "SOX_ITGC");
+    assert.equal(parsed.setupDraft, null);
+    assert.deepEqual(parsed.ownerSuggestions, []);
     assert.equal(parseOnboarding({ project_id: projectId }), null);
+  });
+
+  it("names a step from where the engagement is, and keeps open points after launch", () => {
+    const draft = parseOnboarding(onboarding());
+    assert.ok(draft !== null);
+    assert.equal(
+      stepStatusLabel(draft, "overview", "setup"),
+      "Where setup stands",
+    );
+    assert.equal(stepStatusLabel(draft, "profile", "setup"), "Ready");
+    assert.equal(stepStatusLabel(draft, "team", "setup"), "1 to do");
+    assert.equal(stepStatusLabel(draft, "launch", "setup"), "Not ready");
+    const ready = parseOnboarding(onboarding({ ready: true }));
+    assert.ok(ready !== null);
+    assert.equal(stepStatusLabel(ready, "launch", "ready"), "Ready to launch");
+
+    const running = parseOnboarding(
+      onboarding({
+        started: true,
+        ready: true,
+        project_status: "ACTIVE",
+        readiness: [
+          {
+            step: "scope",
+            title: "Profile",
+            complete: false,
+            issues: [
+              "The engagement's name points to 2029, but the period ends 31 December 2027.",
+              "The scope names fiscal year 2029, but the period ends 31 December 2027.",
+              "The fiscal year is FY2029, but the period ends 31 December 2027.",
+            ],
+          },
+          { step: "team", title: "Team", complete: true, issues: [] },
+          { step: "rcm", title: "Controls", complete: true, issues: [] },
+          {
+            step: "workpapers",
+            title: "Workpapers",
+            complete: true,
+            issues: [],
+          },
+        ],
+      }),
+    );
+    assert.ok(running !== null);
+    assert.equal(
+      stepStatusLabel(running, "overview", "running"),
+      "Where the work stands",
+    );
+    assert.equal(stepStatusLabel(running, "profile", "running"), "3 open");
+    assert.equal(stepStatusLabel(running, "team", "running"), "Ready");
+    assert.equal(stepStatusLabel(running, "launch", "running"), "Running");
+    assert.equal(stepStatusLabel(running, "launch", "paused"), "Paused");
+    assert.equal(stepStatusLabel(running, "launch", "completed"), "Completed");
+    assert.equal(stepStatusLabel(running, "launch", "closed"), "Archived");
+    const open = setupAttention(running);
+    assert.equal(open.length, 1);
+    assert.equal(open[0]?.step, "profile");
+    assert.equal(open[0]?.title, "Engagement profile: 3 open");
+    assert.match(open[0]?.detail ?? "", /points to 2029.*And 2 more/);
+    assert.deepEqual(
+      setupAttention(draft).map((item) => item.step),
+      ["team"],
+    );
   });
 
   it("parses a workpaper preview", () => {
     const parsed = parsePreview({
-      reference: "ITGC-AC-01-TOE",
+      reference: "ITGC-AC-01",
       title: "ITGC-AC-01 New user access is approved",
-      template_title: "Operating effectiveness: manual control",
-      template_version: 1,
-      stage: "effectiveness",
+      template_title: "IT general control",
+      template_version: 2,
+      kind: "ITGC",
       purpose: "p",
-      sections: [
+      tabs: [
         {
-          title: "Testing matrix",
-          kind: "matrix",
-          guidance: "",
-          fields: [],
-          columns: ["Sample", "A. A request exists"],
-          rows: [["Sample 1", ""]],
+          key: "interim",
+          title: "Interim testing",
+          period: "interim",
+          reference: "ITGC-AC-01-TOE",
+          sections: [
+            {
+              title: "Testing matrix",
+              kind: "matrix",
+              guidance: "",
+              fields: [],
+              columns: ["Sample", "A. A request exists"],
+              rows: [["Sample 1", ""]],
+            },
+          ],
         },
       ],
     });
-    assert.equal(parsed?.sections[0]?.rows[0]?.[0], "Sample 1");
+    assert.equal(parsed?.kind, "ITGC");
+    assert.equal(parsed?.tabs[0]?.reference, "ITGC-AC-01-TOE");
+    assert.equal(parsed?.tabs[0]?.sections[0]?.rows[0]?.[0], "Sample 1");
     assert.equal(parsePreview({ title: "x" }), null);
+    assert.equal(parsePreview({ reference: "x", sections: [] }), null);
   });
 
-  it("falls back to the first step and ignores unknown notices", () => {
-    assert.equal(parseStep("pbc"), "pbc");
-    assert.equal(parseStep("drop table"), "scope");
+  it("opens on the overview, keeps old step links, and ignores unknown notices", () => {
+    // Evidence requests left setup: old links land on launch.
+    assert.equal(parseStep("requests"), "launch");
+    // A launched engagement opens where the work stands; a named step always wins.
+    assert.equal(landingStep(null, true), "launch");
+    assert.equal(landingStep("", true), "launch");
+    assert.equal(landingStep(null, false), "overview");
+    assert.equal(landingStep("overview", true), "overview");
+    assert.equal(landingStep("team", true), "team");
+    assert.equal(parseStep("pbc"), "launch");
+    assert.equal(parseStep("rcm"), "controls");
+    // Workpaper templates are their own step now.
+    assert.equal(parseStep("workpapers"), "workpapers");
+    assert.equal(parseStep("start"), "launch");
+    assert.equal(parseStep("drop table"), "overview");
+    assert.equal(parseStep(null), "overview");
     assert.equal(parseSetupNotice("setup-launched"), "setup-launched");
     assert.equal(parseSetupNotice("whatever"), null);
   });
@@ -151,7 +277,7 @@ describe("engagement setup model", () => {
       }),
       {
         intent: "scope",
-        step: "scope",
+        step: "profile",
         method: "PATCH",
         path: `${base}/scope`,
         body: { scope: "ITGCs", period_end: "2027-12-31" },
@@ -168,8 +294,7 @@ describe("engagement setup model", () => {
         owner_email: "Dana@Client.Example",
         frequency: "QUARTERLY",
         nature: "MANUAL",
-        design_template_key: "design-walkthrough",
-        effectiveness_template_key: "oe-manual",
+        template_key: "itgc",
       },
       { application_ids: [appId] },
     );
@@ -183,24 +308,47 @@ describe("engagement setup model", () => {
       frequency: "QUARTERLY",
       nature: "MANUAL",
       application_ids: [appId],
-      design_template_key: "design-walkthrough",
-      effectiveness_template_key: "oe-manual",
+      template_key: "itgc",
+      acknowledge_testing: false,
     });
+    // Setup saves the cadence only; the client contacts are set in Evidence.
     const pbc = setupWrite({
       ...ids,
       intent: "pbc",
-      client_coordinator_name: "Pat",
       client_coordinator_email: "pbc@client.example",
-      client_domains: "Client.Example, it.client.example",
       pbc_due_days: "10",
       pbc_follow_up_days: "3",
       pbc_max_follow_ups: "2",
     });
     assert.ok(!("error" in pbc));
-    assert.deepEqual(pbc.body.client_domains, [
-      "client.example",
-      "it.client.example",
-    ]);
+    assert.deepEqual(pbc.body, {
+      pbc_due_days: 10,
+      pbc_follow_up_days: 3,
+      pbc_max_follow_ups: 2,
+    });
+    const contacts = setupWrite({
+      ...ids,
+      intent: "evidence-contacts",
+      client_coordinator_name: "Pat",
+      client_coordinator_email: "PBC@client.example",
+      client_domains: "Client.Example, it.client.example",
+    });
+    assert.ok(!("error" in contacts));
+    assert.equal(contacts.method, "PATCH");
+    assert.ok(contacts.path.endsWith("/onboarding/evidence-contacts"));
+    assert.deepEqual(contacts.body, {
+      client_coordinator_name: "Pat",
+      client_coordinator_email: "pbc@client.example",
+      client_domains: ["client.example", "it.client.example"],
+    });
+    assert.deepEqual(
+      setupWrite({
+        ...ids,
+        intent: "evidence-contacts",
+        client_coordinator_email: "nope",
+      }),
+      { error: "invalid" },
+    );
     for (const bad of [
       { ...ids, intent: "scope", scope: "password: hunter2", period_end: "" },
       { ...ids, intent: "scope", scope: "x", period_end: "31/12/2027" },
@@ -218,6 +366,7 @@ describe("engagement setup model", () => {
         owner_email: "a@b.co",
       },
       { ...ids, intent: "approve", plan_id: appId, fingerprint: "short" },
+      { ...ids, intent: "launch", fingerprint: "short" },
       { ...ids, intent: "remove-application", application_id: "../team" },
       { ...ids, intent: "pbc", pbc_due_days: "200" },
       { ...ids, intent: "drop" },
@@ -246,6 +395,11 @@ describe("engagement setup model", () => {
   it("maps API results to notices", () => {
     assert.equal(setupNoticeFor("scope", 200, ""), "setup-saved");
     assert.equal(setupNoticeFor("approve", 200, ""), "setup-launched");
+    assert.equal(setupNoticeFor("launch", 200, ""), "setup-launched");
+    assert.equal(
+      setupNoticeFor("launch", 409, "setup changed since the plan was shown"),
+      "setup-changed",
+    );
     assert.equal(
       setupNoticeFor("scope", 409, "engagement has started"),
       "setup-started",
@@ -261,6 +415,127 @@ describe("engagement setup model", () => {
     assert.equal(setupNoticeFor("scope", 403, ""), "setup-denied");
     assert.equal(setupNoticeFor("scope", 422, ""), "setup-invalid");
     assert.equal(setupNoticeFor("scope", 0, ""), "setup-unavailable");
+  });
+});
+
+describe("the planner's setup draft", () => {
+  it("parses the draft and the owner suggestions, and says what is still pending", () => {
+    const parsed = parseOnboarding(
+      onboarding({
+        setup_draft: {
+          status: "IDLE",
+          drafting: false,
+          note: "",
+          source: "AGENT",
+          scope_text: "The engagement covers Acme's ITGCs.",
+          period_end: "2027-12-31",
+          pbc_due_days: 12,
+          pbc_follow_up_days: 4,
+          pbc_max_follow_ups: 3,
+          reasons: { scope: "From the records.", cadence: "Many controls." },
+          drafted_at: "2026-10-12T10:00:00Z",
+          version: 3,
+        },
+        owner_suggestions: [
+          {
+            owner_name: "Lee Park",
+            owner_email: "lee.park@client.example",
+            control_refs: ["ITGC-CM-01"],
+            pattern: "first.last",
+          },
+        ],
+      }),
+    );
+    assert.ok(parsed !== null);
+    assert.equal(parsed.setupDraft?.source, "AGENT");
+    assert.equal(parsed.setupDraft?.version, 3);
+    assert.equal(parsed.setupDraft?.reasons.cadence, "Many controls.");
+    assert.equal(
+      parsed.ownerSuggestions[0]?.ownerEmail,
+      "lee.park@client.example",
+    );
+    // The scope differs from the draft; the period end already matches.
+    assert.deepEqual(pendingSuggestions(parsed), {
+      scope: true,
+      periodEnd: false,
+      cadence: true,
+    });
+    const drafting = parseOnboarding(
+      onboarding({ setup_draft: { status: "WORKING", source: "NONE" } }),
+    );
+    assert.equal(drafting?.setupDraft?.drafting, true);
+    assert.deepEqual(pendingSuggestions(drafting ?? parsed), {
+      scope: false,
+      periodEnd: false,
+      cadence: false,
+    });
+  });
+
+  it("builds the profile, draft, and accept writes", () => {
+    assert.deepEqual(
+      setupWrite({
+        ...ids,
+        intent: "profile",
+        client_name: " Acme Corp ",
+        engagement_type: "SOX_FULL",
+        period_end: "",
+      }),
+      {
+        intent: "profile",
+        step: "profile",
+        method: "PATCH",
+        path: `${base}/profile`,
+        body: {
+          client_name: "Acme Corp",
+          engagement_type: "SOX_FULL",
+          period_end: null,
+        },
+      },
+    );
+    assert.deepEqual(
+      setupWrite({
+        ...ids,
+        intent: "profile",
+        client_name: "x",
+        engagement_type: "OTHER",
+      }),
+      { error: "invalid" },
+    );
+    const asked = setupWrite({ ...ids, intent: "suggest", step: "team" });
+    assert.ok(!("error" in asked));
+    assert.equal(asked.path, `${base}/suggestions/draft`);
+    assert.equal(asked.step, "team");
+    assert.deepEqual(
+      setupWrite(
+        {
+          ...ids,
+          intent: "accept-suggestions",
+          step: "profile",
+          draft_version: "3",
+        },
+        { field: ["scope", "scope", "period_end", "bogus"] },
+      ),
+      {
+        intent: "accept-suggestions",
+        step: "profile",
+        method: "POST",
+        path: `${base}/suggestions/accept`,
+        body: { version: 3, fields: ["scope", "period_end"] },
+      },
+    );
+    assert.deepEqual(
+      setupWrite(
+        { ...ids, intent: "accept-suggestions", draft_version: "3" },
+        {},
+      ),
+      { error: "invalid" },
+    );
+    assert.equal(setupNoticeFor("suggest", 200, ""), "setup-drafting");
+    assert.equal(
+      setupNoticeFor("accept-suggestions", 200, ""),
+      "setup-accepted",
+    );
+    assert.equal(engagementTypeLabel("IT_AUDIT"), "IT audit (non-SOX)");
   });
 });
 
@@ -359,7 +634,7 @@ describe("client RCM upload model", () => {
     });
     assert.deepEqual(write, {
       intent: "rcm-mapping",
-      step: "rcm",
+      step: "controls",
       method: "PATCH",
       path: `${uploadBase}/mapping`,
       body: {
@@ -382,7 +657,7 @@ describe("client RCM upload model", () => {
       }),
       {
         intent: "rcm-layout",
-        step: "rcm",
+        step: "controls",
         method: "PATCH",
         path: `${uploadBase}/layout`,
         body: { version: 2, sheet_index: 1, header_row: 3 },
@@ -688,7 +963,7 @@ describe("in-scope systems from the RCM", () => {
     });
     assert.deepEqual(saved, {
       intent: "rcm-systems",
-      step: "rcm",
+      step: "controls",
       method: "PATCH",
       path: `${base}/rcm/uploads/${importId}/systems`,
       body: {
@@ -753,14 +1028,14 @@ describe("in-scope systems live in the RCM step", () => {
       description: "",
     });
     assert.ok(!("error" in added));
-    assert.equal(added.step, "rcm");
+    assert.equal(added.step, "controls");
     const removed = setupWrite({
       ...ids,
       intent: "remove-application",
       application_id: appId,
     });
     assert.ok(!("error" in removed));
-    assert.equal(removed.step, "rcm");
+    assert.equal(removed.step, "controls");
   });
 });
 
@@ -816,7 +1091,7 @@ describe("client terms mapped by the agent", () => {
       setupWrite({ ...ids, intent: "rcm-remap-terms", import_id: importId }),
       {
         intent: "rcm-remap-terms",
-        step: "rcm",
+        step: "controls",
         method: "POST",
         path: `${base}/rcm/uploads/${importId}/terms/remap`,
         body: {},
@@ -825,6 +1100,585 @@ describe("client terms mapped by the agent", () => {
     assert.deepEqual(
       setupWrite({ ...ids, intent: "rcm-remap-terms", import_id: "x" }),
       { error: "invalid" },
+    );
+  });
+});
+
+describe("controls per application", () => {
+  it("shows one row per control ID with every system its instances cover", () => {
+    const rows = [
+      {
+        id: "1",
+        control_ref: "ITGC-AC-01",
+        application_ids: ["sap"],
+        application_id: "sap",
+        application_name: "SAP ERP",
+      },
+      {
+        id: "2",
+        control_ref: "ITGC-AC-01",
+        application_ids: ["oracle"],
+        application_id: "oracle",
+        application_name: "Oracle",
+      },
+      { id: "3", control_ref: "ITGC-CM-01", application_ids: [] },
+    ];
+    const parsed = parseOnboarding(onboarding({ controls: rows }));
+    assert.ok(parsed !== null);
+    assert.equal(parsed.controls[1]?.applicationName, "Oracle");
+    assert.deepEqual(
+      families(parsed.controls).map((control) => [
+        control.id,
+        control.controlRef,
+        control.applicationIds,
+      ]),
+      [
+        ["1", "ITGC-AC-01", ["sap", "oracle"]],
+        ["3", "ITGC-CM-01", []],
+      ],
+    );
+  });
+});
+
+describe("the Controls step's counts", () => {
+  it("counts each system's copy, so a removed system leaves the counts", () => {
+    const row = (
+      id: string,
+      ref: string,
+      app: string,
+      included: boolean,
+    ): Record<string, unknown> => ({
+      id,
+      control_ref: ref,
+      domain: "ACCESS",
+      application_ids: [app],
+      application_id: app,
+      application_name: app,
+      included,
+      key_control: true,
+      sample_size: 25,
+    });
+    const both = parseOnboarding(
+      onboarding({
+        controls: [
+          row("1", "ITGC-AC-01", "sap", false),
+          row("2", "ITGC-AC-01", "oracle", true),
+          row("3", "ITGC-AC-02", "sap", true),
+          row("4", "ITGC-AC-02", "oracle", true),
+        ],
+      }),
+    );
+    assert.ok(both !== null);
+    assert.deepEqual(scopeCounts(both.controls, "it"), {
+      inScope: 3,
+      total: 4,
+      ids: 2,
+      key: 3,
+      samples: 75,
+    });
+    // A control in scope on any system reads as in scope in the list.
+    assert.equal(families(both.controls)[0]?.included, true);
+    const oneSystem = parseOnboarding(
+      onboarding({
+        controls: [
+          row("1", "ITGC-AC-01", "sap", false),
+          row("3", "ITGC-AC-02", "sap", true),
+        ],
+      }),
+    );
+    assert.ok(oneSystem !== null);
+    assert.equal(scopeCounts(oneSystem.controls, "it").inScope, 1);
+    assert.equal(scopeCounts(oneSystem.controls, "it").samples, 25);
+    // With its last system removed, a system control is kept for the next system but is
+    // not tested, so it is not counted; a business control never has a system and counts.
+    const noSystem = parseOnboarding(
+      onboarding({
+        controls: [
+          {
+            ...row("1", "ITGC-AC-01", "x", false),
+            application_ids: [],
+            application_id: null,
+          },
+          {
+            id: "9",
+            control_ref: "OTC-01",
+            domain: "ORDER_TO_CASH",
+            application_ids: [],
+            included: true,
+            sample_size: 25,
+          },
+        ],
+      }),
+    );
+    assert.ok(noSystem !== null);
+    assert.deepEqual(
+      [
+        scopeCounts(noSystem.controls, "it").total,
+        scopeCounts(noSystem.controls, "business").inScope,
+      ],
+      [0, 1],
+    );
+  });
+});
+
+describe("matching the client's columns", () => {
+  const ids = {
+    organization_id: "01a13253-ec1a-7604-8944-a06dd7633ce0",
+    project_id: "01a1327d-b92a-7bd1-b34b-845a8d89c879",
+    import_id: "01a13300-0000-7000-8000-000000000003",
+    version: "2",
+    intent: "rcm-mapping",
+  };
+  it("lets the area come from two columns, and no other field from more than one", () => {
+    const two = setupWrite(
+      {
+        ...ids,
+        column_0: "control_ref",
+        column_1: "domain",
+        column_2: "domain",
+        column_3: "activity",
+      },
+      {},
+    );
+    assert.ok(!("error" in two));
+    assert.deepEqual(
+      setupWrite(
+        {
+          ...ids,
+          column_0: "control_ref",
+          column_1: "domain",
+          column_2: "domain",
+          column_3: "domain",
+        },
+        {},
+      ),
+      { error: "invalid" },
+    );
+    assert.deepEqual(
+      setupWrite(
+        {
+          ...ids,
+          column_0: "control_ref",
+          column_1: "nature",
+          column_2: "nature",
+        },
+        {},
+      ),
+      { error: "invalid" },
+    );
+  });
+});
+
+describe("a firm's workpaper template", () => {
+  const ids = {
+    organization_id: "01a13253-ec1a-7604-8944-a06dd7633ce0",
+    project_id: "01a1327d-b92a-7bd1-b34b-845a8d89c879",
+  };
+  it("uploads a Word or Excel file for one kind of control", () => {
+    const target = templateUploadTarget(
+      { ...ids, kind: "ITGC", part: "interim" },
+      { name: "C:\\firm\\OE workpaper.docx", size: 1200 },
+    );
+    assert.ok(target !== null);
+    assert.equal(target.fileName, "OE workpaper.docx");
+    assert.ok(
+      target.path.endsWith(
+        "/onboarding/workpaper-templates?file_name=OE%20workpaper.docx&kind=ITGC&part=interim",
+      ),
+    );
+    // A whole workbook is the default part.
+    const whole = templateUploadTarget(
+      { ...ids, kind: "KEY_REPORT" },
+      { name: "reports.xlsx", size: 10 },
+    );
+    assert.ok(whole?.path.endsWith("&kind=KEY_REPORT&part=whole"));
+    assert.equal(
+      templateUploadTarget(
+        { ...ids, kind: "ITGC" },
+        { name: "notes.pdf", size: 10 },
+      ),
+      null,
+    );
+    assert.equal(
+      templateUploadTarget(
+        { ...ids, kind: "OTHER" },
+        { name: "a.docx", size: 10 },
+      ),
+      null,
+    );
+    assert.equal(
+      templateUploadTarget(
+        { ...ids, kind: "ITGC", part: "later" },
+        { name: "a.docx", size: 10 },
+      ),
+      null,
+    );
+    assert.equal(templateUploadNoticeFor(200), "setup-template-uploaded");
+    assert.equal(templateUploadNoticeFor(422), "setup-template-unreadable");
+  });
+
+  it("applies or removes a template by its id, on the workpapers step", () => {
+    const id = "01a13300-0000-7000-8000-000000000009";
+    const applied = setupWrite({
+      ...ids,
+      intent: "workpaper-template-apply",
+      template_id: id,
+    });
+    assert.ok(!("error" in applied));
+    assert.equal(applied.step, "workpapers");
+    assert.ok(applied.path.endsWith(`/workpaper-templates/${id}/apply`));
+    const removed = setupWrite({
+      ...ids,
+      intent: "workpaper-template-remove",
+      template_id: id,
+    });
+    assert.ok(!("error" in removed));
+    assert.ok(removed.path.endsWith(`/workpaper-templates/${id}/remove`));
+    assert.deepEqual(
+      setupWrite({
+        ...ids,
+        intent: "workpaper-template-apply",
+        template_id: "x",
+      }),
+      { error: "invalid" },
+    );
+    assert.equal(parseStep("workpapers"), "workpapers");
+  });
+
+  it("writes a new control from the form, lines split and the system required", () => {
+    const made = setupWrite({
+      ...ids,
+      intent: "control-new",
+      control_ref: " REV-09 ",
+      title: "Credit notes are approved",
+      risk: "",
+      activity: "The finance manager approves every credit note.",
+      domain: "ORDER_TO_CASH",
+      frequency: "WEEKLY",
+      nature: "MANUAL",
+      key_control: "on",
+      test_attributes:
+        "Approved by the manager\r\n\nApproval precedes posting\n",
+      pbc_items: "",
+    });
+    assert.ok(!("error" in made));
+    assert.ok(made.path.endsWith("/controls/new"));
+    assert.deepEqual(made.body, {
+      control_ref: "REV-09",
+      title: "Credit notes are approved",
+      risk: "",
+      activity: "The finance manager approves every credit note.",
+      domain: "ORDER_TO_CASH",
+      frequency: "WEEKLY",
+      nature: "MANUAL",
+      key_control: true,
+      test_attributes: ["Approved by the manager", "Approval precedes posting"],
+      pbc_items: [],
+      application_id: null,
+      process_id: null,
+    });
+    const report = setupWrite({
+      ...ids,
+      intent: "control-new",
+      control_ref: "KR-09",
+      title: "Aged debtors report",
+      activity: "The report is run monthly.",
+      domain: "IPE",
+      frequency: "MONTHLY",
+      nature: "IT_DEPENDENT_MANUAL",
+      test_attributes: "Report ties to the ledger",
+      application_id: appId,
+    });
+    assert.ok(!("error" in report));
+    assert.equal(report.body.application_id, appId);
+    for (const bad of [
+      { domain: "IPE" },
+      { domain: "NOPE" },
+      { control_ref: "../x" },
+      { test_attributes: "" },
+      { activity: "password: hunter2" },
+      { frequency: "SOMETIMES" },
+    ]) {
+      assert.deepEqual(
+        setupWrite({
+          ...ids,
+          intent: "control-new",
+          control_ref: "REV-10",
+          title: "t",
+          activity: "a",
+          domain: "ORDER_TO_CASH",
+          frequency: "WEEKLY",
+          nature: "MANUAL",
+          test_attributes: "x",
+          ...bad,
+        }),
+        { error: "invalid" },
+      );
+    }
+    assert.equal(
+      setupNoticeFor("control-new", 409, "control ID exists"),
+      "setup-control-exists",
+    );
+  });
+
+  it("customises a template and saves the editor's draft", () => {
+    const customised = setupWrite({
+      ...ids,
+      intent: "workpaper-template-customize",
+      base_key: "business",
+    });
+    assert.ok(!("error" in customised));
+    assert.equal(customised.method, "POST");
+    assert.ok(customised.path.endsWith("/workpaper-templates/customize"));
+    assert.deepEqual(customised.body, { base_key: "business" });
+    assert.deepEqual(
+      setupWrite({
+        ...ids,
+        intent: "workpaper-template-customize",
+        base_key: "../x",
+      }),
+      { error: "invalid" },
+    );
+    const id = "01a13300-0000-7000-8000-000000000009";
+    const draft = {
+      title: " Our BP workpaper ",
+      tabs: [
+        {
+          title: "Design",
+          period: "design",
+          sections: [
+            {
+              title: "Control",
+              kind: "fields",
+              guidance: "",
+              columns: [],
+              rows: [],
+            },
+            {
+              title: "Procedures",
+              kind: "table",
+              guidance: "Perform each.",
+              columns: ["Procedure", "", "Result"],
+              rows: [
+                ["Inspect", "", "x"],
+                ["", ""],
+              ],
+            },
+            {
+              title: "Testing matrix",
+              kind: "matrix",
+              guidance: "",
+              columns: ["ignored"],
+              rows: [["dropped"]],
+            },
+          ],
+        },
+      ],
+    };
+    const saved = setupWrite({
+      ...ids,
+      intent: "workpaper-template-save",
+      template_id: id,
+      version: "3",
+      template: JSON.stringify(draft),
+    });
+    assert.ok(!("error" in saved));
+    assert.equal(saved.method, "PUT");
+    assert.ok(saved.path.endsWith(`/workpaper-templates/${id}`));
+    assert.deepEqual(saved.body, {
+      title: "Our BP workpaper",
+      version: 3,
+      tabs: [
+        {
+          title: "Design",
+          period: "design",
+          sections: [
+            {
+              title: "Control",
+              kind: "fields",
+              guidance: "",
+              columns: [],
+              rows: [],
+            },
+            {
+              title: "Procedures",
+              kind: "table",
+              guidance: "Perform each.",
+              columns: ["Procedure", "Result"],
+              rows: [["Inspect", ""]],
+            },
+            {
+              title: "Testing matrix",
+              kind: "matrix",
+              guidance: "",
+              columns: ["ignored"],
+              rows: [],
+            },
+          ],
+        },
+      ],
+    });
+    // A table without columns, an unknown kind or period, an empty tab, or a secret is refused.
+    const refused = (template: unknown) =>
+      setupWrite({
+        ...ids,
+        intent: "workpaper-template-save",
+        template_id: id,
+        version: "3",
+        template: JSON.stringify(template),
+      });
+    assert.deepEqual(parseTemplateDraft({ title: "x", tabs: [] }), null);
+    assert.deepEqual(
+      refused({
+        title: "x",
+        tabs: [
+          {
+            title: "T",
+            period: "interim",
+            sections: [{ title: "A", kind: "table" }],
+          },
+        ],
+      }),
+      { error: "invalid" },
+    );
+    assert.deepEqual(
+      refused({
+        title: "x",
+        tabs: [
+          {
+            title: "T",
+            period: "later",
+            sections: [{ title: "A", kind: "guidance" }],
+          },
+        ],
+      }),
+      { error: "invalid" },
+    );
+    assert.deepEqual(
+      refused({
+        title: "x",
+        tabs: [
+          {
+            title: "T",
+            period: "interim",
+            sections: [{ title: "A", kind: "other" }],
+          },
+        ],
+      }),
+      { error: "invalid" },
+    );
+    assert.deepEqual(
+      refused({
+        title: "x",
+        tabs: [
+          {
+            title: "T",
+            period: "interim",
+            sections: [
+              { title: "A", kind: "guidance", guidance: "password: hunter2" },
+            ],
+          },
+        ],
+      }),
+      { error: "invalid" },
+    );
+    assert.deepEqual(refused("not json"), { error: "invalid" });
+  });
+
+  it("names the kind of workpaper each area uses", () => {
+    assert.equal(kindForDomain("ACCESS"), "ITGC");
+    assert.equal(kindForDomain("CHANGE"), "ITGC");
+    assert.equal(kindForDomain("ITAC"), "ITAC");
+    assert.equal(kindForDomain("IPE"), "KEY_REPORT");
+    assert.equal(kindForDomain("ORDER_TO_CASH"), "BUSINESS");
+  });
+});
+
+describe("previewChoices", () => {
+  it("lists each control once, in order, with its preview link", () => {
+    const choices = previewChoices(
+      [
+        { id: "a", controlRef: "ITGC-01", title: "User access" },
+        { id: "b", controlRef: "ELC-01", title: "Code of conduct" },
+        { id: "a", controlRef: "ITGC-01", title: "User access" },
+      ],
+      (id) => `/?step=workpapers&sample=${id}`,
+    );
+    assert.deepEqual(choices, [
+      {
+        id: "a",
+        label: "ITGC-01 User access",
+        href: "/?step=workpapers&sample=a",
+      },
+      {
+        id: "b",
+        label: "ELC-01 Code of conduct",
+        href: "/?step=workpapers&sample=b",
+      },
+    ]);
+  });
+});
+
+describe("the launched engagement", () => {
+  const raw = {
+    launched_at: "2026-10-12T14:00:00Z",
+    launched_by: "Robert Manaol",
+    controls: 19,
+    plans_approved: 4,
+    plans_proposed: 14,
+    plans_working: 2,
+    plans_missing: 1,
+    requests_held: 5,
+    requests_draft: 3,
+    requests_awaiting_approval: 1,
+    requests_with_client: 0,
+    requests_received: 0,
+    tasks_total: 13,
+    tasks_done: 2,
+    tasks_active: 10,
+    tasks_attention: 1,
+  };
+
+  it("reads the summary and refuses what is not one", () => {
+    const launch = launchParse(raw);
+    assert.ok(launch !== null);
+    assert.equal(launch.launchedBy, "Robert Manaol");
+    assert.equal(launch.plansProposed, 14);
+    assert.equal(launch.requestsHeld, 5);
+    assert.equal(launchParse({ ...raw, tasks_done: -3 })?.tasksDone, 0);
+    assert.equal(launchParse(null), null);
+    assert.equal(launchParse({ controls: 3 }), null);
+  });
+
+  it("puts planning before requests, and agents' work last", () => {
+    const launch = launchParse(raw);
+    assert.ok(launch !== null);
+    const steps = launchNextSteps(launch);
+    assert.deepEqual(
+      steps.map((step) => step.key),
+      ["plans", "unplanned", "approve", "drafts", "tasks", "planner"],
+    );
+    assert.equal(steps[0]?.title, "Approve 14 evidence plans");
+    assert.equal(steps[0]?.target, "controls");
+    assert.equal(steps[2]?.title, "Approve 1 evidence request");
+    assert.equal(steps[4]?.title, "1 agent task needs attention");
+    assert.equal(steps[5]?.tone, "WAITING");
+  });
+
+  it("says when nothing waits for the team", () => {
+    const launch = launchParse({
+      ...raw,
+      plans_proposed: 0,
+      plans_working: 0,
+      plans_missing: 0,
+      requests_draft: 0,
+      requests_awaiting_approval: 0,
+      tasks_attention: 0,
+    });
+    assert.ok(launch !== null);
+    assert.deepEqual(
+      launchNextSteps(launch).map((step) => [step.key, step.tone]),
+      [["clear", "DONE"]],
     );
   });
 });

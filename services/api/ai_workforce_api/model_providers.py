@@ -4,7 +4,9 @@ Only this module names a vendor SDK, so the adapter and the agents never import 
 """
 
 import base64
-from typing import Any, cast
+import logging
+from collections.abc import Callable
+from typing import Any
 
 from ai_workforce_api.models import (
     OUTPUT_TOOL,
@@ -24,6 +26,8 @@ from ai_workforce_api.models import (
     UnavailableModelProvider,
 )
 from ai_workforce_api.settings import Settings
+
+logger = logging.getLogger(__name__)
 
 LOCAL_PROVIDERS = frozenset({"", "mock", "local"})
 # The default Claude model when MODEL_NAME is empty. Cost per token is not configured yet.
@@ -70,34 +74,75 @@ class AnthropicModelProvider:
             ]
             blocks.append({"type": "text", "text": request.prompt})
             message_param = {"role": "user", "content": blocks}
+        output_tool: dict[str, Any] = {
+            "name": OUTPUT_TOOL,
+            "description": "Record the result in the required format.",
+            "input_schema": request.output_schema,
+        }
+        max_tokens = request.max_tokens or (8192 if request.images else 4096)
+
+        def ask(searching: bool) -> tuple[Any, list[Any]]:
+            """Ask, and when the model pauses a long search turn, let it continue."""
+            tools: list[Any] = [output_tool]
+            if searching:
+                tools.append(
+                    {"type": "web_search_20250305", "name": "web_search",
+                     "max_uses": request.web_search}
+                )  # fmt: skip
+            conversation: list[Any] = [message_param]
+            blocks: list[Any] = []
+            for _turn in range(3):
+                reply = client.messages.create(
+                    model=self._model,
+                    max_tokens=max_tokens,
+                    system=request.system,
+                    messages=conversation,
+                    tools=tools,
+                    # Some models refuse a forced tool choice. The instructions ask for
+                    # the tool, and the caller rejects an answer that does not use it.
+                    tool_choice={"type": "auto"},
+                )
+                blocks.extend(reply.content)
+                if reply.stop_reason != "pause_turn":
+                    return reply, blocks
+                conversation = [*conversation, {"role": "assistant", "content": reply.content}]
+            return reply, blocks
+
+        searched = request.web_search > 0
         try:
-            message = client.messages.create(
-                model=self._model,
-                max_tokens=8192 if request.images else 4096,
-                system=request.system,
-                messages=[message_param],
-                tools=[
-                    {
-                        "name": OUTPUT_TOOL,
-                        "description": "Record the result in the required format.",
-                        "input_schema": request.output_schema,
-                    }
-                ],
-                # Some models refuse a forced tool choice. The instructions ask for the
-                # tool, and the caller rejects any answer that does not come through it.
-                tool_choice={"type": "auto"},
-            )
+            try:
+                message, blocks = ask(searched)
+            except APIError as error:
+                # The organization may not have web search enabled: answer without it.
+                if not searched or isinstance(error, (APITimeoutError, RateLimitError)):
+                    raise
+                logger.info("web search unavailable; answering without it")
+                searched = False
+                message, blocks = ask(False)
         except APITimeoutError:
             raise ModelTimeout() from None
         except RateLimitError:
             raise ModelRateLimit() from None
-        except APIError:
-            raise ModelProviderError() from None
+        except APIError as error:
+            raise _provider_error(error) from None
         output: dict[str, Any] | None = None
-        for block in message.content:
+        sources: list[tuple[str, str]] = []
+        for block in blocks:
             if isinstance(block, ToolUseBlock) and block.name == OUTPUT_TOOL:
                 output = block.input if isinstance(block.input, dict) else None
-        return ModelRaw(output, (), message.usage.input_tokens, message.usage.output_tokens)
+            elif getattr(block, "type", "") == "web_search_tool_result":
+                content = getattr(block, "content", None)
+                if isinstance(content, list):
+                    sources += [
+                        (str(item.url), str(item.title)) for item in content
+                        if getattr(item, "type", "") == "web_search_result"
+                    ]  # fmt: skip
+                else:
+                    searched = False
+        return ModelRaw(
+            output, (), message.usage.input_tokens, message.usage.output_tokens,
+            sources=tuple(dict.fromkeys(sources)), searched=searched,
+        )  # fmt: skip
 
     def converse(
         self,
@@ -108,50 +153,97 @@ class AnthropicModelProvider:
     ) -> ChatReply:
         """One assistant turn. Tool calls are returned, never run here."""
         from anthropic import Anthropic, APIError, APITimeoutError, RateLimitError
-        from anthropic.types import MessageParam, TextBlock, ToolParam, ToolUseBlock
 
         client = Anthropic(api_key=self._api_key, timeout=float(timeout_seconds), max_retries=1)
         try:
-            message = client.messages.create(
-                model=self._model,
-                max_tokens=4096,
-                system=system,
-                messages=cast(
-                    "list[MessageParam]", [_anthropic_message(item) for item in messages]
-                ),
-                tools=cast(
-                    "list[ToolParam]",
-                    [
-                        {
-                            "name": tool.name,
-                            "description": tool.description,
-                            "input_schema": tool.input_schema,
-                        }
-                        for tool in tools
-                    ],
-                ),
-                tool_choice={"type": "auto"},
-            )
+            message = client.messages.create(**self._chat_request(system, messages, tools))
         except APITimeoutError:
             raise ModelTimeout() from None
         except RateLimitError:
             raise ModelRateLimit() from None
-        except APIError:
-            raise ModelProviderError() from None
-        text: list[str] = []
-        calls: list[ToolCall] = []
-        for block in message.content:
-            if isinstance(block, TextBlock):
-                text.append(block.text)
-            elif isinstance(block, ToolUseBlock):
-                arguments = block.input if isinstance(block.input, dict) else {}
-                calls.append(ToolCall(id=block.id, name=block.name, arguments=arguments))
-        return ChatReply(
-            text="\n".join(part for part in text if part).strip(),
-            tool_calls=tuple(calls),
-            input_tokens=message.usage.input_tokens,
-            output_tokens=message.usage.output_tokens,
-        )
+        except APIError as error:
+            raise _provider_error(error) from None
+        return _chat_reply(message)
+
+    def converse_streaming(
+        self,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: tuple[ChatTool, ...],
+        timeout_seconds: int,
+        on_text: Callable[[str], None],
+    ) -> ChatReply:
+        """One assistant turn, its text handed to on_text as the model writes it. The reply
+        is the same as converse's: tool calls are returned, never run here."""
+        from anthropic import Anthropic, APIError, APITimeoutError, RateLimitError
+
+        client = Anthropic(api_key=self._api_key, timeout=float(timeout_seconds), max_retries=1)
+        try:
+            with client.messages.stream(**self._chat_request(system, messages, tools)) as stream:
+                for delta in stream.text_stream:
+                    on_text(delta)
+                message = stream.get_final_message()
+        except APITimeoutError:
+            raise ModelTimeout() from None
+        except RateLimitError:
+            raise ModelRateLimit() from None
+        except APIError as error:
+            raise _provider_error(error) from None
+        return _chat_reply(message)
+
+    def _chat_request(
+        self, system: str, messages: list[dict[str, Any]], tools: tuple[ChatTool, ...]
+    ) -> dict[str, Any]:
+        return {
+            "model": self._model,
+            "max_tokens": 4096,
+            "system": system,
+            "messages": [_anthropic_message(item) for item in messages],
+            "tools": [
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.input_schema,
+                }
+                for tool in tools
+            ],
+            "tool_choice": {"type": "auto"},
+        }
+
+
+def _chat_reply(message: Any) -> ChatReply:
+    """The model's message as a provider-neutral reply: its text and its tool calls."""
+    from anthropic.types import TextBlock, ToolUseBlock
+
+    text: list[str] = []
+    calls: list[ToolCall] = []
+    for block in message.content:
+        if isinstance(block, TextBlock):
+            text.append(block.text)
+        elif isinstance(block, ToolUseBlock):
+            arguments = block.input if isinstance(block.input, dict) else {}
+            calls.append(ToolCall(id=block.id, name=block.name, arguments=arguments))
+    return ChatReply(
+        text="\n".join(part for part in text if part).strip(),
+        tool_calls=tuple(calls),
+        input_tokens=message.usage.input_tokens,
+        output_tokens=message.usage.output_tokens,
+    )
+
+
+def _provider_error(error: Exception) -> ModelProviderError:
+    """A vendor error as a neutral one. Logs the kind and status only, never the content."""
+    status = getattr(error, "status_code", None)
+    code = status if isinstance(status, int) else None
+    # No status means the connection dropped. 408, 409, 5xx, and 529 (overloaded) pass.
+    transient = code is None or code in (408, 409) or code >= 500
+    logger.warning(
+        "chat model call failed: %s status=%s transient=%s",
+        type(error).__name__,
+        code,
+        transient,
+    )
+    return ModelProviderError(transient=transient, status=code)
 
 
 def _anthropic_message(item: dict[str, Any]) -> dict[str, Any]:

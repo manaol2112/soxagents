@@ -5,8 +5,10 @@ from datetime import date
 from typing import Any
 from uuid import UUID, uuid4
 
+from evidence_store import store_attachment
 from fastapi.testclient import TestClient
 from support import Database
+from test_evidence_intake import _accept_population
 from test_evidence_review import _base, _client, _sent_engagement_request
 from test_execution import _add_project_member, _add_user
 from test_outbound import migrated
@@ -180,6 +182,12 @@ def test_a_population_gets_a_proposed_test_plan_that_a_person_approves(
     version = replaced.json()["version"]
     assert reviewer.post(f"{base}/approve", json={"version": version}).status_code == 403
     assert client.post(f"{base}/approve", json={"version": version - 1}).status_code == 409
+    # The population arrived on a reply the request still waits on: it is judged as it
+    # stands, and the samples are approved only once it is accepted.
+    blocked = client.post(f"{base}/approve", json={"version": version})
+    assert blocked.status_code == 409
+    assert "population is not validated" in blocked.json()["detail"]
+    _accept_population(client, team, test["engagement_control_id"])
     approved = client.post(f"{base}/approve", json={"version": version})
     assert approved.status_code == 200, approved.text
     body = approved.json()
@@ -288,12 +296,9 @@ def _store(
         },
     )
     assert reply.status_code == 200, reply.text
-    stored = client.post(
-        f"{base}/mailbox-attachments/{reply.json()['attachments'][0]['id']}/content",
-        content=content,
-        headers={"content-type": "application/octet-stream"},
+    store_attachment(
+        client, team["org"], team["project"], reply.json()["attachments"][0]["id"], content
     )
-    assert stored.status_code == 200, stored.text
     return UUID(client.get(f"{base}/evidence-analyses").json()[0]["id"])
 
 

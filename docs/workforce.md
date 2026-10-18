@@ -14,7 +14,7 @@ The roster is code in `services/api/ai_workforce_api/workforce.py`. A test pins 
 | ITGC tester: change management | Request, test, approval, deployment, emergency changes | `file.read`, `attachment.retrieve`, `workpaper.update` | standard |
 | ITGC tester: IT operations | Job monitoring, backup and restore, incidents | `file.read`, `attachment.retrieve`, `workpaper.update` | standard |
 | Business process controls tester | Entity-level controls, business cycles (order to cash, procure to pay, record to report, treasury, payroll, inventory, fixed assets, tax), application controls, and key reports | `file.read`, `attachment.retrieve`, `workpaper.update` | standard |
-| Independent reviewer | Reviews work it did not prepare | `file.read` | reasoning |
+| Independent reviewer | Re-performs testing it did not perform and proposes review notes ([review.md](review.md)) | `file.read` | reasoning |
 | Reporting analyst | Drafts findings and the report | `file.read`, `report.finalize` | reasoning |
 
 Every allowed action must be in the action catalog. No standard worker may hold `permission.modify` or `mail.external`. Listing an action does not bypass policy: `mail.pbc`, `mail.reminder`, `workpaper.update`, and `report.finalize` still wait for a person's approval.

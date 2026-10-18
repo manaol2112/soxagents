@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. Revised by [ADR 0009](0009-google-sign-in.md), which adds Google as a second issuer.
 
 ## Context
 

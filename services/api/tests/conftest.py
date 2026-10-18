@@ -7,6 +7,8 @@ import pytest
 from psycopg import sql
 from support import Database
 
+from ai_workforce_api import independence
+
 
 @pytest.fixture(autouse=True)
 def workflow_address_unset(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -14,10 +16,21 @@ def workflow_address_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WORKFLOW_PROVIDER", "")
     monkeypatch.setenv("EMAIL_PROVIDER", "")
     monkeypatch.setenv("EMAIL_ALLOWED_RECIPIENT_DOMAINS", "")
+    # A developer's live email settings never reach a test: nothing is sent from tests.
+    monkeypatch.setenv("EMAIL_LIVE_SEND_ENABLED", "false")
+    for name in ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "EMAIL_FROM", "PUBLIC_BASE_URL"):
+        monkeypatch.setenv(name, "")
     monkeypatch.setenv("MODEL_PROVIDER", "")
     monkeypatch.setenv("MODEL_API_KEY", "")
     monkeypatch.setenv("MODEL_NAME", "")
     monkeypatch.setenv("LOCAL_WORKER_ENABLED", "false")
+    # A developer's .env may relax these for local use; tests start from the strict defaults.
+    monkeypatch.setenv("REVIEW_INDEPENDENCE_REQUIRED", "true")
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "")
+    monkeypatch.setenv("GOOGLE_REDIRECT_URL", "")
+    monkeypatch.setenv("DNS_NAMESERVERS", "")
+    independence.configure(True)
 
 
 @pytest.fixture

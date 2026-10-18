@@ -1,0 +1,925 @@
+/* ==========================================================================
+   The Engagements page: the firm's portfolio as cards that open their engagement,
+   each with a menu for the other ways in. Scoped to .eg.
+   ========================================================================== */
+
+.eg {
+  --eg-ink: var(--text-strong);
+  --eg-text: var(--text);
+  --eg-muted: var(--text-secondary);
+  --eg-faint: var(--text-tertiary);
+  --eg-line: var(--border);
+  --eg-line-soft: var(--border-subtle);
+  --eg-tint: var(--surface-muted);
+  --eg-accent: var(--accent);
+  --eg-accent-ink: var(--accent-strong);
+  --eg-accent-soft: var(--accent-soft);
+  --eg-green: var(--success);
+  --eg-green-soft: var(--success-soft);
+  --eg-amber: var(--warning);
+  --eg-amber-soft: var(--warning-soft);
+  --eg-shadow: var(--shadow-sm);
+  --eg-shadow-lg: var(--shadow-lg);
+  gap: 1rem;
+  color: var(--eg-text);
+  letter-spacing: -0.005em;
+}
+
+.eg-board {
+  display: grid;
+  gap: 0.875rem;
+  min-width: 0;
+}
+
+.eg-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.625rem;
+}
+
+.eg-filters {
+  display: inline-flex;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 3px;
+  background: var(--eg-tint);
+  border: 1px solid var(--eg-line);
+  border-radius: 9px;
+}
+
+.eg .eg-filters button {
+  flex: none;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 28px;
+  padding: 0 0.7rem;
+  color: var(--eg-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  box-shadow: none;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.eg .eg-filters button span {
+  color: var(--eg-faint);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.eg .eg-filters button.is-on {
+  color: var(--eg-ink);
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 10%);
+}
+
+.eg-search {
+  position: relative;
+  flex: 1 1 16rem;
+  max-width: 22rem;
+}
+
+.eg-search svg {
+  position: absolute;
+  top: 50%;
+  left: 0.7rem;
+  color: var(--eg-faint);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.eg .eg-search input[type="search"] {
+  width: 100%;
+  height: 34px;
+  padding: 0 0.75rem 0 2.1rem;
+  color: var(--eg-text);
+  background: #fff;
+  border: 1px solid var(--eg-line);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.eg .eg-search input[type="search"]:focus {
+  border-color: var(--accent-border);
+  outline: 3px solid rgb(59 91 219 / 14%);
+}
+
+.eg-empty {
+  margin: 1rem 0;
+  color: var(--eg-faint);
+  font-size: 13.5px;
+}
+
+.eg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.eg-grid li {
+  max-width: none;
+}
+
+.eg-card {
+  display: grid;
+  gap: 0.35rem;
+  height: 100%;
+  padding: 1rem 1.1rem;
+  color: var(--eg-text);
+  background: #fff;
+  border: 1px solid var(--eg-line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--eg-shadow);
+  text-decoration: none;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
+}
+
+.eg-card:hover {
+  border-color: var(--accent-border);
+  box-shadow: var(--eg-shadow-lg);
+  transform: translateY(-1px);
+}
+
+.eg-card[aria-current="true"] {
+  border-color: var(--accent-border);
+  box-shadow:
+    0 0 0 3px rgb(59 91 219 / 10%),
+    var(--eg-shadow);
+}
+
+.eg-card.is-archived {
+  background: var(--eg-tint);
+  opacity: 0.85;
+}
+
+/* A tile leads with its client, so engagements with the same name tell apart at a glance. */
+.eg-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.eg-card-top .eg-status {
+  flex: none;
+}
+
+.eg-status {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  white-space: nowrap;
+  gap: 0.35rem;
+  height: 22px;
+  padding: 0 0.55rem;
+  color: var(--eg-muted);
+  background: var(--eg-tint);
+  border: 1px solid var(--eg-line);
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.eg-status::before {
+  width: 6px;
+  height: 6px;
+  background: var(--eg-faint);
+  border-radius: 50%;
+  content: "";
+}
+
+.eg-status.is-active {
+  color: var(--eg-green);
+  background: var(--eg-green-soft);
+  border-color: #c9eed7;
+}
+
+.eg-status.is-active::before {
+  background: var(--eg-green);
+}
+
+.eg-status.is-draft {
+  color: var(--eg-accent-ink);
+  background: var(--eg-accent-soft);
+  border-color: var(--accent-border);
+}
+
+.eg-status.is-draft::before {
+  background: var(--eg-accent);
+}
+
+.eg-status.is-paused {
+  color: var(--eg-amber);
+  background: var(--eg-amber-soft);
+  border-color: #f6dfb4;
+}
+
+.eg-status.is-paused::before {
+  background: #e08a00;
+}
+
+.eg-name {
+  overflow: hidden;
+  color: var(--eg-ink);
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.eg-client {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--eg-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eg-client.is-unset,
+.eg-row-client.is-unset {
+  color: var(--eg-faint);
+  font-style: italic;
+  font-weight: 400;
+}
+
+.eg-facts {
+  display: grid;
+  gap: 0.25rem;
+  margin-top: 0.5rem;
+  color: var(--eg-muted);
+  font-size: 12.5px;
+}
+
+.eg-facts > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.eg-facts svg {
+  color: var(--eg-faint);
+}
+
+.eg-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin-top: 0.65rem;
+  padding-top: 0.65rem;
+  color: var(--eg-muted);
+  border-top: 1px solid var(--eg-line-soft);
+  font-size: 12px;
+}
+
+.eg-foot strong {
+  color: var(--eg-ink);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.eg-foot .is-warn strong {
+  color: var(--eg-amber);
+}
+
+.eg-foot > svg {
+  margin-left: auto;
+  color: #c3c8d2;
+}
+
+.eg-card:hover .eg-foot > svg {
+  color: var(--eg-accent);
+}
+
+.eg .eg-card-plain {
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Tiles or a list (milestone 8.15), and the completed status (8.14). */
+.eg-status.is-completed {
+  color: var(--info);
+  background: var(--info-soft);
+  border-color: var(--info-border);
+}
+
+.eg-status.is-completed::before {
+  background: var(--info);
+}
+
+.eg-layout-switch {
+  display: inline-flex;
+  min-width: 0;
+  margin: 0 0 0 auto;
+  padding: 3px;
+  background: var(--eg-tint);
+  border: 1px solid var(--eg-line);
+  border-radius: 9px;
+}
+
+.eg .eg-layout-switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 28px;
+  padding: 0 0.7rem;
+  color: var(--eg-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  box-shadow: none;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.eg .eg-layout-switch button.is-on {
+  color: var(--eg-ink);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(16 24 40 / 10%);
+}
+
+.eg-list {
+  container-type: inline-size;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--eg-line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--eg-shadow);
+}
+
+.eg-list ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.eg-list-head,
+.eg-row {
+  display: grid;
+  grid-template-columns:
+    minmax(7rem, 1.3fr) minmax(8rem, 1.6fr) 6.5rem 6.75rem
+    minmax(6rem, 1.2fr) 4.5rem 4.5rem;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 1rem;
+}
+
+.eg-list-head {
+  color: var(--eg-faint);
+  background: var(--eg-tint);
+  border-bottom: 1px solid var(--eg-line);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.eg-list .eg-list-head span:nth-child(n + 6) {
+  text-align: right;
+}
+
+.eg-row {
+  color: var(--eg-text);
+  font-size: 13px;
+  text-decoration: none;
+  border-bottom: 1px solid var(--eg-line-soft);
+}
+
+.eg-list li:last-child .eg-row {
+  border-bottom: 0;
+}
+
+.eg-row:hover {
+  background: var(--surface-hover);
+}
+
+.eg-row[aria-current="true"] {
+  background: var(--eg-accent-soft);
+  box-shadow: inset 3px 0 0 var(--eg-accent);
+}
+
+.eg-row:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--eg-accent);
+}
+
+.eg-row-client,
+.eg-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eg-row-client {
+  color: var(--eg-ink);
+  font-weight: 620;
+}
+
+.eg-row-name {
+  color: var(--eg-text);
+}
+
+.eg-row-cell {
+  overflow: hidden;
+  color: var(--eg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eg-row .eg-num {
+  color: var(--eg-ink);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.eg-row .eg-num.is-warn {
+  color: var(--eg-amber);
+  font-weight: 620;
+}
+
+@media (max-width: 760px) {
+  .eg-layout-switch {
+    margin-left: 0;
+  }
+}
+
+/* Where the list is narrow, each row is a small stack, its labels beside the values. */
+@container (max-width: 600px) {
+  .eg-list-head {
+    display: none;
+  }
+
+  .eg-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.35rem 0.75rem;
+  }
+
+  /* The client and its status on top, the engagement under them. */
+  .eg-row .eg-row-client {
+    grid-row: 1;
+    grid-column: 1;
+  }
+
+  .eg-row > :nth-child(3) {
+    grid-row: 1;
+    grid-column: 2;
+  }
+
+  .eg-row .eg-row-name {
+    grid-row: 2;
+    grid-column: 1 / -1;
+  }
+
+  .eg-row-cell {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    font-size: 12.5px;
+  }
+
+  .eg-row-cell::before {
+    color: var(--eg-faint);
+    content: attr(data-label);
+  }
+
+  .eg-row .eg-num {
+    text-align: right;
+  }
+}
+
+/* Engagements or clients (milestone 8.18): two views of one page. */
+.eg-views {
+  display: flex;
+  gap: 1.5rem;
+  border-bottom: 1px solid var(--eg-line);
+}
+
+.eg-views a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: -1px;
+  padding: 0.25rem 0 0.7rem;
+  color: var(--eg-muted);
+  border-bottom: 2px solid transparent;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.eg-views a:hover {
+  color: var(--eg-ink);
+}
+
+.eg-views a[aria-current="page"] {
+  color: var(--eg-ink);
+  border-bottom-color: var(--eg-accent);
+}
+
+.eg-views a span {
+  padding: 0 0.45rem;
+  color: var(--eg-muted);
+  background: var(--eg-tint);
+  border: 1px solid var(--eg-line-soft);
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.55;
+}
+
+.eg-views a[aria-current="page"] span {
+  color: var(--eg-accent-ink);
+  background: var(--eg-accent-soft);
+  border-color: var(--accent-border);
+}
+
+/* The clients table: the client, its latest engagement, and its actions. */
+.eg-clients .eg-list-head,
+.eg-client-row {
+  display: grid;
+  grid-template-columns:
+    minmax(9rem, 1.4fr) minmax(9rem, 1.6fr) 6.5rem 6.75rem
+    13.5rem;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+}
+
+.eg-client-row {
+  font-size: 13px;
+  border-bottom: 1px solid var(--eg-line-soft);
+}
+
+.eg-list li:last-child.eg-client-row {
+  border-bottom: 0;
+}
+
+.eg-client-name {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.eg-client-name strong {
+  overflow: hidden;
+  color: var(--eg-ink);
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eg-client-name small {
+  color: var(--eg-faint);
+  font-size: 12px;
+}
+
+.eg-client-row .eg-row-cell a {
+  color: var(--eg-ink);
+  text-decoration: none;
+}
+
+.eg-client-row .eg-row-cell a:hover {
+  color: var(--eg-accent-ink);
+  text-decoration: underline;
+}
+
+.eg-none {
+  color: var(--eg-faint);
+}
+
+.eg-client-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.375rem;
+}
+
+.eg-client-actions form {
+  margin: 0;
+}
+
+/* A narrow clients table stacks each client, its labels beside the values. */
+@container (max-width: 600px) {
+  .eg-clients .eg-list-head {
+    display: none;
+  }
+
+  .eg-client-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.35rem;
+  }
+
+  .eg-client-row .eg-client-actions {
+    justify-content: flex-start;
+    margin-top: 0.25rem;
+  }
+}
+
+/* Where the list is narrower, agent work gives way (tiles keep it). */
+@container (min-width: 601px) and (max-width: 860px) {
+  .eg-list:not(.eg-clients) .eg-list-head,
+  .eg-list:not(.eg-clients) .eg-row {
+    grid-template-columns:
+      minmax(6rem, 1.2fr) minmax(7rem, 1.5fr) 6rem 6.5rem
+      4.5rem 4.5rem;
+  }
+
+  .eg-list:not(.eg-clients) .eg-list-head span:nth-child(5),
+  .eg-list:not(.eg-clients) .eg-row > :nth-child(5) {
+    display: none;
+  }
+}
+
+/* A card says where the work stands: the agents' progress, what needs someone, and when
+   anything last happened. Its menu sits in the corner, outside the card's link. */
+.eg-tile,
+.eg-row-item {
+  position: relative;
+}
+
+.eg-tile:has(.eg-menu.is-open),
+.eg-row-item:has(.eg-menu.is-open) {
+  z-index: 5;
+}
+
+.eg-tile .eg-card-top {
+  padding-right: 4rem;
+}
+
+.eg-progress {
+  display: grid;
+  gap: 0.3rem;
+  margin-top: 0.6rem;
+}
+
+.eg-progress-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: var(--eg-muted);
+  font-size: 12px;
+}
+
+.eg-progress-line > span:last-child {
+  color: var(--eg-ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.eg-progress-bar {
+  display: block;
+  height: 5px;
+  overflow: hidden;
+  background: var(--eg-tint);
+  border-radius: 999px;
+}
+
+.eg-progress-bar > span {
+  display: block;
+  height: 100%;
+  min-width: 0;
+  background: var(--eg-accent);
+  border-radius: inherit;
+}
+
+.eg-signals {
+  display: grid;
+  gap: 0.2rem;
+  margin-top: 0.35rem;
+  color: var(--eg-muted);
+  font-size: 12px;
+}
+
+.eg-signals > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.eg-signals svg {
+  flex: none;
+  color: var(--eg-faint);
+}
+
+.eg-signals .is-warn {
+  color: var(--eg-amber);
+  font-weight: 600;
+}
+
+.eg-signals .is-warn svg {
+  color: var(--eg-amber);
+}
+
+.eg-card {
+  align-content: start;
+}
+
+.eg-foot {
+  flex-wrap: wrap;
+  row-gap: 0.25rem;
+}
+
+.eg-updated {
+  margin-left: auto;
+  color: var(--eg-faint);
+  white-space: nowrap;
+}
+
+.eg-menu {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.6rem;
+}
+
+.eg-row-item .eg-menu {
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.eg .eg-menu-button {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--eg-faint);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.eg .eg-menu-button:hover,
+.eg .eg-menu.is-open .eg-menu-button {
+  color: var(--eg-ink);
+  background: var(--surface-hover);
+  border-color: var(--eg-line);
+}
+
+.eg .eg-menu-button:focus-visible {
+  outline: 2px solid var(--eg-accent);
+  outline-offset: 1px;
+}
+
+.eg-menu-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  display: grid;
+  width: max-content;
+  min-width: 15rem;
+  max-width: min(20rem, calc(100vw - 2rem));
+  padding: 0.3rem;
+  background: var(--surface);
+  border: 1px solid var(--eg-line);
+  border-radius: 10px;
+  box-shadow: var(--eg-shadow-lg);
+}
+
+.eg-menu-list a {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0.5rem 0.6rem;
+  overflow: hidden;
+  color: var(--eg-text);
+  border-radius: 6px;
+  font-size: 13px;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eg-menu-list a svg {
+  flex: none;
+  color: var(--eg-faint);
+}
+
+.eg-menu-list a:hover,
+.eg-menu-list a:focus-visible {
+  color: var(--eg-ink);
+  background: var(--surface-hover);
+  outline: none;
+}
+
+/* The list keeps room at the end of each row for its star and menu. */
+.eg-list:not(.eg-clients) .eg-list-head,
+.eg-list:not(.eg-clients) .eg-row {
+  padding-right: 5rem;
+}
+
+/* Starred and Recent sit in the status group, after a thin divider. */
+.eg-filters-gap {
+  align-self: center;
+  width: 1px;
+  height: 16px;
+  margin: 0 0.3rem;
+  background: var(--eg-line);
+}
+
+.eg .eg-filters button svg {
+  color: var(--eg-faint);
+}
+
+.eg .eg-filters button.is-on svg {
+  color: var(--eg-ink);
+}
+
+.eg .eg-filters button.eg-starred.is-on svg {
+  color: #d99a06;
+  fill: currentColor;
+}
+
+.eg .eg-star {
+  position: absolute;
+  top: 0.75rem;
+  right: 2.45rem;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--eg-faint);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.eg-row-item .eg-star {
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.eg .eg-star:hover {
+  color: var(--eg-ink);
+  background: var(--surface-hover);
+  border-color: var(--eg-line);
+}
+
+.eg .eg-star.is-on {
+  color: #d99a06;
+}
+
+.eg .eg-star.is-on svg {
+  fill: currentColor;
+}
+
+.eg .eg-star:focus-visible {
+  outline: 2px solid var(--eg-accent);
+  outline-offset: 1px;
+}
+
+/* Status and close-out, opened from a card's menu over the page. */
+.eg-manage {
+  display: grid;
+  gap: 1rem;
+}
+
+.eg-manage-open {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 0.35rem;
+  color: var(--eg-accent-ink, var(--accent-strong));
+  font-size: 13.5px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.eg-manage-open:hover {
+  text-decoration: underline;
+}
+
+.eg-menu-list a > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

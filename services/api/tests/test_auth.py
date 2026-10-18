@@ -158,9 +158,19 @@ def test_email_already_linked_to_another_subject_is_rejected(migrated: Database)
         with transaction(connection) as cursor:
             cursor.execute(
                 """
-                INSERT INTO users (email, display_name, oidc_subject)
-                VALUES ('owner@example.com', 'Owner', 'other-subject')
+                INSERT INTO users (email, display_name)
+                VALUES ('owner@example.com', 'Owner')
+                RETURNING id
                 """
+            )
+            user = cursor.fetchone()
+            assert user is not None
+            cursor.execute(
+                """
+                INSERT INTO user_identities (user_id, issuer, subject)
+                VALUES (%s, 'entra', 'other-subject')
+                """,
+                (user[0],),
             )
     client = TestClient(_app(migrated))
     client.get("/auth/login", follow_redirects=False)
@@ -183,7 +193,7 @@ def test_entra_provider_drops_tokens_and_uses_the_tenant_host() -> None:
         raise AssertionError("pkce verifier appeared in the authorization url")
     assert "login.microsoftonline.com" in started.authorization_url
     identity = provider.complete(flow=started.flow, callback={"code": "good", "state": "abc"})
-    assert identity == Identity(subject="subject-1", email="owner@example.com")
+    assert identity == Identity(subject="subject-1", email="owner@example.com", issuer="entra")
     assert not hasattr(identity, "access_token")
 
 

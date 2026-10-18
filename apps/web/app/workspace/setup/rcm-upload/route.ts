@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-
+import { browserUrl } from "../../../../src/browser-url";
 import { apiBaseUrl, sessionToken } from "../../../../src/load-workspace";
 import {
   rcmUploadNoticeFor,
@@ -51,7 +51,7 @@ function redirect(
   fields: Record<string, string>,
   notice: string,
 ) {
-  const destination = new URL("/", request.url);
+  const destination = browserUrl("/", request);
   destination.searchParams.set("section", "setup");
   const organizationId = fields.organization_id ?? "";
   const projectId = fields.project_id ?? "";

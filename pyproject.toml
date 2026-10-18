@@ -35,7 +35,7 @@ strict = true
 files = ["tests", "services/api"]
 
 [[tool.mypy.overrides]]
-module = ["msal", "msal.*", "boto3", "boto3.*", "botocore", "botocore.*", "openpyxl", "openpyxl.*", "defusedxml", "defusedxml.*"]
+module = ["msal", "msal.*", "boto3", "boto3.*", "botocore", "botocore.*", "openpyxl", "openpyxl.*", "defusedxml", "defusedxml.*", "reportlab", "reportlab.*", "docx", "docx.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

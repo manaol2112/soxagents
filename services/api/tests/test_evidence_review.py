@@ -6,9 +6,10 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from evidence_store import store_attachment
 from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
-from support import Database
+from support import Database, approve_plans_over_api
 from test_evidence_analysis import _Engine, _engines, _no_ocr, _Provider
 from test_execution import _add_project_member, _add_user
 from test_onboarding import _base as _setup_base
@@ -16,6 +17,7 @@ from test_onboarding import _complete_setup, _new_engagement
 from test_outbound import migrated
 
 from ai_workforce_api.auth import token_hash
+from ai_workforce_api.controls import LIBRARY
 from ai_workforce_api.db import connect
 from ai_workforce_api.evidence_analysis import run_analysis
 from ai_workforce_api.evidence_review import (
@@ -181,7 +183,8 @@ def test_the_tester_reviews_a_screenshot_and_a_person_signs_it_off(migrated: Dat
         ).fetchall()
     assert before == after
     assert len(provider.requests[2].images) == 1
-    assert "Configured settings meet the security policy" in provider.requests[2].prompt
+    first = next(c for c in LIBRARY if c.key == "access-authentication").test_attributes[0]
+    assert first in provider.requests[2].prompt
     review = _reviews(client, team)[0]
     assert review["status"] == "READY"
     assert review["proposed"] == "CANNOT_CONCLUDE"
@@ -425,6 +428,8 @@ def _sent_engagement_request(
         f"{setup}/plan/{plan['id']}/approve", json={"fingerprint": plan["fingerprint"]}
     )
     assert started.status_code == 200, started.text
+    # Nothing is requested before a person approves each control's evidence plan.
+    approve_plans_over_api(client, team["org"], team["project"])
     thread = f"thread-{uuid4().hex[:8]}"
     with connect(database.url) as connection:
         row = connection.execute(
@@ -432,7 +437,7 @@ def _sent_engagement_request(
             UPDATE pbc_requests r SET status = 'SENT', thread_id = %s, outbound_message_id = %s
             FROM engagement_controls c
             WHERE c.id = r.engagement_control_id AND r.project_id = %s
-              AND c.control_ref = %s
+              AND c.control_ref = %s AND r.testing_phase = 'INTERIM'
             RETURNING r.id, r.recipient, r.thread_id
             """,
             (thread, f"msg-{thread}", team["project"], control_ref),
@@ -475,12 +480,9 @@ def _store_screenshot(
     )
     assert reply.status_code == 200, reply.text
     assert reply.json()["match_status"] == "MATCHED"
-    stored = client.post(
-        f"{base}/mailbox-attachments/{reply.json()['attachments'][0]['id']}/content",
-        content=content,
-        headers={"content-type": "application/octet-stream"},
+    store_attachment(
+        client, team["org"], team["project"], reply.json()["attachments"][0]["id"], content
     )
-    assert stored.status_code == 200, stored.text
     analyses = client.get(f"{base}/evidence-analyses").json()
     return UUID(analyses[0]["id"])
 

@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-
+import { browserUrl } from "../../../src/browser-url";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 import { inboundNoticeFor, inboundWrite } from "../../../src/workflow-model";
 
@@ -46,7 +46,7 @@ function redirectNotice(
   fields: Record<string, string>,
   notice: string,
 ) {
-  const destination = new URL("/", request.url);
+  const destination = browserUrl("/", request);
   destination.searchParams.set("section", "evidence");
   const organizationId = fields.organization_id ?? "";
   const projectId = fields.project_id ?? "";
@@ -57,6 +57,7 @@ function redirectNotice(
     destination.searchParams.set("project", projectId);
   }
   destination.searchParams.set("notice", notice);
+  destination.searchParams.set("tab", "mailbox");
   destination.hash = "replies";
   return NextResponse.redirect(destination, 303);
 }

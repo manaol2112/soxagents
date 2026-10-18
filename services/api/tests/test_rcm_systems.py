@@ -246,12 +246,14 @@ def test_systems_are_found_confirmed_and_imported_as_in_scope_applications(
         "Active Directory",
         "Microsoft SQL Server",
     }
-    controls = {
-        control["control_ref"]: set(control["application_ids"]) for control in body["controls"]
-    }
-    assert controls["AC 1.01"] == {apps["SAP ECC 6.0 (production)"], apps["ServiceNow"]}
-    assert controls["AC 1.02"] == {apps["SAP ECC 6.0 (production)"], apps["Active Directory"]}
-    assert controls["OP 3.01"] == {apps["Microsoft SQL Server"]}
+    # Each control is one instance per confirmed system (Milestone 8.5).
+    controls: dict[str, set[str]] = {}
+    for control in body["controls"]:
+        assert control["application_ids"] == [control["application_id"]]
+        controls.setdefault(control["control_ref"], set()).add(control["application_name"])
+    assert controls["AC 1.01"] == {"SAP ECC 6.0 (production)", "ServiceNow"}
+    assert controls["AC 1.02"] == {"SAP ECC 6.0 (production)", "Active Directory"}
+    assert controls["OP 3.01"] == {"Microsoft SQL Server"}
     with connect(migrated.url) as connection:
         layer = connection.execute(
             "SELECT layer FROM engagement_applications WHERE project_id = %s AND name = %s",

@@ -176,6 +176,15 @@ describe("test plan model", () => {
 
   it("maps results to notices", () => {
     assert.equal(testNoticeFor("propose", 200), "samples-proposed");
+    // A 409 says why: the plan changed, or the control is not ready for testing.
+    assert.equal(
+      testNoticeFor("approve", 409, "control not ready"),
+      "test-not-ready",
+    );
+    assert.equal(
+      testNoticeFor("approve", 409, "test plan changed"),
+      "test-changed",
+    );
     assert.equal(testNoticeFor("replace", 200), "sample-replaced");
     assert.equal(testNoticeFor("approve", 200), "samples-approved");
     assert.equal(testNoticeFor("approve", 409), "test-changed");

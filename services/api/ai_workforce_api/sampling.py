@@ -50,6 +50,8 @@ class Frame:
     # Indexes into table.rows, in file order.
     rows: tuple[int, ...]
     excluded: int
+    # The last instance date in the frame, so a roll-forward starts after it.
+    covered_to: date | None = None
 
 
 def period_bounds(period_end: date) -> tuple[date, date]:
@@ -125,8 +127,12 @@ def build_frame(
     *,
     key: int | None = None,
     when: int | None = None,
+    window: tuple[date, date] | None = None,
 ) -> Frame:
-    """Check the population and decide which rows can be sampled."""
+    """Check the population and decide which rows can be sampled.
+
+    A roll-forward or retest round samples only inside its window, not the whole year.
+    """
     key = key_column(table) if key is None else key
     when = date_column(table) if when is None else when
     checks: list[PopulationCheck] = []
@@ -134,7 +140,7 @@ def build_frame(
     if count == 0:
         checks.append(PopulationCheck("rows", "ISSUE", "The population has no data rows."))
         return Frame(key, when, tuple(checks), (), 0)
-    expected = EXPECTED_OCCURRENCES.get(frequency)
+    expected = None if window is not None else EXPECTED_OCCURRENCES.get(frequency)
     if expected is not None and count < expected:
         checks.append(
             PopulationCheck(
@@ -193,10 +199,10 @@ def build_frame(
                 "is in the sampling frame.",
             )
         )
-    elif period_end is None:
+    elif period_end is None and window is None:
         checks.append(PopulationCheck("period", "INFO", "The engagement has no period end yet."))
     else:
-        start, end = period_bounds(period_end)
+        start, end = window if window is not None else period_bounds(period_end)  # type: ignore[arg-type]
         dates = [parse_date(row[when]) for row in table.rows]
         unreadable = sum(1 for value in dates if value is None)
         outside = [
@@ -221,6 +227,9 @@ def build_frame(
         checks.append(PopulationCheck("period", result, detail))
         frame = inside
         excluded = count - len(inside)
+        kept = [value for value in dates if value is not None and start <= value <= end]
+        covered = max(kept) if kept else None
+        return Frame(key, when, tuple(checks), tuple(frame), excluded, covered)
     return Frame(key, when, tuple(checks), tuple(frame), excluded)
 
 

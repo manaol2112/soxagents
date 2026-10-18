@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from support import Database
+from support import Database, approve_plans_over_api
 from test_execution import _add_project_member, _add_user
 from test_onboarding import _base, _complete_setup, _new_engagement
 from test_outbound import migrated
@@ -73,6 +73,11 @@ def _valid_output(kind: str = "population") -> dict[str, Any]:
                 "kind": "walkthrough",
                 "title": "Walkthrough of one new user",
                 "detail": "The request, approval, and SAP change document for one user.",
+            },
+            {
+                "kind": "other",
+                "title": "How the user export was produced",
+                "detail": "The SAP report name, its selection criteria, and the row count shown.",
             },
         ],
         "questions": ["Are any users created outside SAP?"],
@@ -185,17 +190,20 @@ def test_the_request_text_fits_the_email() -> None:
         completeness="c" * 500,
     )
     huge = DraftContent(summary="s" * 500, items=[long_item] * 8, questions=["q" * 200] * 5)
-    shortened = render(huge)
-    assert len(shortened) <= MAX_DESCRIPTION
-    # Whole items only, never one cut mid-sentence, and a pointer to the full request.
-    assert shortened.endswith("The full request is in the audit platform.")
-    assert shortened.count("x" * 900) == shortened.count("A very long item")
+    whole = render(huge)
+    assert len(whole) <= MAX_DESCRIPTION
+    # Every item whole, with its fields and completeness: a request is never shortened.
+    # An email too short for it carries a summary instead (test_request_wording.py).
+    assert whole.count("x" * 900) == whole.count("A very long item") == 8
+    assert whole.count("Completeness: " + "c" * 500) == 8
+    assert "shortened" not in whole
 
 
 def test_the_model_sees_the_length_limits() -> None:
     item = DRAFT_SCHEMA["properties"]["items"]
-    assert item["maxItems"] == 8
-    assert item["items"]["properties"]["detail"]["maxLength"] == 900
+    # One item per planned requirement, at the requirement's own length.
+    assert item["maxItems"] == 14
+    assert item["items"]["properties"]["detail"]["maxLength"] == 1500
     assert DRAFT_SCHEMA["properties"]["summary"]["maxLength"] == 500
 
 
@@ -211,11 +219,23 @@ def test_kickoff_queues_a_draft_per_request_and_hands_them_to_the_background(
         drafts = connection.execute(
             "SELECT id, status FROM pbc_drafts WHERE project_id = %s", (team["project"],)
         ).fetchall()
-    assert len(drafts) == 16
+        phases = connection.execute(
+            """
+            SELECT c.control_ref, array_agg(r.testing_phase ORDER BY r.testing_phase)
+            FROM pbc_requests r JOIN engagement_controls c ON c.id = r.engagement_control_id
+            WHERE r.project_id = %s GROUP BY c.control_ref
+            """,
+            (team["project"],),
+        ).fetchall()
+    # Nineteen controls, each with its own design request and interim request. The
+    # roll-forward waits for interim testing, so kickoff requests none.
+    assert len(phases) == 19
+    assert {tuple(row[1]) for row in phases} == {("DESIGN", "INTERIM")}
+    assert len(drafts) == 38
     assert {row[1] for row in drafts} == {"PENDING"}
     assert sorted(scheduler.scheduled) == sorted(row[0] for row in drafts)
     summary = owner.get(base).json()["drafting"]
-    assert summary == {"total": 16, "pending": 16, "drafted": 0, "by_model": 0, "failed": 0}
+    assert summary == {"total": 38, "pending": 38, "drafted": 0, "by_model": 0, "failed": 0}
 
 
 def test_the_rules_draft_rewrites_the_request_once(migrated: Database) -> None:
@@ -231,7 +251,9 @@ def test_the_rules_draft_rewrites_the_request_once(migrated: Database) -> None:
             "SELECT payload FROM audit_events WHERE action = 'pbc.drafted' AND target_id = %s",
             (request_id,),
         ).fetchone()
-    assert row is not None and "Population of" in str(row[0])
+    # The interim request asks for the population, worded from the evidence plan.
+    assert row is not None and "our interim testing" in str(row[0])
+    assert "Every access grant or change in the window" in str(row[0])
     assert audit is not None and audit[0]["source"] == "RULES"
     listed = owner.get(f"{_project(team)}/pbc-drafts").json()
     drafted = next(item for item in listed if item["id"] == str(draft_id))
@@ -239,6 +261,41 @@ def test_the_rules_draft_rewrites_the_request_once(migrated: Database) -> None:
     assert drafted["source"] == "RULES"
     assert drafted["note"] == "No model is configured."
     assert drafted["content"]["items"][0]["kind"] == "population"
+
+
+def test_the_design_request_asks_for_design_evidence_and_no_population(
+    migrated: Database,
+) -> None:
+    team, _owner, _base_path = _started(migrated, "design", RecordingScheduler())
+    draft_id, request_id = _first_draft(migrated, team["project"], "DESIGN")
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, None, draft_id) == "DRAFTED"
+        text = connection.execute(
+            "SELECT evidence_description FROM pbc_requests WHERE id = %s", (request_id,)
+        ).fetchone()
+        content = connection.execute(
+            "SELECT content FROM pbc_drafts WHERE id = %s", (draft_id,)
+        ).fetchone()
+    assert text is not None and "how the control is designed" in str(text[0])
+    assert content is not None
+    kinds = [item["kind"] for item in content[0]["items"]]
+    assert "population" not in kinds
+    assert {"policy", "walkthrough"} <= set(kinds)
+    # A model draft that slips a population into the design request is rejected.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE pbc_drafts SET status = 'PENDING', source = NULL, content = NULL, "
+            "attempts = 0 WHERE id = %s",
+            (draft_id,),
+        )
+        assert run_draft(connection, FakeProvider(_valid_output()), draft_id) == "DRAFTED"
+        note = connection.execute(
+            "SELECT source, note FROM pbc_drafts WHERE id = %s", (draft_id,)
+        ).fetchone()
+    assert note == (
+        "RULES",
+        "Model draft rejected: draft asks for a population in a design request.",
+    )
 
 
 def test_a_model_draft_is_used_when_it_passes_the_checks(migrated: Database) -> None:
@@ -369,18 +426,23 @@ def _started(
         f"{base}/plan/{plan['id']}/approve", json={"fingerprint": plan["fingerprint"]}
     )
     assert started.status_code == 200, started.text
+    # Nothing is requested before a person approves each control's evidence plan.
+    approve_plans_over_api(owner, team["org"], team["project"])
     return team, owner, base
 
 
-def _first_draft(database: Database, project: UUID) -> tuple[UUID, UUID]:
+def _first_draft(database: Database, project: UUID, phase: str = "INTERIM") -> tuple[UUID, UUID]:
+    """ITGC-AC-01's draft for one testing phase: kickoff requests design and interim
+    evidence separately."""
     with connect(database.url) as connection:
         row = connection.execute(
             """
             SELECT d.id, d.pbc_request_id FROM pbc_drafts d
             JOIN engagement_controls c ON c.id = d.engagement_control_id
-            WHERE d.project_id = %s AND c.control_ref = 'ITGC-AC-01'
+            JOIN pbc_requests r ON r.id = d.pbc_request_id
+            WHERE d.project_id = %s AND c.control_ref = 'ITGC-AC-01' AND r.testing_phase = %s
             """,
-            (project,),
+            (project, phase),
         ).fetchone()
     assert row is not None
     return row[0], row[1]
@@ -510,3 +572,18 @@ def test_the_local_worker_runs_drafts_off_the_request_thread() -> None:
     scheduler.shutdown()
     assert seen[0][0] == draft_id
     assert seen[0][1].startswith("pbc-draft")
+
+
+def test_the_local_worker_runs_as_many_jobs_at_once_as_configured() -> None:
+    from ai_workforce_api.pbc_drafting import LocalDraftScheduler
+
+    scheduler = LocalDraftScheduler(Settings(database_url="", local_worker_threads=3))
+    try:
+        assert scheduler.workers == 3
+    finally:
+        scheduler.shutdown()
+    default = LocalDraftScheduler(Settings(database_url=""))
+    try:
+        assert default.workers == 6
+    finally:
+        default.shutdown()

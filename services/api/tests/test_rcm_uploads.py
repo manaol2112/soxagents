@@ -2,9 +2,9 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
-from support import Database
+from support import Database, approve_evidence_plans
 from test_execution import _add_project_member, _add_user
-from test_onboarding import _base, _new_engagement, _pbc
+from test_onboarding import _base, _choose_methodology, _new_engagement, _pbc
 from test_outbound import _session, migrated
 
 from ai_workforce_api.db import connect
@@ -90,17 +90,28 @@ def test_a_client_rcm_is_uploaded_mapped_and_imported_as_the_engagement_rcm(
     assert change["agent_key"] == "itgc-change-tester"
     assert change["custom_fields"] == [{"label": "Region", "value": "Global"}]
     assert change["source"] == "UPLOAD"
-    assert controls["OP/3.01"]["effectiveness_template_key"] == "oe-automated"
+    assert controls["OP/3.01"]["template_key"] == "itgc"
     apps = {app["name"]: app["id"] for app in body["applications"]}
     assert set(apps) == {"SAP ERP", "Workday"}
-    assert set(controls["AC 1.02"]["application_ids"]) == set(apps.values())
+    # A control over two systems is two instances, one per application (Milestone 8.5).
+    instances = {
+        (control["control_ref"], control["application_name"], control["label"])
+        for control in body["controls"]
+        if control["control_ref"] == "AC 1.02"
+    }
+    assert instances == {
+        ("AC 1.02", "SAP ERP", "AC 1.02 · SAP ERP"),
+        ("AC 1.02", "Workday", "AC 1.02 · Workday"),
+    }
 
     # The client's terms and extra columns reach the workpaper.
     preview = owner.get(
         f"{base}/workpaper-preview",
-        params={"template": "oe-manual", "control_id": change["id"]},
+        params={"template": "itgc", "control_id": change["id"]},
     ).json()
-    header = {field["label"]: field["value"] for field in preview["sections"][0]["fields"]}
+    header = {
+        field["label"]: field["value"] for field in preview["tabs"][0]["sections"][0]["fields"]
+    }
     assert header["Frequency"] == "Ad hoc (Quarterly)"
     assert header["Region"] == "Global"
 
@@ -116,11 +127,14 @@ def test_a_client_rcm_is_uploaded_mapped_and_imported_as_the_engagement_rcm(
     # The uploaded RCM starts an engagement like the library does.
     _finish_setup(owner, team)
     plan = owner.post(f"{base}/plan").json()["plan"]
-    assert len(plan["items"]) == 4 * 4 + 1
+    # Four controls, one of them on two systems: five instances (Milestone 8.5).
+    assert len(plan["items"]) == 5 * 4 + 1
     started = owner.post(
         f"{base}/plan/{plan['id']}/approve", json={"fingerprint": plan["fingerprint"]}
     )
     assert started.status_code == 200, started.text
+    # Nothing is requested before a person approves each control's evidence plan.
+    approve_evidence_plans(migrated, project)
     with connect(migrated.url) as connection:
         refs = connection.execute(
             "SELECT control_ref FROM pbc_requests WHERE project_id = %s ORDER BY control_ref",
@@ -133,11 +147,18 @@ def test_a_client_rcm_is_uploaded_mapped_and_imported_as_the_engagement_rcm(
             """,
             (project,),
         ).fetchone()
-    assert [row[0] for row in refs] == ["AC-1.01", "AC-1.02", "CM-2.01", "OP/3.01"]
+    # A design request and an interim request per instance: AC 1.02 asks each of its two
+    # systems' owners.
+    assert [row[0] for row in refs] == [
+        ref
+        for ref in ("AC-1.01", "AC-1.02", "AC-1.02", "CM-2.01", "OP/3.01")
+        for _phase in ("DESIGN", "INTERIM")
+    ]
     assert audit is not None
     # No scan ran, so the systems came from the systems column.
     assert audit[0] == {
         "controls": 4,
+        "mode": "REPLACE",
         "skipped_rows": 1,
         "new_applications": 2,
         "systems_source": None,
@@ -217,22 +238,28 @@ def test_the_library_and_an_upload_replace_each_other_until_kickoff(migrated: Da
     team = _new_engagement(migrated, "switch")
     owner, org, project = team["owner"], team["org"], team["project"]
     base = _base(org, project)
-    assert len(owner.post(f"{base}/controls/load-library").json()["controls"]) == 16
+    # The library needs an in-scope system first; the upload names the same one.
+    assert owner.post(f"{base}/applications", json={"name": "SAP ERP"}).status_code == 200
+    assert len(owner.post(f"{base}/controls/load-library").json()["controls"]) == 19
     uploaded = _upload(owner, base, CLIENT_RCM)
-    assert uploaded["replaces"] == 16
+    assert uploaded["replaces"] == 19
     body = owner.post(
         f"{base}/rcm/uploads/{uploaded['id']}/import", json={"version": uploaded["version"]}
     ).json()
-    assert len(body["controls"]) == 4
+    # Four controls; AC 1.02 runs on SAP ERP and Workday, so it is two instances.
+    assert len(body["controls"]) == 5
+    assert len({c["control_ref"] for c in body["controls"]}) == 4
     assert body["settings"]["templates_confirmed_at"] is None
     back = owner.post(f"{base}/controls/load-library").json()
     assert back["rcm_source"] == "LIBRARY"
-    assert len(back["controls"]) == 16
+    # The two systems the upload added stay: each library control is two instances.
+    assert len(back["controls"]) == 38
+    assert len({c["control_ref"] for c in back["controls"]}) == 19
     second = _upload(owner, base, CLIENT_RCM)
     discarded = owner.post(f"{base}/rcm/uploads/{second['id']}/discard")
     assert discarded.status_code == 200
     assert discarded.json()["open_import_id"] is None
-    assert len(discarded.json()["controls"]) == 16
+    assert len(discarded.json()["controls"]) == 38
     closed = owner.post(
         f"{base}/rcm/uploads/{second['id']}/import", json={"version": second["version"] + 1}
     )
@@ -306,6 +333,107 @@ def test_a_client_control_id_becomes_a_valid_pbc_reference() -> None:
 # Helpers
 
 
+# An RCM whose area is a category and a process, and whose "Nature" is the control type.
+CATEGORISED_RCM = (
+    "Control ID,Control Category,Process,Control Description,Nature,Type,Frequency,"
+    "Key Control,System(s)\n"
+    "BP-01,Business Process,Order-to-Cash / Revenue,Revenue is recorded in the right period.,"
+    "Detective,IT-Dependent Manual,Monthly,Y,Salesforce\n"
+    "BP-02,Business Process,Hire-to-Retire / Payroll,Payroll changes are approved.,"
+    "Preventive,Manual,Monthly,Y,Workday\n"
+    "ITGC-01,ITGC,ITGC – Program Change,Changes are tested before release.,"
+    "Preventive,IT-Dependent Manual,As needed,Y,Salesforce; Workday\n"
+    "ITAC-01,IT Application Control,Order-to-Cash / Revenue,The system blocks price overrides.,"
+    "Preventive,Automated,Recurring,Y,Salesforce\n"
+)
+
+
+def test_a_category_and_a_process_column_place_each_control_in_its_area(
+    migrated: Database,
+) -> None:
+    team = _new_engagement(migrated, "categorised")
+    owner, base = team["owner"], _base(team["org"], team["project"])
+    uploaded = _upload(owner, base, CATEGORISED_RCM, file_name="Categorised RCM.csv")
+    fields = {column["header"]: column["field"] for column in uploaded["columns"]}
+    assert fields["Control Category"] == "domain" and fields["Process"] == "domain"
+    assert fields["Nature"] == "custom" and fields["Type"] == "nature"
+    assert fields["System(s)"] == "applications"
+    terms = {item["value"]: item["mapped"] for item in uploaded["values"]["domain"]}
+    assert terms == {
+        "Business Process / Order-to-Cash / Revenue": "ORDER_TO_CASH",
+        "Business Process / Hire-to-Retire / Payroll": "HIRE_TO_RETIRE",
+        "ITGC / ITGC – Program Change": "CHANGE",
+        "IT Application Control / Order-to-Cash / Revenue": "ITAC",
+    }
+    assert {item["value"] for item in uploaded["values"]["nature"]} == {
+        "IT-Dependent Manual",
+        "Manual",
+        "Automated",
+    }
+    assert uploaded["ready"] is True, uploaded["preview"]["problems"]
+    imported = owner.post(
+        f"{base}/rcm/uploads/{uploaded['id']}/import", json={"version": uploaded["version"]}
+    )
+    assert imported.status_code == 200, imported.text
+    controls = {c["control_ref"]: c for c in imported.json()["controls"]}
+    assert controls["BP-01"]["domain"] == "ORDER_TO_CASH"
+    assert controls["BP-02"]["domain"] == "HIRE_TO_RETIRE"
+    assert controls["ITGC-01"]["domain"] == "CHANGE"
+    assert controls["ITAC-01"]["domain"] == "ITAC"
+    assert controls["BP-01"]["nature"] == "IT_DEPENDENT_MANUAL"
+    assert controls["ITAC-01"]["nature"] == "AUTOMATED"
+    # The control type stays with the control as the client's own column.
+    assert {"label": "Nature", "value": "Detective"} in controls["BP-01"]["custom_fields"]
+    assert sorted(a["name"] for a in imported.json()["applications"]) == ["Salesforce", "Workday"]
+
+
+# The ITGC sheet of the same RCM: one control it shares with the first sheet, reworded.
+ITGC_RCM = (
+    "Ctrl #,Control Activity,How Often,Manual / Automated,Process,Control Owner,"
+    "Owner E-mail,Systems,Region,Assertion\n"
+    "AC 1.02,Access is reviewed every quarter by managers.,Quarterly,Manual,User Access,"
+    "Dana Ruiz,,SAP ERP; Workday,EMEA,Existence\n"
+    "AC 1.03,Privileged access is restricted to administrators.,Quarterly,Manual,"
+    "User Access,Dana Ruiz,,Workday,EMEA,Existence\n"
+    "CM 2.02,Emergency changes are approved after the fact.,Ad hoc,Manual,Program Change,"
+    "Lee Park,lee.park@client.example,Workday,Global,Accuracy\n"
+)
+
+
+def test_a_second_sheet_adds_to_the_controls_already_imported(migrated: Database) -> None:
+    team = _new_engagement(migrated, "add-sheet")
+    owner, base = team["owner"], _base(team["org"], team["project"])
+    first = _upload(owner, base, CLIENT_RCM)
+    done = owner.post(
+        f"{base}/rcm/uploads/{first['id']}/import", json={"version": first["version"]}
+    )
+    assert done.status_code == 200, done.text
+    second = _upload(owner, base, ITGC_RCM, file_name="Acme RCM ITGC.csv")
+    assert second["ready"] is True, second["preview"]["problems"]
+    assert second["replaces"] > 0
+    added = owner.post(
+        f"{base}/rcm/uploads/{second['id']}/import",
+        json={"version": second["version"], "mode": "ADD"},
+    )
+    assert added.status_code == 200, added.text
+    body = added.json()
+    refs = {c["control_ref"] for c in body["controls"]}
+    assert refs == {"AC 1.01", "AC 1.02", "AC 1.03", "CM 2.01", "CM 2.02", "OP/3.01"}
+    assert all(c["source"] == "UPLOAD" for c in body["controls"])
+    # The shared control ID carries the second sheet's row.
+    reviewed = next(c for c in body["controls"] if c["control_ref"] == "AC 1.02")
+    assert reviewed["title"] == "Access is reviewed every quarter by managers."
+    assert body["rcm_source"] == "UPLOAD"
+    # The library is not offered next to the client's RCM.
+    assert body["process_offers"] == []
+    # Without a mode the next sheet replaces everything, as before.
+    third = _upload(owner, base, ITGC_RCM, file_name="Acme RCM ITGC.csv")
+    replaced = owner.post(
+        f"{base}/rcm/uploads/{third['id']}/import", json={"version": third["version"]}
+    ).json()
+    assert {c["control_ref"] for c in replaced["controls"]} == {"AC 1.02", "AC 1.03", "CM 2.02"}
+
+
 def _upload(
     client: TestClient, base: str, text: str, *, file_name: str = "Acme RCM.csv"
 ) -> dict[str, Any]:
@@ -324,5 +452,6 @@ def _finish_setup(owner: TestClient, team: dict[str, Any]) -> None:
         owner.post(f"{base}/team", json={"user_id": str(user_id), "engagement_role": role})
     assert owner.patch(f"{base}/pbc", json=_pbc()).status_code == 200
     assert owner.post(f"{base}/templates/confirm").status_code == 200
+    _choose_methodology(owner, base)
     state = owner.get(base).json()
     assert state["ready"] is True, state["readiness"]

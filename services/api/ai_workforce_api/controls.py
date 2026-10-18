@@ -9,9 +9,10 @@ covers. The copy keeps the library key and version, so the source is always know
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from typing import Literal
 
-LIBRARY_VERSION = 2
+LIBRARY_VERSION = 3
 
 # Standard areas. A client's own term for its process or area maps to one of these.
 DOMAIN_LABELS: dict[str, str] = {
@@ -33,6 +34,15 @@ DOMAIN_LABELS: dict[str, str] = {
 }
 DOMAINS = tuple(DOMAIN_LABELS)
 ITGC_DOMAINS = ("ACCESS", "CHANGE", "OPERATIONS")
+# Controls that run on a system: one instance per in-scope system (Milestone 8.5).
+SYSTEM_DOMAINS = ("ACCESS", "CHANGE", "OPERATIONS", "ITAC", "IPE")
+
+
+def runs_on_a_system(domain: str) -> bool:
+    """Business process and entity-level controls belong to a process, not a system."""
+    return domain in SYSTEM_DOMAINS
+
+
 FREQUENCIES = ("ANNUAL", "QUARTERLY", "MONTHLY", "WEEKLY", "DAILY", "RECURRING", "EVENT_DRIVEN")
 NATURES = ("MANUAL", "AUTOMATED", "IT_DEPENDENT_MANUAL")
 
@@ -1050,7 +1060,89 @@ BUSINESS_LIBRARY: tuple[LibraryControl, ...] = (
     ),
 )
 
-LIBRARY: tuple[LibraryControl, ...] = ITGC_LIBRARY + BUSINESS_LIBRARY
+# Version 2's wording, kept as written: an engagement's controls copied from version 2 are
+# compared with version 3 before a person adopts it (Milestone 8.8).
+V2_LIBRARY: tuple[LibraryControl, ...] = ITGC_LIBRARY + BUSINESS_LIBRARY
+
+
+# Controls that version 3 splits out of a combined version 2 control (milestone 8.9). The
+# original keeps its ID and main activity; each part listed here is a control of its own.
+SPLITS: dict[str, tuple[LibraryControl, ...]] = {
+    "operations-scheduling": (
+        _control(
+            "operations-scheduler-access", "ITGC-OP-02.1", "OPERATIONS",
+            "Access to change the job schedule is reviewed",
+            "People who should not change batch processing can do so.", "", "QUARTERLY",
+            "IT_DEPENDENT_MANUAL", ("",),
+            ("Listing of users able to change the job schedule, with its production date",
+             "Evidence of each quarter's review and the removals requested"),
+        ),
+    ),
+    "operations-backup": (
+        _control(
+            "operations-backup-failures", "ITGC-OP-03.1", "OPERATIONS",
+            "Failed backups are resolved",
+            "A failed backup goes unnoticed, leaving data unrecoverable.", "", "DAILY",
+            "IT_DEPENDENT_MANUAL", ("",),
+            ("Backup job history for the period", "Resolution records for failed backups"),
+        ),
+        _control(
+            "operations-restore-test", "ITGC-OP-03.2", "OPERATIONS",
+            "Restores from backup are tested",
+            "Backups exist but cannot be restored when needed.", "", "ANNUAL", "MANUAL",
+            ("",), ("Restore test record with the checks performed and the sign-off",),
+        ),
+    ),
+    "treasury-debt": (
+        _control(
+            "treasury-covenants", "TRS-03.1", "TREASURY",
+            "Debt covenants are calculated and reviewed",
+            "A covenant breach goes unidentified.", "", "QUARTERLY", "MANUAL", ("",),
+            ("Debt agreements with their covenant definitions",
+             "Quarterly covenant calculations with their sign-off"),
+        ),
+    ),
+    "fa-disposals-impairment": (
+        _control(
+            "fa-impairment", "FA-03.1", "FIXED_ASSETS",
+            "Impairment indicators are assessed",
+            "Impaired assets are carried above their recoverable amount.", "", "ANNUAL",
+            "MANUAL", ("",),
+            ("Impairment policy", "The year's impairment assessment with its sign-off"),
+        ),
+    ),
+}  # fmt: skip
+
+
+def _version_3(control: LibraryControl) -> LibraryControl:
+    """The control as version 3 states it: its statement (statement_registry), with each
+    client value shown as its label until the engagement fills it, and its definition's
+    high and moderate confidence attributes (definition_registry). Low-confidence ones are
+    proposed per engagement, not tested."""
+    from ai_workforce_api.control_statements import render
+    from ai_workforce_api.definition_registry import definition_for
+    from ai_workforce_api.statement_registry import statement_for
+
+    definition = definition_for(control.key)
+    if definition is not None:
+        control = replace(control, test_attributes=tuple(item.text for item in definition.approved))
+    statement = statement_for(control.key)
+    if statement is None:
+        return control
+    labels = {slot.key: slot.label for slot in statement.slots}
+    return replace(
+        control,
+        title=statement.title or control.title,
+        risk=statement.risk,
+        activity=render(statement.text, {}, labels),
+        frequency=statement.frequency,
+        nature=statement.nature,
+    )
+
+
+LIBRARY: tuple[LibraryControl, ...] = tuple(
+    _version_3(item) for control in V2_LIBRARY for item in (control, *SPLITS.get(control.key, ()))
+)
 
 LIBRARY_KEYS = tuple(control.key for control in LIBRARY)
 BY_KEY = {control.key: control for control in LIBRARY}
@@ -1089,7 +1181,21 @@ def sample_size(frequency: str, nature: str) -> int:
     return SAMPLE_SIZES.get(frequency, 25)
 
 
-def default_templates(nature: str) -> tuple[str, str]:
-    """Design and operating effectiveness templates for a control."""
-    effectiveness = "oe-automated" if nature == "AUTOMATED" else "oe-manual"
-    return ("design-walkthrough", effectiveness)
+Kind = Literal["ITGC", "ITAC", "BUSINESS", "KEY_REPORT"]
+KINDS: tuple[Kind, ...] = ("ITGC", "ITAC", "BUSINESS", "KEY_REPORT")
+
+
+def kind_for_domain(domain: str) -> Kind:
+    """The kind of workpaper a control's area calls for."""
+    if domain in ITGC_DOMAINS:
+        return "ITGC"
+    if domain == "ITAC":
+        return "ITAC"
+    if domain == "IPE":
+        return "KEY_REPORT"
+    return "BUSINESS"
+
+
+def kind_domains(kind: str) -> tuple[str, ...]:
+    """The areas whose controls use a kind of workpaper."""
+    return tuple(domain for domain in DOMAINS if kind_for_domain(domain) == kind)

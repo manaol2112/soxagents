@@ -202,6 +202,172 @@ class TurnRequest(TypedDict):
     message_id: str
 
 
+class TestRunRequest(TypedDict):
+    sheet_id: str
+
+
+class WorkpaperRequest(TypedDict):
+    workpaper_id: str
+
+
+@workflow.defn(name="workpaper_draft")
+class WorkpaperDraftWorkflow:
+    """The agent drafts one workpaper, with retries."""
+
+    @workflow.run
+    async def run(self, payload: WorkpaperRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "draft_workpaper",
+                args=[payload["workpaper_id"]],
+                start_to_close_timeout=timedelta(minutes=10),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_workpaper_draft",
+                args=[payload["workpaper_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
+class ReviewRequest(TypedDict):
+    review_id: str
+
+
+@workflow.defn(name="control_review")
+class ControlReviewWorkflow:
+    """The independent reviewer re-performs one control's testing, with retries."""
+
+    @workflow.run
+    async def run(self, payload: ReviewRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "reperform_review",
+                args=[payload["review_id"]],
+                start_to_close_timeout=timedelta(minutes=15),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_review",
+                args=[payload["review_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
+class SetupDraftRequest(TypedDict):
+    project_id: str
+
+
+class PlanRunRequest(TypedDict):
+    plan_id: str
+
+
+@workflow.defn(name="evidence_plan_run")
+class EvidencePlanRunWorkflow:
+    """The planner agent plans a launched control, with retries; the rules' plan stands
+    if it cannot."""
+
+    @workflow.run
+    async def run(self, payload: PlanRunRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "run_evidence_plan",
+                args=[payload["plan_id"]],
+                start_to_close_timeout=timedelta(minutes=10),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_evidence_plan_run",
+                args=[payload["plan_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
+class SystemReviewRequest(TypedDict):
+    application_id: str
+
+
+@workflow.defn(name="system_review")
+class SystemReviewWorkflow:
+    """The scoping agent reviews one in-scope system, with retries."""
+
+    @workflow.run
+    async def run(self, payload: SystemReviewRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "review_system",
+                args=[payload["application_id"]],
+                start_to_close_timeout=timedelta(minutes=10),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_system_review",
+                args=[payload["application_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
+@workflow.defn(name="setup_draft")
+class SetupDraftWorkflow:
+    """The planner drafts an engagement's setup, with retries."""
+
+    @workflow.run
+    async def run(self, payload: SetupDraftRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "draft_setup",
+                args=[payload["project_id"]],
+                start_to_close_timeout=timedelta(minutes=10),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_setup_draft",
+                args=[payload["project_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
+@workflow.defn(name="control_testing")
+class ControlTestingWorkflow:
+    """The control's tester tests a sheet's items, with retries, and again if asked."""
+
+    @workflow.run
+    async def run(self, payload: TestRunRequest) -> str:
+        for _ in range(5):
+            try:
+                result = await workflow.execute_activity(
+                    "test_control",
+                    args=[payload["sheet_id"]],
+                    start_to_close_timeout=timedelta(minutes=30),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+            except ActivityError:
+                await workflow.execute_activity(
+                    "fail_test_run",
+                    args=[payload["sheet_id"]],
+                    start_to_close_timeout=timedelta(seconds=30),
+                )
+                return "FAILED"
+            if str(result) != "AGAIN":
+                return str(result)
+        return "AGAIN"
+
+
 @workflow.defn(name="console_turn")
 class ConsoleTurnWorkflow:
     """Answers one message in the agent console, with one retry."""

@@ -52,7 +52,9 @@ def identity_from_claims(claims: object) -> Identity:
         raise IdentityError()
     if claims.get("email_verified") is False:
         raise IdentityError()
-    return Identity(subject=subject, email=email)
+    name = claims.get("name")
+    display_name = name.strip() if isinstance(name, str) and name.strip() != "" else None
+    return Identity(subject=subject, email=email, issuer="entra", display_name=display_name)
 
 
 def authority_from_issuer(issuer: str) -> str:

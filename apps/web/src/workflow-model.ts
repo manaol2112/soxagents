@@ -3,7 +3,11 @@ import type {
   EvidenceReview,
   EvidenceSettings,
 } from "./analysis-model.ts";
+import type { ConsoleInbox } from "./console-model.ts";
 import type { RequestDraft } from "./draft-model.ts";
+import type { ChangeNotice } from "./evidence-change-model.ts";
+import type { EvidenceRegister, FilingNotice } from "./evidence-model.ts";
+import type { RecipientLink } from "./portal-model.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -33,6 +37,10 @@ export type EvidenceRequest = {
   status: string;
   attachmentCount: number;
   version: number;
+  /** Received from evidence the team uploaded, without an email. */
+  providedDirectly: boolean;
+  /** The control it asks evidence for; its record opens the request for review. */
+  controlId?: string | null;
 };
 
 export type OutboundRecord = {
@@ -102,17 +110,22 @@ export type EvidenceNotice =
   | "redraft-failed"
   | "reminder-failed"
   | "reminder-closed"
+  | "reminder-open"
+  | "reminder-held"
   | "stored"
   | "mismatch"
   | "classified"
   | "reading"
   | "analysis-changed"
   | "signed-off"
-  | "review-changed";
+  | "review-changed"
+  | "links-revoked"
+  | "preview-unavailable";
 
 export type EvidenceFile = {
   id: string;
-  attachmentId: string;
+  /** The mailbox attachment it was stored from. Null for an uploaded file. */
+  attachmentId: string | null;
   contentSha256: string;
   sizeBytes: number;
   fileName: string;
@@ -183,9 +196,19 @@ export type WorkflowState = {
   operationKey: string;
   inbound: InboundReply[] | null;
   evidenceFiles: EvidenceFile[] | null;
+  evidenceRegister: EvidenceRegister | null;
+  filingNotice: FilingNotice | null;
+  /** A file withdrawn, restored, or replaced, or why it could not be. */
+  changeNotice: ChangeNotice | null;
   evidenceAnalyses: EvidenceAnalysis[] | null;
   evidenceReviews: EvidenceReview[] | null;
   evidenceSettings: EvidenceSettings | null;
+  /** The client's PBC coordinator and domains, set in the Evidence section. */
+  evidenceContacts: EvidenceContacts | null;
+  /** Who holds secure upload links on the engagement (8.12). */
+  portalLinks: RecipientLink[] | null;
+  /** What waits on the team: the same list the agent console shows. */
+  inbox: ConsoleInbox | null;
   workforce: StandardWorkforce | null;
   drafts: Map<string, RequestDraft> | null;
 };
@@ -203,9 +226,15 @@ export const EMPTY_WORKFLOW: WorkflowState = {
   operationKey: "",
   inbound: null,
   evidenceFiles: null,
+  evidenceRegister: null,
+  filingNotice: null,
+  changeNotice: null,
   evidenceAnalyses: null,
   evidenceReviews: null,
   evidenceSettings: null,
+  evidenceContacts: null,
+  portalLinks: null,
+  inbox: null,
   workforce: null,
   drafts: null,
 };
@@ -292,6 +321,11 @@ export function parseEvidence(value: unknown): EvidenceRequest[] | null {
       status: item.status,
       attachmentCount: item.attachment_refs.length,
       version: item.version,
+      providedDirectly: item.provided_directly === true,
+      controlId:
+        typeof item.engagement_control_id === "string"
+          ? item.engagement_control_id
+          : null,
     });
   }
   return items;
@@ -363,6 +397,37 @@ export function approvalRequestId(item: ApprovalItem): string | null {
   return match !== null && UUID.test(match[1] ?? "")
     ? (match[1] ?? null)
     : null;
+}
+
+/** A refused send that a newer approval replaced: the request was submitted again, so
+ * the refusal is history, not the request's state. */
+export function supersededSend(
+  record: OutboundRecord,
+  approvals: readonly ApprovalItem[],
+): boolean {
+  return (
+    record.status === "FAILED" &&
+    approvals.some(
+      (item) =>
+        approvalRequestId(item) === record.requestId &&
+        item.id !== record.approvalId &&
+        item.executionStatus === "NOT_STARTED",
+    )
+  );
+}
+
+/** A reminder can be asked for now: the request is with the recipient and no reminder
+ * is open. */
+export function canFollowUpNow(
+  requestStatus: string,
+  openReminder: boolean,
+): boolean {
+  return (
+    !openReminder &&
+    ["SENT", "WAITING_FOR_RESPONSE", "PARTIALLY_RECEIVED", "OVERDUE"].includes(
+      requestStatus,
+    )
+  );
 }
 
 export function latestOutbound(
@@ -565,7 +630,7 @@ export function reminderStep(input: {
 export type FollowUpWrite =
   | { error: "invalid" }
   | {
-      intent: "submit" | "send" | "skip";
+      intent: "submit" | "send" | "skip" | "now" | "remind";
       organizationId: string;
       projectId: string;
       path: string;
@@ -581,9 +646,21 @@ export function followUpWrite(fields: Record<string, string>): FollowUpWrite {
   if (
     !UUID.test(organizationId) ||
     !UUID.test(projectId) ||
-    !UUID.test(requestId) ||
-    !UUID.test(followUpId)
+    !UUID.test(requestId)
   ) {
+    return { error: "invalid" };
+  }
+  if (intent === "now") {
+    // A reminder now, ahead of the schedule: written and submitted for approval.
+    return {
+      intent,
+      organizationId,
+      projectId,
+      path: `/organizations/${organizationId}/projects/${projectId}/pbc-requests/${requestId}/follow-ups/now`,
+      body: {},
+    };
+  }
+  if (!UUID.test(followUpId)) {
     return { error: "invalid" };
   }
   const path = `/organizations/${organizationId}/projects/${projectId}/pbc-requests/${requestId}/follow-ups/${followUpId}`;
@@ -593,6 +670,16 @@ export function followUpWrite(fields: Record<string, string>): FollowUpWrite {
       organizationId,
       projectId,
       path: `${path}/submit`,
+      body: {},
+    };
+  }
+  if (intent === "remind") {
+    // Sent in one step: the person asking approves the reminder.
+    return {
+      intent,
+      organizationId,
+      projectId,
+      path: `${path}/remind`,
       body: {},
     };
   }
@@ -623,7 +710,7 @@ export function followUpWrite(fields: Record<string, string>): FollowUpWrite {
 }
 
 export function followUpNoticeFor(
-  intent: "submit" | "send" | "skip",
+  intent: "submit" | "send" | "skip" | "now" | "remind",
   status: number,
   detail: string,
   deliveryStatus: string,
@@ -631,6 +718,10 @@ export function followUpNoticeFor(
   if (status === 200) {
     if (intent === "submit") {
       return "reminder-submitted";
+    }
+    if ((intent === "now" || intent === "remind") && deliveryStatus === "") {
+      // Approved, and held: email sending is off.
+      return "reminder-held";
     }
     if (intent === "skip") {
       return "reminder-skipped";
@@ -648,6 +739,13 @@ export function followUpNoticeFor(
   }
   if (status === 409 && detail === "approval is not approved") {
     return "awaiting";
+  }
+  if (
+    status === 409 &&
+    (detail === "a reminder already awaits approval" ||
+      detail === "the most reminders for this request are sent")
+  ) {
+    return "reminder-open";
   }
   if (status === 409) {
     return "reminder-closed";
@@ -892,8 +990,9 @@ export function parseEvidenceFiles(value: unknown): EvidenceFile[] | null {
       !isRecord(item) ||
       typeof item.id !== "string" ||
       !UUID.test(item.id) ||
-      typeof item.mailbox_attachment_id !== "string" ||
-      !UUID.test(item.mailbox_attachment_id) ||
+      (item.mailbox_attachment_id !== null &&
+        (typeof item.mailbox_attachment_id !== "string" ||
+          !UUID.test(item.mailbox_attachment_id))) ||
       typeof item.content_sha256 !== "string" ||
       typeof item.size_bytes !== "number" ||
       typeof item.file_name !== "string" ||
@@ -903,7 +1002,10 @@ export function parseEvidenceFiles(value: unknown): EvidenceFile[] | null {
     }
     items.push({
       id: item.id,
-      attachmentId: item.mailbox_attachment_id,
+      attachmentId:
+        typeof item.mailbox_attachment_id === "string"
+          ? item.mailbox_attachment_id
+          : null,
       contentSha256: item.content_sha256,
       sizeBytes: item.size_bytes,
       fileName: item.file_name,
@@ -918,28 +1020,6 @@ export function evidenceFileFor(
   attachmentId: string,
 ): EvidenceFile | null {
   return files.find((item) => item.attachmentId === attachmentId) ?? null;
-}
-
-export function evidenceFileNoticeFor(
-  status: number,
-  detail: string,
-): EvidenceNotice {
-  if (status === 200) {
-    return "stored";
-  }
-  if (status === 409 && detail === "file does not match") {
-    return "mismatch";
-  }
-  if (status === 409) {
-    return "changed";
-  }
-  if (status === 401 || status === 403) {
-    return "denied";
-  }
-  if (status === 404 || status === 422) {
-    return "invalid";
-  }
-  return "unavailable";
 }
 
 /** Mail content is untrusted. The API must say so, or nothing is shown. */
@@ -1299,6 +1379,8 @@ export function parseEvidenceNotice(
     "redraft-failed",
     "reminder-failed",
     "reminder-closed",
+    "reminder-open",
+    "reminder-held",
     "stored",
     "mismatch",
     "classified",
@@ -1306,6 +1388,8 @@ export function parseEvidenceNotice(
     "analysis-changed",
     "signed-off",
     "review-changed",
+    "links-revoked",
+    "preview-unavailable",
   ];
   return notices.find((notice) => notice === value) ?? null;
 }
@@ -1456,4 +1540,33 @@ export function parseWorkforce(value: unknown): StandardWorkforce | null {
     });
   }
   return { rosterVersion: value.roster_version, workers };
+}
+
+export type EvidenceContacts = {
+  coordinatorName: string;
+  coordinatorEmail: string;
+  clientDomains: string[];
+  /** Draft requests with no recipient yet, waiting for a coordinator. */
+  waiting: number;
+};
+
+export function parseEvidenceContacts(value: unknown): EvidenceContacts | null {
+  if (
+    !isRecord(value) ||
+    typeof value.client_coordinator_email !== "string" ||
+    !Array.isArray(value.client_domains)
+  ) {
+    return null;
+  }
+  return {
+    coordinatorName:
+      typeof value.client_coordinator_name === "string"
+        ? value.client_coordinator_name
+        : "",
+    coordinatorEmail: value.client_coordinator_email,
+    clientDomains: value.client_domains.filter(
+      (item): item is string => typeof item === "string",
+    ),
+    waiting: typeof value.waiting === "number" ? value.waiting : 0,
+  };
 }
