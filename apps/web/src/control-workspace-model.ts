@@ -5,7 +5,11 @@
  * rounds, workpapers, files, and audit events); nothing is estimated or assumed done.
  */
 
-import type { AssistantAction, AssistantBrief } from "./assistant-model.ts";
+import {
+  type AssistantAction,
+  type AssistantBrief,
+  stepAnchor,
+} from "./assistant-model.ts";
 import type { ControlContext } from "./control-context-model.ts";
 import type {
   ControlFiles,
@@ -40,6 +44,31 @@ export const RECORD_TAB_LABELS: Record<RecordTab, string> = {
   review: "Review & conclusion",
   activity: "Activity",
 };
+
+/** The record's four primary sections. Each keeps its tabs' own routes (`?tab=`), so a
+ * bookmark or deep link to any tab still opens it; Activity sits outside them, reached
+ * from the AI activity panel and its own link. */
+export type RecordSection = "overview" | "plan" | "work" | "conclusion";
+
+export const RECORD_SECTIONS: ReadonlyArray<{
+  key: RecordSection;
+  label: string;
+  tabs: readonly RecordTab[];
+}> = [
+  { key: "overview", label: "Overview", tabs: ["overview"] },
+  { key: "plan", label: "Test plan", tabs: ["design"] },
+  {
+    key: "work",
+    label: "Evidence & testing",
+    tabs: ["evidence", "testing", "findings"],
+  },
+  { key: "conclusion", label: "Conclusion", tabs: ["review"] },
+];
+
+/** The section a tab belongs to; null for Activity, which is reached on its own. */
+export function sectionOf(tab: RecordTab): RecordSection | null {
+  return RECORD_SECTIONS.find((item) => item.tabs.includes(tab))?.key ?? null;
+}
 
 export type StageStatus =
   | "not_started"
@@ -137,6 +166,12 @@ export function lifecycleOf(input: WorkspaceInput): LifecycleStage[] {
   // 1. Design and walkthrough.
   const designRequests = live.filter((r) => r.phase === "DESIGN");
   let design: Omit<LifecycleStage, "key" | "label" | "tab">;
+  // The walkthrough workpaper is design testing, on the Testing view; the rest of the
+  // stage (attributes, the plan's approval) is on the Test plan tab.
+  const walkthroughWork =
+    designPaper !== undefined ||
+    designRequests.some((r) => RECEIVED.has(r.status)) ||
+    walkthrough?.status === "RUNNING";
   if (designPhase?.applicability === "NOT_APPLICABLE") {
     design = { status: "not_applicable", note: "Not needed", agent: false };
   } else if (designPaper?.status === "PREPARED") {
@@ -392,7 +427,15 @@ export function lifecycleOf(input: WorkspaceInput): LifecycleStage[] {
         : { status: "not_started", note: "", agent: false };
 
   return [
-    { key: "design", label: "Design", tab: "design", ...design },
+    {
+      key: "design",
+      label: "Design",
+      tab:
+        walkthroughWork && (context?.proposed.length ?? 0) === 0
+          ? "testing"
+          : "design",
+      ...design,
+    },
     { key: "evidence", label: "Evidence", tab: "evidence", ...evidence },
     { key: "interim", label: "Interim", tab: "testing", ...interim },
     {
@@ -406,6 +449,86 @@ export function lifecycleOf(input: WorkspaceInput): LifecycleStage[] {
   ];
 }
 
+/** A stage's full name, for the line that says where the audit stands. */
+export const STAGE_TITLES: Record<LifecycleStage["key"], string> = {
+  design: "Design and walkthrough",
+  evidence: "Evidence collection",
+  interim: "Interim testing",
+  rollforward: "Roll-forward testing",
+  review: "Independent review",
+  conclusion: "Conclusion",
+};
+
+const UNDER_WAY: ReadonlySet<StageStatus> = new Set([
+  "ready",
+  "in_progress",
+  "waiting_evidence",
+  "awaiting_approval",
+  "blocked",
+]);
+
+/**
+ * The stage the audit stands at: the first one under way, else the first not started.
+ * A stage the plan says does not apply is never current. Null when every stage that
+ * applies is done.
+ */
+export function currentStage(
+  stages: readonly LifecycleStage[],
+): LifecycleStage | null {
+  return (
+    stages.find((stage) => UNDER_WAY.has(stage.status)) ??
+    stages.find((stage) => stage.status === "not_started") ??
+    null
+  );
+}
+
+/** The control's definition work that waits on a person, part by part. */
+export type DefinitionWork = {
+  /** Client values the control's statement still lacks. */
+  values: boolean;
+  /** Attributes: none approved, a proposal or library update to decide, or an open
+   * question or conflict about them. */
+  attributes: boolean;
+  /** The process map to build, confirm, or replace, or an open question about it. */
+  process: boolean;
+  /** Supporting documents not yet reviewed against the control. */
+  documents: boolean;
+};
+
+/**
+ * What of the control's definition needs a person now. The test plan itself is reviewed
+ * on the Test plans page; these decisions are made on the control, and appear there only
+ * while they wait.
+ */
+export function definitionWork(context: ControlContext | null): DefinitionWork {
+  if (context === null) {
+    return {
+      values: false,
+      attributes: false,
+      process: false,
+      documents: false,
+    };
+  }
+  const open = context.issues.filter((item) => item.status === "OPEN");
+  return {
+    values:
+      context.design?.slots.some(
+        (slot) => !slot.automatic && slot.value.trim() === "",
+      ) ?? false,
+    attributes:
+      context.approved.length === 0 ||
+      context.proposed.length > 0 ||
+      context.libraryUpdate !== null ||
+      open.some((item) => item.origin !== "PROCESS"),
+    process:
+      (context.processRequired &&
+        context.understanding.status !== "CONFIRMED") ||
+      context.understanding.proposedSteps !== null ||
+      open.some((item) => item.origin === "PROCESS"),
+    documents: context.documents.some((item) => !item.reviewed),
+  };
+}
+
 export type AttentionItem = {
   key: string;
   title: string;
@@ -417,6 +540,13 @@ export type AttentionItem = {
   anchor: string;
   /** On the Evidence tab: the view and the record it opens. */
   target?: AssistantAction["target"];
+  /** A page outside the record (the approvals queue), when the work is done there. */
+  href?: string;
+  /** The page the work is done on, when it is not the record (assistant-model.ts); the
+   * page resolves it to href, with the button's words. */
+  page?: AssistantAction["page"];
+  /** The button's words when the work is done on another page. */
+  hrefLabel?: string;
   quick: AssistantAction["quick"];
 };
 
@@ -439,6 +569,7 @@ export function attentionOf(
     tab: action.tab,
     anchor: action.anchor,
     ...(action.target !== undefined ? { target: action.target } : {}),
+    ...(action.page !== undefined ? { page: action.page } : {}),
     quick: action.quick,
   }));
   // The control's own next step, when it is someone else's.
@@ -474,6 +605,76 @@ export function attentionOf(
   return items;
 }
 
+/**
+ * Why nothing is the viewer's: the control is concluded, an agent is working, it waits
+ * on someone else, or nothing is pending at all.
+ */
+export type CalmReason = "concluded" | "working" | "waiting" | "clear";
+
+export type NextAction = {
+  /** The one thing to do next; null when nothing is the viewer's. */
+  primary: AttentionItem | null;
+  /** The viewer's other items, in the same order. */
+  more: AttentionItem[];
+  /** What waits on someone else. */
+  waiting: AttentionItem[];
+  calm: CalmReason;
+};
+
+/**
+ * The viewer's next action, from what needs a person (attentionOf: what blocks testing
+ * first, then the rest) and the agents that stopped before finishing, which a person
+ * starts again. With none of those, the control's own next step when it is the viewer's
+ * (`fallback`). Nothing here decides or approves anything; each item opens the place
+ * where a person does it.
+ */
+export function nextActionOf(input: {
+  attention: readonly AttentionItem[];
+  lanes: readonly AgentLane[];
+  control: Pick<ControlRow, "progress">;
+  /** Whether the viewer may start an agent again (the API checks it again). */
+  canAct: boolean;
+  fallback?: AttentionItem | null;
+}): NextAction {
+  const stopped: AttentionItem[] = input.lanes
+    .filter((lane) => lane.run === "stopped")
+    .map((lane) => ({
+      key: `stopped-${lane.key}`,
+      title: `${lane.agent} could not finish`,
+      detail: lane.runNote,
+      owner: input.canAct ? "You" : "Preparer",
+      kind: input.canAct ? "action" : "waiting",
+      tab: lane.tab,
+      anchor: "",
+      quick: null,
+    }));
+  const yours = [
+    ...input.attention.filter((item) => item.kind !== "waiting"),
+    ...stopped.filter((item) => item.kind !== "waiting"),
+  ];
+  const waiting = [
+    ...stopped.filter((item) => item.kind === "waiting"),
+    ...input.attention.filter((item) => item.kind === "waiting"),
+  ];
+  if (yours.length === 0 && input.fallback) {
+    yours.push(input.fallback);
+  }
+  const summary = laneSummary(input.lanes);
+  return {
+    primary: yours[0] ?? null,
+    more: yours.slice(1),
+    waiting,
+    calm:
+      input.control.progress === "CONCLUDED"
+        ? "concluded"
+        : summary.running + summary.queued > 0
+          ? "working"
+          : waiting.length > 0
+            ? "waiting"
+            : "clear",
+  };
+}
+
 export type Figures = {
   evidence: { received: number; total: number; accepted: number; gaps: number };
   testing: { label: string; detail: string };
@@ -493,14 +694,7 @@ export function figuresOf(
       r.phase !== "ROLLFORWARD" &&
       r.phase !== "RETEST",
   );
-  const requirements = (plan?.phases ?? [])
-    .filter(
-      (phase) =>
-        phase.phase !== "ROLLFORWARD" &&
-        phase.applicability !== "NOT_APPLICABLE",
-    )
-    .flatMap((phase) => phase.requirements)
-    .filter((q) => q.state !== "CANCELLED");
+  const requirements = currentRequirements(plan);
   const interim = stages.find((stage) => stage.key === "interim");
   return {
     evidence: {
@@ -531,6 +725,108 @@ export function figuresOf(
             : 0,
     },
   };
+}
+
+/** The evidence the plan requires for design and interim (the roll-forward's belongs to
+ * its rounds), leaving out phases that do not apply and cancelled items. */
+function currentRequirements(plan: EvidencePlan | null) {
+  return (plan?.phases ?? [])
+    .filter(
+      (phase) =>
+        phase.phase !== "ROLLFORWARD" &&
+        phase.applicability !== "NOT_APPLICABLE",
+    )
+    .flatMap((phase) => phase.requirements)
+    .filter((q) => q.state !== "CANCELLED");
+}
+
+export type Metric = {
+  key: "results" | "drafts" | "sufficiency";
+  label: string;
+  /** "—" when the records hold nothing to count yet, never a guessed zero. */
+  value: string;
+  note: string;
+  tab: RecordTab;
+  anchor: string;
+  target?: AssistantAction["target"];
+};
+
+const DRAFT_STAGES = new Set(["DRAFTED", "RETURNED", "HELD"]);
+
+/**
+ * The three figures under the next action: the test results that wait on a person's
+ * judgment, the evidence requests still in draft, and the planned evidence a person has
+ * accepted as sufficient. Sufficiency counts only requirements accepted on the evidence
+ * plan, never files received.
+ */
+export function summaryMetrics(input: WorkspaceInput): Metric[] {
+  const { control, plan, sheet } = input;
+  const interimApplies =
+    phaseOf(plan, "INTERIM")?.applicability !== "NOT_APPLICABLE";
+  const toJudge =
+    sheet !== null && sheet.status === "OPEN"
+      ? sheet.counts.unable + sheet.counts.review
+      : 0;
+  const results: Metric = {
+    key: "results",
+    label: "Results to review",
+    value: sheet === null ? "—" : String(toJudge),
+    note:
+      sheet === null
+        ? interimApplies
+          ? "Testing not started"
+          : "Interim testing not applicable"
+        : sheet.status === "SIGNED_OFF"
+          ? "Testing signed off"
+          : `${sheet.counts.tested} of ${plural(sheet.counts.items, "item")} tested${sheet.counts.exceptions > 0 ? ` · ${plural(sheet.counts.exceptions, "exception")}` : ""}`,
+    tab: "testing",
+    anchor: stepAnchor("Test results and sign-off"),
+  };
+
+  const stages = control.requests
+    .filter((r) => r.status !== "CANCELLED")
+    .map((r) => requestStage(r, control));
+  const drafts = stages.filter((s) => DRAFT_STAGES.has(s)).length;
+  const held = stages.filter((s) => s === "HELD").length;
+  const awaiting = stages.filter((s) => s === "AWAITING_APPROVAL").length;
+  const draftMetric: Metric = {
+    key: "drafts",
+    label: drafts === 1 ? "Draft request" : "Draft requests",
+    value: String(drafts),
+    note:
+      held > 0
+        ? `${held} held for planning`
+        : awaiting > 0
+          ? `${awaiting} awaiting approval`
+          : stages.length === 0
+            ? "None drafted yet"
+            : "",
+    tab: "evidence",
+    anchor: "",
+    target: { view: "requests" },
+  };
+
+  const requirements = currentRequirements(plan);
+  const accepted = requirements.filter((q) => q.state === "ACCEPTED").length;
+  const gaps = requirements.filter(
+    (q) => q.state === "INSUFFICIENT" || q.state === "FOLLOW_UP_REQUIRED",
+  ).length;
+  const sufficiency: Metric = {
+    key: "sufficiency",
+    label: "Evidence sufficient",
+    value:
+      requirements.length === 0 ? "—" : `${accepted} / ${requirements.length}`,
+    note:
+      requirements.length === 0
+        ? "No evidence planned yet"
+        : gaps > 0
+          ? `${plural(gaps, "gap")} to follow up`
+          : "",
+    tab: "evidence",
+    anchor: "",
+    target: { view: "requirements" },
+  };
+  return [results, draftMetric, sufficiency];
 }
 
 // Activity

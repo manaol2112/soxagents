@@ -229,13 +229,13 @@ def test_kickoff_queues_a_draft_per_request_and_hands_them_to_the_background(
         ).fetchall()
     # Nineteen controls, each with its own design request and interim request. The
     # roll-forward waits for interim testing, so kickoff requests none.
-    assert len(phases) == 19
+    assert len(phases) == 31
     assert {tuple(row[1]) for row in phases} == {("DESIGN", "INTERIM")}
-    assert len(drafts) == 38
+    assert len(drafts) == 62
     assert {row[1] for row in drafts} == {"PENDING"}
     assert sorted(scheduler.scheduled) == sorted(row[0] for row in drafts)
     summary = owner.get(base).json()["drafting"]
-    assert summary == {"total": 38, "pending": 38, "drafted": 0, "by_model": 0, "failed": 0}
+    assert summary == {"total": 62, "pending": 62, "drafted": 0, "by_model": 0, "failed": 0}
 
 
 def test_the_rules_draft_rewrites_the_request_once(migrated: Database) -> None:
@@ -253,7 +253,8 @@ def test_the_rules_draft_rewrites_the_request_once(migrated: Database) -> None:
         ).fetchone()
     # The interim request asks for the population, worded from the evidence plan.
     assert row is not None and "our interim testing" in str(row[0])
-    assert "Every access grant or change in the window" in str(row[0])
+    # Worded from the standard's evidence suite (library version 4).
+    assert "accounts created and access changes" in str(row[0])
     assert audit is not None and audit[0]["source"] == "RULES"
     listed = owner.get(f"{_project(team)}/pbc-drafts").json()
     drafted = next(item for item in listed if item["id"] == str(draft_id))

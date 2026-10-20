@@ -16,6 +16,7 @@ export const SECTIONS = [
   "plan",
   "timeline",
   "deficiencies",
+  "library",
 ] as const;
 
 export type SectionId = (typeof SECTIONS)[number];
@@ -514,8 +515,8 @@ export function workspaceHref(
   if (taskId !== null) {
     params.set("task", taskId);
   }
-  // The console is the default page, so only it can leave the section out.
-  if (section !== "console") {
+  // Home is the default page, so only it can leave the section out.
+  if (section !== "overview") {
     params.set("section", section);
   }
   return `/?${params.toString()}`;
@@ -1166,13 +1167,14 @@ function parseSection(value: string | null): SectionId {
     value === "plan" ||
     value === "timeline" ||
     value === "deficiencies" ||
+    value === "library" ||
     value === "overview" ||
     value === "console"
   ) {
     return value;
   }
-  // An engagement opens on the agent console.
-  return "console";
+  // An engagement opens on its home: where it stands and what to do next.
+  return "overview";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

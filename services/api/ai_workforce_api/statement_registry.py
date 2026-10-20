@@ -9,8 +9,9 @@ import re
 from ai_workforce_api.control_statements import Statement
 from ai_workforce_api.statements_business import STATEMENTS as BUSINESS
 from ai_workforce_api.statements_itgc import STATEMENTS as ITGC
+from ai_workforce_api.statements_itgc_more import STATEMENTS as MORE
 
-STATEMENTS: dict[str, Statement] = {**ITGC, **BUSINESS}
+STATEMENTS: dict[str, Statement] = {**ITGC, **BUSINESS, **MORE}
 
 ITGC_DOMAINS = ("ACCESS", "CHANGE", "OPERATIONS")
 PLACEHOLDER = re.compile(r"\[([^\]]+)\]")

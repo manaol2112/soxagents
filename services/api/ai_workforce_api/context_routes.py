@@ -110,6 +110,11 @@ class UnlinkBody(BaseModel):
     control_id: UUID
 
 
+class ManyValuesResult(BaseModel):
+    # How many controls the answers filled.
+    controls: int
+
+
 class UploadResult(BaseModel):
     document: DocumentBody | None
     readable: bool
@@ -301,6 +306,25 @@ def register_control_context(
             for changed_id in changed_ids:
                 changed(c, project_id, changed_id, p.id)
             return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    # Client values for several controls at once, answered from the plan queue
+
+    @app.put(f"{base}/control-values")
+    def set_many_values(
+        organization_id: UUID,
+        project_id: UUID,
+        body: control_design.ManyValuesBody,
+        request: Request,
+    ) -> ManyValuesResult:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ManyValuesResult:
+            for item in body.items:
+                _allowed(c, p, organization_id, project_id, item.control_id)
+            changed_ids = control_design.set_values_many(c, organization_id, project_id, p.id, body)
+            for changed_id in changed_ids:
+                changed(c, project_id, changed_id, p.id)
+            return ManyValuesResult(controls=len(changed_ids))
 
         return run(request, work)
 

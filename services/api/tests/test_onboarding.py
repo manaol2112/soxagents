@@ -31,14 +31,15 @@ __all__ = ["migrated"]
 
 # Library version 3 (Milestones 8.8 and 8.9): statements and attributes, see
 # docs/testing-definitions.md.
-_REVIEWED_LIBRARY = "67ccef16d2cf0f40958b53c77234bd7d494709339b45a65ebe29c124f44a3042"
+_REVIEWED_LIBRARY = "877a2d07fc2c62cf59edad4ac065d329ff7196c5054a2f55918836f82a8034f1"
 _REVIEWED_TEMPLATES = "77f32bb2e93e3c088cd67bbb54d35a6fd15a4cd4f43d0ff63764543fe5dc744c"
 
 
 def test_the_control_library_and_templates_are_the_reviewed_versions() -> None:
     assert library_problems() == []
     # 48 version 2 controls; version 3 splits four of them into nine (milestone 8.9).
-    assert len(LIBRARY) == 53
+    # 53 controls through version 3, and 29 added in version 4, wave 1 (milestone L3c).
+    assert len(LIBRARY) == 82
     assert library_fingerprint() == _REVIEWED_LIBRARY
     assert templates_fingerprint() == _REVIEWED_TEMPLATES
 
@@ -104,11 +105,11 @@ def test_a_new_engagement_is_set_up_and_started_in_one_approved_step(
     _complete_setup(owner, team)
     ready = owner.get(_base(org, project)).json()
     assert ready["ready"] is True, ready["readiness"]
-    assert len(ready["pbc_preview"]) == 19
+    assert len(ready["pbc_preview"]) == 31
     proposed = owner.post(f"{_base(org, project)}/plan").json()
     plan = proposed["plan"]
     assert plan["status"] == "PROPOSED"
-    assert len(plan["items"]) == 19 * 4 + 1
+    assert len(plan["items"]) == 31 * 4 + 1
     assert proposed["project_status"] == "DRAFT"
     started = owner.post(
         f"{_base(org, project)}/plan/{plan['id']}/approve",
@@ -119,7 +120,7 @@ def test_a_new_engagement_is_set_up_and_started_in_one_approved_step(
     assert body["started"] is True
     assert body["project_status"] == "ACTIVE"
     assert body["plan"]["status"] == "APPROVED"
-    assert body["plan"]["created_tasks"] == 77
+    assert body["plan"]["created_tasks"] == 125
     # Each control's evidence plan waits for a person. Nothing is requested at launch.
     # Approving the plans, and settling the attributes, requests design and operating
     # evidence.
@@ -135,7 +136,7 @@ def test_a_new_engagement_is_set_up_and_started_in_one_approved_step(
         made = connection.execute(
             "SELECT count(*) FROM pbc_requests WHERE project_id = %s", (project,)
         ).fetchone()
-    assert made == (38,)
+    assert made == (62,)
     with connect(migrated.url) as connection:
         unassigned = connection.execute(
             "SELECT count(*) FROM tasks WHERE project_id = %s AND agent_instance_id IS NULL",
@@ -157,8 +158,8 @@ def test_a_new_engagement_is_set_up_and_started_in_one_approved_step(
         mail = connection.execute("SELECT count(*) FROM mailbox_messages").fetchone()
     assert unassigned == (0,)
     # Per control: test waits on walkthrough and evidence, review waits on test.
-    assert dependencies == (19 * 3 + 19,)
-    assert requests == (38, True, True, 19, 19)
+    assert dependencies == (31 * 3 + 31,)
+    assert requests == (62, True, True, 31, 31)
     assert mail == (0,)
     again = owner.post(
         f"{_base(org, project)}/plan/{plan['id']}/approve",
@@ -181,7 +182,7 @@ def test_the_launch_page_shows_the_plan_and_launches_in_one_step(migrated: Datab
     ready = owner.get(_base(org, project)).json()
     preview = ready["plan_preview"]
     assert ready["plan"] is None and preview is not None
-    assert len(preview["items"]) == 19 * 4 + 1
+    assert len(preview["items"]) == 31 * 4 + 1
     # The plan the page showed must still match the setup.
     stale = owner.post(f"{_base(org, project)}/plan/launch", json={"fingerprint": "0" * 64})
     assert stale.status_code == 409
@@ -193,7 +194,7 @@ def test_the_launch_page_shows_the_plan_and_launches_in_one_step(migrated: Datab
     assert body["started"] is True and body["project_status"] == "ACTIVE"
     assert body["plan"]["status"] == "APPROVED"
     assert body["plan"]["fingerprint"] == preview["fingerprint"]
-    assert body["plan"]["created_tasks"] == 77
+    assert body["plan"]["created_tasks"] == 125
     assert body["plan_preview"] is None
     again = owner.post(
         f"{_base(org, project)}/plan/launch", json={"fingerprint": preview["fingerprint"]}
@@ -218,7 +219,7 @@ def test_a_plan_from_stale_setup_cannot_start_the_engagement(migrated: Database)
     )
     assert refused.status_code == 409
     fresh = owner.post(f"{_base(org, project)}/plan").json()["plan"]
-    assert len(fresh["items"]) == 18 * 4 + 1
+    assert len(fresh["items"]) == 30 * 4 + 1
     assert owner.get(_base(org, project)).json()["project_status"] == "DRAFT"
 
 
@@ -392,7 +393,8 @@ def test_business_cycles_come_from_the_library_and_go_to_the_business_tester(
     loaded = owner.post(
         f"{base}/controls/load-library", json={"domains": ["ORDER_TO_CASH", "ITAC", "ACCESS"]}
     ).json()
-    assert len(loaded["controls"]) == 4 + 2 + 6
+    # Order to cash 4; application controls 2 (version 3) + 11 (version 4); access 6 + 6.
+    assert len(loaded["controls"]) == 4 + 13 + 12
     testers = {c["control_ref"]: c["agent_key"] for c in loaded["controls"]}
     assert testers["OTC-01"] == testers["ITAC-01"] == "business-process-tester"
     assert testers["ITGC-AC-01"] == "itgc-access-tester"
@@ -506,8 +508,9 @@ def _complete_setup(owner: TestClient, team: dict[str, Any]) -> None:
         added = owner.post(f"{base}/team", json={"user_id": str(user_id), "engagement_role": role})
         assert added.status_code == 200, added.text
     loaded = owner.post(f"{base}/controls/load-library").json()
-    # The IT general controls: 16 in version 2, 19 once OP-02 and OP-03 are split (8.9).
-    assert len(loaded["controls"]) == 19
+    # The IT general controls: 16 in version 2, 19 once OP-02 and OP-03 are split (8.9),
+    # 31 with the twelve added in library version 4 (L3c).
+    assert len(loaded["controls"]) == 31
     for domain, email in (
         ("ACCESS", "iam@client.example"),
         ("CHANGE", "release@client.example"),
@@ -730,7 +733,7 @@ def test_known_systems_are_offered_and_added_with_their_layer(migrated: Database
     assert "Workday" not in left and "Okta" in left
     # The library then loads once per system.
     loaded = owner.post(f"{base}/controls/load-library").json()
-    assert len(loaded["controls"]) == 38
+    assert len(loaded["controls"]) == 62
     refused = owner.post(f"{base}/applications/known", json={"names": ["My Homegrown ERP"]})
     assert refused.status_code == 422
 

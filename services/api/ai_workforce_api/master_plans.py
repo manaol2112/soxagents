@@ -39,6 +39,7 @@ from uuid import UUID
 
 import psycopg
 from fastapi import FastAPI, HTTPException, Request
+from psycopg.types.json import Json
 from pydantic import BaseModel, Field
 
 from ai_workforce_api.authorization import (
@@ -51,9 +52,14 @@ from ai_workforce_api.authorization import (
     _session_principal,
     authorize,
 )
-from ai_workforce_api.controls import FREQUENCIES
+from ai_workforce_api.control_design import (
+    OpenValueBody,
+    open_values,
+    open_values_by_control,
+)
+from ai_workforce_api.controls import BY_KEY, DOMAIN_LABELS, FREQUENCIES, basis_of
 from ai_workforce_api.db import transaction
-from ai_workforce_api.definition_registry import attribute_for
+from ai_workforce_api.definition_registry import BY_LIBRARY_KEY, attribute_for
 from ai_workforce_api.evidence_planning import PHASE_LABELS, PHASES, Phase
 from ai_workforce_api.evidence_plans import (
     ATTRIBUTES_SETTLED_SQL,
@@ -61,6 +67,7 @@ from ai_workforce_api.evidence_plans import (
     _audit,
     release,
 )
+from ai_workforce_api.library_governance import Category, category_for, effective_status
 from ai_workforce_api.settings import Settings
 
 # Planning states, derived from the records (never stored).
@@ -118,13 +125,40 @@ FindingKind = Literal[
     "UNMATCHED_ATTRIBUTE",
     "ATTRIBUTE_WITHOUT_CRITERIA",
     "ATTRIBUTE_NOT_DOCUMENTED",
+    "DEVIATES_FROM_STANDARD",
 ]
 BlockerKind = Literal["CLARIFICATION", "DECISION"]
+# Where a blocker is resolved, so the review can open that place: the control's own record
+# (its description and frequency), its attributes, its process, the client's values its
+# statement needs, the plan's understanding, whether its phases apply, the proposed changes
+# to its evidence, the planner's proposed revision, or nowhere while the planner drafts.
+BlockerResolve = Literal[
+    "FACTS",
+    "CONTROL",
+    "ATTRIBUTES",
+    "PROCESS",
+    "VALUES",
+    "UNDERSTANDING",
+    "PHASES",
+    "EVIDENCE_CHANGES",
+    "REVISION",
+    "LIBRARY",
+    "WAIT",
+]
 SNAPSHOT_SCHEMA = 1
 
 
 def _normal(text: str) -> str:
     return " ".join(text.split()).lower()
+
+
+def standard_procedure_key(library_key: str, text: str) -> str:
+    """The key of the standard's procedure a plan procedure is, when the standard is
+    written as steps (library version 4) and the plan's text is that procedure's action;
+    the plan review links the row to the steps on the Library. Empty otherwise."""
+    definition = BY_LIBRARY_KEY.get(library_key)
+    found = None if definition is None else definition.procedure_for(text)
+    return "" if found is None or not found.steps else found.key
 
 
 def procedure_key(phase: str, text: str) -> str:
@@ -154,6 +188,8 @@ class _Plan:
     source: str = ""
     # The library statement with the client's values, by field (evidence_plans.statement_fields).
     statement: dict[str, str] = field(default_factory=dict)
+    # Facts the team stated for a client's own control (migration 0088), by fact.
+    stated: dict[str, dict[str, Any]] = field(default_factory=dict)
     plan_id: UUID | None = None
     status: str = ""
     run_status: str = "IDLE"
@@ -178,6 +214,12 @@ class _Plan:
     open_issues: list[tuple[str, str, str, str]] = field(default_factory=list)
     values_missing: list[tuple[str, str]] = field(default_factory=list)
     last_decision: dict[str, Any] | None = None
+    # What the plan is built from (controls.basis_of), and the firm's methodology review of
+    # the standard it follows (library_governance.effective_status).
+    test_basis: str = "STANDARD"
+    library_status: str = ""
+    # The business process the team named for the control, if any (migration 0059).
+    process: str = ""
 
 
 def _load(
@@ -195,9 +237,13 @@ def _load(
                coalesce(c.frequency, ''), coalesce(c.nature, ''), c.domain,
                coalesce(c.key_control, false), coalesce(c.library_key, ''),
                coalesce(a.name, ''), coalesce(c.classifications, '{{}}'), c.included,
-               coalesce(c.source, '')
+               coalesce(c.source, ''), c.test_basis, e.status, e.approved_version,
+               coalesce(pr.name, ''), c.stated_facts
         FROM engagement_controls c
         LEFT JOIN engagement_applications a ON a.id = c.engagement_application_id
+        LEFT JOIN engagement_processes pr ON pr.id = c.process_id
+        LEFT JOIN library_entries e
+          ON e.organization_id = c.organization_id AND e.library_key = c.library_key
         WHERE {where}
         ORDER BY c.control_ref, a.name
         """,
@@ -209,7 +255,15 @@ def _load(
             nature=str(row[6]), domain=str(row[7]), key_control=bool(row[8]),
             library_key=str(row[9]), application=str(row[10]),
             classifications=[str(item) for item in row[11]], included=bool(row[12]),
-            source=str(row[13]),
+            source=str(row[13]), test_basis=basis_of(str(row[13]), row[14]),
+            library_status=effective_status(
+                None if row[15] is None else str(row[15]), row[16], str(row[9])
+            ),
+            process=str(row[17]),
+            stated={
+                str(name): fact for name, fact in (row[18] or {}).items()
+                if isinstance(fact, dict) and str(fact.get("value", "")).strip()
+            },
         )  # fmt: skip
     if not plans:
         return plans
@@ -439,6 +493,11 @@ FACT_LABELS: dict[str, str] = {
     "ASSERTIONS": "Assertions or IT risks",
     "DEPENDENCIES": "Dependencies (reports, interfaces, configurations, ITGCs)",
 }
+# The facts the team states for a client's own control (migration 0088): a library
+# control takes them from its statement and definition.
+STATEABLE_FACTS: tuple[str, ...] = (
+    "OBJECTIVE", "TYPE", "PERFORMER", "REVIEWER", "POPULATION", "ASSERTIONS", "DEPENDENCIES",
+)  # fmt: skip
 _NATURE_WORDS = {
     "MANUAL": "Manual",
     "AUTOMATED": "Automated",
@@ -567,6 +626,11 @@ def facts_of(plan: _Plan) -> list[FactItem]:
             question="Confirm the reports, interfaces, and configurations used.")  # fmt: skip
     else:
         put("DEPENDENCIES", "None identified.", "JUDGMENT", "Planner")
+    # What the team stated for a client's own control (migration 0088) is the fact.
+    for name, told in plan.stated.items():
+        if name in STATEABLE_FACTS:
+            by = str(told.get("by_name") or "the team")
+            put(name, str(told["value"]), "SOURCE", f"Stated by {by}", str(told["value"]))
     # The planner agent's proposal for what the records leave missing.
     for raw in plan.understanding.get("facts") or []:
         if not isinstance(raw, dict):
@@ -712,6 +776,16 @@ class Finding(BaseModel):
     detail: str
 
 
+def _names_attribute(name: str, attributes: list[dict[str, Any]]) -> bool:
+    """Whether evidence that names this wording names one of the control's attributes: the
+    same words, or the words it was planned with before a client value was filled into the
+    attribute (\"by [the deadline]\" naming \"by 30 days after quarter end\")."""
+    wanted = _normal(name)
+    return any(
+        _normal(item["text"]) == wanted or _filled_only(name, item["text"]) for item in attributes
+    )
+
+
 def findings_of(plan: _Plan) -> list[Finding]:
     found: list[Finding] = []
     approved = {item["id"] for item in plan.attributes}
@@ -741,7 +815,6 @@ def findings_of(plan: _Plan) -> list[Finding]:
         a for item in active_requirements
         for a in plan.requirement_attributes.get(item["id"], set())
     }  # fmt: skip
-    texts = {_normal(item["text"]) for item in plan.attributes}
     for item in plan.attributes:
         code = item["code"]
         if item["id"] not in tested:
@@ -763,7 +836,9 @@ def findings_of(plan: _Plan) -> list[Finding]:
                 detail=f"{code} has no stated condition with pass and fail criteria, and is "
                 "not marked as requiring professional judgment.",
             ))  # fmt: skip
-        if item["basis"] == "INFERRED" and not item["quote"]:
+        # A library attribute's basis is the standard's, decided in the firm's library
+        # review (milestone L3e); the plan does not ask for it again.
+        if item["basis"] == "INFERRED" and not item["quote"] and item["definition_key"] is None:
             found.append(Finding(
                 kind="ATTRIBUTE_NOT_DOCUMENTED", code=code,
                 detail=f"{code} is inferred: no source states it.",
@@ -771,19 +846,39 @@ def findings_of(plan: _Plan) -> list[Finding]:
     for item in active_requirements:
         # Evidence of an attribute (a sample's, an execution's, the configuration) must say
         # which; a population, documentation, report support, or change history supports
-        # the testing rather than an attribute, and is not flagged.
+        # the testing rather than an attribute, and is not flagged. Nor is design evidence:
+        # the design is assessed from it, not the attributes.
         evidences = set(item["categories"]) & _EVIDENCES_ATTRIBUTES
-        if evidences and not plan.requirement_attributes.get(item["id"], set()) & approved:
+        if (
+            evidences
+            and item["phase"] != "DESIGN"
+            and not plan.requirement_attributes.get(item["id"], set()) & approved
+        ):
             found.append(Finding(
                 kind="EVIDENCE_WITHOUT_ATTRIBUTE", code=item["code"],
                 detail=f"{item['code']} ({item['title']}) supports no attribute of the control.",
             ))  # fmt: skip
         for name in item["named"]:
-            if _normal(name) not in texts:
+            if not _names_attribute(name, plan.attributes):
                 found.append(Finding(
                     kind="UNMATCHED_ATTRIBUTE", code=item["code"],
                     detail=f"{item['code']} names an attribute the control does not have: "
                     f"{name[:200]}",
+                ))  # fmt: skip
+    # A plan that follows the standard as such is checked against it: a procedure a person
+    # wrote or reworded is a deviation the reviewer sees. A customized standard expects
+    # tailoring, so nothing is flagged.
+    if plan.test_basis == "STANDARD" and plan.library_key:
+        standard = BY_KEY.get(plan.library_key)
+        ref = standard.control_ref if standard is not None else plan.library_key
+        for item in plan.procedures:
+            if item.get("origin") == "PERSON" or item.get("person_edited"):
+                found.append(Finding(
+                    kind="DEVIATES_FROM_STANDARD", code=item["code"],
+                    # What resolves it (keep the standard's wording, or a customized
+                    # standard as the basis) is said with it on the plan (findingFix).
+                    detail=f"{item['code']} deviates from the standard {ref}: a person "
+                    f"{'added' if item.get('origin') == 'PERSON' else 'reworded'} it.",
                 ))  # fmt: skip
     return found
 
@@ -796,28 +891,54 @@ class Blocker(BaseModel):
     detail: str
     # Whether approval is refused until it is resolved.
     blocks: bool
+    resolve: BlockerResolve
+    # The standard a LIBRARY clarification is about, for the link to it.
+    target: str = ""
 
 
 def blockers_of(plan: _Plan) -> list[Blocker]:
     found: list[Blocker] = []
 
-    def add(kind: BlockerKind, detail: str, blocks: bool) -> None:
-        found.append(Blocker(kind=kind, detail=detail, blocks=blocks))
+    def add(
+        kind: BlockerKind, detail: str, blocks: bool, resolve: BlockerResolve, target: str = ""
+    ) -> None:
+        found.append(
+            Blocker(kind=kind, detail=detail, blocks=blocks, resolve=resolve, target=target)
+        )
 
     if plan.run_status in ("PENDING", "WORKING"):
-        add("DECISION", "The planner is still drafting the plan.", True)
+        add("DECISION", "The planner is still drafting the plan.", True, "WAIT")
+    # A standard may be followed before the firm's methodology review approves it (decided
+    # by the product owner): the reviewer sees it; it does not hold the plan.
+    if (
+        plan.test_basis in ("STANDARD", "CUSTOM")
+        and plan.library_key
+        and plan.library_status not in ("APPROVED", "")
+    ):
+        standard = BY_KEY.get(plan.library_key)
+        ref = standard.control_ref if standard is not None else plan.library_key
+        words = plan.library_status.replace("_", " ").lower()
+        add(
+            "CLARIFICATION",
+            f"The standard {ref} this plan follows is {words} on the Library; approving the "
+            "plan does not approve the standard.",
+            False,
+            "LIBRARY",
+            plan.library_key,
+        )
     if not plan.activity.strip():
-        add("CLARIFICATION", "The control has no description of what is done.", True)
+        add("CLARIFICATION", "The control has no description of what is done.", True, "CONTROL")
     if plan.frequency not in FREQUENCIES:
-        add("CLARIFICATION", "The control's frequency is not set.", True)
+        add("CLARIFICATION", "The control's frequency is not set.", True, "CONTROL")
     if not plan.attributes:
-        add("CLARIFICATION", "The control has no test attributes.", True)
+        add("CLARIFICATION", "The control has no test attributes.", True, "ATTRIBUTES")
     if plan.proposed_attributes:
         add(
             "CLARIFICATION",
             f"{plan.proposed_attributes} proposed attribute"
             f"{' waits' if plan.proposed_attributes == 1 else 's wait'} for a decision.",
             True,
+            "ATTRIBUTES",
         )
     for origin, _kind, detail, _ in plan.open_issues:
         add(
@@ -826,34 +947,42 @@ def blockers_of(plan: _Plan) -> list[Blocker]:
             # Attribute and source questions are part of the plan's attributes (decided:
             # approving the plan approves them), so they are settled first.
             origin in ("ATTRIBUTES", "SOURCES"),
+            "PROCESS" if origin == "PROCESS" else "ATTRIBUTES",
         )
     for fact in facts_of(plan):
         # The description and frequency are held above; the rest is asked, not invented.
         if fact.basis == "MISSING" and fact.field not in ("DESCRIPTION", "FREQUENCY"):
-            add("CLARIFICATION", f"{fact.label}: {fact.question}", False)
+            # A library control's missing fact is a client value in its statement; a client's
+            # own control's is a fact the team states about it (migration 0088).
+            stated = not plan.statement and fact.field in STATEABLE_FACTS
+            add("CLARIFICATION", f"{fact.label}: {fact.question}", False,
+                "FACTS" if stated else "VALUES")  # fmt: skip
     for label, _why in plan.values_missing:
-        add("CLARIFICATION", f"The client's value for {label} is not recorded.", False)
+        add("CLARIFICATION", f"The client's value for {label} is not recorded.", False,
+            "VALUES")  # fmt: skip
     if plan.provisional:
         add("CLARIFICATION", "Critical information is missing; the plan rests on assumptions.",
-            False)  # fmt: skip
+            False, "UNDERSTANDING")  # fmt: skip
     for item in plan.understanding.get("missing_information") or []:
         if isinstance(item, str) and item:
-            add("CLARIFICATION", f"Missing: {item}", False)
+            add("CLARIFICATION", f"Missing: {item}", False, "UNDERSTANDING")
     for phase in plan.phases:
         label = PHASE_LABELS.get(phase["phase"], phase["phase"])
         if phase["open_question"]:
-            add("CLARIFICATION", f"{label}: {phase['open_question']}", False)
+            add("CLARIFICATION", f"{label}: {phase['open_question']}", False, "PHASES")
         elif phase["applicability"] == "PENDING":
-            add("CLARIFICATION", f"{label}: whether it applies is undecided.", False)
+            add("CLARIFICATION", f"{label}: whether it applies is undecided.", False, "PHASES")
     if plan.pending_changes:
         add(
             "DECISION",
             f"{plan.pending_changes} proposed change"
             f"{'' if plan.pending_changes == 1 else 's'} to the evidence to decide.",
             True,
+            "EVIDENCE_CHANGES",
         )
     if plan.pending_revision is not None:
-        add("DECISION", "The planner proposed a revised understanding and procedures.", True)
+        add("DECISION", "The planner proposed a revised understanding and procedures.", True,
+            "REVISION")  # fmt: skip
     return found
 
 
@@ -887,6 +1016,13 @@ class ControlSection(BaseModel):
     key_control: bool
     application: str
     classifications: list[str]
+    # Where the control came from, what its plan is built from, and the standard it
+    # follows, with the firm's methodology review of it (milestone L2).
+    source: str
+    test_basis: str
+    library_key: str
+    library_ref: str
+    library_status: str
 
 
 class PhaseSection(BaseModel):
@@ -915,6 +1051,8 @@ class ProcedureItem(BaseModel):
     attribute_codes: list[str]
     evidence_codes: list[str]
     version: int
+    # The standard's procedure this row follows, when the standard has steps (version 4).
+    standard_key: str = ""
 
 
 class AttributeItem(BaseModel):
@@ -975,6 +1113,34 @@ class SubmittedInfo(BaseModel):
     note: str
 
 
+class ChangeItem(BaseModel):
+    """One thing that differs from the version a reviewer last approved."""
+
+    section: Literal["CONTROL", "UNDERSTANDING", "PHASE", "PROCEDURE", "ATTRIBUTE", "EVIDENCE"]
+    code: str
+    change: Literal["ADDED", "REMOVED", "CHANGED"]
+    detail: str
+
+
+class SuggestedStandard(BaseModel):
+    """The library standard a client's control matches, when its RCM gives no test
+    attributes: following it as a customized standard brings the standard's attributes."""
+
+    library_key: str
+    control_ref: str
+    title: str
+    status: Literal["STRONG", "PARTIAL"]
+    rationale: str
+
+
+class FilledValue(BaseModel):
+    key: str
+    label: str
+    value: str
+    filled_by: str
+    filled_at: str
+
+
 class MasterPlanBody(BaseModel):
     control_id: UUID
     plan_id: UUID | None
@@ -1004,6 +1170,17 @@ class MasterPlanBody(BaseModel):
     content_hash: str | None
     # Whether the viewer may approve or request changes (project.update).
     viewer_can_decide: bool
+    # The client values the review asks for, answerable before approving.
+    open_values: list[OpenValueBody] = Field(default_factory=list)
+    # Whether the viewer may enter those values from the plan (task.update), as on the queue.
+    viewer_can_answer: bool = False
+    # Client values filled since the plan was last approved: they keep its approval
+    # (migration 0086), so the plan says what was filled, by whom, and when.
+    filled_since_approval: list[FilledValue] = Field(default_factory=list)
+    # A plan approved before and changed since: what changed from the version approved.
+    changes_since_approval: list[ChangeItem] = Field(default_factory=list)
+    # For a client's control whose RCM gives no test attributes: the standard it matches.
+    suggested_standard: SuggestedStandard | None = None
 
 
 def body_of(
@@ -1011,7 +1188,6 @@ def body_of(
 ) -> MasterPlanBody:
     attribute_code = {item["id"]: item["code"] for item in plan.attributes}
     procedure_code = {item["id"]: item["code"] for item in plan.procedures}
-    texts = {_normal(item["text"]) for item in plan.attributes}
     blockers = blockers_of(plan)
     state = state_of(plan, blockers)
     evidence_of_attribute: dict[UUID, list[str]] = {}
@@ -1068,6 +1244,13 @@ def body_of(
             key_control=plan.key_control,
             application=plan.application,
             classifications=plan.classifications,
+            source=plan.source,
+            test_basis=plan.test_basis,
+            library_key=plan.library_key,
+            library_ref=(
+                BY_KEY[plan.library_key].control_ref if plan.library_key in BY_KEY else ""
+            ),
+            library_status=plan.library_status,
         ),  # fmt: skip
         state=state,
         state_label=STATE_LABELS[state],
@@ -1106,6 +1289,11 @@ def body_of(
                 method=item["method"],
                 origin=item["origin"],
                 person_edited=item["person_edited"],
+                standard_key=(
+                    ""
+                    if item["person_edited"] or plan.test_basis == "CLIENT"
+                    else standard_procedure_key(plan.library_key, item["text"])
+                ),
                 attribute_ids=sorted(
                     a
                     for a in plan.procedure_attributes.get(item["id"], set())
@@ -1179,7 +1367,9 @@ def body_of(
                         if p in procedure_code
                     ]
                 ),
-                unmatched=[name for name in item["named"] if _normal(name) not in texts],
+                unmatched=[
+                    name for name in item["named"] if not _names_attribute(name, plan.attributes)
+                ],
                 version=item["version"],
             )  # fmt: skip
             for item in plan.requirements
@@ -1195,6 +1385,7 @@ def body_of(
         pending_revision=plan.pending_revision,
         content_hash=None if plan.plan_id is None else content_hash(content(plan)),
         viewer_can_decide=viewer_can_decide,
+        open_values=open_values(connection, plan.control_id),
     )
 
 
@@ -1207,7 +1398,240 @@ def master_plan(
     plan = _load(connection, project_id, control_id).get(control_id)
     if plan is None:
         raise NotVisible()
-    return body_of(connection, plan, viewer_can_decide)
+    body = body_of(connection, plan, viewer_can_decide)
+    body.filled_since_approval = filled_since_approval(connection, control_id)
+    body.changes_since_approval = changes_since_approval(connection, plan)
+    body.suggested_standard = suggested_standard(connection, plan)
+    return body
+
+
+def suggested_standard(
+    connection: psycopg.Connection[Any], plan: _Plan
+) -> SuggestedStandard | None:
+    """The standard a client's own control matches by the fixed rules, offered when its
+    RCM states no test attribute (only "The control operated as described"): following it
+    as a customized standard brings its attributes. None for a library control, one that
+    follows a standard already, or one whose attributes are its own."""
+    from ai_workforce_api.library_matching import PLACEHOLDER, load_control, rules_candidates
+
+    if plan.source == "LIBRARY" or plan.library_key in BY_KEY:
+        return None
+    if any(PLACEHOLDER.match(str(item["text"])) is None for item in plan.attributes):
+        return None
+    facts = load_control(connection, plan.control_id)
+    if facts is None:
+        return None
+    ranked = rules_candidates(facts, {}, limit=3)
+    best = ranked[0] if ranked else None
+    if best is None or best.status not in ("STRONG", "PARTIAL") or best.library_key not in BY_KEY:
+        return None
+    standard = BY_KEY[best.library_key]
+    return SuggestedStandard(
+        library_key=standard.key, control_ref=standard.control_ref, title=standard.title,
+        status="STRONG" if best.status == "STRONG" else "PARTIAL", rationale=best.rationale,
+    )  # fmt: skip
+
+
+class FactsBody(BaseModel):
+    """Facts the team states for a client's own control; an empty one clears it."""
+
+    facts: dict[str, str] = Field(min_length=1, max_length=len(STATEABLE_FACTS))
+
+
+def state_facts(
+    connection: psycopg.Connection[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID,
+    body: FactsBody,
+) -> None:
+    """Record what the team states about a client's own control (migration 0088): whether
+    it prevents or detects, who performs and reviews it, its assertions, and the planner's
+    proposals it confirms. Who stated each, and when, is kept with it."""
+    from ai_workforce_api.actions import contains_secret
+
+    cleaned: dict[str, str] = {}
+    for name, raw in body.facts.items():
+        if name not in STATEABLE_FACTS:
+            raise ValueError("that is not a fact the team states")
+        value = " ".join(raw.split())[:600]
+        if name == "TYPE" and value:
+            if value.lower() not in ("preventive", "detective"):
+                raise ValueError("a control is preventive or detective")
+            value = value.capitalize()
+        cleaned[name] = value
+    if contains_secret(cleaned):
+        raise ValueError("a fact cannot hold a credential")
+    with transaction(connection) as cursor:
+        row = cursor.execute(
+            "SELECT stated_facts FROM engagement_controls WHERE id = %s AND project_id = %s "
+            "FOR UPDATE",
+            (control_id, project_id),
+        ).fetchone()
+        if row is None:
+            raise NotVisible()
+        name_row = cursor.execute(
+            "SELECT display_name FROM users WHERE id = %s", (actor,)
+        ).fetchone()
+        by_name = str(name_row[0]) if name_row is not None and name_row[0] else ""
+        stated: dict[str, Any] = dict(row[0] or {})
+        at = cursor.execute("SELECT clock_timestamp()").fetchone()
+        for name, value in cleaned.items():
+            if value:
+                stated[name] = {
+                    "value": value, "by": str(actor), "by_name": by_name,
+                    "at": at[0].isoformat() if at is not None else "",
+                }  # fmt: skip
+            else:
+                stated.pop(name, None)
+        cursor.execute(
+            "UPDATE engagement_controls SET stated_facts = %s, version = version + 1, "
+            "updated_at = clock_timestamp() WHERE id = %s",
+            (Json(stated), control_id),
+        )
+        _audit(
+            cursor, organization_id, project_id, actor, "control.facts_stated",
+            "engagement_control", control_id,
+            {"stated": sorted(k for k, v in cleaned.items() if v),
+             "cleared": sorted(k for k, v in cleaned.items() if not v)},
+        )  # fmt: skip
+
+
+def _filled_only(old: Any, new: Any) -> bool:
+    """Whether new is old with its bracketed client values filled in (migration 0086's
+    fills_placeholders): reported as values filled, not as a change."""
+    if not isinstance(old, str) or not isinstance(new, str) or "[" not in old or old == new:
+        return False
+    parts = re.split(r"\s*\[[^\]]+\]\s*", " ".join(old.split()))
+    pattern = r"\s*(.+?)\s*".join(re.escape(part) for part in parts)
+    return re.fullmatch(pattern, " ".join(new.split())) is not None
+
+
+_CONTROL_FIELDS = {
+    "title": "Title", "description": "Description", "risk": "Risk", "frequency": "Frequency",
+    "nature": "Nature", "area": "Area", "key_control": "Key control",
+    "application": "System", "classifications": "Classifications",
+}  # fmt: skip
+
+
+def changes_since(approved: dict[str, Any], current: dict[str, Any]) -> list[ChangeItem]:
+    """What differs between the plan a reviewer approved and the plan now, item by item.
+    Wording that only fills a client value the approved plan left in brackets is not a
+    change (migration 0086)."""
+    found: list[ChangeItem] = []
+
+    def differs(old: Any, new: Any) -> bool:
+        return old != new and not _filled_only(old, new)
+
+    before, after = approved.get("control", {}), current.get("control", {})
+    for key, label in _CONTROL_FIELDS.items():
+        if differs(before.get(key), after.get(key)):
+            found.append(ChangeItem(
+                section="CONTROL", code="", change="CHANGED", detail=f"{label} changed",
+            ))  # fmt: skip
+    if approved.get("understanding") != current.get("understanding"):
+        found.append(ChangeItem(
+            section="UNDERSTANDING", code="", change="CHANGED",
+            detail="Understanding of the control revised",
+        ))  # fmt: skip
+    phases_before = {item["phase"]: item for item in approved.get("phases", [])}
+    for item in current.get("phases", []):
+        was = phases_before.get(item["phase"])
+        if was is not None and was.get("applicability") != item.get("applicability"):
+            found.append(ChangeItem(
+                section="PHASE", code=item["phase"], change="CHANGED",
+                detail=f"{PHASE_LABELS.get(item['phase'], item['phase'])} applicability changed",
+            ))  # fmt: skip
+
+    def by_code(
+        section: Literal["PROCEDURE", "ATTRIBUTE", "EVIDENCE"],
+        name: str,
+        key: str,
+        wording: tuple[str, ...],
+    ) -> None:
+        old = {item["code"]: item for item in approved.get(key, [])}
+        new = {item["code"]: item for item in current.get(key, [])}
+        for code, item in new.items():
+            was = old.get(code)
+            if was is None:
+                found.append(ChangeItem(
+                    section=section, code=code, change="ADDED", detail=f"{name} {code} added",
+                ))  # fmt: skip
+                continue
+            what: list[str] = []
+            if any(differs(was.get(f), item.get(f)) for f in wording):
+                what.append("reworded")
+            links = ("attributes", "procedures")
+            if any(was.get(f) != item.get(f) for f in links):
+                what.append("links changed")
+            rest = set(item) - set(wording) - set(links)
+            if any(differs(was.get(f), item.get(f)) for f in rest):
+                what.append("changed" if not what else "details changed")
+            if what:
+                found.append(ChangeItem(
+                    section=section, code=code, change="CHANGED",
+                    detail=f"{name} {code} {', '.join(what)}",
+                ))  # fmt: skip
+        for code in old.keys() - new.keys():
+            found.append(ChangeItem(
+                section=section, code=code, change="REMOVED", detail=f"{name} {code} removed",
+            ))  # fmt: skip
+
+    by_code("PROCEDURE", "Procedure", "procedures", ("text",))
+    by_code("ATTRIBUTE", "Attribute", "attributes", ("text",))
+    by_code("EVIDENCE", "Evidence", "evidence", ("title", "description"))
+    return found
+
+
+def changes_since_approval(connection: psycopg.Connection[Any], plan: _Plan) -> list[ChangeItem]:
+    """For a plan approved before and changed since, what changed from the version
+    approved (its stored snapshot). Empty otherwise."""
+    if plan.plan_id is None or plan.approved_revision is None or plan.status in APPROVED_STATUSES:
+        return []
+    row = connection.execute(
+        "SELECT content FROM plan_versions WHERE plan_id = %s AND revision = %s "
+        "ORDER BY created_at DESC LIMIT 1",
+        (plan.plan_id, plan.approved_revision),
+    ).fetchone()
+    if row is None or not isinstance(row[0], dict):
+        return []
+    return changes_since(row[0], content(plan))
+
+
+def filled_since_approval(
+    connection: psycopg.Connection[Any], control_id: UUID
+) -> list[FilledValue]:
+    """The client values recorded after the control's plan was last approved."""
+    from ai_workforce_api.statement_registry import statement_for
+
+    rows = connection.execute(
+        """
+        SELECT c.library_key, v.slot_key, v.value, coalesce(u.display_name, ''), v.filled_at
+        FROM evidence_plans p
+        JOIN engagement_controls c ON c.id = p.engagement_control_id
+        JOIN control_parameters v ON v.engagement_control_id = c.id
+        LEFT JOIN users u ON u.id = v.filled_by
+        WHERE p.engagement_control_id = %s AND p.approved_at IS NOT NULL
+          AND v.value <> '' AND v.filled_at > p.approved_at
+        ORDER BY v.filled_at, v.slot_key
+        """,
+        (control_id,),
+    ).fetchall()
+    found: list[FilledValue] = []
+    for library_key, key, value, by, at in rows:
+        statement = statement_for(str(library_key or ""))
+        label = next(
+            (slot.label for slot in (statement.slots if statement else ()) if slot.key == key),
+            str(key),
+        )
+        found.append(
+            FilledValue(
+                key=str(key), label=label, value=str(value), filled_by=str(by),
+                filled_at=at.isoformat(),
+            )
+        )  # fmt: skip
+    return found
 
 
 # The engagement's planning review queue
@@ -1236,6 +1660,20 @@ class QueueRow(BaseModel):
     version: int = 0
     approvable: bool = False
     held_by: str = ""
+    # What the queue filters by: the process (the team's own name for it, or the
+    # standard area), the kind of control, and how the control is designed and tested.
+    process: str = ""
+    category: Category = "BUSINESS"
+    key_control: bool = False
+    nature: str = ""
+    frequency: str = ""
+    test_basis: str = ""
+    # The client values the plan asks for, answerable from the queue.
+    open_values: list[OpenValueBody] = Field(default_factory=list)
+    # The questions that are not client values: reviewed on the plan itself.
+    other_questions: int = 0
+    # Approved before and changed since: what changed, in short (changes_since_approval).
+    changes_since_approval: list[str] = Field(default_factory=list)
 
 
 class QueueBody(BaseModel):
@@ -1247,6 +1685,8 @@ class QueueBody(BaseModel):
     next_control_id: UUID | None
     # Whether the viewer may approve or request changes (project.update).
     viewer_can_decide: bool = False
+    # Whether the viewer may record the client values the plans ask for (task.update).
+    viewer_can_answer: bool = False
 
 
 _REVIEW_ORDER: dict[str, int] = {
@@ -1258,6 +1698,7 @@ _REVIEW_ORDER: dict[str, int] = {
 def planning_queue(connection: psycopg.Connection[Any], project_id: UUID) -> QueueBody:
     """Every in-scope control and where its plan stands: no control is left out."""
     rows: list[QueueRow] = []
+    asked = open_values_by_control(connection, project_id)
     for plan in _load(connection, project_id).values():
         blockers = blockers_of(plan)
         state = state_of(plan, blockers)
@@ -1287,6 +1728,19 @@ def planning_queue(connection: psycopg.Connection[Any], project_id: UUID) -> Que
                 and plan.status != "APPROVED"
                 and not any(b.blocks for b in blockers),
                 held_by=next((b.detail for b in blockers if b.blocks), ""),
+                process=plan.process or DOMAIN_LABELS.get(plan.domain, plan.domain),
+                category=category_for(plan.domain),
+                key_control=plan.key_control,
+                nature=plan.nature,
+                frequency=plan.frequency,
+                test_basis=plan.test_basis,
+                open_values=asked.get(plan.control_id, []),
+                other_questions=sum(
+                    1 for b in blockers if b.kind == "CLARIFICATION" and b.resolve != "VALUES"
+                ),
+                changes_since_approval=[
+                    item.detail for item in changes_since_approval(connection, plan)
+                ],
             )  # fmt: skip
         )
     counts: dict[str, int] = {state: 0 for state in PLANNING_STATES}
@@ -1343,6 +1797,11 @@ class BatchResult(BaseModel):
 class ApproveBody(BaseModel):
     version: int = Field(ge=1)
     comment: str = Field(default="", max_length=4000)
+    # The client values the reviewer answered while approving (control_design.set_values),
+    # recorded with the approval in one transaction; and whether each also fills other
+    # controls that ask for it and have none yet.
+    values: dict[str, str] = Field(default_factory=dict, max_length=40)
+    everywhere: bool = False
 
 
 class RequestChangesBody(BaseModel):
@@ -1438,9 +1897,14 @@ def approve(
     control_id: UUID,
     actor: UUID,
     body: ApproveBody,
-) -> None:
+) -> list[UUID]:
     """A person approves the plan's current revision, with its attributes. Refused while
-    anything that would change it is undecided."""
+    anything that would change it is undecided. The client values answered with it are
+    recorded first, in the same transaction. Returns the other controls those values
+    also filled, for their own follow-up."""
+    from ai_workforce_api.control_context import ContextState
+    from ai_workforce_api.control_design import ValuesBody, set_values
+
     with transaction(connection) as cursor:
         plan_id, status, version, _revision, run_status, _pending = _locked(
             cursor, project_id, control_id
@@ -1448,9 +1912,20 @@ def approve(
         if status == "APPROVED":
             # Its current revision is approved (the database holds it so): approving it
             # again records nothing new.
-            return
+            return []
         if int(version) != body.version:
             raise PlanState("the plan changed")
+        answered = {key: value for key, value in body.values.items() if value.strip()}
+        filled: list[UUID] = []
+        if answered:
+            try:
+                filled = set_values(
+                    connection, organization_id, project_id, control_id, actor,
+                    ValuesBody(values=answered, everywhere=body.everywhere),
+                )  # fmt: skip
+            except ContextState as error:
+                # An unknown value or a credential: refused, and nothing is approved.
+                raise PlanState(error.detail) from None
         plan = _load(connection, project_id, control_id)[control_id]
         refused = [item.detail for item in blockers_of(plan) if item.blocks]
         if refused:
@@ -1483,8 +1958,15 @@ def approve(
         _audit(
             cursor, organization_id, project_id, actor, "evidence_plan.approved",
             "evidence_plan", plan_id,
-            {"revision": revision, "content_hash": digest, "previous_status": status},
+            {"revision": revision, "content_hash": digest, "previous_status": status,
+             "values_answered": sorted(answered)},
         )  # fmt: skip
+        # Results signed off under an earlier revision now await a reviewer's impact
+        # assessment (plan_impact.py, W3); the agent recommends, a person decides.
+        from ai_workforce_api.plan_impact import detect as detect_impacts
+
+        detect_impacts(cursor, organization_id, project_id, control_id)
+    return [item for item in filled if item != control_id]
 
 
 def request_changes(
@@ -1609,12 +2091,17 @@ class Replanned(BaseModel):
 
 
 def replan_unapproved(
-    connection: psycopg.Connection[Any], organization_id: UUID, project_id: UUID, actor: UUID
+    connection: psycopg.Connection[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    actor: UUID,
+    control_id: UUID | None = None,
 ) -> Replanned:
-    """Plan every in-scope control again with the reviewed rules, where no person has
-    approved the plan: its procedures, links, and understanding follow the records. An
-    approved plan, or one the planner agent is drafting, is left as it is. One control per
-    transaction; a person's decisions are kept, as on any run."""
+    """Plan every in-scope control again with the reviewed rules (or the one named, as a
+    finding on its plan offers), where no person has approved the plan: its procedures,
+    links, and understanding follow the records. An approved plan, or one the planner agent
+    is drafting, is left as it is. One control per transaction; a person's decisions are
+    kept, as on any run."""
     from ai_workforce_api.evidence_plans import generate
 
     rows = connection.execute(
@@ -1622,24 +2109,96 @@ def replan_unapproved(
         SELECT c.id, p.status IN ('APPROVED', 'CHANGES_PROPOSED')
                      OR p.run_status IN ('PENDING', 'WORKING')
         FROM engagement_controls c JOIN evidence_plans p ON p.engagement_control_id = c.id
-        WHERE c.project_id = %s AND c.included
+        WHERE c.project_id = %s AND c.included AND (%s::uuid IS NULL OR c.id = %s)
         ORDER BY c.control_ref
         """,
-        (project_id,),
+        (project_id, control_id, control_id),
     ).fetchall()
     planned = skipped = 0
-    for control_id, leave in rows:
+    for found, leave in rows:
         if leave:
             skipped += 1
             continue
-        generate(connection, None, organization_id, project_id, UUID(str(control_id)), actor)
+        generate(connection, None, organization_id, project_id, UUID(str(found)), actor)
         planned += 1
     with transaction(connection) as cursor:
         _audit(
             cursor, organization_id, project_id, actor, "evidence_plans.replanned",
-            "project", project_id, {"planned": planned, "skipped": skipped},
+            "project", project_id,
+            {"planned": planned, "skipped": skipped}
+            | ({} if control_id is None else {"control_id": str(control_id)}),
         )  # fmt: skip
     return Replanned(planned=planned, skipped=skipped)
+
+
+@dataclass(frozen=True)
+class Settled:
+    linked: int
+    redrawn: int
+
+
+def settle_library_attributes(
+    connection: psycopg.Connection[Any], project_id: UUID | None = None
+) -> Settled:
+    """Bring every unapproved plan in line with its standard's attributes (milestone L3e),
+    so no person tidies what the rules can: a copy of a library attribute is linked to it,
+    or retired when the library's own is on the control (library_definitions.
+    link_definitions), and a plan that leaves a library attribute untested or unsupported is
+    planned again with the rules, as "Plan again with the rules" does; so is one holding
+    evidence the rules planned for an attribute the control does not test. An approved plan, or
+    one the planner agent is drafting, is left as it is. Idempotent; run with every deploy,
+    as the standard workforce is. One control per transaction."""
+    from ai_workforce_api.evidence_plans import generate
+    from ai_workforce_api.library_definitions import link_definitions
+    from ai_workforce_api.testing_definitions import DEFINED_SINCE
+
+    rows = connection.execute(
+        """
+        SELECT c.id, c.organization_id, c.project_id,
+               coalesce(p.generated_by, j.owner_user_id)
+        FROM engagement_controls c
+        JOIN evidence_plans p ON p.engagement_control_id = c.id
+        JOIN projects j ON j.id = c.project_id
+        WHERE c.included AND c.library_key IS NOT NULL AND c.library_version >= %s
+          AND (%s::uuid IS NULL OR c.project_id = %s)
+          AND p.status NOT IN ('APPROVED', 'CHANGES_PROPOSED')
+          AND p.run_status NOT IN ('PENDING', 'WORKING')
+        ORDER BY c.project_id, c.control_ref
+        """,
+        (DEFINED_SINCE, project_id, project_id),
+    ).fetchall()
+    gaps = ("ATTRIBUTE_WITHOUT_PROCEDURE", "ATTRIBUTE_WITHOUT_EVIDENCE")
+    # Evidence the rules planned for an attribute the control does not test.
+    stray = "EVIDENCE_WITHOUT_ATTRIBUTE"
+    linked = redrawn = 0
+    for control_id, organization_id, project, requester in rows:
+        control = UUID(str(control_id))
+        with transaction(connection) as cursor:
+            changed = link_definitions(cursor, control, None)
+        linked += changed
+        plan = _load(connection, UUID(str(project)), control).get(control)
+        if plan is None or requester is None:
+            continue
+        library = {
+            str(code)
+            for (code,) in connection.execute(
+                "SELECT code FROM control_attributes WHERE engagement_control_id = %s "
+                "AND status = 'APPROVED' AND definition_key IS NOT NULL",
+                (control,),
+            ).fetchall()
+        }
+        rules = {item["code"] for item in plan.requirements if item["origin"] == "RULES"}
+        untidy = any(
+            (f.kind in gaps and f.code in library) or (f.kind == stray and f.code in rules)
+            for f in findings_of(plan)
+        )
+        if changed or untidy:
+            generate(
+                connection, None, UUID(str(organization_id)), UUID(str(project)), control,
+                UUID(str(requester)),
+            )  # fmt: skip
+            redrawn += 1
+    return Settled(linked=linked, redrawn=redrawn)
 
 
 # A person edits the plan. Every change revises it (database triggers), and an approved
@@ -2086,13 +2645,13 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
 
     def may_decide(
         connection: psycopg.Connection[Any], principal: Principal, organization_id: UUID,
-        project_id: UUID,
+        project_id: UUID, action: Action = Action.PROJECT_UPDATE,
     ) -> bool:  # fmt: skip
         if principal.kind is not PrincipalKind.USER:
             return False
         try:
             authorize(
-                connection, principal=principal, action=Action.PROJECT_UPDATE,
+                connection, principal=principal, action=action,
                 organization_id=organization_id, project_id=project_id,
             )  # fmt: skip
         except AccessDenied, NotVisible:
@@ -2103,10 +2662,14 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
         connection: psycopg.Connection[Any], principal: Principal, organization_id: UUID,
         project_id: UUID, control_id: UUID,
     ) -> MasterPlanBody:  # fmt: skip
-        return master_plan(
+        body = master_plan(
             connection, project_id, control_id,
             may_decide(connection, principal, organization_id, project_id),
         )  # fmt: skip
+        body.viewer_can_answer = may_decide(
+            connection, principal, organization_id, project_id, Action.TASK_UPDATE
+        )
+        return body
 
     @app.get(f"{control}/master-plan")
     def get_plan(
@@ -2124,6 +2687,9 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
             allowed(c, p, organization_id, project_id, None, Action.TASK_READ)
             body = planning_queue(c, project_id)
             body.viewer_can_decide = may_decide(c, p, organization_id, project_id)
+            body.viewer_can_answer = may_decide(
+                c, p, organization_id, project_id, Action.TASK_UPDATE
+            )
             return body
 
         return run(request, work)
@@ -2227,6 +2793,35 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
             allowed(c, p, organization_id, project_id, control_id, Action.TASK_UPDATE)
             decide_pending_revision(c, organization_id, project_id, control_id, p.id, body)
             return read(c, p, organization_id, project_id, control_id)
+
+        return run(request, work)
+
+    @app.put(f"{control}/master-plan/facts")
+    def put_facts(
+        organization_id: UUID, project_id: UUID, control_id: UUID, body: FactsBody,
+        request: Request,
+    ) -> MasterPlanBody:  # fmt: skip
+        """Facts the team states for a client's own control (the plan's Describe dialog)."""
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> MasterPlanBody:
+            allowed(c, p, organization_id, project_id, control_id, Action.TASK_UPDATE)
+            state_facts(c, organization_id, project_id, control_id, p.id, body)
+            return read(c, p, organization_id, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/master-plan/replan")
+    def replan_control(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> Replanned:
+        """Plan this control again with the reviewed rules (a finding's fix on its plan)."""
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> Replanned:
+            allowed(c, p, organization_id, project_id, control_id, Action.TASK_UPDATE)
+            done = replan_unapproved(c, organization_id, project_id, p.id, control_id)
+            if done.planned == 0:
+                raise PlanState("an approved plan, or one being drafted, is not planned again")
+            return done
 
         return run(request, work)
 

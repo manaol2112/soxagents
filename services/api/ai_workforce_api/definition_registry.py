@@ -17,6 +17,9 @@ from ai_workforce_api import definitions_business, definitions_itgc
 from ai_workforce_api.testing_definitions import (
     AGENT_RULES,
     CONFIDENCES,
+    DEFINITIONS_VERSION,
+    EVIDENCE_FORMS,
+    EVIDENCE_PURPOSES,
     SOURCES,
     TESTED,
     AttributeDef,
@@ -132,6 +135,72 @@ def definition_for(library_key: str) -> Definition | None:
     return BY_LIBRARY_KEY.get(library_key)
 
 
+def definition_version(library_key: str) -> int:
+    """The version a library control's definition is at: 4 for one rewritten with steps and
+    an evidence suite, 3 otherwise. An engagement control below it is offered the update."""
+    definition = BY_LIBRARY_KEY.get(library_key)
+    return DEFINITIONS_VERSION if definition is None else definition.version
+
+
+# Words that leave a step without an action a tester could perform or a reviewer check.
+VAGUE_STEP = re.compile(r"(?i)\b(?:as appropriate|if necessary|where applicable|etc\.?)\b")
+
+
+def _suite_problems(definition: Definition) -> list[str]:
+    """Checks for a version 4 definition: every step names evidence the suite defines and
+    says what to record; every suite item is used; every attribute names its evidence."""
+    name = definition.control_ref
+    found: list[str] = []
+    keys = [item.key for item in definition.evidence]
+    if len(set(keys)) != len(keys):
+        found.append(f"{name}: evidence keys repeat")
+    known = set(keys)
+    attribute_keys = {item.key for item in definition.attributes}
+    used: set[str] = set()
+    for item in definition.evidence:
+        where = f"{name}.{item.key}"
+        if item.form not in EVIDENCE_FORMS or item.purpose not in EVIDENCE_PURPOSES:
+            found.append(f"{where}: unknown form or purpose")
+        if not item.phases or not item.contents or not item.provider or not item.period:
+            found.append(f"{where}: lacks phases, contents, a provider, or a period")
+        if item.purpose in ("POPULATION", "COMPLETENESS") and not item.completeness:
+            found.append(f"{where}: a population or its support says how it is complete")
+        for key in item.attributes:
+            if key not in attribute_keys:
+                found.append(f"{where}: names unknown attribute {key}")
+    for proc in definition.procedures:
+        where = f"{name}: procedure {proc.key}"
+        if not proc.steps:
+            found.append(f"{where} has no steps")
+        # A procedure that tests attributes does so in at least two steps: one that finds
+        # the evidence and one that compares it; a single-step procedure selects or records.
+        if proc.attributes and len(proc.steps) < 2:
+            found.append(f"{where} tests attributes in fewer than two steps")
+        for index, step in enumerate(proc.steps, start=1):
+            if not step.action.strip() or not step.record.strip():
+                found.append(f"{where} step {index} lacks an action or what to record")
+            if VAGUE.search(step.action) or VAGUE_STEP.search(step.action):
+                found.append(f"{where} step {index}: vague wording")
+            for key in step.evidence:
+                if key not in known:
+                    found.append(f"{where} step {index} names unknown evidence {key}")
+                used.add(key)
+        if proc.attributes and not any(step.evidence for step in proc.steps):
+            found.append(f"{where} tests attributes without evidence")
+    for attribute in definition.attributes:
+        where = f"{name}.{attribute.key}"
+        if not attribute.evidence_keys:
+            found.append(f"{where}: no evidence key")
+        for key in attribute.evidence_keys:
+            if key not in known:
+                found.append(f"{where}: names unknown evidence {key}")
+            used.add(key)
+    for key in keys:
+        if key not in used:
+            found.append(f"{name}.{key}: no step or attribute uses it")
+    return found
+
+
 def attribute_for(library_key: str, key: str = "", text: str = "") -> AttributeDef | None:
     """An attribute's definition, by its key, or by its wording when it has no key."""
     definition = BY_LIBRARY_KEY.get(library_key)
@@ -206,6 +275,12 @@ def problems(v2: dict[str, tuple[str, ...]] | None = None) -> list[str]:
             for text in v2.get(definition.library_key, ()):
                 if text not in mapped:
                     found.append(f"{name}: version 2 attribute not carried or retired: {text}")
+        if definition.version >= 4:
+            if not definition.evidence:
+                found.append(f"{name}: version 4 without an evidence suite")
+            found.extend(_suite_problems(definition))
+        elif definition.evidence or any(proc.steps for proc in definition.procedures):
+            found.append(f"{name}: steps or a suite on a definition below version 4")
     return found
 
 
@@ -238,7 +313,8 @@ def uncertainties() -> list[Uncertainty]:
                     if item.confidence == "LOW"
                     else "NOT ESTABLISHED: not supported by the control description.",
                     "; ".join(item.assumptions) or "The answer to the question.",
-                    "Proposed, not tested, until a person approves it with the answer.",
+                    "Approved with the standard in the library review; testing waits for "
+                    "the client's value it shows in brackets.",
                     item.blocks,
                     item.question,
                 )
@@ -432,6 +508,25 @@ def markdown(v2: dict[str, tuple[str, ...]]) -> str:
             limit = f" Limitation: {proc.limitation}" if proc.limitation else ""
             lines.append(f"- **{proc.key}** ({proc.phase.lower()}) {proc.objective} "
                          f"{proc.action}{tested}{limit}")  # fmt: skip
+            for index, step in enumerate(proc.steps, start=1):
+                uses = f" Evidence: {', '.join(step.evidence)}." if step.evidence else ""
+                record = f" Record: {step.record}" if step.record else ""
+                exception = f" If not: {step.exception}" if step.exception else ""
+                lines.append(f"  {index}. {step.action}{uses}{record}{exception}")
+        if definition.evidence:
+            lines += ["", f"Evidence suite (version {definition.version}):", "",
+                      "| Key | Evidence | Form | Provider | Phases | Purpose | Period | "
+                      "Contents | Completeness | Not acceptable | Supports |",
+                      "|" + " --- |" * 11]  # fmt: skip
+            for evidence in definition.evidence:
+                lines.append(
+                    f"| {evidence.key} | {_cell(evidence.name)} | {evidence.form.lower()} | "
+                    f"{_cell(evidence.provider)} | "
+                    f"{', '.join(p.lower() for p in evidence.phases)} | "
+                    f"{evidence.purpose.lower()} | {_cell(evidence.period)} | "
+                    f"{_cell('; '.join(evidence.contents))} | {_cell(evidence.completeness)} | "
+                    f"{_cell(evidence.not_acceptable)} | {', '.join(evidence.attributes)} |"
+                )
         lines += ["", "| Attribute | Confidence | Condition | Why | Evidence | Passes | "
                   "Exception | Insufficient | Human review | Do not infer | Basis |",
                   "|" + " --- |" * 11]  # fmt: skip

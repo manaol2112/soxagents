@@ -32,7 +32,7 @@ from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError
 
 from ai_workforce_api.actions import contains_secret
-from ai_workforce_api.controls import DOMAIN_LABELS
+from ai_workforce_api.controls import BY_KEY, DOMAIN_LABELS
 from ai_workforce_api.db import transaction
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.model_providers import CLAUDE_CONFIG
@@ -953,6 +953,12 @@ class CandidateBody(BaseModel):
     decision_note: str = ""
     decided_by: str | None = None
     decided_at: datetime | None = None
+    # Where it comes from: the system's own control, the client's controls on other
+    # systems adapted to it (their references), or the library; and, for an adapted
+    # control, the standard whose wording it takes.
+    origin: Literal["SYSTEM", "RCM", "LIBRARY"] = "SYSTEM"
+    adapted_from: list[str] = Field(default_factory=list)
+    follows: str = ""
 
 
 class AssessmentBody(BaseModel):
@@ -971,6 +977,8 @@ class AssessmentBody(BaseModel):
     candidates: list[CandidateBody]
     # True once a person saved a selection for the system.
     decided: bool
+    # The system's code in the client's control references (ITGC-AD-02).
+    ref_code: str = ""
 
 
 class CuecControlBody(BaseModel):
@@ -1061,6 +1069,11 @@ def assessment_body(
             decision_note="" if row is None else row[8],
             decided_by=None if row is None or row[9] is None else str(row[9]),
             decided_at=None if row is None else row[10],
+            origin=item.origin, adapted_from=list(item.adapted_from),
+            follows=(
+                BY_KEY[item.library_key].control_ref
+                if item.origin == "RCM" and item.library_key in BY_KEY else ""
+            ),
         ))  # fmt: skip
     if review_row is None:
         review_row = ("IDLE", "NONE", None, "", "", None, "NOT_RESEARCHED", "", "", [], [], [])
@@ -1075,6 +1088,7 @@ def assessment_body(
         questions=[str(text) for text in (review_row[11] or [])],
         candidates=candidates,
         decided=any(candidate.decision is not None for candidate in candidates),
+        ref_code=facts.ref_code,
     )  # fmt: skip
 
 
@@ -1148,6 +1162,9 @@ class DetailsBody(BaseModel):
     purpose: str = Field(default="", max_length=1000)
     processes: str = Field(default="", max_length=500)
     owner: str = Field(default="", max_length=200)
+    # The system's code in the client's control references: omitted keeps it, empty goes
+    # back to the one suggested from its name.
+    ref_code: str | None = Field(default=None, pattern=r"^$|^[A-Z][A-Z0-9]{0,7}$")
 
 
 class Selection(BaseModel):
@@ -1187,11 +1204,11 @@ def update_details(
             """
             UPDATE engagement_applications
             SET description = %s, purpose = %s, processes = %s, owner = %s,
-                version = version + 1
+                ref_code = CASE WHEN %s THEN %s ELSE ref_code END, version = version + 1
             WHERE id = %s AND project_id = %s RETURNING id
             """,
             (values["description"], values["purpose"], values["processes"], values["owner"],
-             application_id, project_id),
+             body.ref_code is not None, body.ref_code or None, application_id, project_id),
         ).fetchone()  # fmt: skip
         if updated is None:
             raise ApplicabilityState("system changed")
@@ -1210,7 +1227,7 @@ def save_selection(
 ) -> None:
     """The person's selection for the system: each control chosen joins its scope, each
     not chosen leaves it, and the decision is kept beside the agent's recommendation."""
-    from ai_workforce_api.system_scoping import gather, include_control
+    from ai_workforce_api.system_scoping import adapt_control, gather, include_control
 
     facts = gather(connection, application_id)
     if facts is None or facts.project_id != project_id:
@@ -1242,7 +1259,12 @@ def save_selection(
     with transaction(connection) as cursor:
         for candidate, selection in chosen:
             own = candidate.control_id is not None and not candidate.elsewhere
-            if selection.selected:
+            if selection.selected and candidate.adapted_from:
+                # The client's control on other systems, adapted to this one.
+                adapt_control(
+                    cursor, organization_id, project_id, application_id, facts.name, candidate
+                )
+            elif selection.selected:
                 include_control(
                     cursor, organization_id, project_id, application_id,
                     candidate.control_id, candidate.library_key or None,

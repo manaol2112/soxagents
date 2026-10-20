@@ -61,6 +61,8 @@ class PortalDeliverable(BaseModel):
     format: str
     show: str
     completeness: str
+    # What may serve instead.
+    alternatives: list[str] = Field(default_factory=list)
     state: ItemState
     state_label: str
     files: list[PortalItemFile]
@@ -168,7 +170,7 @@ def request_facts(
     recipient: str,
     request_status: str,
 ) -> RequestFacts:
-    from ai_workforce_api.request_details import client_content
+    from ai_workforce_api.request_details import client_content, plain_title
 
     title, type_label, content = client_content(connection, project_id, request_id)
     requirements = _requirements(connection, request_id)
@@ -183,7 +185,7 @@ def request_facts(
     deliverables: list[PortalDeliverable] = []
     if content.structured:
         for item in content.items:
-            sufficiency = requirements.get(" ".join(item.title.lower().split()))
+            sufficiency = requirements.get(" ".join(plain_title(item.title).lower().split()))
             item_files = by_item.get(item.number, [])
             state = item_state(len(item_files), sufficiency)
             deliverables.append(
@@ -196,6 +198,7 @@ def request_facts(
                     format=item.format,
                     show=item.show,
                     completeness=item.completeness,
+                    alternatives=item.alternatives,
                     state=state,
                     state_label=ITEM_STATE_LABELS[state],
                     files=item_files,

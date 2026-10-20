@@ -14,9 +14,11 @@ from test_execution import _add_project_member, _add_user
 from test_outbound import _session, migrated
 from test_planning_gate import _control, _launched, _plan, _project, _rows
 
-from ai_workforce_api.db import connect
+from ai_workforce_api.control_attributes import _write_list
+from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.evidence_planning import rules_plan
 from ai_workforce_api.evidence_plans import GATE_PLAN, gate_reason, generate, load_facts
+from ai_workforce_api.master_plans import Settled, changes_since, settle_library_attributes
 from ai_workforce_api.readiness import NotReady, assess, require_testable
 
 __all__ = ["migrated"]
@@ -56,6 +58,11 @@ def test_every_control_is_planned_in_four_sections_and_in_the_queue(migrated: Da
     assert sum(body["counts"].values()) == controls
     assert body["counts"]["NOT_STARTED"] == 0 and body["counts"]["APPROVED"] == 0
     assert body["next_control_id"] is not None
+    # Each row carries what the queue filters by.
+    access = next(row for row in body["controls"] if row["control_ref"] == "ITGC-AC-01")
+    assert access["process"] == "Logical access" and access["category"] == "ITGC"
+    assert access["nature"] and access["frequency"] and access["test_basis"] == "STANDARD"
+    assert isinstance(access["key_control"], bool)
     control = _control(team, "ITGC-AC-01")["id"]
     plan = _master(team, control)
     # The four sections, each item with its code.
@@ -133,6 +140,115 @@ def test_approval_is_bound_to_a_stored_version_and_kept(migrated: Database) -> N
     assert late.status_code == 409 and late.json()["detail"] == "the plan changed"
 
 
+def test_the_values_a_plan_asks_for_are_answered_with_its_approval(migrated: Database) -> None:
+    team = _launched(migrated, "master-values")
+    control = _control(team, "ITGC-AC-01")["id"]
+    before = _master(team, control)
+    # The review asks for the client's values by name, with why each matters.
+    asked = {item["key"]: item for item in before["open_values"]}
+    assert "admin-role" in asked
+    assert asked["admin-role"]["label"] and asked["admin-role"]["why"]
+    # With the answers usually given, to choose from instead of typing.
+    assert "IT service desk" in asked["admin-role"]["options"]
+    assert any(b["resolve"] == "VALUES" for b in before["blockers"])
+    # An answer that is not one of the control's values is refused, and nothing is
+    # approved or recorded.
+    plan = _plan(team, control)
+    refused = team["owner"].post(
+        f"{_project(team)}/controls/{control}/evidence-plan/approve",
+        json={"version": plan["version"], "values": {"no-such-slot": "x"}},
+    )
+    assert refused.status_code == 409, refused.text
+    assert _plan(team, control)["status"] != "APPROVED"
+    # Answered with the approval: recorded first, then approved, in one decision.
+    approved = team["owner"].post(
+        f"{_project(team)}/controls/{control}/evidence-plan/approve",
+        json={
+            "version": plan["version"],
+            "values": {"admin-role": "IT service desk", "approver-role": "  "},
+            "everywhere": True,
+        },
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "APPROVED"
+    after = _master(team, control)
+    assert "admin-role" not in {item["key"] for item in after["open_values"]}
+    rows = _rows(
+        migrated,
+        """
+        SELECT p.value, a.payload
+        FROM control_parameters p, audit_events a
+        WHERE p.engagement_control_id = %s AND p.slot_key = 'admin-role'
+          AND a.action = 'evidence_plan.approved' AND a.project_id = p.project_id
+        """,
+        UUID(control),
+    )
+    assert len(rows) == 1
+    value, payload = rows[0]
+    assert value == "IT service desk"
+    # A blank answer is not recorded; the audit names what was answered.
+    assert payload["values_answered"] == ["admin-role"]
+    # The same value fills the other controls that ask for it and had none.
+    leavers = _control(team, "ITGC-AC-02")["id"]
+    assert "admin-role" not in {item["key"] for item in _master(team, leavers)["open_values"]}
+
+
+def test_the_queue_asks_each_plans_values_and_answers_many_at_once(migrated: Database) -> None:
+    team = _launched(migrated, "master-queue-values")
+    read = team["owner"].get(f"{_project(team)}/planning-review").json()
+    assert read["viewer_can_answer"] is True
+    queue = read["controls"]
+    asking = {
+        row["control_ref"]: {item["key"] for item in row["open_values"]}
+        for row in queue
+        if row["open_values"]
+    }
+    assert "admin-role" in asking["ITGC-AC-01"] and "admin-role" in asking["ITGC-AC-02"]
+    # The plan's other questions are counted apart from its client values.
+    for row in queue:
+        assert 0 <= row["other_questions"] <= row["clarifications"]
+    provisioning = _control(team, "ITGC-AC-01")["id"]
+    leavers = _control(team, "ITGC-AC-02")["id"]
+    path = f"{_project(team)}/control-values"
+    # All or none: one refused value leaves every control as it was.
+    refused = team["owner"].put(
+        path,
+        json={
+            "items": [
+                {"control_id": provisioning, "values": {"admin-role": "IT service desk"}},
+                {"control_id": leavers, "values": {"no-such-slot": "x"}},
+            ]
+        },
+    )
+    assert refused.status_code == 409, refused.text
+    assert "admin-role" in {item["key"] for item in _master(team, provisioning)["open_values"]}
+    # The same answer for both controls, saved at once; a blank answer is skipped.
+    saved = team["owner"].put(
+        path,
+        json={
+            "items": [
+                {"control_id": provisioning, "values": {"admin-role": "IT service desk"}},
+                {"control_id": leavers, "values": {"admin-role": "IT service desk"}},
+                {"control_id": leavers, "values": {"admin-role": "  "}},
+            ]
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["controls"] == 2
+    after = team["owner"].get(f"{_project(team)}/planning-review").json()["controls"]
+    for row in after:
+        if row["control_ref"] in ("ITGC-AC-01", "ITGC-AC-02"):
+            assert "admin-role" not in {item["key"] for item in row["open_values"]}
+    values = _rows(
+        migrated,
+        "SELECT value FROM control_parameters WHERE engagement_control_id IN (%s, %s) "
+        "AND slot_key = 'admin-role'",
+        UUID(provisioning),
+        UUID(leavers),
+    )
+    assert sorted(row[0] for row in values) == ["IT service desk", "IT service desk"]
+
+
 def test_a_contributor_prepares_and_a_reviewer_decides(migrated: Database) -> None:
     team = _launched(migrated, "master-roles")
     control = _control(team, "ITGC-AC-01")["id"]
@@ -142,6 +258,9 @@ def test_a_contributor_prepares_and_a_reviewer_decides(migrated: Database) -> No
     preparer = _session(migrated, member)
     plan = _master(team, control, preparer)
     assert plan["viewer_can_decide"] is False
+    # A preparer enters the client's values from the plan, as on the queue, without deciding.
+    assert plan["viewer_can_answer"] is True
+    assert _master(team, control)["viewer_can_answer"] is True
     path = f"{_project(team)}/controls/{control}/evidence-plan"
     refused = preparer.post(f"{path}/approve", json={"version": plan["version"]})
     assert refused.status_code == 403
@@ -290,6 +409,134 @@ def test_a_material_change_sends_an_approved_plan_back_for_review(migrated: Data
     kept = next(a for a in after["attributes"] if a["code"] == linked["code"])
     assert kept["id"] != linked["id"] and kept["evidence_codes"] == linked["evidence_codes"]
     assert after["state"] != "APPROVED"
+
+
+def test_a_client_value_filled_after_approval_keeps_the_approval(migrated: Database) -> None:
+    """Decided by the product owner: filling a client value the approved plan left in
+    brackets is not a change to the plan; it is recorded and shown. Any other change still
+    sends the plan back for review."""
+    team = _launched(migrated, "master-fill")
+    control = _control(team, "ITGC-AC-02")["id"]
+    before = _master(team, control)
+    assert any(v["key"] == "removal-days" for v in before["open_values"])
+    approved = _approve(team, control)
+    filled = team["owner"].put(
+        f"{_project(team)}/controls/{control}/values",
+        json={"values": {"removal-days": "5 business days"}},
+    )
+    assert filled.status_code == 200, filled.text
+    after = _master(team, control)
+    assert after["status"] == "APPROVED" and after["state"] == "APPROVED"
+    assert after["revision"] == after["approved_revision"] == approved["revision"]
+    timely = next(a for a in after["attributes"] if "termination date" in a["text"])
+    assert "within 5 business days" in timely["text"]
+    assert [(v["key"], v["value"]) for v in after["filled_since_approval"]] == [
+        ("removal-days", "5 business days")
+    ]
+    assert after["filled_since_approval"][0]["filled_by"]
+    # Changing the value once filled is a change to what is tested: back for review.
+    changed = team["owner"].put(
+        f"{_project(team)}/controls/{control}/values",
+        json={"values": {"removal-days": "3 business days"}},
+    )
+    assert changed.status_code == 200, changed.text
+    reopened = _master(team, control)
+    assert reopened["status"] != "APPROVED"
+    assert reopened["revision"] == approved["revision"] + 1
+
+
+def test_what_changed_since_approval_is_said_item_by_item() -> None:
+    approved = {
+        "control": {"description": "Access is removed within [the days] of leaving."},
+        "procedures": [{"code": "I1", "text": "Inspect removals.", "attributes": ["A1"]}],
+        "attributes": [
+            {"code": "A1", "text": "Removed within [the days]", "condition": ""},
+            {"code": "A2", "text": "Every account removed", "condition": ""},
+        ],
+        "evidence": [
+            {"code": "E1", "title": "Leavers", "description": "HR list.", "attributes": []}
+        ],
+    }
+    current = {
+        # Only a client value filled in: not a change (migration 0086).
+        "control": {"description": "Access is removed within 5 days of leaving."},
+        "procedures": [
+            {"code": "I1", "text": "Inspect removals.", "attributes": ["A1", "A2"]},
+            {"code": "I2", "text": "Reperform a sample.", "attributes": []},
+        ],
+        "attributes": [
+            {"code": "A1", "text": "Removed within 5 days", "condition": ""},
+            {"code": "A2", "text": "Every account disabled", "condition": "Each account"},
+        ],
+        "evidence": [],
+    }
+    assert [item.detail for item in changes_since(approved, current)] == [
+        "Procedure I1 links changed",
+        "Procedure I2 added",
+        "Attribute A2 reworded, details changed",
+        "Evidence E1 removed",
+    ]
+    assert changes_since(approved, approved) == []
+
+
+def test_a_plan_changed_since_approval_says_what_changed(migrated: Database) -> None:
+    team = _launched(migrated, "master-changed")
+    control = _control(team, "ITGC-AC-01")["id"]
+    approved = _approve(team, control)
+    assert _master(team, control)["changes_since_approval"] == []
+    added = team["owner"].post(
+        f"{_project(team)}/controls/{control}/master-plan/procedures",
+        json={"phase": "INTERIM", "text": "Reperform the approval check for a sample of grants."},
+    )
+    assert added.status_code == 200, added.text
+    plan = _master(team, control)
+    assert plan["revised_since_approval"] is True
+    assert plan["approved_revision"] == approved["revision"]
+    changes = [item["detail"] for item in plan["changes_since_approval"]]
+    assert any(detail.startswith("Procedure I") and detail.endswith("added") for detail in changes)
+    queue = team["owner"].get(f"{_project(team)}/planning-review").json()
+    row = next(r for r in queue["controls"] if r["control_id"] == control)
+    assert row["changes_since_approval"] == changes
+
+
+def test_evidence_planned_before_a_value_was_filled_still_names_its_attribute(
+    migrated: Database,
+) -> None:
+    team = _launched(migrated, "master-named")
+    control = _control(team, "ITGC-AC-03")["id"]
+    named = _rows(
+        migrated,
+        "SELECT count(*) FROM evidence_requirements WHERE engagement_control_id = %s "
+        "AND attributes::text LIKE %s",
+        UUID(control),
+        "%[%",
+    )[0][0]
+    assert named, "the evidence names the deadline attribute in brackets"
+    filled = team["owner"].put(
+        f"{_project(team)}/controls/{control}/values",
+        json={"values": {"review-deadline": "30 days after quarter end"}},
+    )
+    assert filled.status_code == 200, filled.text
+    after = _master(team, control)
+    assert all(e["unmatched"] == [] for e in after["evidence"])
+    assert "UNMATCHED_ATTRIBUTE" not in {f["kind"] for f in after["findings"]}
+
+
+def test_a_finding_offers_planning_the_control_again_with_the_rules(migrated: Database) -> None:
+    team = _launched(migrated, "master-fix")
+    control = _control(team, "ITGC-AC-02")["id"]
+    attribute = _master(team, control)["attributes"][0]
+    _unlink(migrated, attribute["id"])
+    gaps = {"ATTRIBUTE_WITHOUT_PROCEDURE", "ATTRIBUTE_WITHOUT_EVIDENCE"}
+    assert {f["kind"] for f in _master(team, control)["findings"]} & gaps
+    path = f"{_project(team)}/controls/{control}/master-plan/replan"
+    replanned = team["owner"].post(path)
+    assert replanned.status_code == 200, replanned.text
+    assert replanned.json() == {"planned": 1, "skipped": 0}
+    assert not {f["kind"] for f in _master(team, control)["findings"]} & gaps
+    # An approved plan is not planned again from a finding: a person approved it.
+    _approve(team, control)
+    assert team["owner"].post(path).status_code == 409
 
 
 def test_testing_waits_for_an_approved_plan(migrated: Database) -> None:
@@ -483,3 +730,131 @@ def test_a_reviewer_approves_the_plans_they_select_one_by_one(migrated: Database
     assert {row[1] for row in decisions} == {"Reviewed each plan."}
     after = team["owner"].get(f"{_project(team)}/planning-review").json()
     assert after["counts"]["APPROVED"] == 2
+
+
+def _unlink(migrated: Database, attribute_id: str) -> None:
+    """As a plan drawn before the attribute was approved: nothing tests or supports it."""
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "DELETE FROM plan_procedure_attributes WHERE attribute_id = %s", (attribute_id,)
+        )
+        connection.execute(
+            "DELETE FROM evidence_requirement_attributes WHERE attribute_id = %s",
+            (attribute_id,),
+        )
+
+
+def test_the_rules_settle_what_a_plan_left_of_its_standard(migrated: Database) -> None:
+    """Milestone L3e: what the rules can settle is never left on the plan for a person."""
+    team = _launched(migrated, "master-settle")
+    project = UUID(str(team["project"]))
+    control = _control(team, "ITGC-AC-02")["id"]
+    timely = next(
+        a for a in _master(team, control)["attributes"]
+        if a["text"].startswith("Access was removed within")
+    )  # fmt: skip
+    _unlink(migrated, timely["id"])
+    gaps = {"ATTRIBUTE_WITHOUT_PROCEDURE", "ATTRIBUTE_WITHOUT_EVIDENCE"}
+    found = {(f["kind"], f["code"]) for f in _master(team, control)["findings"]}
+    assert ("ATTRIBUTE_WITHOUT_PROCEDURE", timely["code"]) in found
+    with connect(migrated.url) as connection:
+        assert settle_library_attributes(connection, project).redrawn >= 1
+    after = _master(team, control)
+    assert not {f["kind"] for f in after["findings"]} & gaps
+    assert any(timely["code"] in p["attribute_codes"] for p in after["procedures"])
+    # Idempotent: a second run finds nothing to do.
+    with connect(migrated.url) as connection:
+        assert settle_library_attributes(connection, project) == Settled(linked=0, redrawn=0)
+    # A library inference is the standard's, decided in the library review: the plan does
+    # not flag it as undocumented.
+    incidents = _control(team, "ITGC-AC-03")["id"]
+    inferred = [a for a in _master(team, incidents)["attributes"] if a["basis"] == "INFERRED"]
+    assert inferred
+    assert "ATTRIBUTE_NOT_DOCUMENTED" not in {
+        f["kind"] for f in _master(team, incidents)["findings"]
+    }
+    # An approved plan is left as it is: a person approved what it holds.
+    provisioning = _control(team, "ITGC-AC-01")["id"]
+    attribute = _master(team, provisioning)["attributes"][0]
+    _unlink(migrated, attribute["id"])
+    approved = _approve(team, provisioning)
+    with connect(migrated.url) as connection:
+        settle_library_attributes(connection, project)
+    held = _master(team, provisioning)
+    assert held["revision"] == held["approved_revision"] == approved["revision"]
+    found = {(f["kind"], f["code"]) for f in held["findings"]}
+    assert ("ATTRIBUTE_WITHOUT_PROCEDURE", attribute["code"]) in found
+
+
+def test_evidence_for_an_attribute_the_control_does_not_test_is_not_planned(
+    migrated: Database,
+) -> None:
+    team = _launched(migrated, "master-stray")
+    control = _control(team, "ITGC-AC-02")["id"]
+    mapping = "Account-to-person mapping for the system"
+    assert any(e["title"] == mapping for e in _master(team, control)["evidence"])
+    # A person retires the one attribute that evidence supports; the plan follows.
+    with connect(migrated.url) as connection, transaction(connection) as cursor:
+        cursor.execute(
+            "UPDATE control_attributes SET status = 'RETIRED', note = 'Not tested here.' "
+            "WHERE engagement_control_id = %s AND definition_key = 'ac02-accounts' "
+            "AND status = 'APPROVED'",
+            (control,),
+        )
+        _write_list(cursor, UUID(control))
+    with connect(migrated.url) as connection:
+        generate(
+            connection, None, UUID(str(team["org"])), UUID(str(team["project"])), UUID(control),
+            UUID(str(team["owner_id"])),
+        )  # fmt: skip
+    plan = _master(team, control)
+    assert not any(e["title"] == mapping for e in plan["evidence"])
+    assert "EVIDENCE_WITHOUT_ATTRIBUTE" not in {f["kind"] for f in plan["findings"]}
+
+
+def test_each_blocker_says_where_it_is_resolved() -> None:
+    from uuid import uuid4
+
+    from ai_workforce_api.master_plans import _Plan, blockers_of
+
+    plan = _Plan(
+        control_id=uuid4(),
+        control_ref="ITGC-AC-04",
+        title="Privileged access is reviewed quarterly",
+        risk="",
+        activity="",
+        frequency="",
+        nature="MANUAL",
+        domain="ACCESS",
+        key_control=True,
+        library_key="",
+        application="Active Directory",
+        classifications=[],
+        included=True,
+        run_status="WORKING",
+        proposed_attributes=1,
+        open_issues=[
+            ("SOURCES", "AMBIGUOUS", "Control design to confirm.", ""),
+            ("PROCESS", "MISSING", "Who reviews the listing?", ""),
+        ],
+        values_missing=[("the role that approves privileged access", "")],
+        phases=[{"phase": "INTERIM", "open_question": "", "applicability": "PENDING"}],
+        pending_changes=2,
+        pending_revision={"procedures": []},
+    )
+    found = {(item.detail, item.blocks, item.resolve) for item in blockers_of(plan)}
+    assert ("The planner is still drafting the plan.", True, "WAIT") in found
+    assert ("The control has no description of what is done.", True, "CONTROL") in found
+    assert ("The control's frequency is not set.", True, "CONTROL") in found
+    assert ("1 proposed attribute waits for a decision.", True, "ATTRIBUTES") in found
+    assert ("Control design to confirm.", True, "ATTRIBUTES") in found
+    # A process question does not hold approval, and is resolved on the process.
+    assert ("Who reviews the listing?", False, "PROCESS") in found
+    assert (
+        "The client's value for the role that approves privileged access is not recorded.",
+        False,
+        "VALUES",
+    ) in found
+    assert any(resolve == "PHASES" and not blocks for _, blocks, resolve in found)
+    assert ("2 proposed changes to the evidence to decide.", True, "EVIDENCE_CHANGES") in found
+    assert any(resolve == "REVISION" and blocks for _, blocks, resolve in found)

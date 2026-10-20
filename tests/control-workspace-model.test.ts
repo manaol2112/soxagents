@@ -5,16 +5,23 @@ import type { AssistantBrief } from "../apps/web/src/assistant-model.ts";
 import type { ControlContext } from "../apps/web/src/control-context-model.ts";
 import {
   type AgentLane,
+  type AttentionItem,
   agentLanes,
   approachOf,
   attentionOf,
+  currentStage,
+  definitionWork,
   figuresOf,
   filterActivity,
   type LifecycleStage,
   laneSummary,
   lifecycleOf,
   makeupText,
+  nextActionOf,
   parseActivity,
+  RECORD_SECTIONS,
+  sectionOf,
+  summaryMetrics,
   type WorkspaceInput,
   workpaperMakeup,
 } from "../apps/web/src/control-workspace-model.ts";
@@ -22,6 +29,7 @@ import {
   type ControlFiles,
   type ControlRequest,
   type ControlRow,
+  DETAIL_TABS,
   parseControls,
 } from "../apps/web/src/engagement-model.ts";
 import {
@@ -1098,6 +1106,32 @@ describe("what needs a person", () => {
     );
   });
 
+  it("keeps the page an action is done on, so it links there directly", () => {
+    const approve = {
+      ...brief,
+      actions: [
+        {
+          key: "plan-approve",
+          title: "Review and approve the evidence plan",
+          detail: "",
+          tab: "evidence" as const,
+          anchor: "",
+          target: { view: "requirements" as const },
+          page: "test-plan" as const,
+          quick: null,
+          urgent: false,
+        },
+      ],
+      waiting: [],
+    };
+    const [item] = attentionOf(approve, row({ yours: true }), "");
+    assert.equal(item?.page, "test-plan");
+    assert.equal(
+      attentionOf(brief, row({ yours: true }), "")[0]?.page,
+      undefined,
+    );
+  });
+
   it("does not list the viewer's own step, or a drafted request, as waiting", () => {
     const quiet = { ...brief, actions: [], waiting: [] };
     assert.deepEqual(attentionOf(quiet, row({ yours: true }), ""), []);
@@ -1217,5 +1251,348 @@ describe("a control whose test plan waits for approval", () => {
       held.find((stage) => stage.key === "design")?.status,
       "blocked",
     );
+  });
+});
+
+describe("the record's sections", () => {
+  it("keeps every tab's route in one section, and Activity on its own", () => {
+    const tabs = RECORD_SECTIONS.flatMap((section) => section.tabs);
+    assert.deepEqual(
+      RECORD_SECTIONS.map((section) => section.label),
+      ["Overview", "Test plan", "Evidence & testing", "Conclusion"],
+    );
+    assert.equal(new Set(tabs).size, tabs.length);
+    assert.deepEqual(
+      [...tabs].sort(),
+      DETAIL_TABS.filter((tab) => tab !== "activity").sort(),
+    );
+    assert.equal(sectionOf("testing"), "work");
+    assert.equal(sectionOf("findings"), "work");
+    assert.equal(sectionOf("review"), "conclusion");
+    assert.equal(sectionOf("activity"), null);
+  });
+});
+
+describe("where the audit stands", () => {
+  const stage = (
+    key: LifecycleStage["key"],
+    status: LifecycleStage["status"],
+  ): LifecycleStage => ({
+    key,
+    label: key,
+    status,
+    note: "",
+    agent: false,
+    tab: "overview",
+  });
+
+  it("names the first stage under way, never one that does not apply", () => {
+    assert.equal(currentStage(lifecycleOf(input({})))?.key, "design");
+    assert.equal(
+      currentStage([
+        stage("design", "not_applicable"),
+        stage("evidence", "done"),
+        stage("interim", "awaiting_approval"),
+        stage("rollforward", "not_started"),
+        stage("review", "not_started"),
+        stage("conclusion", "not_started"),
+      ])?.key,
+      "interim",
+    );
+    // A roll-forward not started does not hold the review back as current.
+    assert.equal(
+      currentStage([
+        stage("design", "done"),
+        stage("evidence", "done"),
+        stage("interim", "done"),
+        stage("rollforward", "not_started"),
+        stage("review", "in_progress"),
+        stage("conclusion", "not_started"),
+      ])?.key,
+      "review",
+    );
+    assert.equal(
+      currentStage([
+        stage("design", "done"),
+        stage("rollforward", "not_applicable"),
+        stage("conclusion", "done"),
+      ]),
+      null,
+    );
+  });
+});
+
+describe("the viewer's next action", () => {
+  const item = (
+    key: string,
+    kind: AttentionItem["kind"],
+    tab: AttentionItem["tab"] = "testing",
+  ): AttentionItem => ({
+    key,
+    title: key,
+    detail: "",
+    owner: kind === "waiting" ? "Reviewer" : "You",
+    kind,
+    tab,
+    anchor: "",
+    quick: null,
+  });
+  const idle = agentLanes(input({}));
+
+  it("leads with what blocks, and keeps the rest and the waits apart", () => {
+    const next = nextActionOf({
+      attention: [
+        item("blocker", "blocker"),
+        item("other", "action"),
+        item("wait", "waiting"),
+      ],
+      lanes: idle,
+      control: row({}),
+      canAct: true,
+    });
+    assert.equal(next.primary?.key, "blocker");
+    assert.deepEqual(
+      next.more.map((entry) => entry.key),
+      ["other"],
+    );
+    assert.deepEqual(
+      next.waiting.map((entry) => entry.key),
+      ["wait"],
+    );
+  });
+
+  it("asks a person to start a stopped agent again, after what needs them", () => {
+    const lanes = agentLanes(
+      input({
+        sheet: sheet({
+          counts: { ...sheet({}).counts, items: 4, tested: 1 },
+        }),
+        control: row({ sheetStatus: "OPEN", sheetLeft: "TESTING" }),
+      }),
+    );
+    const mine = nextActionOf({
+      attention: [item("decide", "action")],
+      lanes,
+      control: row({}),
+      canAct: true,
+    });
+    assert.deepEqual(
+      [mine.primary?.key, mine.more.map((entry) => entry.title)],
+      ["decide", ["Tester could not finish"]],
+    );
+    assert.equal(
+      mine.more[0]?.detail,
+      "Stopped with 3 items untested. A person runs it again.",
+    );
+    // Someone who cannot run it sees it as waiting on the preparer.
+    const viewer = nextActionOf({
+      attention: [],
+      lanes,
+      control: row({}),
+      canAct: false,
+    });
+    assert.equal(viewer.primary, null);
+    assert.deepEqual(
+      viewer.waiting.map((entry) => entry.owner),
+      ["Preparer"],
+    );
+    assert.equal(viewer.calm, "waiting");
+  });
+
+  it("falls back to the control's own next step only when nothing else is the viewer's", () => {
+    const fallback = item("next-step", "action", "evidence");
+    assert.equal(
+      nextActionOf({
+        attention: [item("decide", "action")],
+        lanes: idle,
+        control: row({}),
+        canAct: true,
+        fallback,
+      }).primary?.key,
+      "decide",
+    );
+    assert.equal(
+      nextActionOf({
+        attention: [],
+        lanes: idle,
+        control: row({}),
+        canAct: true,
+        fallback,
+      }).primary?.key,
+      "next-step",
+    );
+  });
+
+  it("says no action is required only with nothing of the viewer's, and why", () => {
+    const calm = (
+      attention: AttentionItem[],
+      lanes: AgentLane[],
+      progress: ControlRow["progress"] = "AWAITING_EVIDENCE",
+    ) =>
+      nextActionOf({
+        attention,
+        lanes,
+        control: row({ progress }),
+        canAct: true,
+      });
+    assert.equal(calm([], idle, "CONCLUDED").calm, "concluded");
+    const running = agentLanes(
+      input({ sheet: sheet({ running: true, runState: "RUNNING" }) }),
+    );
+    assert.equal(calm([], running).calm, "working");
+    assert.equal(calm([item("wait", "waiting")], idle).calm, "waiting");
+    assert.equal(calm([], idle).calm, "clear");
+    assert.equal(calm([], idle).primary, null);
+    assert.notEqual(calm([item("do", "action")], idle).primary, null);
+  });
+});
+
+describe("the control's summary figures", () => {
+  const plan = (states: string[]) =>
+    parsePlan({
+      control_id: "c1",
+      status: "APPROVED",
+      phases: [
+        {
+          phase: "INTERIM",
+          applicability: "APPLICABLE",
+          state: "OUTSTANDING",
+          requirements: states.map((state, index) => ({
+            id: `q${index}`,
+            phase: "INTERIM",
+            title: `Item ${index}`,
+            categories: ["POPULATION"],
+            necessity: "REQUIRED",
+            state,
+            version: 1,
+          })),
+        },
+      ],
+    });
+  const metric = (work: WorkspaceInput, key: string) =>
+    summaryMetrics(work).find((entry) => entry.key === key);
+
+  it("shows nothing counted as a dash, never a guessed zero", () => {
+    const work = input({});
+    assert.deepEqual(
+      [metric(work, "results")?.value, metric(work, "results")?.note],
+      ["—", "Testing not started"],
+    );
+    assert.deepEqual(
+      [metric(work, "sufficiency")?.value, metric(work, "sufficiency")?.note],
+      ["—", "No evidence planned yet"],
+    );
+  });
+
+  it("counts the results that wait on a person's judgment", () => {
+    const work = input({
+      sheet: sheet({
+        counts: { ...sheet({}).counts, unable: 1, review: 1, exceptions: 1 },
+      }),
+    });
+    assert.deepEqual(
+      [metric(work, "results")?.value, metric(work, "results")?.note],
+      ["2", "3 of 3 items tested · 1 exception"],
+    );
+  });
+
+  it("counts requests still in draft, apart from those awaiting approval", () => {
+    const work = input({
+      control: row({
+        evidencePlan: "PLANNED",
+        requests: [request("DRAFT"), request("APPROVAL_PENDING", "DESIGN")],
+      }),
+    });
+    assert.deepEqual(
+      [
+        metric(work, "drafts")?.label,
+        metric(work, "drafts")?.value,
+        metric(work, "drafts")?.note,
+      ],
+      ["Draft request", "1", "1 awaiting approval"],
+    );
+  });
+
+  it("counts evidence as sufficient only once a person accepted it, never on files received", () => {
+    const work = input({
+      plan: plan(["RECEIVED", "ACCEPTED", "INSUFFICIENT"]),
+      control: row({ requests: [request("RECEIVED")] }),
+    });
+    assert.deepEqual(
+      [metric(work, "sufficiency")?.value, metric(work, "sufficiency")?.note],
+      ["1 / 3", "1 gap to follow up"],
+    );
+  });
+});
+
+describe("the control's definition work", () => {
+  const context = (overrides: Partial<ControlContext>): ControlContext =>
+    ({
+      readiness: null,
+      proposed: [],
+      approved: [{ id: "a1" }],
+      documents: [],
+      issues: [],
+      understanding: {
+        status: "NONE",
+        builtBy: "RULES",
+        steps: [],
+        proposedSteps: null,
+      },
+      processRequired: false,
+      libraryUpdate: null,
+      design: null,
+      ...overrides,
+    }) as unknown as ControlContext;
+
+  it("shows nothing pending for a settled control", () => {
+    assert.deepEqual(definitionWork(context({})), {
+      values: false,
+      attributes: false,
+      process: false,
+      documents: false,
+    });
+    assert.deepEqual(definitionWork(null), {
+      values: false,
+      attributes: false,
+      process: false,
+      documents: false,
+    });
+  });
+
+  it("raises each part only on what waits on a person", () => {
+    const work = definitionWork(
+      context({
+        approved: [],
+        processRequired: true,
+        documents: [{ reviewed: false }],
+        design: {
+          slots: [
+            { key: "tool", value: "", automatic: false },
+            { key: "system", value: "", automatic: true },
+          ],
+        },
+      } as unknown as Partial<ControlContext>),
+    );
+    assert.deepEqual(work, {
+      values: true,
+      attributes: true,
+      process: true,
+      documents: true,
+    });
+    // A question about the process is the process's, not the attributes'.
+    const question = definitionWork(
+      context({
+        issues: [{ status: "OPEN", origin: "PROCESS", kind: "MISSING" }],
+      } as unknown as Partial<ControlContext>),
+    );
+    assert.deepEqual([question.attributes, question.process], [false, true]);
+    // An automatic value is filled by the records, not by a person.
+    const automatic = definitionWork(
+      context({
+        design: { slots: [{ key: "system", value: "", automatic: true }] },
+      } as unknown as Partial<ControlContext>),
+    );
+    assert.equal(automatic.values, false);
   });
 });

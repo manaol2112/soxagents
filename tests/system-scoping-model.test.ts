@@ -7,7 +7,9 @@ import {
   applySuggestion,
   basisLabel,
   type Candidate,
+  candidateSections,
   cuecRows,
+  filterOffers,
   initialSelection,
   needsReason,
   otherRecommendations,
@@ -24,6 +26,7 @@ import {
   setupProblem,
   setupWrite,
   socOverview,
+  suggestedCode,
   suggestionSummary,
   systemControls,
   systemStatus,
@@ -83,6 +86,7 @@ function system(overrides: Partial<SetupSystem> = {}): SetupSystem {
     owner: "",
     assessment: null,
     socReports: [],
+    refCode: "",
     ...overrides,
   };
 }
@@ -105,6 +109,7 @@ function assessment(
     questions: [],
     candidates: [],
     decided: false,
+    refCode: "",
     ...overrides,
   };
 }
@@ -756,6 +761,9 @@ describe("the system wizard", () => {
     decision: null,
     decisionNote: "",
     decidedBy: null,
+    origin: "SYSTEM",
+    adaptedFrom: [],
+    follows: "",
     ...overrides,
   });
 
@@ -844,6 +852,97 @@ describe("the system wizard", () => {
       "Say why each recommended control you leave out is not selected.",
     );
     assert.equal(wizardProblem(200), null);
+  });
+});
+
+describe("a system scoped from the library and the client's controls", () => {
+  const item = (ref: string, origin: Candidate["origin"]): Candidate => ({
+    controlRef: ref,
+    libraryKey: null,
+    title: ref,
+    domain: "ACCESS",
+    description: "",
+    controlId: null,
+    inScope: false,
+    status: null,
+    source: "NONE",
+    rationale: "",
+    support: "",
+    missing: "",
+    confidence: null,
+    decision: null,
+    decisionNote: "",
+    decidedBy: null,
+    origin,
+    adaptedFrom: origin === "RCM" ? ["ITGC-SAP-02", "ITGC-WD-02"] : [],
+    follows: origin === "RCM" ? "ITGC-AC-02" : "",
+  });
+
+  it("reads the system's own controls, the client's, then the library's", () => {
+    const sections = candidateSections(
+      [
+        item("ITGC-AC-03", "LIBRARY"),
+        item("ITGC-AD-02", "RCM"),
+        item("ITGC-AC-04", "LIBRARY"),
+      ],
+      "Active Directory",
+    );
+    assert.deepEqual(
+      sections.map((part) => [part.origin, part.label, part.items.length]),
+      [
+        ["RCM", "From the client's RCM", 1],
+        ["LIBRARY", "Standard library", 2],
+      ],
+    );
+    assert.match(sections[0]?.note ?? "", /adapted to Active Directory/);
+    assert.equal(
+      candidateSections([item("X-1", "SYSTEM")], "AD")[0]?.label,
+      "On AD",
+    );
+    assert.deepEqual(candidateSections([], "AD"), []);
+  });
+
+  it("suggests the system's code in references as the API does", () => {
+    assert.equal(suggestedCode("Active Directory"), "AD");
+    assert.equal(suggestedCode("SAP S/4HANA"), "SAP");
+    assert.equal(suggestedCode("Oracle E-Business Suite"), "OEBS");
+    assert.equal(suggestedCode("Salesforce (Sales Cloud / CPQ)"), "SAL");
+    assert.equal(suggestedCode("Workday"), "WOR");
+    assert.equal(suggestedCode(""), "SYS");
+  });
+
+  it("says a control is already in scope rather than doing nothing", () => {
+    const notice = setupNoticeFor(
+      "system-add-control",
+      409,
+      "this system already has it in scope as ITGC-AD-02",
+    );
+    assert.equal(notice, "setup-control-in-scope");
+    assert.equal(
+      setupProblem(notice),
+      "That control is already in scope for this system under another ID.",
+    );
+  });
+
+  it("sends the code with the details, checked", () => {
+    const system = {
+      organization_id: "11111111-1111-4111-8111-111111111111",
+      project_id: "22222222-2222-4222-8222-222222222222",
+      system_id: "33333333-3333-4333-8333-333333333333",
+      intent: "details",
+    };
+    const sent = wizardWrite({ ...system, owner: "IT Ops", ref_code: " ad " });
+    assert.ok(!("error" in sent));
+    assert.equal((sent.body as Record<string, unknown>).ref_code, "AD");
+    const cleared = wizardWrite({ ...system, ref_code: "" });
+    assert.ok(!("error" in cleared));
+    assert.equal((cleared.body as Record<string, unknown>).ref_code, "");
+    const kept = wizardWrite({ ...system, owner: "IT Ops" });
+    assert.ok(!("error" in kept));
+    assert.equal("ref_code" in (kept.body as Record<string, unknown>), false);
+    assert.deepEqual(wizardWrite({ ...system, ref_code: "1AD" }), {
+      error: "invalid",
+    });
   });
 });
 
@@ -977,6 +1076,75 @@ describe("suggested system details", () => {
     assert.equal(
       suggestionSummary({ ...suggestion, note: "" }, 0),
       "No empty fields could be filled.",
+    );
+  });
+});
+
+describe("finding a library control to add to a system", () => {
+  const offer = (ref: string, title: string, domain: string, back = false) => ({
+    libraryKey: ref.toLowerCase(),
+    controlRef: ref,
+    title,
+    domain,
+    controlId: back ? `id-${ref}` : null,
+  });
+  const areas = [
+    {
+      domain: "ACCESS",
+      label: "Logical access",
+      offers: [
+        offer(
+          "ITGC-AC-06",
+          "Shared, Generic, and Service Account Management",
+          "ACCESS",
+          true,
+        ),
+        offer(
+          "ITGC-AC-09",
+          "Third-Party and Vendor Account Management",
+          "ACCESS",
+        ),
+      ],
+    },
+    {
+      domain: "CHANGE",
+      label: "Change management",
+      offers: [offer("ITGC-CM-04", "Configuration Change Approval", "CHANGE")],
+    },
+  ];
+  const refs = (shown: ReturnType<typeof filterOffers>) =>
+    shown.flatMap((area) => area.offers.map((item) => item.controlRef));
+
+  it("matches every word of the search in the ID or title, in any case", () => {
+    const all = { query: "", domain: null, removed: false };
+    assert.deepEqual(refs(filterOffers(areas, all)), [
+      "ITGC-AC-06",
+      "ITGC-AC-09",
+      "ITGC-CM-04",
+    ]);
+    assert.deepEqual(
+      refs(filterOffers(areas, { ...all, query: "vendor ACCOUNT" })),
+      ["ITGC-AC-09"],
+    );
+    assert.deepEqual(refs(filterOffers(areas, { ...all, query: "cm-04" })), [
+      "ITGC-CM-04",
+    ]);
+    assert.deepEqual(filterOffers(areas, { ...all, query: "backup" }), []);
+  });
+
+  it("narrows to one area, or to the controls taken out of scope", () => {
+    const all = { query: "", domain: null, removed: false };
+    const change = filterOffers(areas, { ...all, domain: "CHANGE" });
+    assert.deepEqual(
+      change.map((area) => area.label),
+      ["Change management"],
+    );
+    assert.deepEqual(refs(filterOffers(areas, { ...all, removed: true })), [
+      "ITGC-AC-06",
+    ]);
+    assert.deepEqual(
+      filterOffers(areas, { ...all, domain: "CHANGE", removed: true }),
+      [],
     );
   });
 });

@@ -8,6 +8,7 @@ from support import Database, approve_evidence_plans
 from test_onboarding import _base, _complete_setup, _new_engagement
 from test_outbound import _session, migrated
 
+from ai_workforce_api.control_journey import NotFinal
 from ai_workforce_api.db import connect
 from ai_workforce_api.schedule import PHASE_KEYS, interim_cutoff, standard_schedule
 from ai_workforce_api.workspace import (
@@ -122,7 +123,12 @@ def test_the_next_step_names_who_a_control_waits_on() -> None:
     )
     cases = [
         (_row(included=False), "Out of scope", "NONE", False),
-        (_row(conclusion="EFFECTIVE"), "Concluded with no exceptions", "NONE", False),
+        (
+            _row(conclusion="EFFECTIVE", final=True),
+            "Concluded with no exceptions",
+            "NONE",
+            False,
+        ),
         (_row(), "Request evidence", "TEAM", False),
         (
             _row(requests=[_request("EVIDENCE", "DRAFT")]),
@@ -204,7 +210,7 @@ def test_each_step_names_who_takes_it() -> None:
         (_row(sheet_status="SIGNED_OFF", review_left="REPERFORMING"), "AGENT", False),
         (_row(sheet_status="OPEN", sheet_left="TESTING", testing_running=True), "AGENT", False),
         (_row(sheet_status="OPEN", sheet_left="DECIDE"), "PREPARER", False),
-        (_row(conclusion="EFFECTIVE"), "NONE", False),
+        (_row(conclusion="EFFECTIVE", final=True), "NONE", False),
     ]
     for row, actor, drafted in cases:
         step = step_of(row, idle, NOW)
@@ -229,6 +235,11 @@ def test_every_control_has_one_stage_from_its_records() -> None:
 
     assert stage(_row()) == "TO_REQUEST"
     assert stage(_row(requests=[_request("EVIDENCE", "DRAFT")]), "DRAFTED") == "TO_REQUEST"
+    # Nothing is requested before a person approves the test plan: the control waits on it.
+    assert stage(_row(evidence_plan="PROPOSED")) == "PLAN_TO_APPROVE"
+    assert stage(_row(evidence_plan="NONE")) == "PLAN_TO_APPROVE"
+    unsent = [_request("EVIDENCE", "DRAFT")]
+    assert stage(_row(evidence_plan="PROPOSED", requests=unsent), "DRAFTED") == ("PLAN_TO_APPROVE")
     assert stage(_row(requests=[_request("EVIDENCE", "SENT")]), "REQUESTED") == (
         "AWAITING_EVIDENCE"
     )
@@ -254,8 +265,31 @@ def test_every_control_has_one_stage_from_its_records() -> None:
     assert stage(_row(sheet_status="SIGNED_OFF", review_left="ADDRESS"), "RECEIVED") == (
         "REVIEW_NOTES"
     )
-    # Concluded wins over everything, findings or not.
-    assert stage(_row(conclusion="EXCEPTION", deficiencies=1), "RECEIVED") == "CONCLUDED"
+    # A final conclusion wins over everything, findings or not.
+    assert stage(_row(conclusion="EXCEPTION", deficiencies=1, final=True), "RECEIVED") == (
+        "CONCLUDED"
+    )
+    # An opinion that is not final reads as what keeps it open, never as concluded
+    # (docs/workflow-integrity.md §2): here a roll-forward still to request.
+    open_rollforward = NotFinal(
+        kind="ROUND", text="Roll-forward testing outstanding", step="REQUEST", phase="ROLLFORWARD"
+    )
+    held = _row(conclusion="EFFECTIVE", not_final=[open_rollforward])
+    assert stage(held, "RECEIVED") == "TO_REQUEST"
+    step = step_of(
+        held, StageBody(walkthrough="READY", evidence="RECEIVED", test="READY", review="READY"), NOW
+    )
+    assert (step.text, step.actor) == ("Roll-forward testing outstanding", "PREPARER")
+    # Signed-off testing opened again reads as reopened, whatever the review says.
+    reopened = _row(
+        sheet_status="OPEN",
+        sheet_left="TESTING",
+        review_status="OPEN",
+        review_left="ADDRESS",
+        reopened_from="REVIEW_NOTE",
+        reopen_reason="Review note: item 7 lacks the approval",
+    )
+    assert stage(reopened, "RECEIVED") == "TESTING_REOPENED"
 
 
 def test_evidence_is_counted_by_testing_phase() -> None:
@@ -295,8 +329,8 @@ def test_kickoff_lays_out_the_plan_and_the_workspace_reads_it(migrated: Database
     assert plan["started"] is True and plan["schedule_missing"] is False
     phases = {phase["key"]: phase for phase in plan["phases"]}
     assert list(phases) == list(PHASE_KEYS)
-    assert phases["WALKTHROUGHS"]["tasks"] == 19
-    assert phases["INTERIM_TESTING"]["tasks"] == 38
+    assert phases["WALKTHROUGHS"]["tasks"] == 31
+    assert phases["INTERIM_TESTING"]["tasks"] == 62
     assert phases["REPORTING"]["tasks"] == 1
     assert {m["key"] for m in plan["milestones"]} >= {"KICKOFF", "PERIOD_END", "SIGN_OFF"}
     # Kickoff and scoping happened in setup, so they start done, and so does planning.
@@ -305,7 +339,7 @@ def test_kickoff_lays_out_the_plan_and_the_workspace_reads_it(migrated: Database
     assert marks["SCOPING_COMPLETE"]["status"] == "DONE"
     assert phases["PLANNING"]["status"] == "DONE"
     tasks = plan["tasks"]
-    assert len(tasks) == 77
+    assert len(tasks) == 125
     assert all(task["deadline"] for task in tasks)
     assert all(task["control_ref"] for task in tasks if task["plan_kind"] != "report")
     tests = [task for task in tasks if task["plan_kind"] == "test"]
@@ -342,7 +376,7 @@ def test_kickoff_lays_out_the_plan_and_the_workspace_reads_it(migrated: Database
     assert next(m for m in done["milestones"] if m["key"] == "PBC_DUE")["status"] == "DONE"
 
     register = owner.get(f"{base}/workspace/controls").json()
-    assert len(register) == 19
+    assert len(register) == 31
     first = register[0]
     assert first["category"] == "it"
     assert first["stage"] == "PLANNED"
@@ -358,9 +392,9 @@ def test_kickoff_lays_out_the_plan_and_the_workspace_reads_it(migrated: Database
     assert {request["status"] for request in first["requests"]} == {"DRAFT"}
     assert first["test_attributes"] and first["pbc_items"] and first["risk"]
     dashboard = owner.get(f"{base}/workspace/dashboard").json()
-    assert dashboard["controls"]["in_scope"] == 19
-    assert dashboard["evidence"]["draft"] == 38
-    assert dashboard["work"]["total"] == 77
+    assert dashboard["controls"]["in_scope"] == 31
+    assert dashboard["evidence"]["draft"] == 62
+    assert dashboard["work"]["total"] == 125
     assert len(dashboard["schedule"]["phases"]) == 7
 
 

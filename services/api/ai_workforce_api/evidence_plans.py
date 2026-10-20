@@ -47,6 +47,7 @@ from ai_workforce_api.authorization import (
     _session_principal,
     authorize,
 )
+from ai_workforce_api.controls import basis_of
 from ai_workforce_api.db import transaction
 from ai_workforce_api.evidence_planning import (
     _MISSING_AS_REASON,
@@ -71,6 +72,7 @@ from ai_workforce_api.evidence_planning import (
     phase_periods,
     prompt_for,
     rules_plan,
+    suite_wording,
 )
 from ai_workforce_api.model_providers import CLAUDE_CONFIG, call_note, live_model, provider_for
 from ai_workforce_api.models import ModelProvider, ModelRequest, complete, record_call
@@ -225,7 +227,9 @@ def load_facts(
     ).fetchall()
     window = row[6]
     library = connection.execute(
-        "SELECT coalesce(library_key, '') FROM engagement_controls WHERE id = %s", (control_id,)
+        "SELECT coalesce(library_key, ''), coalesce(source, ''), test_basis "
+        "FROM engagement_controls WHERE id = %s",
+        (control_id,),
     ).fetchone()
     keyed = tuple(
         (str(key), str(text))
@@ -264,6 +268,8 @@ def load_facts(
         changes=tuple(ControlChange(c[0], str(c[1]), str(c[2])) for c in changes),
         custom_fields=context.custom_fields,
         library_key="" if library is None else str(library[0]),
+        test_basis="STANDARD" if library is None else basis_of(str(library[1]), library[2]),
+        basis_decided=library is not None and library[2] is not None,
         attribute_keys=keyed,
         statement=statement_fields(connection, control_id),
     )
@@ -1615,10 +1621,23 @@ def render(
 
     def block(number: int, line: _Line, full: bool) -> str:
         optional = {"OPTIONAL": " (if available)", "CONDITIONAL": " (if it applies)"}
-        parts = [
-            f"{number}. {line.title}{optional.get(line.necessity, '')}",
-            f"   {line.description}",
-        ]
+        heading = f"{number}. {line.title}{optional.get(line.necessity, '')}"
+        wording = suite_wording(line.description)
+        if wording is not None:
+            # A standard's evidence item: each part on its own labelled line, under the
+            # period the item itself covers (request_details.parse_wording reads it back).
+            # What is not sufficient stays in the plan for the audit team: the client is
+            # told what to provide, not what the auditor would reject.
+            parts = [heading, f"   Period: {wording.period}"]
+            parts.append("   Include: " + "; ".join(wording.include))
+            if wording.completeness:
+                parts.append(f"   Completeness: {wording.completeness}")
+            if wording.alternatives:
+                parts.append("   If not available: " + "; ".join(wording.alternatives))
+            if wording.note:
+                parts.append(f"   {wording.note}")
+            return "\n".join(parts)
+        parts = [heading, f"   {line.description}"]
         if full and line.period_label:
             parts.append(f"   Period: {line.period_label}")
         return "\n".join(parts)
@@ -2008,7 +2027,7 @@ def sample_asks(
     phase = "INTERIM" if round_kind is None else round_kind
     rows = cursor.execute(
         """
-        SELECT description FROM evidence_requirements
+        SELECT description, title FROM evidence_requirements
         WHERE engagement_control_id = %s AND phase = %s AND depends_on IS NOT NULL
           AND status IN ('PLANNED', 'AWAITING_DEPENDENCY')
         ORDER BY created_at, requirement_key
@@ -2017,10 +2036,17 @@ def sample_asks(
     ).fetchall()
     if not rows:
         return None
-    asks = [
-        re.sub(r"(?i)^for each (?:item|review|change|selected \w+)[^:]*:\s*", "", str(r[0]))
-        for r in rows
-    ]
+
+    def ask_of(description: str, title: str) -> str:
+        # A standard's evidence item names itself in its title and lists what it shows.
+        wording = suite_wording(description)
+        if wording is not None:
+            return f"{title.rstrip('.')}, showing: " + "; ".join(wording.include)
+        return re.sub(
+            r"(?i)^for each (?:item|review|change|selected \w+)[^:]*:\s*", "", description
+        )
+
+    asks = [ask_of(str(r[0]), str(r[1])) for r in rows]
     return " Also: ".join(ask.rstrip(".") for ask in asks)[:1500]
 
 
@@ -4025,12 +4051,15 @@ def register_evidence_plans(
             from ai_workforce_api.testing_engine import TestScheduler, schedule_runs
 
             allowed(c, p, organization_id, project_id, control_id, Action.PROJECT_UPDATE)
-            approve_master_plan(c, organization_id, project_id, control_id, p.id, body)
+            filled = approve_master_plan(c, organization_id, project_id, control_id, p.id, body)
+            tests = scheduler if isinstance(scheduler, TestScheduler) else None
             drafted(release(c, organization_id, project_id, control_id, p.id))
-            schedule_runs(
-                scheduler if isinstance(scheduler, TestScheduler) else None,
-                resume_testing(c, project_id, control_id),
-            )
+            schedule_runs(tests, resume_testing(c, project_id, control_id))
+            # Values answered with the approval may also fill other controls that asked
+            # for them: their own requests and testing follow, as a values change does.
+            for other in filled:
+                drafted(release(c, organization_id, project_id, other, p.id))
+                schedule_runs(tests, resume_testing(c, project_id, other))
             return plan_body(c, project_id, control_id)
 
         return run(request, work)

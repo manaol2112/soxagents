@@ -141,6 +141,10 @@ export function requestStage(
 /** Where a link opens on the Evidence tab: a view, and the record to open in it. */
 export type EvidenceTarget = { view: EvidenceView; request?: string };
 
+/** Where work is done when it is not on the control's Evidence tab: the evidence plan is
+ * reviewed and approved with the rest of the test plan, on the Test plans page. */
+export type ActionPage = "test-plan";
+
 export type EvidenceActionKind =
   | "approve_plan"
   | "plan"
@@ -160,6 +164,8 @@ export type EvidenceAction = {
   title: string;
   detail: string;
   target: EvidenceTarget;
+  /** Done on another page, not on the Evidence tab. */
+  page?: ActionPage;
   /** The person reading can do it (their rights; the API checks again). */
   mine: boolean;
 };
@@ -231,9 +237,10 @@ export function evidenceActions(input: {
           : "Review and approve the evidence plan",
       detail:
         plan !== null && plan.attention.length > 0
-          ? `The planner left ${plan.attention.length === 1 ? "one point" : `${plan.attention.length} points`} for you: ${plan.attention[0]}${plan.attention.length > 1 ? ` (and ${plan.attention.length - 1} more, listed under Evidence plan)` : ""}. Resolve ${plan.attention.length === 1 ? "it" : "them"}, then approve the plan. Nothing is requested before you approve it.`
-          : "The evidence planner proposed what each testing phase needs: the items under Evidence plan below. Check them, mark any that do not apply, then approve. Approving the plan approves its attributes with it. Nothing is requested before approval; the requests are drafted then, and each still needs an approver before it is sent.",
+          ? `The planner left ${plan.attention.length === 1 ? "one point" : `${plan.attention.length} points`} for you: ${plan.attention[0]}${plan.attention.length > 1 ? ` (and ${plan.attention.length - 1} more, listed on the test plan)` : ""}. Resolve ${plan.attention.length === 1 ? "it" : "them"}, then approve the plan. Nothing is requested before you approve it.`
+          : "The evidence planner proposed what each testing phase needs. Check the planned items on the test plan, mark any that do not apply, then approve. Approving the plan approves its attributes with it. Nothing is requested before approval; the requests are drafted then, and each still needs an approver before it is sent.",
       target: { view: "requirements" },
+      page: "test-plan",
       mine: canAct,
     });
   } else if (control.evidencePlan === "NONE") {

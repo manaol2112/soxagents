@@ -8,6 +8,7 @@ applications a person chooses, and tells the readers of a control's evidence whi
 of its siblings it shares (a policy tagged as covering every application).
 """
 
+import json
 import re
 from typing import Any
 from uuid import UUID
@@ -84,7 +85,40 @@ class InstanceState(Exception):
         self.detail = detail
 
 
+def _current_library(cursor: psycopg.Cursor[Any], source_id: UUID) -> dict[str, Any] | None:
+    """For a library copy on an earlier definition version than the library's, the library's
+    current record: a new instance starts there, not where its sibling was copied. None
+    for a client's control or one already current."""
+    from ai_workforce_api.controls import BY_KEY
+    from ai_workforce_api.definition_registry import definition_version
+
+    row = cursor.execute(
+        "SELECT source, library_key, library_version FROM engagement_controls WHERE id = %s",
+        (source_id,),
+    ).fetchone()
+    if row is None or row[0] != "LIBRARY" or row[1] is None:
+        return None
+    current = definition_version(str(row[1]))
+    control = BY_KEY.get(str(row[1]))
+    if control is None or int(row[2] or 0) >= current:
+        return None
+    return {
+        "library_version": current,
+        "title": control.title,
+        "risk": control.risk,
+        "frequency": control.frequency,
+        "nature": control.nature,
+        "test_attributes": json.dumps(list(control.test_attributes)),
+        "pbc_items": json.dumps(list(control.pbc_items)),
+    }
+
+
 def _clone(cursor: psycopg.Cursor[Any], source_id: UUID, application_id: UUID | None) -> UUID:
+    """The family's instance for another system. A copy of a library control on an earlier
+    version starts at the library's current version (its attributes, evidence items, title,
+    and design), since a new instance has no testing to keep; the siblings keep theirs until
+    a person adopts the update. A client's control is copied as it stands."""
+    fresh = _current_library(cursor, source_id) or {}
     row = cursor.execute(
         """
         INSERT INTO engagement_controls (
@@ -95,20 +129,39 @@ def _clone(cursor: psycopg.Cursor[Any], source_id: UUID, application_id: UUID | 
             domain_label, frequency_label, nature_label, custom_fields,
             engagement_application_id
         )
-        SELECT organization_id, project_id, library_key, library_version, control_ref, domain,
-               title, risk, activity, frequency, nature, key_control, included, owner_name,
-               owner_email,
-               CASE WHEN %s::uuid IS NULL THEN ARRAY[]::uuid[] ELSE ARRAY[%s::uuid] END,
-               test_attributes, pbc_items, template_key,
+        SELECT organization_id, project_id, library_key,
+               coalesce(%(library_version)s, library_version), control_ref, domain,
+               coalesce(%(title)s, title), coalesce(%(risk)s, risk), activity,
+               coalesce(%(frequency)s, frequency), coalesce(%(nature)s, nature),
+               key_control, included, owner_name, owner_email,
+               CASE WHEN %(app)s::uuid IS NULL THEN ARRAY[]::uuid[] ELSE ARRAY[%(app)s::uuid] END,
+               coalesce(%(test_attributes)s::jsonb, test_attributes),
+               coalesce(%(pbc_items)s::jsonb, pbc_items), template_key,
                agent_key, source, rcm_import_id, source_row, domain_label, frequency_label,
-               nature_label, custom_fields, %s
-        FROM engagement_controls WHERE id = %s
+               nature_label, custom_fields, %(app)s
+        FROM engagement_controls WHERE id = %(source)s
         RETURNING id
         """,
-        (application_id, application_id, application_id, source_id),
+        {
+            "library_version": fresh.get("library_version"),
+            "title": fresh.get("title"),
+            "risk": fresh.get("risk"),
+            "frequency": fresh.get("frequency"),
+            "nature": fresh.get("nature"),
+            "test_attributes": fresh.get("test_attributes"),
+            "pbc_items": fresh.get("pbc_items"),
+            "app": application_id,
+            "source": source_id,
+        },
     ).fetchone()
     assert row is not None
-    return UUID(str(row[0]))
+    copied = UUID(str(row[0]))
+    if fresh:
+        # Its attributes follow the definition: keys linked, low-confidence ones proposed.
+        from ai_workforce_api.library_definitions import link_definitions
+
+        link_definitions(cursor, copied, None)
+    return copied
 
 
 def _delete_instance(cursor: psycopg.Cursor[Any], control_id: UUID, label: str) -> None:
@@ -200,8 +253,14 @@ def reconcile_family(
 def add_application_everywhere(
     cursor: psycopg.Cursor[Any], project_id: UUID, application_id: UUID
 ) -> int:
-    """A new in-scope system joins every control family: a row without an application
-    takes it, otherwise the family gets one more instance."""
+    """A new in-scope system joins every family of a library standard: a row without an
+    application takes it, otherwise the family gets one more instance. The client's own
+    controls from its RCM are each for their own system, as is a control adapted to one
+    (adapted_controls): a new system is scoped from them in the system wizard, never
+    given copies (decided by the product owner)."""
+    from ai_workforce_api.controls import LIBRARY
+
+    standards = [control.control_ref for control in LIBRARY]
     families = cursor.execute(
         """
         SELECT min(id::text)::uuid, control_ref,
@@ -209,12 +268,13 @@ def add_application_everywhere(
                (array_agg(id ORDER BY created_at)
                 FILTER (WHERE engagement_application_id IS NULL))[1]
         FROM engagement_controls
-        -- A control the scoping review added is for its own system only, and a business
-        -- process control belongs to its process, not a system.
-        WHERE project_id = %s AND source <> 'AGENT' AND domain = ANY(%s)
+        -- A library standard, under its own reference. A business process control belongs
+        -- to its process, not a system.
+        WHERE project_id = %s AND source = 'LIBRARY' AND control_ref = ANY(%s)
+          AND domain = ANY(%s)
         GROUP BY control_ref
         """,
-        (application_id, project_id, list(SYSTEM_DOMAINS)),
+        (application_id, project_id, standards, list(SYSTEM_DOMAINS)),
     ).fetchall()
     added = 0
     for first_id, _ref, has_it, unassigned in families:

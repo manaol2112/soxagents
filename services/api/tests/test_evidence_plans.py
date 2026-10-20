@@ -68,8 +68,8 @@ def test_kickoff_plans_every_phase_of_every_control(migrated: Database) -> None:
         phases = connection.execute(
             "SELECT count(*) FROM evidence_plan_phases WHERE project_id = %s", (team["project"],)
         ).fetchone()
-    assert plans == (19,)
-    assert phases == (57,)
+    assert plans == (31,)
+    assert phases == (93,)
     plan = _plan(client, team, _control(migrated, team, "ITGC-AC-01"))
     # Kickoff proposed it; the fixture approved it, as a person does, which released the
     # requests (the planning gate).
@@ -94,12 +94,10 @@ def test_kickoff_plans_every_phase_of_every_control(migrated: Database) -> None:
             assert requirement["rationale"] and requirement["categories"]
             assert requirement["objective"] and requirement["phase"] == phase["phase"]
     # Sample evidence waits for the population and the sample the team selects.
-    sample = _requirement(plan, "INTERIM", "interim-sample-evidence")
+    sample = _requirement(plan, "INTERIM", "interim-ac01-e5")
     assert sample["state"] == "AWAITING_DEPENDENCY"
-    assert (
-        sample["depends_on_title"] == _requirement(plan, "INTERIM", "interim-population")["title"]
-    )
-    assert "POPULATION" in _requirement(plan, "INTERIM", "interim-population")["categories"]
+    assert sample["depends_on_title"] == _requirement(plan, "INTERIM", "interim-ac01-e3")["title"]
+    assert "POPULATION" in _requirement(plan, "INTERIM", "interim-ac01-e3")["categories"]
     assert not {c for r in design["requirements"] for c in r["categories"]} & {
         "POPULATION",
         "SAMPLE",
@@ -144,7 +142,7 @@ def test_planning_again_never_duplicates_and_changes_to_an_approved_plan_wait(
         facts = load_facts(connection, project, UUID(control_id))
         output = rules_plan(facts).model_dump(mode="json", exclude_none=True)
         interim = next(p for p in output["phases"] if p["phase"] == "INTERIM")
-        item = next(r for r in interim["requirements"] if r["key"] == "interim-population")
+        item = next(r for r in interim["requirements"] if r["key"] == "interim-ac01-e3")
         item["description"] += " Include each monthly access listing as its own sheet."
         generate(connection, _Planner(output), org, project, UUID(control_id), team["owner_id"])
     replanned = _plan(client, team, control_id)
@@ -153,7 +151,7 @@ def test_planning_again_never_duplicates_and_changes_to_an_approved_plan_wait(
     pending = [
         r for p in replanned["phases"] for r in p["requirements"] if r["pending_change"] is not None
     ]
-    population = _requirement(replanned, "INTERIM", "interim-population")
+    population = _requirement(replanned, "INTERIM", "interim-ac01-e3")
     assert population in pending
     assert "monthly" not in population["description"].lower()
     assert "monthly" in population["pending_change"]["description"].lower()
@@ -169,7 +167,7 @@ def test_planning_again_never_duplicates_and_changes_to_an_approved_plan_wait(
     assert current["pending_changes"] == 0
     # Accepting it revised the plan: it goes back for approval before anything else runs.
     assert current["status"] == "PROPOSED" and current["revision"] > replanned["revision"]
-    accepted = _requirement(current, "INTERIM", "interim-population")
+    accepted = _requirement(current, "INTERIM", "interim-ac01-e3")
     assert "monthly" in accepted["description"].lower()
     # The interim request is still a draft, so it now asks for the monthly population.
     with connect(migrated.url) as connection:
@@ -265,7 +263,7 @@ def test_samples_wait_for_a_population_a_person_accepted(migrated: Database) -> 
     _add(client, team, "access population.csv", population, interim["id"])
     _read_all(migrated, scheduler)
     plan = _plan(client, team, control_id)
-    received = _requirement(plan, "INTERIM", "interim-population")
+    received = _requirement(plan, "INTERIM", "interim-ac01-e3")
     # Received is not validated: the phase says so, and the samples wait.
     assert received["state"] == "RECEIVED"
     assert _phase(plan, "INTERIM")["state"] == "RECEIVED_NOT_VALIDATED"
@@ -284,7 +282,7 @@ def test_samples_wait_for_a_population_a_person_accepted(migrated: Database) -> 
         json={"sufficiency": "INSUFFICIENT", "version": received["version"]},
     )
     assert insufficient.status_code == 422
-    for key in ("interim-population", "interim-population-support"):
+    for key in ("interim-ac01-e3", "interim-ac01-e4"):
         item = _requirement(_plan(client, team, control_id), "INTERIM", key)
         accepted = client.post(
             f"{base}/evidence-requirements/{item['id']}/sufficiency",
@@ -297,7 +295,7 @@ def test_samples_wait_for_a_population_a_person_accepted(migrated: Database) -> 
     assert approved.status_code == 200, approved.text
     sample_request = approved.json()["sample_request_id"]
     plan = _plan(client, team, control_id)
-    sample = _requirement(plan, "INTERIM", "interim-sample-evidence")
+    sample = _requirement(plan, "INTERIM", "interim-ac01-e5")
     assert sample["status"] == "REQUESTED"
     assert sample["request_id"] == sample_request
     with connect(migrated.url) as connection:
@@ -306,7 +304,8 @@ def test_samples_wait_for_a_population_a_person_accepted(migrated: Database) -> 
             (sample_request,),
         ).fetchone()
     assert phase is not None and phase[0] == "INTERIM"
-    assert "evidence the control was performed as designed" in str(phase[1])
+    # The ask is worded from the standard's evidence suite (library version 4).
+    assert "Access request for each selected grant" in str(phase[1])
     # Accepted evidence is not completed testing: the sample request is drafted, and
     # nothing has gone to the owner for it yet.
     assert _phase(plan, "INTERIM")["state"] == "NOT_SENT"
@@ -390,7 +389,7 @@ def test_waiving_needs_a_reason_and_takes_the_item_off_its_draft_request(
     control_id = _control(migrated, team, "ITGC-AC-01")
     base = f"{_base(team)}/controls/{control_id}"
     plan = _plan(client, team, control_id)
-    item = _requirement(plan, "DESIGN", "design-procedure")
+    item = _requirement(plan, "DESIGN", "design-ac01-e1")
     refused = client.post(
         f"{base}/evidence-requirements/{item['id']}/waive",
         json={"reason": "No evidence was provided by the owner.", "version": item["version"]},
@@ -404,7 +403,7 @@ def test_waiving_needs_a_reason_and_takes_the_item_off_its_draft_request(
         },
     )
     assert waived.status_code == 200, waived.text
-    after = _requirement(waived.json(), "DESIGN", "design-procedure")
+    after = _requirement(waived.json(), "DESIGN", "design-ac01-e1")
     assert after["state"] == "NOT_APPLICABLE"
     assert after["waive_reason"].startswith("The access policy")
     with connect(migrated.url) as connection:
@@ -416,7 +415,7 @@ def test_waiving_needs_a_reason_and_takes_the_item_off_its_draft_request(
         f"{base}/evidence-requirements/{item['id']}/restore", json={"version": after["version"]}
     )
     assert restored.status_code == 200, restored.text
-    assert _requirement(restored.json(), "DESIGN", "design-procedure")["status"] == "REQUESTED"
+    assert _requirement(restored.json(), "DESIGN", "design-ac01-e1")["status"] == "REQUESTED"
 
 
 class _Planner:

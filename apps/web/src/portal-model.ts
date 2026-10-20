@@ -76,6 +76,8 @@ export type PortalDeliverable = {
   format: string;
   show: string;
   completeness: string;
+  /** What may serve instead. */
+  alternatives: string[];
   state: ItemState;
   stateLabel: string;
   files: PortalFile[];
@@ -306,6 +308,7 @@ function wholeRequest(description: string, files: PortalFile[]) {
     format: "",
     show: "",
     completeness: "",
+    alternatives: [],
     state: files.length > 0 ? "UPLOADED" : "NOT_STARTED",
     stateLabel: files.length > 0 ? "Uploaded" : "Not started",
     files,
@@ -341,6 +344,9 @@ function parseDeliverable(value: unknown): PortalDeliverable | null {
     format: text(value.format) ?? "",
     show: text(value.show) ?? "",
     completeness: text(value.completeness) ?? "",
+    alternatives: list(value.alternatives).filter(
+      (item): item is string => typeof item === "string",
+    ),
     state: value.state as ItemState,
     stateLabel: text(value.state_label) ?? "",
     files: files as PortalFile[],

@@ -1037,6 +1037,10 @@ def run_sheet(
     from ai_workforce_api.readiness import waiting_reason
 
     waiting = waiting_reason(connection, project_id, control_id)
+    if round_id is not None and not waiting:
+        from ai_workforce_api.round_readiness import round_waiting_reason
+
+        waiting = round_waiting_reason(connection, project_id, round_id)
     with transaction(connection) as cursor:
         cursor.execute(
             "UPDATE test_sheets SET waiting_note = %s WHERE id = %s", (waiting[:500], sheet_id)

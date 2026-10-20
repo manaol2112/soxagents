@@ -313,6 +313,20 @@ export type PlanRequirement = {
   assessment: Assessment;
 };
 
+/** Whether an item waits on a person now: something arrived and no one has judged it, the
+ * planner proposes a change to it, or it is flagged for review. */
+export function waitsOnPerson(
+  item: Pick<PlanRequirement, "state" | "pendingChange" | "needsReview">,
+): boolean {
+  return (
+    item.state === "PARTIALLY_RECEIVED" ||
+    item.state === "RECEIVED" ||
+    item.state === "UNDER_REVIEW" ||
+    item.pendingChange !== null ||
+    item.needsReview
+  );
+}
+
 export type PlanPhase = {
   phase: Phase;
   label: string;

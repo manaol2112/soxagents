@@ -16,6 +16,7 @@ import {
 import { parseChangeNotice } from "./evidence-change-model";
 import { parseRegister } from "./evidence-model";
 import { parsePlan as parseEvidencePlan } from "./evidence-plan-model";
+import { parseNextSteps } from "./home-model";
 import { apiGet, sessionToken } from "./load-workspace";
 import { parseRequestDetails } from "./request-details-model";
 import {
@@ -25,6 +26,7 @@ import {
 import { parseRounds } from "./round-model";
 import { parseSheetNotice, parseSheets } from "./sheet-model";
 import type { ShellModel } from "./shell-model";
+import { parseTestBasis } from "./test-basis-model";
 import { parseTestNotice, parseTests } from "./testing-model";
 import {
   parseWorkpaperNotice,
@@ -105,6 +107,7 @@ export async function loadEngagement(
       : null;
   const [
     dashboard,
+    nextSteps,
     controls,
     plan,
     deficiencies,
@@ -120,8 +123,10 @@ export async function loadEngagement(
     context,
     evidencePlan,
     activity,
+    testBasis,
   ] = await Promise.all([
     wanted.dashboard ? apiGet(`${base}/workspace/dashboard`, session) : null,
+    wanted.dashboard ? apiGet(`${base}/next-steps`, session) : null,
     wanted.controls ? apiGet(`${base}/workspace/controls`, session) : null,
     wanted.plan ? apiGet(`${base}/workspace/plan`, session) : null,
     wanted.deficiencies ? apiGet(`${base}/deficiencies`, session) : null,
@@ -146,6 +151,9 @@ export async function loadEngagement(
       ? apiGet(`${base}/controls/${query.control}/evidence-plan`, session)
       : null,
     open ? apiGet(`${base}/controls/${query.control}/activity`, session) : null,
+    open
+      ? apiGet(`${base}/controls/${query.control}/test-basis`, session)
+      : null,
   ]);
   // The request opened on the control's Evidence tab, with its details for review.
   const focus =
@@ -182,9 +190,13 @@ export async function loadEngagement(
         : parseEvidencePlan(ok(evidencePlan)),
     files: controlFiles(ok(register), ok(analyses), ok(reviews), query.control),
     activity: ok(activity) === undefined ? null : parseActivity(ok(activity)),
+    testBasis:
+      ok(testBasis) === undefined ? null : parseTestBasis(ok(testBasis)),
     changeNotice: open ? parseChangeNotice(query.notice) : null,
     dashboard:
       ok(dashboard) === undefined ? null : parseDashboard(ok(dashboard)),
+    nextSteps:
+      ok(nextSteps) === undefined ? null : parseNextSteps(ok(nextSteps)),
     controls: ok(controls) === undefined ? null : parseControls(ok(controls)),
     plan: ok(plan) === undefined ? null : parsePlan(ok(plan)),
     deficiencies:

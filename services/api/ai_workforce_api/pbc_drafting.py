@@ -138,12 +138,16 @@ class DraftItem(BaseModel):
         "other",
     ]
     title: str = Field(min_length=3, max_length=220)
-    detail: str = Field(min_length=10, max_length=1500)
+    # Empty only for a standard's evidence item, whose labelled lines say it all; a model's
+    # item always explains itself (check_draft).
+    detail: str = Field(default="", max_length=1500)
     period: str = Field(default="", max_length=200)
     format: str = Field(default="", max_length=160)
     fields: list[str] = Field(default_factory=list, max_length=15)
     parameters: str = Field(default="", max_length=400)
     completeness: str = Field(default="", max_length=500)
+    # What may serve instead (a standard's evidence item, evidence_planning.SuiteWording).
+    alternatives: list[str] = Field(default_factory=list, max_length=6)
 
 
 class DraftContent(BaseModel):
@@ -355,19 +359,39 @@ def _kind_of(categories: tuple[str, ...]) -> str:
 
 def planned_draft(context: DraftContext) -> DraftContent:
     """The request for one phase, item by item from its planned evidence."""
-    items = [
-        DraftItem(
-            kind=_kind_of(item.categories),  # type: ignore[arg-type]
-            # The plan's own wording, whole: a requirement's title and description fit.
-            title=" ".join(item.title.split()).rstrip(".")
-            + {"OPTIONAL": " (if available)", "CONDITIONAL": " (if it applies)"}.get(
-                item.necessity, ""
-            ),
-            detail=" ".join(item.description.split()),
-            period=item.period_label[:200],
+    from ai_workforce_api.evidence_planning import suite_wording
+
+    items: list[DraftItem] = []
+    for item in context.planned:
+        # The plan's own wording, whole: a requirement's title and description fit.
+        title = " ".join(item.title.split()).rstrip(".") + {
+            "OPTIONAL": " (if available)",
+            "CONDITIONAL": " (if it applies)",
+        }.get(item.necessity, "")
+        kind = _kind_of(item.categories)
+        wording = suite_wording(item.description)
+        if wording is None:
+            items.append(
+                DraftItem(
+                    kind=kind,  # type: ignore[arg-type]
+                    title=title,
+                    detail=" ".join(item.description.split()),
+                    period=item.period_label[:200],
+                )
+            )
+            continue
+        # A standard's evidence item: its parts on their own lines, as the plan renders it.
+        items.append(
+            DraftItem(
+                kind=kind,  # type: ignore[arg-type]
+                title=title,
+                detail=wording.note[:1500],
+                period=wording.period[:200],
+                fields=[text[:200] for text in wording.include[:15]],
+                completeness=wording.completeness[:500],
+                alternatives=[text[:300] for text in wording.alternatives[:6]],
+            )
         )
-        for item in context.planned
-    ]
     questions: list[str] = []
     if context.to_coordinator:
         questions.append(
@@ -604,12 +628,15 @@ def check_draft(output: dict[str, Any], context: DraftContext) -> DraftContent:
         content = DraftContent.model_validate(output)
     except ValidationError as error:
         raise ValueError("draft does not match the schema") from error
+    if any(len(item.detail.strip()) < 10 for item in content.items):
+        raise ValueError("draft has an item without detail")
     texts = [content.summary, *content.questions]
     for item in content.items:
         texts.extend(
             [item.title, item.detail, item.period, item.format, item.parameters, item.completeness]
         )
         texts.extend(item.fields)
+        texts.extend(item.alternatives)
     if any(_URL.search(text) or _CREDENTIAL.search(text) for text in texts):
         raise ValueError("draft contains a link or a credential")
     if any(_ASKS_FOR_ACCESS.search(text) for text in texts):
@@ -646,7 +673,9 @@ def render(content: DraftContent) -> str:
     """The request text the approved email template carries."""
 
     def block(item: DraftItem, number: int, full: bool) -> str:
-        lines = [f"{number}. {item.title}", f"   {item.detail}"]
+        lines = [f"{number}. {item.title}"]
+        if item.detail:
+            lines.append(f"   {item.detail}")
         if item.period:
             lines.append(f"   Period: {item.period}")
         if item.fields and full:
@@ -657,6 +686,8 @@ def render(content: DraftContent) -> str:
             lines.append(f"   Show: {item.parameters}")
         if item.completeness and full:
             lines.append(f"   Completeness: {item.completeness}")
+        if item.alternatives and full:
+            lines.append("   If not available: " + "; ".join(item.alternatives))
         return "\n".join(lines)
 
     questions = (
@@ -896,11 +927,25 @@ def with_plan(
     ).fetchall()
     if not rows or phase is None or phase[0] is None:
         return context
+    from ai_workforce_api.evidence_planning import suite_wording
+
+    def period_of(description: str, label: str) -> str:
+        # A standard's evidence item covers its own period (the version in force, at the
+        # interim date, during the walkthrough), more precise than the phase's label.
+        wording = suite_wording(description)
+        return wording.period if wording is not None else label
+
     return replace(
         context,
         phase=str(phase[0]),
         planned=tuple(
-            PlannedItem(str(r[0]), str(r[1]), tuple(str(c) for c in r[2]), str(r[3]), str(r[4]))
+            PlannedItem(
+                str(r[0]),
+                str(r[1]),
+                tuple(str(c) for c in r[2]),
+                str(r[3]),
+                period_of(str(r[1]), str(r[4])),
+            )
             for r in rows
         ),
     )

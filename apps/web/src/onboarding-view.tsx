@@ -108,6 +108,8 @@ export const NOTICES: Record<SetupNotice, string> = {
     "Your copy is ready. Edit its tabs and sections, then save it as your firm's template.",
   "setup-control-exists":
     "A control with that ID is already in this engagement. Choose another ID.",
+  "setup-control-in-scope":
+    "That control is already in scope for this system under another ID.",
   "setup-launch-slow":
     "The launch took longer than expected to answer. This page shows where it stands: if it says the engagement is running, it launched. It cannot launch twice.",
   "setup-slow":

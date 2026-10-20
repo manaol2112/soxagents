@@ -13,8 +13,9 @@ inferred, the source it rests on, and a confidence classification:
 - NOT_ESTABLISHED: not supported enough to test; the question must be answered first.
 
 HIGH and MODERATE attributes are the control's approved attributes in library version 3.
-LOW and NOT_ESTABLISHED attributes enter an engagement as proposals, with their question,
-and nothing tests them until a person approves.
+LOW and NOT_ESTABLISHED attributes are decided with the standard in the firm's library
+review (milestone L3e): they enter an engagement approved, each with its question, and
+testing waits for any client value they show in brackets.
 
 Definitions are code, reviewed like the library. They are written for management's SOX
 testing (SEC Release 33-8810), citing PCAOB standards as the standard the external auditor
@@ -23,6 +24,7 @@ docs/testing-framework-review.md for what was and was not verified. Nothing here
 Big Four firm's internal methodology.
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -31,7 +33,53 @@ CONFIDENCES: tuple[Confidence, ...] = ("HIGH", "MODERATE", "LOW", "NOT_ESTABLISH
 TESTED: tuple[Confidence, ...] = ("HIGH", "MODERATE")
 ProcedurePhase = Literal["DESIGN", "OPERATING", "ROLLFORWARD"]
 ControlType = Literal["PREVENTIVE", "DETECTIVE", "UNCONFIRMED"]
-DEFINITIONS_VERSION = 3
+# The highest definition version in the library. Each definition carries its own version
+# (Definition.version): a definition rewritten with numbered steps and an evidence suite
+# (milestone L3a) is version 4; the others stay at 3 until their wave. An engagement
+# control follows the version it was imported or adopted at.
+DEFINITIONS_VERSION = 4
+# The version from which every library control has a definition and a statement. A control
+# at this version or later is linked to its definition; a later definition version is
+# offered to it as an update a person adopts.
+DEFINED_SINCE = 3
+
+# The form evidence takes, which decides what it can show: a system report or log shows
+# what the system holds; a screenshot shows a value on its date; a document shows intent.
+EvidenceForm = Literal[
+    "SYSTEM_REPORT",
+    "SYSTEM_LOG",
+    "SYSTEM_SCREEN",
+    "CONFIGURATION",
+    "TICKET",
+    "DOCUMENT",
+    "POLICY",
+    "CORRESPONDENCE",
+    "OBSERVATION",
+    "THIRD_PARTY_REPORT",
+]
+EVIDENCE_FORMS: tuple[EvidenceForm, ...] = (
+    "SYSTEM_REPORT",
+    "SYSTEM_LOG",
+    "SYSTEM_SCREEN",
+    "CONFIGURATION",
+    "TICKET",
+    "DOCUMENT",
+    "POLICY",
+    "CORRESPONDENCE",
+    "OBSERVATION",
+    "THIRD_PARTY_REPORT",
+)
+# What a piece of evidence is for: understanding the design, the population a sample is
+# drawn from, the support for that population's completeness, the attributes of each
+# sampled item, or context the tester reads but tests nothing against.
+EvidencePurpose = Literal["DESIGN", "POPULATION", "COMPLETENESS", "ATTRIBUTE", "CONTEXT"]
+EVIDENCE_PURPOSES: tuple[EvidencePurpose, ...] = (
+    "DESIGN",
+    "POPULATION",
+    "COMPLETENESS",
+    "ATTRIBUTE",
+    "CONTEXT",
+)
 
 
 @dataclass(frozen=True)
@@ -234,6 +282,46 @@ class AttributeDef:
     blocks: bool = False
     # The version 2 wording this attribute replaces, if any (for the adoption comparison).
     was: str = ""
+    # Version 4: the keys of the evidence suite items this attribute is judged from.
+    evidence_keys: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class EvidenceDef:
+    """One item of a control's standard evidence suite (version 4): what an engagement
+    asks the client for, in the form that can show what the test needs, and what does
+    not serve in its place. Procedures and attributes refer to it by key."""
+
+    key: str
+    name: str
+    form: EvidenceForm
+    # The role that provides it, in the client's terms.
+    provider: str
+    phases: tuple[ProcedurePhase, ...]
+    purpose: EvidencePurpose
+    # What it must cover: the period, the date, or the item.
+    period: str
+    # What it must show, field by field.
+    contents: tuple[str, ...]
+    # For a population or its support: how it is shown to be complete and accurate.
+    completeness: str = ""
+    # What is sometimes offered instead and does not serve, and why.
+    not_acceptable: str = ""
+    # What may serve instead when the named form does not exist.
+    alternatives: tuple[str, ...] = ()
+    # The attributes it supports.
+    attributes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Step:
+    """One numbered step of a procedure (version 4): what the tester does, with which
+    evidence, what the workpaper records, and what to do when it does not hold."""
+
+    action: str
+    evidence: tuple[str, ...] = ()
+    record: str = ""
+    exception: str = ""
 
 
 @dataclass(frozen=True)
@@ -245,6 +333,8 @@ class ProcedureDef:
     evidence: tuple[str, ...]
     attributes: tuple[str, ...]
     limitation: str = ""
+    # Version 4: the numbered steps; the action summarises them.
+    steps: tuple[Step, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -275,6 +365,9 @@ class Definition:
     # Set when the control's design must be confirmed before its definition is relied on.
     design_confirmation: str = ""
     not_applicable: tuple[str, ...] = field(default=())
+    # Version 4: the standard evidence suite, and the version this definition is at.
+    evidence: tuple[EvidenceDef, ...] = ()
+    version: int = 3
 
     @property
     def approved(self) -> tuple[AttributeDef, ...]:
@@ -292,6 +385,28 @@ class Definition:
         wanted = _normal(text)
         return next((item for item in self.attributes if _normal(item.text) == wanted), None)
 
+    def filled_from(self, text: str) -> AttributeDef | None:
+        """The attribute this wording was written from: its bracketed values filled in,
+        however they were spaced (a person who typed "within5 days" in place of the
+        bracket still wrote this attribute)."""
+        wanted = _normal(text)
+        return next(
+            (
+                item
+                for item in self.attributes
+                if "[" in item.text and _template(item.text).fullmatch(wanted) is not None
+            ),
+            None,
+        )
+
+    def evidence_item(self, key: str) -> EvidenceDef | None:
+        return next((item for item in self.evidence if item.key == key), None)
+
+    def procedure_for(self, action: str) -> ProcedureDef | None:
+        """The procedure whose action a plan's procedure text is, ignoring case and spacing."""
+        wanted = _normal(action)
+        return next((p for p in self.procedures if _normal(p.action) == wanted), None)
+
 
 @dataclass(frozen=True)
 class Uncertainty:
@@ -306,6 +421,16 @@ class Uncertainty:
 
 def _normal(text: str) -> str:
     return " ".join(text.lower().split())
+
+
+_BRACKET = re.compile(r"\s*\[[^\]]+\]\s*")
+
+
+def _template(text: str) -> re.Pattern[str]:
+    """A pattern for an attribute's wording with each bracketed value filled by anything."""
+    parts = _BRACKET.split(_normal(text))
+    literal = [re.escape(part).replace(r"\ ", r"\s+") for part in parts]
+    return re.compile(r"\s*(.+?)\s*".join(literal))
 
 
 # Sampling, stated as methodology with its source, never as a standard's requirement.

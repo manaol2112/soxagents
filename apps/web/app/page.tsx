@@ -8,6 +8,7 @@ import { parseEvidenceView } from "../src/evidence-model";
 import { loadConsole } from "../src/load-console";
 import { loadEngagement } from "../src/load-engagement";
 import { loadEvidenceCenter } from "../src/load-evidence-center";
+import { loadLibrary } from "../src/load-library";
 import { loadOnboarding } from "../src/load-onboarding";
 import { loadPlanning } from "../src/load-planning";
 import { loadWorkflow } from "../src/load-workflow";
@@ -39,49 +40,63 @@ export default async function Home({ searchParams }: HomeProps) {
     redirect("/welcome");
   }
   const centerQuery = parseCenterQuery((name) => firstParam(params[name]));
-  const [workflow, setup, engagement, consoleState, evidenceCenter, planning] =
-    await Promise.all([
-      loadWorkflow(model, firstParam(params.notice)),
-      loadOnboarding(model, {
-        step: firstParam(params.step),
-        category: firstParam(params.category),
-        control: firstParam(params.control),
-        sample: firstParam(params.sample),
-        template: firstParam(params.template),
-        notice: firstParam(params.notice),
-        system: firstParam(params.system),
-        edit: firstParam(params.edit),
-      }),
-      loadEngagement(model, {
-        category: firstParam(params.category),
-        stage: listParam(params.stage),
-        q: firstParam(params.q),
-        control: firstParam(params.control),
-        deficiency: firstParam(params.deficiency),
-        notice: firstParam(params.notice),
-        queue: firstParam(params.queue),
-        tab: firstParam(params.tab),
-        group: firstParam(params.group),
-        sort: firstParam(params.sort),
-        layout: firstParam(params.layout),
-        app: listParam(params.app),
-        area: listParam(params.area),
-        owner: listParam(params.owner),
-        key: firstParam(params.key),
-        workpaper: firstParam(params.wp),
-        workpaperVersion: firstParam(params.wpversion),
-        ev: firstParam(params.ev),
-        request: firstParam(params.request),
-      }),
-      loadConsole(model, firstParam(params.notice), firstParam(params.thread)),
-      loadEvidenceCenter(model, centerQuery, firstParam(params.tab)),
-      loadPlanning(model, {
-        control: firstParam(params.control),
-        tab: firstParam(params.tab),
-        filter: firstParam(params.filter),
-        view: firstParam(params.view),
-      }),
-    ]);
+  const [
+    workflow,
+    setup,
+    engagement,
+    consoleState,
+    evidenceCenter,
+    planning,
+    library,
+  ] = await Promise.all([
+    loadWorkflow(model, firstParam(params.notice)),
+    loadOnboarding(model, {
+      step: firstParam(params.step),
+      category: firstParam(params.category),
+      control: firstParam(params.control),
+      sample: firstParam(params.sample),
+      template: firstParam(params.template),
+      notice: firstParam(params.notice),
+      system: firstParam(params.system),
+      edit: firstParam(params.edit),
+    }),
+    loadEngagement(model, {
+      category: firstParam(params.category),
+      stage: listParam(params.stage),
+      q: firstParam(params.q),
+      control: firstParam(params.control),
+      deficiency: firstParam(params.deficiency),
+      notice: firstParam(params.notice),
+      queue: firstParam(params.queue),
+      tab: firstParam(params.tab),
+      group: firstParam(params.group),
+      sort: firstParam(params.sort),
+      layout: firstParam(params.layout),
+      app: listParam(params.app),
+      area: listParam(params.area),
+      owner: listParam(params.owner),
+      key: firstParam(params.key),
+      workpaper: firstParam(params.wp),
+      workpaperVersion: firstParam(params.wpversion),
+      ev: firstParam(params.ev),
+      request: firstParam(params.request),
+    }),
+    loadConsole(model, firstParam(params.notice), firstParam(params.thread)),
+    loadEvidenceCenter(model, centerQuery, firstParam(params.tab)),
+    loadPlanning(model, {
+      control: firstParam(params.control),
+      tab: firstParam(params.tab),
+      filter: firstParam(params.filter),
+      view: firstParam(params.view),
+    }),
+    loadLibrary(model, {
+      control: firstParam(params.control),
+      tab: firstParam(params.tab),
+      category: firstParam(params.category),
+      status: firstParam(params.status),
+      q: firstParam(params.q),
+    }),
+  ]);
   return (
     <WorkspaceView
       model={model}
@@ -99,6 +114,7 @@ export default async function Home({ searchParams }: HomeProps) {
       consoleState={consoleState}
       evidenceCenter={evidenceCenter}
       planning={planning}
+      library={library}
       evidenceView={parseEvidenceView({
         tab: firstParam(params.tab),
         queue: firstParam(params.queue),

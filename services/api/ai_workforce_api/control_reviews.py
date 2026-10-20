@@ -122,15 +122,23 @@ def open_review(
     project_id: UUID,
     control_id: UUID,
     requester: UUID,
+    test_round_id: UUID | None = None,
 ) -> UUID | None:
     """The control's review opens, or is re-performed, when its effectiveness workpaper
-    is prepared. Returns the review to schedule when a re-performance is pending."""
+    is prepared; a testing round's own review opens when the round is signed off
+    (workflow integrity W2). Returns the review to schedule when a re-performance is
+    pending."""
+    conflict = (
+        "ON CONFLICT (project_id, engagement_control_id) WHERE test_round_id IS NULL"
+        if test_round_id is None
+        else "ON CONFLICT (test_round_id) WHERE test_round_id IS NOT NULL"
+    )
     row = cursor.execute(
-        """
+        f"""
         INSERT INTO control_reviews (organization_id, project_id, engagement_control_id,
-                                     opened_by)
-        VALUES (%s, %s, %s, %s)
-        ON CONFLICT (project_id, engagement_control_id) DO UPDATE
+                                     opened_by, test_round_id)
+        VALUES (%s, %s, %s, %s, %s)
+        {conflict} DO UPDATE
         SET reperform_status = CASE WHEN control_reviews.reperform_status = 'WORKING'
                                     THEN 'WORKING' ELSE 'PENDING' END,
             reperform_requested_at = clock_timestamp(),
@@ -139,7 +147,7 @@ def open_review(
             version = control_reviews.version + 1
         RETURNING id, reperform_status
         """,
-        (organization_id, project_id, control_id, requester),
+        (organization_id, project_id, control_id, requester, test_round_id),
     ).fetchone()
     if row is None:
         return None
@@ -458,7 +466,8 @@ def run_reperformance(
             WHERE id = %s AND status = 'OPEN' AND attempts < %s
               AND (reperform_status = 'PENDING'
                    OR (reperform_status = 'WORKING' AND lease_until < clock_timestamp()))
-            RETURNING organization_id, project_id, engagement_control_id, opened_by
+            RETURNING organization_id, project_id, engagement_control_id, opened_by,
+                      test_round_id
             """,
             (LEASE_MINUTES, review_id, MAX_ATTEMPTS),
         ).fetchone()
@@ -470,10 +479,11 @@ def run_reperformance(
         UUID(str(claimed[2])),
         UUID(str(claimed[3])),
     )
+    # The sheet under review: the round's own for a round review, else the interim one.
     sheet_row = connection.execute(
         "SELECT id FROM test_sheets WHERE project_id = %s AND engagement_control_id = %s "
-        "AND test_round_id IS NULL AND status = 'SIGNED_OFF'",
-        (project_id, control_id),
+        "AND test_round_id IS NOT DISTINCT FROM %s AND status = 'SIGNED_OFF'",
+        (project_id, control_id, claimed[4]),
     ).fetchone()
     if sheet_row is None:
         _finish(connection, review_id, None, "RULES", "The testing is not signed off.", None, [])
@@ -791,6 +801,14 @@ class ReviewBody(BaseModel):
     sheet_signed_by: str | None
     sheet_version: int | None
     sheet_version_reviewed: int | None
+    sheet_id: UUID | None = None
+    # The testing round this review is of (roll-forward or retest), or None for the
+    # control's own review of its interim testing (workflow integrity W2).
+    test_round_id: UUID | None = None
+    round_kind: str | None = None
+    # What a signed review covered: the sheet and its version, the round, each workpaper
+    # and its version. A prior review never covers later work.
+    coverage: dict[str, Any] = {}
     workpapers: list[ReviewWorkpaper]
     notes: list[NoteBody]
     counts: dict[str, int]
@@ -837,11 +855,12 @@ def _review(
         SELECT r.id, r.engagement_control_id, c.control_ref, a.name, r.status,
                r.reperform_status, r.reperformed_at, r.reperform_source, r.reperform_note,
                r.sheet_version_reviewed, u.display_name, r.signed_at, r.signoff_note,
-               r.version, r.signed_by
+               r.version, r.signed_by, r.test_round_id, t.kind, r.coverage
         FROM control_reviews r
         JOIN engagement_controls c ON c.id = r.engagement_control_id
         LEFT JOIN engagement_applications a ON a.id = c.engagement_application_id
         LEFT JOIN users u ON u.id = r.signed_by
+        LEFT JOIN test_rounds t ON t.id = r.test_round_id
         WHERE r.id = %s AND r.project_id = %s
         """,
         (review_id, project_id),
@@ -849,13 +868,15 @@ def _review(
     if row is None:
         raise NotVisible()
     control_id = UUID(str(row[1]))
+    # The sheet this review is of: the round's own for a round review, else the interim.
     sheet = connection.execute(
         """
-        SELECT s.status, u.display_name, s.version, s.signed_by
+        SELECT s.status, u.display_name, s.version, s.signed_by, s.id
         FROM test_sheets s LEFT JOIN users u ON u.id = s.signed_by
-        WHERE s.project_id = %s AND s.engagement_control_id = %s AND s.test_round_id IS NULL
+        WHERE s.project_id = %s AND s.engagement_control_id = %s
+          AND s.test_round_id IS NOT DISTINCT FROM %s
         """,
-        (project_id, control_id),
+        (project_id, control_id, row[15]),
     ).fetchone()
     papers = connection.execute(
         """
@@ -903,6 +924,10 @@ def _review(
         sheet_signed_by=None if sheet is None or sheet[1] is None else str(sheet[1]),
         sheet_version=None if sheet is None else int(sheet[2]),
         sheet_version_reviewed=None if row[9] is None else int(row[9]),
+        sheet_id=None if sheet is None else UUID(str(sheet[4])),
+        test_round_id=None if row[15] is None else UUID(str(row[15])),
+        round_kind=None if row[16] is None else str(row[16]),
+        coverage=dict(row[17]) if isinstance(row[17], dict) else {},
         workpapers=[
             ReviewWorkpaper(
                 id=UUID(str(p[0])),
@@ -972,8 +997,24 @@ def _notes(connection: psycopg.Connection[Any], review_id: UUID) -> list[NoteBod
 def review_states(
     connection: psycopg.Connection[Any], project_id: UUID
 ) -> dict[UUID, tuple[ReviewStatus, ReviewLeft]]:
-    """Per control: the review's status and what it waits for (for the register)."""
+    """Per control: its own review's status and what it waits for (for the register).
+    The rounds' reviews are read by round (round_review_states)."""
+    return _review_states(connection, project_id, by_round=False)
+
+
+def round_review_states(
+    connection: psycopg.Connection[Any], project_id: UUID
+) -> dict[UUID, tuple[ReviewStatus, ReviewLeft]]:
+    """Per testing round: its review's status and what it waits for."""
+    return _review_states(connection, project_id, by_round=True)
+
+
+def _review_states(
+    connection: psycopg.Connection[Any], project_id: UUID, by_round: bool
+) -> dict[UUID, tuple[ReviewStatus, ReviewLeft]]:
     states: dict[UUID, tuple[ReviewStatus, ReviewLeft]] = {}
+    key = "r.test_round_id" if by_round else "r.engagement_control_id"
+    scope = "r.test_round_id IS NOT NULL" if by_round else "r.test_round_id IS NULL"
     for (
         control_id,
         status,
@@ -983,14 +1024,14 @@ def review_states(
         open_,
         responded,
     ) in connection.execute(
-        """
-            SELECT r.engagement_control_id, r.status, r.reperform_status, r.reperformed_at,
+        f"""
+            SELECT {key}, r.status, r.reperform_status, r.reperformed_at,
                    count(*) FILTER (WHERE n.status = 'PROPOSED'),
                    count(*) FILTER (WHERE n.status = 'OPEN'),
                    count(*) FILTER (WHERE n.status = 'RESPONDED')
             FROM control_reviews r
             LEFT JOIN review_notes n ON n.control_review_id = r.id
-            WHERE r.project_id = %s
+            WHERE r.project_id = %s AND {scope}
             GROUP BY r.id
             """,
         (project_id,),
@@ -1055,6 +1096,12 @@ def review_overview(connection: psycopg.Connection[Any], project_id: UUID) -> Re
         (project_id,),
     ).fetchone()
     signed = sum(1 for item in left if item == "SIGNED")
+    # Complete means every in-scope control's conclusion is final: reviewed, with every
+    # required phase and round covered (control_journey.finality), not merely signed.
+    from ai_workforce_api.control_journey import finality, finality_facts
+
+    facts = finality_facts(connection, project_id)
+    final = sum(1 for control_id in included if finality(facts.get(control_id)).final)
     return ReviewOverview(
         in_scope=len(included),
         not_started=sum(1 for control_id in included if control_id not in states),
@@ -1065,7 +1112,7 @@ def review_overview(connection: psycopg.Connection[Any], project_id: UUID) -> Re
         to_sign=sum(1 for item in left if item in ("SIGN", "REPERFORM")),
         signed_off=signed,
         open_notes=0 if open_notes is None else int(open_notes[0]),
-        complete=len(included) > 0 and signed == len(included),
+        complete=len(included) > 0 and final == len(included),
     )
 
 
@@ -1239,6 +1286,16 @@ def register_control_reviews(app: FastAPI, settings: Settings, scheduler: Any) -
             request, lambda c, p: _reopen(c, p, organization_id, project_id, review_id, body)
         )
 
+    @app.post(f"{base}/{{review_id}}/coverage")
+    def assess_coverage(
+        organization_id: UUID, project_id: UUID, review_id: UUID, body: CoverageBody,
+        request: Request,
+    ) -> ReviewBody:  # fmt: skip
+        return changed(
+            request,
+            lambda c, p: _assess_coverage(c, p, organization_id, project_id, review_id, body),
+        )
+
 
 def _person(
     connection: psycopg.Connection[Any],
@@ -1284,6 +1341,152 @@ def _reviewer(
     _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
     if not _is_reviewer(connection, project_id, principal.id):
         raise ReviewState("only a team member with the reviewer role can do this")
+
+
+class CoverageBody(BaseModel):
+    """A qualified reviewer's assessment of whether a signed review covers the current
+    sheet and workpaper versions (W3 follow-up): documented, never a re-performance."""
+
+    version: int = Field(ge=1)
+    decision: Literal["COVERS", "REQUIRES_REVIEW"]
+    rationale: str = Field(min_length=3, max_length=2000)
+
+
+def _assess_coverage(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    review_id: UUID,
+    body: CoverageBody,
+) -> tuple[ReviewBody, list[UUID]]:
+    """A reviewer who did not prepare the work records that the historical review covers
+    the current versions (COVERS), or that a review is required. The original review and
+    its sign-off record are untouched; the assessment is kept as made."""
+    _reviewer(connection, principal, organization_id, project_id)
+    with transaction(connection) as cursor:
+        _org, control_id, status = _locked(cursor, project_id, review_id, body.version)
+        if status != "SIGNED_OFF":
+            raise ReviewState("the review is open: it is signed off, not assessed")
+        current = _review(cursor.connection, project_id, review_id, principal.id, True)
+        if current.viewer_prepared and independence.required():
+            raise ReviewState(
+                "you signed off the testing or prepared a workpaper; "
+                "another reviewer assesses the review's coverage"
+            )
+        versions = {
+            str(row[0]): row[1]
+            for row in cursor.execute(
+                "SELECT stage, prepared_version FROM workpapers WHERE project_id = %s "
+                "AND engagement_control_id = %s AND status = 'PREPARED'",
+                (project_id, control_id),
+            ).fetchall()
+        }
+        if current.sheet_version is None:
+            raise ReviewState("there is no testing to cover")
+        cursor.execute(
+            """
+            INSERT INTO review_coverage_assessments (
+                organization_id, project_id, control_review_id, engagement_control_id,
+                test_round_id, sheet_version, workpaper_versions, decision, rationale,
+                decided_by
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                organization_id,
+                project_id,
+                review_id,
+                control_id,
+                current.test_round_id,
+                current.sheet_version,
+                Json(versions),
+                body.decision,
+                clean_text(body.rationale, 2000).text,
+                principal.id,
+            ),  # fmt: skip
+        )
+        _bump(cursor, review_id)
+        _audit(
+            cursor, organization_id, project_id, principal.id, review_id,
+            "review.coverage_assessed",
+            {"decision": body.decision, "sheet_version": current.sheet_version,
+             "workpapers": versions},
+        )  # fmt: skip
+        _update_completion(cursor, project_id, principal.id)
+    return _result(connection, project_id, review_id, principal.id), []
+
+
+def _reopen_record(
+    cursor: psycopg.Cursor[Any], actor: UUID, review_id: UUID, reason: str, source: str
+) -> None:
+    """A signed-off review opens again: its sign-off stays on record, marked once as
+    reopened (control_review_signoffs); the review row reads OPEN."""
+    cursor.execute(
+        """
+        UPDATE control_review_signoffs
+        SET reopened_at = clock_timestamp(), reopened_by = %s, reopen_reason = %s,
+            reopened_from = %s
+        WHERE control_review_id = %s AND reopened_at IS NULL
+        """,
+        (actor, reason, source, review_id),
+    )
+    cursor.execute(
+        """
+        UPDATE control_reviews
+        SET status = 'OPEN', signed_by = NULL, signed_at = NULL, signoff_note = '',
+            version = version + 1
+        WHERE id = %s
+        """,
+        (review_id,),
+    )
+
+
+def reopen_review_for(
+    cursor: psycopg.Cursor[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    test_round_id: UUID | None,
+    reason: str,
+    source: str,
+) -> UUID | None:
+    """The review covering a sheet whose results must be re-performed (an impact
+    assessment, W3) opens again, with the reason, and is re-performed once the testing is
+    signed off again. Returns the review, or None when there was none."""
+    row = cursor.execute(
+        "SELECT id, status FROM control_reviews WHERE project_id = %s "
+        "AND engagement_control_id = %s AND test_round_id IS NOT DISTINCT FROM %s FOR UPDATE",
+        (project_id, control_id, test_round_id),
+    ).fetchone()
+    if row is None:
+        return None
+    review_id = UUID(str(row[0]))
+    if row[1] == "SIGNED_OFF":
+        _reopen_record(cursor, principal.id, review_id, reason, source)
+        cursor.execute(
+            """
+            UPDATE tasks SET status = 'REVIEW', version = version + 1
+            WHERE project_id = %s AND engagement_control_id = %s AND plan_kind = 'review'
+              AND status = 'SUCCEEDED'
+            """,
+            (project_id, control_id),
+        )
+        _audit(
+            cursor, organization_id, project_id, principal.id, review_id, "review.reopened",
+            {"reason": reason, "source": source},
+        )  # fmt: skip
+        _update_completion(cursor, project_id, principal.id)
+    return review_id
+
+
+def _round_of(cursor: psycopg.Cursor[Any], review_id: UUID) -> UUID | None:
+    """The testing round a review is of, or None for the control's own review."""
+    row = cursor.execute(
+        "SELECT test_round_id FROM control_reviews WHERE id = %s", (review_id,)
+    ).fetchone()
+    return None if row is None or row[0] is None else UUID(str(row[0]))
 
 
 def _locked(
@@ -1376,7 +1579,15 @@ def _add_note(
             cursor, organization_id, project_id, review_id, finding, "PERSON", principal.id, "OPEN"
         )
         reopened = (
-            _reopen_for(cursor, principal, organization_id, project_id, control_id, finding)
+            _reopen_for(
+                cursor,
+                principal,
+                organization_id,
+                project_id,
+                control_id,
+                finding,
+                _round_of(cursor, review_id),
+            )  # fmt: skip
             if body.severity == "MUST_FIX"
             else []
         )
@@ -1428,8 +1639,9 @@ def _decide_note(
                 "" if text_row is None else str(text_row[0]),
             )
             reopened = _reopen_for(
-                cursor, principal, organization_id, project_id, control_id, finding
-            )
+                cursor, principal, organization_id, project_id, control_id, finding,
+                _round_of(cursor, review_id),
+            )  # fmt: skip
         cursor.execute(
             """
             UPDATE review_notes
@@ -1552,25 +1764,64 @@ def _sign_off(
                 "you signed off the testing or prepared a workpaper; "
                 "another reviewer must sign off the review"
             )
+        # What this review covered, recorded as it signs: the sheet at its version, the
+        # round, and each workpaper at its prepared version (workflow integrity W2). A
+        # later sign-off, round or workpaper is never covered by it.
+        coverage = {
+            "sheet_id": None if current.sheet_id is None else str(current.sheet_id),
+            "sheet_version": current.sheet_version,
+            "test_round_id": None if current.test_round_id is None else str(current.test_round_id),
+            "workpapers": [
+                {"id": str(row[0]), "stage": str(row[1]), "version": row[2]}
+                for row in cursor.execute(
+                    "SELECT id, stage, prepared_version FROM workpapers "
+                    "WHERE project_id = %s AND engagement_control_id = %s AND status = 'PREPARED' "
+                    "ORDER BY stage",
+                    (project_id, control_id),
+                ).fetchall()
+            ],
+        }
         cursor.execute(
             """
             UPDATE control_reviews
             SET status = 'SIGNED_OFF', signed_by = %s, signed_at = clock_timestamp(),
-                signoff_note = %s, version = version + 1
+                signoff_note = %s, coverage = %s, version = version + 1
             WHERE id = %s
             """,
-            (principal.id, clean_text(body.note, 1000).text, review_id),
+            (principal.id, clean_text(body.note, 1000).text, Json(coverage), review_id),
         )
+        # The review's sign-off as made, kept for good (control_review_signoffs,
+        # migration 0091); reopening the review later marks it, never rewrites it.
         cursor.execute(
             """
-            UPDATE tasks SET status = 'SUCCEEDED', version = version + 1
-            WHERE project_id = %s AND engagement_control_id = %s AND plan_kind = 'review'
-              AND status NOT IN ('SUCCEEDED', 'CANCELLED')
+            INSERT INTO control_review_signoffs (
+                organization_id, project_id, control_review_id, engagement_control_id,
+                test_round_id, review_version, signed_by, signed_at, signoff_note, coverage
+            )
+            SELECT organization_id, project_id, id, engagement_control_id, test_round_id,
+                   version, signed_by, signed_at, signoff_note, coverage
+            FROM control_reviews WHERE id = %s
             """,
-            (project_id, control_id),
+            (review_id,),
         )
+        if current.test_round_id is None:
+            cursor.execute(
+                """
+                UPDATE tasks SET status = 'SUCCEEDED', version = version + 1
+                WHERE project_id = %s AND engagement_control_id = %s AND plan_kind = 'review'
+                  AND status NOT IN ('SUCCEEDED', 'CANCELLED')
+                """,
+                (project_id, control_id),
+            )
+        else:
+            from ai_workforce_api.test_rounds import round_reviewed
+
+            # A retest's deficiency is remediated only here, and only if the retest
+            # passed (owner's decision 2); a failed retest went back to remediation at
+            # its sign-off.
+            round_reviewed(cursor, organization_id, project_id, current.test_round_id, principal.id)
         _audit(cursor, organization_id, project_id, principal.id, review_id, "review.signed_off",
-               {"notes": current.counts})  # fmt: skip
+               {"notes": current.counts, "coverage": coverage})  # fmt: skip
         _update_completion(cursor, project_id, principal.id)
     return _result(connection, project_id, review_id, principal.id), []
 
@@ -1588,15 +1839,7 @@ def _reopen(
         _org, control_id, status = _locked(cursor, project_id, review_id, body.version)
         if status != "SIGNED_OFF":
             raise ReviewState("the review is open")
-        cursor.execute(
-            """
-            UPDATE control_reviews
-            SET status = 'OPEN', signed_by = NULL, signed_at = NULL, signoff_note = '',
-                version = version + 1
-            WHERE id = %s
-            """,
-            (review_id,),
-        )
+        _reopen_record(cursor, principal.id, review_id, clean_line(body.reason, 500), "PERSON")
         cursor.execute(
             """
             UPDATE tasks SET status = 'REVIEW', version = version + 1
@@ -1618,6 +1861,7 @@ def _reopen_for(
     project_id: UUID,
     control_id: UUID,
     finding: Finding,
+    test_round_id: UUID | None = None,
 ) -> list[str]:
     """A note that must be fixed reopens what it is about, with the note as the reason.
 
@@ -1633,16 +1877,17 @@ def _reopen_for(
             SELECT id, status, version, engagement_control_id, method, attributes,
                    proposal_status, proposal
             FROM test_sheets
-            WHERE project_id = %s AND engagement_control_id = %s AND test_round_id IS NULL
+            WHERE project_id = %s AND engagement_control_id = %s
+              AND test_round_id IS NOT DISTINCT FROM %s
             FOR UPDATE
             """,
-            (project_id, control_id),
+            (project_id, control_id, test_round_id),
         ).fetchone()
         if sheet is not None and sheet[1] == "SIGNED_OFF":
             try:
-                reopen_work(SheetReopenBody(version=int(sheet[2]), reason=reason))(
-                    cursor, principal, sheet, organization_id, project_id
-                )
+                reopen_work(
+                    SheetReopenBody(version=int(sheet[2]), reason=reason), source="REVIEW_NOTE"
+                )(cursor, principal, sheet, organization_id, project_id)
                 cursor.execute(
                     "UPDATE test_sheets SET version = version + 1 WHERE id = %s", (sheet[0],)
                 )

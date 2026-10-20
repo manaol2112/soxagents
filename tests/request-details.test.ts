@@ -5,14 +5,20 @@ import {
   addressProblem,
   attachmentHref,
   attachmentTarget,
+  composeWording,
   detailsWrite,
+  dueHint,
   formatBytes,
   hasClientActivity,
+  initialsOf,
+  itemNecessity,
   type LifecycleInput,
   lifecycleOf,
   matchContacts,
   parseRequestDetails,
   parseSources,
+  requestIntro,
+  wordingDraft,
 } from "../apps/web/src/request-details-model.ts";
 import {
   reviewProblem,
@@ -607,5 +613,185 @@ describe("what a request supports in the test plan", () => {
       { code: "A2", text: "Approved before granted", items: ["E5"] },
     ]);
     assert.deepEqual(parseRequestDetails(api)?.supports, []);
+  });
+});
+
+describe("the request as the client reads it", () => {
+  it("drops the heading the request is titled by from its opening", () => {
+    const heading =
+      "Design evidence for ITGC-AC-05: Authentication and Password Configuration";
+    assert.equal(
+      requestIntro(
+        `${heading}
+
+To understand how this control is designed, please provide:`,
+        heading,
+      ),
+      "To understand how this control is designed, please provide:",
+    );
+    assert.equal(
+      requestIntro("For our testing, please provide the items below.", heading),
+      "For our testing, please provide the items below.",
+    );
+    assert.equal(requestIntro("", heading), "");
+  });
+
+  it("reads an optional or conditional item from its title", () => {
+    assert.deepEqual(
+      itemNecessity(
+        "Users and roles able to change the settings (if available)",
+      ),
+      {
+        title: "Users and roles able to change the settings",
+        necessity: "OPTIONAL",
+      },
+    );
+    assert.deepEqual(itemNecessity("Exempt accounts (if it applies)"), {
+      title: "Exempt accounts",
+      necessity: "CONDITIONAL",
+    });
+    assert.deepEqual(itemNecessity("Information security policy"), {
+      title: "Information security policy",
+      necessity: "REQUIRED",
+    });
+  });
+
+  it("carries the alternatives and the closing line", () => {
+    const details = parseRequestDetails({
+      ...api,
+      content: {
+        summary: "Please provide:",
+        items: [
+          {
+            number: 1,
+            title: "Information security policy",
+            detail: "",
+            period: "The version in force during the period",
+            include: ["Lockout threshold"],
+            alternatives: ["The security standard"],
+          },
+        ],
+        questions: [],
+        structured: true,
+        closing:
+          "Please label each file with the number of the item it answers. Thank you.",
+      },
+    });
+    const item = details?.content.items[0];
+    assert.deepEqual(item?.alternatives, ["The security standard"]);
+    assert.match(details?.content.closing ?? "", /Thank you.$/);
+  });
+});
+
+describe("the recipients and timing", () => {
+  it("shows a person by their initials", () => {
+    assert.equal(initialsOf("Joanna Rose Manaol", "j@client.example"), "JM");
+    assert.equal(initialsOf("Priya", "p@client.example"), "P");
+    assert.equal(initialsOf("", "iam@client.example"), "I");
+  });
+
+  it("says how far the due date is from today", () => {
+    assert.equal(dueHint("2026-10-29", "2026-10-18"), "In 11 days");
+    assert.equal(dueHint("2026-10-19", "2026-10-18"), "Tomorrow");
+    assert.equal(dueHint("2026-10-18", "2026-10-18"), "Due today");
+    assert.equal(dueHint("2026-10-17", "2026-10-18"), "1 day overdue");
+    assert.equal(dueHint("2026-10-15", "2026-10-18"), "3 days overdue");
+    assert.equal(dueHint("", "2026-10-18"), "");
+  });
+});
+
+describe("the request edited item by item", () => {
+  // request_details.parse_wording reads this exact text back (test_request_details).
+  const COMPOSED = [
+    "Design evidence for ITGC-AC-05: Authentication",
+    "To understand how this control is designed, please provide:",
+    [
+      "1. Information security policy",
+      "   Period: The version in force during the period",
+      "   Include: Password length, complexity; Lockout threshold",
+      "   If not available: The security standard",
+    ].join("\n"),
+    [
+      "2. Users who can change the settings (if available)",
+      "   Export it from the system, not a spreadsheet.",
+      "   Period: At the interim date",
+      "   Include: User or role",
+    ].join("\n"),
+    "Please label each file with the number of the item it answers. Thank you.",
+    ["Questions for you:", "- Who hosts the walkthrough?"].join("\n"),
+  ].join("\n\n");
+
+  const blank = {
+    detail: "",
+    period: "",
+    include: "",
+    format: "",
+    show: "",
+    completeness: "",
+    alternatives: "",
+  };
+
+  it("writes the fields back in the format the checklist is read from", () => {
+    const text = composeWording({
+      heading: "Design evidence for ITGC-AC-05: Authentication",
+      intro: "To understand how this control is designed,\nplease provide:",
+      items: [
+        {
+          ...blank,
+          title: "Information security policy",
+          period: "The version in force during the period",
+          include: "Password length; complexity\n\nLockout threshold.",
+          alternatives: "The security standard",
+        },
+        {
+          ...blank,
+          title: "  ",
+          detail: "An item without a title is left out.",
+        },
+        {
+          ...blank,
+          title: "Users who can change the settings (if available)",
+          detail: "Export it from the system,\nnot a spreadsheet.",
+          period: "At the interim date",
+          include: "User or role",
+        },
+      ],
+      questions: "Who hosts the walkthrough?\n",
+      closing:
+        "Please label each file with the number of the item it answers. Thank you.",
+    });
+    assert.equal(text, COMPOSED);
+  });
+
+  it("reads the request into the fields with its heading kept apart", () => {
+    const details = parseRequestDetails({
+      ...api,
+      title: "Design evidence for ITGC-AC-05: Authentication",
+      content: {
+        summary:
+          "Design evidence for ITGC-AC-05: Authentication\n\nPlease provide:",
+        items: [
+          {
+            number: 1,
+            title: "Information security policy",
+            detail: "",
+            period: "The version in force during the period",
+            include: ["Password length", "Lockout threshold"],
+            alternatives: [],
+          },
+        ],
+        questions: [],
+        structured: true,
+        closing: "",
+      },
+    });
+    assert.ok(details !== null);
+    const draft = wordingDraft(details);
+    assert.equal(
+      draft.heading,
+      "Design evidence for ITGC-AC-05: Authentication",
+    );
+    assert.equal(draft.intro, "Please provide:");
+    assert.equal(draft.items[0]?.include, "Password length\nLockout threshold");
   });
 });

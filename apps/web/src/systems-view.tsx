@@ -2,6 +2,7 @@ import { Fragment } from "react";
 
 import { AutoRefresh } from "./auto-refresh";
 import { ConfirmAction } from "./confirm-action";
+import { FilterableOffers } from "./library-offers";
 import {
   categoryOf,
   HOSTING_LABELS,
@@ -10,6 +11,7 @@ import {
   type SetupControl,
   type SetupSystem,
   systemControls,
+  systemOffers,
   systemStatus,
 } from "./onboarding-model";
 import { removalNote, ScopedControlTable } from "./scoped-controls";
@@ -384,7 +386,83 @@ function SystemDetail({
         system={system}
         editable={editable}
       />
+      {editable ? (
+        <LibraryOffers model={model} onboarding={onboarding} system={system} />
+      ) : null}
     </article>
+  );
+}
+
+/**
+ * The rest of the library's IT controls for this system, closed until opened: any control
+ * not in scope here and not waiting as one of the agent's recommendations can be added,
+ * whatever the agent recommended. A control loaded for the system but out of scope is
+ * brought back rather than copied again.
+ */
+function LibraryOffers({
+  model,
+  onboarding,
+  system,
+}: {
+  model: Ready;
+  onboarding: Onboarding;
+  system: SetupSystem;
+}) {
+  const areas = systemOffers(system);
+  const total = areas.reduce((sum, area) => sum + area.offers.length, 0);
+  if (total === 0) {
+    return null;
+  }
+  return (
+    <details className="sys-more">
+      <summary>
+        <span>Add controls from the library</span>
+        <span className="num">{total} available</span>
+      </summary>
+      <p className="form-hint">
+        Standard IT controls not yet in scope for {system.name}. Each one added
+        is tested for this system only.
+      </p>
+      <FilterableOffers
+        system={system.name}
+        areas={areas}
+        actions={Object.fromEntries(
+          areas.flatMap((area) =>
+            area.offers.map((offer) => [
+              offer.libraryKey || offer.controlRef,
+              <SetupForm
+                key={offer.libraryKey || offer.controlRef}
+                className="sys-rec-actions"
+              >
+                <Hidden
+                  model={model}
+                  onboarding={onboarding}
+                  system={system}
+                  intent="system-add-control"
+                />
+                {offer.controlId !== null ? (
+                  <input
+                    type="hidden"
+                    name="control_id"
+                    value={offer.controlId}
+                  />
+                ) : (
+                  <input
+                    type="hidden"
+                    name="library_key"
+                    value={offer.libraryKey}
+                  />
+                )}
+                <button type="submit" className="btn-ghost btn-sm">
+                  <UiIcon name="plus" size={13} />
+                  {offer.controlId !== null ? "Add back" : "Add to scope"}
+                </button>
+              </SetupForm>,
+            ]),
+          ),
+        )}
+      />
+    </details>
   );
 }
 

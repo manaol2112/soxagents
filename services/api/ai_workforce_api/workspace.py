@@ -36,7 +36,20 @@ from ai_workforce_api.authorization import (
 )
 from ai_workforce_api.control_activity import ActivityItem, control_activity
 from ai_workforce_api.control_instances import control_label
-from ai_workforce_api.control_reviews import REVIEW_STEPS, review_overview, review_states
+from ai_workforce_api.control_journey import Actor as JourneyActor
+from ai_workforce_api.control_journey import (
+    ControlJourney,
+    NotFinal,
+    finality,
+    finality_facts,
+    journey_of,
+)
+from ai_workforce_api.control_reviews import (
+    REVIEW_STEPS,
+    review_overview,
+    review_states,
+    round_review_states,
+)
 from ai_workforce_api.controls import DOMAIN_LABELS, ITGC_DOMAINS, sample_size
 from ai_workforce_api.db import transaction
 from ai_workforce_api.evidence_plans import (
@@ -157,6 +170,16 @@ class StageBody(BaseModel):
     review: str
 
 
+class RoundReview(BaseModel):
+    """A testing round's independent review, as the register shows it."""
+
+    round_id: UUID
+    kind: str
+    round_status: str
+    status: Literal["OPEN", "SIGNED_OFF"] | None
+    left: str | None
+
+
 class ControlRequest(BaseModel):
     id: UUID
     kind: Literal["EVIDENCE", "SAMPLES", "FOLLOW_UP"]
@@ -190,19 +213,33 @@ class ControlRequest(BaseModel):
 # Where a control is in the work: one stage each, in order, so the stages add up to the
 # controls in scope. Worked out from the records in progress_of().
 Progress = Literal[
+    "PLAN_TO_APPROVE",
     "TO_REQUEST",
     "AWAITING_EVIDENCE",
     "EVIDENCE_RECEIVED",
     "READY_FOR_TESTING",
     "AGENT_TESTING",
     "RESULTS_TO_CONFIRM",
+    "TESTING_REOPENED",
     "AWAITING_REVIEW",
     "REVIEW_NOTES",
     "CONCLUDED",
 ]
+# The stage a not-final conclusion reads as, from the step of what keeps it open
+# (control_journey.NotFinal); CONCLUDED is reserved for a final conclusion.
+_PROGRESS_FOR_STEP: dict[str, Progress] = {
+    "PLAN": "PLAN_TO_APPROVE",
+    "REQUEST": "TO_REQUEST",
+    "TEST": "READY_FOR_TESTING",
+    "CONCLUDE": "RESULTS_TO_CONFIRM",
+    "REVIEW": "AWAITING_REVIEW",
+    "DONE": "CONCLUDED",
+}
 # Who the next step belongs to: a preparer (task.update), an approver of outbound
 # requests (project.update), the engagement's independent reviewer, the client, an agent.
-Actor = Literal["PREPARER", "APPROVER", "REVIEWER", "CLIENT", "AGENT", "NONE"]
+# Who a control's next step belongs to (control_journey.Actor, defined there so the
+# journey needs nothing from this module at import time).
+Actor = JourneyActor
 
 
 class PhaseEvidence(BaseModel):
@@ -330,6 +367,19 @@ class ControlRow(BaseModel):
     attributes_settled: bool = True
     # A kickoff draft holds plan items until a person reconciles it (evidence_plans).
     reconcile: bool = False
+    # The conclusion is final (control_journey.finality): every required phase and round
+    # tested and independently reviewed, no plan change awaiting assessment. `conclusion`
+    # is the opinion; only `final` means complete (docs/workflow-integrity.md §2).
+    final: bool = False
+    not_final: list[NotFinal] = []
+    # A signed-off sheet opened again: why, and from what (migration 0089).
+    reopen_reason: str = ""
+    reopened_from: Literal["REVIEW_NOTE", "IMPACT_ASSESSMENT", "PERSON"] | None = None
+    # Each testing round's own independent review (workflow integrity W2).
+    round_reviews: list[RoundReview] = []
+    # Where the control is in Plan → Request → Test → Conclude → Review, each phase's
+    # state and readiness, and what is outstanding (control_journey.py, Milestone 0).
+    journey: ControlJourney | None = None
 
 
 class DeficiencyBody(BaseModel):
@@ -1074,14 +1124,40 @@ def _controls(
     }
     settle = reconcile_waiting(connection, project_id)
     from ai_workforce_api.phase_release import phase_statuses
+    from ai_workforce_api.test_rounds import rounds as load_rounds
 
     phased = phase_statuses(connection, project_id)
+    fin_facts = finality_facts(connection, project_id)
+    reopens: dict[UUID, tuple[str, str]] = {
+        row[0]: (str(row[1]), str(row[2]))
+        for row in connection.execute(
+            "SELECT engagement_control_id, reopen_reason, reopened_from FROM test_sheets "
+            "WHERE project_id = %s AND test_round_id IS NULL AND reopened_from IS NOT NULL "
+            "AND status = 'OPEN'",
+            (project_id,),
+        ).fetchall()
+    }
+    rounds_by: dict[UUID, list[Any]] = {}
+    for found_round in load_rounds(connection, project_id):
+        rounds_by.setdefault(found_round.control_id, []).append(found_round)
+    # Each control's evidence requirements by phase and status, for the journey's
+    # per-phase readiness.
+    requirements: dict[UUID, dict[str, dict[str, int]]] = {}
+    for control_id, phase, status, count in connection.execute(
+        """
+        SELECT engagement_control_id, phase, status, count(*) FROM evidence_requirements
+        WHERE project_id = %s GROUP BY 1, 2, 3
+        """,
+        (project_id,),
+    ).fetchall():
+        requirements.setdefault(control_id, {}).setdefault(str(phase), {})[str(status)] = int(count)
     started = connection.execute(
         "SELECT kicked_off_at IS NOT NULL FROM engagement_settings WHERE project_id = %s",
         (project_id,),
     ).fetchone()
     sheets = _sheet_states(connection, project_id)
     reviews = review_states(connection, project_id)
+    round_reviews = round_review_states(connection, project_id)
     readiness = readiness_states(connection, project_id)
     population_pending = population_waiting_controls(connection, project_id)
     per_app = _application_states(connection, project_id)
@@ -1128,6 +1204,7 @@ def _controls(
             review=mine.get("review", "NONE"),
         )
         worst = max(found, key=order.index) if found else None
+        fin = finality(fin_facts.get(row[0]))
         # A control is concluded once its testing is reviewed: the independent review is
         # signed off and its plan task is done. A task marked done by hand, with no
         # signed-off review, does not conclude a control. A deficiency found earlier, at
@@ -1164,7 +1241,8 @@ def _controls(
                 application_name="" if row[21] is None else str(row[21]),
                 label=control_label(str(row[1]), None if row[21] is None else str(row[21])),
                 sample_size=sample_size(str(row[6]), str(row[8])),
-                stage=_stage(stage_body, conclusion),
+                # The lifecycle reads CONCLUDED only for a final conclusion.
+                stage=_stage(stage_body, conclusion if fin.final else "NOT_CONCLUDED"),
                 stages=stage_body,
                 evidence_requests=sum(pbc.values()),
                 evidence_received=received,
@@ -1210,6 +1288,9 @@ def _controls(
                 (item.phase for item in phases.phases if item.step == "READY"), None
             )
         current.reconcile = current.id in settle
+        current.final, current.not_final = fin.final, fin.reasons
+        if current.id in reopens:
+            current.reopen_reason, current.reopened_from = reopens[current.id]  # type: ignore[assignment]
         step = step_of(current, stage_body, now)
         current.next_step, current.waiting_on, current.overdue = (
             step.text,
@@ -1224,6 +1305,22 @@ def _controls(
             or current.test_result == "NOT_EFFECTIVE"
         )
         current.evidence_phases = evidence_phases(current.requests, now)
+        current.round_reviews = [
+            RoundReview(
+                round_id=found_round.id,
+                kind=str(found_round.kind),
+                round_status=str(found_round.status),
+                status=round_reviews[found_round.id][0]
+                if found_round.id in round_reviews
+                else None,
+                left=round_reviews[found_round.id][1] if found_round.id in round_reviews else None,
+            )
+            for found_round in rounds_by.get(current.id, [])
+            if found_round.status != "CANCELLED"
+        ]
+        current.journey = journey_of(
+            current, phases, rounds_by.get(current.id, []), requirements.get(current.id)
+        )
     mark_yours(connection, principal, organization_id, project_id, result)
     approver = _allowed(connection, principal, organization_id, project_id, Action.PROJECT_UPDATE)
     for row in result:
@@ -1449,10 +1546,18 @@ def step_of(control: ControlRow, stages: StageBody, now: datetime | None = None)
     moment = now or datetime.now(UTC)
     if not control.included:
         return Step("Out of scope", "NONE")
-    if control.conclusion == "EFFECTIVE":
-        return Step("Concluded with no exceptions", "NONE")
-    if control.conclusion == "EXCEPTION":
-        return Step("Concluded with exceptions", "NONE")
+    if control.conclusion != "NOT_CONCLUDED":
+        # The opinion is reached. Concluded only when final; otherwise the first thing
+        # keeping it open is the step (docs/workflow-integrity.md §2).
+        if control.final or not control.not_final:
+            return Step(
+                "Concluded with no exceptions"
+                if control.conclusion == "EFFECTIVE"
+                else "Concluded with exceptions",
+                "NONE",
+            )
+        first = control.not_final[0]
+        return Step(first.text, "REVIEWER" if first.step == "REVIEW" else "PREPARER")
     if control.test_status == "PROPOSED":
         if control.population_pending:
             return Step("Accept the population on the evidence plan", "PREPARER")
@@ -1621,8 +1726,14 @@ def _review_step(control: ControlRow) -> Step:
 def progress_of(control: ControlRow, stages: StageBody, step: Step) -> Progress:
     """The control's one stage in the work, from its records. A control has exactly one,
     so the stages add up to the controls in scope; exceptions are shown beside it."""
-    if control.conclusion != "NOT_CONCLUDED":
+    if control.conclusion != "NOT_CONCLUDED" and (control.final or not control.not_final):
         return "CONCLUDED"
+    if control.sheet_status == "OPEN" and control.reopened_from is not None:
+        # Signed-off testing opened again (a review note, an impact assessment, a person):
+        # the stage says so, with the reason on the row; the review's notes stay open.
+        return "TESTING_REOPENED"
+    if control.conclusion != "NOT_CONCLUDED":
+        return _PROGRESS_FOR_STEP[control.not_final[0].step]
     if control.review_left is not None and control.review_left != "SIGNED":
         return (
             "REVIEW_NOTES"
@@ -1643,7 +1754,8 @@ def progress_of(control: ControlRow, stages: StageBody, step: Step) -> Progress:
     if control.sheet_left == "PLACE":
         return "EVIDENCE_RECEIVED"
     if stages.evidence in ("NONE", "DRAFTED"):
-        return "TO_REQUEST"
+        # Nothing is requested before a person approves the control's test plan.
+        return "TO_REQUEST" if control.evidence_plan == "PLANNED" else "PLAN_TO_APPROVE"
     if stages.evidence in ("REQUESTED", "OVERDUE"):
         return "AWAITING_EVIDENCE"
     if stages.evidence == "PARTIAL":
@@ -1658,7 +1770,7 @@ def progress_of(control: ControlRow, stages: StageBody, step: Step) -> Progress:
     return "READY_FOR_TESTING"
 
 
-_PHASE_ORDER = ("DESIGN", "INTERIM", "ROLLFORWARD", "RETEST", "REMEDIATION")
+_PHASE_ORDER = ("DESIGN", "INTERIM", "ROLLFORWARD", "REMEDIATION", "RETEST")
 
 
 def evidence_phases(requests: list[ControlRequest], now: datetime) -> list[PhaseEvidence]:
@@ -1847,7 +1959,8 @@ def _dashboard(
     severity = Counter(d.severity for d in open_findings)
     tasks = plan.tasks
     agents = Counter(task.agent or "People" for task in tasks if task.status not in DONE_TASKS)
-    concluded = sum(1 for c in controls if c.conclusion != "NOT_CONCLUDED")
+    # Completion counts final conclusions only (docs/workflow-integrity.md §2.1).
+    concluded = sum(1 for c in controls if c.final)
     next_milestones = [m.model_dump(mode="json") for m in plan.milestones if m.status != "DONE"][:4]
     return DashboardBody(
         started=plan.started,

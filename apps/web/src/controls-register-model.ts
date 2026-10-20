@@ -320,6 +320,13 @@ export function stageText(control: ControlRow): StageText {
   const has = (status: string) =>
     live.some((request) => request.status === status);
   switch (control.progress) {
+    case "PLAN_TO_APPROVE":
+      return {
+        label,
+        // Evidence is requested only from an approved test plan.
+        detail: "Evidence is requested once it is approved",
+        ai: false,
+      };
     case "TO_REQUEST":
       return {
         label,
@@ -387,6 +394,10 @@ export function stageText(control: ControlRow): StageText {
       return control.reviewLeft === "REPERFORMING"
         ? { label, detail: "Reviewer agent re-performing", ai: true }
         : { label, detail: "With the reviewer", ai: false };
+    case "TESTING_REOPENED":
+      // Signed-off testing opened again; the sheet says why (a review note, an impact
+      // assessment, a person).
+      return { label, detail: control.reopenReason ?? "", ai: false };
     case "REVIEW_NOTES":
       return { label, detail: "Notes to answer", ai: false };
     case "CONCLUDED":

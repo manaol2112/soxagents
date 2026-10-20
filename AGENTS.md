@@ -29,16 +29,21 @@ Routine, explicitly authorized actions may run automatically. Sensitive or conse
 
 ## Milestone closeout
 
-Run formatting, linting, type checking, unit tests, and the relevant integration or end-to-end tests. Review the diff for unrelated changes, secrets, unsafe defaults, and accidental data exposure.
+Testing is risk-based and change-focused (decided by the product owner; docs/test-strategy.md). A milestone gate is: formatting, linting and type checking for the modified code; the targeted tests for the active work (`make test-fast`, or `make test-changed` for the files modified); every applicable audit-critical safeguard test (`make test-critical`: authorization, segregation of duties, approvals, evidence traceability, review independence, database integrity); migration validation whenever the database changes; and focused integration tests for the affected workflows. The entire legacy Python suite (`make test-full`) runs only when the owner explicitly asks. Review the diff for unrelated changes, secrets, unsafe defaults, and accidental data exposure.
+
+A failing test is never classified as obsolete by default. A test whose expectation encodes a superseded workflow is rewritten for the approved behavior, with the old expectation, the new one and the methodology justification recorded; a test is retired only when the functionality it covers has genuinely been removed. Audit-integrity assertions are preserved.
 
 Report:
 
 - Files changed
 - Behavior implemented
-- Commands actually run and their results
+- Tests executed and their results (commands actually run)
+- Critical safeguards validated
+- Legacy tests updated or retired, with justification
+- Areas not tested and the associated risks
 - Acceptance criteria marked PASS or FAIL
 - Security implications
-- Known limitations
+- Outstanding defects, known limitations
 - The recommended next milestone
 
 Do not start the next milestone until the current milestone's acceptance criteria pass and the changes are reviewed.

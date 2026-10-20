@@ -107,7 +107,10 @@ _KIND_TYPES: dict[str, RequestType] = {
 # For wording no plan or draft explains: a recommendation only, never settled.
 _KEYWORDS: tuple[tuple[re.Pattern[str], RequestType], ...] = (
     (
-        re.compile(r"(?i)\buser (?:access )?list|\baccess list|\bpermissions? list"),
+        re.compile(
+            r"(?i)\buser (?:access )?list|\baccess list|\bpermissions? list"
+            r"|\busers? and roles\b|\broles? and users?\b"
+        ),
         "ACCESS_LISTING",
     ),
     (re.compile(r"(?i)\breconciliation"), "RECONCILIATION"),
@@ -130,7 +133,18 @@ _FIELDS = {
     "Format:": "format",
     "Show:": "show",
     "Completeness:": "completeness",
+    "If not available:": "alternatives",
 }
+# A phase's request, by name, as the evidence plan heads its wording.
+PHASE_TITLES: dict[str, str] = {
+    "DESIGN": "Design evidence",
+    "INTERIM": "Interim testing evidence",
+    "ROLLFORWARD": "Roll-forward evidence",
+}
+# What a planned item's title carries when the item is optional or conditional.
+_NECESSITY_SUFFIX = re.compile(r"\s*\((?:if available|if it applies)\)$", re.IGNORECASE)
+# A policy or standard among the process documentation, rather than a narrative.
+_POLICY = re.compile(r"(?i)\bpolic(?:y|ies)\b|\bprocedures?\b|\bstandards?\b")
 _QUESTIONS = "Questions for you:"
 
 
@@ -190,6 +204,8 @@ class ItemBody(BaseModel):
     format: str = ""
     show: str = ""
     completeness: str = ""
+    # What may serve instead.
+    alternatives: list[str] = Field(default_factory=list)
     request_type: str | None = None
 
 
@@ -649,7 +665,7 @@ def details(
     signals = _signals(connection, pbc, control, planning, kinds)
     kind = classify(pbc, signals, labels)
     for item in content.items:
-        item.request_type = by_title.get(_norm(item.title)) or _keyword_type(
+        item.request_type = by_title.get(_norm(plain_title(item.title))) or _keyword_type(
             f"{item.title} {item.detail}"
         )
     known = contacts(connection, project_id)
@@ -707,7 +723,7 @@ def client_content(
     planning, kinds, by_title = _planning(connection, pbc)
     kind = classify(pbc, _signals(connection, pbc, control, planning, kinds), labels)
     for item in content.items:
-        item.request_type = by_title.get(_norm(item.title)) or _keyword_type(
+        item.request_type = by_title.get(_norm(plain_title(item.title))) or _keyword_type(
             f"{item.title} {item.detail}"
         )
     return title_of(pbc, content), kind.label, content
@@ -718,16 +734,39 @@ def reference_of(request_id: UUID) -> str:
 
 
 def title_of(pbc: PbcBody, content: ContentBody) -> str:
-    """The person's title, else the first item's (the request's main deliverable), else
-    the first line of the wording."""
+    """The person's title, else the wording's own heading (a planned request opens with
+    one: "Design evidence for ITGC-AC-05: ..."), else, for a phase's request of several
+    items, the phase and control, else the first item's (the request's main deliverable),
+    else the first line of the wording."""
     if pbc.title.strip():
         return pbc.title.strip()
+    heading = heading_of(content)
+    if heading:
+        return heading
+    if len(content.items) > 1 and pbc.testing_phase in PHASE_TITLES:
+        return f"{PHASE_TITLES[pbc.testing_phase]} for {pbc.control_ref}"
     if content.items:
         return content.items[0].title[:160]
     for line in pbc.evidence_description.splitlines():
         if line.strip():
             return line.strip()[:160]
     return pbc.control_ref
+
+
+def heading_of(content: ContentBody) -> str:
+    """The wording's heading: a first line before the items that is a title, not a
+    sentence (no closing punctuation). Empty when the wording opens with a sentence."""
+    if not content.items or not content.summary:
+        return ""
+    first = content.summary.split("\n\n", 1)[0].strip()
+    if "\n" in first or not first or len(first) > 160 or first[-1] in ".:?!,;":
+        return ""
+    return first
+
+
+def plain_title(title: str) -> str:
+    """An item's title without the "(if available)" a planned optional item carries."""
+    return _NECESSITY_SUFFIX.sub("", title).strip()
 
 
 def request_types(connection: psycopg.Connection[Any]) -> list[RequestTypeBody]:
@@ -745,6 +784,7 @@ def parse_wording(text: str) -> ContentBody:
     items: list[ItemBody] = []
     questions: list[str] = []
     in_questions = False
+    closing = ""
     for paragraph in text.strip().split("\n\n"):
         lines = [line.rstrip() for line in paragraph.strip("\n").split("\n")]
         if not lines or not lines[0].strip():
@@ -767,10 +807,17 @@ def parse_wording(text: str) -> ContentBody:
             continue
         if not items:
             summary.append(paragraph.strip())
-        elif items:
+        elif (
+            not questions
+            and "\n" not in paragraph.strip()
+            and paragraph.strip().endswith("Thank you.")
+        ):
+            # The drafter's one-line closing, after the last item: not part of that item,
+            # even when the item has no detail line of its own.
+            closing = paragraph.strip()
+        else:
             items[-1].detail = f"{items[-1].detail}\n\n{paragraph.strip()}".strip()
-    closing = ""
-    if items and not questions:
+    if items and not questions and not closing:
         # The drafter's one-line closing, after the last item: not part of that item.
         parts = items[-1].detail.rsplit("\n\n", 1)
         if len(parts) == 2 and "\n" not in parts[1] and parts[1].endswith("Thank you."):
@@ -799,8 +846,9 @@ def _item(number: int, title: str, lines: list[str]) -> ItemBody:
             continue
         value = text[len(label) :].strip()
         field = _FIELDS[label]
-        if field == "include":
-            item.include = [part.strip() for part in value.split(";") if part.strip()]
+        if field in {"include", "alternatives"}:
+            parts = [part.strip().rstrip(".") for part in value.split(";") if part.strip()]
+            setattr(item, field, parts)
         else:
             setattr(item, field, value)
     item.detail = "\n".join(part for part in detail if part)
@@ -847,15 +895,11 @@ def _planning(
     assumptions = [str(item) for item in content.get("assumptions", []) if isinstance(item, str)]
     drafted_items = [item for item in content.get("items", []) if isinstance(item, dict)]
     kinds = [str(item.get("kind", "")) for item in drafted_items]
-    by_title: dict[str, RequestType] = {}
-    for item in drafted_items:
-        found = _KIND_TYPES.get(str(item.get("kind", "")))
-        if found is not None:
-            by_title[_norm(str(item.get("title", "")))] = found
-    for requirement in requirements:
-        found = _category_type(requirement.categories, pbc.testing_phase)
-        if found is not None:
-            by_title.setdefault(_norm(requirement.title), found)
+    by_title = item_types(
+        [(str(item.get("title", "")), str(item.get("kind", ""))) for item in drafted_items],
+        [(item.title, item.categories) for item in requirements],
+        pbc.testing_phase,
+    )
     source = str(draft[1]) if draft is not None and draft[1] is not None else ""
     drafted_by: Literal["MODEL", "RULES", "PERSON"] = (
         "MODEL" if source == "MODEL" else "RULES" if source == "RULES" else "PERSON"
@@ -897,6 +941,7 @@ def _signals(
         agent=planning.drafted_by == "MODEL",
         categories=[item.categories for item in planning.requirements],
         kinds=kinds,
+        titles=[item.title for item in planning.requirements],
     )
 
 
@@ -907,6 +952,7 @@ def signals_of(
     agent: bool,
     categories: list[list[str]],
     kinds: list[str],
+    titles: list[str] | None = None,
 ) -> Signals:
     """What the records say the request asks for, from what was read for it: whether its
     control is about access, whether the drafter's model wrote it, each planned item's
@@ -922,9 +968,13 @@ def signals_of(
 
     if pbc.operation_key.startswith("samples-"):
         return Signals(("SAMPLE_EVIDENCE",), "KIND", False)
+    named = titles if titles is not None and len(titles) == len(categories) else None
     planned = [
         refine(found)
-        for found in (_category_type(item, pbc.testing_phase) for item in categories)
+        for found in (
+            _category_type(item, pbc.testing_phase, named[index] if named else "")
+            for index, item in enumerate(categories)
+        )
         if found is not None
     ]
     if planned:
@@ -974,13 +1024,44 @@ def classify(pbc: PbcBody, signals: Signals, labels: dict[str, str]) -> TypeBody
     )
 
 
-def _category_type(categories: list[str], phase: str | None) -> RequestType | None:
+def item_types(
+    drafted: list[tuple[str, str]],
+    planned: list[tuple[str, list[str]]],
+    phase: str | None,
+) -> dict[str, RequestType]:
+    """Each item's type by its title: the drafter's kind for each drafted (title, kind),
+    and the plan's type for each planned (title, categories). The draft's kind stands,
+    unless it could not place the item ("other") and the plan can."""
+    found: dict[str, RequestType] = {}
+    for title, kind in drafted:
+        drafted_type = _KIND_TYPES.get(kind)
+        if drafted_type is not None:
+            found[_norm(title)] = drafted_type
+    for title, categories in planned:
+        planned_type = _category_type(categories, phase, title, named=True)
+        key = _norm(title)
+        if planned_type is not None and found.get(key) in (None, "OTHER"):
+            found[key] = planned_type
+    return found
+
+
+def _category_type(
+    categories: list[str], phase: str | None, title: str = "", *, named: bool = False
+) -> RequestType | None:
+    """A planned item's type from its categories, refined by its title where the category
+    is broad: a policy among the process documentation. With named, an item the plan could
+    not place is labelled by what its title names plainly (a list of users and roles): a
+    label for the item only, which never settles the request's own type."""
     for category in categories:
         found = _CATEGORY_TYPES.get(category)
         if found is None:
             continue
         if category == "CONTROL_EXECUTION" and phase == "DESIGN":
             return "SAMPLE_OF_ONE"
+        if category == "PROCESS_DOCUMENTATION" and _POLICY.search(title):
+            return "POLICY_PROCEDURE"
+        if found == "OTHER" and named and title:
+            return _keyword_type(title) or found
         return found
     return None
 

@@ -53,6 +53,7 @@ from ai_workforce_api.request_details import (
     reference_of,
     request_types,
     signals_of,
+    title_of,
 )
 from ai_workforce_api.settings import Settings
 
@@ -165,7 +166,7 @@ MAX_BULK = 500
 _UNSENT = frozenset({"DRAFT", "APPROVAL_PENDING"})
 _OUT = frozenset({"SENT", "WAITING_FOR_RESPONSE", "PARTIALLY_RECEIVED", "OVERDUE", "ESCALATED"})
 _LIST = re.compile(r"^[A-Za-z0-9_.@ +/&()-]{1,200}$")
-_PHASE_ORDER = {"DESIGN": 0, "INTERIM": 1, "ROLLFORWARD": 2, "RETEST": 3, "REMEDIATION": 4}
+_PHASE_ORDER = {"DESIGN": 0, "INTERIM": 1, "ROLLFORWARD": 2, "REMEDIATION": 3, "RETEST": 4}
 
 
 class CenterState(Exception):
@@ -489,7 +490,8 @@ class _Facts:
     """What was read for the engagement's requests, in one pass."""
 
     controls: dict[UUID, tuple[str, str, str, list[str]]] = field(default_factory=dict)
-    requirements: dict[UUID, list[tuple[str, str, list[str]]]] = field(default_factory=dict)
+    # Each requirement a request carries: status, sufficiency, categories, title.
+    requirements: dict[UUID, list[tuple[str, str, list[str], str]]] = field(default_factory=dict)
     drafts: dict[UUID, tuple[str, str, list[str]]] = field(default_factory=dict)
     clarifications: set[UUID] = field(default_factory=set)
     files: Counter[UUID] = field(default_factory=Counter)
@@ -526,13 +528,14 @@ def _facts(connection: psycopg.Connection[Any], project_id: UUID) -> _Facts:
         facts.controls[row[0]] = (str(row[1]), str(row[2]), str(row[3]), list(row[4] or []))
     for row in connection.execute(
         """
-        SELECT pbc_request_id, status, sufficiency, categories FROM evidence_requirements
+        SELECT pbc_request_id, status, sufficiency, categories, title
+        FROM evidence_requirements
         WHERE project_id = %s AND pbc_request_id IS NOT NULL ORDER BY created_at, id
         """,
         (project_id,),
     ).fetchall():
         facts.requirements.setdefault(row[0], []).append(
-            (str(row[1]), str(row[2]), [str(item) for item in row[3] or []])
+            (str(row[1]), str(row[2]), [str(item) for item in row[3] or []], str(row[4]))
         )
     for row in connection.execute(
         """
@@ -671,6 +674,7 @@ def _row(
         agent=draft is not None and draft[1] == "MODEL",
         categories=[item[2] for item in requirements],
         kinds=draft[2] if draft is not None else [],
+        titles=[item[3] for item in requirements],
     )
     kind = classify(pbc, signals, facts.labels)
     approval = facts.approvals.get(pbc.id, {})
@@ -694,7 +698,7 @@ def _row(
         agent = "READY_FOR_REVIEW"
     elif pbc.id in facts.reading:
         agent = "READING"
-    title = pbc.title.strip() or _title_of_wording(pbc.evidence_description)
+    title = title_of(pbc, parse_wording(pbc.evidence_description))
     recipient = pbc.recipient.strip().lower()
     held_reason = ""
     if pbc.id in facts.held:
@@ -774,21 +778,6 @@ def _row(
         owner_user_id=pbc.owner_user_id,
         drafting=drafting,
     )
-
-
-def _title_of_wording(text: str) -> str:
-    """A request's title when a person has not set one: its first checklist item, else
-    the first line of its wording."""
-    items = parse_wording(text).items
-    return items[0].title if items else _first_line(text)
-
-
-def _first_line(text: str) -> str:
-    for line in text.splitlines():
-        stripped = line.strip().lstrip("-*• ").strip()
-        if stripped:
-            return stripped
-    return "Evidence request"
 
 
 def kpi_of(row: RowBody, kpi: Kpi) -> bool:
@@ -1296,7 +1285,7 @@ def bulk(
                 )
             )
             continue
-        title = current.title.strip() or _title_of_wording(current.evidence_description)
+        title = title_of(current, parse_wording(current.evidence_description))
         reference = reference_of(current.id)
 
         def outcome(

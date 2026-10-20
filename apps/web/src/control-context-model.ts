@@ -36,6 +36,7 @@ export type ReadinessState =
   | "PROCESS_UNDERSTANDING_INCOMPLETE"
   | "EVIDENCE_PENDING"
   | "CONFLICT_REQUIRES_REVIEW"
+  | "IMPACT_PENDING"
   | "READY_FOR_REVIEW"
   | "CONCLUDED";
 
@@ -46,6 +47,7 @@ export const READINESS_STATES: readonly ReadinessState[] = [
   "PROCESS_UNDERSTANDING_INCOMPLETE",
   "EVIDENCE_PENDING",
   "CONFLICT_REQUIRES_REVIEW",
+  "IMPACT_PENDING",
   "READY_FOR_REVIEW",
   "CONCLUDED",
 ];
@@ -65,6 +67,7 @@ export const STATE_LABELS: Record<ReadinessState, string> = {
   PROCESS_UNDERSTANDING_INCOMPLETE: "Process understanding incomplete",
   EVIDENCE_PENDING: "Evidence pending",
   CONFLICT_REQUIRES_REVIEW: "Conflict to review",
+  IMPACT_PENDING: "Impact assessment pending",
   READY_FOR_REVIEW: "Ready for review",
   CONCLUDED: "Concluded",
 };
@@ -76,6 +79,7 @@ export const STATE_TONES: Record<ReadinessState, string> = {
   PROCESS_UNDERSTANDING_INCOMPLETE: "tone-warning",
   EVIDENCE_PENDING: "tone-info",
   CONFLICT_REQUIRES_REVIEW: "tone-danger",
+  IMPACT_PENDING: "tone-warning",
   READY_FOR_REVIEW: "tone-info",
   CONCLUDED: "tone-success",
 };
@@ -209,6 +213,12 @@ export type DesignSlot = {
   automatic: boolean;
   filledBy: string | null;
   version: number;
+  /** The answers usually given, to choose from (slot_options.py). */
+  options: string[];
+  /** The value as a question to the client (slot_questions.py). */
+  question: string;
+  /** How to answer it, for whoever fills it in (slot_questions.hint_for). */
+  hint: string;
 };
 
 /** The control's design, as its documentation states it, with the client's values. */
@@ -506,6 +516,9 @@ function parseDesign(value: unknown): Design | null {
         automatic: item.automatic === true,
         filledBy: typeof item.filled_by === "string" ? item.filled_by : null,
         version: num(item.version),
+        options: strings(item.options).slice(0, 6),
+        question: str(item.question),
+        hint: str(item.hint),
       })),
     missing: strings(value.missing),
   };

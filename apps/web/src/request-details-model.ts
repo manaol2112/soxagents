@@ -51,6 +51,8 @@ export type ChecklistItem = {
   format: string;
   show: string;
   completeness: string;
+  /** What may serve instead. */
+  alternatives: string[];
   type: string | null;
 };
 
@@ -106,6 +108,8 @@ export type RequestDetails = {
     items: ChecklistItem[];
     questions: string[];
     structured: boolean;
+    /** The wording's closing line after the items, kept apart from them. */
+    closing: string;
   };
   planning: {
     requirements: PlanningRequirement[];
@@ -266,10 +270,12 @@ export function parseRequestDetails(value: unknown): RequestDetails | null {
         format: str(item.format),
         show: str(item.show),
         completeness: str(item.completeness),
+        alternatives: strings(item.alternatives),
         type: typeof item.request_type === "string" ? item.request_type : null,
       })),
       questions: strings(content.questions),
       structured: content.structured === true,
+      closing: str(content.closing),
     },
     planning: {
       requirements: records(planning?.requirements).map((item) => ({
@@ -799,4 +805,203 @@ export function parseSources(
         stage: str(item.stage),
       })),
   };
+}
+
+/**
+ * The wording's opening for the client, without the heading the request is titled by: a
+ * planned request opens "Design evidence for ITGC-AC-05: ..." and the panel shows that as
+ * its title already.
+ */
+export function requestIntro(summary: string, title: string): string {
+  const paragraphs = summary
+    .split(/\n\s*\n/)
+    .map((part) => part.trim())
+    .filter((part) => part !== "");
+  if (paragraphs.length > 0 && paragraphs[0] === title.trim()) {
+    paragraphs.shift();
+  }
+  return paragraphs.join(" ");
+}
+
+export type ItemNecessity = "REQUIRED" | "OPTIONAL" | "CONDITIONAL";
+
+/** An item's title without the "(if available)" or "(if it applies)" the plan adds to an
+ * optional or conditional item, and which of those it is. */
+export function itemNecessity(title: string): {
+  title: string;
+  necessity: ItemNecessity;
+} {
+  const found = /\s*\((if available|if it applies)\)$/i.exec(title);
+  if (found === null) {
+    return { title, necessity: "REQUIRED" };
+  }
+  return {
+    title: title.slice(0, found.index).trim(),
+    necessity:
+      found[1]?.toLowerCase() === "if available" ? "OPTIONAL" : "CONDITIONAL",
+  };
+}
+
+/** A person's initials for their avatar: the first letters of the first and last names,
+ * else of the address. */
+export function initialsOf(name: string, email: string): string {
+  const words = name
+    .trim()
+    .split(/\s+/)
+    .filter((word) => /\p{L}/u.test(word));
+  const first = words[0];
+  const last = words.length > 1 ? words[words.length - 1] : undefined;
+  if (first !== undefined) {
+    return `${first[0] ?? ""}${last?.[0] ?? ""}`.toUpperCase();
+  }
+  return (email.trim()[0] ?? "?").toUpperCase();
+}
+
+/** How far the due date is from today, in words: "Due today", "In 3 days", "2 days
+ * overdue". Both dates are YYYY-MM-DD; empty for a date that cannot be read. */
+export function dueHint(due: string, today: string): string {
+  const day = /^\d{4}-\d{2}-\d{2}$/;
+  if (!day.test(due) || !day.test(today)) {
+    return "";
+  }
+  const days = Math.round(
+    (Date.parse(`${due}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) /
+      86_400_000,
+  );
+  if (days === 0) {
+    return "Due today";
+  }
+  if (days === 1) {
+    return "Tomorrow";
+  }
+  if (days > 1) {
+    return `In ${days} days`;
+  }
+  return `${-days} day${days === -1 ? "" : "s"} overdue`;
+}
+
+/** One item as the audit team edits it: lists one entry per line. */
+export type DraftItemFields = {
+  title: string;
+  detail: string;
+  period: string;
+  include: string;
+  format: string;
+  show: string;
+  completeness: string;
+  alternatives: string;
+};
+
+/** The request's wording as the audit team edits it, item by item. The heading the
+ * request is titled by is kept as it is; it changes with the title. */
+export type WordingDraft = {
+  heading: string;
+  intro: string;
+  items: DraftItemFields[];
+  questions: string;
+  closing: string;
+};
+
+export const EMPTY_ITEM: DraftItemFields = {
+  title: "",
+  detail: "",
+  period: "",
+  include: "",
+  format: "",
+  show: "",
+  completeness: "",
+  alternatives: "",
+};
+
+/** The wording read into the editor's fields (parseRequestDetails reads it from the API's
+ * structure, request_details.parse_wording). */
+export function wordingDraft(details: RequestDetails): WordingDraft {
+  const { content } = details;
+  const first = content.summary.split(/\n\s*\n/)[0]?.trim() ?? "";
+  const heading = first !== "" && first === details.title.trim() ? first : "";
+  return {
+    heading,
+    intro: requestIntro(content.summary, heading),
+    items: content.items.map((item) => ({
+      title: item.title,
+      detail: item.detail,
+      period: item.period,
+      include: item.include.join("\n"),
+      format: item.format,
+      show: item.show,
+      completeness: item.completeness,
+      alternatives: item.alternatives.join("\n"),
+    })),
+    questions: content.questions.join("\n"),
+    closing: content.closing,
+  };
+}
+
+/** One line: what the format reads line by line cannot hold a line break. */
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** Entries one per line, as the format lists them: separated by semicolons, so an
+ * entry cannot hold one. */
+function entries(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => oneLine(line.replaceAll(";", ",")).replace(/\.$/, ""))
+    .filter((line) => line !== "");
+}
+
+/**
+ * The wording from the editor's fields, in the format the API reads back into items
+ * (request_details.parse_wording): the heading and opening, each numbered item with its
+ * labelled lines, the closing line, then the questions. Items without a title are left
+ * out.
+ */
+export function composeWording(draft: WordingDraft): string {
+  const parts: string[] = [];
+  if (oneLine(draft.heading) !== "") {
+    parts.push(oneLine(draft.heading));
+  }
+  const intro = draft.intro
+    .split(/\n\s*\n/)
+    .map(oneLine)
+    .filter((part) => part !== "");
+  parts.push(...intro);
+  const items = draft.items.filter((item) => oneLine(item.title) !== "");
+  items.forEach((item, index) => {
+    const lines = [`${index + 1}. ${oneLine(item.title)}`];
+    const detail = oneLine(item.detail);
+    if (detail !== "") {
+      lines.push(`   ${detail}`);
+    }
+    const labelled: Array<[string, string]> = [
+      ["Period", oneLine(item.period)],
+      ["Include", entries(item.include).join("; ")],
+      ["Format", oneLine(item.format)],
+      ["Show", oneLine(item.show)],
+      ["Completeness", oneLine(item.completeness)],
+      ["If not available", entries(item.alternatives).join("; ")],
+    ];
+    for (const [label, value] of labelled) {
+      if (value !== "") {
+        lines.push(`   ${label}: ${value}`);
+      }
+    }
+    parts.push(lines.join("\n"));
+  });
+  if (oneLine(draft.closing) !== "") {
+    parts.push(oneLine(draft.closing));
+  }
+  const questions = draft.questions
+    .split("\n")
+    .map(oneLine)
+    .filter((line) => line !== "");
+  if (questions.length > 0) {
+    parts.push(
+      ["Questions for you:", ...questions.map((line) => `- ${line}`)].join(
+        "\n",
+      ),
+    );
+  }
+  return parts.join("\n\n");
 }

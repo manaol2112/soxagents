@@ -12,7 +12,7 @@ SHELL := C:/Program Files/Git/bin/bash.exe
 .SHELLFLAGS := -c
 endif
 
-.PHONY: help toolchain check install start go awake stop status format lint typecheck api web migrate test ci reset
+.PHONY: help toolchain check install start go awake stop status format lint typecheck api web migrate test test-fast test-critical test-changed test-full ci reset
 
 help:
 	@echo "make toolchain  Show pinned Node.js, pnpm, Python, and uv versions"
@@ -29,7 +29,11 @@ help:
 	@echo "make typecheck  Run mypy and tsc"
 	@echo "make api        Run the API on 127.0.0.1:8000"
 	@echo "make web        Run the web app on 127.0.0.1:3000"
-	@echo "make test       Run smoke tests, then SELECT 1 against PostgreSQL"
+	@echo "make test       The milestone gate: test-critical, then the Node tests"
+	@echo "make test-fast  Targeted tests for the active work (FAST_PY=... FAST_NODE=... to choose)"
+	@echo "make test-critical  Audit-integrity and security regression tests, in parallel"
+	@echo "make test-changed   Tests for the files changed since main (BASE=<ref> to compare)"
+	@echo "make test-full  The entire legacy Python suite (only when the owner asks)"
 	@echo "make ci         Run lint, typecheck, and test"
 	@echo "make reset      Stop PostgreSQL and delete the local data volume"
 
@@ -119,10 +123,43 @@ api: require-env
 web:
 	set -a && . ./.env && set +a && pnpm --filter web exec next dev --hostname "$${WEB_HOST:-127.0.0.1}" --port 3000
 
-test: migrate
-	set -a && . ./.env && set +a && uv run pytest
-	pnpm exec node --test tests/smoke.test.ts tests/shell-model.test.ts tests/project-form.test.ts tests/agent-form.test.ts tests/task-form.test.ts tests/directory.test.ts tests/workflow-model.test.ts tests/follow-ups.test.ts tests/format.test.ts tests/routes.test.ts tests/onboarding-model.test.ts tests/draft-model.test.ts tests/engagement-model.test.ts tests/analysis-model.test.ts tests/testing-model.test.ts tests/console-model.test.ts tests/evidence-model.test.ts tests/sheet-model.test.ts tests/workpaper-model.test.ts tests/evidence-change-model.test.ts tests/round-model.test.ts tests/evidence-preview-model.test.ts tests/review-model.test.ts tests/welcome-model.test.ts tests/sign-in-model.test.ts tests/client-copy.test.ts tests/invite-model.test.ts tests/system-scoping-model.test.ts tests/process-model.test.ts tests/control-context-model.test.ts tests/assistant-model.test.ts tests/evidence-plan-model.test.ts tests/portal-model.test.ts tests/portal-workspace.test.ts tests/engagement-lifecycle.test.ts tests/engagement-close.test.ts tests/engagement-edit.test.ts tests/no-autofill.test.ts tests/clients.test.ts tests/engagements-model.test.ts tests/controls-register-model.test.ts tests/control-workspace-model.test.ts tests/evidence-workspace-model.test.ts tests/controls-overview-model.test.ts tests/engagement-profile.test.ts tests/evidence-flow.test.ts tests/request-details.test.ts tests/evidence-center-model.test.ts tests/recent-engagements.test.ts tests/browser-url.test.ts tests/planning-model.test.ts
+# Testing strategy (docs/test-strategy.md, decided by the product owner): targeted and
+# audit-critical tests gate a milestone; the whole legacy suite runs only on request.
+# Every Python test still gets its own database, cloned from a migrated template;
+# files run in parallel with one file per worker.
+# Six workers: each test opens several PostgreSQL connections (the app, the schedulers,
+# direct checks) and the local server allows 100; more workers exhaust them.
+WORKERS ?= 6
+PYTEST := uv run pytest -q -p no:cacheprovider -n $(WORKERS) --dist loadfile --durations=15 --tb=short
+API_TESTS := services/api/tests
+
+# The active work's tests: the workflow-integrity set by default, or the files given.
+FAST_PY ?= $(API_TESTS)/test_control_journey.py $(API_TESTS)/test_workspace.py $(API_TESTS)/test_control_reviews.py $(API_TESTS)/test_round_reviews.py $(API_TESTS)/test_plan_impact.py $(API_TESTS)/test_round_readiness.py $(API_TESTS)/test_test_rounds.py $(API_TESTS)/test_phase_release.py $(API_TESTS)/test_control_progress.py $(API_TESTS)/test_control_activity.py $(API_TESTS)/test_next_steps.py $(API_TESTS)/test_migrations.py
+FAST_NODE ?= tests/controls-register-model.test.ts tests/engagement-model.test.ts tests/review-model.test.ts tests/home-model.test.ts tests/round-model.test.ts tests/control-workspace-model.test.ts tests/controls-overview-model.test.ts
+
+# Audit integrity, authorization, segregation of duties, approvals, evidence
+# traceability, review independence, and database integrity (CRITICAL in
+# docs/test-strategy.md). Kept in step with that document.
+CRITICAL_PY := $(addprefix $(API_TESTS)/,test_access.py test_actions.py test_agents.py test_approvals.py test_auth.py test_authorization.py test_execution.py test_security.py test_policy.py test_schema.py test_migrations.py test_independence.py test_control_reviews.py test_round_reviews.py test_plan_impact.py test_round_readiness.py test_planning_gate.py test_master_plans.py test_evidence_flow.py test_evidence_versions.py test_evidence.py test_engagement_integrity.py test_handoffs.py test_outbound.py test_smtp_mailbox.py test_mailbox.py test_inbound.py test_health.py test_control_journey.py test_test_rounds.py test_workspace.py test_phase_release.py test_test_citations.py test_console_citations.py test_evidence_review.py test_testing_engine.py test_workpapers.py test_google.py test_invitations.py test_demo_requests.py test_evidence_portal.py test_projects.py test_tasks.py test_workflows.py test_failures.py test_durable.py)
+
+test-fast: require-env
+	set -a && . ./.env && set +a && $(PYTEST) $(FAST_PY)
+	pnpm exec node --test $(FAST_NODE)
+
+test-critical: require-env
+	set -a && . ./.env && set +a && $(PYTEST) $(CRITICAL_PY)
+
+BASE ?=
+test-changed: require-env
+	set -a && . ./.env && set +a && uv run python scripts/changed_tests.py $(if $(BASE),--base $(BASE),)
+
+test: test-critical
+	pnpm exec node --test tests/smoke.test.ts tests/shell-model.test.ts tests/project-form.test.ts tests/agent-form.test.ts tests/task-form.test.ts tests/directory.test.ts tests/workflow-model.test.ts tests/follow-ups.test.ts tests/format.test.ts tests/routes.test.ts tests/onboarding-model.test.ts tests/draft-model.test.ts tests/engagement-model.test.ts tests/analysis-model.test.ts tests/testing-model.test.ts tests/console-model.test.ts tests/evidence-model.test.ts tests/sheet-model.test.ts tests/workpaper-model.test.ts tests/evidence-change-model.test.ts tests/round-model.test.ts tests/evidence-preview-model.test.ts tests/review-model.test.ts tests/welcome-model.test.ts tests/sign-in-model.test.ts tests/client-copy.test.ts tests/invite-model.test.ts tests/system-scoping-model.test.ts tests/process-model.test.ts tests/control-context-model.test.ts tests/assistant-model.test.ts tests/evidence-plan-model.test.ts tests/portal-model.test.ts tests/portal-workspace.test.ts tests/engagement-lifecycle.test.ts tests/engagement-close.test.ts tests/engagement-edit.test.ts tests/no-autofill.test.ts tests/clients.test.ts tests/engagements-model.test.ts tests/controls-register-model.test.ts tests/control-workspace-model.test.ts tests/evidence-workspace-model.test.ts tests/controls-overview-model.test.ts tests/engagement-profile.test.ts tests/evidence-flow.test.ts tests/request-details.test.ts tests/evidence-center-model.test.ts tests/recent-engagements.test.ts tests/browser-url.test.ts tests/planning-model.test.ts tests/library-model.test.ts tests/test-basis-model.test.ts
 	$(COMPOSE) exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -c "SELECT 1"'
+
+# The entire legacy Python suite, about an hour serially; run only when the owner asks.
+test-full: require-env
+	set -a && . ./.env && set +a && $(PYTEST) -rsw
 
 ci: lint typecheck test
 

@@ -356,11 +356,14 @@ export function RequestUpload({
   projectId,
   requestId,
   label,
+  variant = "row",
 }: {
   organizationId: string;
   projectId: string;
   requestId: string;
   label: string;
+  /** A button in a table row, or a drop zone in a request's side panel. */
+  variant?: "row" | "panel";
 }) {
   const input = useRef<HTMLInputElement>(null);
   const {
@@ -377,7 +380,7 @@ export function RequestUpload({
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: a drop target for the mouse; the button inside picks files from the keyboard.
     <div
-      className={`request-upload${over ? " is-over" : ""}`}
+      className={`request-upload${variant === "panel" ? " is-panel" : ""}${over ? " is-over" : ""}`}
       onDragOver={(event) => {
         event.preventDefault();
         setOver(true);
@@ -387,7 +390,9 @@ export function RequestUpload({
     >
       <button
         type="button"
-        className="btn-secondary btn-sm"
+        className={
+          variant === "panel" ? "btn-secondary" : "btn-secondary btn-sm"
+        }
         disabled={running}
         onClick={() => input.current?.click()}
         title="Choose files, or drop them here. They are filed to this request."
@@ -397,8 +402,15 @@ export function RequestUpload({
         ) : (
           <UiIcon name="upload" size={13} />
         )}
-        {running ? `Uploading ${finished} of ${total}` : "Add evidence"}
+        {running
+          ? `Uploading ${finished} of ${total}`
+          : variant === "panel"
+            ? "Choose files"
+            : "Add evidence"}
       </button>
+      {variant === "panel" && !running ? (
+        <span className="request-upload-hint">or drop them here</span>
+      ) : null}
       <input
         ref={input}
         type="file"

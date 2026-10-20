@@ -217,6 +217,8 @@ export type QueueRow = {
   revision: number;
   approvedRevision: number | null;
   revisedSinceApproval: boolean;
+  /** Approved before and changed since: what changed, in short. */
+  changesSinceApproval: string[];
   clarifications: number;
   decisions: number;
   findings: number;
@@ -228,6 +230,33 @@ export type QueueRow = {
   version: number;
   approvable: boolean;
   heldBy: string;
+  /** The team's process for the control, or its standard area. */
+  process: string;
+  category: ControlCategory;
+  keyControl: boolean;
+  nature: string;
+  frequency: string;
+  testBasis: string;
+  /** The client values the plan asks for, answerable from the queue. */
+  openValues: OpenValue[];
+  /** The questions that are not client values: reviewed on the plan itself. */
+  otherQuestions: number;
+};
+
+export const CONTROL_CATEGORIES = [
+  "ITGC",
+  "ITAC",
+  "KEY_REPORT",
+  "BUSINESS",
+  "ENTITY",
+] as const;
+export type ControlCategory = (typeof CONTROL_CATEGORIES)[number];
+export const CATEGORY_WORDS: Record<ControlCategory, string> = {
+  ITGC: "IT general control",
+  ITAC: "Application control",
+  KEY_REPORT: "Key report",
+  BUSINESS: "Business process control",
+  ENTITY: "Entity-level control",
 };
 
 export type Queue = {
@@ -235,6 +264,8 @@ export type Queue = {
   counts: Record<PlanningState, number>;
   controls: QueueRow[];
   nextControlId: string | null;
+  /** May record the client values the plans ask for (task.update). */
+  viewerCanAnswer: boolean;
   viewerCanDecide: boolean;
 };
 
@@ -273,6 +304,8 @@ export type Procedure = {
   attributeCodes: string[];
   evidenceCodes: string[];
   version: number;
+  /** The standard's procedure this row follows, when the standard has steps. */
+  standardKey: string;
 };
 
 export type Attribute = {
@@ -317,10 +350,29 @@ export type Evidence = {
 };
 
 export type Finding = { kind: string; code: string; detail: string };
+/** Where a blocker is resolved (master_plans.BlockerResolve). */
+export const BLOCKER_RESOLVES = [
+  "WAIT",
+  "REVISION",
+  "LIBRARY",
+  "CONTROL",
+  "ATTRIBUTES",
+  "PROCESS",
+  "EVIDENCE_CHANGES",
+  "FACTS",
+  "VALUES",
+  "PHASES",
+  "UNDERSTANDING",
+] as const;
+export type BlockerResolve = (typeof BLOCKER_RESOLVES)[number];
+
 export type Blocker = {
   kind: "CLARIFICATION" | "DECISION";
   detail: string;
   blocks: boolean;
+  resolve: BlockerResolve;
+  /** The standard a LIBRARY clarification is about, for the link to it. */
+  target: string;
 };
 export type Decision = {
   decision: "APPROVED" | "CHANGES_REQUESTED";
@@ -346,6 +398,13 @@ export type MasterPlan = {
     keyControl: boolean;
     application: string;
     classifications: string[];
+    /** Where the control came from, what its plan is built from, and the standard it
+     * follows with the firm's review of it (milestone L2). */
+    source: string;
+    testBasis: string;
+    libraryKey: string;
+    libraryRef: string;
+    libraryStatus: string;
   };
   state: PlanningState;
   status: string | null;
@@ -370,7 +429,289 @@ export type MasterPlan = {
   pendingRevision: boolean;
   contentHash: string | null;
   viewerCanDecide: boolean;
+  /** The client values the review asks for, answerable before approving. */
+  openValues: OpenValue[];
+  /** Whether the viewer may enter those values from the plan, as on the queue. */
+  viewerCanAnswer: boolean;
+  /** Client values filled since the plan was approved; they keep its approval. */
+  filledSinceApproval: FilledValue[];
+  /** For a client's control whose RCM gives no test attributes: the standard it
+   * matches, to follow as a customized standard and take its attributes. */
+  suggestedStandard: SuggestedStandard | null;
+  /** Approved before and changed since: what changed from the version approved. */
+  changesSinceApproval: ChangeItem[];
 };
+
+export type ChangeItem = {
+  section: string;
+  code: string;
+  change: "ADDED" | "REMOVED" | "CHANGED";
+  detail: string;
+};
+
+/** What changed since a plan's approval, in a few words: one change as it is, several
+ * counted by kind (procedures, attributes, evidence) with the control's own fields named;
+ * a plan whose only change is client values filled in says so. */
+export function changesSummary(changes: readonly string[]): string {
+  if (changes.length === 0) {
+    return "Only client values filled in";
+  }
+  if (changes.length === 1) {
+    return changes[0] ?? "";
+  }
+  const kinds: Array<[string, string, string]> = [
+    ["Procedure", "procedure", "procedures"],
+    ["Attribute", "attribute", "attributes"],
+    ["Evidence", "evidence item", "evidence items"],
+  ];
+  const parts: string[] = [];
+  for (const [prefix, one, many] of kinds) {
+    const count = changes.filter((item) =>
+      item.startsWith(`${prefix} `),
+    ).length;
+    if (count > 0) {
+      parts.push(`${count} ${count === 1 ? one : many}`);
+    }
+  }
+  for (const item of changes) {
+    if (!kinds.some(([prefix]) => item.startsWith(`${prefix} `))) {
+      parts.push(item.replace(/\s+(changed|revised)$/, "").toLowerCase());
+    }
+  }
+  const text = parts.join(", ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** Changes since approval, one line per part of the plan: what happened and to which
+ * items ("added D3, D4 · removed D1"); the control's own changes as said. */
+export type ChangeGroup = {
+  label: string;
+  parts: Array<{ what: string; codes: string[] }>;
+};
+
+const CHANGE_SECTIONS: Array<[string, string, string]> = [
+  ["CONTROL", "The control", ""],
+  ["UNDERSTANDING", "Understanding", ""],
+  ["PHASE", "Phases", ""],
+  ["PROCEDURE", "Procedures", "Procedure"],
+  ["ATTRIBUTE", "Attributes", "Attribute"],
+  ["EVIDENCE", "Evidence", "Evidence"],
+];
+
+export function groupChanges(items: readonly ChangeItem[]): ChangeGroup[] {
+  const groups: ChangeGroup[] = [];
+  for (const [section, label, name] of CHANGE_SECTIONS) {
+    const mine = items.filter((item) => item.section === section);
+    if (mine.length === 0) {
+      continue;
+    }
+    const parts: ChangeGroup["parts"] = [];
+    for (const item of mine) {
+      const prefix = `${name} ${item.code} `;
+      const coded = name !== "" && item.detail.startsWith(prefix);
+      const what = coded ? item.detail.slice(prefix.length) : item.detail;
+      const part = coded
+        ? parts.find((entry) => entry.what === what)
+        : undefined;
+      if (part !== undefined) {
+        part.codes.push(item.code);
+      } else {
+        parts.push({ what, codes: coded ? [item.code] : [] });
+      }
+    }
+    groups.push({ label, parts });
+  }
+  return groups;
+}
+
+/** The last decision as the queue shows it: an approval the plan has changed since names
+ * the revision it approved, so it does not read as the plan's current state. */
+export function decisionWords(
+  row: Pick<
+    QueueRow,
+    "lastDecision" | "revisedSinceApproval" | "approvedRevision"
+  >,
+): string {
+  if (row.lastDecision === "CHANGES_REQUESTED") {
+    return "Changes requested";
+  }
+  return row.revisedSinceApproval && row.approvedRevision !== null
+    ? `Approved revision ${row.approvedRevision}`
+    : "Approved";
+}
+
+export type SuggestedStandard = {
+  libraryKey: string;
+  controlRef: string;
+  title: string;
+  status: "STRONG" | "PARTIAL";
+  rationale: string;
+};
+
+/** The facts the team states for a client's own control (master_plans.STATEABLE_FACTS),
+ * in the order the Describe dialog asks them. */
+export const STATEABLE_FACTS = [
+  "TYPE",
+  "PERFORMER",
+  "REVIEWER",
+  "ASSERTIONS",
+  "OBJECTIVE",
+  "POPULATION",
+  "DEPENDENCIES",
+] as const;
+export type StateableFact = (typeof STATEABLE_FACTS)[number];
+
+/** The assertions a business process control may address (control_statements). */
+export const ASSERTION_CHOICES = [
+  "Existence or occurrence",
+  "Completeness",
+  "Valuation or allocation",
+  "Rights and obligations",
+  "Presentation and disclosure",
+] as const;
+
+const IT_AREAS = new Set(["ACCESS", "CHANGE", "OPERATIONS", "ITAC", "IPE"]);
+
+// Each fact the Describe dialog asks, as one question, whether the plan is missing it or
+// the planner proposed it (the proposal is filled in below the question).
+const DESCRIBE_QUESTIONS: Record<StateableFact, string> = {
+  TYPE: "Does the control prevent the error, or detect it after the fact?",
+  PERFORMER: "Who performs the control at the client?",
+  REVIEWER: "Who reviews or approves the control's operation, if anyone?",
+  ASSERTIONS:
+    "Which financial statement assertions or IT risks does the control address?",
+  OBJECTIVE: "What is the control meant to achieve?",
+  POPULATION:
+    "What population of instances or transactions does the control cover?",
+  DEPENDENCIES:
+    "Which reports, interfaces, or configurations does the control rely on?",
+};
+
+export type DescribeQuestion = {
+  field: StateableFact;
+  label: string;
+  question: string;
+  /** How it is answered: a choice of two, words, the assertions, or a few sentences. */
+  input: "type" | "text" | "assertions" | "long";
+  /** The planner's proposal to confirm, or "" for a fact the plan is missing. */
+  proposal: string;
+};
+
+/**
+ * What the Describe dialog asks of a client's own control: each fact the plan is missing
+ * that the team states (the blockers resolved by FACTS), then each the planner proposed,
+ * to confirm. Empty for a control whose facts all stand.
+ */
+export function describeQuestions(plan: MasterPlan): DescribeQuestion[] {
+  const asked = new Set(
+    plan.blockers
+      .filter((item) => item.resolve === "FACTS")
+      .map((item) => item.detail.split(":")[0] ?? ""),
+  );
+  const questions: DescribeQuestion[] = [];
+  for (const field of STATEABLE_FACTS) {
+    const fact = plan.facts.find((item) => item.field === field);
+    if (fact === undefined) {
+      continue;
+    }
+    const missing = fact.basis === "MISSING" && asked.has(fact.label);
+    const proposed = fact.basis === "PROPOSED" || fact.basis === "ASSUMPTION";
+    if (!missing && !proposed) {
+      continue;
+    }
+    const input =
+      field === "TYPE"
+        ? "type"
+        : field === "ASSERTIONS"
+          ? IT_AREAS.has(plan.control.area)
+            ? "text"
+            : "assertions"
+          : field === "PERFORMER" || field === "REVIEWER"
+            ? "text"
+            : "long";
+    questions.push({
+      field,
+      label: fact.label,
+      question: DESCRIBE_QUESTIONS[field],
+      input,
+      proposal: missing ? "" : fact.value,
+    });
+  }
+  return questions;
+}
+
+export type FilledValue = {
+  key: string;
+  label: string;
+  value: string;
+  filledBy: string;
+  filledAt: string;
+};
+
+/** What was filled into an approved plan since, in one line for its header. */
+export function filledLine(values: readonly FilledValue[]): string {
+  if (values.length === 0) {
+    return "";
+  }
+  const parts = values.map(
+    (item) =>
+      `${item.label}: ${item.value}` +
+      (item.filledBy !== "" ? ` (${item.filledBy})` : ""),
+  );
+  return `Client ${values.length === 1 ? "value" : "values"} filled since approval: ${parts.join("; ")}`;
+}
+
+/** A client value the plan asks for (control_design.open_values): the slot, what it is,
+ * why it matters, an example, and whether testing waits for it. */
+export type OpenValue = {
+  key: string;
+  label: string;
+  why: string;
+  example: string;
+  blocks: boolean;
+  /** The answers usually given, to choose from (slot_options.py). */
+  options: string[];
+  /** The value as a question to the client (slot_questions.py). */
+  question: string;
+  /** How to answer it, for whoever fills it in (slot_questions.hint_for). */
+  hint: string;
+};
+
+/** The hint in an empty answer field: a usual answer is offered under it, so the field
+ * asks for the client's own; else the library's example. */
+export function answerPlaceholder(value: {
+  options: readonly string[];
+  example: string;
+}): string {
+  if (value.options.length > 0) {
+    return "Type the client's answer";
+  }
+  return value.example !== "" ? `For example: ${value.example}` : "";
+}
+
+/** How a value is asked: its question, else its name. */
+export function questionText(value: {
+  question: string;
+  label: string;
+}): string {
+  if (value.question.trim() !== "") {
+    return value.question;
+  }
+  return `${value.label.charAt(0).toUpperCase()}${value.label.slice(1)}`;
+}
+
+/** The answers a reviewer gives while approving: only the values filled in, trimmed. */
+export function answeredValues(
+  asked: readonly OpenValue[],
+  answers: Record<string, string>,
+): Record<string, string> {
+  const keys = new Set(asked.map((item) => item.key));
+  return Object.fromEntries(
+    Object.entries(answers)
+      .map(([key, value]) => [key, value.trim()] as const)
+      .filter(([key, value]) => keys.has(key) && value !== ""),
+  );
+}
 
 // Parsing
 
@@ -454,8 +795,21 @@ export function parseQueue(value: unknown): Queue | null {
       version: num(row.version),
       approvable: row.approvable === true,
       heldBy: str(row.held_by),
+      process: str(row.process),
+      category: oneOf(row.category, CONTROL_CATEGORIES, "BUSINESS"),
+      keyControl: row.key_control === true,
+      nature: str(row.nature),
+      frequency: str(row.frequency),
+      testBasis: str(row.test_basis),
+      openValues: parseOpenValues(row.open_values),
+      otherQuestions: num(row.other_questions),
+      changesSinceApproval: (Array.isArray(row.changes_since_approval)
+        ? row.changes_since_approval
+        : []
+      ).filter((item): item is string => typeof item === "string"),
     })),
     nextControlId: strOrNull(value.next_control_id),
+    viewerCanAnswer: value.viewer_can_answer === true,
     viewerCanDecide: value.viewer_can_decide === true,
   };
 }
@@ -482,6 +836,11 @@ export function parseMasterPlan(value: unknown): MasterPlan | null {
       keyControl: control.key_control === true,
       application: str(control.application),
       classifications: strings(control.classifications),
+      source: str(control.source),
+      testBasis: str(control.test_basis),
+      libraryKey: str(control.library_key),
+      libraryRef: str(control.library_ref),
+      libraryStatus: str(control.library_status),
     },
     state: stateOf(value.state),
     status: strOrNull(value.status),
@@ -532,6 +891,7 @@ export function parseMasterPlan(value: unknown): MasterPlan | null {
       attributeCodes: strings(item.attribute_codes),
       evidenceCodes: strings(item.evidence_codes),
       version: num(item.version),
+      standardKey: str(item.standard_key),
     })),
     attributes: records(value.attributes).map((item) => ({
       id: str(item.id),
@@ -585,6 +945,8 @@ export function parseMasterPlan(value: unknown): MasterPlan | null {
       kind: item.kind === "DECISION" ? "DECISION" : "CLARIFICATION",
       detail: str(item.detail),
       blocks: item.blocks === true,
+      resolve: oneOf(item.resolve, BLOCKER_RESOLVES, "UNDERSTANDING"),
+      target: str(item.target),
     })),
     decisions: records(value.decisions).map((item) => ({
       decision:
@@ -608,7 +970,172 @@ export function parseMasterPlan(value: unknown): MasterPlan | null {
     pendingRevision: isRecord(value.pending_revision),
     contentHash: strOrNull(value.content_hash),
     viewerCanDecide: value.viewer_can_decide === true,
+    openValues: parseOpenValues(value.open_values),
+    viewerCanAnswer: value.viewer_can_answer === true,
+    filledSinceApproval: (Array.isArray(value.filled_since_approval)
+      ? value.filled_since_approval
+      : []
+    )
+      .filter(isRecord)
+      .map((item) => ({
+        key: str(item.key),
+        label: str(item.label),
+        value: str(item.value),
+        filledBy: str(item.filled_by),
+        filledAt: str(item.filled_at),
+      })),
+    suggestedStandard: isRecord(value.suggested_standard)
+      ? {
+          libraryKey: str(value.suggested_standard.library_key),
+          controlRef: str(value.suggested_standard.control_ref),
+          title: str(value.suggested_standard.title),
+          status:
+            value.suggested_standard.status === "STRONG" ? "STRONG" : "PARTIAL",
+          rationale: str(value.suggested_standard.rationale),
+        }
+      : null,
+    changesSinceApproval: (Array.isArray(value.changes_since_approval)
+      ? value.changes_since_approval
+      : []
+    )
+      .filter(isRecord)
+      .map((item) => ({
+        section: str(item.section),
+        code: str(item.code),
+        change: oneOf(item.change, ["ADDED", "REMOVED", "CHANGED"], "CHANGED"),
+        detail: str(item.detail),
+      })),
   };
+}
+
+const SLOT_KEY = /^[a-z][a-z0-9-]{1,40}$/;
+
+function parseOpenValues(value: unknown): OpenValue[] {
+  return records(value)
+    .filter((item) => SLOT_KEY.test(str(item.key)))
+    .map((item) => ({
+      key: str(item.key),
+      label: str(item.label),
+      why: str(item.why),
+      example: str(item.example),
+      blocks: item.blocks === true,
+      options: strings(item.options).slice(0, 6),
+      question: str(item.question),
+      hint: str(item.hint),
+    }));
+}
+
+/** One question across the plans shown: a client value, asked once per system, with
+ * every control on that system that asks for it. One answer fills them all. */
+export type ValueQuestion = OpenValue & {
+  /** The system it is asked for; "" for controls on no system. */
+  system: string;
+  controls: Array<{ id: string; ref: string; title: string }>;
+};
+
+/** The client values one plan asks for, as the answer dialog asks them. */
+export function planQuestions(plan: MasterPlan): ValueQuestion[] {
+  return plan.openValues.map((item) => ({
+    ...item,
+    system: plan.control.application,
+    controls: [
+      {
+        id: plan.controlId,
+        ref: plan.control.controlRef,
+        title: plan.control.title,
+      },
+    ],
+  }));
+}
+
+const wording = (text: string): string =>
+  text
+    .trim()
+    .replace(/^\[|\]$/g, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+
+/** The open value a placeholder in the plan's text stands for: the text in brackets is
+ * the value's label (the statement shows a value not recorded yet that way). */
+export function openValueFor(
+  values: readonly OpenValue[],
+  placeholder: string,
+): OpenValue | undefined {
+  const wanted = wording(placeholder);
+  return values.find((item) => wording(item.label) === wanted);
+}
+
+/** The open value a missing fact waits for: the first placeholder in it that one stands
+ * for. */
+export function missingValueOf(
+  fact: Pick<Fact, "basis" | "value">,
+  values: readonly OpenValue[],
+): OpenValue | undefined {
+  if (fact.basis !== "MISSING") {
+    return undefined;
+  }
+  for (const part of statementParts(fact.value)) {
+    const found = part.placeholder
+      ? openValueFor(values, part.text)
+      : undefined;
+    if (found !== undefined) {
+      return found;
+    }
+  }
+  return undefined;
+}
+
+/** The client values the given plans ask for, one question per system and value, the
+ * systems and then the values in order. */
+export function valueQuestions(rows: readonly QueueRow[]): ValueQuestion[] {
+  const found = new Map<string, ValueQuestion>();
+  for (const row of rows) {
+    for (const item of row.openValues) {
+      const id = `${row.application}\u0000${item.key}`;
+      const question = found.get(id) ?? {
+        ...item,
+        system: row.application,
+        controls: [],
+      };
+      question.blocks = question.blocks || item.blocks;
+      question.controls.push({
+        id: row.controlId,
+        ref: row.controlRef,
+        title: row.title,
+      });
+      found.set(id, question);
+    }
+  }
+  return [...found.values()].sort(
+    (a, b) =>
+      (a.system || "~").localeCompare(b.system || "~") ||
+      Number(b.blocks) - Number(a.blocks) ||
+      a.label.localeCompare(b.label),
+  );
+}
+
+/** The answers given, as the values each control is filled with (one call). */
+export function valuesItems(
+  questions: readonly ValueQuestion[],
+  answers: Record<string, string>,
+  idOf: (question: ValueQuestion) => string,
+): Array<{ control_id: string; values: Record<string, string> }> {
+  const byControl = new Map<string, Record<string, string>>();
+  for (const question of questions) {
+    const answer = (answers[idOf(question)] ?? "").trim();
+    if (answer === "") {
+      continue;
+    }
+    for (const control of question.controls) {
+      const values = byControl.get(control.id) ?? {};
+      values[question.key] = answer;
+      byControl.set(control.id, values);
+    }
+  }
+  return [...byControl.entries()].map(([control_id, values]) => ({
+    control_id,
+    values,
+  }));
 }
 
 // Reading a plan
@@ -656,6 +1183,93 @@ export function tabOfCode(code: string): Tab | null {
 }
 
 /** Findings by the code of the item they are about. */
+/** What resolves a finding, and the control that does it on the plan: the row's link
+ * editor, its criteria, planning the control again with the rules, or the control's own
+ * record (its attributes, or the test basis on its Design tab). */
+export type FindingAction =
+  | "links"
+  | "criteria"
+  | "replan"
+  | "procedures"
+  | "evidence"
+  | "attributes"
+  | "basis"
+  | null;
+
+export type FindingFix = { hint: string; action: FindingAction; label: string };
+
+export function findingFix(kind: string, approved: boolean): FindingFix {
+  const fix = (hint: string, action: FindingAction, label: string) => ({
+    hint,
+    action,
+    label,
+  });
+  switch (kind) {
+    case "ATTRIBUTE_WITHOUT_PROCEDURE":
+      return approved
+        ? fix(
+            "Link it from the procedure that tests it; the plan then goes back for approval.",
+            "procedures",
+            "Open the procedures",
+          )
+        : fix(
+            "Planning the control again with the rules links it, or link it from the procedure that tests it.",
+            "replan",
+            "Plan again with the rules",
+          );
+    case "ATTRIBUTE_WITHOUT_EVIDENCE":
+      return approved
+        ? fix(
+            "Link it from the evidence that supports it; the plan then goes back for approval.",
+            "evidence",
+            "Open the evidence",
+          )
+        : fix(
+            "Planning the control again with the rules links it, or link it from the evidence that supports it.",
+            "replan",
+            "Plan again with the rules",
+          );
+    case "PROCEDURE_WITHOUT_ATTRIBUTE":
+      return fix(
+        "Link the attributes this procedure tests.",
+        "links",
+        "Edit links",
+      );
+    case "EVIDENCE_WITHOUT_ATTRIBUTE":
+      return fix(
+        "Link the attributes this evidence supports.",
+        "links",
+        "Edit links",
+      );
+    case "UNMATCHED_ATTRIBUTE":
+      return fix(
+        "Link the attribute it supports in its place.",
+        "links",
+        "Edit links",
+      );
+    case "ATTRIBUTE_WITHOUT_CRITERIA":
+      return fix(
+        "State when it passes and when it fails, or mark it as needing professional judgment.",
+        "criteria",
+        "Add criteria",
+      );
+    case "ATTRIBUTE_NOT_DOCUMENTED":
+      return fix(
+        "Confirm it with the control owner and record where it is stated.",
+        "attributes",
+        "Open the control's attributes",
+      );
+    case "DEVIATES_FROM_STANDARD":
+      return fix(
+        "Keep the standard's wording, or choose a customized standard as the test basis.",
+        "basis",
+        "Change the test basis",
+      );
+    default:
+      return fix("", null, "");
+  }
+}
+
 export function findingsByCode(plan: MasterPlan): Map<string, Finding[]> {
   const found = new Map<string, Finding[]>();
   for (const item of plan.findings) {
@@ -732,23 +1346,172 @@ export function neighbours(
 }
 
 /** The queue rows shown under a filter of states (all when none). */
+/**
+ * The queue's filters beyond the state: each is one value, or "" for any. A control on no
+ * system (a business process or entity-level control) matches the system "None".
+ */
+export const QUEUE_FILTERS = [
+  "system",
+  "process",
+  "category",
+  "key",
+  "nature",
+  "frequency",
+  "basis",
+] as const;
+export type QueueFilter = (typeof QUEUE_FILTERS)[number];
+export type QueueFilters = Record<QueueFilter, string>;
+export const NO_FILTERS: QueueFilters = {
+  system: "",
+  process: "",
+  category: "",
+  key: "",
+  nature: "",
+  frequency: "",
+  basis: "",
+};
+export const FILTER_LABELS: Record<QueueFilter, string> = {
+  system: "System",
+  process: "Process",
+  category: "Control type",
+  key: "Key control",
+  nature: "Nature",
+  frequency: "Frequency",
+  basis: "Test basis",
+};
+export const NO_SYSTEM = "None";
+
+const BASIS_WORDS: Record<string, string> = {
+  STANDARD: "Standard",
+  CUSTOM: "Customized standard",
+  CLIENT: "Client's procedures",
+};
+
+/** A row's value for a filter: what the filter compares and what the option shows. */
+function filterValue(row: QueueRow, filter: QueueFilter): string {
+  switch (filter) {
+    case "system":
+      return row.application || NO_SYSTEM;
+    case "process":
+      return row.process;
+    case "category":
+      return row.category;
+    case "key":
+      return row.keyControl ? "KEY" : "NON_KEY";
+    case "nature":
+      return row.nature;
+    case "frequency":
+      return row.frequency;
+    case "basis":
+      return row.testBasis;
+  }
+}
+
+/** How an option reads. */
+export function filterOptionLabel(filter: QueueFilter, value: string): string {
+  switch (filter) {
+    case "category":
+      return CATEGORY_WORDS[value as ControlCategory] ?? value;
+    case "key":
+      return value === "KEY" ? "Key controls" : "Non-key controls";
+    case "nature":
+      return NATURE_LABELS[value] ?? value;
+    case "frequency":
+      return FREQUENCY_LABELS[value] ?? value;
+    case "basis":
+      return BASIS_WORDS[value] ?? value;
+    default:
+      return value;
+  }
+}
+
+/**
+ * Each filter's options, from the rows themselves, with how many controls each matches
+ * given the other filters applied (so a choice never leads to an empty list it could not
+ * show). A filter with fewer than two values across the queue is left out.
+ */
+export function filterOptions(
+  rows: readonly QueueRow[],
+  filters: QueueFilters,
+): Array<{
+  filter: QueueFilter;
+  options: Array<{ value: string; label: string; count: number }>;
+}> {
+  const found: Array<{
+    filter: QueueFilter;
+    options: Array<{ value: string; label: string; count: number }>;
+  }> = [];
+  for (const filter of QUEUE_FILTERS) {
+    const every = new Set(rows.map((row) => filterValue(row, filter)));
+    every.delete("");
+    if (every.size < 2) {
+      continue;
+    }
+    const others = { ...filters, [filter]: "" };
+    const counts = new Map<string, number>();
+    for (const row of rows) {
+      if (matches(row, others)) {
+        const value = filterValue(row, filter);
+        counts.set(value, (counts.get(value) ?? 0) + 1);
+      }
+    }
+    const options = [...every]
+      .map((value) => ({
+        value,
+        label: filterOptionLabel(filter, value),
+        count: counts.get(value) ?? 0,
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    found.push({ filter, options });
+  }
+  return found;
+}
+
+function matches(row: QueueRow, filters: QueueFilters): boolean {
+  return QUEUE_FILTERS.every(
+    (filter) =>
+      filters[filter] === "" || filterValue(row, filter) === filters[filter],
+  );
+}
+
+/** How many of the filters are set. */
+export function activeFilters(filters: QueueFilters): QueueFilter[] {
+  return QUEUE_FILTERS.filter((filter) => filters[filter] !== "");
+}
+
 export function filterQueue(
   rows: QueueRow[],
   states: readonly PlanningState[],
   search: string,
+  filters: QueueFilters = NO_FILTERS,
 ): QueueRow[] {
   const words = search.trim().toLowerCase();
   return rows.filter(
     (row) =>
       (states.length === 0 || states.includes(row.state)) &&
+      matches(row, filters) &&
       (words === "" ||
-        `${row.controlRef} ${row.title} ${row.application}`
+        `${row.controlRef} ${row.title} ${row.application} ${row.process}`
           .toLowerCase()
           .includes(words)),
   );
 }
 
 // Addresses
+
+/** The standard's procedure on the Library, at its numbered steps. */
+export function standardStepsHref(
+  organizationId: string,
+  projectId: string,
+  libraryKey: string,
+  procedureKey: string,
+): string {
+  const base = libraryHref(organizationId, projectId, {
+    control: libraryKey,
+    tab: "procedures",
+  });
+  return `${base}#lb-proc-${procedureKey}`;
+}
 
 export function planningHref(
   organizationId: string,
@@ -787,6 +1550,7 @@ export function parseTab(value: string | null): Tab {
 // Actions
 
 export type PlanningIntent =
+  | "values-many"
   | "approve"
   | "request-changes"
   | "submit"
@@ -800,6 +1564,9 @@ export type PlanningIntent =
   | "criteria"
   | "batch-approve"
   | "replan"
+  | "replan-control"
+  | "facts"
+  | "use-standard"
   | "phase-release"
   | "phase-release-batch";
 
@@ -848,8 +1615,84 @@ export function planningWrite(fields: Fields): PlanningWrite {
     method: "POST" | "PUT" = "POST",
     slow = false,
   ): PlanningWrite => ({ intent, method, path, body, slow });
+  if (intent === "values-many") {
+    // Client values for several controls at once (context_routes.set_many_values).
+    const items = Array.isArray(fields.items) ? fields.items : [];
+    if (items.length === 0 || items.length > 300) {
+      return { error: "invalid" };
+    }
+    const checked: Array<{
+      control_id: string;
+      values: Record<string, string>;
+    }> = [];
+    for (const item of items) {
+      if (
+        !isRecord(item) ||
+        typeof item.control_id !== "string" ||
+        !UUID.test(item.control_id) ||
+        !isRecord(item.values)
+      ) {
+        return { error: "invalid" };
+      }
+      const values: Record<string, string> = {};
+      for (const [key, value] of Object.entries(item.values)) {
+        if (
+          !SLOT_KEY.test(key) ||
+          typeof value !== "string" ||
+          !clean(value.trim(), 1, 300)
+        ) {
+          return { error: "invalid" };
+        }
+        values[key] = value.trim();
+      }
+      if (Object.keys(values).length === 0 || Object.keys(values).length > 40) {
+        return { error: "invalid" };
+      }
+      checked.push({ control_id: item.control_id, values });
+    }
+    return ok(`${base}/control-values`, { items: checked }, "PUT");
+  }
   if (intent === "replan") {
     return ok(`${base}/evidence-plans/replan`, {}, "POST", true);
+  }
+  if (intent === "facts") {
+    // Facts the team states for a client's own control (master_plans.state_facts).
+    const control = text(fields, "control_id");
+    const given = isRecord(fields.facts) ? fields.facts : {};
+    const facts: Record<string, string> = {};
+    for (const [key, value] of Object.entries(given)) {
+      if (
+        !STATEABLE_FACTS.includes(key as StateableFact) ||
+        typeof value !== "string" ||
+        value.length > 600
+      ) {
+        return { error: "invalid" };
+      }
+      facts[key] = value;
+    }
+    return UUID.test(control) && Object.keys(facts).length > 0
+      ? ok(`${base}/controls/${control}/master-plan/facts`, { facts }, "PUT")
+      : { error: "invalid" };
+  }
+  if (intent === "use-standard") {
+    // Follow the standard a client's control matches as a customized standard: its
+    // attributes are proposed for the control (library_matching.decide_basis).
+    const control = text(fields, "control_id");
+    const key = text(fields, "library_key");
+    return UUID.test(control) && /^[a-z0-9][a-z0-9-]{1,59}$/.test(key)
+      ? ok(
+          `${base}/controls/${control}/test-basis`,
+          { basis: "CUSTOM", library_key: key, note: "" },
+          "PUT",
+          true,
+        )
+      : { error: "invalid" };
+  }
+  if (intent === "replan-control") {
+    const control = text(fields, "control_id");
+    return UUID.test(control)
+      ? ok(`${base}/controls/${control}/master-plan/replan`, {}, "POST", true)
+      : { error: "invalid" };
   }
   if (intent === "phase-release-batch") {
     const phase = text(fields, "phase");
@@ -911,8 +1754,30 @@ export function planningWrite(fields: Fields): PlanningWrite {
     }
     case "approve": {
       const comment = text(fields, "comment");
+      // Client values answered with the approval (control_design.set_values).
+      const raw = isRecord(fields.values) ? fields.values : {};
+      const values: Record<string, string> = {};
+      for (const [key, value] of Object.entries(raw)) {
+        if (
+          !SLOT_KEY.test(key) ||
+          typeof value !== "string" ||
+          !clean(value.trim(), 1, 300)
+        ) {
+          return { error: "invalid" };
+        }
+        values[key] = value.trim();
+      }
+      if (Object.keys(values).length > 40) {
+        return { error: "invalid" };
+      }
       return at !== null && clean(comment, 0, 4000)
-        ? ok(`${control}/evidence-plan/approve`, { version: at, comment })
+        ? ok(`${control}/evidence-plan/approve`, {
+            version: at,
+            comment,
+            ...(Object.keys(values).length > 0
+              ? { values, everywhere: fields.everywhere === true }
+              : {}),
+          })
         : { error: "invalid" };
     }
     case "request-changes": {
@@ -1243,5 +2108,304 @@ export function releasable(status: PhaseStatus | null): boolean {
     status !== null &&
     status.phase !== "DESIGN" &&
     (status.step === "READY" || status.step === "WAITING")
+  );
+}
+
+/** The phase a reviewer releases next: the first, in the audit's order, that can be
+ * released now. Null when none can. */
+export function nextRelease(
+  phases: readonly PhaseStatus[],
+): PhaseStatus | null {
+  return phases.find((status) => releasable(status)) ?? null;
+}
+
+/** Where a phase stands, in a few plain words, under its segment. */
+export function phaseNote(status: PhaseStatus): string {
+  if (status.step === "RELEASED" || status.step === "COMPLETE") {
+    return `${status.stepLabel}${status.early ? " early" : ""}`;
+  }
+  if (status.step === "WAITING" && status.waitingFor !== "") {
+    return status.waitingFor;
+  }
+  return status.stepLabel;
+}
+
+// What holds approval, as work to do
+
+const HOLD_WORDS: Record<BlockerResolve, { title: string; action: string }> = {
+  WAIT: { title: "The planner is still drafting this plan", action: "" },
+  REVISION: {
+    title: "Accept or dismiss the planner's revision",
+    action: "",
+  },
+  LIBRARY: {
+    title: "The standard this plan follows awaits methodology review",
+    action: "Open the standard",
+  },
+  CONTROL: {
+    title: "Complete the control's description and frequency",
+    action: "Open the control",
+  },
+  ATTRIBUTES: {
+    title: "Settle the control's attributes",
+    action: "Open the attributes",
+  },
+  PROCESS: {
+    title: "Confirm how the process runs",
+    action: "Open the process",
+  },
+  EVIDENCE_CHANGES: {
+    title: "Decide the proposed changes to the evidence",
+    action: "Review the changes",
+  },
+  FACTS: {
+    title: "Describe the control",
+    action: "Describe the control",
+  },
+  VALUES: {
+    title: "Record the client's values",
+    action: "Record the values",
+  },
+  PHASES: {
+    title: "Decide which test phases apply",
+    action: "Open the planning basis",
+  },
+  UNDERSTANDING: {
+    title: "Check what the plan assumes",
+    action: "Read the understanding",
+  },
+};
+
+export type HoldGroup = {
+  resolve: BlockerResolve;
+  /** Approval is refused until it is resolved. */
+  blocks: boolean;
+  title: string;
+  /** The button's words; "" where the work is done elsewhere on this page or waits. */
+  action: string;
+  items: string[];
+  /** The standard the group is about (resolve LIBRARY). */
+  target: string;
+};
+
+/**
+ * What stands in the way of approving the plan, as work: the blockers gathered by where
+ * each is resolved, what holds approval first, each with what to do and where. The
+ * reviewer reads one line of work per place instead of every finding.
+ */
+export function holdGroups(blockers: readonly Blocker[]): HoldGroup[] {
+  const groups: HoldGroup[] = [];
+  for (const blocks of [true, false]) {
+    for (const resolve of BLOCKER_RESOLVES) {
+      const matching = blockers.filter(
+        (item) => item.blocks === blocks && item.resolve === resolve,
+      );
+      if (matching.length > 0) {
+        groups.push({
+          resolve,
+          blocks,
+          ...HOLD_WORDS[resolve],
+          items: matching.map((item) => item.detail),
+          target: matching[0]?.target ?? "",
+        });
+      }
+    }
+  }
+  return groups;
+}
+
+/**
+ * Where a hold is resolved, on the control's record: the part of its Test plan tab that
+ * holds the decision, or its evidence. Null for what is done on the review itself (the
+ * revision, the understanding) or waits on the planner.
+ */
+export function holdHref(
+  ids: { organizationId: string; projectId: string },
+  controlId: string,
+  resolve: BlockerResolve,
+  target = "",
+): string | null {
+  const record = (tab: string, extra: Record<string, string> = {}) => {
+    const params = new URLSearchParams({
+      organization: ids.organizationId,
+      project: ids.projectId,
+      section: "controls",
+      control: controlId,
+      tab,
+      ...extra,
+    });
+    return `/?${params.toString()}`;
+  };
+  switch (resolve) {
+    case "CONTROL":
+      return record("design");
+    case "ATTRIBUTES":
+      return `${record("design")}#step-definition-and-attributes`;
+    case "PROCESS":
+      return `${record("design")}#step-process-understanding`;
+    case "VALUES":
+      return `${record("design")}#step-control-statement`;
+    case "PHASES":
+      return record("evidence", { ev: "plan" });
+    case "EVIDENCE_CHANGES":
+      return record("evidence", { ev: "requirements" });
+    case "LIBRARY":
+      return target === ""
+        ? null
+        : libraryHref(ids.organizationId, ids.projectId, { control: target });
+    default:
+      return null;
+  }
+}
+
+import { FREQUENCY_LABELS, NATURE_LABELS } from "./control-context-model.ts";
+import { libraryHref } from "./library-model.ts";
+
+/** What the plan is built from, for the review's header: the standard it follows, the
+ * standard tailored, or the client's own procedures. */
+export function basisWords(control: MasterPlan["control"]): string {
+  if (control.testBasis === "CLIENT") {
+    return control.source === "LIBRARY"
+      ? "Client's procedures"
+      : "Client's own procedures";
+  }
+  const standard = control.libraryRef !== "" ? ` ${control.libraryRef}` : "";
+  return control.testBasis === "CUSTOM"
+    ? `Customized standard${standard}`
+    : `Standard${standard}`;
+}
+
+/** The same question open for other systems: one value, asked of each system's controls,
+ * answered once and used for all where the answer is the same. */
+export function otherSystems(
+  question: ValueQuestion,
+  all: readonly ValueQuestion[],
+): ValueQuestion[] {
+  return all.filter(
+    (item) => item.key === question.key && item.system !== question.system,
+  );
+}
+
+/** What a save covers: the questions shown, and any other question given an answer (one
+ * copied from a question shown, for another system the filters hide). */
+export function questionsToSave(
+  shown: readonly ValueQuestion[],
+  all: readonly ValueQuestion[],
+  answers: Record<string, string>,
+  idOf: (question: ValueQuestion) => string,
+): ValueQuestion[] {
+  const ids = new Set(shown.map(idOf));
+  return [
+    ...shown,
+    ...all.filter(
+      (item) =>
+        !ids.has(idOf(item)) && (answers[idOf(item)] ?? "").trim() !== "",
+    ),
+  ];
+}
+
+/** A plan's one next step in the queue, in a few words. */
+export type NextStep = {
+  kind: "held" | "answer" | "decide" | "review" | "ready" | "none";
+  label: string;
+  /** The whole of what holds approval, for the step's hover text. */
+  detail: string;
+};
+
+const counted = (count: number, one: string, many: string): string =>
+  `${count} ${count === 1 ? one : many}`;
+
+/** What holds a plan, as a short action of a few words (the whole reason stays in the
+ * step's detail). The reasons are master_plans.blockers_of's. */
+export function heldStep(reason: string): string {
+  const text = reason.trim();
+  const count = (pattern: RegExp, one: string, many: string): string | null => {
+    const found = pattern.exec(text);
+    if (found === null) {
+      return null;
+    }
+    const n = Number(found[1]);
+    return `${n} ${n === 1 ? one : many}`;
+  };
+  const attributes = count(
+    /^(\d+) proposed attributes? waits?/i,
+    "attribute",
+    "attributes",
+  );
+  if (attributes !== null) {
+    return `Decide ${attributes}`;
+  }
+  const changes = count(
+    /^(\d+) proposed changes? to the evidence/i,
+    "evidence change",
+    "evidence changes",
+  );
+  if (changes !== null) {
+    return `Decide ${changes}`;
+  }
+  const known: Array<[RegExp, string]> = [
+    [/planner is still drafting/i, "Planner drafting"],
+    [/planner proposed a revised/i, "Review planner's revision"],
+    [/^control design to confirm/i, "Confirm control design"],
+    [/no description of what is done/i, "Describe the control"],
+    [/frequency is not set/i, "Set the frequency"],
+    [/no test attributes/i, "Add test attributes"],
+  ];
+  const match = known.find(([pattern]) => pattern.test(text));
+  if (match !== undefined) {
+    return match[1];
+  }
+  // Another issue: its own heading when it is short, else a plain word for it.
+  const heading = (text.split(":")[0] ?? text).trim().replace(/\.$/, "");
+  return heading.length <= 32 ? heading : "Resolve open issue";
+}
+
+/**
+ * The step a plan waits for, most pressing first: what holds its approval, then the
+ * client values to answer, the proposals to decide, the rest to review; else it is ready
+ * to approve. Whatever the step leaves open is listed as counts.
+ */
+export function nextStepOf(row: QueueRow): NextStep {
+  const step = (
+    kind: NextStep["kind"],
+    label: string,
+    detail = "",
+  ): NextStep => ({
+    kind,
+    label,
+    detail,
+  });
+  if (row.state === "APPROVED") {
+    return step("none", "Nothing open");
+  }
+  if (row.heldBy !== "") {
+    return step("held", heldStep(row.heldBy), row.heldBy);
+  }
+  const values = row.openValues.length;
+  if (values > 0) {
+    return step(
+      "answer",
+      `Answer ${counted(values, "client value", "client values")}`,
+    );
+  }
+  if (row.decisions > 0) {
+    return step(
+      "decide",
+      `Decide ${counted(row.decisions, "proposal", "proposals")}`,
+    );
+  }
+  const items = row.otherQuestions + row.findings;
+  if (items > 0) {
+    return step(
+      "review",
+      `Review ${counted(items, "open item", "open items")}`,
+    );
+  }
+  if (row.state === "ANALYZING" || row.state === "NOT_STARTED") {
+    return step("none", "Being planned");
+  }
+  return step(
+    "ready",
+    row.revisedSinceApproval ? "Re-approve the changes" : "Ready to approve",
   );
 }

@@ -10,6 +10,7 @@ import {
   parsePlan,
   planProblem,
   planWrite,
+  waitsOnPerson,
 } from "../apps/web/src/evidence-plan-model.ts";
 import {
   evidenceSummary,
@@ -17,6 +18,7 @@ import {
   focusPhase,
   linkableFiles,
   matchesStatus,
+  phaseDigest,
   proposals,
   requestRows,
   requirementGroups,
@@ -470,5 +472,81 @@ describe("the evidence workspace", () => {
       planProblem(409, "the file is not one of this control's evidence files"),
       "Only a file this control already holds can serve its items.",
     );
+  });
+});
+
+describe("the evidence on one page", () => {
+  const phaseOf = (states: string[], applicability = "APPLICABLE") => {
+    const parsed = parsePlan({
+      control_id: CONTROL,
+      status: "APPROVED",
+      phases: [
+        {
+          phase: "INTERIM",
+          applicability,
+          state: "OUTSTANDING",
+          requirements: states.map((state, index) =>
+            requirement({ id: `q${index}`, phase: "INTERIM", state }),
+          ),
+        },
+      ],
+    });
+    const phase = parsed?.phases.find((item) => item.phase === "INTERIM");
+    assert.ok(phase !== undefined);
+    return phase;
+  };
+
+  it("waits on a person only for what arrived unjudged, a proposed change, or a flag", () => {
+    const phase = phaseOf([
+      "RECEIVED",
+      "PARTIALLY_RECEIVED",
+      "UNDER_REVIEW",
+      "ACCEPTED",
+      "INSUFFICIENT",
+      "REQUESTED",
+      "NOT_APPLICABLE",
+    ]);
+    assert.deepEqual(
+      phase.requirements.map((item) => waitsOnPerson(item)),
+      [true, true, true, false, false, false, false],
+    );
+    const [first] = phase.requirements;
+    assert.ok(first !== undefined);
+    assert.equal(
+      waitsOnPerson({ ...first, state: "ACCEPTED", needsReview: true }),
+      true,
+    );
+    assert.equal(
+      waitsOnPerson({
+        ...first,
+        state: "ACCEPTED",
+        pendingChange: { remove: true, title: "", description: "" },
+      }),
+      true,
+    );
+  });
+
+  it("sums a phase in one line: items, accepted, and what is to review", () => {
+    const phase = phaseOf([
+      "ACCEPTED",
+      "ACCEPTED",
+      "RECEIVED",
+      "NOT_APPLICABLE",
+    ]);
+    assert.deepEqual(phaseDigest(phase, phase.requirements), {
+      total: 3,
+      accepted: 2,
+      waiting: 1,
+      line: "3 items · 2 accepted · 1 to review",
+    });
+    const settled = phaseOf(["ACCEPTED"]);
+    assert.equal(
+      phaseDigest(settled, settled.requirements).line,
+      "1 item · 1 accepted",
+    );
+    const none = phaseOf([], "NOT_APPLICABLE");
+    assert.equal(phaseDigest(none, []).line, "Not applicable");
+    const empty = phaseOf([]);
+    assert.equal(phaseDigest(empty, []).line, "Nothing planned");
   });
 });

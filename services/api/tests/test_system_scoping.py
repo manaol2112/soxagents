@@ -106,10 +106,16 @@ def test_an_uploaded_rcm_is_scoped_with_the_clients_own_controls(migrated: Datab
     assert imported.status_code == 200, imported.text
     workday = _system(imported.json(), "Workday")
     candidates = {c["control_ref"]: c for c in workday["assessment"]["candidates"]}
-    # Nothing from the library next to the client's RCM: its own IT controls are offered.
-    assert candidates and not set(candidates) & {c.control_ref for c in LIBRARY}
+    # The client's own IT controls are offered, and the library beside them (decided by
+    # the product owner).
+    assert {c["origin"] for c in candidates.values()} >= {"RCM", "LIBRARY"}
+    assert set(candidates) & {c.control_ref for c in LIBRARY}
     # "Managers approve new access." is on SAP ERP only; it can be chosen for Workday too.
+    # This client's references name no system (AC 1.02 is on both): it is one family, offered
+    # under its own reference and wording.
     assert "AC 1.01" in candidates and candidates["AC 1.01"]["in_scope"] is False
+    assert candidates["AC 1.01"]["origin"] == "RCM"
+    assert candidates["AC 1.01"]["adapted_from"] == []
     assert imported.json()["process_offers"] == []
     saved = owner.put(
         f"{base}/systems/{workday['id']}/applicability",
@@ -122,3 +128,126 @@ def test_an_uploaded_rcm_is_scoped_with_the_clients_own_controls(migrated: Datab
         ("SAP ERP", True),
         ("Workday", True),
     ]
+
+
+SYSTEM_RCM = (
+    "Ctrl #,Control Activity,How Often,Manual / Automated,Process,Control Owner,"
+    "Owner E-mail,Systems,Region,Assertion\n"
+    "ITGC-SAP-01,New SAP access is requested in ServiceNow and approved by the user's manager "
+    "before it is granted.,As needed,Manual,User Access,Dana Ruiz,,SAP ERP,EMEA,Existence\n"
+    "ITGC-SAP-02,SAP access is removed timely upon termination: IT Security locks the SAP user "
+    "within 1 business day of the HR termination date.,As needed,Manual,User Access,"
+    "Dana Ruiz,,SAP ERP,EMEA,Existence\n"
+    "ITGC-WD-01,New Workday access is requested and approved by the manager before it is "
+    "granted.,As needed,Manual,User Access,Dana Ruiz,,Workday,EMEA,Existence\n"
+    "ITGC-WD-02,Workday access is removed timely upon termination of employment.,As needed,"
+    "Manual,User Access,Dana Ruiz,,Workday,EMEA,Existence\n"
+)
+
+
+def test_a_system_added_by_hand_is_scoped_from_the_library_and_the_clients_controls(
+    migrated: Database,
+) -> None:
+    """Decided by the product owner: a system the client's RCM does not cover starts with
+    nothing in scope; the wizard offers the library and the client's controls on other
+    systems, adapted to it under a reference for it and the standard's wording."""
+    owner, base = _engagement(migrated)
+    uploaded = _upload(owner, base, SYSTEM_RCM)
+    imported = owner.post(
+        f"{base}/rcm/uploads/{uploaded['id']}/import", json={"version": uploaded["version"]}
+    )
+    assert imported.status_code == 200, imported.text
+    added = owner.post(f"{base}/applications", json={"name": "Active Directory"})
+    assert added.status_code == 200, added.text
+    directory = _system(added.json(), "Active Directory")
+    # No copies of the other systems' controls.
+    assert directory["controls_in_scope"] == 0
+    assert not [c for c in added.json()["controls"]
+                if c["application_name"] == "Active Directory"]  # fmt: skip
+    # The row's "Add controls from the library" offers the library, not other systems'
+    # controls as they are.
+    offers = directory["other_controls"]
+    assert offers and all(item["library_key"] for item in offers)
+    assessment = directory["assessment"]
+    assert assessment["ref_code"] == "AD"
+    candidates = {c["control_ref"]: c for c in assessment["candidates"]}
+    adapted = [c for c in candidates.values() if c["adapted_from"]]
+    assert adapted and all(c["control_ref"].startswith("ITGC-AD-") for c in adapted)
+    assert all(c["domain"] in ITGC for c in adapted)
+    # The same standard on SAP and Workday is offered once, from both.
+    joined = next(c for c in adapted if len(c["adapted_from"]) > 1)
+    assert joined["follows"] and joined["library_key"]
+    assert "SAP" not in joined["description"]
+    # The library is offered beside it, without the standard the adapted control follows.
+    assert any(c["origin"] == "LIBRARY" for c in candidates.values())
+    assert joined["follows"] not in candidates
+    # A person picks it: Active Directory gets its own control, flagged for the client.
+    saved = owner.put(
+        f"{base}/systems/{directory['id']}/applicability",
+        json={"selections": [{"control_ref": joined["control_ref"], "selected": True}]},
+    )
+    assert saved.status_code == 200, saved.text
+    mine = [c for c in saved.json()["controls"] if c["application_name"] == "Active Directory"]
+    assert [(c["control_ref"], c["included"]) for c in mine] == [(joined["control_ref"], True)]
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            "SELECT c.adapted_from, c.library_key, c.activity, i.topic, i.status "
+            "FROM engagement_controls c JOIN control_context_issues i "
+            "ON i.engagement_control_id = c.id WHERE c.id = %s",
+            (mine[0]["id"],),
+        ).fetchone()
+    assert row is not None
+    assert row[0] == joined["adapted_from"] and row[1] == joined["library_key"]
+    assert "Active Directory" in row[2]
+    assert row[3] == "Confirm the control for this system" and row[4] == "OPEN"
+    # The row's library offers leave out the standard Active Directory has in scope; adding
+    # it again from the library is refused with why, not ignored.
+    row = _system(saved.json(), "Active Directory")
+    assert joined["library_key"] not in {o["library_key"] for o in row["other_controls"]}
+    duplicate = owner.post(
+        f"{base}/systems/{directory['id']}/controls/add",
+        json={"library_key": joined["library_key"]},
+    )
+    assert duplicate.status_code == 409
+    assert joined["control_ref"] in duplicate.json()["detail"]
+    # Taken out of scope, it is offered back under its own reference, and comes back.
+    removed = owner.post(
+        f"{base}/systems/{directory['id']}/controls/remove",
+        json={"control_id": mine[0]["id"]},
+    )
+    assert removed.status_code == 200, removed.text
+    offer = next(
+        o for o in _system(removed.json(), "Active Directory")["other_controls"]
+        if o["library_key"] == joined["library_key"]
+    )  # fmt: skip
+    assert offer["control_ref"] == joined["control_ref"] and offer["control_id"] == mine[0]["id"]
+    back = owner.post(
+        f"{base}/systems/{directory['id']}/controls/add", json={"control_id": offer["control_id"]}
+    )
+    assert back.status_code == 200, back.text
+    assert [
+        (c["control_ref"], c["included"]) for c in back.json()["controls"]
+        if c["application_name"] == "Active Directory"
+    ] == [(joined["control_ref"], True)]  # fmt: skip
+    # It is not offered again, and its reference stays its own.
+    again = _system(owner.get(base).json(), "Active Directory")["assessment"]["candidates"]
+    assert not [c for c in again if c["adapted_from"] == joined["adapted_from"]
+                and c["origin"] == "RCM"]  # fmt: skip
+    # The team sets the system's code: the references follow it.
+    renamed = owner.patch(f"{base}/systems/{directory['id']}/details", json={"ref_code": "ADS"})
+    assert renamed.status_code == 200, renamed.text
+    system_now = _system(owner.get(base).json(), "Active Directory")
+    later = system_now["assessment"]
+    assert later["ref_code"] == "ADS" and system_now["ref_code"] == "ADS"
+    # Saving the other details keeps the code a person set.
+    kept = owner.patch(f"{base}/systems/{directory['id']}/details", json={"owner": "IT Ops"})
+    assert kept.status_code == 200, kept.text
+    assert _system(owner.get(base).json(), "Active Directory")["ref_code"] == "ADS"
+    assert all(c["control_ref"].startswith("ITGC-ADS-")
+               for c in later["candidates"] if c["adapted_from"])  # fmt: skip
+    assert (
+        owner.patch(
+            f"{base}/systems/{directory['id']}/details", json={"ref_code": "ad"}
+        ).status_code
+        == 422
+    )

@@ -50,11 +50,13 @@ State = Literal[
     "PROCESS_UNDERSTANDING_INCOMPLETE",
     "EVIDENCE_PENDING",
     "CONFLICT_REQUIRES_REVIEW",
+    "IMPACT_PENDING",
     "READY_FOR_REVIEW",
     "CONCLUDED",
 ]
 BLOCKING: frozenset[str] = frozenset(
     {
+        "IMPACT_PENDING",
         "NEEDS_INFORMATION",
         "PLAN_NOT_APPROVED",
         "PROCESS_UNDERSTANDING_INCOMPLETE",
@@ -71,6 +73,7 @@ STATE_LABELS: dict[str, str] = {
     "PROCESS_UNDERSTANDING_INCOMPLETE": "Process understanding incomplete",
     "EVIDENCE_PENDING": "Evidence pending",
     "CONFLICT_REQUIRES_REVIEW": "Conflict to review",
+    "IMPACT_PENDING": "Impact assessment pending",
     "READY_FOR_REVIEW": "Ready for review",
     "CONCLUDED": "Concluded",
 }
@@ -146,6 +149,9 @@ class Facts:
     # The master test plan's status and revision (None: no plan).
     master_status: str | None = None
     master_revision: int = 0
+    # Results signed off under an earlier (or unrecorded) plan revision await a reviewer's
+    # impact assessment (plan_impact.py, W3): nothing relies on them until then.
+    impact_pending: int = 0
 
 
 def load_facts(
@@ -271,6 +277,28 @@ def load_facts(
     for cid, state in review_states(connection, project_id).items():
         if (found := facts.get(cid)) is not None:
             found.review_status = str(state[0])
+    # Signed-off results whose plan revision is unknown or older than the approved one,
+    # with no VALID assessment for the approved revision: pending, whether or not the
+    # assessment row exists yet.
+    for cid, count in connection.execute(
+        """
+        SELECT o.engagement_control_id, count(*)
+        FROM test_sheet_signoffs o
+        JOIN test_sheets s ON s.id = o.test_sheet_id AND s.status = 'SIGNED_OFF'
+        JOIN evidence_plans p ON p.engagement_control_id = o.engagement_control_id
+        WHERE o.project_id = %s AND o.reopened_at IS NULL AND p.approved_revision IS NOT NULL
+          AND (o.plan_revision IS NULL OR o.plan_revision <> p.approved_revision)
+          AND NOT EXISTS (
+              SELECT 1 FROM plan_impact_assessments a
+              WHERE a.signoff_id = o.id AND a.to_revision = p.approved_revision
+                AND a.status = 'VALID'
+          )
+        GROUP BY 1
+        """,
+        (project_id,),
+    ).fetchall():
+        if (found := facts.get(UUID(str(cid)))) is not None:
+            found.impact_pending = int(count)
     return facts
 
 
@@ -598,8 +626,25 @@ def evaluate(facts: Facts) -> ReadinessBody:
         blockers=plan_blockers,
     )
 
+    if facts.impact_pending:
+        plan_check.status = "BLOCKED"
+        plan_check.summary = "Impact assessment pending"
+        plan_check.blockers.append(
+            Blocker(
+                detail=f"{facts.impact_pending} signed-off result"
+                f"{'' if facts.impact_pending == 1 else 's'} predate the plan's approved "
+                "revision, or the revision tested under is not recorded.",
+                why="Results are relied on only under the plan revision they were tested "
+                "against, or once a reviewer confirms the revision does not affect them.",
+                resolve="A reviewer decides the impact assessment: the results stand, or "
+                "the testing is re-performed.",
+            )
+        )
     state: State
-    if facts.review_status == "SIGNED_OFF":
+    if facts.impact_pending:
+        # Nothing relies on the results, and nothing is tested further, until decided.
+        state = "IMPACT_PENDING"
+    elif facts.review_status == "SIGNED_OFF":
         state = "CONCLUDED"
     elif facts.sheet_status == "SIGNED_OFF":
         state = "READY_FOR_REVIEW"

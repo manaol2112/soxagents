@@ -370,12 +370,14 @@ def test_large_engagements_count_every_record(migrated: Database) -> None:
         first = _run(context, "list_requests", limit=100, sort="control")
         last = _run(context, "list_requests", limit=100, offset=200, sort="control")
         made = _run(context, "export_records", dataset="evidence_requests")
+        assert total is not None
+        # Every page, however many records the engagement has.
         pages = [
             engagement_data.evidence_requests(
                 connection, context.principal, team["org"], team["project"],
                 engagement_data.RequestFilters(), sort="control", offset=offset, limit=100,
             )
-            for offset in (0, 100, 200)
+            for offset in range(0, total[0], 100)
         ]  # fmt: skip
     assert total is not None and total[0] > 250
     # Totals cover every record, never only those that came back.

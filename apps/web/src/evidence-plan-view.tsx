@@ -26,6 +26,7 @@ import {
   type RequirementFile,
   requirementStatus,
   shownRequirements,
+  waitsOnPerson,
 } from "./evidence-plan-model";
 import { formatDate } from "./format";
 import { UiIcon } from "./ui-icon";
@@ -297,6 +298,7 @@ export function RequirementRow({
   action,
   linkable = [],
   proposed = false,
+  compact = false,
 }: {
   item: PlanRequirement;
   canAct: boolean;
@@ -305,6 +307,9 @@ export function RequirementRow({
   linkable?: Array<{ id: string; name: string }>;
   /** Its plan waits for approval: the item is part of the proposal. */
   proposed?: boolean;
+  /** On the control's evidence: one line until the item waits on a person, its plan
+   * wording and files on request. */
+  compact?: boolean;
 }) {
   const shown = requirementStatus(item.state, proposed);
   const id = useId();
@@ -320,11 +325,148 @@ export function RequirementRow({
     item.state === "ACCEPTED" ||
     item.state === "INSUFFICIENT" ||
     item.state === "FOLLOW_UP_REQUIRED";
+  // What a person must look at now: evidence arrived and not yet judged, a change the
+  // planner proposes, or an item flagged for review.
+  const waitsOnYou = waitsOnPerson(item);
+  const fold = compact && !waitsOnYou && asking === null;
   const ask = (next: Asking, prefill = "") => {
     setAsking(next);
     setWords(prefill);
     setFileId("");
   };
+  const buttons =
+    canAct && asking === null ? (
+      <span className="ep-buttons">
+        {judgeable && item.state !== "ACCEPTED" ? (
+          <button
+            type="button"
+            className="btn-sm"
+            disabled={action.pending}
+            onClick={() =>
+              action.run(`judge-${item.id}`, {
+                intent: "sufficiency",
+                requirement_id: item.id,
+                sufficiency: "ACCEPTED",
+                version: item.version,
+              })
+            }
+          >
+            Accept
+          </button>
+        ) : null}
+        {judgeable ? (
+          <>
+            <button
+              type="button"
+              className="btn-ghost btn-sm"
+              disabled={action.pending}
+              onClick={() => ask({ kind: "INSUFFICIENT" })}
+            >
+              Insufficient
+            </button>
+            <button
+              type="button"
+              className="btn-ghost btn-sm"
+              disabled={action.pending}
+              onClick={() =>
+                ask(
+                  { kind: "FOLLOW_UP_REQUIRED" },
+                  proposal.followUps.join("; ").slice(0, 1000),
+                )
+              }
+            >
+              Follow up
+            </button>
+          </>
+        ) : null}
+        {open && item.pendingChange === null ? (
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            disabled={action.pending}
+            onClick={() => ask({ kind: "WAIVE" })}
+          >
+            Mark not applicable
+          </button>
+        ) : null}
+        {item.state === "NOT_APPLICABLE" ? (
+          <button
+            type="button"
+            className="btn-ghost btn-sm"
+            disabled={action.pending}
+            onClick={() =>
+              action.run(`restore-${item.id}`, {
+                intent: "restore",
+                requirement_id: item.id,
+                version: item.version,
+              })
+            }
+          >
+            Restore
+          </button>
+        ) : null}
+      </span>
+    ) : null;
+  // The evidence that serves the item and what the reader found.
+  const evidence = assessed ? (
+    <div className="ep-evidence">
+      <ul className="ep-files">
+        {item.files.map((file) => (
+          <li key={file.fileId}>
+            <UiIcon name="file" size={13} />
+            <span className="ep-file-name">{file.name}</span>
+            <small>
+              {file.via === "LINK"
+                ? `linked by ${file.linkedBy ?? "a person"}`
+                : "on its request"}
+              {file.readStatus === "PENDING" || file.readStatus === "WORKING"
+                ? " · being read"
+                : file.readStatus === "FAILED"
+                  ? " · could not be read"
+                  : file.coverage !== null
+                    ? ` · ${COVERAGE_WORDS[file.coverage]}${file.readBy === "RULES" ? " (by the rules)" : ""}`
+                    : ""}
+              {file.period ? ` · ${file.period}` : ""}
+            </small>
+            {canAct && file.via === "LINK" && file.linkId !== null ? (
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                disabled={action.pending}
+                onClick={() => ask({ kind: "UNLINK", file })}
+              >
+                Unlink
+              </button>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      <p
+        className={`ep-assess is-${proposal.proposal.toLowerCase()}${decided ? " is-decided" : ""}`}
+      >
+        <span
+          className="cw-ai"
+          title="The evidence reader's proposal, not a decision"
+        >
+          AI
+        </span>
+        {proposal.proposal === "NONE" ? null : (
+          <>
+            {decided ? "The reader proposed: " : null}
+            <strong>{PROPOSAL_LABELS[proposal.proposal]}.</strong>{" "}
+          </>
+        )}
+        {proposal.reason}
+      </p>
+      {proposal.followUps.length > 0 ? (
+        <ul className="ep-follow">
+          {proposal.followUps.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  ) : null;
   return (
     <li
       id={`req-${item.id}`}
@@ -345,68 +487,14 @@ export function RequirementRow({
           {item.needsReview ? (
             <span className="cc-badge is-question">Needs review</span>
           ) : null}
+          {compact && assessed ? (
+            <span className="ep-file-count">
+              {item.files.length} {item.files.length === 1 ? "file" : "files"}
+            </span>
+          ) : null}
         </p>
-        <p className="cc-text">{item.description}</p>
-        {assessed ? (
-          <div className="ep-evidence">
-            <ul className="ep-files">
-              {item.files.map((file) => (
-                <li key={file.fileId}>
-                  <UiIcon name="file" size={13} />
-                  <span className="ep-file-name">{file.name}</span>
-                  <small>
-                    {file.via === "LINK"
-                      ? `linked by ${file.linkedBy ?? "a person"}`
-                      : "on its request"}
-                    {file.readStatus === "PENDING" ||
-                    file.readStatus === "WORKING"
-                      ? " · being read"
-                      : file.readStatus === "FAILED"
-                        ? " · could not be read"
-                        : file.coverage !== null
-                          ? ` · ${COVERAGE_WORDS[file.coverage]}${file.readBy === "RULES" ? " (by the rules)" : ""}`
-                          : ""}
-                    {file.period ? ` · ${file.period}` : ""}
-                  </small>
-                  {canAct && file.via === "LINK" && file.linkId !== null ? (
-                    <button
-                      type="button"
-                      className="btn-ghost btn-sm"
-                      disabled={action.pending}
-                      onClick={() => ask({ kind: "UNLINK", file })}
-                    >
-                      Unlink
-                    </button>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-            <p
-              className={`ep-assess is-${proposal.proposal.toLowerCase()}${decided ? " is-decided" : ""}`}
-            >
-              <span
-                className="cw-ai"
-                title="The evidence reader's proposal, not a decision"
-              >
-                AI
-              </span>
-              {proposal.proposal === "NONE" ? null : (
-                <>
-                  {decided ? "The reader proposed: " : null}
-                  <strong>{PROPOSAL_LABELS[proposal.proposal]}.</strong>{" "}
-                </>
-              )}
-              {proposal.reason}
-            </p>
-            {proposal.followUps.length > 0 ? (
-              <ul className="ep-follow">
-                {proposal.followUps.map((line) => (
-                  <li key={line}>{line}</li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
-        ) : null}
+        {compact ? null : <p className="cc-text">{item.description}</p>}
+        {fold ? null : evidence}
         {!assessed &&
         (item.state === "RECEIVED" ||
           item.state === "PARTIALLY_RECEIVED" ||
@@ -419,7 +507,10 @@ export function RequirementRow({
         {/* The reasoning and the request behind the item open on request, so the plan
             reads as what is needed and where it stands. */}
         <details className="ep-more">
-          <summary>Why, period, and request</summary>
+          <summary>{compact ? "Details" : "Why, period, and request"}</summary>
+          {compact ? <p className="cc-text">{item.description}</p> : null}
+          {fold ? evidence : null}
+          {fold ? buttons : null}
           <p className="cc-why">
             <span>Why</span>
             {item.rationale}
@@ -647,78 +738,7 @@ export function RequirementRow({
         >
           {shown.label}
         </span>
-        {canAct && asking === null ? (
-          <span className="ep-buttons">
-            {judgeable && item.state !== "ACCEPTED" ? (
-              <button
-                type="button"
-                className="btn-sm"
-                disabled={action.pending}
-                onClick={() =>
-                  action.run(`judge-${item.id}`, {
-                    intent: "sufficiency",
-                    requirement_id: item.id,
-                    sufficiency: "ACCEPTED",
-                    version: item.version,
-                  })
-                }
-              >
-                Accept
-              </button>
-            ) : null}
-            {judgeable ? (
-              <>
-                <button
-                  type="button"
-                  className="btn-ghost btn-sm"
-                  disabled={action.pending}
-                  onClick={() => ask({ kind: "INSUFFICIENT" })}
-                >
-                  Insufficient
-                </button>
-                <button
-                  type="button"
-                  className="btn-ghost btn-sm"
-                  disabled={action.pending}
-                  onClick={() =>
-                    ask(
-                      { kind: "FOLLOW_UP_REQUIRED" },
-                      proposal.followUps.join("; ").slice(0, 1000),
-                    )
-                  }
-                >
-                  Follow up
-                </button>
-              </>
-            ) : null}
-            {open && item.pendingChange === null ? (
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                disabled={action.pending}
-                onClick={() => ask({ kind: "WAIVE" })}
-              >
-                Mark not applicable
-              </button>
-            ) : null}
-            {item.state === "NOT_APPLICABLE" ? (
-              <button
-                type="button"
-                className="btn-ghost btn-sm"
-                disabled={action.pending}
-                onClick={() =>
-                  action.run(`restore-${item.id}`, {
-                    intent: "restore",
-                    requirement_id: item.id,
-                    version: item.version,
-                  })
-                }
-              >
-                Restore
-              </button>
-            ) : null}
-          </span>
-        ) : null}
+        {fold ? null : buttons}
       </div>
     </li>
   );

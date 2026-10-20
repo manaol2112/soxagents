@@ -6,7 +6,11 @@
 
 import type { ContextIntent, ControlContext } from "./control-context-model.ts";
 import type { ControlRow, DetailTab, PlanTask } from "./engagement-model.ts";
-import type { EvidenceAction, EvidenceTarget } from "./evidence-flow.ts";
+import type {
+  ActionPage,
+  EvidenceAction,
+  EvidenceTarget,
+} from "./evidence-flow.ts";
 import type { ControlReview } from "./review-model.ts";
 import type { TestSheet } from "./sheet-model.ts";
 import type { ControlTest } from "./testing-model.ts";
@@ -21,6 +25,8 @@ export type AssistantAction = {
   anchor: string;
   /** On the Evidence tab: the view and the record it opens (evidence-flow.ts). */
   target?: EvidenceTarget;
+  /** Done on another page instead (evidence-flow.ts ActionPage). */
+  page?: ActionPage;
   /** Work the agent can do right now, on the person's word. */
   quick: { intent: ContextIntent; label: string } | null;
   urgent: boolean;
@@ -399,6 +405,7 @@ export function assistantBrief(input: AssistantInput): AssistantBrief {
       tab: "evidence",
       anchor: "",
       target: item.target,
+      ...(item.page !== undefined ? { page: item.page } : {}),
       urgent: item.kind === "approve" || item.kind === "revise",
     });
   }

@@ -11,6 +11,7 @@ import "./console.css";
 import "./engagements.css";
 import "./portal.css";
 import "./planning.css";
+import "./library.css";
 
 const inter = Inter({
   subsets: ["latin"],

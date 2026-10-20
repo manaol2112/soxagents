@@ -36,6 +36,7 @@ import {
   TYPE_LABELS,
 } from "./control-context-model";
 import { UiIcon } from "./ui-icon";
+import { SuggestedAnswer } from "./value-options";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
 
@@ -122,6 +123,8 @@ const STATE_EXPLAINED: Record<Readiness["state"], string> = {
     "The control is defined and understood. Testing starts when its evidence arrives.",
   CONFLICT_REQUIRES_REVIEW:
     "Sources disagree. A person settles each conflict before testing.",
+  IMPACT_PENDING:
+    "The test plan changed after results were signed off, or the revision they were tested under is not recorded. A reviewer decides whether the results stand or the testing is re-performed; nothing relies on them until then.",
   READY_FOR_REVIEW:
     "Testing is signed off and waits for the independent review.",
   CONCLUDED: "The control is concluded.",
@@ -542,8 +545,12 @@ export function DesignPanel({
           <h4>
             Client values{" "}
             <span className="num">
-              {fillable.filter((slot) => slot.value !== "").length}/
-              {fillable.length}
+              {
+                fillable.filter(
+                  (slot) => (values[slot.key] ?? "").trim() !== "",
+                ).length
+              }
+              /{fillable.length}
             </span>
           </h4>
           <p className="form-hint">
@@ -552,31 +559,36 @@ export function DesignPanel({
           </p>
           <div className="cc-value-grid">
             {fillable.map((slot) => (
-              <label
-                key={slot.key}
-                className="cc-value"
-                htmlFor={`${id}-${slot.key}`}
-              >
-                <span className="cc-value-label">
-                  {sentence(slot.label)}
-                  {slot.blocks ? (
+              <div key={slot.key} className="cc-value">
+                <label className="cc-value-label" htmlFor={`${id}-${slot.key}`}>
+                  {slot.question || sentence(slot.label)}
+                  {(values[slot.key] ?? "").trim() !== "" ? (
+                    <span className="cc-value-done">
+                      <UiIcon name="check" size={11} />
+                      Answered
+                    </span>
+                  ) : slot.blocks ? (
                     <Badge tone="is-question">Testing waits</Badge>
                   ) : null}
-                </span>
-                <input
+                </label>
+                {slot.hint !== "" ? <small>{slot.hint}</small> : null}
+                <SuggestedAnswer
                   id={`${id}-${slot.key}`}
+                  options={slot.options}
                   value={values[slot.key] ?? ""}
-                  maxLength={300}
                   placeholder={
-                    slot.example !== "" ? `For example: ${slot.example}` : ""
+                    canAct && slot.options.length > 0
+                      ? "Type the client's answer"
+                      : slot.example !== ""
+                        ? `For example: ${slot.example}`
+                        : ""
                   }
                   disabled={!canAct}
-                  onChange={(event) =>
-                    setValues({ ...values, [slot.key]: event.target.value })
+                  onChange={(text) =>
+                    setValues({ ...values, [slot.key]: text })
                   }
                 />
-                <small>{slot.why}</small>
-              </label>
+              </div>
             ))}
           </div>
           {canAct ? (

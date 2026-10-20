@@ -40,6 +40,7 @@ from ai_workforce_api.control_instances import (
     remove_application_everywhere,
 )
 from ai_workforce_api.controls import (
+    BY_KEY,
     DOMAIN_AGENTS,
     DOMAIN_LABELS,
     DOMAINS,
@@ -221,6 +222,8 @@ class ApplicationBody(BaseModel):
     purpose: str = ""
     processes: str = ""
     owner: str = ""
+    # The system's code in the client's control references, when a person set one.
+    ref_code: str = ""
     assessment: AssessmentBody | None = None
     soc_reports: list[SocReportBody] = []
 
@@ -1118,10 +1121,12 @@ _LIBRARY_BY_KEY = {control.key: control for control in LIBRARY}
 def _other_controls(
     controls: dict[str, tuple[UUID, bool]],
     recommendations: list[RecommendationBody],
-    uploaded: dict[str, OtherControlBody],
+    by_standard: dict[str, tuple[UUID, bool, str, str]] | None = None,
 ) -> list[OtherControlBody]:
-    """Controls not in scope for the system and not waiting as a recommendation: the
-    client's own IT controls when its RCM is the source, else the library's."""
+    """The library's controls not in scope for the system and not waiting as a
+    recommendation. The client's own controls on other systems are offered in the system
+    wizard, adapted to the system (adapted_controls), never copied as they are from here
+    (decided by the product owner)."""
     # Waiting as a recommendation, or out of scope because the SOC report covers it (shown
     # with its own "Keep in scope").
     waiting = {
@@ -1131,22 +1136,28 @@ def _other_controls(
         or (r.status == "ACCEPTED" and r.kind == "EXCLUDE")
     }
     others: list[OtherControlBody] = []
-    if uploaded:
-        for ref, family in uploaded.items():
-            current = controls.get(ref)
-            if ref in waiting or (current is not None and current[1]):
-                continue
-            others.append(
-                family.model_copy(
-                    update={"control_id": family.control_id if current is None else current[0]}
-                )
-            )
-        return others
     for control in LIBRARY:
         ref = control.control_ref.upper()
-        current = controls.get(ref)
         if control.domain not in SYSTEM_DOMAINS or ref in waiting:
             continue
+        # The system's own control for the standard, under whatever reference it has
+        # (ITGC-AD-01 adapted from the client's controls): offered back when out of scope,
+        # and not offered at all when in scope.
+        own = (by_standard or {}).get(control.key)
+        if own is not None:
+            if own[1]:
+                continue
+            others.append(
+                OtherControlBody(
+                    library_key=control.key,
+                    control_ref=own[2],
+                    title=own[3],
+                    domain=control.domain,
+                    control_id=own[0],
+                )  # fmt: skip
+            )
+            continue
+        current = controls.get(ref)
         if current is not None and current[1]:
             continue
         others.append(
@@ -1182,7 +1193,7 @@ def _applications(connection: psycopg.Connection[Any], project_id: UUID) -> list
         SELECT a.id, a.name, a.description, a.layer, a.hosting, a.soc_expected,
                a.facts_source, a.facts_reason, a.facts_confirmed, a.version,
                r.review_status, r.source, r.basis, r.summary, r.coverage, r.cuecs, r.note,
-               r.reviewed_at, a.purpose, a.processes, a.owner
+               r.reviewed_at, a.purpose, a.processes, a.owner, coalesce(a.ref_code, '')
         FROM engagement_applications a
         LEFT JOIN system_reviews r ON r.application_id = a.id
         WHERE a.project_id = %s ORDER BY a.name
@@ -1192,9 +1203,13 @@ def _applications(connection: psycopg.Connection[Any], project_id: UUID) -> list
     # Whether a CUEC is answered is read from the controls as they are now, not from the
     # review: a decision taken after the review changes it.
     live: dict[UUID, dict[str, tuple[UUID, bool]]] = {}
-    for app_id, ref, control_id, included in connection.execute(
+    # Each system's control for a library standard, by the standard: (id, included,
+    # reference, title).
+    standards: dict[UUID, dict[str, tuple[UUID, bool, str, str]]] = {}
+    for app_id, ref, control_id, included, key, shown, title in connection.execute(
         """
-        SELECT engagement_application_id, upper(control_ref), id, included
+        SELECT engagement_application_id, upper(control_ref), id, included, library_key,
+               control_ref, title
         FROM engagement_controls
         WHERE project_id = %s AND engagement_application_id IS NOT NULL
         """,
@@ -1203,24 +1218,10 @@ def _applications(connection: psycopg.Connection[Any], project_id: UUID) -> list
         known = live.setdefault(app_id, {})
         if ref not in known or (included and not known[ref][1]):
             known[ref] = (control_id, bool(included))
-    # The client's RCM as the source: its IT controls are what a system can take on.
-    uploaded_families: dict[str, OtherControlBody] = {}
-    for family in connection.execute(
-        """
-        SELECT DISTINCT ON (upper(control_ref)) control_ref, id, title, domain
-        FROM engagement_controls
-        WHERE project_id = %s AND source = 'UPLOAD' AND domain = ANY(%s)
-        ORDER BY upper(control_ref), created_at
-        """,
-        (project_id, list(SYSTEM_DOMAINS)),
-    ).fetchall():
-        uploaded_families[str(family[0]).upper()] = OtherControlBody(
-            library_key="",
-            control_ref=str(family[0]),
-            title=str(family[2]),
-            domain=str(family[3]),
-            control_id=family[1],
-        )
+        if key is not None and str(key) in BY_KEY:
+            standards.setdefault(app_id, {})[str(key)] = (
+                control_id, bool(included), str(shown), str(title),
+            )  # fmt: skip
     recommendations: dict[UUID, list[RecommendationBody]] = {}
     for rec in connection.execute(
         """
@@ -1281,11 +1282,12 @@ def _applications(connection: psycopg.Connection[Any], project_id: UUID) -> list
             recommendations=recommendations.get(row[0], []),
             controls_in_scope=sum(1 for _, included in live.get(row[0], {}).values() if included),
             other_controls=_other_controls(
-                live.get(row[0], {}), recommendations.get(row[0], []), uploaded_families
+                live.get(row[0], {}), recommendations.get(row[0], []), standards.get(row[0], {})
             ),
             purpose=str(row[18]),
             processes=str(row[19]),
             owner=str(row[20]),
+            ref_code=str(row[21]),
             assessment=assessment_body(connection, row[0]),
             soc_reports=report_bodies(connection, row[0]),
         )

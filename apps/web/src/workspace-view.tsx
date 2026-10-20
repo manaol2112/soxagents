@@ -80,7 +80,10 @@ import {
   initials,
   monogram,
 } from "./format";
+import { NextStepsPanel } from "./home-view";
+import { LibraryPage } from "./library-view";
 import type { EvidenceCenterState } from "./load-evidence-center";
+import type { LibraryPageState } from "./load-library";
 import type { PlanningPageState } from "./load-planning";
 import { LoadingScreen } from "./loading-screen";
 import { NavScroll } from "./nav-scroll";
@@ -171,16 +174,16 @@ const NAV_GROUPS: ReadonlyArray<{ label: string; items: NavItem[] }> = [
     label: "Engagement",
     items: [
       {
+        id: "overview",
+        label: "Home",
+        detail: "Where the engagement stands and what to do next",
+        icon: "grid",
+      },
+      {
         id: "console",
         label: "Agent console",
         detail: "Ask the workforce and confirm its work",
         icon: "sparkles",
-      },
-      {
-        id: "overview",
-        label: "Dashboard",
-        detail: "Health at a glance",
-        icon: "grid",
       },
       {
         id: "controls",
@@ -234,6 +237,12 @@ const NAV_GROUPS: ReadonlyArray<{ label: string; items: NavItem[] }> = [
         label: "Engagement settings",
         detail: "Scope, team, RCM, and PBC",
         icon: "sparkles",
+      },
+      {
+        id: "library",
+        label: "Library",
+        detail: "Standard procedures and attributes",
+        icon: "layers",
       },
       {
         id: "agents",
@@ -297,6 +306,7 @@ export function WorkspaceView({
   evidenceView = DEFAULT_EVIDENCE_VIEW,
   evidenceCenter = null,
   planning = null,
+  library = null,
 }: {
   model: ShellModel;
   directory?: DirectoryQuery;
@@ -315,6 +325,7 @@ export function WorkspaceView({
   evidenceView?: EvidenceView;
   evidenceCenter?: EvidenceCenterState | null;
   planning?: PlanningPageState | null;
+  library?: LibraryPageState | null;
 }) {
   const waiting =
     workflow.approvals === null
@@ -451,6 +462,7 @@ export function WorkspaceView({
             evidenceView={evidenceView}
             evidenceCenter={evidenceCenter}
             planning={planning}
+            library={library}
           />
         </main>
       </div>
@@ -494,7 +506,7 @@ function SidebarControls({
 
 function WorkspaceControls({ model }: { model: Ready }) {
   const sectionLabel =
-    NAV.find((item) => item.id === model.section)?.label ?? "Dashboard";
+    NAV.find((item) => item.id === model.section)?.label ?? "Home";
   return (
     <>
       <nav aria-label="Breadcrumb">
@@ -630,6 +642,7 @@ function WorkspaceMain({
   evidenceView,
   evidenceCenter,
   planning,
+  library,
 }: {
   model: ShellModel;
   directory: DirectoryQuery;
@@ -647,6 +660,7 @@ function WorkspaceMain({
   evidenceView: EvidenceView;
   evidenceCenter: EvidenceCenterState | null;
   planning: PlanningPageState | null;
+  library: LibraryPageState | null;
 }) {
   if (model.status === "loading") {
     return <LoadingScreen />;
@@ -705,6 +719,9 @@ function WorkspaceMain({
       <AgentsMain model={model} workflow={workflow} creating={creatingAgent} />
     );
   }
+  if (model.section === "library") {
+    return <LibraryPage model={model} library={library} />;
+  }
   if (model.section === "tasks") {
     return <TasksMain model={model} directory={directory} />;
   }
@@ -745,13 +762,27 @@ function WorkspaceMain({
       <DeficienciesMain model={model} engagement={engagement} logFor={logFor} />
     );
   }
+  // The journey and the one list of what to do next lead the page; the dashboard's
+  // own "Waiting on you" is part of that list.
+  const home =
+    engagement.nextSteps != null && model.selectedProject !== null ? (
+      <NextStepsPanel
+        next={engagement.nextSteps}
+        organizationId={model.organization.id}
+        projectId={model.selectedProject.id}
+        consoleHref={sectionHref(model, "console")}
+      />
+    ) : null;
   if (engagement.dashboard?.started === true) {
     return (
       <EngagementDashboard
         model={model}
         engagement={engagement}
+        home={home}
         attention={
-          <AttentionCard model={model} workflow={workflow} now={now} />
+          home === null ? (
+            <AttentionCard model={model} workflow={workflow} now={now} />
+          ) : null
         }
       />
     );
@@ -762,6 +793,7 @@ function WorkspaceMain({
       workflow={workflow}
       now={now}
       onboarding={setup.onboarding}
+      home={home}
     />
   );
 }
@@ -923,11 +955,13 @@ function CommandCenter({
   workflow,
   now,
   onboarding,
+  home,
 }: {
   model: Ready;
   workflow: WorkflowState;
   now: number;
   onboarding: Onboarding | null;
+  home: ReactNode;
 }) {
   const project = model.selectedProject;
   const evidence = workflow.evidence ?? [];
@@ -953,7 +987,7 @@ function CommandCenter({
   return (
     <div className="page">
       <PageHeader
-        context="Dashboard"
+        context="Home"
         title={project?.name ?? model.organization.name}
         badge={
           project === null ? undefined : <StatusPill status={project.status} />
@@ -968,6 +1002,7 @@ function CommandCenter({
       />
       {project === null ? null : (
         <>
+          {home}
           {onboarding !== null && showsSetupCallout(onboarding) ? (
             <SetupCallout model={model} onboarding={onboarding} />
           ) : null}

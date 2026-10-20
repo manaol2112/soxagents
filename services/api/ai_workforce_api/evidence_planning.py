@@ -197,6 +197,12 @@ class PlanFacts:
     changes: tuple[ControlChange, ...] = ()
     custom_fields: tuple[tuple[str, str], ...] = ()
     library_key: str = ""
+    # What the plan is built from (controls.basis_of): the standard, the standard tailored,
+    # or the client's own procedures, in which case the library definition is not applied.
+    test_basis: str = "STANDARD"
+    # Whether a person decided the basis (milestone L2): the standard's procedures are
+    # then followed at once, before its attributes are approved.
+    basis_decided: bool = False
     # (definition key, wording) of each approved attribute that follows a library
     # definition (milestone B: the library's procedures name the attributes they test).
     attribute_keys: tuple[tuple[str, str], ...] = ()
@@ -1384,6 +1390,247 @@ _TESTS_ATTRIBUTES = frozenset(
     }
 )
 _LIBRARY_PHASE = {"DESIGN": "DESIGN", "OPERATING": "INTERIM", "ROLLFORWARD": "ROLLFORWARD"}
+_CHANGE_KEY = re.compile(r"^(?:design|interim|rollforward)-change(?:s|-\d+)$")
+
+# How a suite item's purpose and form decide the requirement's categories. An attribute
+# item is sample evidence where the phase has a population to sample from; otherwise it is
+# the control's own execution or configuration (a test of one).
+_FORM_CATEGORY: dict[str, Category] = {
+    "POLICY": "PROCESS_DOCUMENTATION",
+    "DOCUMENT": "PROCESS_DOCUMENTATION",
+    "CONFIGURATION": "CONFIGURATION",
+    "SYSTEM_LOG": "CONTROL_EXECUTION",
+    "SYSTEM_REPORT": "REPORT_RELIABILITY",
+    "SYSTEM_SCREEN": "CONTROL_EXECUTION",
+    "TICKET": "CONTROL_EXECUTION",
+    "CORRESPONDENCE": "OTHER",
+    "OBSERVATION": "CONTROL_EXECUTION",
+    "THIRD_PARTY_REPORT": "OTHER",
+}
+
+
+def _suite_categories(
+    purpose: str, form: str, name: str, sampled: bool, phase: Phase
+) -> list[Category]:
+    lowered = name.lower()
+    if purpose == "POPULATION":
+        return ["POPULATION"]
+    if purpose == "COMPLETENESS":
+        return ["REPORT_RELIABILITY"]
+    if "change history" in lowered or "changes to the control" in lowered:
+        return ["CHANGE_HISTORY"]
+    # A report's definition (its logic, query, or parameters) is what its reliability is
+    # judged from, whatever form the client keeps it in.
+    if purpose == "DESIGN" and ("logic" in lowered or "query" in lowered):
+        return ["REPORT_RELIABILITY"]
+    if purpose == "ATTRIBUTE":
+        base = _FORM_CATEGORY.get(form, "OTHER")
+        if sampled:
+            return ["SAMPLE", "CONTROL_EXECUTION" if base == "OTHER" else base]
+        return [base if base != "OTHER" else "CONTROL_EXECUTION"]
+    if purpose == "DESIGN":
+        base = _FORM_CATEGORY.get(form, "PROCESS_DOCUMENTATION")
+        return [base if base != "OTHER" else "PROCESS_DOCUMENTATION"]
+    return ["OTHER"]
+
+
+@dataclass(frozen=True)
+class SuiteWording:
+    """A suite item's wording for the control owner: the period it covers, what it must
+    show, what makes it complete, what is not sufficient in its place, and what may serve
+    instead. Kept in the requirement's description as labelled sentences, so the plan reads
+    as prose and the request can still set each part on its own line."""
+
+    period: str
+    include: tuple[str, ...]
+    completeness: str = ""
+    not_sufficient: str = ""
+    alternatives: tuple[str, ...] = ()
+    # What a person added after the labelled parts: the client is asked for it too.
+    note: str = ""
+
+
+# The labels a suite description carries, in order, and the field each fills.
+SUITE_LABELS: tuple[tuple[str, str], ...] = (
+    ("Include", "include"),
+    ("Completeness", "completeness"),
+    ("Not sufficient", "not_sufficient"),
+    ("If not available", "alternatives"),
+)
+_SUITE_SPLIT = re.compile(r"\s(Include|Completeness|Not sufficient|If not available): ")
+_AFTER_FIRST_SENTENCE = re.compile(r"^(.+?[.?!])\s+([A-Z].*)$")
+
+
+def _sentence_case(text: str) -> str:
+    text = " ".join(text.split()).rstrip(".")
+    return text[:1].upper() + text[1:]
+
+
+def _full_stop(text: str) -> str:
+    text = " ".join(text.split())
+    return text if text.endswith((".", "?", "!")) else f"{text}."
+
+
+def suite_description(wording: SuiteWording) -> str:
+    """The requirement's description for a suite item (suite_wording reads it back)."""
+    parts = [_full_stop(wording.period), "Include: " + _full_stop("; ".join(wording.include))]
+    if wording.completeness:
+        parts.append("Completeness: " + _full_stop(wording.completeness))
+    if wording.not_sufficient:
+        parts.append("Not sufficient: " + _full_stop(wording.not_sufficient))
+    if wording.alternatives:
+        parts.append("If not available: " + _full_stop("; ".join(wording.alternatives)))
+    if wording.note:
+        parts.append(_full_stop(wording.note))
+    return " ".join(parts)
+
+
+def suite_wording(description: str) -> SuiteWording | None:
+    """A suite item's description read back into its parts; None for any other wording
+    (a generic requirement, or one the audit team rewrote without the labels)."""
+    parts = _SUITE_SPLIT.split(" ".join(description.split()))
+    if len(parts) < 3 or parts[1] != "Include":
+        return None
+    found: dict[str, str] = {}
+    for label, text in zip(parts[1::2], parts[2::2], strict=True):
+        found[label] = text.strip()
+    lead = parts[0].strip().rstrip(".")
+    if not lead or not found.get("Include"):
+        return None
+
+    def listed(text: str) -> tuple[str, ...]:
+        return tuple(
+            part.strip().rstrip(".") for part in text.rstrip(".").split(";") if part.strip()
+        )
+
+    # The library states what is not sufficient in one sentence; a sentence after it was
+    # added by a person (appended to the wording), and is not dropped with it.
+    not_sufficient, note = found.get("Not sufficient", ""), ""
+    added = _AFTER_FIRST_SENTENCE.match(not_sufficient)
+    if added is not None:
+        not_sufficient, note = added.group(1), added.group(2).strip()
+    return SuiteWording(
+        period=lead,
+        include=listed(found["Include"]),
+        completeness=found.get("Completeness", ""),
+        not_sufficient=not_sufficient,
+        alternatives=listed(found.get("If not available", "")),
+        note=note,
+    )
+
+
+def _suite_requirements(
+    facts: PlanFacts, traits: Traits, phase: Phase, period: PhasePeriod
+) -> list[RequirementPlan]:
+    """The phase's evidence from the standard's evidence suite (library version 4), for a
+    control that follows its standard. Each suite item becomes one requirement worded for
+    the control owner: what to provide, in which form, covering what, with what makes it
+    complete and what does not serve in its place. Empty when the control has no suite or
+    follows the client's own procedures."""
+    from ai_workforce_api.definition_registry import BY_LIBRARY_KEY
+
+    if facts.test_basis == "CLIENT" or not (facts.attribute_keys or facts.basis_decided):
+        return []
+    definition = BY_LIBRARY_KEY.get(facts.library_key)
+    if definition is None or not definition.evidence:
+        return []
+    library_phase = {value: key for key, value in _LIBRARY_PHASE.items()}[phase]
+    items = [item for item in definition.evidence if library_phase in item.phases]
+    if not items:
+        return []
+    prefix = phase.lower()
+    allowed = {_normal(text) for text in facts.attributes}
+    texts = {item.key: item.text for item in definition.attributes}
+    population = next((item for item in items if item.purpose == "POPULATION"), None)
+    sampled = population is not None and not traits.automated
+    span = _span(period)
+    size = (
+        ROLLFORWARD_SIZES.get(facts.frequency, 10)
+        if phase == "ROLLFORWARD"
+        else sample_size(facts.frequency, "")
+    )
+    selection = (
+        f"The audit team selects {size} from the validated population at random, with a "
+        f"recorded seed, per the approved sample-size table for {facts.a_frequency} control"
+        + ("; interim samples are not repeated" if phase == "ROLLFORWARD" else "")
+        + ". Samples are selected by the audit team, not the control owner."
+    )
+    found: list[RequirementPlan] = []
+    for item in items:
+        categories = _suite_categories(item.purpose, item.form, item.name, sampled, phase)
+        lead = _sentence_case(item.period)
+        if phase != "DESIGN" and "window" in item.period.lower():
+            lead += f" ({span})"
+        description = suite_description(
+            SuiteWording(
+                period=lead,
+                include=tuple(item.contents),
+                completeness=item.completeness,
+                not_sufficient=item.not_acceptable,
+                alternatives=tuple(item.alternatives),
+            )
+        )
+        objective = {
+            "DESIGN": "Understand how the control is meant to work and confirm it is implemented",
+            "POPULATION": "Establish the population the sample is drawn from",
+            "COMPLETENESS": "Establish that the population is complete and accurate",
+            "ATTRIBUTE": "Test each selected item against the control's attributes",
+            "CONTEXT": "Inform the evaluation; nothing is tested against it",
+        }[item.purpose]
+        rationale = {
+            "DESIGN": "The design is judged against how the control is meant to work, from the "
+            "document that sets it.",
+            "POPULATION": "Operating effectiveness is tested on items from the whole population; "
+            "its completeness is a precondition for sampling.",
+            "COMPLETENESS": "A population is not validated because a file arrived; its source "
+            "and parameters show it is complete (AS 1105.10).",
+            "ATTRIBUTE": "The standard's attributes are judged from this evidence, in this form; "
+            "another form shows something else.",
+            "CONTEXT": "Read for context: a change since interim, or the effect of a deviation.",
+        }[item.purpose]
+        supported = [
+            texts[key] for key in item.attributes if _normal(texts.get(key, "")) in allowed
+        ]
+        # Evidence for attributes the control does not test (a later version's, or one a
+        # person retired) is not asked of the client. A control whose attributes are not
+        # linked to the standard (its own wording) is planned from the whole suite.
+        linked = {key for key, _text in facts.attribute_keys}
+        if (
+            item.purpose == "ATTRIBUTE"
+            and item.attributes
+            and linked
+            and not linked & set(item.attributes)
+        ):
+            continue
+        # A walkthrough or observation shows the control performed: it is read against
+        # every attribute, as the generic design evidence is.
+        walkthrough = item.purpose == "DESIGN" and "CONTROL_EXECUTION" in categories
+        extra: dict[str, Any] = {
+            "attributes": list(facts.attributes[:6]) if walkthrough else supported[:12],
+            "period_label": period.label if phase != "DESIGN" else "",
+            "necessity": "OPTIONAL" if item.purpose == "CONTEXT" else "REQUIRED",
+        }
+        if item.purpose == "POPULATION":
+            extra["population_kind"] = (
+                "CONTROL_EXECUTIONS"
+                if traits.periodic or traits.profile == "MANAGEMENT_REVIEW"
+                else "TRANSACTIONS"
+            )
+        if "SAMPLE" in categories and population is not None:
+            extra["depends_on"] = f"{prefix}-{population.key}"
+            extra["sample_selection"] = selection
+        found.append(
+            _requirement(
+                f"{prefix}-{item.key}",
+                item.name,
+                description,
+                categories,
+                objective,
+                rationale,
+                **extra,
+            )
+        )
+    return found
 
 
 def _procedures(
@@ -1394,7 +1641,11 @@ def _procedures(
     other control follows the procedures for its kind."""
     from ai_workforce_api.definition_registry import BY_LIBRARY_KEY
 
-    definition = BY_LIBRARY_KEY.get(facts.library_key) if facts.attribute_keys else None
+    definition = (
+        BY_LIBRARY_KEY.get(facts.library_key)
+        if (facts.attribute_keys or facts.basis_decided) and facts.test_basis != "CLIENT"
+        else None
+    )
     if definition is not None:
         wording = dict(facts.attribute_keys)
         texts: list[str] = []
@@ -1453,6 +1704,13 @@ def rules_plan(facts: PlanFacts, *, every_phase: bool = False) -> PlanOutput:
             if phase == "DESIGN"
             else _operating(facts, traits, phase, period)
         )
+        suite = _suite_requirements(facts, traits, phase, period)
+        if suite:
+            # The standard's evidence suite replaces the generic requirements; what the
+            # engagement's own changes need is kept.
+            requirements = suite + [
+                item for item in requirements if _CHANGE_KEY.search(item.key) is not None
+            ]
         decision = forced.get(phase)
         if decision is None:
             applicability: Applicability = "APPLICABLE"
@@ -1715,8 +1973,13 @@ def check_sources(facts: PlanFacts) -> str:
         texts += [definition.objective, definition.population, definition.sampling]
         for procedure in definition.procedures:
             texts += [procedure.objective, procedure.action, procedure.limitation]
+            for item in procedure.steps:
+                texts += [item.action, item.record, item.exception]
         for attribute in definition.attributes:
             texts += [attribute.text, attribute.condition, attribute.passes, attribute.fails]
+        for evidence in definition.evidence:
+            texts += [evidence.name, evidence.period, evidence.completeness]
+            texts += [evidence.not_acceptable, *evidence.contents, *evidence.alternatives]
     for period in phase_periods(facts).values():
         if period.start is not None and period.end is not None:
             texts.append(_expected(facts, period.start, period.end)[1])

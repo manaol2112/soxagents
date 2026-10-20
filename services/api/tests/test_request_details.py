@@ -15,7 +15,21 @@ from test_onboarding import _base, _complete_setup, _new_engagement
 from test_outbound import _session, migrated
 
 from ai_workforce_api.db import connect
-from ai_workforce_api.request_details import parse_wording
+from ai_workforce_api.evidence_planning import (
+    SuiteWording,
+    suite_description,
+    suite_wording,
+)
+from ai_workforce_api.evidence_plans import _Line, render
+from ai_workforce_api.pbc import PbcBody
+from ai_workforce_api.request_details import (
+    _category_type,
+    heading_of,
+    item_types,
+    parse_wording,
+    plain_title,
+    title_of,
+)
 
 __all__ = ["migrated"]
 
@@ -96,6 +110,123 @@ def test_the_wording_reads_back_as_a_checklist() -> None:
     assert not free.structured and free.summary == "Please send the signed Q1 access review."
 
 
+def test_the_request_edited_item_by_item_reads_back_the_same() -> None:
+    # The exact text the web editor writes (request-details-model composeWording, pinned
+    # in tests/request-details.test.ts).
+    text = "\n\n".join(
+        [
+            "Design evidence for ITGC-AC-05: Authentication",
+            "To understand how this control is designed, please provide:",
+            "1. Information security policy\n"
+            "   Period: The version in force during the period\n"
+            "   Include: Password length, complexity; Lockout threshold\n"
+            "   If not available: The security standard",
+            "2. Users who can change the settings (if available)\n"
+            "   Export it from the system, not a spreadsheet.\n"
+            "   Period: At the interim date\n"
+            "   Include: User or role",
+            "Please label each file with the number of the item it answers. Thank you.",
+            "Questions for you:\n- Who hosts the walkthrough?",
+        ]
+    )
+    content = parse_wording(text)
+    assert heading_of(content) == "Design evidence for ITGC-AC-05: Authentication"
+    first, second = content.items
+    assert (first.title, first.detail, first.period) == (
+        "Information security policy",
+        "",
+        "The version in force during the period",
+    )
+    assert first.include == ["Password length, complexity", "Lockout threshold"]
+    assert first.alternatives == ["The security standard"]
+    assert second.detail == "Export it from the system, not a spreadsheet."
+    assert second.include == ["User or role"] and plain_title(second.title) == (
+        "Users who can change the settings"
+    )
+    assert content.closing.endswith("Thank you.")
+    assert content.questions == ["Who hosts the walkthrough?"]
+
+
+def test_a_standard_evidence_item_reads_as_labelled_lines_under_the_requests_heading() -> None:
+    wording = SuiteWording(
+        period="The version in force during the period",
+        include=("Required password length and complexity", "Lockout threshold"),
+        completeness="Approved and dated.",
+        not_sufficient="A policy that says settings must be 'strong' without values.",
+        alternatives=("The security standard the policy refers to",),
+    )
+    description = suite_description(wording)
+    assert suite_wording(description) == SuiteWording(
+        period="The version in force during the period",
+        include=("Required password length and complexity", "Lockout threshold"),
+        completeness="Approved and dated.",
+        not_sufficient="A policy that says settings must be 'strong' without values.",
+        alternatives=("The security standard the policy refers to",),
+    )
+    # A description the team rewrote without the labels stays prose.
+    assert suite_wording("A list of every active user with their role.") is None
+    text = render(
+        "ITGC-AC-05",
+        "Authentication and Password Configuration",
+        "DESIGN",
+        [
+            _Line("Information security policy", description, "", "REQUIRED"),
+            _Line("Users and roles able to change the settings", description, "", "OPTIONAL"),
+        ],
+        (None, None),
+    )
+    content = parse_wording(text)
+    first, second = content.items
+    # The item's title is not repeated as its detail; each part is its own field.
+    assert first.title == "Information security policy" and first.detail == ""
+    assert first.period == "The version in force during the period"
+    assert first.include == ["Required password length and complexity", "Lockout threshold"]
+    assert first.completeness == "Approved and dated."
+    # What the auditor would not accept stays in the plan, for the audit team only.
+    assert "strong" in description and "strong" not in text
+    assert "Not sufficient" not in text
+    assert first.alternatives == ["The security standard the policy refers to"]
+    assert plain_title(second.title) == "Users and roles able to change the settings"
+    # The request is titled by its heading, not by its first item.
+    heading = "Design evidence for ITGC-AC-05: Authentication and Password Configuration"
+    assert heading_of(content) == heading
+    pbc = PbcBody.model_construct(title="", evidence_description=text, control_ref="ITGC-AC-05")
+    assert title_of(pbc, content) == heading
+    # A wording that opens with a sentence keeps the first item as its title.
+    sentence = parse_wording("Please provide the items below.\n\n1. User access listing\n   All.")
+    assert heading_of(sentence) == ""
+    # A drafted phase request of several items is titled by its phase and control.
+    drafted = parse_wording(
+        "We ask for two items.\n\n1. Information security policy\n   The policy.\n\n"
+        "2. Authentication configuration\n   The settings."
+    )
+    phase_request = PbcBody.model_construct(
+        title="", evidence_description="", control_ref="ITGC-AC-05", testing_phase="DESIGN"
+    )
+    assert title_of(phase_request, drafted) == "Design evidence for ITGC-AC-05"
+
+
+def test_a_planned_items_type_follows_its_title_where_the_category_is_broad() -> None:
+    policy = _category_type(["PROCESS_DOCUMENTATION"], "DESIGN", "Information security policy")
+    assert policy == "POLICY_PROCEDURE"
+    narrative = _category_type(["PROCESS_DOCUMENTATION"], "DESIGN", "Process narrative")
+    assert narrative == "PROCESS_NARRATIVE"
+    users = "Users and roles able to change the settings"
+    assert _category_type(["OTHER"], "DESIGN", users, named=True) == "ACCESS_LISTING"
+    # A label for the item only: the request's own type stays for the team to confirm.
+    assert _category_type(["OTHER"], "DESIGN", users) == "OTHER"
+    assert _category_type(["OTHER"], "DESIGN", "Board minutes", named=True) == "OTHER"
+    assert _category_type(["CONTROL_EXECUTION"], "DESIGN", "Walkthrough") == "SAMPLE_OF_ONE"
+    # The drafter's kind stands, unless it could not place the item and the plan can.
+    found = item_types(
+        [("Information security policy", "design"), (users, "other")],
+        [("Information security policy", ["PROCESS_DOCUMENTATION"]), (users, ["OTHER"])],
+        "DESIGN",
+    )
+    assert found["information security policy"] == "PROCESS_NARRATIVE"
+    assert found[users.lower()] == "ACCESS_LISTING"
+
+
 def test_a_drafted_request_shows_its_type_checklist_and_internal_planning_apart(
     migrated: Database,
 ) -> None:
@@ -112,10 +243,16 @@ def test_a_drafted_request_shows_its_type_checklist_and_internal_planning_apart(
     if first == "POPULATION":
         assert kind["request_type"] == "ACCESS_LISTING"
     assert len(body["types"]) == 12
-    # The client-facing checklist, and the title from its main deliverable.
+    # The client-facing checklist, and a title for the request as a whole: its phase and
+    # control when it asks for several items, else its one deliverable.
     content = body["content"]
     assert content["structured"] and content["items"]
-    assert body["title"] == content["items"][0]["title"] and not body["title_set"]
+    expected = (
+        f"Interim testing evidence for {body['request']['control_ref']}"
+        if len(content["items"]) > 1
+        else content["items"][0]["title"]
+    )
+    assert body["title"] == expected and not body["title_set"]
     assert all(item["request_type"] for item in content["items"])
     # Why each item is asked for stays with the audit team, never in the wording.
     planning = body["planning"]

@@ -2,9 +2,10 @@
 
 Each library attribute has a definition: when it applies, the evidence, what to compare,
 and when it passes, fails, lacks evidence, or needs a person, with its source basis and
-confidence. High and moderate attributes are tested; low and not-established ones are
-proposed with their question. These tests check the structure and its plumbing, not the
-methodology, which a reviewer decides.
+confidence. Every attribute of a standard enters an engagement approved with it (the firm
+decides them in its library review, milestone L3e); a low or not-established one carries
+its question, and testing waits for the client's value it depends on. These tests check the
+structure and its plumbing, not the methodology, which a reviewer decides.
 """
 
 import json
@@ -18,7 +19,9 @@ from test_evidence_intake import _accept_population, _engagement, _request
 from test_outbound import migrated
 from test_testing_engine import _add, _answer, _base, _Citing, _read_all, _sheet, _year
 
+from ai_workforce_api.control_attributes import _write_list
 from ai_workforce_api.control_context import Issue, raise_issues
+from ai_workforce_api.control_design import open_values
 from ai_workforce_api.controls import LIBRARY, SAMPLE_SIZES
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.definition_registry import (
@@ -67,7 +70,7 @@ def test_the_definitions_pass_their_structural_checks() -> None:
 
 
 def test_the_library_tests_only_high_and_moderate_attributes() -> None:
-    assert len(LIBRARY) == len(DEFINITIONS) == 53
+    assert len(LIBRARY) == len(DEFINITIONS) == 82
     for control in LIBRARY:
         definition = definition_for(control.key)
         assert definition is not None, control.key
@@ -201,17 +204,18 @@ def test_kickoff_links_definitions_and_waits_for_the_answers_testing_needs(
     assert approved[0]["definition"]["key"] == "ac02-removed"
     assert approved[0]["definition"]["confidence"] == "HIGH"
     assert context["testing"]["procedures"] and context["library_update"] is None
-    # The timeliness threshold is the client's: proposed with its question, not tested.
-    (timely,) = context["attributes"]["proposed"]
-    assert timely["definition"]["key"] == "ac02-timely" and timely["definition"]["blocks"]
-    assert "days" in timely["note"] and timely["source_kind"] == "LIBRARY"
-    assert timely["text"] not in [a["text"] for a in approved]
+    # The timeliness threshold is the client's. The firm decided the attribute in its library
+    # review, so it arrives approved with its question; the plan does not decide it again.
+    assert context["attributes"]["proposed"] == []
+    timely = next(a for a in approved if a["definition"]["key"] == "ac02-timely")
+    assert timely["definition"]["blocks"] and timely["source_kind"] == "LIBRARY"
+    assert "days" in timely["note"] and "[" in timely["text"]
     criteria = _criteria(context)
     assert criteria["status"] == "BLOCKED"
-    assert any("Proposed by the library" in b["detail"] for b in criteria["blockers"])
-    # The same value is a slot in the control's statement (8.9): testing waits for it too.
+    assert not any("Proposed by the library" in b["detail"] for b in criteria["blockers"])
+    # Testing waits for the client's value it depends on, a slot of the statement (8.9).
     assert any("removal" in b["detail"] for b in criteria["blockers"])
-    # A person enters the client's value once: the statement and the proposal both use it.
+    # A person enters the client's value once: the statement and the attribute both use it.
     filled = client.put(
         f"{_base(team)}/controls/{leavers}/values",
         json={"values": {"removal-days": "5 business days"}},
@@ -219,31 +223,49 @@ def test_kickoff_links_definitions_and_waits_for_the_answers_testing_needs(
     assert filled.status_code == 200, filled.text
     context = filled.json()
     assert "within 5 business days of the termination date" in context["design"]["text"]
-    (timely,) = context["attributes"]["proposed"]
-    assert timely["text"] == (
+    answered = next(
+        a for a in context["attributes"]["approved"] if a["definition"]["key"] == "ac02-timely"
+    )
+    assert answered["text"] == (
         "Access was removed within 5 business days of the HR termination date"
     )
-    # Approving it as worded: the definition stays with the attribute.
-    decided = client.post(
-        f"{_base(team)}/controls/{leavers}/attributes/{timely['id']}/decide",
-        json={"decision": "APPROVE", "version": timely["version"]},
-    )
-    assert decided.status_code == 200, decided.text
-    context = _context(client, team, leavers)
-    answered = context["attributes"]["approved"][-1]
-    assert answered["definition"]["key"] == "ac02-timely"
-    assert _criteria(context)["status"] == "OK"
-    # An optional proposal does not hold testing; rejecting it is final.
+    assert _criteria(_context(client, team, leavers))["status"] == "OK"
+    # An optional library attribute is approved with the standard too; one still showing a
+    # client value in brackets holds testing until that value is entered, and the plan
+    # review asks for it.
     incidents = _control_id(migrated, team, "ITGC-OP-04")
     context = _context(client, team, incidents)
-    assert _criteria(context)["status"] == "WARN"
-    assert "optional" in _criteria(context)["summary"]
-    for proposal in context["attributes"]["proposed"]:
-        rejected = client.post(
-            f"{_base(team)}/controls/{incidents}/attributes/{proposal['id']}/decide",
-            json={"decision": "REJECT", "version": proposal["version"]},
-        )
-        assert rejected.status_code == 200, rejected.text
+    assert context["attributes"]["proposed"] == []
+    keys = {(a["definition"] or {}).get("key") for a in context["attributes"]["approved"]}
+    assert {"op04-priority", "op04-root-cause"} <= keys
+    assert _criteria(context)["status"] == "OK"
+    reviews = _control_id(migrated, team, "ITGC-AC-03")
+    context = _context(client, team, reviews)
+    deadline = next(
+        a
+        for a in context["attributes"]["approved"]
+        if (a["definition"] or {}).get("key") == "ac03-deadline"
+    )
+    assert "[the deadline in the access review procedure]" in deadline["text"]
+    (blocker,) = _criteria(context)["blockers"]
+    assert "the deadline in the access review procedure" in blocker["detail"]
+    slot = next(s for s in context["design"]["slots"] if "deadline" in s["label"])
+    assert slot["blocks"]
+    with connect(migrated.url) as connection:
+        asked = [value.key for value in open_values(connection, UUID(reviews))]
+    assert slot["key"] in asked
+    filled = client.put(
+        f"{_base(team)}/controls/{reviews}/values",
+        json={"values": {slot["key"]: "30 days after quarter end"}},
+    )
+    assert filled.status_code == 200, filled.text
+    deadline = next(
+        a
+        for a in filled.json()["attributes"]["approved"]
+        if (a["definition"] or {}).get("key") == "ac03-deadline"
+    )
+    assert "30 days after quarter end" in deadline["text"] and "[" not in deadline["text"]
+    assert _criteria(_context(client, team, reviews))["status"] == "OK"
     with connect(migrated.url) as connection, transaction(connection) as cursor:
         assert link_definitions(cursor, UUID(incidents), None) == 0
         assert link_definitions(cursor, UUID(leavers), None) == 0
@@ -305,11 +327,17 @@ def test_a_control_copied_from_version_2_adopts_version_3_when_a_person_chooses(
             "WHERE id = %s",
             (json.dumps(list(before)), control),
         )
+        # Its attributes carry no definition keys: version 2 had none.
+        cursor.execute(
+            "UPDATE control_attributes SET definition_key = NULL WHERE engagement_control_id = %s",
+            (control,),
+        )
     context = _context(client, team, control)
     assert [a["text"] for a in context["attributes"]["approved"]] == list(before)
     assert context["testing"] is None
     update = context["library_update"]
-    assert update["library_version"] == 2 and update["current_version"] == 3
+    # The leaver control's definition is version 4 (steps and an evidence suite).
+    assert update["library_version"] == 2 and update["current_version"] == 4
     changes = {item["change"] for item in update["items"]}
     assert {"REWORD", "PROPOSE", "RETIRE"} <= changes
     retiring = next(item for item in update["items"] if item["change"] == "RETIRE")
@@ -322,14 +350,17 @@ def test_a_control_copied_from_version_2_adopts_version_3_when_a_person_chooses(
     assert body["library_update"] is None and body["testing"] is not None
     definition = definition_for("access-termination")
     assert definition is not None
-    assert [a["text"] for a in body["attributes"]["approved"]] == [
+    # The attribute that depends on the client is adopted approved with the rest, its
+    # question kept as a note; nothing waits for a decision on the plan.
+    approved = body["attributes"]["approved"]
+    timely = next(a for a in approved if a["definition"]["key"] == "ac02-timely")
+    assert [a["text"] for a in approved if a is not timely] == [
         item.text for item in definition.approved
     ]
-    # The proposal already raised at kickoff is not proposed twice.
-    keys = [a["definition"]["key"] for a in body["attributes"]["proposed"]]
-    assert keys == ["ac02-timely"]
+    assert timely["note"].startswith("From the library standard; it depends on the client:")
+    assert body["attributes"]["proposed"] == []
     history = {a["text"]: a["note"] for a in body["attributes"]["history"]}
-    assert history[retiring["was"]].startswith("Retired by library v3:")
+    assert history[retiring["was"]].startswith("Retired by library v4:")
     again = client.post(f"{_base(team)}/controls/{control}/library-update/adopt")
     assert again.status_code == 409
     with connect(migrated.url) as connection:
@@ -339,6 +370,112 @@ def test_a_control_copied_from_version_2_adopts_version_3_when_a_person_chooses(
             (control,),
         ).fetchone()
     assert row == (1,)
+
+
+def test_migration_0085_approves_open_library_proposals_into_the_attribute_list(
+    migrated: Database,
+) -> None:
+    team, client, _scheduler = _engagement(migrated, "defs-0085", settle=False)
+    leavers = _control_id(migrated, team, "ITGC-AC-02")
+    # As an engagement launched before L3e has it: the timeliness attribute still a
+    # proposal, and not on the control's attribute list.
+    with connect(migrated.url) as connection, transaction(connection) as cursor:
+        cursor.execute(
+            "UPDATE control_attributes SET status = 'PROPOSED', proposal = 'ADD', "
+            "decided_at = NULL, note = 'Library v3, low confidence: How many days?' "
+            "WHERE engagement_control_id = %s AND definition_key = 'ac02-timely'",
+            (leavers,),
+        )
+        _write_list(cursor, UUID(leavers))
+    before = _context(client, team, leavers)["attributes"]
+    assert [a["definition"]["key"] for a in before["proposed"]] == ["ac02-timely"]
+    script = ROOT / "migrations" / "0085_library_attributes_approved.sql"
+    with connect(migrated.url) as connection, transaction(connection) as cursor:
+        cursor.execute(script.read_text(encoding="utf-8"))
+        (listed,) = cursor.execute(
+            "SELECT test_attributes FROM engagement_controls WHERE id = %s", (leavers,)
+        ).fetchone() or (None,)
+    after = _context(client, team, leavers)["attributes"]
+    assert after["proposed"] == []
+    timely = next(a for a in after["approved"] if a["definition"]["key"] == "ac02-timely")
+    assert timely["note"] == (
+        "From the library standard (approved by migration 0085); it depends on the client: "
+        "How many days?"
+    )
+    # The control's attribute list carries it, so the trigger does not retire it later.
+    assert listed == [a["text"] for a in after["approved"]]
+    assert timely["text"] in listed
+
+
+def test_a_copy_of_a_library_attribute_is_that_attribute_not_a_second_one(
+    migrated: Database,
+) -> None:
+    definition = definition_for("access-termination")
+    assert definition is not None
+    # A person typed the value in place of the bracket, however spaced.
+    for typed in (
+        "Access was removed within5 days of the HR termination date",
+        "access was removed within 5 business days of the HR termination date",
+    ):
+        found = definition.filled_from(typed)
+        assert found is not None and found.key == "ac02-timely"
+    assert definition.filled_from("Access was removed of the HR termination date") is None
+    assert definition.filled_from("The leaver's access was removed") is None
+    team, client, _scheduler = _engagement(migrated, "defs-copies", settle=False)
+    leavers = _control_id(migrated, team, "ITGC-AC-02")
+    filled = client.put(
+        f"{_base(team)}/controls/{leavers}/values",
+        json={"values": {"removal-days": "5 business days"}},
+    )
+    assert filled.status_code == 200, filled.text
+    worded = "Access was removed within 5 business days of the HR termination date"
+
+    def timely() -> list[tuple[str, str | None, str, str]]:
+        with connect(migrated.url) as connection:
+            return [
+                (str(r[0]), r[1], str(r[2]), str(r[3]))
+                for r in connection.execute(
+                    "SELECT status, definition_key, text, note FROM control_attributes "
+                    "WHERE engagement_control_id = %s AND text ILIKE 'Access was removed within%%' "
+                    "ORDER BY created_at",
+                    (leavers,),
+                ).fetchall()
+            ]
+
+    def copy(text: str) -> int:
+        """As a copy of the control carries it: approved, without its link. Then linked."""
+        with connect(migrated.url) as connection, transaction(connection) as cursor:
+            cursor.execute(
+                "INSERT INTO control_attributes (organization_id, project_id, "
+                "engagement_control_id, position, text, status, basis, source_kind, decided_at) "
+                "SELECT organization_id, project_id, id, 9, %s, 'APPROVED', 'DOCUMENTED', "
+                "'LIBRARY', clock_timestamp() FROM engagement_controls WHERE id = %s",
+                (text, leavers),
+            )
+            _write_list(cursor, UUID(leavers))
+            return link_definitions(cursor, UUID(leavers), None)
+
+    # Beside the library's own: the copy is retired, the library's kept with the value.
+    assert copy("Access was removed within5 days of the HR termination date") == 1
+    rows = timely()
+    assert [(r[1], r[2]) for r in rows if r[0] == "APPROVED"] == [("ac02-timely", worded)]
+    retired = next(r for r in rows if "within5" in r[2])
+    assert retired[0] == "RETIRED" and retired[3].startswith("Repeats the library standard")
+    # Alone (the library's was retired): the copy becomes the library's attribute, worded
+    # with the client's recorded value, and nothing is added beside it.
+    with connect(migrated.url) as connection, transaction(connection) as cursor:
+        cursor.execute(
+            "UPDATE control_attributes SET status = 'RETIRED' WHERE engagement_control_id = %s "
+            "AND status = 'APPROVED' AND definition_key = 'ac02-timely'",
+            (leavers,),
+        )
+        _write_list(cursor, UUID(leavers))
+    assert copy("Access was removed within 7 days of the HR termination date") == 1
+    assert [(r[1], r[2]) for r in timely() if r[0] == "APPROVED"] == [("ac02-timely", worded)]
+    listed = _context(client, team, leavers)["attributes"]["approved"]
+    assert [a["text"] for a in listed].count(worded) == 1
+    with connect(migrated.url) as connection, transaction(connection) as cursor:
+        assert link_definitions(cursor, UUID(leavers), None) == 0
 
 
 def test_a_result_needing_human_review_holds_sign_off_until_a_person_decides(

@@ -750,6 +750,8 @@ describe("the planning gate", () => {
     assert.deepEqual(primaryAction(actions)?.action.target, {
       view: "requirements",
     });
+    // It is done with the test plan, on the Test plans page, not on the Evidence tab.
+    assert.equal(primaryAction(actions)?.action.page, "test-plan");
     // A plan with open points says what they are. Approval is still required.
     const judged = evidenceActions({
       control,

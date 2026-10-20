@@ -78,6 +78,7 @@ export function WorkpapersTab({
   stage,
   initial,
   hasInput,
+  compact = false,
 }: {
   papers: Workpaper[] | null;
   notice: WorkpaperNotice | null;
@@ -90,6 +91,9 @@ export function WorkpapersTab({
   initial?: string | undefined;
   /** Whether the agent has anything to draft from: read evidence or signed-off testing. */
   hasInput?: boolean | undefined;
+  /** On the control's testing: no explanation, and the workbook folded under one line
+   * that says where each record stands. */
+  compact?: boolean;
 }) {
   const papers =
     all === null || stage === undefined
@@ -111,12 +115,14 @@ export function WorkpapersTab({
       <header className="wp-bar">
         <div>
           <strong>Workpaper</strong>
-          <small>
-            One workbook: design, interim testing, and roll-forward tabs, filled
-            from the records and the evidence. The agent drafts the narratives
-            with citations; you edit, then prepare the design tab and the
-            testing tabs.
-          </small>
+          {compact ? null : (
+            <small>
+              One workbook: design, interim testing, and roll-forward tabs,
+              filled from the records and the evidence. The agent drafts the
+              narratives with citations; you edit, then prepare the design tab
+              and the testing tabs.
+            </small>
+          )}
         </div>
         {canAct ? (
           <form autoComplete="off" method="post" action="/workspace/workpapers">
@@ -162,6 +168,26 @@ export function WorkpapersTab({
               : "No workpaper yet. The testing tabs open when the control's testing is signed off, or draft the whole workbook now."}
           </span>
         </p>
+      ) : compact ? (
+        <details
+          className="wp-fold"
+          open={viewing !== null || notice !== null ? true : undefined}
+        >
+          <summary>
+            <span>{papers.map(paperLine).join(" · ")}</span>
+            <span className="wp-fold-toggle">
+              Open the workpaper
+              <UiIcon name="chevron" size={14} />
+            </span>
+          </summary>
+          <WorkpaperBook
+            papers={papers}
+            ids={ids}
+            canAct={canAct}
+            viewing={viewing}
+            initial={initial}
+          />
+        </details>
       ) : (
         <WorkpaperBook
           papers={papers}
@@ -173,6 +199,19 @@ export function WorkpapersTab({
       )}
     </div>
   );
+}
+
+/** Where one record of the workbook stands, in a few words. */
+function paperLine(paper: Workpaper): string {
+  const name = paper.stage === "DESIGN" ? "Design" : "Testing";
+  const state = paper.drafting
+    ? "the agent is drafting"
+    : paper.status === "PREPARED"
+      ? `prepared by ${paper.preparedBy}`
+      : paper.currentVersion === 0
+        ? "not drafted"
+        : `draft, version ${paper.currentVersion}`;
+  return `${name}: ${state}`;
 }
 
 /** The workbook: the design record's tab, then the testing record's tabs. */

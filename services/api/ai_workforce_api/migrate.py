@@ -130,6 +130,20 @@ def main() -> None:
         f"standard workforce: {result.roster_workers} workers, {result.installed} installed, "
         f"{result.updated} updated, {result.retired} retired, {result.staffed} staffed"
     )
+    # Library attributes are settled by the rules, never left for a person to tidy
+    # (milestone L3e): plans that do not yet follow their standard's attributes catch up.
+    from ai_workforce_api.master_plans import settle_library_attributes
+
+    with psycopg.connect(settings.database_url, connect_timeout=3) as connection:
+        settled = settle_library_attributes(connection)
+    print(f"library attributes: {settled.linked} settled, {settled.redrawn} plans redrawn")
+    # Results signed off under an earlier or unrecorded plan revision get their impact
+    # assessment raised for a reviewer (plan_impact.py, W3); none is assumed valid.
+    from ai_workforce_api.plan_impact import detect_everywhere
+
+    with psycopg.connect(settings.database_url, connect_timeout=3) as connection:
+        raised = detect_everywhere(connection)
+    print(f"plan impact: {raised} assessments raised")
 
 
 if __name__ == "__main__":

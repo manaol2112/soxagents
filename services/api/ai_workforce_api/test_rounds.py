@@ -113,6 +113,13 @@ class RoundBody(BaseModel):
     cancel_reason: str
     created_at: datetime
     application_name: str = ""
+    # The round's own independent review (workflow integrity W2): OPEN, SIGNED_OFF, or
+    # None while it has not opened (the round is not signed off, or predates W2).
+    review_status: str | None = None
+    # Whether the round may be sampled and tested now, and what holds it
+    # (round_readiness.py, W4).
+    readiness_state: str | None = None
+    readiness_blockers: list[str] = []
 
 
 def rollforward_size(frequency: str, nature: str) -> tuple[str, int]:
@@ -687,18 +694,21 @@ def round_signed_off(
     conclusion: str,
     requester: UUID,
 ) -> None:
-    """A round's sheet was signed off: close the round, and decide a retest's deficiency."""
+    """A round's sheet was signed off: close the round, record a retest's result, and open
+    the round's own independent review (workflow integrity W2). A retest that failed
+    sends its deficiency back to remediation now; one that passed remediates it only once
+    the round's review is signed off (round_reviewed, owner's decision 2)."""
     row = cursor.execute(
         """
         UPDATE test_rounds SET status = 'SIGNED_OFF', conclusion = %s, version = version + 1
         WHERE id = %s AND status IN ('REQUESTED', 'TESTING')
-        RETURNING kind, deficiency_id, task_id
+        RETURNING kind, deficiency_id, task_id, engagement_control_id
         """,
         (conclusion, round_id),
     ).fetchone()
     if row is None:
         return
-    kind, deficiency_id, task_id = row
+    kind, deficiency_id, task_id, control_id = row
     if task_id is not None:
         cursor.execute(
             "UPDATE tasks SET status = 'SUCCEEDED', version = version + 1 "
@@ -710,27 +720,64 @@ def round_signed_off(
         moved = cursor.execute(
             """
             UPDATE deficiencies
-            SET status = %s, retest_result = %s, retested_at = current_date,
+            SET status = CASE WHEN %s THEN status ELSE 'REMEDIATION_IN_PROGRESS' END,
+                retest_result = %s, retested_at = current_date,
                 version = version + 1, updated_at = clock_timestamp()
             WHERE id = %s AND status = 'READY_FOR_RETEST'
             RETURNING reference
             """,
-            (
-                "REMEDIATED" if passed else "REMEDIATION_IN_PROGRESS",
-                "PASSED" if passed else "FAILED",
-                deficiency_id,
-            ),
+            (passed, "PASSED" if passed else "FAILED", deficiency_id),
         ).fetchone()
         if moved is not None:
             _audit(
                 cursor, organization_id, project_id, requester, "deficiency.progress",
                 "deficiency", deficiency_id,
-                {"retest": "PASSED" if passed else "FAILED", "round": str(round_id)},
+                {
+                    "retest": "PASSED" if passed else "FAILED",
+                    "round": str(round_id),
+                    "remediated": False,
+                    "awaiting": "round review" if passed else None,
+                },
             )  # fmt: skip
     _audit(
         cursor, organization_id, project_id, requester, "testing.round_signed_off",
         "test_round", round_id, {"conclusion": conclusion},
     )  # fmt: skip
+    from ai_workforce_api.control_reviews import open_review
+
+    open_review(cursor, organization_id, project_id, control_id, requester, round_id)
+
+
+def round_reviewed(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    round_id: UUID,
+    reviewer: UUID,
+) -> None:
+    """The round's independent review signed off. A retest that passed now remediates its
+    deficiency; the reviewer's sign-off alone never does so when the retest found
+    continuing exceptions (owner's decision 2)."""
+    row = cursor.execute(
+        "SELECT kind, conclusion, deficiency_id FROM test_rounds WHERE id = %s", (round_id,)
+    ).fetchone()
+    if row is None or row[0] != "RETEST" or row[1] != "EFFECTIVE" or row[2] is None:
+        return
+    moved = cursor.execute(
+        """
+        UPDATE deficiencies
+        SET status = 'REMEDIATED', version = version + 1, updated_at = clock_timestamp()
+        WHERE id = %s AND status = 'READY_FOR_RETEST' AND retest_result = 'PASSED'
+        RETURNING reference
+        """,
+        (row[2],),
+    ).fetchone()
+    if moved is not None:
+        _audit(
+            cursor, organization_id, project_id, reviewer, "deficiency.progress",
+            "deficiency", row[2], {"status": "REMEDIATED", "round": str(round_id),
+                                   "on": "round review signed off"},
+        )  # fmt: skip
 
 
 def mark_testing(cursor: psycopg.Cursor[Any], round_id: UUID) -> None:
@@ -754,7 +801,8 @@ def rounds(connection: Any, project_id: UUID) -> list[RoundBody]:
                (SELECT s.id FROM test_sheets s WHERE s.test_round_id = r.id),
                r.conclusion, r.cancel_reason, r.created_at,
                (SELECT a.name FROM engagement_applications a
-                WHERE a.id = c.engagement_application_id)
+                WHERE a.id = c.engagement_application_id),
+               (SELECT v.status FROM control_reviews v WHERE v.test_round_id = r.id)
         FROM test_rounds r
         JOIN engagement_controls c ON c.id = r.engagement_control_id
         LEFT JOIN deficiencies d ON d.id = r.deficiency_id
@@ -764,7 +812,7 @@ def rounds(connection: Any, project_id: UUID) -> list[RoundBody]:
         """,
         (project_id,),
     ).fetchall()
-    return [
+    found = [
         RoundBody(
             id=row[0],
             control_id=row[1],
@@ -788,9 +836,18 @@ def rounds(connection: Any, project_id: UUID) -> list[RoundBody]:
             cancel_reason=str(row[19]),
             created_at=row[20],
             application_name="" if row[21] is None else str(row[21]),
+            review_status=None if row[22] is None else str(row[22]),
         )
         for row in rows
     ]
+    from ai_workforce_api.round_readiness import round_readiness_states
+
+    states = round_readiness_states(connection, project_id)
+    for item in found:
+        state = states.get(item.id)
+        if state is not None:
+            item.readiness_state, item.readiness_blockers = state.state, list(state.blockers)
+    return found
 
 
 def register_test_rounds(app: FastAPI, settings: Settings) -> None:

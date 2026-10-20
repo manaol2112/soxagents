@@ -2,7 +2,10 @@
 proposals for what needs a person's answer, and adoption by controls copied from version 2.
 
 - link_definitions: a library control copied as version 3 gets each attribute's definition
-  key, and its LOW and NOT_ESTABLISHED attributes as proposals carrying their question.
+  key, and its LOW and NOT_ESTABLISHED attributes too, approved with the standard (the firm
+  decides them once, in its library review; milestone L3e), each carrying its question as
+  a note. The client's values they depend on are asked as values, and testing of them
+  waits for those, as before.
   A control whose design must be confirmed gets an open question that holds its testing.
   Run at launch and when a control joins scope. Idempotent: a proposal a person rejected is
   never proposed again, and a settled question is not raised again.
@@ -20,11 +23,16 @@ from psycopg.types.json import Json
 from pydantic import BaseModel
 
 from ai_workforce_api.control_context import ContextState, Issue, raise_issues
-from ai_workforce_api.control_design import refresh_statement
+from ai_workforce_api.control_design import filled_wording, refresh_statement
 from ai_workforce_api.controls import BY_KEY, LIBRARY, SPLITS
 from ai_workforce_api.db import transaction
-from ai_workforce_api.definition_registry import attribute_for, definition_for
+from ai_workforce_api.definition_registry import (
+    attribute_for,
+    definition_for,
+    definition_version,
+)
 from ai_workforce_api.testing_definitions import (
+    DEFINED_SINCE,
     DEFINITIONS_VERSION,
     SOURCES,
     TESTED,
@@ -140,13 +148,17 @@ def retire_dropped_design_questions(
 
 
 def link_definitions(cursor: psycopg.Cursor[Any], control_id: UUID, actor: UUID | None) -> int:
-    """Link a version 3 library control's attributes to their definitions and propose its
-    low-confidence attributes. Returns how many proposals were added."""
+    """Link a version 3 library control's attributes to their definitions and add its
+    low-confidence attributes, approved with the standard: the firm decides the library's
+    attributes in its library review, not plan by plan. An approved attribute written from
+    a library one (a copy of the control carries it unlinked) is linked to it, or retired
+    when the library's own is on the control too. Returns how many attributes it added,
+    linked by their filled wording, or retired."""
     control = _control(cursor, control_id)
     if control is None:
         return 0
     retire_dropped_design_questions(cursor, [control_id])
-    if int(control[3]) < DEFINITIONS_VERSION:
+    if int(control[3]) < DEFINED_SINCE:
         return 0
     # The description follows the statement, with the client's values filled so far.
     refresh_statement(cursor, control_id)
@@ -154,44 +166,95 @@ def link_definitions(cursor: psycopg.Cursor[Any], control_id: UUID, actor: UUID 
     if definition is None:
         return 0
     rows = cursor.execute(
-        "SELECT id, text, definition_key FROM control_attributes WHERE engagement_control_id = %s",
+        "SELECT id, text, definition_key, status FROM control_attributes "
+        "WHERE engagement_control_id = %s",
         (control_id,),
     ).fetchall()
     known = {str(row[2]) for row in rows if row[2] is not None}
-    for row_id, text, key in rows:
-        if key is None:
-            match = definition.matching(str(text))
-            if match is not None:
-                cursor.execute(
-                    "UPDATE control_attributes SET definition_key = %s WHERE id = %s",
-                    (match.key, row_id),
-                )
-                known.add(match.key)
+    approved = {str(row[2]) for row in rows if row[2] is not None and row[3] == "APPROVED"}
+    texts = {str(row[1]) for row in rows if row[3] == "APPROVED"}
+    changed = 0
+    for row_id, text, key, status in rows:
+        if key is not None:
+            continue
+        match = definition.matching(str(text))
+        if match is not None:
+            cursor.execute(
+                "UPDATE control_attributes SET definition_key = %s WHERE id = %s",
+                (match.key, row_id),
+            )
+            known.add(match.key)
+            continue
+        # An approved attribute written from a library one, its value filled in (as a copy
+        # of the control carries it, without its link), is that attribute.
+        filled = definition.filled_from(str(text)) if status == "APPROVED" else None
+        if filled is None:
+            continue
+        if filled.key in approved:
+            # The library's own is on the control already, worded with the client's values.
+            cursor.execute(
+                "UPDATE control_attributes SET status = 'RETIRED', note = %s, decided_by = %s, "
+                "decided_at = clock_timestamp(), version = version + 1, "
+                "updated_at = clock_timestamp() WHERE id = %s",
+                (
+                    "Repeats the library standard's attribute, which is kept, worded with the "
+                    "client's values.",
+                    actor, row_id,
+                ),
+            )  # fmt: skip
+            changed += 1
+            continue
+        # Linked, and worded with the client's values when every one is recorded.
+        wording = filled_wording(cursor, control_id, filled.text)
+        if "[" in wording or wording in texts:
+            wording = str(text)
+        cursor.execute(
+            "UPDATE control_attributes SET definition_key = %s, text = %s, "
+            "version = version + 1, updated_at = clock_timestamp() WHERE id = %s",
+            (filled.key, wording, row_id),
+        )
+        texts.add(wording)
+        known.add(filled.key)
+        approved.add(filled.key)
+        changed += 1
     added = 0
     position = len(rows)
     for item in definition.proposed:
         if item.key in known:
             continue
-        cursor.execute(
+        # One already approved in the same words (the control's own) is kept, not repeated.
+        inserted = cursor.execute(
             """
             INSERT INTO control_attributes (
                 organization_id, project_id, engagement_control_id, position, text, status,
-                basis, source_kind, note, proposal, created_by, definition_key
+                basis, source_kind, note, proposal, created_by, decided_at, definition_key
             )
-            VALUES (%s, %s, %s, %s, %s, 'PROPOSED', %s, 'LIBRARY', %s, 'ADD', %s, %s)
+            SELECT %s, %s, %s, %s, %s, 'APPROVED', %s, 'LIBRARY', %s, NULL, %s,
+                   clock_timestamp(), %s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM control_attributes
+                WHERE engagement_control_id = %s AND status = 'APPROVED' AND text = %s
+            )
             """,
             (
                 control[0], control[1], control_id, position, item.text,
                 "DOCUMENTED" if "DESIGN" in item.basis else "INFERRED",
-                f"Library v3, {item.confidence.lower().replace('_', ' ')} confidence: "
-                f"{item.question}"[:500],
-                actor, item.key,
+                f"From the library standard; it depends on the client: {item.question}"[:500],
+                actor, item.key, control_id, item.text,
             ),
-        )  # fmt: skip
-        position += 1
-        added += 1
+        ).rowcount  # fmt: skip
+        if inserted:
+            position += 1
+            added += 1
+    if added or changed:
+        from ai_workforce_api.control_attributes import _write_list
+
+        # Their bracketed values are filled from the client's values recorded so far, and
+        # the control's attribute list follows.
+        refresh_statement(cursor, control_id)
+        _write_list(cursor, control_id)
     _confirm_design(cursor, control, control_id, definition)
-    return added
+    return added + changed
 
 
 def _confirm_design(
@@ -266,10 +329,11 @@ def library_update(connection: psycopg.Connection[Any], control_id: UUID) -> Upd
         raise ContextState("control not found")
     definition = definition_for(str(row[0]))
     version = int(row[1])
-    if definition is None or version >= DEFINITIONS_VERSION:
+    if definition is None or version >= definition.version:
         return UpdateBody(
             control_id=control_id, library_version=version,
-            current_version=DEFINITIONS_VERSION, available=False, items=[],
+            current_version=DEFINITIONS_VERSION if definition is None else definition.version,
+            available=False, items=[],
             note="This control is not a library control on an earlier version.",
         )  # fmt: skip
     approved = {
@@ -317,7 +381,7 @@ def library_update(connection: psycopg.Connection[Any], control_id: UUID) -> Upd
     return UpdateBody(
         control_id=control_id,
         library_version=version,
-        current_version=DEFINITIONS_VERSION,
+        current_version=definition.version,
         available=True,
         items=items,
         note="Attributes the team added stay as they are. Open and signed-off test sheets "
@@ -392,7 +456,7 @@ def _add_split(
         RETURNING id
         """,
         (
-            part.key, DEFINITIONS_VERSION, part.control_ref, part.domain, part.title,
+            part.key, definition_version(part.key), part.control_ref, part.domain, part.title,
             part.risk, part.activity, part.frequency, part.nature,
             Json(list(part.test_attributes)), Json(list(part.pbc_items)), parent_id,
             part.key,
@@ -420,7 +484,7 @@ def adopt(
         raise ContextState("no library update for this control")
     with transaction(connection) as cursor:
         control = _control(cursor, control_id)
-        if control is None or int(control[3]) >= DEFINITIONS_VERSION:
+        if control is None or int(control[3]) >= definition_version(str(control[2])):
             raise ContextState("the control changed")
         rows = cursor.execute(
             "SELECT id, text, position FROM control_attributes WHERE engagement_control_id = %s "
@@ -428,12 +492,13 @@ def adopt(
             (control_id,),
         ).fetchall()
         by_text = {" ".join(str(r[1]).lower().split()): r for r in rows}
-        # A proposal already open, or one a person rejected, is not proposed again.
+        # One already in place, or one a person rejected or retired, is not added again.
         settled = {
             str(key)
             for (key,) in cursor.execute(
                 "SELECT definition_key FROM control_attributes WHERE engagement_control_id = %s "
-                "AND status IN ('PROPOSED', 'REJECTED') AND definition_key IS NOT NULL",
+                "AND status IN ('APPROVED', 'PROPOSED', 'REJECTED', 'RETIRED') "
+                "AND definition_key IS NOT NULL",
                 (control_id,),
             ).fetchall()
         }
@@ -453,7 +518,10 @@ def adopt(
         end = len(rows)
         for item in update.items:
             if item.change == "RETIRE":
-                retire(item.was, f"Retired by library v3: {item.reason}")
+                retire(
+                    item.was,
+                    f"Retired by library v{definition_version(str(control[2]))}: {item.reason}",
+                )
                 continue
             if item.change == "KEEP":
                 kept = by_text.get(" ".join(item.text.lower().split()))
@@ -463,9 +531,14 @@ def adopt(
                         (item.key, kept[0]),
                     )
                 continue
-            status = "APPROVED" if item.change in ("ADD", "REWORD") else "PROPOSED"
+            # Every attribute of the standard is approved with it (milestone L3e); one the
+            # library leaves to the client carries its question.
+            status = "APPROVED"
+            dependent = item.change not in ("ADD", "REWORD")
             position = retire(item.was, "Reworded by library v3.") if item.was else None
-            if status == "PROPOSED" and item.key in settled:
+            if dependent and (
+                item.key in settled or " ".join(item.text.lower().split()) in by_text
+            ):
                 continue
             cursor.execute(
                 """
@@ -480,9 +553,12 @@ def adopt(
                 (
                     organization_id, project_id, control_id,
                     position if position is not None else end, item.text, status,
-                    item.reason[:500] if status == "PROPOSED" else "Library v3.",
-                    "ADD" if status == "PROPOSED" else None, actor,
-                    actor if status == "APPROVED" else None, status, item.key,
+                    (
+                        f"From the library standard; it depends on the client: {item.reason}"
+                        if dependent
+                        else "Library v3."
+                    )[:500],
+                    None, actor, actor, status, item.key,
                 ),
             )  # fmt: skip
             if position is None:
@@ -502,7 +578,7 @@ def adopt(
             "frequency = coalesce(%s, frequency), nature = coalesce(%s, nature), "
             "updated_at = clock_timestamp() WHERE id = %s",
             (
-                DEFINITIONS_VERSION,
+                definition_version(str(control[2])),
                 None if v3 is None else v3.title, None if v3 is None else v3.risk,
                 None if v3 is None else v3.frequency, None if v3 is None else v3.nature,
                 control_id,
@@ -525,7 +601,7 @@ def adopt(
             """,
             (
                 organization_id, project_id, actor, control_id,
-                Json({"version": DEFINITIONS_VERSION,
+                Json({"version": definition_version(str(control[2])),
                       "changes": [i.change for i in update.items],
                       "fields": [f.field for f in update.fields], "added": added}),
             ),
@@ -561,6 +637,13 @@ def sheet_definitions(
     ]
 
 
+class StepBody(BaseModel):
+    action: str
+    evidence: list[str]
+    record: str
+    exception: str
+
+
 class ProcedureBody(BaseModel):
     key: str
     phase: str
@@ -569,10 +652,13 @@ class ProcedureBody(BaseModel):
     evidence: list[str]
     attributes: list[str]
     limitation: str
+    # Version 4: the numbered steps, with the evidence each uses by name.
+    steps: list[StepBody] = []
 
 
 class TestingBody(BaseModel):
-    """How a library control is tested under version 3, for people to inspect."""
+    """How a library control is tested under its definition's version, for people to
+    inspect."""
 
     version: int
     objective: str
@@ -593,14 +679,15 @@ def testing_body(connection: psycopg.Connection[Any], control_id: UUID) -> Testi
         "SELECT library_key, library_version FROM engagement_controls WHERE id = %s",
         (control_id,),
     ).fetchone()
-    if row is None or row[0] is None or int(row[1] or 0) < DEFINITIONS_VERSION:
+    if row is None or row[0] is None or int(row[1] or 0) < DEFINED_SINCE:
         return None
     definition = definition_for(str(row[0]))
     if definition is None:
         return None
     texts = {item.key: item.text for item in definition.attributes}
+    names = {item.key: item.name for item in definition.evidence}
     return TestingBody(
-        version=DEFINITIONS_VERSION,
+        version=definition.version,
         objective=definition.objective,
         control_type=definition.control_type,
         population=definition.population,
@@ -614,6 +701,15 @@ def testing_body(connection: psycopg.Connection[Any], control_id: UUID) -> Testi
                 evidence=list(p.evidence),
                 attributes=[texts.get(k, k) for k in p.attributes],
                 limitation=p.limitation,
+                steps=[
+                    StepBody(
+                        action=s.action,
+                        evidence=[names.get(k, k) for k in s.evidence],
+                        record=s.record,
+                        exception=s.exception,
+                    )
+                    for s in p.steps
+                ],
             )  # fmt: skip
             for p in definition.procedures
         ],

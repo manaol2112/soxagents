@@ -11,6 +11,7 @@ import {
   basisLabel,
   type Candidate,
   CONTROL_CATEGORIES,
+  candidateSections,
   type DetailField,
   type DetailSuggestion,
   initialSelection,
@@ -18,6 +19,7 @@ import {
   needsReason,
   parseSuggestion,
   type SetupSystem,
+  suggestedCode,
   suggestionSummary,
   systemNamed,
   systemNameKey,
@@ -46,6 +48,8 @@ type Details = {
   purpose: string;
   processes: string;
   owner: string;
+  /** The system's code in the client's control references; empty takes the suggestion. */
+  refCode: string;
 };
 
 const DOMAIN_LABELS: Record<string, string> = Object.fromEntries(
@@ -113,6 +117,7 @@ function Wizard({
     purpose: existing?.purpose ?? "",
     processes: existing?.processes ?? "",
     owner: existing?.owner ?? "",
+    refCode: existing?.refCode ?? "",
   });
   const [selected, setSelected] = useState<Record<string, boolean> | null>(
     null,
@@ -259,6 +264,7 @@ function Wizard({
         purpose: details.purpose,
         processes: details.processes,
         owner: details.owner,
+        ref_code: details.refCode,
       },
       target,
     );
@@ -302,10 +308,7 @@ function Wizard({
   const shown = onlyRecommended
     ? candidates.filter((item) => item.status === "RECOMMENDED")
     : candidates;
-  const groups = DOMAIN_ORDER.map((domain) => ({
-    domain,
-    items: shown.filter((item) => item.domain === domain),
-  })).filter((group) => group.items.length > 0);
+  const sections = candidateSections(shown, details.name);
   const recommended = candidates.filter(
     (item) => item.status === "RECOMMENDED",
   );
@@ -456,27 +459,53 @@ function Wizard({
                   client's RCM first; you can still save the system now.
                 </p>
               ) : (
-                groups.map((group) => (
-                  <fieldset key={group.domain} className="sw-group">
-                    <legend>
-                      {DOMAIN_LABELS[group.domain] ?? group.domain}
-                    </legend>
-                    <ul>
-                      {group.items.map((item) => (
-                        <ControlRow
-                          key={item.controlRef}
-                          item={item}
-                          checked={selected?.[item.controlRef] === true}
-                          onChange={(value) =>
-                            setSelected((current) => ({
-                              ...(current ?? {}),
-                              [item.controlRef]: value,
-                            }))
-                          }
-                        />
+                sections.map((section) => (
+                  <section
+                    key={section.origin}
+                    className="sw-source"
+                    aria-label={section.label}
+                  >
+                    {sections.length > 1 ? (
+                      <header className="sw-source-head">
+                        <h4>
+                          {section.label}{" "}
+                          <span className="num">{section.items.length}</span>
+                        </h4>
+                        {section.note !== "" ? (
+                          <p className="form-hint">{section.note}</p>
+                        ) : null}
+                      </header>
+                    ) : null}
+                    {DOMAIN_ORDER.map((domain) => ({
+                      domain,
+                      items: section.items.filter(
+                        (item) => item.domain === domain,
+                      ),
+                    }))
+                      .filter((group) => group.items.length > 0)
+                      .map((group) => (
+                        <fieldset key={group.domain} className="sw-group">
+                          <legend>
+                            {DOMAIN_LABELS[group.domain] ?? group.domain}
+                          </legend>
+                          <ul>
+                            {group.items.map((item) => (
+                              <ControlRow
+                                key={item.controlRef}
+                                item={item}
+                                checked={selected?.[item.controlRef] === true}
+                                onChange={(value) =>
+                                  setSelected((current) => ({
+                                    ...(current ?? {}),
+                                    [item.controlRef]: value,
+                                  }))
+                                }
+                              />
+                            ))}
+                          </ul>
+                        </fieldset>
                       ))}
-                    </ul>
-                  </fieldset>
+                  </section>
                 ))
               )}
             </section>
@@ -884,6 +913,30 @@ function DetailsStep({
           />
           {note("owner")}
         </label>
+        <label htmlFor={`${id}-code`}>
+          Reference code
+          <input
+            autoComplete="off"
+            id={`${id}-code`}
+            maxLength={8}
+            value={details.refCode}
+            placeholder={suggestedCode(details.name)}
+            aria-describedby={`${id}-code-hint`}
+            onChange={(event) =>
+              setDetails({
+                ...details,
+                refCode: event.target.value
+                  .toUpperCase()
+                  .replace(/[^A-Z0-9]/g, ""),
+              })
+            }
+          />
+          <span id={`${id}-code-hint`} className="form-hint">
+            The system's code in the client's control references. A control
+            adapted from another system takes it, for example ITGC-
+            {details.refCode || suggestedCode(details.name)}-02.
+          </span>
+        </label>
       </div>
     </section>
   );
@@ -939,6 +992,12 @@ function ControlRow({
         </span>
         {item.description !== "" ? (
           <span className="sw-row-text">{item.description}</span>
+        ) : null}
+        {item.adaptedFrom.length > 0 ? (
+          <span className="sw-row-from">
+            Adapted from {item.adaptedFrom.join(", ")}
+            {item.follows !== "" ? ` · Standard ${item.follows}` : ""}
+          </span>
         ) : null}
         {item.rationale !== "" ? (
           <span className="sw-row-why">

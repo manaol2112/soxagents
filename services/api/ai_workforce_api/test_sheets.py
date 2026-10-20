@@ -165,6 +165,11 @@ class ReopenBody(BaseModel):
     reason: str = Field(min_length=3, max_length=500)
 
 
+# What reopened a signed-off sheet (migration 0089): a review note that must be fixed, a
+# plan-revision impact assessment, or a person. Set by the caller, never from a request.
+ReopenSource = Literal["REVIEW_NOTE", "IMPACT_ASSESSMENT", "PERSON"]
+
+
 class DeficiencyDecision(BaseModel):
     version: int = Field(ge=1)
     action: Literal["LOG", "DISMISS"]
@@ -432,7 +437,13 @@ def sign_off_work(body: SignOffBody) -> Work:
             UPDATE test_sheets
             SET status = 'SIGNED_OFF', conclusion = %s, signed_by = %s,
                 signed_at = clock_timestamp(), signoff_note = %s,
-                proposal = %s, proposal_status = %s
+                proposal = %s, proposal_status = %s,
+                -- The plan revision the results were tested under (finality, W3), and the
+                -- end of any reopening (the audit log keeps its reason).
+                plan_revision = (SELECT p.approved_revision FROM evidence_plans p
+                                 WHERE p.engagement_control_id = test_sheets.engagement_control_id),
+                reopened_at = NULL, reopened_by = NULL, reopen_reason = '',
+                reopened_from = NULL, reopened_from_id = NULL
             WHERE id = %s
             """,
             (
@@ -443,6 +454,21 @@ def sign_off_work(body: SignOffBody) -> Work:
                 "NONE" if proposal is None else "PROPOSED",
                 sheet[0],
             ),
+        )
+        # The sign-off as made, kept for good (test_sheet_signoffs, migration 0091):
+        # reopening the sheet later marks this row, it never rewrites it.
+        cursor.execute(
+            """
+            INSERT INTO test_sheet_signoffs (
+                organization_id, project_id, test_sheet_id, engagement_control_id,
+                test_round_id, sheet_version, conclusion, signed_by, signed_at, signoff_note,
+                plan_revision
+            )
+            SELECT organization_id, project_id, id, engagement_control_id, test_round_id,
+                   version, conclusion, signed_by, signed_at, signoff_note, plan_revision
+            FROM test_sheets WHERE id = %s
+            """,
+            (sheet[0],),
         )
         # The effectiveness workpaper opens, filled from the signed-off testing.
         ensure(cursor, organization_id, project_id, sheet[3], principal.id, ("EFFECTIVENESS",))
@@ -474,7 +500,9 @@ def sign_off_work(body: SignOffBody) -> Work:
     return work
 
 
-def reopen_work(body: ReopenBody) -> Work:
+def reopen_work(
+    body: ReopenBody, source: ReopenSource = "PERSON", source_id: UUID | None = None
+) -> Work:
     def work(
         cursor: psycopg.Cursor[Any],
         principal: Principal,
@@ -513,10 +541,22 @@ def reopen_work(body: ReopenBody) -> Work:
             UPDATE test_sheets
             SET status = 'OPEN', conclusion = NULL, signed_by = NULL, signed_at = NULL,
                 proposal = NULL, proposal_status = 'NONE', proposal_reason = '',
-                proposal_decided_by = NULL, run_status = 'IDLE'
+                proposal_decided_by = NULL, run_status = 'IDLE',
+                reopened_at = clock_timestamp(), reopened_by = %s, reopen_reason = %s,
+                reopened_from = %s, reopened_from_id = %s
             WHERE id = %s
             """,
-            (sheet[0],),
+            (principal.id, clean_line(body.reason, 500), source, source_id, sheet[0]),
+        )
+        # The sign-off being reopened stays on record, marked once as reopened.
+        cursor.execute(
+            """
+            UPDATE test_sheet_signoffs
+            SET reopened_at = clock_timestamp(), reopened_by = %s, reopen_reason = %s,
+                reopened_from = %s
+            WHERE test_sheet_id = %s AND reopened_at IS NULL
+            """,
+            (principal.id, clean_line(body.reason, 500), source, sheet[0]),
         )
         if round_row is None:
             # Interim testing is open again: the roll-forward waits for it once more.

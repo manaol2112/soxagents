@@ -16,8 +16,8 @@ const PHASE_WORD: Record<PhaseState, string> = {
 
 /**
  * One phase of a control's audit (design, interim testing, roll-forward, review): a
- * header that says where it stands, which agent carries it and what it has done, and
- * then the phase's steps in the order an auditor works them.
+ * header that says where it stands, then the phase's steps in the order an auditor works
+ * them. What the phase tests is in the test plan; the agent's work is under AI activity.
  */
 export function PhasePanel({
   number,
@@ -31,7 +31,8 @@ export function PhasePanel({
   number: number;
   title: string;
   state: PhaseState;
-  summary: string;
+  /** One line at most; the plan says what the phase covers. */
+  summary?: string;
   /** The agent's task for this phase, when the kickoff created one. */
   task?: PlanTask | undefined;
   aside?: ReactNode;
@@ -45,7 +46,7 @@ export function PhasePanel({
         </span>
         <div className="cx-phase-title">
           <h2>{title}</h2>
-          <p>{summary}</p>
+          {summary !== undefined && summary !== "" ? <p>{summary}</p> : null}
         </div>
         <div className="cx-phase-side">
           <span className={`cx-status ${PHASE_TONE[state]}`}>
@@ -73,23 +74,27 @@ const PHASE_TONE: Record<PhaseState, string> = {
   issue: "tone-danger",
 };
 
-/** A numbered step inside a phase: what to do, where it stands, and the controls for it. */
+/** A numbered step inside a phase: where it stands and the controls for it. A finished
+ * step, and one that cannot start yet, fold to one line; either opens on request. */
 export function PhaseStep({
   number,
   title,
   hint,
   state,
   note,
+  waits,
   keepOpen = false,
   children,
 }: {
   number: number;
   title: string;
-  /** What this step is for, in one line. */
-  hint: string;
+  /** What this step is for, in one line, when the title does not say it. */
+  hint?: string;
   state: PhaseState;
   /** A short status note: "3 of 7 received", "Signed off by Dana". */
   note?: string | undefined;
+  /** What a step not started waits for: "Starts after interim sign-off". */
+  waits?: string | undefined;
   /** A finished step folds to its heading; this keeps it open, as when it shows the
    * result of something just done in it. */
   keepOpen?: boolean;
@@ -102,19 +107,21 @@ export function PhaseStep({
       </span>
       <div>
         <h3>{title}</h3>
-        <p>{hint}</p>
+        {hint !== undefined && hint !== "" ? <p>{hint}</p> : null}
       </div>
       {note !== undefined && note !== "" ? (
         <span className="cx-step-note">{note}</span>
+      ) : state === "todo" && waits !== undefined && waits !== "" ? (
+        <span className="cx-step-note is-waits">{waits}</span>
       ) : null}
     </>
   );
-  // A finished step folds to one line, so the step that needs work comes up the page;
-  // it opens again on request.
-  if (state === "done") {
+  // A finished step, and one that cannot start yet, fold to one line, so the step that
+  // needs work comes up the page; each opens again on request.
+  if (state === "done" || state === "todo") {
     return (
       <details
-        className="cx-step is-done is-folding"
+        className={`cx-step is-${state} is-folding`}
         aria-label={title}
         id={stepAnchor(title)}
         open={keepOpen}

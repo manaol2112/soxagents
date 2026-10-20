@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  type ControlReview,
   openNotes,
   parseReviewNotice,
   parseReviews,
   reviewFor,
   reviewNoticeFor,
   reviewWrite,
+  roundReviewsFor,
 } from "../apps/web/src/review-model.ts";
 
 const org = "11111111-1111-7111-8111-111111111111";
@@ -137,6 +139,33 @@ describe("independent review model", () => {
     assert.equal(reviewFor(parsed, note), null);
     assert.equal(parseReviews([{ id: "x" }]), null);
     assert.equal(parseReviews("no"), null);
+    // A review of a testing round (W2) is listed beside the control's own, never in
+    // its place; what it covered is kept as given.
+    const base = JSON.parse(JSON.stringify(fixture)) as Record<string, unknown>;
+    const withRound = parseReviews([
+      base,
+      {
+        ...base,
+        id: "01a12990-0000-7000-8000-000000000009",
+        test_round_id: "01a12990-0000-7000-8000-000000000001",
+        round_kind: "ROLLFORWARD",
+        coverage: {
+          sheet_version: 3,
+          test_round_id: "01a12990-0000-7000-8000-000000000001",
+        },
+      },
+    ]) as ControlReview[];
+    assert.equal(withRound[0]?.testRoundId, null);
+    assert.equal(withRound[1]?.roundKind, "ROLLFORWARD");
+    assert.deepEqual(withRound[1]?.coverage, {
+      sheet_version: 3,
+      test_round_id: "01a12990-0000-7000-8000-000000000001",
+    });
+    assert.equal(reviewFor(withRound, control)?.id, review);
+    assert.deepEqual(
+      roundReviewsFor(withRound, control).map((entry) => entry.id),
+      ["01a12990-0000-7000-8000-000000000009"],
+    );
   });
 
   it("builds each review write and refuses bad input", () => {

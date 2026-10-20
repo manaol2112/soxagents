@@ -1166,7 +1166,9 @@ function DeliverableCard({
       {request.structured && item.detail !== "" ? (
         <p className="pt-prose pt-item-detail">{item.detail}</p>
       ) : null}
-      {item.include.length > 0 || facts.length > 0 ? (
+      {item.include.length > 0 ||
+      facts.length > 0 ||
+      item.alternatives.length > 0 ? (
         <dl className="pt-item-facts">
           {item.include.length > 0 ? (
             <div>
@@ -1186,6 +1188,18 @@ function DeliverableCard({
               <dd>{entry.value}</dd>
             </div>
           ))}
+          {item.alternatives.length > 0 ? (
+            <div>
+              <dt>If not available</dt>
+              <dd>
+                <ul className="pt-bullets">
+                  {item.alternatives.map((entry) => (
+                    <li key={entry}>{entry}</li>
+                  ))}
+                </ul>
+              </dd>
+            </div>
+          ) : null}
         </dl>
       ) : null}
       {item.files.length > 0 ? <FileList files={item.files} /> : null}

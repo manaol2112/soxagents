@@ -174,25 +174,28 @@ describe("workspace shell", () => {
     }
     assert.equal(model.organization.id, organization.id);
     assert.equal(model.selectedProject?.id, project.id);
-    // An unknown section falls back to the engagement's home, the agent console.
-    assert.equal(model.section, "console");
+    // An unknown section falls back to the engagement's home: where it stands and what
+    // to do next.
+    assert.equal(model.section, "overview");
   });
 
-  it("links to the dashboard explicitly, since the console is the default", () => {
-    const dashboard = new URL(
-      workspaceHref("overview", organization.id, project.id),
-      "http://x",
-    );
-    assert.equal(dashboard.searchParams.get("section"), "overview");
-    const model = deriveShell(
-      snapshot({ requestedSection: dashboard.searchParams.get("section") }),
-    );
-    assert.equal(model.status === "ready" && model.section, "overview");
-    const home = new URL(
+  it("links to the console explicitly, since Home is the default", () => {
+    const agents = new URL(
       workspaceHref("console", organization.id, project.id),
       "http://x",
     );
+    assert.equal(agents.searchParams.get("section"), "console");
+    const model = deriveShell(
+      snapshot({ requestedSection: agents.searchParams.get("section") }),
+    );
+    assert.equal(model.status === "ready" && model.section, "console");
+    const home = new URL(
+      workspaceHref("overview", organization.id, project.id),
+      "http://x",
+    );
     assert.equal(home.searchParams.get("section"), null);
+    const opened = deriveShell(snapshot({ requestedSection: null }));
+    assert.equal(opened.status === "ready" && opened.section, "overview");
   });
 
   it("keeps a requested organization that is in the membership list", () => {

@@ -33,14 +33,19 @@ def workflow_address_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     independence.configure(True)
 
 
-@pytest.fixture
-def empty_database() -> Iterator[Database]:
-    admin_url = os.environ.get("DATABASE_URL", "")
-    if admin_url == "":
-        pytest.skip("DATABASE_URL is not set")
+def _fresh_database(admin_url: str, template: str | None = None) -> Iterator[Database]:
+    """A database of its own for one test, empty or cloned from a template, dropped
+    afterwards. Every test keeps its own database either way."""
     name = f"ai_workforce_test_{uuid4().hex[:12]}"
     with psycopg.connect(admin_url, autocommit=True) as connection:
-        connection.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+        if template is None:
+            connection.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+        else:
+            connection.execute(
+                sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
+                    sql.Identifier(name), sql.Identifier(template)
+                )
+            )
     url = _database_url(admin_url, name)
     try:
         yield Database(url)
@@ -49,6 +54,43 @@ def empty_database() -> Iterator[Database]:
             connection.execute(
                 sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name))
             )
+
+
+@pytest.fixture
+def empty_database() -> Iterator[Database]:
+    admin_url = os.environ.get("DATABASE_URL", "")
+    if admin_url == "":
+        pytest.skip("DATABASE_URL is not set")
+    yield from _fresh_database(admin_url)
+
+
+@pytest.fixture(scope="session")
+def template_database() -> Iterator[str]:
+    """The migrations applied once per session (per worker), into a template every
+    migrated test database is cloned from: the same schema and seed rows the migration
+    runner produces, in a fraction of the time."""
+    admin_url = os.environ.get("DATABASE_URL", "")
+    if admin_url == "":
+        pytest.skip("DATABASE_URL is not set")
+    from ai_workforce_api.migrate import apply_migrations, migrations_dir
+
+    name = f"ai_workforce_tpl_{uuid4().hex[:12]}"
+    with psycopg.connect(admin_url, autocommit=True) as connection:
+        connection.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+    apply_migrations(_database_url(admin_url, name), migrations_dir())
+    try:
+        yield name
+    finally:
+        with psycopg.connect(admin_url, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name))
+            )
+
+
+@pytest.fixture
+def migrated_database(template_database: str) -> Iterator[Database]:
+    """A test's own database with every migration applied, cloned from the template."""
+    yield from _fresh_database(os.environ["DATABASE_URL"], template_database)
 
 
 def _database_url(admin_url: str, name: str) -> str:

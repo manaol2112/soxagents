@@ -14,6 +14,7 @@ import {
   type PlanPhase,
   type PlanRequirement,
   type RequirementState,
+  waitsOnPerson,
 } from "./evidence-plan-model.ts";
 
 export const EVIDENCE_VIEWS = [
@@ -418,4 +419,28 @@ export function carriedBy(
       rationale: q.rationale,
       necessity: q.necessity,
     }));
+}
+
+/** A phase of the evidence in one line: how many items, how many a person accepted, and
+ * how many wait on a person now. A phase with something waiting opens by itself. */
+export function phaseDigest(
+  phase: Pick<PlanPhase, "applicability">,
+  items: readonly PlanRequirement[],
+): { total: number; accepted: number; waiting: number; line: string } {
+  const live = items.filter((q) => q.state !== "NOT_APPLICABLE");
+  const accepted = live.filter((q) => q.state === "ACCEPTED").length;
+  const waiting = items.filter(waitsOnPerson).length;
+  const line =
+    phase.applicability === "NOT_APPLICABLE"
+      ? "Not applicable"
+      : live.length === 0
+        ? "Nothing planned"
+        : [
+            plural(live.length, "item"),
+            `${accepted} accepted`,
+            waiting > 0 ? `${waiting} to review` : "",
+          ]
+            .filter((part) => part !== "")
+            .join(" · ");
+  return { total: live.length, accepted, waiting, line };
 }

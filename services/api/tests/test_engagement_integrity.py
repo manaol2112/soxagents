@@ -98,7 +98,7 @@ def test_an_engagement_launches_once(migrated: Database) -> None:
             "SELECT count(*) FROM engagement_plans WHERE project_id = %s AND status = 'APPROVED'",
             (team["project"],),
         ).fetchone()
-    assert tasks is not None and tasks[0] == 77
+    assert tasks is not None and tasks[0] == 125
     assert plans is not None and plans[0] == 1
     # The engagement is active and its setup locked; it cannot be made a draft again.
     state = owner.get(base).json()

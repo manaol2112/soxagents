@@ -189,6 +189,11 @@ export function waitingHref(
   if (item.link === "mailbox") {
     params.set("tab", "mailbox");
   }
+  if (item.kind === "contacts" && item.link === "evidence") {
+    // Requests without a recipient: the evidence coordinator is assigned there.
+    params.set("tab", "requests");
+    return `/?${params.toString()}#contacts-title`;
+  }
   return `/?${params.toString()}`;
 }
 

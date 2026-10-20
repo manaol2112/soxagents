@@ -12,7 +12,7 @@ import json
 from dataclasses import asdict, dataclass, replace
 from typing import Literal
 
-LIBRARY_VERSION = 3
+LIBRARY_VERSION = 4
 
 # Standard areas. A client's own term for its process or area maps to one of these.
 DOMAIN_LABELS: dict[str, str] = {
@@ -1073,7 +1073,9 @@ SPLITS: dict[str, tuple[LibraryControl, ...]] = {
             "operations-scheduler-access", "ITGC-OP-02.1", "OPERATIONS",
             "Access to change the job schedule is reviewed",
             "People who should not change batch processing can do so.", "", "QUARTERLY",
-            "IT_DEPENDENT_MANUAL", ("",),
+            "IT_DEPENDENT_MANUAL", (
+            '',
+        ),
             ("Listing of users able to change the job schedule, with its production date",
              "Evidence of each quarter's review and the removals requested"),
         ),
@@ -1083,14 +1085,18 @@ SPLITS: dict[str, tuple[LibraryControl, ...]] = {
             "operations-backup-failures", "ITGC-OP-03.1", "OPERATIONS",
             "Failed backups are resolved",
             "A failed backup goes unnoticed, leaving data unrecoverable.", "", "DAILY",
-            "IT_DEPENDENT_MANUAL", ("",),
+            "IT_DEPENDENT_MANUAL", (
+            '',
+        ),
             ("Backup job history for the period", "Resolution records for failed backups"),
         ),
         _control(
             "operations-restore-test", "ITGC-OP-03.2", "OPERATIONS",
             "Restores from backup are tested",
             "Backups exist but cannot be restored when needed.", "", "ANNUAL", "MANUAL",
-            ("",), ("Restore test record with the checks performed and the sign-off",),
+            (
+            '',
+        ), ("Restore test record with the checks performed and the sign-off",),
         ),
     ),
     "treasury-debt": (
@@ -1132,7 +1138,7 @@ def _version_3(control: LibraryControl) -> LibraryControl:
     labels = {slot.key: slot.label for slot in statement.slots}
     return replace(
         control,
-        title=statement.title or control.title,
+        title=FORMAL_TITLES.get(control.key) or statement.title or control.title,
         risk=statement.risk,
         activity=render(statement.text, {}, labels),
         frequency=statement.frequency,
@@ -1140,9 +1146,517 @@ def _version_3(control: LibraryControl) -> LibraryControl:
     )
 
 
+# Each standard control's formal title (library version 4): a noun phrase in title case,
+# naming the control the way an RCM or a methodology names it. The control's statement says
+# what it does; the title names it. Version 2 titles stay on V2_LIBRARY for comparison.
+FORMAL_TITLES: dict[str, str] = {
+    # Logical access
+    "access-provisioning": "User Access Provisioning and Approval",
+    "access-termination": "Timely Removal of Terminated User Access",
+    "access-review": "Periodic User Access Review",
+    "access-privileged": "Quarterly Privileged Access Review",
+    "access-authentication": "Authentication and Password Configuration",
+    "access-shared-accounts": "Shared, Generic, and Service Account Management",
+    "access-transfer": "User Access Modification upon Transfer",
+    "access-firefighter": "Emergency (Firefighter) Access Approval and Monitoring",
+    "access-third-party": "Third-Party and Vendor Account Management",
+    "access-sod-rules": "Segregation of Duties Conflict Monitoring",
+    "access-direct-db-os": "Database and Operating System Access Restriction",
+    "access-security-monitoring": "Security Event Monitoring and Response",
+    # Change management
+    "change-approval": "Program Change Testing and Approval",
+    "change-emergency": "Emergency Change Retrospective Approval",
+    "change-segregation": "Production Deployment Access Review",
+    "change-configuration": "Configuration Change Approval",
+    "change-data": "Direct Data Change Approval",
+    "change-patching": "Patch Testing and Approval",
+    "change-sdlc": "System Development Life Cycle Governance",
+    "change-data-migration": "Data Migration Reconciliation and Approval",
+    # IT operations
+    "operations-jobs": "Batch Job Monitoring and Failure Resolution",
+    "operations-scheduling": "Job Schedule Change Approval",
+    "operations-scheduler-access": "Job Scheduler Access Review",
+    "operations-backup": "Backup Configuration and Scheduling",
+    "operations-backup-failures": "Backup Failure Resolution",
+    "operations-restore-test": "Backup Restoration Testing",
+    "operations-incidents": "IT Incident Management",
+    "operations-physical": "Data Center Physical Access Restriction",
+    "operations-interfaces": "Interface Monitoring and Error Resolution",
+    "operations-soc-reports": "Service Organization (SOC 1) Report Review",
+    "operations-vulnerabilities": "Vulnerability Management and Remediation",
+    # Entity level
+    "entity-code-of-conduct": "Annual Code of Conduct Acknowledgement",
+    "entity-whistleblower": "Whistleblower Report Investigation and Oversight",
+    # Application controls
+    "itac-three-way-match": "Three-Way Match and Invoice Payment Block",
+    "itac-credit-limit": "Credit Limit Check and Order Hold",
+    "itac-duplicate-invoice": "Duplicate Invoice Prevention",
+    "itac-po-workflow": "Purchase Order Approval Workflow",
+    "itac-nonpo-routing": "Non-PO Invoice Approval Routing",
+    "itac-period-lock": "Closed Period Posting Restriction",
+    "itac-je-workflow": "Journal Entry Approval Workflow",
+    "itac-price-master": "Price Master Enforcement and Override Approval",
+    "itac-ship-to-bill": "Shipment-to-Billing Completeness",
+    "itac-depreciation-calc": "Automated Depreciation Calculation",
+    "itac-payroll-calc": "Automated Gross-to-Net Payroll Calculation",
+    "itac-posting-validation": "Journal Posting Validation Rules",
+    "itac-interface-totals": "Interface Record Count and Control Total Check",
+    # Key reports
+    "ipe-aged-receivables": "Accounts Receivable Aging Report Validation",
+    "ipe-journal-listing": "Journal Entry Listing Completeness",
+    "ipe-inventory-valuation": "Inventory Valuation Report Validation",
+    "ipe-fixed-asset-register": "Fixed Asset Register Reconciliation",
+    "ipe-payroll-register": "Payroll Register Reconciliation",
+    "ipe-billing-report": "Billing Report Validation",
+    "ipe-ap-aging": "Accounts Payable Aging Report Validation",
+    "ipe-euc-spreadsheets": "End-User Computing (Spreadsheet) Controls",
+    # Order to cash
+    "otc-customer-master": "Customer Master Data Change Approval",
+    "otc-revenue-cutoff": "Revenue Cut-Off Review",
+    "otc-cash-application": "Cash Receipts Application",
+    "otc-credit-memos": "Credit Memo Approval",
+    # Procure to pay
+    "ptp-vendor-master": "Vendor Master Data Change Approval",
+    "ptp-purchase-approval": "Purchase Order Approval within Delegated Authority",
+    "ptp-accruals": "Unrecorded Liabilities Review and Accrual",
+    "ptp-payment-run": "Payment Run Approval",
+    # Record to report
+    "rtr-journal-review": "Manual Journal Entry Review and Approval",
+    "rtr-account-reconciliations": "Balance Sheet Account Reconciliation",
+    "rtr-flux-review": "Financial Statement Fluctuation Analysis",
+    "rtr-consolidation": "Consolidation and Elimination Review",
+    # Treasury
+    "treasury-bank-reconciliation": "Bank Account Reconciliation",
+    "treasury-bank-access": "Bank Signatory and Banking Portal Access Review",
+    "treasury-debt": "Debt Balance Reconciliation to Lender Statements",
+    "treasury-covenants": "Debt Covenant Compliance Review",
+    # Hire to retire
+    "h2r-payroll-changes": "Payroll Master Data Change Approval",
+    "h2r-payroll-review": "Payroll Pre-Disbursement Review",
+    "h2r-payroll-reconciliation": "Payroll to General Ledger Reconciliation",
+    # Inventory
+    "inventory-counts": "Inventory Count and Variance Resolution",
+    "inventory-valuation": "Excess and Obsolete Inventory Reserve Review",
+    "inventory-standard-costs": "Standard Cost Change Approval",
+    # Fixed assets
+    "fa-additions": "Capital Expenditure Approval and Capitalization",
+    "fa-depreciation": "Depreciation Expense Review",
+    "fa-disposals-impairment": "Fixed Asset Disposal Approval and Recording",
+    "fa-impairment": "Long-Lived Asset Impairment Assessment",
+    # Tax
+    "tax-provision": "Income Tax Provision Review",
+    "tax-indirect": "Indirect Tax Return Reconciliation",
+}
+
+
+def _v4(
+    key: str,
+    ref: str,
+    domain: str,
+    title: str,
+    risk: str,
+    frequency: str,
+    nature: str,
+    pbc: tuple[str, ...],
+) -> LibraryControl:
+    """A standard control added in library version 4 (milestone L3c). It was never in
+    version 2, so it carries no attributes of its own: its tested attributes come from its
+    definition and its description from its statement, as for every control."""
+    return LibraryControl(key, ref, domain, title, risk, "", frequency, nature, (), pbc)
+
+
+# Standard controls added in library version 4, wave 1: IT general controls, application
+# controls, and key reports the catalogue lacked. Each has a statement (statements_itgc_more)
+# and a version 4 definition with steps and an evidence suite.
+V4_LIBRARY: tuple[LibraryControl, ...] = (
+    _v4(
+        "access-transfer",
+        "ITGC-AC-07",
+        "ACCESS",
+        "Access is re-approved on transfer",
+        "A user who changes role keeps the access of the old role.",
+        "EVENT_DRIVEN",
+        "MANUAL",
+        (
+            "HR transfer listing for the period",
+            "The new manager's re-approval and the system's "
+            "record of access removed for each selected transfer",
+        ),
+    ),
+    _v4(
+        "access-firefighter",
+        "ITGC-AC-08",
+        "ACCESS",
+        "Emergency access is approved and its activity reviewed",
+        "Emergency privileged access is used beyond the incident it was granted for.",
+        "EVENT_DRIVEN",
+        "IT_DEPENDENT_MANUAL",
+        (
+            "Firefighter session log for the period",
+            "Checkout approval, activity log, and review sign-off for each selected session",
+        ),
+    ),
+    _v4(
+        "access-third-party",
+        "ITGC-AC-09",
+        "ACCESS",
+        "Third-party accounts are sponsored, time-limited, and reviewed",
+        "A vendor or contractor keeps access after the engagement ends.",
+        "QUARTERLY",
+        "IT_DEPENDENT_MANUAL",
+        (
+            "Third-party account listing with its production date for each quarter",
+            "Sponsor approvals, review sign-off, and accounts disabled",
+        ),
+    ),
+    _v4(
+        "access-sod-rules",
+        "ITGC-AC-10",
+        "ACCESS",
+        "Segregation-of-duties conflicts are detected and resolved",
+        "One person holds a combination of access that lets them both commit and conceal.",
+        "QUARTERLY",
+        "IT_DEPENDENT_MANUAL",
+        (
+            "Conflict report with its parameters for each quarter",
+            "Removal or approved "
+            "mitigation for each conflict, the sign-off, and the ruleset change log",
+        ),
+    ),
+    _v4(
+        "access-direct-db-os",
+        "ITGC-AC-11",
+        "ACCESS",
+        "Direct database and operating-system access is restricted and logged",
+        "Data or programs are changed below the application without a trace.",
+        "QUARTERLY",
+        "IT_DEPENDENT_MANUAL",
+        (
+            "Database and operating-system account listings for each quarter",
+            "Review sign-off, removals, and the privileged activity logging configuration",
+        ),
+    ),
+    _v4(
+        "access-security-monitoring",
+        "ITGC-AC-12",
+        "ACCESS",
+        "Security events are monitored",
+        "Unauthorized access or change goes unnoticed.",
+        "DAILY",
+        "IT_DEPENDENT_MANUAL",
+        (
+            "Alert listing with parameters for each selected day",
+            "Investigation record for each alert and the log source configuration",
+        ),
+    ),
+    _v4(
+        "change-patching",
+        "ITGC-CM-06",
+        "CHANGE",
+        "Patches are tested and approved",
+        "A patch changes the system's behaviour without testing or approval.",
+        "EVENT_DRIVEN",
+        "MANUAL",
+        (
+            "Patch history from the system for the period",
+            "Change record, test evidence, and approval for each selected patch",
+        ),
+    ),
+    _v4(
+        "change-sdlc",
+        "ITGC-CM-07",
+        "CHANGE",
+        "Projects follow the development life cycle",
+        "A new system or major release processes financial data in a way the business did not "
+        "specify or test.",
+        "EVENT_DRIVEN",
+        "MANUAL",
+        (
+            "Release register agreed to the deployment log",
+            "Approved requirements, acceptance "
+            "test sign-off, and go-live approval for each selected release",
+        ),
+    ),
+    _v4(
+        "change-data-migration",
+        "ITGC-CM-08",
+        "CHANGE",
+        "Data migrations are reconciled and approved",
+        "Migrated data arrives incomplete or altered.",
+        "EVENT_DRIVEN",
+        "MANUAL",
+        (
+            "Migration register agreed to the load logs",
+            "Reconciliation with extracts and the approval for each selected data object",
+        ),
+    ),
+    _v4(
+        "operations-interfaces",
+        "ITGC-OP-06",
+        "OPERATIONS",
+        "Interfaces are monitored",
+        "Transactions are lost or duplicated between systems.",
+        "DAILY",
+        "IT_DEPENDENT_MANUAL",
+        (
+            "Interface run log with record counts for each selected day",
+            "Investigation and reprocessing record for each failure or mismatch",
+        ),
+    ),
+    _v4(
+        "operations-soc-reports",
+        "ITGC-OP-07",
+        "OPERATIONS",
+        "Service organization reports are reviewed",
+        "The company relies on a service organization's controls without knowing whether they "
+        "operated.",
+        "ANNUAL",
+        "MANUAL",
+        (
+            "SOC 1 Type 2 report and bridge letter for each service organization",
+            "Reviewer's memo with exceptions assessed and complementary controls mapped",
+        ),
+    ),
+    _v4(
+        "operations-vulnerabilities",
+        "ITGC-OP-08",
+        "OPERATIONS",
+        "Vulnerabilities are remediated",
+        "A known weakness on a financial system is left open.",
+        "MONTHLY",
+        "IT_DEPENDENT_MANUAL",
+        (
+            "Scan results with scope for each selected month",
+            "Remediation or risk acceptance for "
+            "each critical or high finding and the review sign-off",
+        ),
+    ),
+    _v4(
+        "itac-duplicate-invoice",
+        "ITAC-03",
+        "ITAC",
+        "Duplicate invoices are rejected",
+        "The same vendor invoice is recorded and paid twice.",
+        "RECURRING",
+        "AUTOMATED",
+        (
+            "Duplicate check configuration shown from the system, with its change history",
+            "One rejected or blocked duplicate",
+        ),
+    ),
+    _v4(
+        "itac-po-workflow",
+        "ITAC-04",
+        "ITAC",
+        "Purchase orders are routed for approval",
+        "Goods or services are ordered without the authority the delegation requires.",
+        "RECURRING",
+        "AUTOMATED",
+        (
+            "Release strategy shown from the system, with its change history",
+            "One order held until its approvals were recorded",
+        ),
+    ),
+    _v4(
+        "itac-nonpo-routing",
+        "ITAC-05",
+        "ITAC",
+        "Invoices without a purchase order are routed for approval",
+        "An invoice with no purchase order is paid without anyone with authority agreeing it.",
+        "RECURRING",
+        "AUTOMATED",
+        (
+            "Invoice routing configuration shown from the system, with its change history",
+            "One invoice held until approved",
+        ),
+    ),
+    _v4(
+        "itac-period-lock",
+        "ITAC-06",
+        "ITAC",
+        "Closed periods cannot be posted to",
+        "A transaction is posted into a closed period after the results were reported.",
+        "RECURRING",
+        "AUTOMATED",
+        (
+            "Posting period configuration and the period change log",
+            "One rejected posting to a closed period",
+        ),
+    ),
+    _v4(
+        "itac-je-workflow",
+        "ITAC-07",
+        "ITAC",
+        "Journal entries above the threshold need approval",
+        "A manual journal entry is posted without independent approval.",
+        "RECURRING",
+        "AUTOMATED",
+        (
+            "Journal workflow configuration shown from the system, with its change history",
+            "One entry held until approved",
+        ),
+    ),
+    _v4(
+        "itac-price-master",
+        "ITAC-08",
+        "ITAC",
+        "Prices come from the price master",
+        "Goods are sold below the approved price without authority.",
+        "RECURRING",
+        "AUTOMATED",
+        (
+            "Pricing configuration shown from the system, with its change history",
+            "One order with an override held for approval",
+        ),
+    ),
+    _v4(
+        "itac-ship-to-bill",
+        "ITAC-09",
+        "ITAC",
+        "Shipments are billed once",
+        "Goods shipped are never invoiced, or are invoiced twice.",
+        "RECURRING",
+        "AUTOMATED",
+        (
+            "Billing configuration shown from the system, with its change history",
+            "One shipment traced to its invoice and the billing due list after a run",
+        ),
+    ),
+    _v4(
+        "itac-depreciation-calc",
+        "ITAC-10",
+        "ITAC",
+        "Depreciation is calculated by the system",
+        "Depreciation is calculated with the wrong method or life, or not posted.",
+        "RECURRING",
+        "AUTOMATED",
+        (
+            "Depreciation configuration shown from the system, with its change history",
+            "One asset's depreciation recalculated and the run log",
+        ),
+    ),
+    _v4(
+        "itac-payroll-calc",
+        "ITAC-11",
+        "ITAC",
+        "Payroll is calculated by the system",
+        "Employees are paid or taxed at the wrong amounts.",
+        "RECURRING",
+        "AUTOMATED",
+        (
+            "Pay rule and tax table configuration shown from the system, with its change history",
+            "One employee's pay recalculated and the run log",
+        ),
+    ),
+    _v4(
+        "itac-posting-validation",
+        "ITAC-12",
+        "ITAC",
+        "Postings are validated",
+        "A posting lands in the wrong account or leaves the ledger unbalanced.",
+        "RECURRING",
+        "AUTOMATED",
+        (
+            "Validation configuration shown from the system, with its change history",
+            "One rejected posting",
+        ),
+    ),
+    _v4(
+        "itac-interface-totals",
+        "ITAC-13",
+        "ITAC",
+        "Interface totals are checked",
+        "Transactions are lost or duplicated between the source system and the ledger.",
+        "RECURRING",
+        "AUTOMATED",
+        (
+            "Interface control configuration shown from the tool, with its change history",
+            "One mismatched batch held in the error queue",
+        ),
+    ),
+    _v4(
+        "ipe-inventory-valuation",
+        "IPE-03",
+        "IPE",
+        "The inventory valuation report is complete and accurate",
+        "Inventory is valued from a report that is incomplete or wrong.",
+        "QUARTERLY",
+        "IT_DEPENDENT_MANUAL",
+        (
+            "Inventory valuation report as run with its parameters for each selected period",
+            "Agreement to the ledger and the recalculation of selected items",
+        ),
+    ),
+    _v4(
+        "ipe-fixed-asset-register",
+        "IPE-04",
+        "IPE",
+        "The fixed asset register agrees to the ledger",
+        "Fixed asset balances are reported from a register that does not agree to the ledger.",
+        "QUARTERLY",
+        "IT_DEPENDENT_MANUAL",
+        (
+            "Fixed asset register as run with its parameters for each selected period",
+            "Agreement to the ledger by class",
+        ),
+    ),
+    _v4(
+        "ipe-payroll-register",
+        "IPE-05",
+        "IPE",
+        "The payroll register agrees to what is posted and paid",
+        "Payroll is paid and recorded from a register that does not agree to what is posted.",
+        "MONTHLY",
+        "IT_DEPENDENT_MANUAL",
+        (
+            "Payroll register as run with its parameters for each selected payroll",
+            "Agreement to the payroll journal and the payment file",
+        ),
+    ),
+    _v4(
+        "ipe-billing-report",
+        "IPE-06",
+        "IPE",
+        "The billing report is complete and accurate",
+        "Revenue is closed from a billing report that is incomplete or wrong.",
+        "MONTHLY",
+        "IT_DEPENDENT_MANUAL",
+        (
+            "Billing report as run with its parameters for each selected period",
+            "Agreement to revenue and the invoices traced",
+        ),
+    ),
+    _v4(
+        "ipe-ap-aging",
+        "IPE-07",
+        "IPE",
+        "The accounts payable aging is complete and correctly aged",
+        "Payables and the accrual review rest on an aging that is incomplete or misaged.",
+        "QUARTERLY",
+        "IT_DEPENDENT_MANUAL",
+        (
+            "Accounts payable aging as run with its parameters for each selected period",
+            "Agreement to the ledger and the invoices recalculated",
+        ),
+    ),
+    _v4(
+        "ipe-euc-spreadsheets",
+        "IPE-08",
+        "IPE",
+        "Key spreadsheets are controlled",
+        "A key control relies on a spreadsheet whose inputs or formulas are wrong.",
+        "QUARTERLY",
+        "MANUAL",
+        (
+            "Inventory of key spreadsheets and each one's access and version history",
+            "The signed version used with its input agreement and formula check",
+        ),
+    ),
+)
+
 LIBRARY: tuple[LibraryControl, ...] = tuple(
     _version_3(item) for control in V2_LIBRARY for item in (control, *SPLITS.get(control.key, ()))
-)
+) + tuple(_version_3(control) for control in V4_LIBRARY)
 
 LIBRARY_KEYS = tuple(control.key for control in LIBRARY)
 BY_KEY = {control.key: control for control in LIBRARY}
@@ -1179,6 +1693,19 @@ def sample_size(frequency: str, nature: str) -> int:
     if nature == "AUTOMATED":
         return 1
     return SAMPLE_SIZES.get(frequency, 25)
+
+
+TestBasis = Literal["STANDARD", "CLIENT", "CUSTOM"]
+TEST_BASES: tuple[TestBasis, ...] = ("STANDARD", "CLIENT", "CUSTOM")
+
+
+def basis_of(source: str, stored: str | None) -> TestBasis:
+    """What a control's test plan is built from (milestone L2). A person's decision when
+    there is one; otherwise a library copy follows its standard and a client's control
+    follows the client's own procedures. Nothing is forced."""
+    if stored in TEST_BASES:
+        return stored
+    return "STANDARD" if source == "LIBRARY" else "CLIENT"
 
 
 Kind = Literal["ITGC", "ITAC", "BUSINESS", "KEY_REPORT"]

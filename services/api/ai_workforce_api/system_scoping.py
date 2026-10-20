@@ -22,6 +22,12 @@ from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field
 
+from ai_workforce_api.adapted_controls import (
+    adapted_ref,
+    restated,
+    suggested_code,
+    system_token,
+)
 from ai_workforce_api.authorization import Principal, _call, _session_principal
 from ai_workforce_api.control_instances import clone_instance
 from ai_workforce_api.controls import (
@@ -178,6 +184,10 @@ class Candidate:
     domain: str = ""
     activity: str = ""
     elsewhere: bool = False
+    # Where it comes from: the system's own control, the client's controls on other systems
+    # adapted to it (adapted_controls; `adapted_from` names them), or the library.
+    origin: Literal["SYSTEM", "RCM", "LIBRARY"] = "SYSTEM"
+    adapted_from: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -192,11 +202,14 @@ class SystemFacts:
     confirmed: bool
     # This system's control instances: (id, library key, control ref, title, included).
     controls: tuple[tuple[UUID, str, str, str, bool], ...]
-    # Every control a CUEC could call for: this system's instances, then library
-    # controls not loaded for it, or, when the client's RCM is the source, the client's
-    # other IT controls not on this system yet.
+    # Every control a CUEC could call for: this system's instances, then, when the
+    # client's RCM is the source, the client's IT general controls on other systems
+    # adapted to it, and the library's controls not loaded for it.
     candidates: tuple[Candidate, ...]
     uploaded: bool = False
+    # The system's code in the client's control references (ITGC-AD-02): set by a person,
+    # or suggested from its name.
+    ref_code: str = ""
 
 
 # Facts
@@ -206,7 +219,7 @@ def gather(connection: psycopg.Connection[Any], application_id: UUID) -> SystemF
     row = connection.execute(
         """
         SELECT a.id, a.organization_id, a.project_id, a.name, a.layer, a.hosting,
-               a.soc_expected, a.facts_confirmed
+               a.soc_expected, a.facts_confirmed, a.ref_code
         FROM engagement_applications a WHERE a.id = %s
         """,
         (application_id,),
@@ -215,7 +228,7 @@ def gather(connection: psycopg.Connection[Any], application_id: UUID) -> SystemF
         return None
     controls = connection.execute(
         """
-        SELECT id, library_key, control_ref, title, included, domain, activity
+        SELECT id, library_key, control_ref, title, included, domain, activity, adapted_from
         FROM engagement_controls
         WHERE project_id = %s AND engagement_application_id = %s
         ORDER BY control_ref
@@ -237,27 +250,31 @@ def gather(connection: psycopg.Connection[Any], application_id: UUID) -> SystemF
         (row[2],),
     ).fetchone()
     uploaded = bool(uploaded_row and uploaded_row[0])
+    code = str(row[8]) if row[8] else suggested_code(str(row[3]))
     if uploaded:
-        # The client's RCM is the source: its other IT controls, not on this system yet,
-        # are what a CUEC can call for. The library is not offered next to it.
-        others = connection.execute(
-            """
-            SELECT DISTINCT ON (upper(control_ref))
-                   id, control_ref, title, domain, activity
-            FROM engagement_controls
-            WHERE project_id = %s AND source = 'UPLOAD' AND domain = ANY(%s)
-              AND upper(control_ref) <> ALL(%s)
-            ORDER BY upper(control_ref), created_at
-            """,
-            (
-                row[2],
-                list(RECOMMENDABLE_DOMAINS),
-                [str(c[2]).upper() for c in controls],
-            ),
-        ).fetchall()
+        # The client's RCM is the source: its IT general controls on other systems, adapted
+        # to this one, and the library's controls beside them (decided by the product
+        # owner). A standard an adapted control follows is offered once, as that control.
+        candidates += _rcm_templates(
+            connection, UUID(str(row[1])), UUID(str(row[2])), application_id, str(row[3]),
+            code, list(controls),
+        )  # fmt: skip
+        represented = {item.library_key for item in candidates if item.library_key}
         candidates += [
-            Candidate("", str(o[1]), str(o[2]), UUID(str(o[0])), False, str(o[3]), str(o[4]), True)
-            for o in others
+            Candidate(
+                control.key,
+                control.control_ref,
+                control.title,
+                None,
+                False,
+                control.domain,
+                control.activity,
+                origin="LIBRARY",
+            )  # fmt: skip
+            for control in LIBRARY
+            if control.domain in RECOMMENDABLE_DOMAINS
+            and control.key not in loaded
+            and control.key not in represented
         ]
     else:
         candidates += [
@@ -285,7 +302,131 @@ def gather(connection: psycopg.Connection[Any], application_id: UUID) -> SystemF
         controls=rows,
         candidates=tuple(candidates),
         uploaded=uploaded,
+        ref_code=code,
     )
+
+
+def _rcm_templates(
+    connection: psycopg.Connection[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    application_id: UUID,
+    system: str,
+    code: str,
+    own: list[Any],
+) -> list[Candidate]:
+    """The client's IT general controls on other systems, as this system's candidates.
+    Where the client's references name their system (ITGC-SAP-02), those that follow the
+    same standard are offered as one (ITGC-SAP-02, ITGC-WD-02: access removed on
+    termination), with the reference it takes here and the standard's wording, or the
+    client's wording restated for this system. Where they do not (AC 1.02), the control is
+    one family across systems and is offered as it is. An application's own controls and
+    reports (application controls, key reports) are not offered for another system."""
+    from ai_workforce_api.control_statements import render
+    from ai_workforce_api.controls import BY_KEY
+    from ai_workforce_api.library_matching import ControlFacts, rules_candidates
+    from ai_workforce_api.statement_registry import statement_for
+
+    rows = connection.execute(
+        """
+        SELECT DISTINCT ON (upper(c.control_ref))
+               c.id, c.control_ref, c.title, c.domain, c.activity, coalesce(c.risk, ''),
+               c.nature, c.frequency, coalesce(a.name, ''), c.engagement_application_id
+        FROM engagement_controls c
+        LEFT JOIN engagement_applications a ON a.id = c.engagement_application_id
+        WHERE c.project_id = %s AND c.source = 'UPLOAD' AND c.domain = ANY(%s)
+          AND c.engagement_application_id IS DISTINCT FROM %s
+          AND cardinality(c.adapted_from) = 0
+        ORDER BY upper(c.control_ref), c.created_at
+        """,
+        (project_id, list(_GENERAL), application_id),
+    ).fetchall()
+    tokens = {
+        app: system_token(str(ref) for ref in refs)
+        for app, refs in connection.execute(
+            "SELECT engagement_application_id, array_agg(control_ref) FROM engagement_controls "
+            "WHERE project_id = %s AND source = 'UPLOAD' AND engagement_application_id IS NOT NULL "
+            "AND cardinality(adapted_from) = 0 GROUP BY engagement_application_id",
+            (project_id,),
+        ).fetchall()
+    }
+    # Already here: this system's own controls by reference, and those adapted to it.
+    here = {str(c[2]).upper() for c in own}
+    done = {str(ref).upper() for c in own for ref in (c[7] or [])}
+    groups: dict[str, list[Any]] = {}
+    found: list[Candidate] = []
+    for member in rows:
+        ref = str(member[1])
+        if ref.upper() in here or ref.upper() in done:
+            continue
+        if tokens.get(member[9]) is None:
+            # References that name no system (AC 1.02 on SAP and Workday alike): the
+            # client's control is one family across systems, offered as it is.
+            found.append(
+                Candidate(
+                    "",
+                    ref,
+                    str(member[2]),
+                    UUID(str(member[0])),
+                    False,
+                    str(member[3]),
+                    str(member[4]),
+                    True,
+                    origin="RCM",
+                )  # fmt: skip
+            )
+            continue
+        facts = ControlFacts(
+            control_id=UUID(str(member[0])), organization_id=organization_id,
+            project_id=project_id, control_ref=ref, title=str(member[2]),
+            activity=str(member[4]), risk=str(member[5]), domain=str(member[3]),
+            nature=str(member[6]), frequency=str(member[7]), source="UPLOAD",
+            library_key="", test_basis="CLIENT",
+        )  # fmt: skip
+        ranked = rules_candidates(facts, {}, limit=2)
+        standard = ranked[0].library_key if ranked and ranked[0].status == "STRONG" else ""
+        groups.setdefault(standard or f"ref:{ref.upper()}", []).append(member)
+    taken = {
+        str(ref).upper()
+        for (ref,) in connection.execute(
+            "SELECT DISTINCT control_ref FROM engagement_controls WHERE project_id = %s",
+            (project_id,),
+        ).fetchall()
+    }
+    for key, members in sorted(groups.items(), key=lambda item: str(item[1][0][1])):
+        first = members[0]
+        token = tokens.get(first[9])
+        names = [str(first[8]), token or ""]
+        ref = adapted_ref(str(first[1]), token, code, taken)
+        taken.add(ref.upper())
+        follows = BY_KEY.get(key)
+        if follows is not None:
+            statement = statement_for(follows.key)
+            activity = (
+                render(statement.text, {"system": system},
+                       {slot.key: slot.label for slot in statement.slots})
+                if statement is not None else follows.activity
+            )  # fmt: skip
+            title, domain = follows.title, follows.domain
+        else:
+            title = restated(str(first[2]), names, system)
+            activity = restated(str(first[4]), names, system)
+            domain = str(first[3])
+        found.append(
+            Candidate(
+                follows.key if follows is not None else "",
+                ref,
+                title,
+                UUID(str(first[0])),
+                False,
+                domain,
+                activity,
+                True,
+                origin="RCM",
+                adapted_from=tuple(str(member[1]) for member in members),
+            )  # fmt: skip
+        )
+    return found
 
 
 # Running a review
@@ -381,6 +522,16 @@ def add_control(
         ).fetchone()
         if found is None:
             raise OnboardingState("system changed")
+        # A standard the system already has in scope, under any reference (ITGC-AD-02
+        # adapted from the client's controls), is said to be there, not added silently.
+        held = cursor.execute(
+            "SELECT control_ref FROM engagement_controls WHERE project_id = %s "
+            "AND engagement_application_id = %s AND included "
+            "AND (id = %s OR (%s::text IS NOT NULL AND library_key = %s))",
+            (project_id, application_id, body.control_id, body.library_key, body.library_key),
+        ).fetchone()
+        if held is not None:
+            raise OnboardingState(f"this system already has it in scope as {held[0]}")
         include_control(
             cursor, organization_id, project_id, application_id, body.control_id, body.library_key
         )
@@ -653,19 +804,32 @@ def _add_library_control(
     project_id: UUID,
     application_id: UUID,
     library_key: str,
+    control_ref: str | None = None,
+    adapted_from: tuple[str, ...] = (),
 ) -> None:
-    """Bring a library control into scope for this system, as the CUECs call for."""
+    """Bring a library control into scope for this system, as the CUECs call for: under
+    its own reference, or, adapted from the client's controls on other systems, under the
+    reference it takes in the client's scheme."""
     control = next((c for c in LIBRARY if c.key == library_key), None)
     if control is None or control.domain not in RECOMMENDABLE_DOMAINS:
         raise OnboardingState("recommendations changed")
+    # The system has one control per standard: one it has already is never added again
+    # silently (the insert below would do nothing).
+    held = cursor.execute(
+        "SELECT control_ref FROM engagement_controls WHERE project_id = %s "
+        "AND engagement_application_id = %s AND library_key = %s",
+        (project_id, application_id, library_key),
+    ).fetchone()
+    if held is not None:
+        raise OnboardingState(f"this system already has the standard as {held[0]}")
     cursor.execute(
         """
         INSERT INTO engagement_controls (
             organization_id, project_id, library_key, library_version, control_ref, domain,
             title, risk, activity, frequency, nature, application_ids, test_attributes,
-            pbc_items, template_key, agent_key, engagement_application_id
+            pbc_items, template_key, agent_key, engagement_application_id, adapted_from
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT DO NOTHING
         """,
         (
@@ -673,7 +837,7 @@ def _add_library_control(
             project_id,
             control.key,
             LIBRARY_VERSION,
-            control.control_ref,
+            control_ref or control.control_ref,
             control.domain,
             control.title,
             control.risk,
@@ -686,9 +850,81 @@ def _add_library_control(
             default_template(control.domain),
             DOMAIN_AGENTS[control.domain],
             application_id,
+            list(adapted_from),
         ),
     )
     _reset_templates(cursor, project_id)
+
+
+def adapt_control(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    application_id: UUID,
+    system: str,
+    candidate: Candidate,
+) -> UUID:
+    """The client's control on other systems, adapted to this one (adapted_controls): the
+    reference it takes here, and the wording of the standard it follows, or the client's
+    wording restated for this system. The client confirms it: an open question on the
+    control says what it was adapted from."""
+    from ai_workforce_api.control_context import Issue, raise_issues
+
+    if candidate.library_key:
+        _add_library_control(
+            cursor, organization_id, project_id, application_id, candidate.library_key,
+            candidate.control_ref, candidate.adapted_from,
+        )  # fmt: skip
+        found = cursor.execute(
+            "SELECT id FROM engagement_controls WHERE project_id = %s "
+            "AND engagement_application_id = %s AND control_ref = %s",
+            (project_id, application_id, candidate.control_ref),
+        ).fetchone()
+        if found is None:
+            raise OnboardingState("system changed")
+        control_id = UUID(str(found[0]))
+        # Its description is the standard's statement, naming this system.
+        from ai_workforce_api.control_design import refresh_statement
+
+        refresh_statement(cursor, control_id)
+    else:
+        if candidate.control_id is None:
+            raise OnboardingState("system changed")
+        control_id = clone_instance(cursor, candidate.control_id, application_id)
+        cursor.execute(
+            """
+            UPDATE engagement_controls
+            SET control_ref = %s, title = %s, activity = %s, adapted_from = %s,
+                included = true, version = version + 1, updated_at = clock_timestamp()
+            WHERE id = %s
+            """,
+            (
+                candidate.control_ref, candidate.title[:300], candidate.activity,
+                list(candidate.adapted_from), control_id,
+            ),
+        )  # fmt: skip
+    sources = ", ".join(candidate.adapted_from)
+    wording = (
+        "the library standard it matches, worded for this system"
+        if candidate.library_key
+        else "the client's wording, with the other system's name replaced"
+    )
+    raise_issues(
+        cursor, organization_id, project_id, control_id,
+        [Issue(
+            origin="ATTRIBUTES", kind="AMBIGUOUS",
+            topic="Confirm the control for this system",
+            detail=f"Adapted for {system} from the client's {sources}. Its description is "
+            f"{wording}.",
+            why="The client's RCM describes this control for other systems only; how it "
+            f"operates for {system} is not documented yet.",
+            resolve=f"Confirm with the control owner that {system} has this control and "
+            "that the description fits, edit it if needed, and resolve this with a note.",
+        )],
+        "RULES",
+    )  # fmt: skip
+    _reset_templates(cursor, project_id)
+    return control_id
 
 
 def register_system_scoping(

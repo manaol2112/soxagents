@@ -159,14 +159,17 @@ def test_effective_interim_testing_rolls_forward_to_period_end(migrated: Databas
     assert roll["applicability"] == "APPLICABLE"
     assert roll["period_start"] == f"{year}-03-11"
     on_request = {r["key"] for r in roll["requirements"] if r["request_id"] == rolled["request_id"]}
+    # The standard's suite (library version 4): the population, its support, the note of
+    # changes since interim, and the engagement's own changes question.
     assert on_request == {
         "rollforward-changes",
-        "rollforward-population",
-        "rollforward-population-support",
+        "rollforward-ac01-e3",
+        "rollforward-ac01-e4",
+        "rollforward-ac01-e10",
     }
     assert "Changes since the interim period" in text
     assert f"11 March {year} to 31 December {year}" in text
-    waiting = next(r for r in roll["requirements"] if r["key"] == "rollforward-sample-evidence")
+    waiting = next(r for r in roll["requirements"] if r["key"] == "rollforward-ac01-e5")
     assert waiting["state"] == "AWAITING_DEPENDENCY"
     assert _task(migrated, rolled["task_id"]) == ("READY", "rollforward", "ROLLFORWARD")
 
@@ -289,6 +292,12 @@ def test_a_logged_deficiency_is_remediated_and_retested(migrated: Database) -> N
         + f"u0999,Before Fix,{(fixed - timedelta(days=5)).isoformat()}\n"
     )
     _add(client, team, "after the fix.csv", after, second["request_id"])
+    # Remediation precedes retesting (W4): the fix and its support arrive on the
+    # remediation request before the retest is sampled.
+    _add(
+        client, team, "fix evidence.txt", "Approval step added; screenshot attached.",
+        deficiency["remediation_request_id"],
+    )  # fmt: skip
     scheduler = _engagement_scheduler(team)
     _read_all(migrated, scheduler)
     plan = next(p for p in _plans(client, team) if p["test_round_id"] == second["id"])
@@ -306,8 +315,14 @@ def test_a_logged_deficiency_is_remediated_and_retested(migrated: Database) -> N
     signed = _test_and_sign(migrated, client, team, retest_sheet)
     # A passing retest proposes no new deficiency: it remediates the one it retests.
     assert (signed["conclusion"], signed["proposal_status"]) == ("EFFECTIVE", "NONE")
+    # The result is recorded at once; the deficiency is remediated only once the round's
+    # own independent review signs off (workflow integrity W2, test_round_reviews).
     final = client.get(f"{base}/deficiencies").json()[0]
-    assert (final["status"], final["retest_result"]) == ("REMEDIATED", "PASSED")
+    assert (final["status"], final["retest_result"]) == ("READY_FOR_RETEST", "PASSED")
+    [retest_review] = [
+        r for r in client.get(f"{base}/reviews").json() if r["test_round_id"] == second["id"]
+    ]
+    assert (retest_review["status"], retest_review["round_kind"]) == ("OPEN", "RETEST")
     reopened = client.post(
         f"{base}/test-sheets/{retest_sheet['id']}/reopen",
         json={"version": signed["version"], "reason": "Second look"},

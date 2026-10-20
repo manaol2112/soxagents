@@ -32,6 +32,7 @@ import {
   setupWrite,
   stepReadiness,
   stepStatusLabel,
+  systemOffers,
   templateUploadNoticeFor,
   templateUploadTarget,
   uniqueKeys,
@@ -1680,5 +1681,47 @@ describe("the launched engagement", () => {
       launchNextSteps(launch).map((step) => [step.key, step.tone]),
       [["clear", "DONE"]],
     );
+  });
+});
+
+describe("the library's IT controls a person can add for a system", () => {
+  it("groups them by area, in reference order, and leaves key reports to their card", () => {
+    const offer = (
+      controlRef: string,
+      domain: string,
+      controlId: string | null = null,
+    ) => ({
+      libraryKey: controlRef.toLowerCase(),
+      controlRef,
+      title: controlRef,
+      domain,
+      controlId,
+    });
+    const areas = systemOffers({
+      otherControls: [
+        offer("ITGC-CM-06", "CHANGE"),
+        offer("ITGC-AC-09", "ACCESS"),
+        offer("ITGC-AC-07", "ACCESS", "01a13300-0000-7000-8000-000000000002"),
+        offer("IPE-03", "IPE"),
+        offer("ITAC-03", "ITAC"),
+      ],
+    });
+    assert.deepEqual(
+      areas.map((area) => [
+        area.label,
+        area.offers.map((item) => item.controlRef),
+      ]),
+      [
+        ["Logical access", ["ITGC-AC-07", "ITGC-AC-09"]],
+        ["Change management", ["ITGC-CM-06"]],
+        ["Application controls", ["ITAC-03"]],
+      ],
+    );
+    // One loaded for the system but out of scope is brought back, not copied again.
+    assert.equal(
+      areas[0]?.offers[0]?.controlId,
+      "01a13300-0000-7000-8000-000000000002",
+    );
+    assert.deepEqual(systemOffers({ otherControls: [] }), []);
   });
 });

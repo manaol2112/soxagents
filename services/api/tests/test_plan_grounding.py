@@ -196,7 +196,9 @@ def test_the_understanding_says_where_each_fact_comes_from(migrated: Database) -
     assert plan["state"] == "NEEDS_CLARIFICATION"
     # The snapshot a reviewer approves holds the facts as they were.
     assert plan["content_hash"]
-    # Recording the client's value answers it, and revises the plan.
+    # Recording the client's value answers it. Filling a value the plan left in brackets is
+    # not a revision (migration 0086, decided by the product owner); the snapshot a
+    # reviewer approves holds it.
     statement = statement_for("access-provisioning")
     assert statement is not None
     keys = set(SLOT.findall(statement.operator))
@@ -209,7 +211,8 @@ def test_the_understanding_says_where_each_fact_comes_from(migrated: Database) -
     after = _master(team, control)
     performer = next(item for item in after["facts"] if item["field"] == "PERFORMER")
     assert performer["basis"] == "SOURCE" and "IT access administrator" in performer["value"]
-    assert after["revision"] > plan["revision"]
+    assert after["revision"] == plan["revision"]
+    assert after["content_hash"] != plan["content_hash"]
 
 
 def test_planning_again_links_procedures_and_evidence(migrated: Database) -> None:
@@ -312,3 +315,83 @@ def test_the_agents_criteria_never_replace_a_persons(migrated: Database) -> None
         a for a in _master(team, control)["attributes"] if a["criteria_source"] == "LIBRARY"
     )
     assert library["condition"]
+
+
+def _client_control(migrated: Database, team: dict[str, Any], ref: str) -> str:
+    """One of the engagement's controls as a client's own (as one the team adds), with no test
+    attribute stated: the placeholder an import writes, and no standard followed."""
+    control = _control(team, ref)["id"]
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE engagement_controls SET source = 'MANUAL', library_key = %s, "
+            "test_basis = NULL, test_attributes = %s::jsonb WHERE id = %s",
+            (
+                f"upload:test:{ref}",
+                '["The control operated as described in the control activity."]',
+                control,
+            ),
+        )
+        generate(
+            connection, None, UUID(str(team["org"])), UUID(str(team["project"])),
+            UUID(control), UUID(str(team["owner_id"])),
+        )  # fmt: skip
+    return str(control)
+
+
+def test_the_team_describes_a_client_control_the_rcm_leaves_undescribed(
+    migrated: Database,
+) -> None:
+    """Decided by the product owner: a client's own control's missing facts are stated by
+    the team in one place (migration 0088), the planner's proposals confirmed there, and a
+    control with no test attributes is offered the standard it matches."""
+    team = _launched(migrated, "grounding-describe")
+    control = _client_control(migrated, team, "ITGC-AC-01")
+    path = f"{_project(team)}/controls/{control}/master-plan"
+    plan = team["owner"].get(path).json()
+    asked = {b["detail"].split(":")[0] for b in plan["blockers"] if b["resolve"] == "FACTS"}
+    assert {"Preventive or detective", "Performed by", "Reviewed or approved by"} <= asked
+    assert not [b for b in plan["blockers"] if b["resolve"] == "VALUES"]
+    objective = next(f for f in plan["facts"] if f["field"] == "OBJECTIVE")
+    assert objective["basis"] == "PROPOSED"
+    # The RCM states no test attribute: the standard the control matches is offered.
+    assert plan["suggested_standard"]["library_key"] == "access-provisioning"
+    assert plan["suggested_standard"]["status"] == "STRONG"
+    stated = team["owner"].put(
+        f"{path}/facts",
+        json={
+            "facts": {
+                "TYPE": "preventive",
+                "PERFORMER": "IT Security Administrator",
+                "ASSERTIONS": "Existence or occurrence; Accuracy",
+                "OBJECTIVE": objective["value"],
+            }
+        },  # fmt: skip
+    )
+    assert stated.status_code == 200, stated.text
+    facts = {f["field"]: f for f in stated.json()["facts"]}
+    assert facts["TYPE"]["value"] == "Preventive" and facts["TYPE"]["basis"] == "SOURCE"
+    assert facts["PERFORMER"]["source"].startswith("Stated by")
+    assert facts["OBJECTIVE"]["basis"] == "SOURCE"
+    left = {b["detail"].split(":")[0] for b in stated.json()["blockers"]
+            if b["resolve"] == "FACTS"}  # fmt: skip
+    assert left == {"Reviewed or approved by"}
+    for wrong in ({"TYPE": "sometimes"}, {"RISK": "Anything"}):
+        assert team["owner"].put(f"{path}/facts", json={"facts": wrong}).status_code == 422
+    # Approved, then a missing fact stated: the approval stands (as a filled client value);
+    # a stated fact changed: the plan goes back for review.
+    approved = team["owner"].post(
+        f"{_project(team)}/controls/{control}/evidence-plan/approve",
+        json={"version": stated.json()["version"]},
+    )
+    assert approved.status_code == 200, approved.text
+    filled = team["owner"].put(f"{path}/facts", json={"facts": {"REVIEWER": "IT Manager"}})
+    assert filled.json()["status"] == "APPROVED"
+    changed = team["owner"].put(f"{path}/facts", json={"facts": {"PERFORMER": "Help desk"}})
+    assert changed.json()["status"] != "APPROVED"
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            "SELECT count(*) FROM audit_events WHERE action = 'control.facts_stated' "
+            "AND target_id = %s",
+            (control,),
+        ).fetchone()
+    assert row == (3,)

@@ -270,10 +270,13 @@ function Meter({ value, tone = "" }: { value: number; tone?: string }) {
 export function EngagementDashboard({
   model,
   engagement,
+  home,
   attention,
 }: {
   model: Ready;
   engagement: EngagementState;
+  /** The journey and the list of what to do next (home-view), leading the page. */
+  home?: ReactNode;
   attention: ReactNode;
 }) {
   const project = model.selectedProject;
@@ -284,7 +287,8 @@ export function EngagementDashboard({
   if (data === null) {
     return (
       <div className="page">
-        <PageHeader context={project.name} title="Dashboard" />
+        <PageHeader context={project.name} title="Home" />
+        {home}
         <Unavailable what="dashboard" />
         {attention}
       </div>
@@ -303,7 +307,7 @@ export function EngagementDashboard({
     <div className="page">
       <PageHeader
         context={project.name}
-        title="Dashboard"
+        title="Home"
         badge={<StatusPill status={project.status} />}
         description={
           <>
@@ -325,6 +329,7 @@ export function EngagementDashboard({
           </>
         }
       />
+      {home}
       {data.periodConflicts.length > 0 ? (
         // A div, not Banner's paragraph: the alert holds a list.
         <div className="banner banner-warning period-alert" role="status">
@@ -394,7 +399,8 @@ export function EngagementDashboard({
           </div>
         </div>
       ) : null}
-      {data.unaddressedRequests > 0 ? (
+      {/* With the list of what to do next, the missing recipient is one of its steps. */}
+      {data.unaddressedRequests > 0 && home == null ? (
         <div className="banner banner-warning period-alert" role="status">
           <UiIcon name="mail" size={16} />
           <div>
@@ -424,6 +430,9 @@ export function EngagementDashboard({
           <a href={pageHref(model, "plan")}>Create its standard plan</a> to see
           phases and milestones.
         </Banner>
+      ) : null}
+      {home != null ? (
+        <h2 className="home-section-title">Engagement health</h2>
       ) : null}
       <section className="kpis kpis-five" aria-label="Engagement health">
         <Metric

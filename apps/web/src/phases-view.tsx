@@ -7,9 +7,11 @@ import { formatDate } from "./format";
 import type { PlanningPageState } from "./load-planning";
 import {
   type ControlPhases,
+  nextRelease,
   PHASE_SHORT,
   type Phase,
   type PhaseStatus,
+  phaseNote,
   phaseStatus,
   planningHref,
   planningProblem,
@@ -484,7 +486,11 @@ function PhaseLine({
   );
 }
 
-/** A control's phases on its test plan review: where each stands, and its release. */
+/**
+ * A control's evidence release on its test plan review, drawn like the control record's
+ * audit progress: one segment per phase with where it stands beneath, and the one release
+ * the reviewer can make next. A later phase can still be released early from its segment.
+ */
 export function PhaseStrip({
   ids,
   row,
@@ -502,30 +508,76 @@ export function PhaseStrip({
     return null;
   }
   const target = open === null ? null : phaseStatus(row, open);
+  const next = nextRelease(row.phases);
+  const start = (phase: Phase) => {
+    setOpen(phase as Released);
+    setReason("");
+  };
   return (
     <section
       className="pl-strip"
-      aria-label="Phases"
+      aria-labelledby="pl-strip-title"
       aria-busy={action.pending}
     >
-      <ol>
+      <div className="pl-strip-head">
+        <h2 id="pl-strip-title">Evidence release</h2>
+        <p>
+          {next === null
+            ? row.phases.every(
+                (status) =>
+                  status.step === "RELEASED" ||
+                  status.step === "COMPLETE" ||
+                  status.step === "NOT_APPLICABLE",
+              )
+              ? "Every phase is released."
+              : "Nothing can be released yet."
+            : next.step === "READY"
+              ? `${PHASE_SHORT[next.phase]} is ready to release.`
+              : `${PHASE_SHORT[next.phase]} is next.`}
+        </p>
+        {canRelease && next !== null && open === null ? (
+          <button
+            type="button"
+            className={
+              next.step === "READY" ? "btn btn-sm" : "btn btn-secondary btn-sm"
+            }
+            disabled={action.pending}
+            onClick={() => start(next.phase)}
+          >
+            {next.step === "READY"
+              ? `Release ${PHASE_SHORT[next.phase].toLowerCase()}`
+              : `Release ${PHASE_SHORT[next.phase].toLowerCase()} early`}
+          </button>
+        ) : null}
+      </div>
+      <ol className="pl-strip-track">
         {row.phases.map((status) => (
-          <li key={status.phase}>
-            <span className="pl-strip-name">{PHASE_SHORT[status.phase]}</span>
-            <StepPill status={status} />
-            {canRelease && releasable(status) && status.phase !== "DESIGN" ? (
+          <li
+            key={status.phase}
+            className={`is-${status.step.toLowerCase()}${status.early ? " is-early" : ""}`}
+          >
+            <span className="pl-strip-bar" aria-hidden="true" />
+            <strong>{PHASE_SHORT[status.phase]}</strong>
+            <small
+              title={
+                status.releasedAt
+                  ? `${status.releasedBy ?? "Recorded"} · ${formatDate(status.releasedAt)}${status.early && status.reason ? ` · ${status.reason}` : ""}`
+                  : undefined
+              }
+            >
+              {phaseNote(status)}
+            </small>
+            {canRelease &&
+            releasable(status) &&
+            status !== next &&
+            open === null ? (
               <button
                 type="button"
-                className={
-                  status.step === "READY" ? "btn-sm" : "btn btn-ghost btn-sm"
-                }
+                className="pl-strip-link"
                 disabled={action.pending}
-                onClick={() => {
-                  setOpen(status.phase as Released);
-                  setReason("");
-                }}
+                onClick={() => start(status.phase)}
               >
-                {status.step === "READY" ? "Release" : "Release early"}
+                Release early
               </button>
             ) : null}
           </li>

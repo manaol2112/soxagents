@@ -19,6 +19,7 @@ import {
 import {
   type ControlRow,
   EMPTY_ENGAGEMENT,
+  overallState,
   type PhaseEvidence,
   parseControls,
 } from "../apps/web/src/engagement-model.ts";
@@ -387,5 +388,47 @@ describe("a control's stage and next step", () => {
       phaseLine(phase({ phase: "ROLLFORWARD", received: 1, out: 1, late: 1 })),
       { label: "Roll-forward", text: "1/2", tone: "late" },
     );
+  });
+});
+
+describe("a conclusion that is not final (workflow integrity W1)", () => {
+  it("reads the row's finality and why it is open", () => {
+    const [open] = parseControls([
+      {
+        id: "c1",
+        control_ref: "ITGC-AC-01",
+        included: true,
+        progress: "TO_REQUEST",
+        conclusion: "EFFECTIVE",
+        final: false,
+        not_final: [
+          {
+            kind: "ROUND",
+            text: "Roll-forward testing outstanding",
+            step: "REQUEST",
+          },
+          { kind: "REVIEW", text: "", step: "REVIEW" },
+        ],
+      },
+    ]) as ControlRow[];
+    assert.equal(open?.final, false);
+    assert.deepEqual(open?.notFinalBecause, [
+      "Roll-forward testing outstanding",
+    ]);
+    // Not concluded until final: the register's state follows the stage, not the opinion.
+    assert.equal(overallState(open as ControlRow), "not_started");
+  });
+
+  it("shows reopened testing with the sheet's reason", () => {
+    const reopened = row({
+      progress: "TESTING_REOPENED",
+      reopenReason: "Review note: item 7 lacks the approval",
+    });
+    assert.deepEqual(stageText(reopened), {
+      label: "Testing reopened",
+      detail: "Review note: item 7 lacks the approval",
+      ai: false,
+    });
+    assert.equal(overallState(reopened), "in_progress");
   });
 });

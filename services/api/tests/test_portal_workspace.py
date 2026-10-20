@@ -218,7 +218,7 @@ def test_submitting_needs_a_file_and_confirms_missing_items(migrated: Database) 
         headers=session,
     )  # fmt: skip
     assert confirmed.status_code == 200, confirmed.text
-    assert confirmed.json()["missing"] == ["Completeness and accuracy of the list"]
+    assert confirmed.json()["missing"] == ["Report parameters and record count for the population"]
     request = public.get(_PORTAL, headers=session).json()["requests"][0]
     assert request["submitted_at"] is not None
     assert request["owner_status"] in ("SUBMITTED", "UNDER_REVIEW")

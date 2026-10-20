@@ -19,6 +19,8 @@ An unknown tenant or project is `404`. A member who lacks the action is `403`. A
 | Update a task | Yes | Yes | Project member | No | Project member |
 | Read agent definitions | Yes | Yes | Yes | Yes | Yes |
 | Create or update a custom agent; disable or enable a standard agent | Yes | Yes | No | No | No |
+| Read the standard library; propose a change to it | Yes | Yes | Yes | Yes | Yes |
+| Decide a standard control's methodology status or a proposed change | Yes | Yes | No | No | No |
 
 Owners and admins can read every project in their organization. Other roles also need a `project_memberships` row. Project creation is allowed for a project manager without an existing project membership. Project and task updates are not.
 

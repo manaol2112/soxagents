@@ -20,6 +20,8 @@ from ai_workforce_api.evidence_planning import (
     phase_periods,
     prompt_for,
     rules_plan,
+    suite_description,
+    suite_wording,
     traits_of,
 )
 from ai_workforce_api.evidence_plans import phase_state, requirement_state
@@ -133,6 +135,134 @@ def _requirement(plan: PlanOutput, phase: str, key: str) -> Any:
 
 
 # Every phase, every time
+
+
+def test_the_planner_follows_the_decided_basis() -> None:
+    """A standard a person decided to follow is planned from at once, before its
+    attributes are approved; the client's procedures never apply the standard; with no
+    decision and no approved library attribute the control is planned by its kind."""
+    leaver = _facts(
+        control_ref="ITGC-SAP-02",
+        title="Access is removed timely upon termination",
+        activity="IT Security locks the SAP user within 1 business day of the termination.",
+        library_key="access-termination",
+    )
+    standard_design = "Read the access policy's removal period"
+    decided = _plan(replace(leaver, test_basis="STANDARD", basis_decided=True))
+    assert decided.phase("DESIGN").procedures[0].startswith(standard_design)
+    client = _plan(replace(leaver, test_basis="CLIENT", basis_decided=True))
+    assert not any(item.startswith(standard_design) for item in client.phase("DESIGN").procedures)
+    undecided = _plan(leaver)
+    assert not any(
+        item.startswith(standard_design) for item in undecided.phase("DESIGN").procedures
+    )
+
+
+def test_a_standard_with_an_evidence_suite_plans_its_evidence_from_it() -> None:
+    """A control that follows a version 4 standard asks for the suite's items, phase by
+    phase: the population and its support, then each item's attribute evidence depending
+    on the population, worded with what makes it complete and what does not serve. The
+    engagement's own change requirements stay; a configured control takes no sample."""
+    from ai_workforce_api.definition_registry import BY_LIBRARY_KEY
+
+    leaver = BY_LIBRARY_KEY["access-termination"]
+    facts = _facts(
+        control_ref="ITGC-SAP-02",
+        title="Access is removed upon termination",
+        activity="IT Security locks the SAP user within the period the policy allows.",
+        attributes=tuple(item.text for item in leaver.approved),
+        library_key="access-termination",
+        test_basis="STANDARD",
+        basis_decided=True,
+    )
+    plan = _plan(facts)
+    design = {item.key: item for item in plan.phase("DESIGN").requirements}
+    assert "design-ac02-e1" in design and design["design-ac02-e1"].categories == [
+        "PROCESS_DOCUMENTATION"
+    ]
+    interim = {item.key: item for item in plan.phase("INTERIM").requirements}
+    population = interim["interim-ac02-e3"]
+    assert population.categories == ["POPULATION"]
+    assert population.population_kind == "TRANSACTIONS"
+    assert "Not sufficient:" in population.description
+    assert "Completeness:" in population.description
+    # The item is worded for the owner without repeating its own title, and reads back.
+    assert population.title not in population.description
+    wording = suite_wording(population.description)
+    assert wording is not None and wording.include and wording.not_sufficient
+    assert wording.note == ""
+    # A sentence a person appends after it is theirs: kept apart, so the request still asks
+    # for it, and written back in place.
+    added = suite_wording(
+        population.description + " Include each monthly access listing as its own sheet."
+    )
+    assert added is not None
+    assert added.not_sufficient == wording.not_sufficient
+    assert added.note == "Include each monthly access listing as its own sheet."
+    assert suite_wording(suite_description(added)) == added
+    sample = interim["interim-ac02-e5"]
+    assert "SAMPLE" in sample.categories
+    assert sample.depends_on == "interim-ac02-e3"
+    assert sample.sample_selection.startswith("The audit team selects")
+    assert sample.attributes and all(text in facts.attributes for text in sample.attributes)
+    # The generic requirements are replaced; the roll-forward keeps the changes question.
+    assert "interim-population" not in interim
+    roll = {item.key for item in plan.phase("ROLLFORWARD").requirements}
+    assert "rollforward-changes" in roll and "rollforward-ac02-e8" in roll
+    # The client's own procedures leave the suite aside.
+    client = _plan(replace(facts, test_basis="CLIENT"))
+    assert "interim-population" in {i.key for i in client.phase("INTERIM").requirements}
+    # A configured control's suite is tested without a sample.
+    settings = BY_LIBRARY_KEY["access-authentication"]
+    configured = _plan(
+        _facts(
+            control_ref="ITGC-AC-05",
+            title="Authentication settings meet policy",
+            activity="The system enforces the authentication settings the policy requires.",
+            frequency="RECURRING",
+            nature="AUTOMATED",
+            attributes=tuple(item.text for item in settings.approved),
+            library_key="access-authentication",
+            test_basis="STANDARD",
+            basis_decided=True,
+        )
+    )
+    categories = {
+        category
+        for item in configured.phase("INTERIM").requirements
+        for category in item.categories
+    }
+    assert "SAMPLE" not in categories and {"CONFIGURATION", "CHANGE_HISTORY"} <= categories
+
+
+def test_every_version_4_standard_plans_and_validates() -> None:
+    from ai_workforce_api.controls import BY_KEY
+    from ai_workforce_api.definition_registry import DEFINITIONS
+
+    for definition in DEFINITIONS:
+        if definition.version < 4:
+            continue
+        control = BY_KEY[definition.library_key]
+        facts = _facts(
+            control_ref=control.control_ref,
+            title=control.title,
+            activity=control.activity,
+            risk=control.risk,
+            domain=control.domain,
+            frequency=control.frequency,
+            nature=control.nature,
+            attributes=tuple(item.text for item in definition.approved),
+            library_key=definition.library_key,
+            test_basis="STANDARD",
+            basis_decided=True,
+        )
+        plan = _plan(facts)
+        for phase in plan.phases:
+            keys = [item.key for item in phase.requirements]
+            assert keys and any(key.endswith("-e1") or "-e" in key for key in keys), (
+                definition.control_ref,
+                phase.phase,
+            )
 
 
 def test_every_control_is_planned_for_all_three_phases() -> None:

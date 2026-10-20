@@ -7,6 +7,7 @@ import pytest
 from support import Database
 from test_evidence_analysis import _Provider
 from test_outbound import _session, migrated
+from test_phase_release import _prepare_design
 from test_testing_engine import _base, _controls, _sheet
 from test_workpapers import _tested_control
 
@@ -272,8 +273,8 @@ def test_the_reviewer_decides_notes_a_must_fix_reopens_the_work_and_signs_off(
     assert _row(client, team, sheet["control_id"])["review_left"] == "SIGN"
     # The dashboard and the inbox say where the review stands (9.2).
     dashboard = client.get(f"{base}/workspace/dashboard").json()["review"]
-    assert (dashboard["in_scope"], dashboard["to_sign"], dashboard["signed_off"]) == (19, 1, 0)
-    assert dashboard["not_started"] == 18 and dashboard["complete"] is False
+    assert (dashboard["in_scope"], dashboard["to_sign"], dashboard["signed_off"]) == (31, 1, 0)
+    assert dashboard["not_started"] == 30 and dashboard["complete"] is False
     inbox = client.get(f"{base}/console/inbox").json()["waiting"]
     waiting = next(item for item in inbox if item["kind"] == "control_review")
     assert waiting["title"] == "Sign off the review of ITGC-AC-01 · SAP ERP"
@@ -295,6 +296,10 @@ def test_the_reviewer_decides_notes_a_must_fix_reopens_the_work_and_signs_off(
         )
     own = client.post(f"{path}/sign-off", json={"version": review["version"]})
     assert own.status_code == 409 and "another reviewer" in own.json()["detail"]
+    # Design and implementation testing is applicable to the control: its workpaper is
+    # prepared before the review signs off, or the conclusion cannot be final (workflow
+    # integrity W1, owner's decision 4).
+    _prepare_design(migrated, team, sheet["control_id"])
     signed_off = reviewer.post(
         f"{path}/sign-off", json={"version": review["version"], "note": "Reviewed."}
     )
@@ -308,6 +313,7 @@ def test_the_reviewer_decides_notes_a_must_fix_reopens_the_work_and_signs_off(
         "SIGNED",
     )
     assert row["next_step"] == "Concluded with exceptions"
+    assert row["final"] is True and row["not_final"] == []
     dashboard = client.get(f"{base}/workspace/dashboard").json()["review"]
     assert (dashboard["in_scope"], dashboard["signed_off"], dashboard["complete"]) == (1, 1, True)
     marks = {m["key"]: m for m in client.get(f"{base}/workspace/plan").json()["milestones"]}

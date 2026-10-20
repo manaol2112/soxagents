@@ -11,24 +11,28 @@ import {
   DesignPanel,
   DocumentsPanel,
   ProcessPanel,
-  ReadinessPanel,
 } from "./control-context-view";
 import { PhasePanel, type PhaseState, PhaseStep } from "./control-phases";
 import {
   ActivityTimeline,
-  AgentRoster,
-  ApproachLine,
-  AttentionPanel,
+  AiActivity,
+  AuditProgress,
+  NextActionLine,
+  NextActionPanel,
+  RecordSections,
+  SummaryMetrics,
+  TestPlanSummary,
 } from "./control-workspace";
 import {
+  type AttentionItem,
   agentLanes,
   approachOf,
   attentionOf,
+  definitionWork,
   figuresOf,
-  laneSummary,
   lifecycleOf,
-  RECORD_TAB_LABELS,
-  STAGE_STATUS_LABELS,
+  nextActionOf,
+  summaryMetrics,
   type WorkspaceInput,
 } from "./control-workspace-model";
 import { ControlsGroup, GroupsToggle } from "./controls-group";
@@ -90,7 +94,6 @@ import {
 import {
   evidenceActions,
   evidenceHref,
-  primaryAction,
   REQUEST_STAGES,
   requestStage,
 } from "./evidence-flow";
@@ -103,9 +106,7 @@ import {
 } from "./evidence-model";
 import {
   PHASE_STATE_SHORT,
-  PHASE_STATE_TONES,
   type Phase,
-  type PlanPhase,
   populationWaiting,
   stepStateOf,
 } from "./evidence-plan-model";
@@ -119,6 +120,8 @@ import {
 } from "./evidence-workspace-model";
 import { EvidenceWorkspace } from "./evidence-workspace-view";
 import { formatDate } from "./format";
+import { HashScroll } from "./hash-scroll";
+import { planningHref } from "./planning-model";
 import { RequestReview } from "./request-review";
 import { reviewFor as controlReviewFor, openNotes } from "./review-model";
 import { ReviewTab } from "./review-view";
@@ -128,6 +131,7 @@ import { sheetFor } from "./sheet-model";
 import { TestSheetCard } from "./sheet-view";
 import type { ShellModel } from "./shell-model";
 import { canManageProjects } from "./shell-model";
+import { TestBasisCard } from "./test-basis-view";
 import { testFor } from "./testing-model";
 import { TestPlanCard } from "./testing-view";
 import { UiIcon } from "./ui-icon";
@@ -1032,46 +1036,83 @@ function ControlRecord({
   };
   const stages = lifecycleOf(input);
   const lanes = agentLanes(input);
-  const working = laneSummary(lanes).running;
   const approach = approachOf(input, CLASSIFICATION_LABELS);
   const figures = figuresOf(input, stages);
   const stage = stageText(control);
   const link = nextStepLink(control);
   const who = control.yours ? "You" : ACTOR_LABELS[control.actor];
-  const attention = attentionOf(brief, control, control.yours ? "" : who);
+  // Work done on another page links there directly: the evidence plan is approved
+  // with the test plan, on its Evidence tab.
+  const attention = attentionOf(brief, control, control.yours ? "" : who).map(
+    (item): AttentionItem =>
+      item.page === "test-plan"
+        ? {
+            ...item,
+            href: planningHref(ids.organizationId, ids.projectId, {
+              control: control.id,
+              tab: "evidence",
+            }),
+            hrefLabel: "Review the test plan",
+          }
+        : item,
+  );
   const tabHrefs = Object.fromEntries(
     DETAIL_TABS.map((key) => [
       key,
       href(model, { ...keep, control: control.id, tab: key }),
     ]),
   ) as Record<DetailTab, string>;
-  // The header's next step opens the record it is about when that is evidence work.
+  // The control's next step opens the record it is about when that is evidence work.
   const firstEvidence = evidence.find((action) => action.mine);
-  const nextHref =
-    link === null
-      ? null
-      : firstEvidence !== undefined &&
-          (link.section === "approvals" || link.tab === "evidence")
-        ? evidenceHref(tabHrefs.evidence, firstEvidence.target)
-        : link.section === "approvals"
-          ? href(model, {}, "approvals")
-          : (tabHrefs[link.tab as DetailTab] ?? tabHrefs.overview);
-  // The header leads with the same evidence action as the Evidence tab when the next
-  // step is evidence work the person can do; otherwise with the control's next step.
-  const evidenceLead = primaryAction(evidence);
-  // On the Evidence tab the page itself approves the plan. The header does not
-  // offer the same button again.
-  const lead =
-    evidenceLead !== null &&
-    !(tab === "evidence" && evidenceLead.action.kind === "approve_plan") &&
-    (link === null || link.section === "approvals" || link.tab === "evidence")
+  // The viewer's next action: what needs them, most pressing first (attentionOf), then an
+  // agent that stopped before finishing; with none, the control's own next step when it
+  // is theirs, and a drafted control's batch submission.
+  const fallback: AttentionItem | null =
+    link !== null
       ? {
-          label: evidenceLead.label,
-          href: evidenceHref(tabHrefs.evidence, evidenceLead.action.target),
+          key: `next-${control.nextStep}`,
+          title: control.nextStep,
+          detail: "",
+          owner: "You",
+          kind: "action",
+          anchor: "",
+          quick: null,
+          ...(firstEvidence !== undefined &&
+          (link.section === "approvals" || link.tab === "evidence")
+            ? { tab: "evidence", target: firstEvidence.target }
+            : link.section === "approvals"
+              ? {
+                  tab: "overview",
+                  href: href(model, {}, "approvals"),
+                  hrefLabel: "Open the approvals",
+                }
+              : {
+                  tab: DETAIL_TABS.includes(link.tab as DetailTab)
+                    ? (link.tab as DetailTab)
+                    : "overview",
+                }),
         }
-      : link !== null && nextHref !== null
-        ? { label: control.nextStep, href: nextHref }
+      : control.drafted && control.yours
+        ? {
+            key: `drafted-${control.id}`,
+            title: "Submit the drafted requests with the batch",
+            detail: "",
+            owner: "You",
+            kind: "action",
+            tab: "evidence",
+            anchor: "",
+            target: { view: "requests" },
+            quick: null,
+          }
         : null;
+  const nextAction = nextActionOf({
+    attention,
+    lanes,
+    control,
+    canAct,
+    fallback,
+  });
+  const metrics = summaryMetrics(input);
   // The request opened on the Evidence tab (?request=), with its review.
   const focused = engagement.filters.request ?? null;
   const focusRow =
@@ -1105,25 +1146,116 @@ function ControlRecord({
         That request is not on this control. Its requests are listed below.
       </p>
     ) : null;
-  const attributesState: PhaseState =
+  // The control's definition, part by part: what waits on a person shows on the Test plan
+  // tab, the rest folds away. The plan itself is reviewed on the Test plans page.
+  const work = definitionWork(context);
+  const unreviewed =
+    context?.documents.filter((item) => !item.reviewed).length ?? 0;
+  const definitionParts: Array<{
+    key: string;
+    label: string;
+    pending: boolean;
+    node: ReactNode;
+  }> =
     context === null
-      ? "todo"
-      : context.approved.length === 0
-        ? "issue"
-        : context.proposed.length > 0 ||
-            context.issues.some(
-              (item) => item.status === "OPEN" && item.origin !== "PROCESS",
-            )
-          ? "active"
-          : "done";
-  const processState: PhaseState =
-    context === null
-      ? "todo"
-      : !context.processRequired || context.understanding.status === "CONFIRMED"
-        ? "done"
-        : context.understanding.status === "DRAFT"
-          ? "active"
-          : "todo";
+      ? []
+      : [
+          ...(context.design !== null
+            ? [
+                {
+                  key: "statement",
+                  label: "Statement",
+                  pending: work.values,
+                  node: (
+                    <DefinitionSection
+                      key="statement"
+                      title="Control statement"
+                      note={work.values ? "Client values to record" : ""}
+                    >
+                      <DesignPanel
+                        ids={ids}
+                        design={context.design}
+                        canAct={canAct}
+                      />
+                    </DefinitionSection>
+                  ),
+                },
+              ]
+            : []),
+          {
+            key: "attributes",
+            label: `${context.approved.length} ${context.approved.length === 1 ? "attribute" : "attributes"}`,
+            pending: work.attributes,
+            node: (
+              <DefinitionSection
+                key="attributes"
+                title="Definition and attributes"
+                note={
+                  !work.attributes
+                    ? ""
+                    : context.proposed.length > 0
+                      ? `${context.proposed.length} proposed to decide`
+                      : context.approved.length === 0
+                        ? "None approved"
+                        : "Open question"
+                }
+              >
+                <AttributesPanel ids={ids} context={context} canAct={canAct} />
+              </DefinitionSection>
+            ),
+          },
+          {
+            key: "process",
+            label: context.processRequired
+              ? "Process understanding"
+              : "Process not needed",
+            pending: work.process,
+            node: (
+              <DefinitionSection
+                key="process"
+                title="Process understanding"
+                note={
+                  !work.process
+                    ? ""
+                    : context.understanding.proposedSteps !== null
+                      ? "Revision proposed"
+                      : context.understanding.steps.length === 0
+                        ? "To build"
+                        : "To confirm"
+                }
+              >
+                <ProcessPanel ids={ids} context={context} canAct={canAct} />
+              </DefinitionSection>
+            ),
+          },
+          {
+            key: "documents",
+            label:
+              context.documents.length === 0
+                ? "No supporting documents"
+                : `${context.documents.length} supporting ${context.documents.length === 1 ? "document" : "documents"}`,
+            pending: work.documents,
+            node: (
+              <DefinitionSection
+                key="documents"
+                title="Supporting documents"
+                note={unreviewed > 0 ? `${unreviewed} to review` : ""}
+              >
+                <DocumentsPanel
+                  ids={ids}
+                  context={context}
+                  canAct={canAct}
+                  controls={(engagement.controls ?? [])
+                    .filter((item) => item.included)
+                    .map((item) => ({
+                      id: item.id,
+                      label: item.label || item.controlRef,
+                    }))}
+                />
+              </DefinitionSection>
+            ),
+          },
+        ];
   const lifeState = (key: string): PhaseState => {
     const found = stages.find((item) => item.key === key)?.status;
     return found === "done"
@@ -1151,19 +1283,25 @@ function ControlRecord({
     ROLLFORWARD: tabHrefs.evidence,
   };
   const openFindings = figures.findings.open;
-  const tabs: Array<[DetailTab, number | null]> = [
-    ["overview", attention.filter((item) => item.kind !== "waiting").length],
-    ["design", context?.proposed.length ?? null],
-    [
-      "evidence",
-      control.requests.filter((request) => request.status !== "CANCELLED")
-        .length,
-    ],
-    ["testing", sheet === null ? null : sheet.counts.items],
-    ["findings", openFindings + figures.findings.potential],
-    ["review", review === null ? null : openNotes(review).length],
-    ["activity", engagement.activity?.length ?? null],
-  ];
+  // The counts beside the Evidence & testing views.
+  const counts: Partial<Record<DetailTab, number | null>> = {
+    evidence: control.requests.filter(
+      (request) => request.status !== "CANCELLED",
+    ).length,
+    testing: sheet === null ? null : sheet.counts.items,
+    findings: openFindings + figures.findings.potential,
+  };
+  // A workpaper step: prepared, being drafted or written, or not started.
+  const paperState = (stage: "DESIGN" | "EFFECTIVENESS"): PhaseState => {
+    const papers = (engagement.workpapers ?? []).filter(
+      (paper) => paper.stage === stage,
+    );
+    return papers.some((paper) => paper.status === "PREPARED")
+      ? "done"
+      : papers.length > 0
+        ? "active"
+        : "todo";
+  };
   const workpaperProps = {
     papers: engagement.workpapers,
     notice: engagement.workpaperNotice,
@@ -1176,19 +1314,12 @@ function ControlRecord({
     engagement.workpaperNotice !== null || engagement.workpaperViewing !== null;
   return (
     <div className="page record-page cx cw">
+      <HashScroll />
       <div className="cx-record-nav">
         <nav className="cx-crumbs" aria-label="Breadcrumb">
           <a href={href(model, keep)}>
             <span aria-hidden="true">←</span> Controls
           </a>
-          {control.applicationName !== "" ? (
-            <>
-              <span aria-hidden="true">/</span>
-              <span>{control.applicationName}</span>
-            </>
-          ) : null}
-          <span aria-hidden="true">/</span>
-          <span>{control.controlRef}</span>
         </nav>
         {index >= 0 ? (
           <span className="cx-pager">
@@ -1224,32 +1355,37 @@ function ControlRecord({
           </span>
         ) : null}
       </div>
-      <header className="cw-head">
-        <div className="cw-id">
-          <p className="cw-kicker">
-            <span className="cw-ref">{control.controlRef}</span>
-            {control.applicationName !== "" ? (
-              <span>{control.applicationName}</span>
-            ) : null}
-          </p>
-          <h1>{control.title}</h1>
-          <p className="cw-meta">
-            <span>{CATEGORY_LABEL[control.category] ?? control.category}</span>
-            <span>{control.keyControl ? "Key control" : "Non-key"}</span>
-            <span>{sentence(natureText(control))}</span>
-            <span>{sentence(frequencyText(control))}</span>
-            <span>{approach.method}</span>
-            <span title={control.ownerEmail || undefined}>
-              Owner{" "}
-              {control.ownerName || control.ownerEmail || "PBC coordinator"}
-            </span>
-          </p>
-        </div>
-        <div className="cw-head-side">
+      <section className="cw-summary" aria-label="Control summary">
+        <header className="cw-head">
+          <div className="cw-id">
+            <p className="cw-kicker">
+              {control.applicationName !== "" ? (
+                <>
+                  <span>{control.applicationName}</span>
+                  <span aria-hidden="true">/</span>
+                </>
+              ) : null}
+              <span className="cw-ref">{control.controlRef}</span>
+            </p>
+            <h1>{control.title}</h1>
+            <p className="cw-meta">
+              <span>{sentence(natureText(control))}</span>
+              <span>{control.keyControl ? "Key control" : "Non-key"}</span>
+              <span>{sentence(frequencyText(control))}</span>
+              <span>
+                {CATEGORY_LABEL[control.category] ?? control.category}
+              </span>
+              <span title={control.ownerEmail || undefined}>
+                Owner{" "}
+                {control.ownerName || control.ownerEmail || "PBC coordinator"}
+              </span>
+            </p>
+          </div>
           <p className="cw-stage-line">
             <span
               className={`cr-status cw-stage is-${control.progress.toLowerCase()}`}
             >
+              <span className="sr-only">Status: </span>
               {stage.label}
             </span>
             {stage.ai ? (
@@ -1260,218 +1396,86 @@ function ControlRecord({
                 AI
               </span>
             ) : null}
-            {working > 0 ? (
-              <span className="cw-live">
-                <span className="cw-pulse" aria-hidden="true" />
-                {working === 1
-                  ? "1 agent working"
-                  : `${working} agents working`}
-              </span>
-            ) : null}
+            {control.overdue ? <span className="cw-late">Overdue</span> : null}
           </p>
-          {lead !== null ? (
-            <a className="btn" href={lead.href}>
-              {lead.label}
-              <UiIcon name="arrow" size={15} />
-            </a>
-          ) : control.progress === "CONCLUDED" ? (
-            <a className="btn btn-secondary" href={tabHrefs.review}>
-              View the conclusion
-              <UiIcon name="arrow" size={15} />
-            </a>
-          ) : (
-            <p className={`cw-waiting-on${control.overdue ? " is-late" : ""}`}>
-              {control.drafted ? (
-                <>
-                  <span className="cw-owner">Drafted</span>
-                  Submit with the drafted batch
-                </>
-              ) : (
-                <>
-                  {who !== "" ? <span className="cw-owner">{who}</span> : null}
-                  {control.nextStep}
-                </>
-              )}
-            </p>
-          )}
-        </div>
-      </header>
-      <nav className="cw-life" aria-label="Where the audit stands">
-        <ol>
-          {stages.map((item) => (
-            <li key={item.key} className={`is-${item.status}`}>
-              <a href={tabHrefs[item.tab]}>
-                <span className="cw-life-icon" aria-hidden="true">
-                  {item.status === "done" ? (
-                    <UiIcon name="check" size={12} />
-                  ) : item.status === "blocked" ? (
-                    <UiIcon name="risk" size={12} />
-                  ) : item.agent ? (
-                    <UiIcon name="sparkles" size={11} />
-                  ) : null}
-                </span>
-                <span className="cw-life-text">
-                  <strong>{item.label}</strong>
-                  <small>
-                    {item.note !== ""
-                      ? item.note
-                      : STAGE_STATUS_LABELS[item.status]}
-                  </small>
-                </span>
-                <span className="sr-only">
-                  : {STAGE_STATUS_LABELS[item.status]}
-                </span>
-              </a>
-            </li>
-          ))}
-        </ol>
-      </nav>
-      <nav className="cx-tabs cw-tabs" aria-label="Control record">
-        {tabs.map(([key, count]) => (
-          <a
-            key={key}
-            href={tabHrefs[key]}
-            aria-current={tab === key ? "page" : undefined}
-          >
-            {RECORD_TAB_LABELS[key]}
-            {count !== null && count > 0 ? (
-              <span className="cx-tab-count">{count}</span>
-            ) : null}
-          </a>
-        ))}
-      </nav>
-      <div className="record-tab cw-body">
+        </header>
+        <AuditProgress stages={stages} hrefs={tabHrefs} />
         {tab === "overview" ? (
           <>
-            <AttentionPanel
-              attention={attention}
+            <NextActionPanel
+              next={nextAction}
               ids={ids}
               hrefs={tabHrefs}
               canAct={canAct}
+              conclusionHref={tabHrefs.review}
             />
-            <AgentRoster lanes={lanes} hrefs={tabHrefs} />
-            <ApproachLine approach={approach} />
-            <section className="cw-recent" aria-labelledby="cw-recent-title">
-              <h2 id="cw-recent-title">Recent activity</h2>
-              <ActivityTimeline
-                items={engagement.activity}
-                limit={5}
-                moreHref={tabHrefs.activity}
-              />
-            </section>
+            <SummaryMetrics metrics={metrics} hrefs={tabHrefs} />
           </>
+        ) : nextAction.primary !== null ? (
+          <NextActionLine item={nextAction.primary} hrefs={tabHrefs} />
+        ) : null}
+      </section>
+      <RecordSections tab={tab} hrefs={tabHrefs} counts={counts} />
+      <div className="record-tab cw-body">
+        {tab === "overview" ? (
+          <AiActivity
+            lanes={lanes}
+            hrefs={tabHrefs}
+            activity={engagement.activity}
+          />
         ) : null}
         {tab === "design" ? (
           <>
-            <AboutControl control={control} />
-            <ReadinessPanel readiness={context?.readiness ?? null} />
-            <PhasePanel
-              number={1}
-              title="Design and walkthrough"
-              state={lifeState("design")}
-              summary="Confirm the control exists as described and is designed to address the risk: what the tester checks, how the process runs where it is needed, and the walkthrough of one instance in the design workpaper."
-              task={taskOf("walkthrough")}
-            >
-              <PhaseStep
-                number={1}
-                title="Definition and attributes"
-                hint="What the tester checks for each sample. The attributes belong to the control: from the library, the client's RCM, or the team, and proposed by the agent from the sources for you to approve."
-                state={attributesState}
-                note={
-                  context === null
-                    ? undefined
-                    : context.proposed.length > 0
-                      ? `${context.proposed.length} proposed`
-                      : `${context.approved.length} approved`
-                }
-              >
-                {context === null ? (
-                  <p className="form-hint">
-                    The control's context could not be loaded.
-                  </p>
-                ) : (
-                  <>
-                    {context.design !== null ? (
-                      <DesignPanel
-                        ids={ids}
-                        design={context.design}
-                        canAct={canAct}
-                      />
-                    ) : null}
-                    <AttributesPanel
-                      ids={ids}
-                      context={context}
-                      canAct={canAct}
-                    />
-                  </>
-                )}
-              </PhaseStep>
-              <PhaseStep
-                number={2}
-                title="Process understanding"
-                hint={
-                  context?.processRequired === true
-                    ? "How the process runs and where this control operates in it. Built from the RCM and any supporting documents; each step says whether a source states it or it is inferred. Testing waits until you confirm it."
-                    : "Needed only for business process controls. This one is defined by its own criteria and configuration."
-                }
-                state={processState}
-                note={
-                  context === null
-                    ? undefined
-                    : !context.processRequired
-                      ? "Not needed"
-                      : context.understanding.status === "CONFIRMED"
-                        ? "Confirmed"
-                        : context.understanding.status === "DRAFT"
-                          ? "Draft"
-                          : "Not started"
-                }
-              >
-                {context === null ? null : (
-                  <ProcessPanel ids={ids} context={context} canAct={canAct} />
-                )}
-              </PhaseStep>
-              <PhaseStep
-                number={3}
-                title="Supporting documents"
-                hint="Optional: a narrative, policy, procedure, flowchart, walkthrough notes, or system documentation. One document can support several controls; the agent reviews it against the control and proposes changes."
-                state={
-                  context === null || context.documents.length === 0
-                    ? "todo"
-                    : context.documents.every((item) => item.reviewed)
-                      ? "done"
-                      : "active"
-                }
-                note={
-                  context === null || context.documents.length === 0
-                    ? "Optional"
-                    : `${context.documents.length} linked`
-                }
-              >
-                {context === null ? null : (
-                  <DocumentsPanel
-                    ids={ids}
-                    context={context}
-                    canAct={canAct}
-                    controls={(engagement.controls ?? [])
-                      .filter((item) => item.included)
-                      .map((item) => ({
-                        id: item.id,
-                        label: item.label || item.controlRef,
-                      }))}
-                  />
-                )}
-              </PhaseStep>
-              <PhaseStep
-                number={4}
-                title="Walkthrough and design workpaper"
-                hint="The agent writes the understanding of the control and the walkthrough of one instance from the evidence as soon as the first file has been read; you complete the design attributes and the conclusion, then prepare it."
-                state={lifeState("design")}
-                keepOpen={keepWorkpaper}
-              >
-                <WorkpapersTab {...workpaperProps} stage="DESIGN" />
-              </PhaseStep>
-            </PhasePanel>
+            <TestPlanSummary
+              plan={evidencePlan}
+              approach={approach}
+              attributes={context?.approved.length ?? 0}
+              questions={
+                context?.issues.filter(
+                  (item) => item.status === "OPEN" && item.kind !== "CONFLICT",
+                ).length ?? 0
+              }
+              href={planningHref(ids.organizationId, ids.projectId, {
+                control: control.id,
+              })}
+            />
+            <TestBasisCard ids={ids} basis={engagement.testBasis ?? null} />
+            {context === null ? (
+              <p className="form-hint">
+                The control's definition could not be loaded. Refresh to try
+                again.
+              </p>
+            ) : (
+              <>
+                {definitionParts.some((part) => part.pending) ? (
+                  <h2 className="cw-group-title">Needs your decision</h2>
+                ) : null}
+                {definitionParts
+                  .filter((part) => part.pending)
+                  .map((part) => part.node)}
+                {definitionParts.some((part) => !part.pending) ? (
+                  <details className="cw-fold">
+                    <summary>
+                      <span>
+                        <strong>Control definition</strong>
+                        <small>
+                          {definitionParts
+                            .filter((part) => !part.pending)
+                            .map((part) => part.label)
+                            .join(" · ")}
+                        </small>
+                      </span>
+                      <UiIcon name="chevron" size={14} />
+                    </summary>
+                    <div className="cw-fold-body">
+                      {definitionParts
+                        .filter((part) => !part.pending)
+                        .map((part) => part.node)}
+                    </div>
+                  </details>
+                ) : null}
+              </>
+            )}
           </>
         ) : null}
         {tab === "evidence" ? (
@@ -1485,15 +1489,10 @@ function ControlRecord({
               engagement.files,
             )}
             proposals={evidenceProposals(evidencePlan)}
-            actions={evidence}
             focus={{
               view: engagement.filters.evidenceView ?? null,
               request: focusRow?.id ?? null,
             }}
-            tabHref={tabHrefs.evidence}
-            lanes={lanes.filter(
-              (lane) => lane.key === "requests" || lane.key === "reader",
-            )}
             files={(engagement.files?.files ?? []).map((file) => ({
               id: file.id,
               fileName: file.fileName,
@@ -1527,19 +1526,33 @@ function ControlRecord({
         ) : null}
         {tab === "testing" ? (
           <>
+            {stages.find((item) => item.key === "design")?.status !==
+            "not_applicable" ? (
+              <PhasePanel
+                number={1}
+                title="Design and walkthrough"
+                state={lifeState("design")}
+              >
+                <PhaseStep
+                  number={1}
+                  title="Walkthrough and design workpaper"
+                  state={paperState("DESIGN")}
+                  waits="Starts when design evidence has been read"
+                  keepOpen={keepWorkpaper}
+                >
+                  <WorkpapersTab compact {...workpaperProps} stage="DESIGN" />
+                </PhaseStep>
+              </PhasePanel>
+            ) : null}
             <PhasePanel
-              number={1}
+              number={2}
               title="Interim testing"
               state={lifeState("interim")}
-              summary="Operating effectiveness up to the interim date: a sample from a population you accepted as complete, the agent's test of every item against every attribute with the passage it relied on, your decisions and sign-off, and the interim workpaper."
-              task={taskOf("test")}
-              aside={<PlanChip plan={planPhase("INTERIM")} />}
             >
               {test !== null || sheet?.method !== "TEST_OF_ONE" ? (
                 <PhaseStep
                   number={1}
                   title="Population and sample"
-                  hint="The agent checks the population and proposes the sample; you approve it before anything is tested."
                   state={
                     test === null
                       ? "todo"
@@ -1552,6 +1565,7 @@ function ControlRecord({
                       ? undefined
                       : `${test.samples.length} ${test.status === "APPROVED" ? "approved" : "proposed"}`
                   }
+                  waits="Starts when the population is received"
                   keepOpen={engagement.testNotice !== null}
                 >
                   <TestPlanCard
@@ -1566,7 +1580,7 @@ function ControlRecord({
                       context?.readiness !== null &&
                       context?.readiness !== undefined &&
                       BLOCKING_STATES.includes(context.readiness.state)
-                        ? `Not ready for testing: ${context.readiness.label.toLowerCase()}. See Readiness on the Control & design tab.`
+                        ? `Not ready for testing: ${context.readiness.label.toLowerCase()}. See the Test plan tab.`
                         : null
                     }
                   />
@@ -1575,7 +1589,6 @@ function ControlRecord({
               <PhaseStep
                 number={2}
                 title="Test results and sign-off"
-                hint="The agent tests each item against each attribute from the evidence and cites the passage it relied on. Its results are proposals: you decide the open ones and sign the testing off."
                 state={
                   control.sheetStatus === "SIGNED_OFF"
                     ? "done"
@@ -1590,6 +1603,12 @@ function ControlRecord({
                       ? `Signed off${sheet.signedBy ? ` by ${sheet.signedBy}` : ""}`
                       : `${sheet.counts.tested} of ${sheet.items.length} tested`
                 }
+                waits={
+                  sheet?.method === "TEST_OF_ONE" ||
+                  control.nature === "AUTOMATED"
+                    ? "Starts when the evidence is read"
+                    : "Starts when the samples are approved"
+                }
                 keepOpen={engagement.sheetNotice !== null}
               >
                 <TestSheetCard
@@ -1602,84 +1621,76 @@ function ControlRecord({
               <PhaseStep
                 number={3}
                 title="Interim workpaper"
-                hint="Filled from the records: population, sample, the testing matrix, exceptions, and the conclusion derived from the sign-off. The agent drafts the narratives; you prepare it."
+                state={paperState("EFFECTIVENESS")}
+                waits="Starts when testing begins"
                 keepOpen={keepWorkpaper}
-                state={
-                  engagement.workpapers?.some(
-                    (paper) =>
-                      paper.stage === "EFFECTIVENESS" &&
-                      paper.status === "PREPARED",
-                  ) === true
-                    ? "done"
-                    : engagement.workpapers?.some(
-                          (paper) => paper.stage === "EFFECTIVENESS",
-                        ) === true
-                      ? "active"
-                      : "todo"
-                }
               >
                 <WorkpapersTab
+                  compact
                   {...workpaperProps}
                   stage="EFFECTIVENESS"
                   initial="interim"
                 />
               </PhaseStep>
             </PhasePanel>
-            <PhasePanel
-              number={2}
-              title="Roll-forward and retests"
-              state={lifeState("rollforward")}
-              summary="From the interim date to period end: the owner evidences what changed and sends the remaining population, the agent tests an update sample from the remaining period only, and a deficiency fixed during the period is retested from after the fix."
-              aside={<PlanChip plan={planPhase("ROLLFORWARD")} />}
-            >
-              <PhaseStep
-                number={1}
-                title="Rounds"
-                hint="A roll-forward starts when interim testing is signed off effective; a retest when a deficiency is marked ready. Each round has its own request, sample, and test sheet."
+            {stages.find((item) => item.key === "rollforward")?.status !==
+            "not_applicable" ? (
+              <PhasePanel
+                number={3}
+                title="Roll-forward and retests"
                 state={lifeState("rollforward")}
-                note={
-                  rounds.length === 0
-                    ? undefined
-                    : `${rounds.length} round${rounds.length === 1 ? "" : "s"}`
-                }
               >
-                {rounds.length === 0 ? (
-                  <p className="sheet-empty">
-                    <UiIcon name="clock" size={16} />
-                    <span>
-                      {planPhase("ROLLFORWARD")?.applicability ===
-                      "NOT_APPLICABLE"
-                        ? "No roll-forward: the evidence plan says why it does not apply."
-                        : control.sheetStatus === "SIGNED_OFF"
-                          ? "No roll-forward round yet. One starts when interim testing is signed off effective."
-                          : "The roll-forward round starts once interim testing is signed off effective. Its evidence is already planned on the Evidence tab."}
-                    </span>
-                  </p>
-                ) : (
-                  <TestRounds
-                    rounds={rounds}
-                    tests={engagement.tests}
-                    sheets={engagement.sheets}
-                    ids={ids}
-                    canAct={canAct}
-                    today={new Date().toISOString().slice(0, 10)}
+                <PhaseStep
+                  number={1}
+                  title="Rounds"
+                  state={
+                    rounds.length === 0 ? "todo" : lifeState("rollforward")
+                  }
+                  note={
+                    rounds.length === 0
+                      ? undefined
+                      : `${rounds.length} round${rounds.length === 1 ? "" : "s"}`
+                  }
+                  waits="Starts when interim testing is signed off effective"
+                >
+                  {rounds.length === 0 ? (
+                    <p className="sheet-empty">
+                      <UiIcon name="clock" size={16} />
+                      <span>
+                        A roll-forward round starts when interim testing is
+                        signed off effective; a retest when a deficiency is
+                        marked ready.
+                      </span>
+                    </p>
+                  ) : (
+                    <TestRounds
+                      rounds={rounds}
+                      tests={engagement.tests}
+                      sheets={engagement.sheets}
+                      ids={ids}
+                      canAct={canAct}
+                      today={new Date().toISOString().slice(0, 10)}
+                    />
+                  )}
+                </PhaseStep>
+                <PhaseStep
+                  number={2}
+                  title="Roll-forward workpaper"
+                  state={
+                    rounds.length === 0 ? "todo" : lifeState("rollforward")
+                  }
+                  waits="Starts with the first round"
+                  keepOpen={keepWorkpaper}
+                >
+                  <WorkpapersTab
+                    compact
+                    {...workpaperProps}
+                    stage="EFFECTIVENESS"
+                    initial="rollforward"
                   />
-                )}
-              </PhaseStep>
-              <PhaseStep
-                number={2}
-                title="Roll-forward workpaper"
-                hint="The roll-forward tab of the testing workpaper: changes since interim, the update sample, its testing, and the conclusion for the whole period."
-                state={rounds.length === 0 ? "todo" : lifeState("rollforward")}
-                keepOpen={keepWorkpaper}
-              >
-                <WorkpapersTab
-                  {...workpaperProps}
-                  stage="EFFECTIVENESS"
-                  initial="rollforward"
-                />
-              </PhaseStep>
-            </PhasePanel>
+                </PhaseStep>
+              </PhasePanel>
+            ) : null}
           </>
         ) : null}
         {tab === "findings" ? (
@@ -1785,69 +1796,29 @@ function ControlRecord({
   );
 }
 
-/** What the control is: its activity, the risk it addresses, and its facts. */
-function AboutControl({ control }: { control: ControlRow }) {
+/** One part of the control's definition, with what waits on it. Its anchor is the one the
+ * next action links to. */
+function DefinitionSection({
+  title,
+  note,
+  children,
+}: {
+  title: string;
+  note: string;
+  children: ReactNode;
+}) {
   return (
-    <section className="cw-plain cw-about">
-      <h2>About the control</h2>
-      <p className="cx-lead">{control.activity}</p>
-      {control.risk !== "" ? (
-        <div className="cx-risk">
-          <UiIcon name="risk" size={16} />
-          <div>
-            <h3>Risk addressed</h3>
-            <p>{control.risk}</p>
-          </div>
-        </div>
-      ) : null}
-      <dl className="cw-facts">
-        <div>
-          <dt>Type</dt>
-          <dd>{CATEGORY_LABEL[control.category] ?? control.category}</dd>
-        </div>
-        <div>
-          <dt>Area</dt>
-          <dd>{control.area}</dd>
-        </div>
-        <div>
-          <dt>Nature</dt>
-          <dd>{sentence(natureText(control))}</dd>
-        </div>
-        <div>
-          <dt>Frequency</dt>
-          <dd>{sentence(frequencyText(control))}</dd>
-        </div>
-        <div>
-          <dt>Sample size</dt>
-          <dd>{control.sampleSize}</dd>
-        </div>
-        <div>
-          <dt>Control owner</dt>
-          <dd>
-            {control.ownerName || "PBC coordinator"}
-            {control.ownerEmail ? <small>{control.ownerEmail}</small> : null}
-          </dd>
-        </div>
-        <div>
-          <dt>Systems</dt>
-          <dd>
-            {control.systems.length === 0 ? "None" : control.systems.join(", ")}
-          </dd>
-        </div>
-      </dl>
-    </section>
-  );
-}
-
-/** Where a phase's evidence plan stands, beside the phase's title. */
-function PlanChip({ plan }: { plan: PlanPhase | null }) {
-  return plan === null ? null : (
-    <span
-      className={`cx-status ${PHASE_STATE_TONES[plan.state]}`}
-      title="Evidence plan"
+    <section
+      className="cw-plain cw-def"
+      id={stepAnchor(title)}
+      aria-label={title}
     >
-      {plan.stateLabel}
-    </span>
+      <header className="cw-def-head">
+        <h2>{title}</h2>
+        {note !== "" ? <span className="cw-def-note">{note}</span> : null}
+      </header>
+      {children}
+    </section>
   );
 }
 

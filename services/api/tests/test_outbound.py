@@ -15,7 +15,6 @@ from ai_workforce_api.authorization import Principal, PrincipalKind
 from ai_workforce_api.db import connect
 from ai_workforce_api.mailbox import MailboxProvider, MailboxState, MockMailbox, open_mailbox
 from ai_workforce_api.main import create_app
-from ai_workforce_api.migrate import apply_migrations, migrations_dir
 from ai_workforce_api.outbound import PBC_REQUEST, recipient_allowed, render, send_request
 from ai_workforce_api.pbc import PbcBody
 from ai_workforce_api.settings import Settings
@@ -382,9 +381,10 @@ class _TimesOut:
 
 
 @pytest.fixture
-def migrated(empty_database: Database) -> Database:
-    apply_migrations(empty_database.url, migrations_dir())
-    return empty_database
+def migrated(migrated_database: Database) -> Database:
+    # Cloned from the session's migrated template (conftest): the state apply_migrations
+    # produces, without running the migrations again for every test.
+    return migrated_database
 
 
 def _team(database: Database, slug: str) -> tuple[dict[str, Any], UUID, TestClient, TestClient]:

@@ -17,7 +17,9 @@ export type ControlFiles = {
 
 import type { ControlContext } from "./control-context-model.ts";
 import type { EvidencePlan } from "./evidence-plan-model.ts";
+import type { NextSteps } from "./home-model.ts";
 import type { ControlReview, ReviewNotice } from "./review-model.ts";
+import type { TestBasis } from "./test-basis-model.ts";
 import type { ControlTest, TestNotice } from "./testing-model.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -179,12 +181,14 @@ export type WaitingOn = "TEAM" | "OWNER" | "AGENT" | "NONE";
 /** A control's one stage in the work (workspace.progress_of), in order. The stages add
  * up to the controls in scope. */
 export const PROGRESS = [
+  "PLAN_TO_APPROVE",
   "TO_REQUEST",
   "AWAITING_EVIDENCE",
   "EVIDENCE_RECEIVED",
   "READY_FOR_TESTING",
   "AGENT_TESTING",
   "RESULTS_TO_CONFIRM",
+  "TESTING_REOPENED",
   "AWAITING_REVIEW",
   "REVIEW_NOTES",
   "CONCLUDED",
@@ -192,12 +196,14 @@ export const PROGRESS = [
 export type Progress = (typeof PROGRESS)[number];
 
 export const PROGRESS_LABELS: Record<Progress, string> = {
+  PLAN_TO_APPROVE: "Test plan to approve",
   TO_REQUEST: "Not yet requested",
   AWAITING_EVIDENCE: "Awaiting evidence",
   EVIDENCE_RECEIVED: "Evidence received",
   READY_FOR_TESTING: "Ready for testing",
   AGENT_TESTING: "Agent testing",
   RESULTS_TO_CONFIRM: "Results to confirm",
+  TESTING_REOPENED: "Testing reopened",
   AWAITING_REVIEW: "Awaiting review",
   REVIEW_NOTES: "Review notes",
   CONCLUDED: "Concluded",
@@ -377,6 +383,12 @@ export type ControlRow = {
   readinessState: string;
   readinessLabel: string;
   readinessBlocker: string;
+  /** The conclusion is final: every required phase and round tested and reviewed
+   * (control_journey.finality). Only then does the control count as complete. */
+  final?: boolean;
+  notFinalBecause?: string[];
+  /** Why a signed-off sheet was opened again, while it is open; "" otherwise. */
+  reopenReason?: string;
   sheetLeft: SheetLeft | null;
   /** The independent review (9.1): OPEN or SIGNED_OFF, and what it waits for. */
   reviewStatus: "OPEN" | "SIGNED_OFF" | null;
@@ -581,10 +593,14 @@ export type EngagementState = {
   context: ControlContext | null;
   /** The open control's evidence plan: each phase, its evidence, and where it stands. */
   evidencePlan: EvidencePlan | null;
+  /** The open control's test basis and candidate standards (milestone L2). */
+  testBasis?: TestBasis | null;
   plan: Plan | null;
   controls: ControlRow[] | null;
   deficiencies: Deficiency[] | null;
   dashboard: Dashboard | null;
+  /** The engagement's journey and what waits on the team (next_steps.py), for Home. */
+  nextSteps?: NextSteps | null;
   notice: EngagementNotice | null;
   filters: {
     category: string | null;
@@ -811,6 +827,11 @@ export function parseControls(value: unknown): ControlRow[] | null {
       sheetLeft: SHEET_LEFT.find((left) => left === item.sheet_left) ?? null,
       readinessState: str(item.readiness_state) || "READY",
       readinessLabel: str(item.readiness_label),
+      final: item.final === true,
+      notFinalBecause: (Array.isArray(item.not_final) ? item.not_final : [])
+        .map((reason) => (isRecord(reason) ? str(reason.text) : ""))
+        .filter((text) => text !== ""),
+      reopenReason: str(item.reopen_reason),
       readinessBlocker: str(item.readiness_blocker),
       reviewStatus:
         item.review_status === "OPEN" || item.review_status === "SIGNED_OFF"
@@ -1021,7 +1042,10 @@ export function overallState(control: ControlRow): OverallState {
   if (blockersOf(control).length > 0) {
     return "blocked";
   }
-  return control.progress === "TO_REQUEST" ? "not_started" : "in_progress";
+  return control.progress === "TO_REQUEST" ||
+    control.progress === "PLAN_TO_APPROVE"
+    ? "not_started"
+    : "in_progress";
 }
 
 export const QUEUES = [

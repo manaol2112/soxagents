@@ -60,6 +60,13 @@ export type ControlReview = {
   controlId: string;
   controlRef: string;
   label: string;
+  /** The testing round this review covers (roll-forward or retest), or null for the
+   * control's own review of its interim testing (workflow integrity W2). */
+  testRoundId?: string | null;
+  roundKind?: "ROLLFORWARD" | "RETEST" | null;
+  /** What a signed review covered: the sheet and its version, the round, the workpaper
+   * versions. A prior review never covers later work. */
+  coverage?: Record<string, unknown>;
   status: "OPEN" | "SIGNED_OFF";
   reperforming: boolean;
   reperformState: RunState;
@@ -194,6 +201,12 @@ export function parseReviews(value: unknown): ControlReview[] | null {
       controlId: item.control_id,
       controlRef: str(item.control_ref),
       label: str(item.label) || str(item.control_ref),
+      testRoundId: maybe(item.test_round_id),
+      roundKind:
+        item.round_kind === "ROLLFORWARD" || item.round_kind === "RETEST"
+          ? item.round_kind
+          : null,
+      coverage: isRecord(item.coverage) ? item.coverage : {},
       status: item.status === "SIGNED_OFF" ? "SIGNED_OFF" : "OPEN",
       reperforming: item.reperforming === true,
       reperformState: parseRunState(
@@ -250,11 +263,29 @@ export function parseReviews(value: unknown): ControlReview[] | null {
   return reviews;
 }
 
+/** The control's own review (of its interim testing); a round's review never stands
+ * for it. */
 export function reviewFor(
   reviews: ControlReview[] | null,
   controlId: string,
 ): ControlReview | null {
-  return reviews?.find((review) => review.controlId === controlId) ?? null;
+  return (
+    reviews?.find(
+      (review) =>
+        review.controlId === controlId && (review.testRoundId ?? null) === null,
+    ) ?? null
+  );
+}
+
+/** The reviews of the control's testing rounds, in the order they opened. */
+export function roundReviewsFor(
+  reviews: ControlReview[] | null,
+  controlId: string,
+): ControlReview[] {
+  return (reviews ?? []).filter(
+    (review) =>
+      review.controlId === controlId && (review.testRoundId ?? null) !== null,
+  );
 }
 
 /** Notes that still need someone: the reviewer's decision, an answer, or clearing. */

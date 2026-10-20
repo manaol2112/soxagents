@@ -1669,6 +1669,7 @@ export type SetupNotice =
   | "setup-template-customized"
   | "setup-template-saved"
   | "setup-control-exists"
+  | "setup-control-in-scope"
   | "setup-process-exists"
   | "setup-process-in-use"
   | "setup-already-launched"
@@ -1724,6 +1725,7 @@ const NOTICES: readonly SetupNotice[] = [
   "setup-template-customized",
   "setup-template-saved",
   "setup-control-exists",
+  "setup-control-in-scope",
   "setup-process-exists",
   "setup-process-in-use",
   "setup-already-launched",
@@ -1817,6 +1819,8 @@ export type SetupSystem = {
   purpose: string;
   processes: string;
   owner: string;
+  /** The system's code in the client's control references, when a person set one. */
+  refCode: string;
   /** The agent's assessment beside the team's decisions, once the system has a review. */
   assessment: SystemAssessment | null;
   /** SOC reports uploaded for the system, with the CUECs read from them. */
@@ -1871,7 +1875,80 @@ export type Candidate = {
   decision: "SELECTED" | "NOT_SELECTED" | null;
   decisionNote: string;
   decidedBy: string | null;
+  /** Where it comes from: the system's own control, the client's controls on other
+   * systems adapted to it, or the library. */
+  origin: CandidateOrigin;
+  /** For a control adapted from the client's controls on other systems: their
+   * references, and the standard whose wording it takes. */
+  adaptedFrom: string[];
+  follows: string;
 };
+
+export type CandidateOrigin = "SYSTEM" | "RCM" | "LIBRARY";
+
+const MINOR_WORDS = new Set(["and", "of", "the", "for", "a", "an", "to", "on"]);
+
+/** The system's code in control references, suggested from its name, as the API suggests
+ * it (adapted_controls.suggested_code): an acronym it starts with (SAP S/4HANA: SAP), the
+ * initials of several words (Active Directory: AD), or the start of one word (WOR). */
+export function suggestedCode(name: string): string {
+  const words = (
+    name.replace(/\([^)]*\)/g, " ").match(/[A-Za-z0-9]+/g) ?? []
+  ).filter((word) => !MINOR_WORDS.has(word.toLowerCase()));
+  const [first] = words;
+  if (first === undefined) {
+    return "SYS";
+  }
+  if (first.length >= 2 && /^[A-Z]+$/.test(first)) {
+    return first.slice(0, 8);
+  }
+  if (words.length === 1) {
+    return (
+      first
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, "")
+        .slice(0, 3) || "SYS"
+    );
+  }
+  const initials = words
+    .filter((word) => /^[A-Za-z]/.test(word))
+    .map((word) => word.charAt(0).toUpperCase())
+    .join("");
+  return initials.length >= 2
+    ? initials.slice(0, 8)
+    : first.toUpperCase().slice(0, 3);
+}
+
+/** The wizard's candidates in the order a person reads them: the system's own controls,
+ * the client's controls from its RCM, then the standard library. Empty parts are left
+ * out. */
+export function candidateSections(
+  candidates: readonly Candidate[],
+  system: string,
+): Array<{
+  origin: CandidateOrigin;
+  label: string;
+  note: string;
+  items: Candidate[];
+}> {
+  const parts: Array<[CandidateOrigin, string, string]> = [
+    ["SYSTEM", `On ${system || "this system"}`, ""],
+    [
+      "RCM",
+      "From the client's RCM",
+      `The client's controls on its other systems. One with references naming their system is adapted to ${system || "this system"}: it takes this system's reference and the standard's wording, and the client confirms it.`,
+    ],
+    ["LIBRARY", "Standard library", ""],
+  ];
+  return parts
+    .map(([origin, label, note]) => ({
+      origin,
+      label,
+      note,
+      items: candidates.filter((item) => item.origin === origin),
+    }))
+    .filter((part) => part.items.length > 0);
+}
 
 export type SystemAssessment = {
   status: "IDLE" | "PENDING" | "WORKING";
@@ -1888,6 +1965,9 @@ export type SystemAssessment = {
   questions: string[];
   candidates: Candidate[];
   decided: boolean;
+  /** The system's code in the client's control references (ITGC-AD-02): set by a person,
+   * or suggested from its name. */
+  refCode: string;
 };
 
 export type SocCuec = {
@@ -2067,6 +2147,15 @@ export function wizardWrite(fields: Record<string, unknown>): WizardWrite {
         return { error: "invalid" };
       }
       body[key] = value;
+    }
+    // The system's code in control references: sent when given; empty goes back to the
+    // suggestion from its name.
+    if (typeof fields.ref_code === "string") {
+      const code = fields.ref_code.trim().toUpperCase();
+      if (code !== "" && !/^[A-Z][A-Z0-9]{0,7}$/.test(code)) {
+        return { error: "invalid" };
+      }
+      body.ref_code = code;
     }
     return { method: "PATCH", path: `${system}/details`, body };
   }
@@ -2364,6 +2453,7 @@ function parseSystem(item: Record<string, unknown>): SetupSystem {
     purpose: str(item.purpose),
     processes: str(item.processes),
     owner: str(item.owner),
+    refCode: str(item.ref_code),
     assessment: parseAssessment(item.assessment),
     socReports: records(item.soc_reports).map(parseSocReport),
     recommendations: records(item.recommendations)
@@ -2441,8 +2531,14 @@ function parseAssessment(value: unknown): SystemAssessment | null {
       decision: pick(item.decision, ["SELECTED", "NOT_SELECTED"] as const),
       decisionNote: str(item.decision_note),
       decidedBy: typeof item.decided_by === "string" ? item.decided_by : null,
+      origin:
+        pick(item.origin, ["RCM", "LIBRARY"] as const) ??
+        ("SYSTEM" as CandidateOrigin),
+      adaptedFrom: strings(item.adapted_from),
+      follows: str(item.follows),
     })),
     decided: value.decided === true,
+    refCode: str(value.ref_code),
   };
 }
 
@@ -2616,6 +2712,12 @@ export function setupNoticeFor(
   }
   if (status === 409 && detail === "control ID exists") {
     return "setup-control-exists";
+  }
+  if (
+    status === 409 &&
+    detail.startsWith("this system already has it in scope as")
+  ) {
+    return "setup-control-in-scope";
   }
   if (status === 409 && detail === "process exists") {
     return "setup-process-exists";
@@ -4007,6 +4109,9 @@ export function setupProblem(notice: string): string | null {
   if (notice === "setup-control-exists") {
     return "A control with that ID is already in this engagement.";
   }
+  if (notice === "setup-control-in-scope") {
+    return "That control is already in scope for this system under another ID.";
+  }
   if (notice === "setup-process-exists") {
     return "A process with that name is already in this engagement.";
   }
@@ -4162,6 +4267,65 @@ export function reportRows(onboarding: Onboarding): ReportRow[] {
       },
     ];
   });
+}
+
+/** The library's IT controls a person can add for one system, by area: those not in scope
+ * for it and not waiting as one of the agent's recommendations. Key reports are offered
+ * on their own card (reportOffers). */
+export const SYSTEM_OFFER_AREAS: ReadonlyArray<{
+  domain: string;
+  label: string;
+}> = [
+  { domain: "ACCESS", label: "Logical access" },
+  { domain: "CHANGE", label: "Change management" },
+  { domain: "OPERATIONS", label: "IT operations" },
+  { domain: "ITAC", label: "Application controls" },
+];
+
+export function systemOffers(
+  system: Pick<SetupSystem, "otherControls">,
+): Array<{ domain: string; label: string; offers: OtherControl[] }> {
+  return SYSTEM_OFFER_AREAS.map((area) => ({
+    ...area,
+    offers: system.otherControls
+      .filter((offer) => offer.domain === area.domain)
+      .sort(byRef),
+  })).filter((area) => area.offers.length > 0);
+}
+
+export type OfferFilter = {
+  /** Words that must all appear in the control's ID or title, in any case. */
+  query: string;
+  /** One area (ACCESS, CHANGE, …), or every area. */
+  domain: string | null;
+  /** Only the system's own controls taken out of scope, offered back. */
+  removed: boolean;
+};
+
+/** A system's library offers narrowed by a search and filters, its areas kept in order
+ * and an area with nothing left dropped. */
+export function filterOffers(
+  areas: ReadonlyArray<{
+    domain: string;
+    label: string;
+    offers: OtherControl[];
+  }>,
+  filter: OfferFilter,
+): Array<{ domain: string; label: string; offers: OtherControl[] }> {
+  const words = filter.query.toLowerCase().split(/\s+/).filter(Boolean);
+  return areas
+    .filter((area) => filter.domain === null || area.domain === filter.domain)
+    .map((area) => ({
+      ...area,
+      offers: area.offers.filter((offer) => {
+        if (filter.removed && offer.controlId === null) {
+          return false;
+        }
+        const text = `${offer.controlRef} ${offer.title}`.toLowerCase();
+        return words.every((word) => text.includes(word));
+      }),
+    }))
+    .filter((area) => area.offers.length > 0);
 }
 
 /** Key reports in the library not loaded for any system, once each. */

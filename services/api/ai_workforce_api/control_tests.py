@@ -531,6 +531,15 @@ def _approve(
         require_testable(connection, project_id, current.engagement_control_id)
     except NotReady as error:
         raise TestState(error.detail) from None
+    if current.test_round_id is not None:
+        # A round has prerequisites of its own: remediation before retesting, the
+        # round's evidence received, the fixed control operated long enough (W4).
+        from ai_workforce_api.round_readiness import RoundNotReady, require_round_testable
+
+        try:
+            require_round_testable(connection, project_id, current.test_round_id)
+        except RoundNotReady as error:
+            raise TestState(error.detail) from None
     if is_withdrawn(connection, current.population_file_id):
         raise TestState("the population file is withdrawn; propose samples from its replacement")
     # Samples come only from a population a person accepted as complete and accurate on

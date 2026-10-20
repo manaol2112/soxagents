@@ -240,9 +240,9 @@ def test_the_library_and_an_upload_replace_each_other_until_kickoff(migrated: Da
     base = _base(org, project)
     # The library needs an in-scope system first; the upload names the same one.
     assert owner.post(f"{base}/applications", json={"name": "SAP ERP"}).status_code == 200
-    assert len(owner.post(f"{base}/controls/load-library").json()["controls"]) == 19
+    assert len(owner.post(f"{base}/controls/load-library").json()["controls"]) == 31
     uploaded = _upload(owner, base, CLIENT_RCM)
-    assert uploaded["replaces"] == 19
+    assert uploaded["replaces"] == 31
     body = owner.post(
         f"{base}/rcm/uploads/{uploaded['id']}/import", json={"version": uploaded["version"]}
     ).json()
@@ -253,13 +253,13 @@ def test_the_library_and_an_upload_replace_each_other_until_kickoff(migrated: Da
     back = owner.post(f"{base}/controls/load-library").json()
     assert back["rcm_source"] == "LIBRARY"
     # The two systems the upload added stay: each library control is two instances.
-    assert len(back["controls"]) == 38
-    assert len({c["control_ref"] for c in back["controls"]}) == 19
+    assert len(back["controls"]) == 62
+    assert len({c["control_ref"] for c in back["controls"]}) == 31
     second = _upload(owner, base, CLIENT_RCM)
     discarded = owner.post(f"{base}/rcm/uploads/{second['id']}/discard")
     assert discarded.status_code == 200
     assert discarded.json()["open_import_id"] is None
-    assert len(discarded.json()["controls"]) == 38
+    assert len(discarded.json()["controls"]) == 62
     closed = owner.post(
         f"{base}/rcm/uploads/{second['id']}/import", json={"version": second["version"] + 1}
     )

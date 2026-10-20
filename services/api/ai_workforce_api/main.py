@@ -55,11 +55,14 @@ from ai_workforce_api.handoffs import register_handoffs
 from ai_workforce_api.identity import IdentityProvider
 from ai_workforce_api.inbound import register_inbound
 from ai_workforce_api.invitations import DomainChecker, register_invitations
+from ai_workforce_api.library_governance import register_library_governance
+from ai_workforce_api.library_matching import register_library_matching
 from ai_workforce_api.mailbox import live_send_enabled, register_mailbox
 from ai_workforce_api.manager import register_manager
 from ai_workforce_api.master_plans import register_master_plans
 from ai_workforce_api.model_providers import provider_for
 from ai_workforce_api.models import ModelProvider, register_models
+from ai_workforce_api.next_steps import register_next_steps
 from ai_workforce_api.onboarding import register_onboarding
 from ai_workforce_api.outbound import register_outbound
 from ai_workforce_api.pbc import register_pbc
@@ -70,6 +73,7 @@ from ai_workforce_api.pbc_drafting import (
     register_drafting,
 )
 from ai_workforce_api.phase_release import register_phase_release
+from ai_workforce_api.plan_impact import register_plan_impact
 from ai_workforce_api.policy import register_policy
 from ai_workforce_api.projects import register_projects
 from ai_workforce_api.rcm_systems import SystemScanScheduler, scan_runner
@@ -189,6 +193,8 @@ def create_app(
     register_control_reviews(app, resolved, drafts)
     register_demo_requests(app, resolved)
     register_library_summary(app)
+    register_library_governance(app, resolved)
+    register_library_matching(app, resolved)
     register_setup_drafting(app, resolved, drafts)
     register_system_scoping(app, resolved, drafts)
     register_system_suggestions(app, resolved)
@@ -206,6 +212,8 @@ def create_app(
     register_drafting(app, resolved, drafts)
     register_evidence_plans(app, resolved, drafts)
     register_master_plans(app, resolved, drafts)
+    register_next_steps(app, resolved)
+    register_plan_impact(app, resolved)
     register_phase_release(app, resolved)
     scans = drafts if isinstance(drafts, SystemScanScheduler) else None
     register_rcm_uploads(app, resolved, scans)

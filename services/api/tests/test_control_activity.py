@@ -106,4 +106,14 @@ def test_only_a_signed_off_review_concludes_a_control(migrated: Database) -> Non
         )
         connection.commit()
     row = _controls(client, team)[str(control[0])]
-    assert (row["conclusion"], row["progress"]) == ("EFFECTIVE", "CONCLUDED")
+    assert row["conclusion"] == "EFFECTIVE"
+    # The opinion follows the review; the conclusion is final only once the testing
+    # behind it is complete (workflow integrity W1). Here nothing was tested: the
+    # register says what is outstanding instead of reading the control as concluded.
+    assert row["final"] is False and row["progress"] != "CONCLUDED"
+    assert [item["text"] for item in row["not_final"]] == [
+        "Interim testing outstanding",
+        "Design and implementation testing outstanding",
+        "Roll-forward testing outstanding",
+    ]
+    assert row["next_step"] == "Interim testing outstanding"

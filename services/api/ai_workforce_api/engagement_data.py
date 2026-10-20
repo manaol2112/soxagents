@@ -537,9 +537,15 @@ class ControlFilters:
 
 
 def testing_status(row: Any, open_notes: int, pending: int) -> str:
-    """Where a control's testing stands (RULES): complete only when it is concluded, its
-    independent review is signed off, and no review note is open."""
-    if row.conclusion != "NOT_CONCLUDED" and row.review_status == "SIGNED_OFF" and open_notes == 0:
+    """Where a control's testing stands (RULES): complete only when its conclusion is
+    final (every required phase and round tested and independently reviewed:
+    control_journey.finality), its review is signed off, and no review note is open."""
+    if (
+        row.conclusion != "NOT_CONCLUDED"
+        and getattr(row, "final", False)
+        and row.review_status == "SIGNED_OFF"
+        and open_notes == 0
+    ):
         return "complete"
     if row.sheet_status == "SIGNED_OFF":
         return "awaiting_review"

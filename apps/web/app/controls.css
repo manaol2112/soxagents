@@ -2319,3 +2319,17 @@ button.cite-open:hover {
     grid-column: 1 / -1;
   }
 }
+
+/* A client value with an answer, ticked beside its question. */
+.cc-value-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.45rem;
+  color: var(--success);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--success-soft);
+  border: 1px solid var(--success-border);
+  border-radius: 999px;
+}

@@ -13,6 +13,7 @@ import {
 
 import type { ControlRequest } from "./engagement-model";
 import type { RequestStage } from "./evidence-flow";
+import { RequestUpload } from "./evidence-intake";
 import type { EvidencePlan } from "./evidence-plan-model";
 import { Problem, usePlanAction } from "./evidence-plan-view";
 import { formatDate } from "./format";
@@ -24,8 +25,14 @@ import {
   type Check,
   CONTACT_ROLES,
   type Contact,
+  composeWording,
+  type DraftItemFields,
+  dueHint,
+  EMPTY_ITEM,
   formatBytes,
   hasClientActivity,
+  initialsOf,
+  itemNecessity,
   LIFECYCLE_LABELS,
   LIFECYCLE_PATH,
   type LifecycleStage,
@@ -38,9 +45,12 @@ import {
   type Priority,
   parseSources,
   type RequestDetails,
+  requestIntro,
   SOURCE_LABELS,
   type SourceFile,
   type SourceWorkpaper,
+  type WordingDraft,
+  wordingDraft,
 } from "./request-details-model";
 import {
   MAX_DESCRIPTION,
@@ -208,20 +218,25 @@ export function RequestReview({
   const typeLabels = Object.fromEntries(
     (details?.types ?? []).map((item) => [item.key, item.label]),
   );
+  const heading = details?.title || request.title || "Evidence request";
+  const eyebrow = [
+    details?.reference || "Evidence request",
+    heading.includes(control.title)
+      ? control.ref
+      : `${control.ref} ${control.title}`,
+    control.system,
+  ].filter((part) => part !== "");
+  const itemCount = details?.content.structured
+    ? details.content.items.length
+    : 0;
   const headPart = (
     <>
       <header className="rr-head">
         <div className="rr-head-main">
           {inDialog ? null : (
             <>
-              <p className="rr-eyebrow">
-                {details?.reference || "Evidence request"} · {control.ref}{" "}
-                {control.title}
-                {control.system !== "" ? ` · ${control.system}` : ""}
-              </p>
-              <h3 id={`${id}-title`}>
-                {details?.title || request.title || "Evidence request"}
-              </h3>
+              <p className="rr-eyebrow">{eyebrow.join(" · ")}</p>
+              <h3 id={`${id}-title`}>{heading}</h3>
             </>
           )}
           <ul className="rr-badges" aria-label="Request attributes">
@@ -248,6 +263,13 @@ export function RequestReview({
                   className={`rr-badge is-${detail.priority.toLowerCase()}`}
                 >
                   {PRIORITY_LABELS[detail.priority]} priority
+                </span>
+              </li>
+            ) : null}
+            {itemCount > 0 ? (
+              <li>
+                <span className="rr-badge">
+                  {itemCount} item{itemCount === 1 ? "" : "s"}
                 </span>
               </li>
             ) : null}
@@ -457,36 +479,18 @@ export function RequestReview({
             />
           ) : null}
 
-          {inDialog ? null : (
-            <>
-              {unsent && stage !== "HELD" ? (
-                <Readiness
-                  supports={details.supports}
-                  checks={details.checks}
-                  approved={request.approvalDecision === "APPROVED"}
-                />
-              ) : null}
-              <Assignment
-                key={detail?.version}
-                id={id}
-                details={details}
-                busy={busy}
-                run={review.run}
-              />
-            </>
-          )}
-
           <section className="rr-section" aria-labelledby={`${id}-ask`}>
             <div className="rr-section-head">
               <h4 id={`${id}-ask`}>Request to the client</h4>
               {editable && !editing && detail !== null ? (
                 <button
                   type="button"
-                  className="btn btn-sm btn-ghost"
+                  className="btn btn-sm btn-secondary"
                   disabled={busy}
                   onClick={() => setEditing(true)}
                 >
-                  Edit wording
+                  <UiIcon name="compose" size={13} />
+                  Edit request
                 </button>
               ) : null}
             </div>
@@ -494,6 +498,7 @@ export function RequestReview({
               <EditWording
                 id={id}
                 detail={detail}
+                details={details}
                 busy={busy}
                 onCancel={() => setEditing(false)}
                 onSave={async (fields) => {
@@ -818,9 +823,72 @@ export function RequestReview({
       ) : null}
     </>
   );
+  const sidePart = (
+    <aside className="rr-side" aria-label="Status and actions">
+      <section
+        className={`rr-panel${inDialog ? "" : " rr-panel-actions"}`}
+        aria-label={inDialog ? "Status" : "Actions"}
+      >
+        <p className="rr-panel-title">{inDialog ? "Status" : "Actions"}</p>
+        {inDialog ? (
+          <p className={`rr-stage is-${life.tone}`}>{life.label}</p>
+        ) : null}
+        {side}
+        {actionPart}
+      </section>
+      {canAct && status !== "CANCELLED" && status !== "CLOSED" ? (
+        // Evidence the audit team already holds, such as what was obtained during the
+        // walkthrough: filed to this request. An unsent request is then recorded as
+        // received directly and is not sent (evidence_receipts.apply_receipt).
+        <section
+          className="rr-panel rr-evidence"
+          aria-labelledby={`${id}-files`}
+        >
+          <p className="rr-panel-title" id={`${id}-files`}>
+            {unsent ? "Evidence already obtained" : "Add evidence"}
+          </p>
+          <p className="rr-panel-note">
+            {unsent
+              ? "Obtained during the walkthrough or otherwise in hand? Upload it here. The request is recorded as received from the audit team and is not sent to the client."
+              : "Upload files received outside the portal. They are filed to this request."}
+          </p>
+          <RequestUpload
+            organizationId={ids.organizationId}
+            projectId={ids.projectId}
+            requestId={request.id}
+            label={heading}
+            variant="panel"
+          />
+        </section>
+      ) : null}
+      {details !== null &&
+      unsent &&
+      stage !== "HELD" &&
+      details.checks.some((check) => !check.ok) ? (
+        // Only what blocks approval or sending: a request that passes shows its next
+        // action, not a confirmation.
+        <section className="rr-panel">
+          <Readiness
+            checks={details.checks}
+            approved={request.approvalDecision === "APPROVED"}
+          />
+        </section>
+      ) : null}
+      {details !== null ? (
+        <section className="rr-panel">
+          <Assignment
+            key={detail?.version}
+            id={id}
+            details={details}
+            busy={busy}
+            run={review.run}
+          />
+        </section>
+      ) : null}
+    </aside>
+  );
   if (inDialog) {
-    // The record dialog: the request in the main column; its state, actions,
-    // checks, and recipients beside it.
+    // The record dialog: the page names the request, so only the summary band shows.
     return (
       <section
         className="rr is-in-dialog"
@@ -833,48 +901,25 @@ export function RequestReview({
             {calloutPart}
             {mainPart}
           </div>
-          <aside className="rr-side" aria-label="Status and actions">
-            <section className="rr-panel" aria-label="Status">
-              <p className="rr-panel-title">Status</p>
-              <p className={`rr-stage is-${life.tone}`}>{life.label}</p>
-              {side}
-              {actionPart}
-            </section>
-            {details !== null && unsent && stage !== "HELD" ? (
-              <section className="rr-panel">
-                <Readiness
-                  supports={details.supports}
-                  checks={details.checks}
-                  approved={request.approvalDecision === "APPROVED"}
-                />
-              </section>
-            ) : null}
-            {details !== null ? (
-              <section className="rr-panel">
-                <Assignment
-                  key={detail?.version}
-                  id={id}
-                  details={details}
-                  busy={busy}
-                  run={review.run}
-                />
-              </section>
-            ) : null}
-          </aside>
+          {sidePart}
         </div>
       </section>
     );
   }
   return (
     <section
-      className="rr"
+      className="rr is-inline"
       aria-labelledby={`${id}-title`}
       id={`request-${request.id}`}
     >
       {headPart}
-      {calloutPart}
-      {mainPart}
-      {actionPart}
+      <div className="rr-layout">
+        <div className="rr-main">
+          {calloutPart}
+          {mainPart}
+        </div>
+        {sidePart}
+      </div>
     </section>
   );
 }
@@ -1026,62 +1071,30 @@ function LifecycleTrack({ stage }: { stage: LifecycleStage }) {
   );
 }
 
-/** The checks run before approval and sending: what still needs attention. */
+/** The checks run before approval and sending, shown only while one fails: what still
+ * needs attention. */
 function Readiness({
   checks,
   approved,
-  supports = [],
 }: {
   checks: Check[];
   /** Approved and not yet sent: the checks run again when it is sent. */
   approved: boolean;
-  /** The test plan's attributes its items evidence: internal, for the reviewer. */
-  supports?: RequestDetails["supports"];
 }) {
   const failing = checks.filter((check) => !check.ok);
   return (
-    <section
-      className={`rr-ready${failing.length === 0 ? " is-ok" : ""}`}
-      aria-label="Checks before approval"
-    >
+    <section className="rr-ready" aria-label="Checks before approval">
       <p className="rr-ready-head">
-        <UiIcon name={failing.length === 0 ? "check" : "risk"} size={14} />
-        {failing.length === 0
-          ? approved
-            ? "All checks passed. The request is ready to send."
-            : "All checks passed. The request is ready for approval."
-          : `${failing.length} item${failing.length === 1 ? "" : "s"} to resolve before ${approved ? "sending" : "approval"}`}
+        <UiIcon name="risk" size={14} />
+        {`${failing.length} item${failing.length === 1 ? "" : "s"} to resolve before ${approved ? "sending" : "approval"}`}
       </p>
-      {supports.length > 0 ? (
-        <details className="rr-supports">
-          <summary>
-            Supports {supports.map((item) => item.code).join(", ")}
-            <span> · test plan attributes, internal</span>
-          </summary>
-          <ul>
-            {supports.map((item) => (
-              <li key={item.code}>
-                <strong>{item.code}</strong> {item.text}
-                {item.items.length > 0 ? (
-                  <span className="rr-supports-items">
-                    {" "}
-                    · {item.items.join(", ")}
-                  </span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
-      {failing.length > 0 ? (
-        <ul className="rr-ready-list">
-          {failing.map((check) => (
-            <li key={check.key}>
-              <strong>{check.label}:</strong> {check.detail}
-            </li>
-          ))}
-        </ul>
-      ) : null}
+      <ul className="rr-ready-list">
+        {failing.map((check) => (
+          <li key={check.key}>
+            <strong>{check.label}:</strong> {check.detail}
+          </li>
+        ))}
+      </ul>
       <details className="rr-ready-all">
         <summary>View all checks</summary>
         <ul>
@@ -1214,6 +1227,8 @@ function Assignment({
   const [due, setDue] = useState(detail.dueAt.slice(0, 10));
   const [priority, setPriority] = useState<Priority>(detail.priority);
   const [adding, setAdding] = useState(false);
+  // Choosing another recipient: the search replaces the person until one is picked.
+  const [changing, setChanging] = useState(false);
   const [creating, setCreating] = useState<null | {
     target: "to" | "cc";
     email: string;
@@ -1262,7 +1277,9 @@ function Assignment({
   }
   const recipientCheck = check("recipient");
   const ccCheck = check("cc");
+  const dueCheck = check("due");
   const today = new Date().toISOString().slice(0, 10);
+  const suggested = details.suggested;
   return (
     <section className="rr-section rr-assign" aria-labelledby={`${id}-who`}>
       <div className="rr-section-head">
@@ -1276,176 +1293,221 @@ function Assignment({
           Changes to recipients or the due date return the request for approval.
         </p>
       ) : null}
-      <div className="rr-assign-grid">
-        <div className="rr-field">
-          <span className="rr-field-label" id={`${id}-to-label`}>
+      <div className="rr-props">
+        <div className="rr-prop">
+          <span className="rr-prop-label" id={`${id}-to-label`}>
             To
           </span>
-          {recipient !== "" ? (
-            <div className="rr-chips">
-              <ContactChip
-                contact={byEmail.get(recipient.toLowerCase()) ?? null}
-                email={recipient}
-                onRemove={
-                  editable && !busy ? () => save({ recipient: "" }) : null
-                }
-                removeLabel="Change the recipient"
-              />
-            </div>
-          ) : editable ? (
-            <>
-              <ContactSearch
-                id={`${id}-to`}
-                labelledBy={`${id}-to-label`}
-                contacts={details.contacts}
-                exclude={cc}
-                domains={details.domains}
-                placeholder="Search engagement contacts"
-                disabled={busy}
-                onPick={(email) => save({ recipient: email })}
-                onCreate={(email) => setCreating({ target: "to", email })}
-              />
-              {details.suggested !== null ? (
-                <p className="rr-suggest">
-                  Suggested: {details.suggested.name} ({details.suggested.role}){" "}
+          <div className="rr-prop-value">
+            {recipient !== "" && !changing ? (
+              editable ? (
+                // The person is the control: choosing them opens the search.
+                <button
+                  type="button"
+                  className="rr-person-button"
+                  disabled={busy}
+                  aria-label={`Change the recipient, ${byEmail.get(recipient.toLowerCase())?.name ?? recipient}`}
+                  onClick={() => setChanging(true)}
+                >
+                  <Person
+                    contact={byEmail.get(recipient.toLowerCase()) ?? null}
+                    email={recipient}
+                  />
+                  <span className="rr-person-edit" aria-hidden="true">
+                    <UiIcon name="compose" size={13} />
+                  </span>
+                </button>
+              ) : (
+                <div className="rr-person-row">
+                  <Person
+                    contact={byEmail.get(recipient.toLowerCase()) ?? null}
+                    email={recipient}
+                  />
+                </div>
+              )
+            ) : editable ? (
+              <>
+                <ContactSearch
+                  id={`${id}-to`}
+                  labelledBy={`${id}-to-label`}
+                  contacts={details.contacts}
+                  exclude={[recipient, ...cc]}
+                  domains={details.domains}
+                  placeholder="Search contacts or type an email"
+                  disabled={busy}
+                  focus={changing}
+                  onPick={(email) => {
+                    setChanging(false);
+                    save({ recipient: email });
+                  }}
+                  onCreate={(email) => {
+                    setChanging(false);
+                    setCreating({ target: "to", email });
+                  }}
+                  onClose={
+                    recipient !== "" ? () => setChanging(false) : undefined
+                  }
+                />
+                {recipient === "" && suggested !== null ? (
                   <button
                     type="button"
-                    className="link-button"
+                    className="rr-suggest"
                     disabled={busy}
-                    onClick={() =>
-                      save({ recipient: details.suggested?.email ?? "" })
-                    }
+                    onClick={() => save({ recipient: suggested.email })}
                   >
-                    Assign
+                    <span>Suggested</span>
+                    <strong>{suggested.name}</strong>
+                    <span>{suggested.role}</span>
                   </button>
-                </p>
-              ) : null}
-            </>
-          ) : (
-            <p className="rr-missing">No recipient assigned.</p>
-          )}
-          {recipientCheck !== null && !recipientCheck.ok && recipient !== "" ? (
-            <p className="rr-field-error">{recipientCheck.detail}</p>
-          ) : null}
-          {recipient === "" && editable ? (
-            <p className="rr-field-error">A recipient is required.</p>
-          ) : null}
+                ) : null}
+              </>
+            ) : (
+              <span className="rr-prop-empty">No recipient assigned</span>
+            )}
+            {recipientCheck !== null &&
+            !recipientCheck.ok &&
+            recipient !== "" ? (
+              <p className="rr-field-error">{recipientCheck.detail}</p>
+            ) : null}
+            {recipient === "" && editable ? (
+              <p className="rr-field-error">A recipient is required.</p>
+            ) : null}
+          </div>
         </div>
 
-        <div className="rr-field">
-          <span className="rr-field-label" id={`${id}-cc-label`}>
+        <div className="rr-prop">
+          <span className="rr-prop-label" id={`${id}-cc-label`}>
             Cc
           </span>
-          <div className="rr-chips">
-            {cc.map((email) => (
-              <ContactChip
-                key={email}
-                contact={byEmail.get(email.toLowerCase()) ?? null}
-                email={email}
-                onRemove={
-                  editable && !busy
-                    ? () => save({ cc: cc.filter((item) => item !== email) })
-                    : null
-                }
-                removeLabel={`Remove ${email}`}
-              />
-            ))}
-            {cc.length === 0 && !adding ? (
-              <span className="rr-none">None</span>
+          <div className="rr-prop-value">
+            {cc.length > 0 ? (
+              <ul className="rr-cc" aria-labelledby={`${id}-cc-label`}>
+                {cc.map((email) => {
+                  const contact = byEmail.get(email.toLowerCase()) ?? null;
+                  return (
+                    <li key={email}>
+                      <Person contact={contact} email={email} compact />
+                      {editable ? (
+                        <button
+                          type="button"
+                          className="rr-cc-x"
+                          disabled={busy}
+                          aria-label={`Remove ${contact?.name ?? email}`}
+                          onClick={() =>
+                            save({ cc: cc.filter((item) => item !== email) })
+                          }
+                        >
+                          <UiIcon name="x" size={11} />
+                        </button>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
             ) : null}
-            {editable && !adding && cc.length < MAX_COPIED ? (
+            {adding ? (
+              <ContactSearch
+                id={`${id}-cc`}
+                labelledBy={`${id}-cc-label`}
+                contacts={details.contacts}
+                exclude={[recipient, ...cc]}
+                domains={details.domains}
+                placeholder="Search contacts or type an email"
+                disabled={busy}
+                focus
+                onPick={(email) => {
+                  setAdding(false);
+                  save({ cc: [...cc, email] });
+                }}
+                onCreate={(email) => {
+                  setAdding(false);
+                  setCreating({ target: "cc", email });
+                }}
+                onClose={() => setAdding(false)}
+              />
+            ) : editable && cc.length < MAX_COPIED ? (
               <button
                 type="button"
-                className="rr-add"
+                className="rr-prop-add"
                 disabled={busy}
                 onClick={() => setAdding(true)}
               >
                 <UiIcon name="plus" size={12} />
-                Add
+                {cc.length === 0 ? "Add people" : "Add"}
               </button>
+            ) : cc.length === 0 ? (
+              <span className="rr-prop-empty">None</span>
+            ) : null}
+            {ccCheck !== null && !ccCheck.ok ? (
+              <p className="rr-field-error">{ccCheck.detail}</p>
             ) : null}
           </div>
-          {adding ? (
-            <ContactSearch
-              id={`${id}-cc`}
-              labelledBy={`${id}-cc-label`}
-              contacts={details.contacts}
-              exclude={[recipient, ...cc]}
-              domains={details.domains}
-              placeholder="Add a person to copy"
-              disabled={busy}
-              focus
-              onPick={(email) => {
-                setAdding(false);
-                save({ cc: [...cc, email] });
-              }}
-              onCreate={(email) => {
-                setAdding(false);
-                setCreating({ target: "cc", email });
-              }}
-              onClose={() => setAdding(false)}
-            />
-          ) : null}
-          {ccCheck !== null && !ccCheck.ok ? (
-            <p className="rr-field-error">{ccCheck.detail}</p>
-          ) : null}
         </div>
 
-        <div className="rr-field rr-field-short">
-          <label className="rr-field-label" htmlFor={`${id}-due`}>
-            Due date
+        <div className="rr-prop">
+          <label className="rr-prop-label" htmlFor={`${id}-due`}>
+            Due
           </label>
-          {editable ? (
-            <input
-              id={`${id}-due`}
-              type="date"
-              min={today}
-              value={due}
-              disabled={busy}
-              onChange={(event) => {
-                const value = event.target.value;
-                if (/^\d{4}-\d{2}-\d{2}$/.test(value) && value >= today) {
-                  save({ due: value });
-                } else {
-                  setDue(value);
-                }
-              }}
-            />
-          ) : (
-            <p>{formatDate(detail.dueAt)}</p>
-          )}
-          {check("due")?.ok === false ? (
-            <p className="rr-field-error">{check("due")?.detail}</p>
-          ) : null}
+          <div className="rr-prop-value">
+            {editable ? (
+              <div className="rr-due">
+                <input
+                  id={`${id}-due`}
+                  type="date"
+                  className="rr-prop-input"
+                  min={today}
+                  value={due}
+                  disabled={busy}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (/^\d{4}-\d{2}-\d{2}$/.test(value) && value >= today) {
+                      save({ due: value });
+                    } else {
+                      setDue(value);
+                    }
+                  }}
+                />
+                <span className="rr-due-hint">{dueHint(due, today)}</span>
+              </div>
+            ) : (
+              <span className="rr-prop-text">
+                {formatDate(detail.dueAt)}
+                <span className="rr-due-hint">
+                  {dueHint(detail.dueAt.slice(0, 10), today)}
+                </span>
+              </span>
+            )}
+            {dueCheck?.ok === false ? (
+              <p className="rr-field-error">{dueCheck.detail}</p>
+            ) : null}
+          </div>
         </div>
 
-        <div className="rr-field rr-field-short">
-          <span className="rr-field-label" id={`${id}-priority`}>
+        <div className="rr-prop">
+          <label className="rr-prop-label" htmlFor={`${id}-priority`}>
             Priority
-          </span>
-          {editable ? (
-            <fieldset
-              className="rr-segment"
-              aria-labelledby={`${id}-priority`}
-              disabled={busy}
-            >
-              {PRIORITIES.map((item) => (
-                <label key={item} className={priority === item ? "is-on" : ""}>
-                  <input
-                    type="radio"
-                    className="sr-only"
-                    name={`${id}-priority-choice`}
-                    value={item}
-                    checked={priority === item}
-                    onChange={() => save({ priority: item })}
-                  />
-                  {PRIORITY_LABELS[item]}
-                </label>
-              ))}
-            </fieldset>
-          ) : (
-            <p>{PRIORITY_LABELS[priority]}</p>
-          )}
+          </label>
+          <div className="rr-prop-value">
+            {editable ? (
+              <select
+                id={`${id}-priority`}
+                className={`rr-prop-input rr-priority is-${priority.toLowerCase()}`}
+                value={priority}
+                disabled={busy}
+                onChange={(event) =>
+                  save({ priority: event.target.value as Priority })
+                }
+              >
+                {PRIORITIES.map((item) => (
+                  <option key={item} value={item}>
+                    {PRIORITY_LABELS[item]}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="rr-prop-text">{PRIORITY_LABELS[priority]}</span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1478,37 +1540,37 @@ function Assignment({
   );
 }
 
-function ContactChip({
+/** A person on the request: their initials, name, and role and address beneath; or, in a
+ * list of people copied, the initials and name only, the rest on hover. */
+function Person({
   contact,
   email,
-  onRemove,
-  removeLabel,
+  compact = false,
 }: {
   contact: Contact | null;
   email: string;
-  onRemove: (() => void) | null;
-  removeLabel: string;
+  compact?: boolean;
 }) {
+  const name = contact?.name || email;
+  const role =
+    contact !== null ? contact.role || CONTACT_ROLES[contact.source] : "";
   return (
-    <span className="rr-chip">
-      <span className="rr-chip-text">
-        <strong>{contact?.name ?? email}</strong>
-        <span>
-          {contact !== null
-            ? `${contact.email} · ${contact.role || CONTACT_ROLES[contact.source]}`
-            : email}
-        </span>
+    <span
+      className={`rr-person${compact ? " is-compact" : ""}`}
+      title={[name, role, email].filter((part) => part !== "").join(" · ")}
+    >
+      <span className="rr-avatar" aria-hidden="true">
+        {initialsOf(contact?.name ?? "", email)}
       </span>
-      {onRemove !== null ? (
-        <button
-          type="button"
-          className="rr-chip-x"
-          aria-label={removeLabel}
-          onClick={onRemove}
-        >
-          <UiIcon name="x" size={12} />
-        </button>
-      ) : null}
+      <span className="rr-person-text">
+        <strong>{name}</strong>
+        {compact ? null : (
+          <span>
+            {role !== "" ? `${role} · ` : ""}
+            {email}
+          </span>
+        )}
+      </span>
     </span>
   );
 }
@@ -1538,7 +1600,7 @@ export function ContactSearch({
   focus?: boolean;
   onPick: (email: string) => void;
   onCreate: (email: string) => void;
-  onClose?: () => void;
+  onClose?: (() => void) | undefined;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
@@ -1796,88 +1858,116 @@ function ClientContent({
   const shared = details.attachments.filter(
     (item) => item.visibility === "SHARED",
   ).length;
+  const intro = requestIntro(content.summary, details.title);
   return (
-    <div className="rr-client">
+    <div className="rr-client rr-doc">
       {content.structured ? (
         <>
-          {content.summary !== "" ? (
-            <p className="rr-summary">{content.summary}</p>
-          ) : null}
-          <h5>Please provide</h5>
-          <ol className="rr-checklist">
-            {content.items.map((item) => (
-              <li key={`${item.number}-${item.title}`}>
-                <div className="rr-item-head">
-                  <span className="rr-item-no" aria-hidden="true">
-                    {item.number}
-                  </span>
-                  <strong>{item.title}</strong>
-                  {item.type !== null && typeLabels[item.type] ? (
-                    <span className="rr-tag">{typeLabels[item.type]}</span>
+          {intro !== "" ? <p className="rr-summary">{intro}</p> : null}
+          <ol className="rr-checklist" aria-label="Items requested">
+            {content.items.map((item) => {
+              const named = itemNecessity(item.title);
+              const label = item.type !== null ? typeLabels[item.type] : "";
+              return (
+                <li key={`${item.number}-${item.title}`}>
+                  <div className="rr-item-head">
+                    <span className="rr-item-no" aria-hidden="true">
+                      {item.number}
+                    </span>
+                    <strong>
+                      <span className="sr-only">Item {item.number}: </span>
+                      {named.title}
+                    </strong>
+                    {named.necessity !== "REQUIRED" ? (
+                      <span className="rr-tag is-soft">
+                        {named.necessity === "OPTIONAL"
+                          ? "If available"
+                          : "If applicable"}
+                      </span>
+                    ) : null}
+                    {label ? <span className="rr-tag">{label}</span> : null}
+                  </div>
+                  {item.detail !== "" ? (
+                    <p className="rr-item-detail">{item.detail}</p>
                   ) : null}
-                </div>
-                {item.detail !== "" ? (
-                  <p className="rr-item-detail">{item.detail}</p>
-                ) : null}
-                <dl className="rr-item-meta">
-                  {item.period !== "" ? (
-                    <div>
-                      <dt>Period</dt>
-                      <dd>{item.period}</dd>
-                    </div>
-                  ) : null}
-                  {item.include.length > 0 ? (
-                    <div>
-                      <dt>Include</dt>
-                      <dd>{item.include.join("; ")}</dd>
-                    </div>
-                  ) : null}
-                  {item.format !== "" ? (
-                    <div>
-                      <dt>Format</dt>
-                      <dd>{item.format}</dd>
-                    </div>
-                  ) : null}
-                  {item.show !== "" ? (
-                    <div>
-                      <dt>Show</dt>
-                      <dd>{item.show}</dd>
-                    </div>
-                  ) : null}
-                  {item.completeness !== "" ? (
-                    <div>
-                      <dt>Completeness</dt>
-                      <dd>{item.completeness}</dd>
-                    </div>
-                  ) : null}
-                </dl>
-              </li>
-            ))}
+                  <ItemFacts item={item} />
+                </li>
+              );
+            })}
           </ol>
           {content.questions.length > 0 ? (
-            <>
+            <div className="rr-doc-block">
               <h5>Questions for the recipient</h5>
               <ul className="rr-questions">
                 {content.questions.map((question) => (
                   <li key={question}>{question}</li>
                 ))}
               </ul>
-            </>
+            </div>
           ) : null}
         </>
       ) : (
         <div className="rr-text">{details.request.description}</div>
       )}
-      <h5>Submission instructions</h5>
-      <p className="rr-submit">
-        Upload files through the secure link in the request email. A one-time
-        code is sent to the recipient to open it. Files sent as email
-        attachments are not accepted as evidence.
-        {shared > 0
-          ? ` ${shared} reference file${shared === 1 ? " is" : "s are"} available on the same page.`
-          : ""}
-      </p>
+      <div className="rr-doc-foot">
+        {content.closing !== "" ? <p>{content.closing}</p> : null}
+        <p className="rr-submit">
+          <UiIcon name="shield" size={13} />
+          <span>
+            Files are uploaded through the secure link in the request email,
+            opened with a one-time code sent to the recipient. Files sent as
+            email attachments are not accepted as evidence.
+            {shared > 0
+              ? ` ${shared} reference file${shared === 1 ? " is" : "s are"} available on the same page.`
+              : ""}
+          </span>
+        </p>
+      </div>
     </div>
+  );
+}
+
+/** One item's parts as the client reads them, each on its own labelled row. */
+function ItemFacts({
+  item,
+}: {
+  item: RequestDetails["content"]["items"][number];
+}) {
+  const rows: Array<{ label: string; value: string | string[] }> = [
+    { label: "Period", value: item.period },
+    { label: "Include", value: item.include },
+    { label: "Format", value: item.format },
+    { label: "Should show", value: item.show },
+    { label: "Completeness", value: item.completeness },
+    { label: "If not available", value: item.alternatives },
+  ];
+  const shown = rows.filter((row) => row.value.length > 0);
+  if (shown.length === 0) {
+    return null;
+  }
+  return (
+    <dl className="rr-item-meta">
+      {shown.map((row) => (
+        <div key={row.label}>
+          <dt>{row.label}</dt>
+          <dd>
+            {Array.isArray(row.value) ? (
+              row.value.length === 1 ? (
+                row.value[0]
+              ) : (
+                <ul className="rr-bullets">
+                  {row.value.map((entry) => (
+                    <li key={entry}>{entry}</li>
+                  ))}
+                </ul>
+              )
+            ) : (
+              row.value
+            )}
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -2356,6 +2446,23 @@ function Planning({
           </dd>
         </div>
       </dl>
+      {details.supports.length > 0 ? (
+        <>
+          <h5>Test plan attributes this request evidences</h5>
+          <ul className="rr-carries">
+            {details.supports.map((item) => (
+              <li key={item.code}>
+                <strong>
+                  {item.code} {item.text}
+                </strong>
+                {item.items.length > 0 ? (
+                  <span>Evidence: {item.items.join(", ")}</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
       {planning.requirements.length > 0 ? (
         <>
           <h5>Planned evidence covered by this request</h5>
@@ -2411,39 +2518,299 @@ function Planning({
   );
 }
 
+/** The request as the audit team edits it: the opening, then each item in its own fields,
+ * written back in the format the client's checklist is read from. Wording without items,
+ * or a person's choice, is edited as plain text. */
 function EditWording({
   id,
   detail,
+  details,
   busy,
   onCancel,
   onSave,
 }: {
   id: string;
   detail: RequestDetail;
+  details: RequestDetails;
   busy: boolean;
   onCancel: () => void;
   onSave: (fields: Record<string, unknown>) => void;
 }) {
+  const [plain, setPlain] = useState(!details.content.structured);
+  const [draft, setDraft] = useState<WordingDraft>(() => wordingDraft(details));
   const [description, setDescription] = useState(detail.description);
+  const text = plain ? description : composeWording(draft);
+  const titled = draft.items.filter((item) => item.title.trim() !== "").length;
+  const tooLong = text.length > MAX_DESCRIPTION;
+  const setItem = (index: number, change: Partial<DraftItemFields>) =>
+    setDraft((current) => ({
+      ...current,
+      items: current.items.map((item, at) =>
+        at === index ? { ...item, ...change } : item,
+      ),
+    }));
+  const moveItem = (index: number, by: -1 | 1) =>
+    setDraft((current) => {
+      const items = [...current.items];
+      const [moved] = items.splice(index, 1);
+      if (moved !== undefined) {
+        items.splice(index + by, 0, moved);
+      }
+      return { ...current, items };
+    });
   return (
     <div className="rr-edit">
-      <label htmlFor={`${id}-desc`}>Wording sent to the client</label>
-      <textarea
-        id={`${id}-desc`}
-        rows={12}
-        maxLength={MAX_DESCRIPTION}
-        value={description}
-        onChange={(event) => setDescription(event.target.value)}
-      />
+      <div className="rr-edit-mode">
+        <span>
+          {plain
+            ? "Editing the wording as plain text."
+            : "Edit the opening and each item. The client receives them as a numbered checklist."}
+        </span>
+        <button
+          type="button"
+          className="link-button"
+          onClick={() => {
+            if (plain) {
+              setPlain(false);
+            } else {
+              setDescription(composeWording(draft));
+              setPlain(true);
+            }
+          }}
+          disabled={plain && !details.content.structured}
+          hidden={plain && !details.content.structured}
+        >
+          {plain ? "Edit item by item" : "Edit as plain text"}
+        </button>
+      </div>
+      {plain ? (
+        <label htmlFor={`${id}-desc`}>
+          Wording sent to the client
+          <textarea
+            id={`${id}-desc`}
+            rows={14}
+            maxLength={MAX_DESCRIPTION}
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+          />
+        </label>
+      ) : (
+        <>
+          <label htmlFor={`${id}-intro`}>
+            Opening
+            <textarea
+              id={`${id}-intro`}
+              rows={2}
+              value={draft.intro}
+              onChange={(event) =>
+                setDraft({ ...draft, intro: event.target.value })
+              }
+            />
+          </label>
+          <ol className="rr-edit-items">
+            {draft.items.map((item, index) => (
+              // Items have no identity beyond their place in the list while edited.
+              // biome-ignore lint/suspicious/noArrayIndexKey: the position is the item's identity here.
+              <li key={index} className="rr-edit-item">
+                <div className="rr-edit-item-head">
+                  <span className="rr-item-no" aria-hidden="true">
+                    {index + 1}
+                  </span>
+                  <label
+                    htmlFor={`${id}-item-${index}-title`}
+                    className="rr-edit-title"
+                  >
+                    <span className="sr-only">Item {index + 1} title</span>
+                    <textarea
+                      id={`${id}-item-${index}-title`}
+                      rows={1}
+                      maxLength={220}
+                      placeholder="What to provide"
+                      value={item.title}
+                      onChange={(event) =>
+                        setItem(index, {
+                          // A title is one line in the request; a pasted break is a space.
+                          title: event.target.value.replace(/\s*\n\s*/g, " "),
+                        })
+                      }
+                    />
+                  </label>
+                  <div className="rr-edit-item-tools">
+                    <button
+                      type="button"
+                      className="rr-icon-button"
+                      aria-label={`Move item ${index + 1} up`}
+                      disabled={index === 0}
+                      onClick={() => moveItem(index, -1)}
+                    >
+                      <UiIcon name="arrowUp" size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      className="rr-icon-button"
+                      aria-label={`Move item ${index + 1} down`}
+                      disabled={index === draft.items.length - 1}
+                      onClick={() => moveItem(index, 1)}
+                    >
+                      <UiIcon name="arrowDown" size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      className="rr-icon-button is-danger"
+                      aria-label={`Remove item ${index + 1}`}
+                      onClick={() =>
+                        setDraft({
+                          ...draft,
+                          items: draft.items.filter((_, at) => at !== index),
+                        })
+                      }
+                    >
+                      <UiIcon name="x" size={13} />
+                    </button>
+                  </div>
+                </div>
+                <div className="rr-edit-grid">
+                  <label htmlFor={`${id}-item-${index}-period`}>
+                    Period
+                    <input
+                      id={`${id}-item-${index}-period`}
+                      type="text"
+                      maxLength={200}
+                      value={item.period}
+                      onChange={(event) =>
+                        setItem(index, { period: event.target.value })
+                      }
+                    />
+                  </label>
+                  <label htmlFor={`${id}-item-${index}-include`}>
+                    Include <small>One per line</small>
+                    <textarea
+                      id={`${id}-item-${index}-include`}
+                      rows={Math.max(2, item.include.split("\n").length)}
+                      value={item.include}
+                      onChange={(event) =>
+                        setItem(index, { include: event.target.value })
+                      }
+                    />
+                  </label>
+                </div>
+                <details
+                  className="rr-edit-more"
+                  open={
+                    item.detail !== "" ||
+                    item.format !== "" ||
+                    item.show !== "" ||
+                    item.completeness !== "" ||
+                    item.alternatives !== ""
+                  }
+                >
+                  <summary>Note, format, and alternatives</summary>
+                  <div className="rr-edit-grid">
+                    <label htmlFor={`${id}-item-${index}-detail`}>
+                      Note to the client
+                      <textarea
+                        id={`${id}-item-${index}-detail`}
+                        rows={2}
+                        value={item.detail}
+                        onChange={(event) =>
+                          setItem(index, { detail: event.target.value })
+                        }
+                      />
+                    </label>
+                    <label htmlFor={`${id}-item-${index}-format`}>
+                      Format
+                      <input
+                        id={`${id}-item-${index}-format`}
+                        type="text"
+                        maxLength={160}
+                        value={item.format}
+                        onChange={(event) =>
+                          setItem(index, { format: event.target.value })
+                        }
+                      />
+                    </label>
+                    <label htmlFor={`${id}-item-${index}-show`}>
+                      Should show
+                      <input
+                        id={`${id}-item-${index}-show`}
+                        type="text"
+                        maxLength={400}
+                        value={item.show}
+                        onChange={(event) =>
+                          setItem(index, { show: event.target.value })
+                        }
+                      />
+                    </label>
+                    <label htmlFor={`${id}-item-${index}-completeness`}>
+                      Completeness
+                      <input
+                        id={`${id}-item-${index}-completeness`}
+                        type="text"
+                        maxLength={500}
+                        value={item.completeness}
+                        onChange={(event) =>
+                          setItem(index, { completeness: event.target.value })
+                        }
+                      />
+                    </label>
+                    <label htmlFor={`${id}-item-${index}-alternatives`}>
+                      If not available <small>One per line</small>
+                      <textarea
+                        id={`${id}-item-${index}-alternatives`}
+                        rows={2}
+                        value={item.alternatives}
+                        onChange={(event) =>
+                          setItem(index, { alternatives: event.target.value })
+                        }
+                      />
+                    </label>
+                  </div>
+                </details>
+              </li>
+            ))}
+          </ol>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm rr-edit-add"
+            onClick={() =>
+              setDraft({ ...draft, items: [...draft.items, { ...EMPTY_ITEM }] })
+            }
+          >
+            <UiIcon name="plus" size={13} />
+            Add an item
+          </button>
+          <label htmlFor={`${id}-questions`}>
+            Questions for the recipient <small>One per line, optional</small>
+            <textarea
+              id={`${id}-questions`}
+              rows={2}
+              value={draft.questions}
+              onChange={(event) =>
+                setDraft({ ...draft, questions: event.target.value })
+              }
+            />
+          </label>
+        </>
+      )}
+      {!plain && titled === 0 ? (
+        <p className="rr-field-error">The request needs at least one item.</p>
+      ) : null}
+      {tooLong ? (
+        <p className="rr-field-error">
+          The wording is longer than a request can hold.
+        </p>
+      ) : null}
       <div className="rr-actions">
         <button
           type="button"
           className="btn"
-          disabled={busy || description.trim() === ""}
+          disabled={
+            busy || text.trim() === "" || tooLong || (!plain && titled === 0)
+          }
           onClick={() =>
             onSave({
               version: detail.version,
-              description,
+              description: text,
               recipient: detail.recipient,
               due_date: detail.dueAt.slice(0, 10),
               control_ref: detail.controlRef,
@@ -2453,7 +2820,7 @@ function EditWording({
             })
           }
         >
-          Save wording
+          Save changes
         </button>
         <button type="button" className="btn btn-ghost" onClick={onCancel}>
           Cancel
