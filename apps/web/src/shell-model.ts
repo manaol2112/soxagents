@@ -1,26 +1,7 @@
 import type { Client } from "./client-model.ts";
 import type { Completion } from "./engagement-lifecycle.ts";
 import type { ProjectNoticeCode } from "./project-form.ts";
-
-export const SECTIONS = [
-  "console",
-  "overview",
-  "projects",
-  "agents",
-  "tasks",
-  "evidence",
-  "approvals",
-  "setup",
-  "controls",
-  "planning",
-  "testing",
-  "plan",
-  "timeline",
-  "deficiencies",
-  "library",
-] as const;
-
-export type SectionId = (typeof SECTIONS)[number];
+import { parseSection, type SectionId } from "./routes.ts";
 
 export type SessionUser = {
   id: string;
@@ -440,6 +421,24 @@ export function projectLabels(
   );
 }
 
+export {
+  DESTINATIONS,
+  destinationHref,
+  parseReportTab,
+  parseSection,
+  parseSettingsTab,
+  REPORT_TAB_LABELS,
+  REPORT_TABS,
+  type ReportTab,
+  type Route,
+  resolveRoute,
+  SECTIONS,
+  SETTINGS_TAB_LABELS,
+  SETTINGS_TABS,
+  type SectionId,
+  type SettingsTab,
+} from "./routes.ts";
+
 /** The sections that open once the engagement has launched. Before that, setup is the work. */
 export const LAUNCHED_SECTIONS: readonly SectionId[] = [
   "console",
@@ -452,6 +451,7 @@ export const LAUNCHED_SECTIONS: readonly SectionId[] = [
   "evidence",
   "deficiencies",
   "approvals",
+  "reports",
 ];
 
 /** A draft engagement has not launched: its controls, evidence, plan, and approvals wait. */
@@ -1154,30 +1154,6 @@ function parseActivity(value: unknown): ProjectActivity[] | null {
 
 function isDateText(value: unknown): value is string | null {
   return value === null || typeof value === "string";
-}
-
-function parseSection(value: string | null): SectionId {
-  if (
-    value === "projects" ||
-    value === "agents" ||
-    value === "tasks" ||
-    value === "evidence" ||
-    value === "approvals" ||
-    value === "setup" ||
-    value === "controls" ||
-    value === "planning" ||
-    value === "testing" ||
-    value === "plan" ||
-    value === "timeline" ||
-    value === "deficiencies" ||
-    value === "library" ||
-    value === "overview" ||
-    value === "console"
-  ) {
-    return value;
-  }
-  // An engagement opens on its home: where it stands and what to do next.
-  return "overview";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

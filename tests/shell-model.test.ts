@@ -5,11 +5,14 @@ import {
   canManageAgents,
   canManageProjects,
   chosenOrganizationId,
+  DESTINATIONS,
   deriveShell,
+  destinationHref,
   lockedBeforeLaunch,
   type Organization,
   type Project,
   projectLabels,
+  resolveRoute,
   showsSignInPrompt,
   taskStatusChoices,
   type WorkspaceSnapshot,
@@ -373,5 +376,184 @@ describe("sign-in prompt", () => {
       showsSignInPrompt({ status: "empty", email: "a@example.com" }),
       true,
     );
+  });
+});
+
+describe("the six destinations and the older addresses (M2c)", () => {
+  const org = "01a15b1a-5bec-7b26-aab2-4c7f84a889b4";
+  const project = "01a15b1a-5d67-7fde-8120-1314701cbb30";
+  const control = "01a15ad5-b710-7e67-9620-4c226f5f27c1";
+  const route = (query: Record<string, string | string[]>) =>
+    resolveRoute({ organization: org, project, ...query });
+  const target = (query: Record<string, string | string[]>) => {
+    const found = route(query).redirect;
+    assert.ok(found !== null, `no redirect for ${JSON.stringify(query)}`);
+    const params = new URLSearchParams(found.slice(2));
+    return Object.fromEntries(params.entries());
+  };
+
+  it("keeps the destinations and the retained pages where they are", () => {
+    for (const section of [
+      "overview",
+      "controls",
+      "testing",
+      "evidence",
+      "reports",
+      "settings",
+      "console",
+      "approvals",
+      "projects",
+    ] as const) {
+      const found = route({ section });
+      assert.equal(found.redirect, null, section);
+      assert.equal(found.section, section);
+    }
+    assert.equal(route({}).section, "overview");
+    assert.equal(route({ section: "nowhere" }).section, "overview");
+  });
+
+  it("redirects every moved section with its record kept", () => {
+    // Test plans: the queue, a control's plan on its tab, the phases view.
+    assert.deepEqual(target({ section: "planning" }), {
+      organization: org,
+      project,
+      section: "testing",
+    });
+    assert.deepEqual(
+      target({
+        section: "planning",
+        control,
+        tab: "evidence",
+        filter: "APPROVED",
+      }),
+      {
+        organization: org,
+        project,
+        control,
+        tab: "evidence",
+        filter: "APPROVED",
+        section: "testing",
+      },
+    );
+    assert.deepEqual(target({ section: "planning", view: "phases" }), {
+      organization: org,
+      project,
+      view: "phases",
+      section: "testing",
+    });
+    // Project plan and Timeline: Reports' schedule tabs.
+    assert.deepEqual(target({ section: "plan" }), {
+      organization: org,
+      project,
+      section: "reports",
+      view: "schedule",
+    });
+    assert.deepEqual(target({ section: "timeline" }), {
+      organization: org,
+      project,
+      section: "reports",
+      view: "timeline",
+    });
+    // Deficiencies: the register and one deficiency, the log dialog for a control.
+    assert.deepEqual(target({ section: "deficiencies", deficiency: control }), {
+      organization: org,
+      project,
+      deficiency: control,
+      section: "reports",
+      view: "deficiencies",
+    });
+    assert.deepEqual(target({ section: "deficiencies", new: control }), {
+      organization: org,
+      project,
+      new: control,
+      section: "reports",
+      view: "deficiencies",
+    });
+    // Engagement settings: a setup step; the library's entry on its tab; an agent;
+    // a task.
+    assert.deepEqual(target({ section: "setup", step: "team" }), {
+      organization: org,
+      project,
+      step: "team",
+      section: "settings",
+      view: "engagement",
+    });
+    assert.deepEqual(
+      target({ section: "library", control: "ITGC-AC-01", tab: "attributes" }),
+      {
+        organization: org,
+        project,
+        control: "ITGC-AC-01",
+        tab: "attributes",
+        section: "settings",
+        view: "library",
+      },
+    );
+    assert.deepEqual(target({ section: "agents", agent: control }), {
+      organization: org,
+      project,
+      agent: control,
+      section: "settings",
+      view: "workforce",
+    });
+    assert.deepEqual(target({ section: "tasks", task: control }), {
+      organization: org,
+      project,
+      task: control,
+      section: "settings",
+      view: "tasks",
+    });
+    // A repeated parameter travels whole.
+    const found = route({
+      section: "plan",
+      stage: ["PLANNED", "TESTING"],
+    }).redirect;
+    assert.ok(found !== null);
+    assert.deepEqual(new URLSearchParams(found.slice(2)).getAll("stage"), [
+      "PLANNED",
+      "TESTING",
+    ]);
+  });
+
+  it("names the page a destination's tab renders", () => {
+    assert.deepEqual(route({ section: "reports" }), {
+      section: "reports",
+      page: "deficiencies",
+      tab: "deficiencies",
+      redirect: null,
+    });
+    assert.equal(route({ section: "reports", view: "schedule" }).page, "plan");
+    assert.equal(
+      route({ section: "reports", view: "timeline" }).page,
+      "timeline",
+    );
+    assert.equal(route({ section: "reports", view: "status" }).page, "reports");
+    assert.equal(route({ section: "reports", view: "x" }).page, "deficiencies");
+    assert.equal(route({ section: "settings" }).page, "setup");
+    assert.equal(
+      route({ section: "settings", view: "library" }).page,
+      "library",
+    );
+    assert.equal(
+      route({ section: "settings", view: "workforce" }).page,
+      "agents",
+    );
+    assert.equal(route({ section: "settings", view: "tasks" }).page, "tasks");
+    assert.equal(
+      route({ section: "settings", view: "engagements" }).page,
+      "projects",
+    );
+    assert.equal(
+      destinationHref("reports", "schedule", org, project),
+      `/?organization=${org}&project=${project}&section=reports&view=schedule`,
+    );
+    assert.deepEqual(DESTINATIONS, [
+      "overview",
+      "controls",
+      "testing",
+      "evidence",
+      "reports",
+      "settings",
+    ]);
   });
 });

@@ -408,6 +408,105 @@ classic control tabs beside the guided steps (M2d); the guided Plan step links t
 review rather than embedding its sections (the plan has one editor; the embedding is
 M2d's).
 
+## 14. M2c as built: the six destinations
+
+**Navigation before and after.** Before: fourteen sections in two menu groups,
+Engagement (Home, Agent console, Controls, Test plans, Project plan, Timeline, Evidence,
+Deficiencies, Approvals) and Setup (Engagement settings, Library, AI workforce,
+Engagements), plus Tasks reachable by address; M2b made it fifteen with Testing. After:
+one menu of six destinations, Home · Controls · Testing · Evidence · Reports · Settings
+(`DESTINATIONS` in `shell-model.ts`), each a page or a page with tabs; the engagement
+switcher stays in the top bar. Reports › Deficiencies / Schedule / Timeline / Status and
+reports; Settings › Engagement / Library / AI workforce / Tasks / Engagements. The tab
+travels as `view`, as Testing's does, so a page's own `tab` (a control's plan tab, the
+library's) still opens. The Approvals badge moves to Home, whose queue lists every
+pending approval. Three pages leave the menu and stay reachable by their addresses and
+from the pages that lead to them: the agent console (from Home, from the pages that cite
+it, and from Reports › Status and reports, where the five engagement reports are produced
+on request), the approvals page (from every approval item in the queue and from Reports ›
+Status and reports) and the engagements page (behind the switcher and Settings ›
+Engagements). Nothing was rebuilt: each tab renders the component that was the page.
+
+**Redirect mapping** (`resolveRoute` in `routes.ts`, answered by the edge proxy
+`apps/web/proxy.ts` with HTTP 307 before anything renders, and applied again by
+`page.tsx` as a fallback; every other parameter is kept, repeated ones included):
+
+| Older address | Resolves to | Record kept |
+| --- | --- | --- |
+| `section=overview` (and no section) | Home | — |
+| `section=controls` | Controls | `control`, `step`, `tab`, `request`, `wp`, `ev`, filters |
+| `section=testing` | Testing | `view`, `control`, `tab`, `filter` |
+| `section=evidence` | Evidence | `tab`, `request`, `file`, `queue`, filters |
+| `section=planning` | Testing (Plans) | `control`, `tab`, `filter`; `view=phases` → Testing › Phases |
+| `section=plan` | Reports › Schedule (`view=schedule`) | `stage` and the plan's filters |
+| `section=timeline` | Reports › Timeline (`view=timeline`) | — |
+| `section=deficiencies` | Reports › Deficiencies (`view=deficiencies`) | `deficiency`, `new` (the log dialog for a control) |
+| `section=setup` | Settings › Engagement (`view=engagement`) | `step`, `control`, `sample`, `template`, `system`, `edit`, `category`, `notice` |
+| `section=library` | Settings › Library (`view=library`) | `control`, `tab`, `category`, `status`, `q` |
+| `section=agents` | Settings › AI workforce (`view=workforce`) | `agent` |
+| `section=tasks` | Settings › Tasks (`view=tasks`) | `task`, the directory filters |
+| `section=console` | the agent console, retained | `thread`, `notice` |
+| `section=approvals` | the approvals page, retained | `notice` |
+| `section=projects` | the engagements page, retained | `create`, `edit`, `manage`, `view` |
+| `section=reports`, `section=settings` | the destination; an unknown `view` opens its first tab | as above |
+
+A redirect never lands on a generic page when a record-specific destination exists: the
+deficiency, the control's plan, the library entry, the agent and the task each open as
+before, inside the destination that now holds their page. `shell-model.test.ts` opens
+every older section and the stored link shapes (a control's plan on its tab, a
+deficiency, a log dialog, a setup step, a library entry, an agent, a task, a repeated
+filter) and checks the address each resolves to; the queue's and the next-steps API's
+links (`section=planning`, `section=approvals`) keep working through the same table.
+
+**The M2b conditions.** Results show the phase of the record in the row (the sheet's
+round, else the interim sheet, else the open round awaiting its testing), never the
+control's journey step; `testing-hub-model.test.ts` holds a concluded control whose
+remaining obligation is the design workpaper's review coverage and checks the row says
+Interim. Semantic deduplication: a submitted request's approval record and the control's
+"Approve the evidence request" step are one item (the approval's); a stopped tester run
+and "Testing stopped: run it again" are one (the sheet's); a due reminder and "Chase the
+overdue evidence request" are one (the reminder's); a stopped workpaper draft and
+"Prepare the workpapers" are one (the draft's); open reviews, impact and coverage
+assessments, round bases, proposed samples and deficiencies already stood for their
+steps. Independent obligations stay apart: a control's drafted design request beside its
+submitted interim request, a review beside a deficiency. `test_queue.py` builds the
+approval and stopped-run cases and checks that no (control, obligation) pair repeats
+except the per-record kinds (one drafted request, one send approval, one reminder each). The same check against the live 155-control queue found one more pair, an impact
+assessment listed as its record and as the control's finality step in other words; a
+step now also defers by its obligation class (`_OBLIGATION_KINDS`), and the live check
+reports no repeated pair (`docs/review/m2c/queue-dedup.md`).
+At phone width the Results and Review tables fold to cards that show the control, its
+status, whose it is and the next action, with the phase, result, notes and sign-off
+behind Details; the desktop tables are unchanged.
+
+**Scale baseline.** The 155-control engagement (§13) and a 403-control one over thirteen
+systems (`ai_workforce_scale400`, 830 queue items, 747 of them drafted-request
+approvals):
+
+| Read (in-process, median of five) | 155 controls | 403 controls |
+| --- | --- | --- |
+| `GET /queue` | 231 ms, 166 statements | 350 ms, 246 statements |
+| `GET /queue?limit=25` | 229 ms | 331 ms |
+| `GET /console/inbox` | 236 ms | 351 ms |
+| `GET /workspace/controls` | 175 ms, 128 statements | 329 ms, 208 statements |
+| `GET /test-sheets` | 78 ms | 126 ms |
+| `GET /planning-review` | 498 ms | 1131 ms |
+
+Latency and statements grow well under linearly with the controls (2.6× the controls,
+1.5× the time, 1.5× the statements): the per-request cost is the fixed set of per-table
+reads, not per-control queries, and no material issue is exposed. The Plans view's
+`planning-review` read is the one that grows fastest and is the first to revisit if
+engagements exceed this size; no rewrite is undertaken.
+
+**Remaining duplicated interfaces and risks.** The console page's inbox beside Home's
+queue, and its own past-due count (Milestone 3 makes the console the companion panel);
+the classic control tabs beside the guided steps (M2d); the guided Plan step linking to
+the plan review rather than embedding it (M2d); the Settings › Engagement tab is the
+setup wizard's step pages, which still read as a wizard after launch; in-app links that
+still name the older sections (the next-steps API, the Home journey bar, the register's
+planning links) work through the redirect and are to be rewritten to the destinations in
+M2d so no request takes the extra hop.
+
 ## 10. Out of scope for Milestone 2
 
 The Agent Companion panel (Milestone 3), the onboarding wizard and design tokens

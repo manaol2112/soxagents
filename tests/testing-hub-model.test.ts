@@ -51,6 +51,7 @@ const sheet = (over: Partial<TestSheet> = {}): TestSheet =>
     controlRef: "ITGC-AC-01",
     method: "SAMPLE",
     attributes: ["a", "b"],
+    testRoundId: null,
     status: "OPEN",
     running: false,
     runState: "IDLE",
@@ -201,6 +202,30 @@ describe("the Testing destination", () => {
           actor: "PREPARER",
           yours: true,
         }),
+        // Concluded interim testing whose remaining obligation is about the design
+        // workpaper's review coverage: the row shows the interim record's phase, not
+        // the step's.
+        control({
+          id: "c6",
+          controlRef: "ITGC-AC-09",
+          label: "ITGC-AC-09 · SAP ERP",
+          conclusion: "EFFECTIVE",
+          nextStep:
+            "The design workpaper changed since the review covered it: review outstanding",
+          actor: "REVIEWER",
+          journey: {
+            step: "REVIEW",
+            stepPhase: "DESIGN",
+            action: "",
+            actor: "REVIEWER",
+            phases: [],
+            blockers: [],
+            reopened: "",
+            staleResults: false,
+            final: false,
+            notFinalBecause: [],
+          },
+        }),
       ],
       sheets: [
         sheet({ running: true, runState: "QUEUED" }),
@@ -232,6 +257,13 @@ describe("the Testing destination", () => {
             unplaced: 0,
           },
         }),
+        sheet({ id: "s3b", controlId: "c3", testRoundId: "r1" }),
+        sheet({
+          id: "s6",
+          controlId: "c6",
+          status: "SIGNED_OFF",
+          conclusion: "EFFECTIVE",
+        }),
       ],
       rounds: [round({ controlId: "c3", status: "TESTING", sheetId: "s3b" })],
       automation: NO_AUTOMATION,
@@ -249,10 +281,10 @@ describe("the Testing destination", () => {
           "INTERIM",
         ],
         ["ITGC-AC-02", "TO_DECIDE", "1 result to decide", "INTERIM"],
-        // The open retest round names the phase; its own sheet is not loaded, so the
-        // control's latest sheet stands in.
-        ["ITGC-CM-01", "SIGNED_OFF", "Signed off · not effective", "RETEST"],
+        // The open retest round's own sheet is the record shown, in its phase.
+        ["ITGC-CM-01", "TESTING", "Testing in progress", "RETEST"],
         ["ITGC-PD-01", "BLOCKED", "Test plan not approved", "INTERIM"],
+        ["ITGC-AC-09", "SIGNED_OFF", "Signed off · effective", "INTERIM"],
       ],
     );
     assert.equal(rows[1]?.exceptions, 1);
@@ -261,14 +293,19 @@ describe("the Testing destination", () => {
       rows[2]?.href,
       "/?organization=org-1&project=proj-1&section=controls&control=c3&step=test",
     );
+    assert.equal(rows[4]?.next.startsWith("The design workpaper"), true);
+    assert.equal(
+      rows[4]?.href,
+      "/?organization=org-1&project=proj-1&section=controls&control=c6&step=review",
+    );
     assert.equal(
       nextWords({ actor: "AGENT", yours: false }),
       "Waits on an agent",
     );
     assert.equal(nextWords({ actor: "PREPARER", yours: true }), "Yours");
     const counts = resultCounts(rows);
-    assert.equal(counts.all, 4);
-    assert.equal(counts.testing, 1);
+    assert.equal(counts.all, 5);
+    assert.equal(counts.testing, 2);
     assert.equal(counts.decide, 1);
     assert.equal(counts.signed, 1);
     assert.equal(counts.exceptions, 2);

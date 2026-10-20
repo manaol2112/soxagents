@@ -160,3 +160,12 @@ and `workflow-model` (queue sources).
   The inbox-related UPDATE and CURRENT files (`test_console`, `test_evidence_flow`,
   `test_waiting`, `test_next_steps`, `test_evidence_review`, `test_workspace`) ran once:
   58 passed after the rewrite.
+- M2c (the six destinations; the M2b conditions: Results phase, semantic deduplication,
+  phone cards, the 403-control baseline): `make test-critical` **363 passed, 0 failed in
+  4 min 51 s** on the final code (`test_queue.py` grown to seven tests, with the
+  obligation-class rule); `make test-fast` **87 Python passed in 2 min 5 s and 112 Node
+  passed**; the whole Node set **714 passed** (`shell-model` gains the route and redirect
+  cases, `testing-hub-model` the Results phase regression); the ten moved addresses
+  answered 307 live from the edge proxy with their record kept
+  (`docs/review/m2c/redirects.md`); type checks clean; lint clean except the known
+  `biome.json` line endings. No legacy expectation changed.

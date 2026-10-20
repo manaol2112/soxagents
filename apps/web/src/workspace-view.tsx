@@ -103,6 +103,7 @@ import {
   type AgentDetail,
   type AgentNotice,
   canManageProjects,
+  destinationHref,
   LAUNCHED_SECTIONS,
   lockedBeforeLaunch,
   type Organization,
@@ -110,7 +111,11 @@ import {
   type ProjectDetail,
   type ProjectNotice,
   projectLabels,
+  REPORT_TAB_LABELS,
+  REPORT_TABS,
   roleLabel,
+  SETTINGS_TAB_LABELS,
+  SETTINGS_TABS,
   type SectionId,
   type ShellModel,
   showsSignInPrompt,
@@ -169,6 +174,9 @@ type NavItem = {
   icon: IconName;
 };
 
+// The six destinations (Milestone 2c). The agent console, the approvals page and the
+// engagements page stay reachable by their addresses and from the pages that lead to
+// them; the older sections redirect (shell-model.resolveRoute).
 const NAV_GROUPS: ReadonlyArray<{ label: string; items: NavItem[] }> = [
   {
     label: "Engagement",
@@ -178,12 +186,6 @@ const NAV_GROUPS: ReadonlyArray<{ label: string; items: NavItem[] }> = [
         label: "Home",
         detail: "Where the engagement stands and what to do next",
         icon: "grid",
-      },
-      {
-        id: "console",
-        label: "Agent console",
-        detail: "Ask the workforce and confirm its work",
-        icon: "sparkles",
       },
       {
         id: "controls",
@@ -198,63 +200,22 @@ const NAV_GROUPS: ReadonlyArray<{ label: string; items: NavItem[] }> = [
         icon: "check",
       },
       {
-        id: "plan",
-        label: "Project plan",
-        detail: "Work by phase",
-        icon: "activity",
-      },
-      {
-        id: "timeline",
-        label: "Timeline",
-        detail: "Phases and milestones",
-        icon: "clock",
-      },
-      {
         id: "evidence",
         label: "Evidence",
-        detail: "Requests and responses",
+        detail: "Requests, mailbox, files and contacts",
         icon: "inbox",
       },
       {
-        id: "deficiencies",
-        label: "Deficiencies",
-        detail: "Findings and remediation",
-        icon: "risk",
+        id: "reports",
+        label: "Reports",
+        detail: "Deficiencies, schedule, status and reports",
+        icon: "activity",
       },
       {
-        id: "approvals",
-        label: "Approvals",
-        detail: "Human decisions",
-        icon: "check",
-      },
-    ],
-  },
-  {
-    label: "Setup",
-    items: [
-      {
-        id: "setup",
-        label: "Engagement settings",
-        detail: "Scope, team, RCM, and PBC",
-        icon: "sparkles",
-      },
-      {
-        id: "library",
-        label: "Library",
-        detail: "Standard procedures and attributes",
+        id: "settings",
+        label: "Settings",
+        detail: "Engagement, library, AI workforce and engagements",
         icon: "layers",
-      },
-      {
-        id: "agents",
-        label: "AI workforce",
-        detail: "Roles and limits",
-        icon: "agents",
-      },
-      {
-        id: "projects",
-        label: "Engagements",
-        detail: "Portfolio and scope",
-        icon: "briefcase",
       },
     ],
   },
@@ -309,8 +270,13 @@ export function WorkspaceView({
   testingView = "plans",
   testingFilter = null,
   library = null,
+  page = "overview",
+  tab = null,
 }: {
   model: ShellModel;
+  /** The page rendered inside the destination, and the destination's tab (M2c). */
+  page?: SectionId;
+  tab?: string | null;
   directory?: DirectoryQuery;
   workflow?: WorkflowState;
   now?: number;
@@ -387,7 +353,7 @@ export function WorkspaceView({
                         >
                           <UiIcon name={item.icon} size={16} />
                           <span>{item.label}</span>
-                          {item.id === "approvals" &&
+                          {item.id === "overview" &&
                           waiting !== null &&
                           waiting > 0 ? (
                             <span
@@ -470,6 +436,8 @@ export function WorkspaceView({
             testingView={testingView}
             testingFilter={testingFilter}
             library={library}
+            page={page}
+            tab={tab}
           />
         </main>
       </div>
@@ -652,8 +620,12 @@ function WorkspaceMain({
   testingView,
   testingFilter,
   library,
+  page,
+  tab,
 }: {
   model: ShellModel;
+  page: SectionId;
+  tab: string | null;
   directory: DirectoryQuery;
   workflow: WorkflowState;
   now: number;
@@ -768,6 +740,68 @@ function WorkspaceMain({
         view={testingView}
         filter={testingFilter}
       />
+    );
+  }
+  if (model.section === "reports") {
+    return (
+      <Destination
+        model={model}
+        section="reports"
+        tab={tab}
+        tabs={REPORT_TABS}
+        labels={REPORT_TAB_LABELS}
+        title="Reports"
+        description="Deficiencies, the schedule, the engagement's status and its reports."
+      >
+        {page === "plan" ? (
+          <PlanMain model={model} engagement={engagement} />
+        ) : page === "timeline" ? (
+          <TimelineMain model={model} engagement={engagement} />
+        ) : page === "reports" ? (
+          <ReportsStatus model={model} workflow={workflow} />
+        ) : (
+          <DeficienciesMain
+            model={model}
+            engagement={engagement}
+            logFor={logFor}
+          />
+        )}
+      </Destination>
+    );
+  }
+  if (model.section === "settings") {
+    return (
+      <Destination
+        model={model}
+        section="settings"
+        tab={tab}
+        tabs={SETTINGS_TABS}
+        labels={SETTINGS_TAB_LABELS}
+        title="Settings"
+        description="The engagement's setup, the standard library, the AI workforce and the engagements."
+      >
+        {page === "library" ? (
+          <LibraryPage model={model} library={library} />
+        ) : page === "agents" ? (
+          <AgentsMain
+            model={model}
+            workflow={workflow}
+            creating={creatingAgent}
+          />
+        ) : page === "tasks" ? (
+          <TasksMain model={model} directory={directory} />
+        ) : page === "projects" ? (
+          <ProjectsMain
+            model={model}
+            creating={creatingEngagement}
+            editing={editingEngagement}
+            managing={managingEngagement}
+            view={engagementsView}
+          />
+        ) : (
+          <SetupMain model={model} setup={setup} />
+        )}
+      </Destination>
     );
   }
   if (model.section === "console") {
@@ -1583,6 +1617,118 @@ function NotLaunched({ model }: { model: Ready }) {
             </a>
           }
         />
+      </section>
+    </div>
+  );
+}
+
+/** A destination with tabs (M2c): Reports and Settings. The tab bar leads; the page
+ * inside keeps its own header, so nothing it offered is lost. */
+function Destination({
+  model,
+  section,
+  tab,
+  tabs,
+  labels,
+  title,
+  description,
+  children,
+}: {
+  model: Ready;
+  section: "reports" | "settings";
+  tab: string | null;
+  tabs: readonly string[];
+  labels: Record<string, string>;
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  const current = tab ?? tabs[0];
+  return (
+    <div className="destination">
+      <div className="destination-head">
+        <p className="page-context">{model.selectedProject?.name ?? ""}</p>
+        <h1 className="destination-title">{title}</h1>
+        <p className="page-desc">{description}</p>
+        <nav className="tv-tabs" aria-label={`${title} views`}>
+          {tabs.map((item) => (
+            <a
+              key={item}
+              href={destinationHref(
+                section,
+                item,
+                model.organization.id,
+                model.selectedProject?.id ?? null,
+              )}
+              aria-current={item === current ? "page" : undefined}
+            >
+              {labels[item] ?? item}
+            </a>
+          ))}
+        </nav>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** Reports > Status and reports: the engagement's status and close-out, the reports
+ * the agents produce on request, and the exports, each where it already lives. */
+function ReportsStatus({
+  model,
+  workflow,
+}: {
+  model: Ready;
+  workflow: WorkflowState;
+}) {
+  const project = model.selectedProject;
+  if (project === null) {
+    return <NoEngagement model={model} what="Reports" />;
+  }
+  const ids = { organizationId: model.organization.id, projectId: project.id };
+  const waiting =
+    workflow.approvals === null
+      ? null
+      : pendingApprovals(workflow.approvals, 0).length;
+  return (
+    <div className="page">
+      <section className="card destination-links">
+        <h2>Status and close-out</h2>
+        <p>
+          The engagement's status, its close-out checks and the record of its
+          sign-offs, from its card on the engagements page.
+        </p>
+        <a
+          className="btn"
+          href={`${sectionHref(model, "projects")}&manage=engagement`}
+        >
+          Open status and close-out <UiIcon name="arrow" size={13} />
+        </a>
+      </section>
+      <section className="card destination-links">
+        <h2>Reports</h2>
+        <p>
+          The five engagement reports (PDF and Word) are produced on request in
+          the agent console from the engagement's records; what the records say
+          fills them, and any narrative is marked as unverified interpretation.
+        </p>
+        <a className="btn btn-secondary" href={sectionHref(model, "console")}>
+          Open the agent console <UiIcon name="arrow" size={13} />
+        </a>
+      </section>
+      <section className="card destination-links">
+        <h2>Exports and approvals</h2>
+        <p>
+          The evidence requests export, and the approvals page where every
+          pending, expired and self-approval case is listed
+          {waiting === null ? "" : ` (${waiting} waiting)`}.
+        </p>
+        <a className="btn btn-secondary" href={exportHref(ids, DEFAULT_QUERY)}>
+          Export evidence requests <UiIcon name="arrow" size={13} />
+        </a>{" "}
+        <a className="btn btn-secondary" href={sectionHref(model, "approvals")}>
+          Open approvals <UiIcon name="arrow" size={13} />
+        </a>
       </section>
     </div>
   );

@@ -252,6 +252,52 @@ function ResultsView({
           </table>
         </div>
       )}
+      {shown.length === 0 ? null : (
+        <ul className="tv-cards" aria-label="Results">
+          {shown.map((row) => (
+            <li key={row.controlId} className="tv-card">
+              <div className="tv-card-head">
+                <a className="tv-control" href={row.href}>
+                  {row.controlRef}
+                </a>
+                <Tone tone={row.tone}>{row.stateLabel}</Tone>
+              </div>
+              <span className="tv-sub">{row.label}</span>
+              {row.next === "" ? null : (
+                <p className="tv-card-next">
+                  {row.next}
+                  <span className={`tv-sub ${row.yours ? "tv-mine" : ""}`}>
+                    {nextWords(row)}
+                  </span>
+                </p>
+              )}
+              <div className="tv-card-foot">
+                <details className="tv-more">
+                  <summary>Details</summary>
+                  <dl>
+                    <dt>Phase</dt>
+                    <dd>{phaseWords(row.phase)}</dd>
+                    <dt>Result</dt>
+                    <dd>
+                      {row.result === "NOT_CONCLUDED"
+                        ? "Not concluded"
+                        : row.result === "EFFECTIVE"
+                          ? `Effective${row.final ? " · final" : ""}`
+                          : `Exceptions${row.final ? " · final" : ""}`}
+                      {row.exceptions > 0
+                        ? ` · ${row.exceptions} exception${row.exceptions === 1 ? "" : "s"} in the results`
+                        : ""}
+                    </dd>
+                  </dl>
+                </details>
+                <a className="btn btn-sm btn-secondary" href={row.href}>
+                  Open <UiIcon name="arrow" size={13} />
+                </a>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
@@ -370,6 +416,56 @@ function ReviewView({
             </tbody>
           </table>
         </div>
+      )}
+      {shown.length === 0 ? null : (
+        <ul className="tv-cards" aria-label="Reviews">
+          {shown.map((row) => (
+            <li key={row.reviewId} className="tv-card">
+              <div className="tv-card-head">
+                <a className="tv-control" href={row.href}>
+                  {row.controlRef}
+                </a>
+                <Tone tone={row.tone}>{row.stage}</Tone>
+              </div>
+              <span className="tv-sub">{row.label}</span>
+              {row.next === "" ? null : (
+                <p className="tv-card-next">
+                  {row.next}
+                  <span className={`tv-sub ${row.mine ? "tv-mine" : ""}`}>
+                    {row.owner}
+                  </span>
+                </p>
+              )}
+              <div className="tv-card-foot">
+                <details className="tv-more">
+                  <summary>Details</summary>
+                  <dl>
+                    <dt>Round</dt>
+                    <dd>
+                      {row.round === null ? "Interim" : phaseWords(row.round)}
+                    </dd>
+                    <dt>Notes open</dt>
+                    <dd>{row.openNotes}</dd>
+                    {row.status === "SIGNED_OFF" && row.signedBy !== null ? (
+                      <>
+                        <dt>Signed off</dt>
+                        <dd>
+                          By {row.signedBy}
+                          {row.signedAt === null
+                            ? ""
+                            : ` on ${row.signedAt.slice(0, 10)}`}
+                        </dd>
+                      </>
+                    ) : null}
+                  </dl>
+                </details>
+                <a className="btn btn-sm btn-secondary" href={row.href}>
+                  Open <UiIcon name="arrow" size={13} />
+                </a>
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   );

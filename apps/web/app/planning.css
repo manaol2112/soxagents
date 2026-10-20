@@ -2931,13 +2931,121 @@ button.pl-since-code:hover {
   color: var(--text-muted);
 }
 
+/* At phone width the tables fold to cards: the control, its status, whose it is and
+   the next action in view; the rest behind Details. */
+.tv-cards {
+  display: none;
+}
+
 @media (max-width: 720px) {
   .tv-bar {
     padding: 0.6rem 0.75rem 0.4rem;
   }
 
-  .tv-table th:nth-child(3),
-  .tv-table td:nth-child(3) {
+  .tv-wrap {
     display: none;
+  }
+
+  .tv-cards {
+    display: grid;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0 0.75rem 0.75rem;
+    list-style: none;
+  }
+
+  .tv-card {
+    display: grid;
+    gap: 0.35rem;
+    padding: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+
+  .tv-card-head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.6rem;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .tv-card-next {
+    display: grid;
+    gap: 0.15rem;
+    margin: 0;
+  }
+
+  .tv-card-foot {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+
+  .tv-more summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+  }
+
+  .tv-more dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.2rem 0.6rem;
+    margin: 0.4rem 0 0;
+    font-size: var(--fs-sm);
+  }
+
+  .tv-more dt {
+    color: var(--text-muted);
+  }
+
+  .tv-more dd {
+    margin: 0;
+  }
+}
+
+/* A destination with tabs (M2c): Reports and Settings lead with their tab bar; the page
+   inside keeps its own header. */
+.destination-head {
+  padding: 1.25rem 1.1rem 0;
+}
+
+.destination-title {
+  margin: 0.15rem 0 0.25rem;
+  font-size: var(--fs-2xl, 1.5rem);
+  font-weight: 650;
+  color: var(--text-strong);
+}
+
+.destination-head .tv-tabs {
+  margin: 0.75rem 0 0;
+  padding: 0;
+}
+
+.destination-links {
+  display: grid;
+  gap: 0.5rem;
+  padding: 1rem 1.1rem;
+}
+
+.destination-links h2 {
+  margin: 0;
+  font-size: var(--fs-lg, 1.05rem);
+}
+
+.destination-links p {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.destination-links .btn {
+  justify-self: start;
+}
+
+@media (max-width: 720px) {
+  .destination-head {
+    padding: 0.75rem 0.75rem 0;
   }
 }

@@ -127,3 +127,20 @@ unavailable, sent requests are SIMULATED). Viewers: Dana Whitfield (lead), Riley
 | `testing-review-owner-desktop.png`, `testing-review-reviewer-desktop.png`, `-mobile.png` | Testing › Review: the open reviews with their stage and the queue's action; the reviewer's own are marked Yours, the signed-off review with a coverage gap stays in Open. |
 | `console-owner-desktop.png`, `-top.png` | The agent console's inbox, the same list without the upcoming items. |
 | `walk-1-conclude-before-desktop.png`, `walk-1-conclude-after-desktop.png`, `walk-2-results-after-desktop.png`, `walk-3-review-reviewer-desktop.png`, `walk-log.md` | The multi-control walkthrough: from the Results and Review views, the lead signs off one control's testing, the reviewer accepts one proposed note, the lead starts a stopped tester run again (queued; the queue reports the automation unavailable), and the Results view and the queue counts after. |
+
+## m2c — the six destinations
+
+The same 155-control scale engagement (`ai_workforce_scale`, rebuilt; the lead Dana
+Whitfield and the reviewer Riley Okafor), after the M2b conditions and the navigation
+consolidation. The navigation inventory, the redirect mapping and the 403-control
+baseline are in [milestone-2-plan.md §14](../milestone-2-plan.md).
+
+| File | What it shows |
+| --- | --- |
+| `home-owner-desktop.png`, `home-owner-mobile.png` | The six-destination menu (Home, Controls, Testing, Evidence, Reports, Settings) at desktop and phone width; Home's queue unchanged. |
+| `reports-deficiencies-owner-desktop.png`, `-mobile.png`, `reports-schedule-owner-desktop.png`, `reports-status-owner-desktop.png` | Reports with its tabs: the deficiencies register, the project plan as Schedule, and Status and reports (status and close-out, the agent console's reports, the export and the approvals page). |
+| `settings-engagement-owner-desktop.png`, `settings-library-owner-desktop.png`, `settings-workforce-owner-desktop.png`, `-mobile.png` | Settings with its tabs: the engagement's setup steps, the library, the AI workforce. |
+| `testing-results-owner-mobile.png`, `testing-review-reviewer-mobile.png`, `testing-review-reviewer-mobile-details.png` | Results and Review at 390px as cards: control, status, whose it is and the next action in view, the phase, result, notes and sign-off behind Details; no horizontal scrolling (document width 390). |
+| `walk-1-home-mine-testing.png` → `walk-5-deficiency-open.png` | The cross-control walkthrough: Home's queue filtered to the lead's testing work, a control's Test step, Testing › Results filtered to Mine (each row opening its control's step), Reports › Deficiencies, and one deficiency opened from a stored link that resolves to the Reports tab. |
+| `redirects.md` | Every older address requested live: the ten moved sections answer 307 to the destination with the record kept; the retained pages and destinations stay. |
+| `queue-dedup.md` | The queue's items by kind and obligation after the M2c rules, and the (control, obligation) pairs that repeat beyond the per-record kinds. |

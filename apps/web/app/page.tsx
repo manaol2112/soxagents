@@ -13,6 +13,7 @@ import { loadOnboarding } from "../src/load-onboarding";
 import { loadPlanning } from "../src/load-planning";
 import { loadWorkflow } from "../src/load-workflow";
 import { loadWorkspace } from "../src/load-workspace";
+import { resolveRoute } from "../src/shell-model";
 import { parseTestingView } from "../src/testing-hub-model";
 import { WorkspaceView } from "../src/workspace-view";
 
@@ -24,14 +25,23 @@ type HomeProps = {
 
 export default async function Home({ searchParams }: HomeProps) {
   const params = await searchParams;
-  const model = await loadWorkspace({
+  // The six destinations (M2c): an older section's address redirects to where it now
+  // lives, with its record kept; a destination's tab names the page the loaders read.
+  const route = resolveRoute(params);
+  if (route.redirect !== null) {
+    redirect(route.redirect);
+  }
+  const loaded = await loadWorkspace({
     organizationId: firstParam(params.organization),
     projectId: firstParam(params.project),
     agentId: firstParam(params.agent),
     taskId: firstParam(params.task),
-    section: firstParam(params.section),
+    section: route.page,
     notice: firstParam(params.notice),
   });
+  // The loaders read by the page; the shell renders the destination.
+  const model =
+    loaded.status === "ready" ? { ...loaded, section: route.section } : loaded;
   // A visitor with no session sees the landing page; a signed-in member who is
   // denied still sees the workspace's own message.
   if (
@@ -50,8 +60,8 @@ export default async function Home({ searchParams }: HomeProps) {
     planning,
     library,
   ] = await Promise.all([
-    loadWorkflow(model, firstParam(params.notice)),
-    loadOnboarding(model, {
+    loadWorkflow(loaded, firstParam(params.notice)),
+    loadOnboarding(loaded, {
       step: firstParam(params.step),
       category: firstParam(params.category),
       control: firstParam(params.control),
@@ -61,7 +71,7 @@ export default async function Home({ searchParams }: HomeProps) {
       system: firstParam(params.system),
       edit: firstParam(params.edit),
     }),
-    loadEngagement(model, {
+    loadEngagement(loaded, {
       category: firstParam(params.category),
       stage: listParam(params.stage),
       q: firstParam(params.q),
@@ -84,15 +94,15 @@ export default async function Home({ searchParams }: HomeProps) {
       request: firstParam(params.request),
       filter: firstParam(params.filter),
     }),
-    loadConsole(model, firstParam(params.notice), firstParam(params.thread)),
-    loadEvidenceCenter(model, centerQuery, firstParam(params.tab)),
-    loadPlanning(model, {
+    loadConsole(loaded, firstParam(params.notice), firstParam(params.thread)),
+    loadEvidenceCenter(loaded, centerQuery, firstParam(params.tab)),
+    loadPlanning(loaded, {
       control: firstParam(params.control),
       tab: firstParam(params.tab),
       filter: firstParam(params.filter),
       view: firstParam(params.view),
     }),
-    loadLibrary(model, {
+    loadLibrary(loaded, {
       control: firstParam(params.control),
       tab: firstParam(params.tab),
       category: firstParam(params.category),
@@ -103,6 +113,8 @@ export default async function Home({ searchParams }: HomeProps) {
   return (
     <WorkspaceView
       model={model}
+      page={route.page}
+      tab={route.tab}
       workflow={workflow}
       directory={parseDirectoryQuery(params)}
       now={Date.now()}

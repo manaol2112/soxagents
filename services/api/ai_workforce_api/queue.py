@@ -231,6 +231,15 @@ _STEP_TO_KIND: tuple[tuple[str, str], ...] = (
     ("Decide the impact", "impact"),
     ("Confirm the round's testing basis", "round-basis"),
     ("Retest outstanding", "deficiency"),
+    # Approving a submitted request is the approval record's item; a stopped tester
+    # run, the sheet's; chasing an overdue request, the due reminder's; preparing a
+    # workpaper whose draft stopped, the draft's.
+    ("Approve the evidence request", "approval"),
+    ("Approve the sample request", "approval"),
+    ("Approve the follow-up", "approval"),
+    ("Testing stopped", "run-stopped"),
+    ("Chase the overdue", "reminder"),
+    ("Prepare the workpapers", "draft-stopped"),
 )
 # Finality reasons that are a coverage assessment (control_journey.coverage_gaps).
 _COVERAGE_TEXTS = (
@@ -275,6 +284,20 @@ _STEP_OBLIGATIONS: tuple[tuple[str, str], ...] = (
     ("Decide the impact", "IMPACT_ASSESSMENT"),
     ("Confirm the round's testing basis", "ROUND_BASIS"),
 )
+
+
+# A step whose obligation is one of these restates the record's own item when that
+# item exists on the control (semantic deduplication, M2c).
+_OBLIGATION_KINDS: dict[str, str] = {
+    "IMPACT_ASSESSMENT": "impact",
+    "COVERAGE_ASSESSMENT": "coverage",
+    "ROUND_BASIS": "round-basis",
+    "SAMPLES_APPROVAL": "samples",
+    "TESTING_RUN_STOPPED": "run-stopped",
+    "REQUEST_APPROVAL": "approval",
+    "DEFICIENCY_RETEST": "deficiency",
+    "WORKPAPER_DRAFT_STOPPED": "draft-stopped",
+}
 
 
 def _step_obligation(text: str) -> str:
@@ -393,6 +416,11 @@ def queue(
         )
         if same is None and any(mark in control.next_step for mark in _COVERAGE_TEXTS):
             same = "coverage"
+        obligation = _step_obligation(control.next_step)
+        if same is None:
+            # The step's obligation class names a record kind (an impact assessment
+            # pending, a stale basis, a stopped run): the record's item stands.
+            same = _OBLIGATION_KINDS.get(obligation)
         if same is not None and specific.get((control.id, same)):
             continue
         role: Role = control.actor if control.actor in ROLE_WORDS else "NONE"
@@ -401,7 +429,6 @@ def queue(
         journey_blockers = list(control.journey.blockers) if control.journey is not None else []
         if journey_blockers and role == "CLIENT":
             blockers = journey_blockers[:2]
-        obligation = _step_obligation(control.next_step)
         # The holds on the step's own phase (never another phase's): the phase is not
         # released, or the retest window has not opened, so nothing is due on it yet.
         # Releasing the phase is itself an action, never upcoming.

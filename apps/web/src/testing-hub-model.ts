@@ -220,6 +220,18 @@ export function resultRows(input: {
           : sheetOf(sheets, control.id);
       const journey = control.journey ?? null;
       const { state, label, tone } = stateOf(control, sheet, input.automation);
+      // The phase of the record shown: the sheet's round (else the interim sheet), or
+      // the open round awaiting its testing; never the control's current journey step,
+      // which may be about another phase's obligation.
+      const sheetRoundId = sheet?.testRoundId ?? null;
+      const sheetRound =
+        sheetRoundId === null
+          ? null
+          : (rounds.find((item) => item.id === sheetRoundId) ?? null);
+      const phase =
+        sheet !== null
+          ? (sheetRound?.kind ?? "INTERIM")
+          : (round?.kind ?? "INTERIM");
       const step =
         journey !== null
           ? (STEP_SECTIONS[journey.step] ?? "test")
@@ -231,12 +243,7 @@ export function resultRows(input: {
         controlRef: control.controlRef,
         label: control.label,
         application: control.applicationName,
-        // The round names the phase once its own testing exists; a round only
-        // requested leaves the phase to the sheet shown.
-        phase:
-          round !== null && round.sheetId !== null
-            ? round.kind
-            : (journey?.stepPhase ?? "INTERIM"),
+        phase,
         state,
         stateLabel: label,
         tone,

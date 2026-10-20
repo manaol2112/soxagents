@@ -33,6 +33,7 @@ from ai_workforce_api.db import connect
 from ai_workforce_api.evidence_analysis import run_analysis
 from ai_workforce_api.queue import NO_WORKER, queue
 from ai_workforce_api.settings import Settings
+from ai_workforce_api.testing_engine import fail_run
 from ai_workforce_api.workpaper_service import DRAFT_FAILED
 
 __all__ = ["migrated"]
@@ -361,3 +362,82 @@ def test_evidence_awaiting_a_sufficiency_decision_is_the_preparers(migrated: Dat
     )
     assert decided.status_code == 200, decided.text
     assert not any(i["id"] == key for i in _queue(client, team)["items"])
+
+
+def test_two_records_for_one_obligation_make_one_item(migrated: Database) -> None:
+    """Semantic deduplication (M2c): a submitted request's approval and the control's
+    "Approve the evidence request" step are one obligation, as are a stopped tester run
+    and the control's "Testing stopped: run it again" step. Independent obligations on
+    the same control (its drafted design request, its review) stay apart."""
+    team, client, scheduler = _engagement(migrated, "queue-dedup")
+    base = _base(team)
+    # A kickoff request submitted for approval: the approval record is the item; the
+    # requester cannot approve it, so it waits on another approver.
+    kickoff = _request(migrated, team, "ITGC-CM-01")
+    submitted = client.post(
+        f"{base}/pbc-requests/{kickoff['id']}/submit", json={"version": kickoff["version"]}
+    )
+    assert submitted.status_code == 200, submitted.text
+    approval_id = submitted.json()["approval"]["id"]
+    with connect(migrated.url) as connection:
+        [(cm_control,)] = connection.execute(
+            "SELECT engagement_control_id FROM pbc_requests WHERE id = %s", (kickoff["id"],)
+        ).fetchall()
+    body = _queue(client, team)
+    on_cm = _items_on(body, str(cm_control))
+    approvals = [i for i in on_cm if i["obligation"] in ("SEND_APPROVAL", "REQUEST_APPROVAL")]
+    assert [i["id"] for i in approvals] == [f"approval:{approval_id}"], [
+        (i["kind"], i["title"]) for i in on_cm
+    ]
+    assert approvals[0]["bucket"] == "WAITING" and approvals[0]["authorized"] is False
+    assert not any(
+        i["kind"] == "control-step" and i["obligation"] == "REQUEST_APPROVAL" for i in on_cm
+    )
+    # Another approver sees the same single item as theirs.
+    other = _session(migrated, team["reviewer_id"])
+    theirs = [i for i in _items_on(_queue(other, team), str(cm_control)) if i["kind"] == "approval"]
+    assert len(theirs) == 1 and theirs[0]["bucket"] == "MINE"
+    # The tester's run stopped before testing anything: the sheet's stopped-run item
+    # stands; the control's step, which says the same, is not repeated.
+    population_request = _request(migrated, team, "ITGC-AC-01")
+    year = _year(migrated, team)
+    population = "User ID,Name,Date granted\n" + "".join(
+        f"u000{n},Demo User {n},{year}-0{n}-10\n" for n in range(1, 4)
+    )
+    _add(client, team, "access population.csv", population, population_request["id"])
+    _read_all(migrated, scheduler)
+    [plan] = _plans(client, team)
+    control = plan["engagement_control_id"]
+    _accept_population(client, team, control)
+    approved = client.post(
+        f"{base}/control-tests/{plan['id']}/approve", json={"version": plan["version"]}
+    )
+    assert approved.status_code == 200, approved.text
+    [sheet] = [s for s in _sheets(client, team) if s["control_id"] == control]
+    tickets = "ticket,user,approved_by\n" + "".join(
+        f"T-{n},{item['label']},Demo Manager\n" for n, item in enumerate(sheet["items"])
+    )
+    _add(client, team, "access tickets.csv", tickets, approved.json()["sample_request_id"])
+    _read_all(migrated, scheduler)
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE test_sheets SET run_status = 'PENDING' WHERE id = %s", (sheet["id"],)
+        )
+        connection.commit()
+        fail_run(connection, UUID(sheet["id"]), "ModelTimeout")
+    on_control = _items_on(_queue(client, team), control)
+    stopped = [i for i in on_control if i["obligation"] == "TESTING_RUN_STOPPED"]
+    assert [i["kind"] for i in stopped] == ["run-stopped"], [
+        (i["kind"], i["obligation"], i["title"]) for i in on_control
+    ]
+    assert stopped[0]["bucket"] == "MINE"
+    # No identity, and no (control, obligation) pair, appears twice anywhere.
+    body = _queue(client, team)
+    pairs = [(i["control_id"], i["obligation"]) for i in body["items"] if i["control_id"]]
+    repeated = {
+        pair
+        for pair in pairs
+        if pairs.count(pair) > 1
+        and pair[1] not in ("REQUEST_DRAFT_APPROVAL", "SEND_APPROVAL", "REMINDER_APPROVAL")
+    }
+    assert repeated == set(), repeated
