@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-
+import { agentSays, reviewForStep, sheetForStep } from "./agent-says-model";
 import { analysisFor, reviewFor } from "./analysis-model";
 import { AnalysisPanel } from "./analysis-view";
 import { AppIdentity } from "./app-identity";
@@ -152,6 +152,7 @@ import { canManageProjects } from "./shell-model";
 import { TestBasisCard } from "./test-basis-view";
 import { testFor } from "./testing-model";
 import { TestPlanCard } from "./testing-view";
+import { traceOf, traceRows } from "./trace-model";
 import { UiIcon } from "./ui-icon";
 import { canDecide, canRequestEvidence } from "./workflow-model";
 import { WorkpapersTab } from "./workpaper-view";
@@ -1125,6 +1126,49 @@ function ControlRecord({
       }),
     ]),
   ) as Record<(typeof STEPS)[number], string>;
+  // Milestone 1c: the agent block for the open step and the trace rail, both read from
+  // the records above; nothing here decides or derives state.
+  const controlSheets = (engagement.sheets ?? []).filter(
+    (item) => item.controlId === control.id,
+  );
+  const controlReviews = (engagement.reviews ?? []).filter(
+    (item) => item.controlId === control.id,
+  );
+  const stepSheet = guided
+    ? sheetForStep(controlSheets, rounds, journey)
+    : null;
+  const stepReview = guided ? reviewForStep(controlReviews, journey) : null;
+  const agent = guided
+    ? agentSays({
+        step,
+        journey,
+        controlRef: control.controlRef,
+        sheet: stepSheet,
+        review: stepReview,
+        impact,
+        plan: evidencePlan,
+        activity: engagement.activity ?? [],
+        deficiencies: findings,
+        hrefs: stepHrefs,
+      })
+    : null;
+  const trace = guided
+    ? (() => {
+        const traceInput = {
+          journey,
+          risk: control.risk,
+          statement: control.activity,
+          attributes: control.testAttributes,
+          plan: evidencePlan,
+          sheet: stepSheet,
+          review: stepReview,
+          deficiencies: findings,
+          conclusion: control.conclusion,
+          hrefs: stepHrefs,
+        };
+        return { nodes: traceOf(traceInput), rows: traceRows(traceInput) };
+      })()
+    : null;
   // The control's next step opens the record it is about when that is evidence work.
   const firstEvidence = evidence.find((action) => action.mine);
   // The viewer's next action: what needs them, most pressing first (attentionOf), then an
@@ -1487,6 +1531,8 @@ function ControlRecord({
             blockers={blockersOf(journey)}
             receipts={engagement.signoffs ?? []}
             classicHref={tabHrefs.overview}
+            agent={agent}
+            trace={trace}
           />
         ) : (
           <>

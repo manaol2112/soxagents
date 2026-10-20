@@ -1,3 +1,5 @@
+import { AgentSays } from "./agent-says";
+import type { AgentSays as Says } from "./agent-says-model";
 import type {
   Blocker,
   ControlJourney,
@@ -9,6 +11,8 @@ import type {
 import { completion } from "./control-journey-model";
 import { formatDate } from "./format";
 import { receiptText, reopenText, type Signoff } from "./signoff-model";
+import type { TraceNode, TraceRow } from "./trace-model";
+import { TraceRail } from "./trace-rail";
 import { UiIcon } from "./ui-icon";
 
 const PHASE_SHORT: Record<string, string> = {
@@ -37,6 +41,8 @@ export function ControlStepper({
   blockers,
   receipts,
   classicHref,
+  agent,
+  trace,
 }: {
   journey: ControlJourney | null;
   items: StepperItem[];
@@ -49,6 +55,10 @@ export function ControlStepper({
   blockers: Blocker[];
   receipts: Signoff[];
   classicHref: string;
+  /** The agent block for the open step (M1c). */
+  agent: Says | null;
+  /** The trace rail: the chain of records, and each attribute's row (M1c). */
+  trace: { nodes: TraceNode[]; rows: TraceRow[] } | null;
 }) {
   const done = completion(journey);
   return (
@@ -142,6 +152,7 @@ export function ControlStepper({
           </div>
         ) : null}
       </section>
+      {agent !== null ? <AgentSays says={agent} /> : null}
       {blockers.length > 0 ? (
         <section className="cw-blockers" aria-labelledby="cw-blockers-title">
           <h2 id="cw-blockers-title">Outstanding</h2>
@@ -177,6 +188,9 @@ export function ControlStepper({
             ))}
           </ul>
         </section>
+      ) : null}
+      {trace !== null ? (
+        <TraceRail nodes={trace.nodes} rows={trace.rows} />
       ) : null}
     </div>
   );

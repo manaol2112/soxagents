@@ -41,6 +41,21 @@ the owner's request after the M1b report):
 The signer of the testing and the preparer of the work were checked in the same runs:
 neither sees a form, each sees why it waits on the independent reviewer.
 
+## m1c — the agent block and the trace rail
+
+Same demo engagements. "Agent says" sits under the Needs-you card; the trace rail sits
+under the sign-offs on record, compact by default and opened with a click (the
+`*-expanded-*` shots).
+
+| File | What it shows |
+| --- | --- |
+| `plan-agent-proposal-*.png` | Plan awaiting approval: the agent drafted the plan from rules (18 requirements), proposes it for approval with its basis per phase; the decision is a person's. Trace: objective, risk, procedures and attributes on record; evidence, results, exception, conclusion and review not yet. |
+| `plan-impact-decided-desktop.png` | The impact assessment after the reviewer's decision: the agent's comparison stays as what it did; no proposal is shown once a person decided. |
+| `testing-agent-trace-*.png` | Retest ready: the agent's run is in progress ("results are not in yet"); the trace shows which links have records. |
+| `testing-trace-expanded-*.png` | The same control with the rail open: each link's records and the per-attribute table (nothing tested yet, so no evidence is cited). |
+| `review-agent-notes-*.png` | A round awaiting review: the reviewer agent's re-performance and its two proposed notes, with the attributes and evidence they cite; the reviewer decides and signs. |
+| `completed-trace-expanded-*.png` | A concluded control: every link has a record, from the objective to the signed review, with each attribute's cited evidence and results. |
+
 Rebuilding the demo database: the builder script lives outside the repository (it drives
 the test fixtures); the API is pointed at `ai_workforce_demo` with the test environment
 (independence required, no model, no worker, no live email).

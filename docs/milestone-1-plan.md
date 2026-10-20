@@ -284,3 +284,48 @@ routes with the same authorization, the same approval gates and the same records
   are server-derived but the classic bodies under them are not yet.
 - Not in M1b: the agent block and trace rail (M1c), retiring the client-side derivations
   (M1d).
+
+## 11. M1c as built
+
+Two presentational components over records the workspace already loads; no API change,
+no new write path, no migration.
+
+- **Agent says** (`agent-says-model.ts`, `agent-says.tsx`): one block under the Needs-you
+  card, for the open step. *Did*: what the agents actually did, from the records (the
+  plan's generation runs, the sheet's tested samples and cited passages, the review's
+  re-performance and notes, the control's agent activity); a run in progress is said to
+  be in progress. *Proposes*: the agents' proposal worded as a proposal (a plan for
+  approval, a conclusion, a deficiency, review notes, an impact decision) with its
+  recorded reason; nothing proposed is ever shown as done, and a person's sign-off is
+  attributed to the person. *Based on*: the records behind it as links (attributes with
+  exceptions, cited evidence files, plan changes, assessment, notes). *Decision*: the
+  decision still pending and whose it is. *No proposal* or *Caveat*: when the records
+  give no basis (no sheet, no results, results or notes that cite no evidence, a plan
+  missing information, an assessment the rules could not judge) the block says so
+  instead of recommending.
+- **Trace rail** (`trace-model.ts`, `trace-rail.tsx`): the chain objective → risk →
+  procedure → attribute → evidence → result → exception → conclusion → review as compact
+  chips, each stating whether its record exists (recorded, partly, not on record); open,
+  each link's records and a table per attribute of the evidence its results cite and what
+  they found. Objective and procedures come from the approved plan's phase, the risk from
+  the control, attributes from the sheet or the approved set, evidence from the phase's
+  requirements and the results' citations, results and exceptions from the sheet,
+  the conclusion from the control's canonical state, the review from its record. A
+  missing link is shown as missing; `unsupportedLinks` lists them.
+- **Placement**: both inside the guided frame (`control-stepper.tsx`); the classic view
+  is unchanged. The step's sheet and review are the round's when the journey is at a
+  roll-forward or retest, else the control's own; with no control review yet, an open
+  round review is the step's work.
+- **Verified** at 1440 and 390 on five demo scenarios (`docs/review/m1c/`).
+- **Missing or unsupported trace links seen in the scenarios**: the retest's rail takes
+  objective, procedures and evidence from the interim phase, because the plan has no
+  phase record for a retest (it says "for interim operating effectiveness"); no results
+  cite evidence until the tester runs; the plan-awaiting-approval control has no evidence,
+  results, exception, conclusion or review record, and says so.
+- **Remaining UX issues** (carried to M1d with the earlier three): the plan proposal's
+  reason is the plan's summary, which restates the control statement at length; the
+  retest's agent block says "Testing is running now" from the sheet's run state even when
+  no worker is configured, which is the record but reads oddly in a demo without a
+  worker; the agent block repeats the Needs-you decision in its own words when the
+  reviewer is the viewer.
+- Not in M1c: retiring the client-side derivations in the classic bodies (M1d).

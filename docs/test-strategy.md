@@ -113,3 +113,10 @@ and `workflow-model` (queue sources).
   (`test_overlapping_phases…`: the next step for a roll-forward round in testing reads
   "Finish the roll-forward testing and sign it off", an action, instead of the status
   "Roll-forward testing in progress"; the step and stage it asserted are unchanged).
+- M1b browser smoke tests (owner's condition): the impact decision and the coverage
+  assessment driven end to end in headless Chrome against the demo database; recorded in
+  `docs/review/README.md`. Commit 4e1987f.
+- M1c (web only, no API change): `make test-fast` **80 Python passed in 2 min 3 s and 102
+  Node passed**; the whole Node set **697 passed** (two new files: `agent-says-model`,
+  `trace-model`); type checks clean; lint clean except the known `biome.json` line
+  endings. The critical set was not rerun: no Python, migration or route changed.
