@@ -6,6 +6,11 @@ Source specification: AI Employee Workforce Cursor Build Plan.
 
 ## Current milestone
 
+**Milestone 1b: the step bodies and the reviewer's interactions.** Authorized by the product owner after M1a's conditional acceptance ([milestone-1-plan.md §10](milestone-1-plan.md)). Complete, pending review; no migration.
+
+- The Plan step shows each plan-revision impact assessment with the agent's recommendation and the reviewer's decision form (reviewer only, never the signer); the Review step lists each testing round's own review and the coverage assessment of a signed review; Testing and Review carry a banner while an assessment is pending. A round in testing is the step, the stage and the next action before the interim's review. Verified on six fixture-built scenarios ([docs/review/README.md](review/README.md)).
+- M1a (complete): opening a control shows the five steps as a map of where it is (from the API's journey, never a gate), the testing phases with their own state, the one thing that needs a person and who that is, everything outstanding with the step where it is resolved, and the sign-offs on record (two new read routes). The step's classic body shows under the frame; "All details" keeps the seven tabs through M2.
+
 **Workflow integrity W4: phase order and round readiness (with the W3 follow-ups).** Authorized by the product owner on conditional approval of W3; design in [workflow-integrity.md](workflow-integrity.md) §5 and §12. Complete, pending review; migration 0092.
 
 - Remediation precedes retesting wherever phases are shown. Each roll-forward and retest round has a readiness of its own (`round_readiness.py`): a retest waits for the remediation evidence, the fixed control's operating period, its population and samples and the approved plan; a roll-forward for effective interim testing and its evidence, not for interim's review. Approving a round's samples and the tester's run wait on it and say why; the register's rounds and the journey's phases carry the blockers.

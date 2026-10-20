@@ -1751,7 +1751,7 @@ def queue_drafts(
 # approved plan; operating evidence (population, samples, reports) also waits for the
 # control's attributes to be settled, since they define what a population must hold.
 
-GATE_PLAN = "approve the evidence plan first"
+GATE_PLAN = "approve the test plan first"
 GATE_ATTRIBUTES = "settle the control's attributes first"
 _APPROVED_PLAN = ("APPROVED", "CHANGES_PROPOSED")
 _OPERATING = ("INTERIM", "ROLLFORWARD")

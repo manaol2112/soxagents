@@ -1219,6 +1219,14 @@ def register_control_reviews(app: FastAPI, settings: Settings, scheduler: Any) -
     def list_reviews(organization_id: UUID, project_id: UUID, request: Request) -> list[ReviewBody]:
         return run(request, lambda c, p: reviews(c, p, organization_id, project_id))
 
+    @app.get(f"{base}/{{review_id}}/signoffs")
+    def list_signoffs(
+        organization_id: UUID, project_id: UUID, review_id: UUID, request: Request
+    ) -> list[ReviewSignoffBody]:
+        return run(
+            request, lambda c, p: review_signoffs(c, p, organization_id, project_id, review_id)
+        )
+
     @app.post(f"{base}/{{review_id}}/reperform")
     def reperform(
         organization_id: UUID, project_id: UUID, review_id: UUID, body: VersionBody,
@@ -1341,6 +1349,75 @@ def _reviewer(
     _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
     if not _is_reviewer(connection, project_id, principal.id):
         raise ReviewState("only a team member with the reviewer role can do this")
+
+
+class ReviewSignoffBody(BaseModel):
+    """One sign-off of an independent review as it was made (control_review_signoffs,
+    migration 0091), what it covered, and, if the review was opened again, why."""
+
+    id: UUID
+    control_review_id: UUID
+    test_round_id: UUID | None
+    round_kind: str | None
+    review_version: int
+    signed_by: str | None
+    signed_at: datetime
+    signoff_note: str
+    coverage: dict[str, Any]
+    reopened_at: datetime | None
+    reopened_by: str | None
+    reopen_reason: str
+    reopened_from: str | None
+
+
+def review_signoffs(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    review_id: UUID,
+) -> list[ReviewSignoffBody]:
+    """The review's sign-off history, oldest first, for anyone who may read the project.
+    A review outside the organization and project asked for is not visible."""
+    _person(connection, principal, organization_id, project_id, Action.TASK_READ)
+    owned = connection.execute(
+        "SELECT 1 FROM control_reviews WHERE id = %s AND project_id = %s AND organization_id = %s",
+        (review_id, project_id, organization_id),
+    ).fetchone()
+    if owned is None:
+        raise NotVisible()
+    rows = connection.execute(
+        """
+        SELECT o.id, o.control_review_id, o.test_round_id, r.kind, o.review_version,
+               s.display_name, o.signed_at, o.signoff_note, o.coverage, o.reopened_at,
+               b.display_name, o.reopen_reason, o.reopened_from
+        FROM control_review_signoffs o
+        LEFT JOIN test_rounds r ON r.id = o.test_round_id
+        LEFT JOIN users s ON s.id = o.signed_by
+        LEFT JOIN users b ON b.id = o.reopened_by
+        WHERE o.control_review_id = %s AND o.project_id = %s
+        ORDER BY o.signed_at
+        """,
+        (review_id, project_id),
+    ).fetchall()
+    return [
+        ReviewSignoffBody(
+            id=row[0],
+            control_review_id=row[1],
+            test_round_id=row[2],
+            round_kind=None if row[3] is None else str(row[3]),
+            review_version=int(row[4]),
+            signed_by=None if row[5] is None else str(row[5]),
+            signed_at=row[6],
+            signoff_note=str(row[7]),
+            coverage=dict(row[8]) if isinstance(row[8], dict) else {},
+            reopened_at=row[9],
+            reopened_by=None if row[10] is None else str(row[10]),
+            reopen_reason=str(row[11]),
+            reopened_from=None if row[12] is None else str(row[12]),
+        )
+        for row in rows
+    ]
 
 
 class CoverageBody(BaseModel):

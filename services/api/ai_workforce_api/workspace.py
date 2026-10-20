@@ -43,6 +43,8 @@ from ai_workforce_api.control_journey import (
     finality,
     finality_facts,
     journey_of,
+    leading_reason,
+    round_in_hand,
 )
 from ai_workforce_api.control_reviews import (
     REVIEW_STEPS,
@@ -1546,6 +1548,12 @@ def step_of(control: ControlRow, stages: StageBody, now: datetime | None = None)
     moment = now or datetime.now(UTC)
     if not control.included:
         return Step("Out of scope", "NONE")
+    in_hand = round_in_hand(control.not_final)
+    if in_hand is not None and not control.final:
+        # A round in testing is the work in hand, before the interim's workpapers or
+        # review (docs/workflow-integrity.md §2: interim review is no prerequisite).
+        word = "retest" if in_hand.phase == "RETEST" else "roll-forward"
+        return Step(f"Finish the {word} testing and sign it off", "PREPARER")
     if control.conclusion != "NOT_CONCLUDED":
         # The opinion is reached. Concluded only when final; otherwise the first thing
         # keeping it open is the step (docs/workflow-integrity.md §2).
@@ -1556,7 +1564,7 @@ def step_of(control: ControlRow, stages: StageBody, now: datetime | None = None)
                 else "Concluded with exceptions",
                 "NONE",
             )
-        first = control.not_final[0]
+        first = leading_reason(control.not_final)
         return Step(first.text, "REVIEWER" if first.step == "REVIEW" else "PREPARER")
     if control.test_status == "PROPOSED":
         if control.population_pending:
@@ -1603,7 +1611,7 @@ def step_of(control: ControlRow, stages: StageBody, now: datetime | None = None)
     if control.evidence_plan == "PROPOSED" and control.plan_changes_requested:
         return Step("Revise the test plan as the reviewer asked", "PREPARER")
     if control.evidence_plan == "PROPOSED" and unsent:
-        return Step("Approve the evidence plan", "PREPARER")
+        return Step("Approve the test plan", "PREPARER")
     for kind, noun in (("FOLLOW_UP", "follow-up"), ("SAMPLES", "sample request"),
                        ("EVIDENCE", "evidence request")):  # fmt: skip
         mine = by_kind.get(kind, [])
@@ -1732,8 +1740,10 @@ def progress_of(control: ControlRow, stages: StageBody, step: Step) -> Progress:
         # Signed-off testing opened again (a review note, an impact assessment, a person):
         # the stage says so, with the reason on the row; the review's notes stay open.
         return "TESTING_REOPENED"
+    if round_in_hand(control.not_final) is not None and not control.final:
+        return "READY_FOR_TESTING"
     if control.conclusion != "NOT_CONCLUDED":
-        return _PROGRESS_FOR_STEP[control.not_final[0].step]
+        return _PROGRESS_FOR_STEP[leading_reason(control.not_final).step]
     if control.review_left is not None and control.review_left != "SIGNED":
         return (
             "REVIEW_NOTES"

@@ -358,7 +358,7 @@ export function RequestReview({
               >
                 {planAction.busy === "approve"
                   ? "Approving…"
-                  : "Approve the evidence plan"}
+                  : "Approve the test plan"}
               </button>
             ) : null}
             {controlHref === undefined && canAct && !planned ? (

@@ -1408,7 +1408,7 @@ _INTERNAL = {
     "settle the kickoff draft against the plan first": (
         "Reconcile the kickoff draft with the evidence plan first."
     ),
-    "approve the evidence plan first": "Approve the control's evidence plan first.",
+    "approve the test plan first": "Approve the control's test plan first.",
     "settle the control's attributes first": "Settle the control's attributes first.",
     "requester cannot approve": "You submitted it; another approver must decide it.",
     "approval is already decided": "A decision is already recorded.",

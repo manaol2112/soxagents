@@ -234,7 +234,7 @@ export function evidenceActions(input: {
       title:
         plan !== null && plan.attention.length > 0
           ? "The evidence plan needs your judgment"
-          : "Review and approve the evidence plan",
+          : "Review and approve the test plan",
       detail:
         plan !== null && plan.attention.length > 0
           ? `The planner left ${plan.attention.length === 1 ? "one point" : `${plan.attention.length} points`} for you: ${plan.attention[0]}${plan.attention.length > 1 ? ` (and ${plan.attention.length - 1} more, listed on the test plan)` : ""}. Resolve ${plan.attention.length === 1 ? "it" : "them"}, then approve the plan. Nothing is requested before you approve it.`

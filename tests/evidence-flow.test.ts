@@ -745,7 +745,7 @@ describe("the planning gate", () => {
     assert.equal(primaryAction(actions)?.label, "Approve plan");
     assert.equal(
       primaryAction(actions)?.action.title,
-      "Review and approve the evidence plan",
+      "Review and approve the test plan",
     );
     assert.deepEqual(primaryAction(actions)?.action.target, {
       view: "requirements",
@@ -791,7 +791,7 @@ describe("the planning gate", () => {
 
   it("says why a request waits, in words", () => {
     assert.equal(
-      reviewProblem(409, "approve the evidence plan first"),
+      reviewProblem(409, "approve the test plan first"),
       "Approve the control's evidence plan first. Requests are released once it is approved.",
     );
     assert.equal(

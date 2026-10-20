@@ -151,7 +151,7 @@ _QUESTIONS = "Questions for you:"
 # Why the evidence coordinator's draft waits (evidence_plans.held_for_planning), in words.
 HELD_WORDS: dict[str, str] = {
     "plan the evidence first": "Plan the control's evidence first.",
-    "approve the evidence plan first": "Approve the control's evidence plan first.",
+    "approve the test plan first": "Approve the control's test plan first.",
     "settle the control's attributes first": (
         "Settle the control's attributes first: operating evidence follows them."
     ),

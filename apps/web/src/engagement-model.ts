@@ -16,9 +16,12 @@ export type ControlFiles = {
 };
 
 import type { ControlContext } from "./control-context-model.ts";
+import { type ControlJourney, parseJourney } from "./control-journey-model.ts";
 import type { EvidencePlan } from "./evidence-plan-model.ts";
 import type { NextSteps } from "./home-model.ts";
+import type { ImpactAssessment } from "./impact-model.ts";
 import type { ControlReview, ReviewNotice } from "./review-model.ts";
+import type { Signoff } from "./signoff-model.ts";
 import type { TestBasis } from "./test-basis-model.ts";
 import type { ControlTest, TestNotice } from "./testing-model.ts";
 
@@ -389,6 +392,9 @@ export type ControlRow = {
   notFinalBecause?: string[];
   /** Why a signed-off sheet was opened again, while it is open; "" otherwise. */
   reopenReason?: string;
+  /** Where the control is in Plan → Request → Test → Conclude → Review, each phase's
+   * state and readiness, and what is outstanding (control_journey.py). */
+  journey?: ControlJourney | null;
   sheetLeft: SheetLeft | null;
   /** The independent review (9.1): OPEN or SIGNED_OFF, and what it waits for. */
   reviewStatus: "OPEN" | "SIGNED_OFF" | null;
@@ -599,6 +605,11 @@ export type EngagementState = {
   controls: ControlRow[] | null;
   deficiencies: Deficiency[] | null;
   dashboard: Dashboard | null;
+  /** The open control's sign-offs on record (receipts), oldest first. */
+  signoffs?: Signoff[] | null;
+  /** The engagement's plan-revision impact assessments (plan_impact.py), read when a
+   * control is open. */
+  impact?: ImpactAssessment[] | null;
   /** The engagement's journey and what waits on the team (next_steps.py), for Home. */
   nextSteps?: NextSteps | null;
   notice: EngagementNotice | null;
@@ -611,6 +622,8 @@ export type EngagementState = {
     deficiency: string | null;
     queue: Queue | null;
     tab: string | null;
+    /** The guided workspace's step (?step=), when a link names one. */
+    step: string | null;
     /** The Evidence tab's view (?ev=) and the request opened in it (?request=). */
     evidenceView?: string | null;
     request?: string | null;
@@ -649,6 +662,8 @@ export const EMPTY_ENGAGEMENT: EngagementState = {
   controls: null,
   deficiencies: null,
   dashboard: null,
+  signoffs: null,
+  impact: null,
   notice: null,
   filters: {
     category: null,
@@ -658,6 +673,7 @@ export const EMPTY_ENGAGEMENT: EngagementState = {
     deficiency: null,
     queue: null,
     tab: null,
+    step: null,
     group: "application",
     sort: "control",
     layout: "applications",
@@ -832,6 +848,7 @@ export function parseControls(value: unknown): ControlRow[] | null {
         .map((reason) => (isRecord(reason) ? str(reason.text) : ""))
         .filter((text) => text !== ""),
       reopenReason: str(item.reopen_reason),
+      journey: parseJourney(item.journey),
       readinessBlocker: str(item.readiness_blocker),
       reviewStatus:
         item.review_status === "OPEN" || item.review_status === "SIGNED_OFF"

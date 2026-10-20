@@ -69,6 +69,7 @@ export default async function Home({ searchParams }: HomeProps) {
       notice: firstParam(params.notice),
       queue: firstParam(params.queue),
       tab: firstParam(params.tab),
+      step: firstParam(params.step),
       group: firstParam(params.group),
       sort: firstParam(params.sort),
       layout: firstParam(params.layout),

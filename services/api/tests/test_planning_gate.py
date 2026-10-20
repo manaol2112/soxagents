@@ -101,7 +101,7 @@ def test_a_plan_waits_for_a_person_at_launch(migrated: Database) -> None:
     ) == [(0,)]
     row = _control(team, "ITGC-AC-01")
     assert row["evidence_plan"] == "PROPOSED"
-    assert row["next_step"] == "Approve the evidence plan"
+    assert row["next_step"] == "Approve the test plan"
     body = _plan(team, row["id"])
     assert body["approved_automatically"] is False and body["attention"] == []
     # Approving it releases the design evidence. Every request still waits for an
@@ -163,7 +163,7 @@ def test_a_plan_that_needs_judgment_waits_for_a_person(migrated: Database) -> No
     assert body["attention"] == [
         "Interim operating effectiveness: Is the control run monthly or quarterly?"
     ]
-    assert _control(team, "ITGC-AC-01")["next_step"] == "Approve the evidence plan"
+    assert _control(team, "ITGC-AC-01")["next_step"] == "Approve the test plan"
     # A person approves it; the question no longer moves it.
     approved = owner.post(
         f"{_project(team)}/controls/{control}/evidence-plan/approve",
@@ -312,10 +312,10 @@ def test_a_draft_made_before_the_plan_was_approved_is_held(migrated: Database) -
     path = f"{_project(team)}/pbc-requests/{request[0]}"
     refused = owner.post(f"{path}/approve", json={"version": request[1]})
     assert refused.status_code == 409
-    assert refused.json()["detail"] == "approve the evidence plan first"
+    assert refused.json()["detail"] == "approve the test plan first"
     details = owner.get(f"{path}/details").json()
     planning = next(item for item in details["checks"] if item["key"] == "planning")
-    assert planning["detail"] == "Approve the control's evidence plan first."
+    assert planning["detail"] == "Approve the control's test plan first."
     listed = owner.get(f"{_project(team)}/evidence-requests", params={"size": 200}).json()
     row = next(item for item in listed["rows"] if item["id"] == str(request[0]))
     assert row["held"] is True and row["held_reason"] == "Awaiting plan approval"
@@ -324,7 +324,7 @@ def test_a_draft_made_before_the_plan_was_approved_is_held(migrated: Database) -
         f"{_project(team)}/evidence-requests/bulk",
         json={"action": "APPROVE", "items": [{"id": str(request[0]), "version": request[1]}]},
     ).json()
-    assert bulk["outcomes"][0]["detail"] == "Approve the control's evidence plan first."
+    assert bulk["outcomes"][0]["detail"] == "Approve the control's test plan first."
     # Nothing was deleted: approving the plan releases it.
     plan = _plan(team, control)
     owner.post(

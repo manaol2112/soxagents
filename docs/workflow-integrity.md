@@ -315,6 +315,11 @@ W1 implements §2 with these specifics, following §8:
   `_reopen_for` write them; sign-off clears them (the audit log keeps the history).
 - Readiness' own `CONCLUDED` state (readiness.py: "the review is signed off; nothing more
   to test") is **not** changed in W1; its label is reported as an open question.
+- M1b refinement: a roll-forward or retest round in testing is the work in hand. It leads
+  the step, the register's stage and the next action (`round_in_hand`, `leading_reason`)
+  before the interim's workpapers or review, whether or not the opinion is reached; the
+  interim review stays outstanding and is no prerequisite for the round (§W4). Nothing
+  about finality changes: every reason stays on the row until it is resolved.
 
 Open questions from W1, for the owner (none changes methodology; each is a presentation
 or a pre-existing record-keeping point):

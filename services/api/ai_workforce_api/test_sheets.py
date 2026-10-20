@@ -170,6 +170,77 @@ class ReopenBody(BaseModel):
 ReopenSource = Literal["REVIEW_NOTE", "IMPACT_ASSESSMENT", "PERSON"]
 
 
+class SignoffBody(BaseModel):
+    """One sign-off of a test sheet as it was made (test_sheet_signoffs, migration 0091),
+    and, if the sheet was opened again afterwards, why. Never rewritten."""
+
+    id: UUID
+    test_sheet_id: UUID
+    test_round_id: UUID | None
+    round_kind: str | None
+    sheet_version: int
+    conclusion: str
+    signed_by: str | None
+    signed_at: datetime
+    signoff_note: str
+    plan_revision: int | None
+    reopened_at: datetime | None
+    reopened_by: str | None
+    reopen_reason: str
+    reopened_from: str | None
+
+
+def sheet_signoffs(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    sheet_id: UUID,
+) -> list[SignoffBody]:
+    """The sheet's sign-off history, oldest first, for anyone who may read the project.
+    A sheet outside the organization and project asked for is not visible."""
+    _person(connection, principal, organization_id, project_id, Action.TASK_READ)
+    owned = connection.execute(
+        "SELECT 1 FROM test_sheets WHERE id = %s AND project_id = %s AND organization_id = %s",
+        (sheet_id, project_id, organization_id),
+    ).fetchone()
+    if owned is None:
+        raise NotVisible()
+    rows = connection.execute(
+        """
+        SELECT o.id, o.test_sheet_id, o.test_round_id, r.kind, o.sheet_version, o.conclusion,
+               s.display_name, o.signed_at, o.signoff_note, o.plan_revision, o.reopened_at,
+               b.display_name, o.reopen_reason, o.reopened_from
+        FROM test_sheet_signoffs o
+        LEFT JOIN test_rounds r ON r.id = o.test_round_id
+        LEFT JOIN users s ON s.id = o.signed_by
+        LEFT JOIN users b ON b.id = o.reopened_by
+        WHERE o.test_sheet_id = %s AND o.project_id = %s
+        ORDER BY o.signed_at
+        """,
+        (sheet_id, project_id),
+    ).fetchall()
+    return [
+        SignoffBody(
+            id=row[0],
+            test_sheet_id=row[1],
+            test_round_id=row[2],
+            round_kind=None if row[3] is None else str(row[3]),
+            sheet_version=int(row[4]),
+            conclusion=str(row[5]),
+            signed_by=None if row[6] is None else str(row[6]),
+            signed_at=row[7],
+            signoff_note=str(row[8]),
+            plan_revision=None if row[9] is None else int(row[9]),
+            reopened_at=row[10],
+            reopened_by=None if row[11] is None else str(row[11]),
+            reopen_reason=str(row[12]),
+            reopened_from=None if row[13] is None else str(row[13]),
+        )
+        for row in rows
+    ]
+
+
 class DeficiencyDecision(BaseModel):
     version: int = Field(ge=1)
     action: Literal["LOG", "DISMISS"]
@@ -208,6 +279,14 @@ def register_test_sheets(app: FastAPI, settings: Settings, scheduler: TestSchedu
     @app.get(base)
     def list_sheets(organization_id: UUID, project_id: UUID, request: Request) -> list[SheetBody]:
         return run(request, lambda c, p: sheets(c, p, organization_id, project_id))
+
+    @app.get(f"{base}/{{sheet_id}}/signoffs")
+    def list_signoffs(
+        organization_id: UUID, project_id: UUID, sheet_id: UUID, request: Request
+    ) -> list[SignoffBody]:
+        return run(
+            request, lambda c, p: sheet_signoffs(c, p, organization_id, project_id, sheet_id)
+        )
 
     @app.post(f"{base}/{{sheet_id}}/retest")
     def retest(

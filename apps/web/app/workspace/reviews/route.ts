@@ -39,6 +39,25 @@ export async function POST(request: Request) {
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const STEPS = new Set(["plan", "request", "test", "conclude", "review"]);
+
+/** The guided step the form was posted from, when the page was one; a value we name
+ * ourselves, never the referer's text, reaches the redirect. */
+function guidedStep(referer: string | null): string | null {
+  if (referer === null) {
+    return null;
+  }
+  try {
+    const url = new URL(referer);
+    const step = (url.searchParams.get("step") ?? "").toLowerCase();
+    if (url.searchParams.get("tab") === null && STEPS.has(step)) {
+      return step;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 function redirect(
   request: Request,
@@ -57,7 +76,14 @@ function redirect(
       destination.searchParams.set(param, value);
     }
   }
-  destination.searchParams.set("tab", "review");
+  // Back to where the form was: the guided Review step when the page was a step
+  // (the referer carries `step` and no `tab`), else the classic Review tab.
+  const step = guidedStep(request.headers.get("referer"));
+  if (step !== null) {
+    destination.searchParams.set("step", step);
+  } else {
+    destination.searchParams.set("tab", "review");
+  }
   destination.searchParams.set("notice", notice);
   destination.hash = "control-review";
   return NextResponse.redirect(destination, 303);

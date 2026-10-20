@@ -12,7 +12,17 @@ import {
   DocumentsPanel,
   ProcessPanel,
 } from "./control-context-view";
+import {
+  blockersOf,
+  currentStep,
+  needsYou,
+  phaseItems,
+  STEP_TABS,
+  STEPS,
+  stepperItems,
+} from "./control-journey-model";
 import { PhasePanel, type PhaseState, PhaseStep } from "./control-phases";
+import { ControlStepper } from "./control-stepper";
 import {
   ActivityTimeline,
   AiActivity,
@@ -63,6 +73,7 @@ import {
   stageText,
 } from "./controls-register-model";
 import { ControlsToolbar } from "./controls-toolbar";
+import { CoverageForm } from "./coverage-form";
 import {
   byApplication,
   byArea,
@@ -121,11 +132,18 @@ import {
 import { EvidenceWorkspace } from "./evidence-workspace-view";
 import { formatDate } from "./format";
 import { HashScroll } from "./hash-scroll";
+import { impactFor } from "./impact-model";
+import { ImpactPanel } from "./impact-panel";
 import { planningHref } from "./planning-model";
 import { RequestReview } from "./request-review";
-import { reviewFor as controlReviewFor, openNotes } from "./review-model";
+import {
+  reviewFor as controlReviewFor,
+  openNotes,
+  roundReviewsFor,
+} from "./review-model";
 import { ReviewTab } from "./review-view";
 import { roundsFor } from "./round-model";
+import { RoundReviews } from "./round-reviews";
 import { TestRounds } from "./round-view";
 import { sheetFor } from "./sheet-model";
 import { TestSheetCard } from "./sheet-view";
@@ -957,7 +975,14 @@ function ControlRecord({
   keep: Keep;
   siblings: ControlRow[];
 }) {
-  const tab = detailTab(control, engagement.filters.tab);
+  // The guided workspace (Milestone 1a) unless a link asks for a classic tab: the step
+  // comes from the API's journey, or from ?step=, and shows that step's classic body.
+  const journey = control.journey ?? null;
+  const guided = engagement.filters.tab === null;
+  const step = currentStep(journey, engagement.filters.step);
+  const tab = guided
+    ? STEP_TABS[step]
+    : detailTab(control, engagement.filters.tab);
   const tasks = (engagement.plan?.tasks ?? []).filter(
     (task) => task.controlId === control.id,
   );
@@ -966,6 +991,32 @@ function ControlRecord({
   );
   const test = testFor(engagement.tests, control.id);
   const review = controlReviewFor(engagement.reviews, control.id);
+  // Milestone 1b: the plan-revision impact assessments, the rounds' own reviews, and
+  // the coverage gaps the journey reports, surfaced in the steps they belong to.
+  const impact = impactFor(engagement.impact ?? null, control.id);
+  const pendingImpact = impact.filter(
+    (item) => item.status === "PENDING",
+  ).length;
+  const decideImpact = impact.some(
+    (item) => item.status === "PENDING" && item.viewerCanDecide,
+  );
+  const roundReviews = roundReviewsFor(engagement.reviews, control.id);
+  const reasons = control.notFinalBecause ?? [];
+  const coverageGaps = {
+    control:
+      reasons.find(
+        (text) =>
+          /review/i.test(text) &&
+          /changed since|did not record|after the review/i.test(text) &&
+          !/^(Roll-forward|Retest|The roll-forward|The retest)/.test(text),
+      ) ?? "",
+    "roll-forward":
+      reasons.find((text) =>
+        /^(Roll-forward|The roll-forward) .*review/i.test(text),
+      ) ?? "",
+    retest:
+      reasons.find((text) => /^(Retest|The retest) .*review/i.test(text)) ?? "",
+  };
   const index = siblings.findIndex((item) => item.id === control.id);
   const previous = index > 0 ? siblings[index - 1] : undefined;
   const next =
@@ -1062,6 +1113,18 @@ function ControlRecord({
       href(model, { ...keep, control: control.id, tab: key }),
     ]),
   ) as Record<DetailTab, string>;
+  // The guided workspace's steps; a step link carries no classic tab.
+  const stepHrefs = Object.fromEntries(
+    STEPS.map((key) => [
+      key,
+      href(model, {
+        ...keep,
+        control: control.id,
+        tab: null,
+        step: key.toLowerCase(),
+      }),
+    ]),
+  ) as Record<(typeof STEPS)[number], string>;
   // The control's next step opens the record it is about when that is evidence work.
   const firstEvidence = evidence.find((action) => action.mine);
   // The viewer's next action: what needs them, most pressing first (attentionOf), then an
@@ -1399,23 +1462,55 @@ function ControlRecord({
             {control.overdue ? <span className="cw-late">Overdue</span> : null}
           </p>
         </header>
-        <AuditProgress stages={stages} hrefs={tabHrefs} />
-        {tab === "overview" ? (
+        {guided ? (
+          <ControlStepper
+            journey={journey}
+            items={stepperItems(journey)}
+            phases={phaseItems(journey)}
+            current={step}
+            hrefs={stepHrefs}
+            needs={needsYou({
+              nextStep: control.nextStep,
+              actor: control.actor,
+              yours: control.yours,
+              journey,
+              decideImpact,
+            })}
+            actionHref={
+              decideImpact
+                ? stepHrefs.PLAN
+                : nextAction.primary !== null
+                  ? (nextAction.primary.href ??
+                    tabHrefs[nextAction.primary.tab])
+                  : null
+            }
+            blockers={blockersOf(journey)}
+            receipts={engagement.signoffs ?? []}
+            classicHref={tabHrefs.overview}
+          />
+        ) : (
           <>
-            <NextActionPanel
-              next={nextAction}
-              ids={ids}
-              hrefs={tabHrefs}
-              canAct={canAct}
-              conclusionHref={tabHrefs.review}
-            />
-            <SummaryMetrics metrics={metrics} hrefs={tabHrefs} />
+            <AuditProgress stages={stages} hrefs={tabHrefs} />
+            {tab === "overview" ? (
+              <>
+                <NextActionPanel
+                  next={nextAction}
+                  ids={ids}
+                  hrefs={tabHrefs}
+                  canAct={canAct}
+                  conclusionHref={tabHrefs.review}
+                />
+                <SummaryMetrics metrics={metrics} hrefs={tabHrefs} />
+              </>
+            ) : nextAction.primary !== null ? (
+              <NextActionLine item={nextAction.primary} hrefs={tabHrefs} />
+            ) : null}
           </>
-        ) : nextAction.primary !== null ? (
-          <NextActionLine item={nextAction.primary} hrefs={tabHrefs} />
-        ) : null}
+        )}
       </section>
-      <RecordSections tab={tab} hrefs={tabHrefs} counts={counts} />
+      {guided ? null : (
+        <RecordSections tab={tab} hrefs={tabHrefs} counts={counts} />
+      )}
       <div className="record-tab cw-body">
         {tab === "overview" ? (
           <AiActivity
@@ -1426,6 +1521,11 @@ function ControlRecord({
         ) : null}
         {tab === "design" ? (
           <>
+            <ImpactPanel
+              assessments={impact}
+              ids={ids}
+              hrefs={{ test: stepHrefs.TEST, review: stepHrefs.REVIEW }}
+            />
             <TestPlanSummary
               plan={evidencePlan}
               approach={approach}
@@ -1526,6 +1626,20 @@ function ControlRecord({
         ) : null}
         {tab === "testing" ? (
           <>
+            {pendingImpact > 0 ? (
+              <p
+                className="banner banner-warning cw-impact-banner"
+                role="status"
+              >
+                <UiIcon name="risk" size={16} />
+                <span>
+                  {pendingImpact === 1
+                    ? "These results await a reviewer's impact decision: the test plan changed after they were signed off."
+                    : `${pendingImpact} signed-off results await a reviewer's impact decision.`}
+                  <a href={stepHrefs.PLAN}>Open the assessment</a>
+                </span>
+              </p>
+            ) : null}
             {stages.find((item) => item.key === "design")?.status !==
             "not_applicable" ? (
               <PhasePanel
@@ -1758,6 +1872,36 @@ function ControlRecord({
                 />
               </PhaseStep>
             </PhasePanel>
+            {pendingImpact > 0 ? (
+              <p
+                className="banner banner-warning cw-impact-banner"
+                role="status"
+              >
+                <UiIcon name="risk" size={16} />
+                <span>
+                  The results this review covers await a reviewer's impact
+                  decision.
+                  <a href={stepHrefs.PLAN}>Open the assessment</a>
+                </span>
+              </p>
+            ) : null}
+            {review !== null ? (
+              <CoverageForm
+                review={review}
+                ids={ids}
+                gap={coverageGaps.control}
+                canAct={canAct}
+              />
+            ) : null}
+            <RoundReviews
+              reviews={roundReviews}
+              rounds={rounds}
+              sheets={engagement.sheets}
+              notice={engagement.reviewNotice}
+              ids={ids}
+              canAct={canAct}
+              gaps={coverageGaps}
+            />
             <section className="cw-plain cw-conclusion">
               <h2>Conclusion</h2>
               {control.conclusion === "NOT_CONCLUDED" ? (

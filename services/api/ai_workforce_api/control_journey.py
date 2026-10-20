@@ -770,8 +770,10 @@ def _phase_blockers(
     if not control.attributes_settled:
         blockers.append("Settle the control's attributes")
     if state == "PLANNED" and phase in ("INTERIM", "ROLLFORWARD"):
+        # Not a gate on anything now: the platform recommends the release once the
+        # earlier phase is complete, and a reviewer may release it earlier.
         waiting = status.waiting_for if status is not None else ""
-        blockers.append(waiting or f"Release the {_LABELS[phase].lower()} phase")
+        blockers.append(_not_released(waiting))
     if control.reconcile and phase == "INTERIM":
         blockers.append("Reconcile the kickoff draft with the evidence plan")
     dependent = requirements.get("AWAITING_DEPENDENCY", 0)
@@ -824,6 +826,26 @@ _CONCLUDING = 6
 _REVIEWING = 7
 
 
+_RELEASE_AFTER = {
+    "Design and implementation testing is not complete.": "design and implementation testing "
+    "is complete",
+    "Interim testing is not signed off.": "interim testing is signed off",
+}
+
+
+def _not_released(waiting: str) -> str:
+    """Why a phase is not released yet, as a recommendation rather than a block."""
+    after = _RELEASE_AFTER.get(waiting)
+    if after is not None:
+        return (
+            f"Not released yet: release is recommended once {after}; "
+            "a reviewer may release it earlier"
+        )
+    if waiting:
+        return f"Not released yet: {waiting.rstrip('.')}"
+    return "Not released yet: a person releases this phase"
+
+
 def _step(control: ControlRow, phases: Sequence[PhaseJourney]) -> tuple[Step, Phase | None]:
     """The step the control is at (docs §4.2): Plan until its plan is approved at its
     current revision; otherwise the open phase furthest along (an earlier phase still to
@@ -832,12 +854,15 @@ def _step(control: ControlRow, phases: Sequence[PhaseJourney]) -> tuple[Step, Ph
     nothing applicable is open."""
     if control.evidence_plan != "PLANNED":
         return "PLAN", None
+    in_hand = round_in_hand(control.not_final)
+    if in_hand is not None and not (control.final or not control.not_final):
+        return "TEST", in_hand.phase
     if control.conclusion != "NOT_CONCLUDED":
         # The opinion is reached: Done when final, else the first thing keeping it open
         # (the register's stage follows the same reason: workspace.progress_of).
         if control.final or not control.not_final:
             return "DONE", None
-        first = control.not_final[0]
+        first = leading_reason(control.not_final)
         return first.step, first.phase
     candidates: list[tuple[int, int, Step, Phase | None]] = []
     for index, item in enumerate(phases):
@@ -857,6 +882,23 @@ def _step(control: ControlRow, phases: Sequence[PhaseJourney]) -> tuple[Step, Ph
         return "CONCLUDE", None
     _rank, _tie, step, phase = max(candidates)
     return step, phase
+
+
+def round_in_hand(reasons: Sequence[NotFinal]) -> NotFinal | None:
+    """A roll-forward or retest round in testing: work already in hand, which leads the
+    step, the register's stage and the next action before what waits on others (the
+    interim review, the workpapers), whether or not the opinion is reached."""
+    for reason in reasons:
+        if reason.kind == "ROUND" and reason.step == "TEST":
+            return reason
+    return None
+
+
+def leading_reason(reasons: Sequence[NotFinal]) -> NotFinal:
+    """The reason that leads once the opinion is reached: the round in hand, else the
+    first reason recorded. The step, the register's stage and the next action all follow
+    it, so they never disagree."""
+    return round_in_hand(reasons) or reasons[0]
 
 
 def journey_of(

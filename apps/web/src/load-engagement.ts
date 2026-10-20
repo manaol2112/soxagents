@@ -17,15 +17,18 @@ import { parseChangeNotice } from "./evidence-change-model";
 import { parseRegister } from "./evidence-model";
 import { parsePlan as parseEvidencePlan } from "./evidence-plan-model";
 import { parseNextSteps } from "./home-model";
+import { parseImpact } from "./impact-model";
 import { apiGet, sessionToken } from "./load-workspace";
 import { parseRequestDetails } from "./request-details-model";
 import {
   parseReviews as parseControlReviews,
   parseReviewNotice,
+  reviewFor,
 } from "./review-model";
 import { parseRounds } from "./round-model";
-import { parseSheetNotice, parseSheets } from "./sheet-model";
+import { parseSheetNotice, parseSheets, sheetFor } from "./sheet-model";
 import type { ShellModel } from "./shell-model";
+import { parseSignoffs, receipts } from "./signoff-model";
 import { parseTestBasis } from "./test-basis-model";
 import { parseTestNotice, parseTests } from "./testing-model";
 import {
@@ -69,6 +72,8 @@ export async function loadEngagement(
     notice: string | null;
     queue?: string | null;
     tab?: string | null;
+    /** The guided workspace's step (?step=), when a link names one. */
+    step?: string | null;
     group?: string | null;
     sort?: string | null;
     layout?: string | null;
@@ -108,6 +113,7 @@ export async function loadEngagement(
   const [
     dashboard,
     nextSteps,
+    impact,
     controls,
     plan,
     deficiencies,
@@ -127,6 +133,7 @@ export async function loadEngagement(
   ] = await Promise.all([
     wanted.dashboard ? apiGet(`${base}/workspace/dashboard`, session) : null,
     wanted.dashboard ? apiGet(`${base}/next-steps`, session) : null,
+    open ? apiGet(`${base}/impact`, session) : null,
     wanted.controls ? apiGet(`${base}/workspace/controls`, session) : null,
     wanted.plan ? apiGet(`${base}/workspace/plan`, session) : null,
     wanted.deficiencies ? apiGet(`${base}/deficiencies`, session) : null,
@@ -166,21 +173,48 @@ export async function loadEngagement(
       : null;
   const ok = (result: { status: number; body: unknown } | null) =>
     result !== null && result.status === 200 ? result.body : undefined;
+  const parsedSheets =
+    ok(sheets) === undefined ? null : parseSheets(ok(sheets));
+  const parsedReviews =
+    ok(controlReviews) === undefined
+      ? null
+      : parseControlReviews(ok(controlReviews));
+  // The open control's sign-offs on record (its interim sheet's and its own review's):
+  // the receipts the guided workspace shows.
+  const openSheet =
+    open && query.control !== null
+      ? sheetFor(parsedSheets, query.control)
+      : null;
+  const openReview =
+    open && query.control !== null
+      ? reviewFor(parsedReviews, query.control)
+      : null;
+  const [sheetSignoffs, reviewSignoffs] = await Promise.all([
+    openSheet !== null
+      ? apiGet(`${base}/test-sheets/${openSheet.id}/signoffs`, session)
+      : null,
+    openReview !== null
+      ? apiGet(`${base}/reviews/${openReview.id}/signoffs`, session)
+      : null,
+  ]);
   return {
     focusRequest:
       ok(focused) === undefined ? null : parseRequestDetails(ok(focused)),
     tests: ok(tests) === undefined ? null : parseTests(ok(tests)),
     testNotice: section === "controls" ? parseTestNotice(query.notice) : null,
-    sheets: ok(sheets) === undefined ? null : parseSheets(ok(sheets)),
+    sheets: parsedSheets,
+    signoffs: open
+      ? receipts(
+          parseSignoffs(ok(sheetSignoffs) ?? [], "TESTING"),
+          parseSignoffs(ok(reviewSignoffs) ?? [], "REVIEW"),
+        )
+      : null,
     rounds: ok(rounds) === undefined ? null : parseRounds(ok(rounds)),
     sheetNotice: section === "controls" ? parseSheetNotice(query.notice) : null,
     workpapers: withVersion(ok(papers), ok(shownPaper)),
     workpaperNotice: open ? parseWorkpaperNotice(query.notice) : null,
     workpaperViewing: viewing,
-    reviews:
-      ok(controlReviews) === undefined
-        ? null
-        : parseControlReviews(ok(controlReviews)),
+    reviews: parsedReviews,
     reviewNotice:
       section === "controls" ? parseReviewNotice(query.notice) : null,
     context: ok(context) === undefined ? null : parseContext(ok(context)),
@@ -195,6 +229,7 @@ export async function loadEngagement(
     changeNotice: open ? parseChangeNotice(query.notice) : null,
     dashboard:
       ok(dashboard) === undefined ? null : parseDashboard(ok(dashboard)),
+    impact: ok(impact) === undefined ? null : parseImpact(ok(impact)),
     nextSteps:
       ok(nextSteps) === undefined ? null : parseNextSteps(ok(nextSteps)),
     controls: ok(controls) === undefined ? null : parseControls(ok(controls)),
@@ -232,6 +267,12 @@ export async function loadEngagement(
         query.tab !== undefined &&
         /^[a-z]{1,20}$/.test(query.tab)
           ? query.tab
+          : null,
+      step:
+        query.step !== null &&
+        query.step !== undefined &&
+        /^[a-z]{1,10}$/.test(query.step)
+          ? query.step
           : null,
       evidenceView:
         query.ev != null && /^[a-z]{1,20}$/.test(query.ev) ? query.ev : null,

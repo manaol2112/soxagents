@@ -258,7 +258,7 @@ export function reviewProblem(status: number, detail: string): string | null {
         "The request is no longer a draft. The page shows the current status.",
       "the evidence coordinator is not set up":
         "The evidence coordinator is not active for this firm. Submit the request for approval instead.",
-      "approve the evidence plan first":
+      "approve the test plan first":
         "Approve the control's evidence plan first. Requests are released once it is approved.",
       "settle the control's attributes first":
         "Settle the control's attributes first. Operating evidence follows them.",

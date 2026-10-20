@@ -332,7 +332,8 @@ export type ReviewIntent =
   | "clear"
   | "return"
   | "sign-off"
-  | "reopen";
+  | "reopen"
+  | "coverage";
 
 export type ReviewWrite =
   | { error: "invalid" }
@@ -397,6 +398,23 @@ export function reviewWrite(fields: Record<string, string>): ReviewWrite {
       intent,
       path: `${base}/reopen`,
       body: { version, reason },
+      controlId,
+    };
+  }
+  if (intent === "coverage") {
+    // A qualified reviewer's documented coverage assessment of a signed review (W3
+    // follow-up): COVERS or REQUIRES_REVIEW, with why. The API checks the role again.
+    const decision = fields.decision ?? "";
+    if (
+      (decision !== "COVERS" && decision !== "REQUIRES_REVIEW") ||
+      reason.length < 3
+    ) {
+      return { error: "invalid" };
+    }
+    return {
+      intent,
+      path: `${base}/coverage`,
+      body: { version, decision, rationale: reason },
       controlId,
     };
   }
@@ -478,6 +496,7 @@ export type ReviewNotice =
   | "review-returned"
   | "review-signed"
   | "review-reopened"
+  | "review-covered"
   | "review-blocked"
   | "review-denied"
   | "review-invalid"
@@ -497,6 +516,7 @@ export const REVIEW_NOTICES: Record<ReviewNotice, string> = {
     "Note returned to the preparer with what is still missing.",
   "review-signed": "Review signed off. The control is concluded.",
   "review-reopened": "The review is open again.",
+  "review-covered": "The coverage assessment is recorded on the review.",
   "review-blocked":
     "That could not be done yet: the review changed, notes are still open, or the work is not ready for review. Refresh and check what is left.",
   "review-denied":
@@ -516,6 +536,7 @@ const DONE: Record<ReviewIntent, ReviewNotice> = {
   return: "review-returned",
   "sign-off": "review-signed",
   reopen: "review-reopened",
+  coverage: "review-covered",
 };
 
 export function reviewNoticeFor(

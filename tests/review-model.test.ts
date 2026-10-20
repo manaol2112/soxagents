@@ -282,3 +282,37 @@ describe("independent review model", () => {
     assert.equal(parseReviewNotice("sheet-signed"), null);
   });
 });
+
+describe("a reviewer's coverage assessment (W3 follow-up)", () => {
+  it("posts COVERS or REQUIRES_REVIEW with a rationale, and nothing else", () => {
+    const fields = {
+      organization_id: "01a13253-ec1a-7604-8944-a06dd7633ce0",
+      project_id: "01a155ff-992f-7342-bc45-127332b008f4",
+      review_id: "01a12990-0000-7000-8000-000000000020",
+      version: "3",
+      intent: "coverage",
+      decision: "COVERS",
+      reason: "The design workpaper restates the walkthrough the review read.",
+    };
+    const good = reviewWrite(fields);
+    assert.ok(!("error" in good));
+    assert.equal(good.intent, "coverage");
+    assert.match(
+      good.path,
+      /\/reviews\/01a12990-0000-7000-8000-000000000020\/coverage$/,
+    );
+    assert.deepEqual(good.body, {
+      version: 3,
+      decision: "COVERS",
+      rationale: fields.reason,
+    });
+    assert.deepEqual(reviewWrite({ ...fields, decision: "MAYBE" }), {
+      error: "invalid",
+    });
+    assert.deepEqual(reviewWrite({ ...fields, reason: "no" }), {
+      error: "invalid",
+    });
+    assert.equal(reviewNoticeFor("coverage", 200), "review-covered");
+    assert.equal(reviewNoticeFor("coverage", 409), "review-blocked");
+  });
+});

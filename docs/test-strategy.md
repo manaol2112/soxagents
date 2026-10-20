@@ -107,3 +107,9 @@ and `workflow-model` (queue sources).
   warnings in 4 min 13 s**.
 - W4 (with the W3 follow-ups): targeted set 76 passed; `make test-critical` with
   `test_round_readiness` added: **348 passed, 0 failed, 0 skipped, 0 warnings in 5 min**.
+- M1b (19 October 2026): `make test-fast` **80 Python passed in 2 min 1 s and 102 Node
+  passed**; the whole Node set 685 passed; `make test-critical` **351 passed, 0 failed in
+  4 min 31 s** after the last code change. One legacy expectation rewritten
+  (`test_overlapping_phases…`: the next step for a roll-forward round in testing reads
+  "Finish the roll-forward testing and sign it off", an action, instead of the status
+  "Roll-forward testing in progress"; the step and stage it asserted are unchanged).

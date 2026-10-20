@@ -23,6 +23,7 @@ from ai_workforce_api.control_journey import (
     RoundFacts,
     finality,
     journey_of,
+    leading_reason,
 )
 from ai_workforce_api.db import connect
 from ai_workforce_api.phase_release import ControlPhases, PhaseStatus
@@ -136,7 +137,7 @@ def test_a_control_waits_at_plan_until_a_person_approves_its_plan() -> None:
         ),
     )
     assert (journey.step, journey.step_phase) == ("PLAN", None)
-    assert journey.action == "Approve the evidence plan" == row.next_step
+    assert journey.action == "Approve the test plan" == row.next_step
     assert set(_states(journey).values()) == {"AWAITING_PLAN"}
     assert not any(item.ready_for_testing for item in journey.phases)
     assert all(item.blockers == ["Approve the test plan"] for item in journey.phases)
@@ -163,7 +164,7 @@ def test_overlapping_phases_interim_reviewed_while_the_roll_forward_is_tested() 
         ],
     )
     assert row.progress == "READY_FOR_TESTING"
-    assert row.next_step == "Roll-forward testing in progress"
+    assert row.next_step == "Finish the roll-forward testing and sign it off"
     journey = journey_of(
         row,
         _phases(rollforward="RELEASED", complete=(True, True, False)),
@@ -195,7 +196,10 @@ def test_the_roll_forward_waits_for_interim_testing_and_says_so() -> None:
     assert (journey.step, journey.step_phase) == ("TEST", "INTERIM")
     rollforward = next(item for item in journey.phases if item.phase == "ROLLFORWARD")
     assert rollforward.state == "PLANNED" and rollforward.ready_for_testing is False
-    assert rollforward.blockers == ["Interim testing is not signed off."]
+    assert rollforward.blockers == [
+        "Not released yet: release is recommended once interim testing is signed off; a "
+        "reviewer may release it earlier"
+    ]
     # The later phase is outstanding beside the step, not hidden by it.
     assert "Roll-forward operating effectiveness: planned, not released" in journey.blockers
     assert journey.conflicts == []
@@ -344,6 +348,70 @@ def test_a_concluded_control_with_nothing_outstanding_is_done() -> None:
     assert set(_states(journey).values()) <= {"REVIEWED", "SIGNED_OFF"}
     assert journey.blockers == [] and journey.conflicts == []
     assert not any(item.ready_for_testing for item in journey.phases)
+
+
+def test_a_round_in_testing_leads_the_step_and_the_action_once_the_opinion_is_reached() -> None:
+    """Interim concluded not effective, its review open, and the retest round in testing:
+    the work in hand (the retest) is the step, the register's stage and the next action,
+    not the review that waits on the reviewer; the review stays outstanding."""
+    reasons = [
+        NotFinal(kind="REVIEW", text="Independent review not signed off", step="REVIEW"),
+        NotFinal(
+            kind="DESIGN",
+            text="Design and implementation testing outstanding",
+            step="TEST",
+            phase="DESIGN",
+        ),
+        NotFinal(kind="ROUND", text="Retest testing in progress", step="TEST", phase="RETEST"),
+    ]
+    assert leading_reason(reasons).kind == "ROUND"
+    assert leading_reason(reasons[:2]).kind == "REVIEW"
+    row = _settled(
+        REVIEWED,
+        sheet_status="SIGNED_OFF",
+        test_result="NOT_EFFECTIVE",
+        review_status="OPEN",
+        review_left="REPERFORMING",
+        conclusion="EXCEPTION",
+        deficiencies=1,
+        not_final=reasons,
+        requests=[
+            _request("EVIDENCE", "RECEIVED", phase="INTERIM"),
+            _request("EVIDENCE", "RECEIVED", phase="REMEDIATION"),
+        ],
+    )
+    journey = journey_of(
+        row,
+        _phases(rollforward="NOT_APPLICABLE", complete=(True, True, False)),
+        [_round("RETEST", "TESTING", "RECEIVED")],
+    )
+    assert (journey.step, journey.step_phase) == ("TEST", "RETEST")
+    assert "Independent review not signed off" in journey.not_final_because
+    assert journey.final is False
+    assert row.progress == "READY_FOR_TESTING"
+    assert (row.next_step, row.actor) == ("Finish the retest testing and sign it off", "PREPARER")
+    # Before the opinion is reached too: interim signed off, its workpapers not prepared,
+    # the retest in testing. The retest leads; the workpapers stay outstanding.
+    before = _settled(
+        REVIEWED,
+        sheet_status="SIGNED_OFF",
+        test_result="NOT_EFFECTIVE",
+        conclusion="NOT_CONCLUDED",
+        deficiencies=1,
+        not_final=reasons[1:],
+        requests=[
+            _request("EVIDENCE", "RECEIVED", phase="INTERIM"),
+            _request("EVIDENCE", "RECEIVED", phase="REMEDIATION"),
+        ],
+    )
+    early = journey_of(
+        before,
+        _phases(rollforward="NOT_APPLICABLE", complete=(True, True, False)),
+        [_round("RETEST", "TESTING", "RECEIVED")],
+    )
+    assert (early.step, early.step_phase) == ("TEST", "RETEST")
+    assert before.progress == "READY_FOR_TESTING"
+    assert before.next_step == "Finish the retest testing and sign it off"
 
 
 def test_the_journey_agrees_with_the_register_wherever_it_does_not_report_a_conflict() -> None:

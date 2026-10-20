@@ -1112,7 +1112,7 @@ describe("what needs a person", () => {
       actions: [
         {
           key: "plan-approve",
-          title: "Review and approve the evidence plan",
+          title: "Review and approve the test plan",
           detail: "",
           tab: "evidence" as const,
           anchor: "",

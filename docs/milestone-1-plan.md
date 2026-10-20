@@ -1,6 +1,6 @@
 # Milestone 1: the guided control workspace (implementation plan for approval)
 
-Status: **proposed; no UI code changed.** Milestone 1 builds the control workspace the
+Status: **approved; M1a built (see §9).** Milestone 1 builds the control workspace the
 owner approved in [workflow-redesign.md](workflow-redesign.md) §3 on the W1–W4 backend
 ([workflow-integrity.md](workflow-integrity.md)). Scope is the auditor's experience of one
 control; the W1–W4 safeguards are not touched; no new destination, menu change or page is
@@ -189,3 +189,98 @@ widths for every visual change; no full legacy suite.
    the Review step linking to the same panel. Recommended.
 5. **Agent recommendations' wording**: "The agent recommends … because …" with the items
    it compared, and "A reviewer decides" beside every recommendation. Confirm.
+
+---
+
+## 9. M1a as built
+
+- **Two read routes** (tenant- and project-scoped, `task.read`): `GET
+  …/test-sheets/{id}/signoffs` and `GET …/reviews/{id}/signoffs`, returning each sign-off
+  as made (signer, time, conclusion or coverage, version, plan revision) and, when it was
+  opened again, by what and why. `test_signoff_history` covers the records, a reopening,
+  and refusal across tenants and projects.
+- **Web models** (`control-journey-model.ts`, `signoff-model.ts`): the API's journey
+  parsed as given; the five steps with done / current / upcoming from the journey alone;
+  the step a link asks for (`?step=`) else the journey's; each applicable phase with its
+  state in words; the Needs-you card, role-aware (`yours`, `actor`), with the reason the
+  step is open only when it is not the action itself; the outstanding list, each cause
+  once with the phases it holds, work not yet reached left out; testing complete, review
+  complete and final kept apart; receipts in words. 36 Node tests.
+- **The frame** (`control-stepper.tsx`, server-rendered): stepper, completion line
+  (testing · review · final), phase chips, Needs-you, Outstanding with a link to the step
+  where each item is resolved, On record (receipts). The control record shows it when no
+  classic tab is asked for and renders the step's classic body under it; "All details"
+  opens the seven tabs unchanged; old `tab=` links still land on their tab.
+- Verified at 1440 and 390 on the dev engagements: a control whose action is the viewer's
+  (Approve the evidence plan) and one that waits on the client (Waiting for evidence); the
+  next action sits above the fold at both widths; no horizontal overflow. No engagement
+  the owner belongs to has a signed-off sheet, so receipts are shown by the API tests and
+  model tests rather than a screenshot.
+- Not in M1a: the step bodies (M1b), the agent block and trace rail (M1c), retiring the
+  client-side derivations (M1d).
+
+## 10. M1b as built
+
+The step bodies gain the workflow interactions W1–W4 introduced, each where the step's
+work is, without a new write path: every action goes through the existing registered
+routes with the same authorization, the same approval gates and the same records.
+
+- **Terminology.** The one gate is named *Approve the test plan* everywhere (register
+  next step, evidence gate text, request details, evidence center). "Evidence plan" was
+  the same gate under another name; no gate was merged or removed.
+- **Phase dependency wording** distinguishes three things: what blocks an action now
+  (the Needs-you card and the phase's own cause), what is outstanding before the control
+  is final (the Outstanding list, each item linked to the step that resolves it), and a
+  future phase not yet released ("Not released yet: release is recommended once design
+  and implementation testing is complete; a reviewer may release it earlier"). The
+  outstanding list no longer repeats the API's phase lines or its impact line when the
+  not-final reason already says so.
+- **Plan step: impact assessments** (`impact-model.ts`, `impact-panel.tsx`,
+  `app/workspace/impact/route.ts`). Each assessment shows what was signed off, by whom,
+  under which revision, the agent's recommendation with its rationale and the item-by-item
+  comparison, and links to the testing and the review it is about. Only the viewer the
+  API marks `viewer_can_decide` (a reviewer who did not sign the testing) sees the
+  decision form (VALID or REPERFORM, rationale of three characters or more); everyone
+  else sees that it waits on the independent reviewer. The form posts to the existing
+  `POST …/impact/{id}/decide`; the API checks the role, the signer's exclusion and the
+  version again. A pending assessment the viewer may decide is the Needs-you card itself.
+- **Testing and Review steps** carry a banner while an assessment is pending, linking to
+  the Plan step: nothing relies on the signed-off results until the reviewer decides.
+- **Review step: round reviews** (`round-reviews.tsx`). Each testing round's own review
+  (W2) is listed with its state (open with notes to decide, ready to sign off, or signed
+  off and what it covered); opening one shows the full review — the agent's
+  re-performance, the proposed notes to accept or dismiss, the sign-off — through the
+  existing review component, so the reviewer independence rules apply unchanged.
+- **Historical coverage assessments** (`coverage-form.tsx`). A signed review whose
+  coverage of a later testing version is unknown shows a form (COVERS or REQUIRES_REVIEW
+  with a rationale) posting to `POST …/reviews/{id}/coverage` (W3); the record is
+  immutable and shown once made.
+- **The step in hand.** A roll-forward or retest round in testing is the control's step,
+  the register's stage (*Ready for testing*) and the next action (*Finish the retest
+  testing and sign it off*), whether or not the opinion is reached, before the interim's
+  workpapers or review, which stay outstanding. `control_journey.round_in_hand` and
+  `leading_reason` drive all three so they never disagree. In the stepper a step behind
+  the journey's with work still in hand is shown as *working*, never as done; the step a
+  link opens is outlined.
+- **Verified** on six fixture-built scenarios at 1440 and 390 (`docs/review/m1b/`, index
+  in `docs/review/README.md`): plan awaiting approval; evidence awaiting the owner;
+  testing ready for execution; a round awaiting independent review; an impact assessment
+  requiring a reviewer's decision (reviewer and signer views); a completed control with
+  receipts.
+- **Browser smoke tests** (after the report, at the owner's request; `docs/review/m1b/
+  e2e-*.png`): the impact decision and the coverage assessment were exercised end to end
+  in headless Chrome against the demo database — loading, client validation (disabled
+  button, native required fields), submission, the success state after refresh or
+  redirect, a stale tab's conflict shown inline, and the signer's and preparer's views
+  without forms. The review's sign-off record was compared byte for byte before and
+  after the coverage assessment: unchanged. Plain review forms posted from a guided step
+  now return to that step (the route reads the step from the referer, allowing only the
+  five step names) instead of the classic tab.
+- **Remaining UX issues** (M1d, retiring client-side derivations): the classic testing
+  body's group headers derive their own status ("Roll-forward and retests — Not started"
+  while a retest is testing; a roll-forward workpaper offered when the roll-forward is
+  not applicable); the review step repeats the generic "the independent review opens
+  when…" explanation above the round reviews; the Needs-you card and the On-record line
+  are server-derived but the classic bodies under them are not yet.
+- Not in M1b: the agent block and trace rail (M1c), retiring the client-side derivations
+  (M1d).
