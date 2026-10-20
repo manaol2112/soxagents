@@ -1,4 +1,5 @@
 import { AutoRefresh } from "./auto-refresh";
+import { type Automation, executionOf } from "./execution-model";
 import { formatDate } from "./format";
 import {
   type ControlReview,
@@ -57,12 +58,15 @@ export function ReviewTab({
   notice,
   ids,
   canAct,
+  automation = null,
 }: {
   review: ControlReview | null;
   sheet: TestSheet | null;
   notice: ReviewNotice | null;
   ids: Ids;
   canAct: boolean;
+  /** Whether an agent worker will pick up a queued re-performance (M1d). */
+  automation?: Automation | null;
 }) {
   if (review === null) {
     return (
@@ -142,7 +146,13 @@ export function ReviewTab({
           {review.status === "SIGNED_OFF"
             ? "Reviewed"
             : review.reperforming
-              ? "Re-performing"
+              ? executionOf({
+                  agent: "reviewer",
+                  run: review.reperformState,
+                  automation,
+                }).state === "UNAVAILABLE"
+                ? "Re-performance queued · automation unavailable"
+                : "Re-performing"
               : waiting.length > 0
                 ? "Notes open"
                 : "Ready to sign off"}

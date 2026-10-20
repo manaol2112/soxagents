@@ -24,6 +24,7 @@ import {
   recordAction,
   STAGES,
 } from "./engagement-model.ts";
+import type { Automation } from "./execution-model.ts";
 
 type Filters = EngagementState["filters"];
 export type Sort = Filters["sort"];
@@ -312,7 +313,10 @@ export type StageText = {
 };
 
 /** A control's stage in words, with the detail that tells the cases apart. */
-export function stageText(control: ControlRow): StageText {
+export function stageText(
+  control: ControlRow,
+  automation: Automation | null = null,
+): StageText {
   const label = PROGRESS_LABELS[control.progress];
   const live = control.requests.filter(
     (request) => request.status !== "CANCELLED",
@@ -378,7 +382,10 @@ export function stageText(control: ControlRow): StageText {
         ai: false,
       };
     case "AGENT_TESTING":
-      return { label, detail: "In progress", ai: true };
+      // "In progress" only when a worker will run it (execution-model, M1d).
+      return automation?.available === true
+        ? { label, detail: "In progress", ai: true }
+        : { label, detail: "Run queued; no agent worker", ai: true };
     case "RESULTS_TO_CONFIRM":
       return {
         label,

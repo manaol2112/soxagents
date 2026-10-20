@@ -3,8 +3,9 @@ import { UiIcon } from "./ui-icon";
 
 /**
  * The one agent block of the control workspace: what the agents did on this step, what
- * they propose and why, the records that support it, and whether a person's decision is
- * pending. A proposal is never shown as done; when the records give no basis, that is
+ * they propose and why in a sentence, the execution state from the run record, and
+ * whether a person's decision is pending. The full reason and the references sit behind
+ * "Details". A proposal is never shown as done; when the records give no basis, that is
  * said in place of a recommendation.
  */
 export function AgentSays({ says }: { says: Says }) {
@@ -12,10 +13,12 @@ export function AgentSays({ says }: { says: Says }) {
     says.did.length > 0 ||
     says.recommends !== null ||
     says.decision !== null ||
-    says.insufficient !== null;
+    says.insufficient !== null ||
+    says.execution !== null;
   if (!hasSomething) {
     return null;
   }
+  const details = says.becauseFull !== "" || says.supports.length > 0;
   return (
     <section className="cw-agent" aria-labelledby="cw-agent-title">
       <p className="cw-agent-kicker" id="cw-agent-title">
@@ -23,6 +26,14 @@ export function AgentSays({ says }: { says: Says }) {
         Agent says
       </p>
       <dl className="cw-agent-grid">
+        {says.execution !== null ? (
+          <>
+            <dt>Run</dt>
+            <dd>
+              <strong>{says.execution.label}.</strong> {says.execution.detail}
+            </dd>
+          </>
+        ) : null}
         {says.did.length > 0 ? (
           <>
             <dt>Did</dt>
@@ -60,10 +71,22 @@ export function AgentSays({ says }: { says: Says }) {
             <dd className="cw-agent-insufficient">{says.insufficient}</dd>
           </>
         ) : null}
-        {says.supports.length > 0 ? (
+        {says.decision !== null ? (
           <>
-            <dt>Based on</dt>
-            <dd>
+            <dt>Decision</dt>
+            <dd className="cw-agent-decision">{says.decision}</dd>
+          </>
+        ) : null}
+      </dl>
+      {details ? (
+        <details className="cw-agent-details">
+          <summary>Details</summary>
+          {says.becauseFull !== "" ? (
+            <p className="cw-agent-full">{says.becauseFull}</p>
+          ) : null}
+          {says.supports.length > 0 ? (
+            <>
+              <p className="cw-agent-refs-title">Based on</p>
               <ul className="cw-agent-refs">
                 {says.supports.map((ref) =>
                   ref.href !== null ? (
@@ -75,16 +98,10 @@ export function AgentSays({ says }: { says: Says }) {
                   ),
                 )}
               </ul>
-            </dd>
-          </>
-        ) : null}
-        {says.decision !== null ? (
-          <>
-            <dt>Decision</dt>
-            <dd className="cw-agent-decision">{says.decision}</dd>
-          </>
-        ) : null}
-      </dl>
+            </>
+          ) : null}
+        </details>
+      ) : null}
     </section>
   );
 }

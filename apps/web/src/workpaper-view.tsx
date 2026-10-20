@@ -1,4 +1,5 @@
 import { AutoRefresh } from "./auto-refresh";
+import { type Automation, executionOf } from "./execution-model";
 import { formatDate } from "./format";
 import { type SheetTab, SheetTabs } from "./sheet-tabs";
 import { UiIcon } from "./ui-icon";
@@ -79,6 +80,7 @@ export function WorkpapersTab({
   initial,
   hasInput,
   compact = false,
+  automation = null,
 }: {
   papers: Workpaper[] | null;
   notice: WorkpaperNotice | null;
@@ -94,6 +96,8 @@ export function WorkpapersTab({
   /** On the control's testing: no explanation, and the workbook folded under one line
    * that says where each record stands. */
   compact?: boolean;
+  /** Whether an agent worker will pick up a queued draft (M1d). */
+  automation?: Automation | null;
 }) {
   const papers =
     all === null || stage === undefined
@@ -174,7 +178,9 @@ export function WorkpapersTab({
           open={viewing !== null || notice !== null ? true : undefined}
         >
           <summary>
-            <span>{papers.map(paperLine).join(" · ")}</span>
+            <span>
+              {papers.map((paper) => paperLine(paper, automation)).join(" · ")}
+            </span>
             <span className="wp-fold-toggle">
               Open the workpaper
               <UiIcon name="chevron" size={14} />
@@ -202,10 +208,18 @@ export function WorkpapersTab({
 }
 
 /** Where one record of the workbook stands, in a few words. */
-function paperLine(paper: Workpaper): string {
+function paperLine(
+  paper: Workpaper,
+  automation: Automation | null = null,
+): string {
   const name = paper.stage === "DESIGN" ? "Design" : "Testing";
+  const run = paper.drafting
+    ? executionOf({ agent: "drafter", run: "QUEUED", automation })
+    : null;
   const state = paper.drafting
-    ? "the agent is drafting"
+    ? run !== null && run.state === "UNAVAILABLE"
+      ? "draft queued; no agent worker is configured, so it will not start"
+      : "draft queued for the agent"
     : paper.status === "PREPARED"
       ? `prepared by ${paper.preparedBy}`
       : paper.currentVersion === 0

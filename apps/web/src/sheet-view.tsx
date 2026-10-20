@@ -1,5 +1,6 @@
 import { AutoRefresh } from "./auto-refresh";
 import { PreviewButton } from "./evidence-preview";
+import type { Automation } from "./execution-model";
 import { formatDate } from "./format";
 import {
   RESULT_LABELS,
@@ -65,11 +66,14 @@ export function TestSheetCard({
   notice,
   ids,
   canAct,
+  automation = null,
 }: {
   sheet: TestSheet | null;
   notice: SheetNotice | null;
   ids: Ids;
   canAct: boolean;
+  /** Whether an agent worker will pick up a queued run (M1d). */
+  automation?: Automation | null;
 }) {
   if (sheet === null) {
     return (
@@ -87,7 +91,7 @@ export function TestSheetCard({
       </section>
     );
   }
-  const headline = sheetHeadline(sheet);
+  const headline = sheetHeadline(sheet, automation);
   const open = sheet.status === "OPEN" && canAct;
   const linkable = sheet.placements.filter(
     (entry) => entry.placement !== "EXCLUDED",

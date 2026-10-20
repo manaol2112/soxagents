@@ -19,6 +19,7 @@ import type {
 } from "./engagement-model.ts";
 import { requestStage } from "./evidence-flow.ts";
 import type { EvidencePlan, Phase, PlanPhase } from "./evidence-plan-model.ts";
+import type { Automation } from "./execution-model.ts";
 import type { ControlReview } from "./review-model.ts";
 import type { TestRound } from "./round-model.ts";
 import type { RunState } from "./run-state.ts";
@@ -121,6 +122,8 @@ export type WorkspaceInput = {
   tasks: PlanTask[];
   files: ControlFiles | null;
   findings: Deficiency[];
+  /** Whether an agent worker will pick up queued runs (M1d); null when unknown. */
+  automation?: Automation | null;
 };
 
 const RECEIVED = new Set(["RECEIVED", "CLOSED"]);
@@ -982,7 +985,7 @@ export function makeupText(makeup: Makeup): string {
 
 /** What the agent is doing on its job: running now, handed to the background and not yet
  * picked up, stopped (it gave up and a person starts it again), or not running. */
-export type LaneRun = "running" | "queued" | "stopped" | "idle";
+export type LaneRun = "running" | "queued" | "stopped" | "idle" | "unavailable";
 
 /** Whether the agent's output still waits on a person: nothing to decide yet, a decision
  * pending, or decided (approved, signed off, prepared). */
@@ -1019,7 +1022,15 @@ export type AgentLane = {
 
 const NO_DECISION: LaneDecision = { state: "none", text: "", owner: "" };
 
-function runOf(state: RunState): LaneRun {
+function runOf(state: RunState, automation: Automation | null): LaneRun {
+  // A lease is "running" or "queued" only when a worker exists to run it; otherwise the
+  // lane says automation is unavailable rather than implying work (execution-model).
+  if (
+    (state === "RUNNING" || state === "QUEUED") &&
+    automation?.available !== true
+  ) {
+    return "unavailable";
+  }
   return state === "RUNNING"
     ? "running"
     : state === "QUEUED"
@@ -1260,7 +1271,7 @@ export function agentLanes(input: WorkspaceInput): AgentLane[] {
           ? "idle"
           : failedDraft
             ? "stopped"
-            : runOf(paper.draftState),
+            : runOf(paper.draftState, input.automation ?? null),
       runNote:
         paper === undefined
           ? ""
@@ -1349,7 +1360,11 @@ export function agentLanes(input: WorkspaceInput): AgentLane[] {
           ? "Tests the control once, against each attribute, citing the evidence"
           : "Draws the samples, then tests each against every attribute",
       run:
-        sheet === null ? "idle" : stopped ? "stopped" : runOf(sheet.runState),
+        sheet === null
+          ? "idle"
+          : stopped
+            ? "stopped"
+            : runOf(sheet.runState, input.automation ?? null),
       runNote:
         sheet === null
           ? ""
@@ -1431,7 +1446,7 @@ export function agentLanes(input: WorkspaceInput): AgentLane[] {
         ? "idle"
         : reviewStopped
           ? "stopped"
-          : runOf(review.reperformState),
+          : runOf(review.reperformState, input.automation ?? null),
     runNote:
       review === null
         ? ""

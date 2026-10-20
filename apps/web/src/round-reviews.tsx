@@ -1,4 +1,5 @@
 import { CoverageForm } from "./coverage-form";
+import type { Automation } from "./execution-model";
 import type { ControlReview, ReviewNotice } from "./review-model";
 import { openNotes } from "./review-model";
 import { ReviewTab } from "./review-view";
@@ -27,6 +28,7 @@ export function RoundReviews({
   ids,
   canAct,
   gaps,
+  automation = null,
 }: {
   reviews: ControlReview[];
   rounds: readonly TestRound[];
@@ -36,6 +38,7 @@ export function RoundReviews({
   canAct: boolean;
   /** Coverage gaps the journey reports, by round phase word ("roll-forward", "retest"). */
   gaps: Record<string, string>;
+  automation?: Automation | null;
 }) {
   if (reviews.length === 0) {
     return null;
@@ -94,6 +97,7 @@ export function RoundReviews({
                 notice={notice}
                 ids={ids}
                 canAct={canAct}
+                automation={automation}
               />
               <CoverageForm
                 review={review}

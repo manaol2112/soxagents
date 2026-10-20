@@ -137,9 +137,23 @@ describe("test sheet model", () => {
       [];
     assert.ok(signed !== undefined);
     assert.equal(sheetHeadline(signed).label, "Signed off · effective");
-    const [running] = parseSheets([raw({ running: true })]) ?? [];
+    const [running] =
+      parseSheets([raw({ running: true, run_state: "QUEUED" })]) ?? [];
     assert.ok(running !== undefined);
-    assert.equal(sheetHeadline(running).tone, "info");
+    // A queued or working run is "running" only when an agent worker exists; with
+    // none (or unknown), the headline says automation is unavailable (M1d).
+    assert.deepEqual(sheetHeadline(running), {
+      label: "Run queued · automation unavailable",
+      tone: "warning",
+    });
+    const local = { available: true, provider: "local", detail: "" } as const;
+    assert.equal(sheetHeadline(running, local).label, "Queued for the tester");
+    const [working] = parseSheets([raw({ running: true })]) ?? [];
+    assert.ok(working !== undefined);
+    assert.deepEqual(sheetHeadline(working, local), {
+      label: "The tester is running",
+      tone: "info",
+    });
   });
 
   it("builds each write and refuses bad input", () => {

@@ -425,6 +425,7 @@ const RUN_LABELS: Record<LaneRun, string> = {
   queued: "Queued",
   stopped: "Stopped",
   idle: "",
+  unavailable: "Queued · no agent worker",
 };
 
 /**

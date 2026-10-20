@@ -155,6 +155,36 @@ class PlanTask(BaseModel):
     waiting_on: int
 
 
+class AutomationBody(BaseModel):
+    """Whether queued agent runs will be picked up (M1d). The web says "running" only
+    when a run record is active and this says a worker exists; otherwise automated
+    execution is reported as unavailable rather than implied."""
+
+    available: bool
+    provider: Literal["workflow", "local", "none"]
+    detail: str
+
+
+def automation_of(settings: Settings) -> AutomationBody:
+    if settings.workflow_address != "":
+        return AutomationBody(
+            available=True,
+            provider="workflow",
+            detail="A durable workflow engine runs the agents' queued work.",
+        )
+    if settings.local_worker_enabled:
+        return AutomationBody(
+            available=True,
+            provider="local",
+            detail="The API's local worker runs the agents' queued work.",
+        )
+    return AutomationBody(
+        available=False,
+        provider="none",
+        detail="No agent worker is configured: queued runs stay queued until one is.",
+    )
+
+
 class PlanBody(BaseModel):
     started: bool
     kickoff: date | None
@@ -344,6 +374,9 @@ class ControlRow(BaseModel):
     progress: Progress = "TO_REQUEST"
     actor: Actor = "NONE"
     yours: bool = False
+    # The people the control's open work is assigned to, by display name (M1d): who a
+    # preparer's step waits on when it is not the viewer's.
+    assignees: list[str] = []
     # The next step is submitting a drafted request: done together, not control by control.
     drafted: bool = False
     # An exception in its testing or an open deficiency.
@@ -528,6 +561,14 @@ def register_workspace(app: FastAPI, settings: Settings) -> None:
             request,
             lambda c, p: control_activity(c, p, organization_id, project_id, control_id),
         )
+
+    @app.get(f"{base}/workspace/automation")
+    def automation(organization_id: UUID, project_id: UUID, request: Request) -> AutomationBody:
+        def read(connection: psycopg.Connection[Any], principal: Principal) -> AutomationBody:
+            _authorize(connection, principal, organization_id, project_id, Action.TASK_READ)
+            return automation_of(settings)
+
+        return run(request, read)
 
     @app.get(f"{base}/workspace/plan")
     def plan(organization_id: UUID, project_id: UUID, request: Request) -> PlanBody:
@@ -1834,16 +1875,26 @@ def mark_yours(
     prepare = _allowed(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
     approve = _allowed(connection, principal, organization_id, project_id, Action.PROJECT_UPDATE)
     reviewer = _is_reviewer(connection, project_id, principal.id)
+    # A preparer's step, when no one is assigned, is an engagement lead's or preparer's
+    # (project_memberships.engagement_role); an organization admin who is not on the
+    # engagement's team has the permission but not the role, so it is not theirs (M1d).
+    preparer = _has_engagement_role(connection, project_id, principal.id, ("LEAD", "PREPARER"))
     assigned: dict[UUID, set[UUID]] = {}
-    for control_id, user_id in connection.execute(
+    names: dict[UUID, list[str]] = {}
+    for control_id, user_id, name in connection.execute(
         """
-        SELECT engagement_control_id, assignee_user_id FROM tasks
-        WHERE project_id = %s AND engagement_control_id IS NOT NULL
-          AND assignee_user_id IS NOT NULL AND status NOT IN ('SUCCEEDED', 'CANCELLED')
+        SELECT t.engagement_control_id, t.assignee_user_id, u.display_name FROM tasks t
+        JOIN users u ON u.id = t.assignee_user_id
+        WHERE t.project_id = %s AND t.engagement_control_id IS NOT NULL
+          AND t.assignee_user_id IS NOT NULL AND t.status NOT IN ('SUCCEEDED', 'CANCELLED')
+        ORDER BY u.display_name
         """,
         (project_id,),
     ).fetchall():
         assigned.setdefault(control_id, set()).add(user_id)
+        found = names.setdefault(control_id, [])
+        if str(name) not in found:
+            found.append(str(name))
     prepared = {
         row[0]
         for row in connection.execute(
@@ -1874,7 +1925,8 @@ def mark_yours(
     }
     for control in controls:
         people = assigned.get(control.id)
-        mine = people is None or principal.id in people
+        mine = principal.id in people if people is not None else preparer
+        control.assignees = names.get(control.id, [])
         if control.drafted:
             control.yours = False
         elif control.actor == "PREPARER" or (control.actor == "CLIENT" and control.overdue):
@@ -2053,6 +2105,19 @@ _DEFICIENCY_COLUMNS = """
     d.remediation_request_id,
     (SELECT a.name FROM engagement_applications a WHERE a.id = c.engagement_application_id)
 """
+
+
+def _has_engagement_role(
+    connection: psycopg.Connection[Any], project_id: UUID, user_id: UUID, roles: tuple[str, ...]
+) -> bool:
+    row = connection.execute(
+        """
+        SELECT 1 FROM project_memberships
+        WHERE project_id = %s AND user_id = %s AND engagement_role = ANY(%s)
+        """,
+        (project_id, user_id, list(roles)),
+    ).fetchone()
+    return row is not None
 
 
 def _is_reviewer(connection: psycopg.Connection[Any], project_id: UUID, user_id: UUID) -> bool:

@@ -56,6 +56,24 @@ under the sign-offs on record, compact by default and opened with a click (the
 | `review-agent-notes-*.png` | A round awaiting review: the reviewer agent's re-performance and its two proposed notes, with the attributes and evidence they cite; the reviewer decides and signs. |
 | `completed-trace-expanded-*.png` | A concluded control: every link has a record, from the objective to the signed review, with each attribute's cited evidence and results. |
 
+## m1d — corrections, before and after
+
+The "before" of each correction is an earlier screenshot in `m1b/` or `m1c/`, named
+below; the "after" is in `m1d/`. One scenario was added to the demo database for the
+walkthrough: testing complete (design and interim signed off), the independent review
+open with the agent's notes, not signed (`demo-review-open`).
+
+| Correction | Before | After |
+| --- | --- | --- |
+| Agent execution wording: a queued run with no worker is no longer "The tester is testing" / "Testing is running now" | `m1c/testing-agent-trace-desktop.png`, `m1b/3-testing-ready-desktop.png` | `testing-after-*.png`: "Run queued · automation unavailable" on the sheet, "Automation unavailable" in Agent says, "draft queued; no agent worker is configured" on the workpapers; `classic-ai-activity-after-desktop.png` for the classic lanes |
+| Role-aware actions: the reviewer no longer sees "Needs you" for the preparer's step | `m1c/review-agent-notes-desktop.png` ("Needs you: Prepare the workpapers") | `review-step-reviewer-after-*.png` ("Waits on the preparer") |
+| Agent says concise, references behind "Details" | `m1c/plan-agent-proposal-desktop.png` (the plan summary restated the control) | `plan-agent-concise-*.png` |
+| Retest traceability: interim objective, procedures and evidence requirements no longer shown as the retest's | `m1c/testing-trace-expanded-desktop.png` | `retest-trace-after-desktop.png` |
+| Classic testing headers from the journey | `m1b/3-testing-ready-desktop.png` ("Roll-forward and retests — Not started" while the retest tests) | `testing-after-desktop.png` ("In progress") |
+| Redundant review explanation removed in the guided step | `m1b/4-round-awaiting-review-reviewer-desktop.png` | `review-step-reviewer-after-desktop.png` |
+| Effective after a dismissed exception, explained | `m1b/6-completed-receipts-desktop.png` | `conclusion-wording-after-*.png` |
+| Testing complete, review outstanding: no finality implied | — | `testing-complete-review-open-*.png` ("Testing complete · Review pending · Not final"; the reviewer's view in `-reviewer-desktop.png`) |
+
 Rebuilding the demo database: the builder script lives outside the repository (it drives
 the test fixtures); the API is pointed at `ai_workforce_demo` with the test environment
 (independence required, no model, no worker, no live email).

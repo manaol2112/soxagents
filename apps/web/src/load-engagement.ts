@@ -16,6 +16,7 @@ import {
 import { parseChangeNotice } from "./evidence-change-model";
 import { parseRegister } from "./evidence-model";
 import { parsePlan as parseEvidencePlan } from "./evidence-plan-model";
+import { parseAutomation } from "./execution-model";
 import { parseNextSteps } from "./home-model";
 import { parseImpact } from "./impact-model";
 import { apiGet, sessionToken } from "./load-workspace";
@@ -114,6 +115,7 @@ export async function loadEngagement(
     dashboard,
     nextSteps,
     impact,
+    automation,
     controls,
     plan,
     deficiencies,
@@ -134,6 +136,9 @@ export async function loadEngagement(
     wanted.dashboard ? apiGet(`${base}/workspace/dashboard`, session) : null,
     wanted.dashboard ? apiGet(`${base}/next-steps`, session) : null,
     open ? apiGet(`${base}/impact`, session) : null,
+    section === "controls"
+      ? apiGet(`${base}/workspace/automation`, session)
+      : null,
     wanted.controls ? apiGet(`${base}/workspace/controls`, session) : null,
     wanted.plan ? apiGet(`${base}/workspace/plan`, session) : null,
     wanted.deficiencies ? apiGet(`${base}/deficiencies`, session) : null,
@@ -230,6 +235,8 @@ export async function loadEngagement(
     dashboard:
       ok(dashboard) === undefined ? null : parseDashboard(ok(dashboard)),
     impact: ok(impact) === undefined ? null : parseImpact(ok(impact)),
+    automation:
+      ok(automation) === undefined ? null : parseAutomation(ok(automation)),
     nextSteps:
       ok(nextSteps) === undefined ? null : parseNextSteps(ok(nextSteps)),
     controls: ok(controls) === undefined ? null : parseControls(ok(controls)),

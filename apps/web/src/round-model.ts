@@ -143,7 +143,7 @@ export function roundNext(round: TestRound, today: string): string {
   }
   if (round.status === "TESTING") {
     return round.method === "TEST_OF_ONE"
-      ? "The tester is testing the current evidence. Review and sign off the sheet."
+      ? "The current evidence is on the test sheet. Review the results and sign off the sheet."
       : "Samples are approved. The tester tests their evidence as it arrives.";
   }
   if (round.requestId === null) {

@@ -137,7 +137,11 @@ export function ControlStepper({
         aria-labelledby="cw-needs-title"
       >
         <p className="cw-needs-kicker" id="cw-needs-title">
-          {needs.mine ? "Needs you" : `Waits on ${needs.who.toLowerCase()}`}
+          {needs.mine
+            ? "Needs you"
+            : needs.waitsOn !== ""
+              ? `Waits on ${needs.waitsOn}`
+              : `Waits on ${needs.who.toLowerCase()}`}
         </p>
         <p className="cw-needs-title">{needs.title}</p>
         {needs.reason !== "" ? (

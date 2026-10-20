@@ -266,9 +266,18 @@ describe("a control's stage and next step", () => {
   it("says what exactly, and marks an agent's unconfirmed work", () => {
     assert.deepEqual(stageText(row({ progress: "AGENT_TESTING" })), {
       label: "Agent testing",
-      detail: "In progress",
+      detail: "Run queued; no agent worker",
       ai: true,
     });
+    // With a worker configured, the run is in progress.
+    assert.equal(
+      stageText(row({ progress: "AGENT_TESTING" }), {
+        available: true,
+        provider: "local",
+        detail: "",
+      }).detail,
+      "In progress",
+    );
     assert.deepEqual(
       stageText(
         row({

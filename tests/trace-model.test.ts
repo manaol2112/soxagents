@@ -282,4 +282,90 @@ describe("the trace rail", () => {
       ],
     );
   });
+
+  it("never presents the interim plan as a retest's", () => {
+    const atRetest = parseJourney({
+      step: "TEST",
+      step_phase: "RETEST",
+      phases: [],
+      blockers: [],
+      not_final_because: [],
+      conflicts: [],
+    });
+    const retestSheet = {
+      ...sheet,
+      items: [
+        {
+          id: "r1",
+          label: "u1001",
+          files: [{ id: "f9", fileName: "after the fix.csv" }],
+          cells: [],
+        },
+      ],
+      counts: {
+        items: 1,
+        tested: 0,
+        noEvidence: 0,
+        exceptions: 0,
+        unable: 0,
+        review: 0,
+        unplaced: 0,
+      },
+      proposal: null,
+      proposalStatus: "NONE",
+    } as unknown as TestSheet;
+    const nodes = traceOf(
+      input({
+        journey: atRetest,
+        sheet: retestSheet,
+        round: {
+          kind: "RETEST",
+          number: 1,
+          deficiencyReference: "D-001",
+          requestStatus: "RECEIVED",
+        },
+      }),
+    );
+    assert.equal(nodes[0]?.state, "partial");
+    assert.match(
+      nodes[0]?.summary ?? "",
+      /^Retest round 1 of D-001: the round record states what is retested; no retest-specific objective/,
+    );
+    assert.equal(nodes[2]?.state, "missing");
+    assert.match(
+      nodes[2]?.summary ?? "",
+      /No retest-specific procedures are approved on the plan; the interim procedures are not shown/,
+    );
+    assert.match(
+      nodes[3]?.summary ?? "",
+      /on the retest sheet, carried from the control's approved set/,
+    );
+    assert.equal(nodes[4]?.state, "recorded");
+    assert.match(
+      nodes[4]?.summary ?? "",
+      /^1 file on the retest samples; 0 files cited by results\. The interim evidence requirements are not the retest's\./,
+    );
+    assert.deepEqual(nodes[4]?.items, ["after the fix.csv"]);
+    // A roll-forward has its own plan phase, so nothing changes for it.
+    const atRollForward = parseJourney({
+      step: "TEST",
+      step_phase: "ROLLFORWARD",
+      phases: [],
+      blockers: [],
+      not_final_because: [],
+      conflicts: [],
+    });
+    const rolled = traceOf(
+      input({
+        journey: atRollForward,
+        round: {
+          kind: "ROLLFORWARD",
+          number: 1,
+          deficiencyReference: null,
+          requestStatus: "RECEIVED",
+        },
+      }),
+    );
+    assert.equal(rolled[2]?.state, "recorded");
+  });
 });

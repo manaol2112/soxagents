@@ -32,7 +32,7 @@ export function PhasePanel({
   title: string;
   state: PhaseState;
   /** One line at most; the plan says what the phase covers. */
-  summary?: string;
+  summary?: string | undefined;
   /** The agent's task for this phase, when the kickoff created one. */
   task?: PlanTask | undefined;
   aside?: ReactNode;

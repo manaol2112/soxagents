@@ -111,6 +111,9 @@ function sheet(overrides: Partial<TestSheet>): TestSheet {
 
 function input(overrides: Partial<WorkspaceInput>): WorkspaceInput {
   return {
+    // A worker is configured unless a test says otherwise: "running" and "queued" mean
+    // what they say only then (execution-model, M1d).
+    automation: { available: true, provider: "local", detail: "" },
     control: row({}),
     plan: null,
     context: null,
@@ -508,6 +511,18 @@ describe("the agents on a control", () => {
       "tester",
     );
     assert.deepEqual([queued.run, queued.runNote], ["queued", "Run queued"]);
+    // With no worker configured (or unknown), a queued lease is not "queued for an
+    // agent": the lane says automation is unavailable.
+    const noWorker = laneOf(
+      agentLanes(
+        input({
+          sheet: sheet({ running: true, runState: "QUEUED" }),
+          automation: null,
+        }),
+      ),
+      "tester",
+    );
+    assert.equal(noWorker.run, "unavailable");
     const running = laneOf(
       agentLanes(
         input({

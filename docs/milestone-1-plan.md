@@ -329,3 +329,100 @@ no new write path, no migration.
   worker; the agent block repeats the Needs-you decision in its own words when the
   reviewer is the viewer.
 - Not in M1c: retiring the client-side derivations in the classic bodies (M1d).
+
+## 12. M1d as built
+
+Corrections to what M1a–M1c showed, each from a record; no new workflow, no navigation
+change, no migration. One read-only route was added.
+
+- **Execution state** (`execution-model.ts`, `GET …/workspace/automation`). "Running" is
+  said only when a run record is active (the record's lease: queued or working) *and* the
+  automation status says a worker or workflow engine exists. Without one, every place
+  that spoke of an agent at work now says automation is unavailable: the sheet headline
+  ("Run queued · automation unavailable"), Agent says ("Automation unavailable. A testing
+  run is queued, but no agent worker is configured, so it will not start."), the
+  workpaper line, the review pill, the register's stage detail ("Run queued; no agent
+  worker") and the classic AI-activity lanes. The states kept apart: ready, queued,
+  running, completed, failed (stopped), unavailable. Nothing is inferred from the sheet's
+  workflow state. The route reads the API's settings (`workflow_address`,
+  `local_worker_enabled`) under `task.read`; it serves no secret.
+- **Role-aware actions** (`workspace.mark_yours`, `ControlRow.assignees`). A preparer's
+  step is the viewer's when they are assigned to the control's task or, with no
+  assignee, when they are on the engagement team as lead or preparer. Organization
+  permissions alone no longer make it theirs: the engagement reviewer and an admin off
+  the team see "Waits on the preparer", with the assignees named when there are any. The
+  Needs-you card, Agent says ("The independent reviewer decides…" versus "You accept or
+  dismiss…", from `viewer_is_reviewer` and `viewer_can_decide`) and the stepper now
+  agree. Approvals keep their permission rule; the requester never approves their own.
+- **Agent says, concise.** The default view is Run, Did, Proposes (one sentence with a
+  reason cut at a sentence end near 180 characters), No proposal or Caveat, Decision. The
+  full reason and the "Based on" references sit behind "Details". The plan proposal's
+  reason is now what the plan is built from and how much it asks for, not the plan
+  summary.
+- **Retest traceability** (`trace-model.ts`, `TraceRound`). For a retest the rail no
+  longer borrows the interim plan phase: the objective is the round record ("Retest round
+  1 of D-001 … no retest-specific objective is on the approved plan", partial), the
+  procedure link is missing ("No retest-specific procedures are approved on the plan; the
+  interim procedures are not shown as the retest's"), the attributes are stated as
+  carried from the control's approved set, and the evidence is the files on the retest
+  samples and the round's request, with "The interim evidence requirements are not the
+  retest's". A roll-forward keeps its own plan phase.
+- **Classic bodies.** The testing panels' headers read the journey's phase states (a
+  retest in testing is "In progress"; a released phase with nothing requested is "Not
+  started"); the review panel is in progress while the control's or any round's review
+  is open. In the guided Review step the generic explanation is gone and, with no review
+  of the control's own, one line says why and points to the rounds' reviews. The
+  conclusion says, when the testing was signed off not effective and the control is
+  effective, that the proposed deficiency was dismissed by a person (with the reason) and
+  that the reviewer concluded on the signed-off review. "All details" still opens the
+  classic view.
+- **Walkthrough.** Plan → Request → Test → Conclude → Review verified on the demo
+  scenarios at 1440 and 390, with a new scenario where testing is complete and the review
+  open: the completion line reads "Testing complete · Review pending · Not final", the
+  stepper's Review step is current, the card waits on the reviewer, and the conclusion
+  reads "Not concluded". Parallel work is shown where the records allow it: in the
+  round-review scenario the roll-forward round's review is open while design evidence is
+  still to be requested; in the retest scenario the retest is the step while the
+  interim's review remains outstanding.
+- **Tests.** `tests/execution-model.test.ts` (new); the sheet headline, register stage,
+  classic lanes, journey, agent block and trace tests updated for the new meanings (each
+  old expectation replaced by the with-worker and without-worker pair); Python:
+  `test_control_progress` gains the engagement-role rule, the admin-off-the-team case,
+  the assignees, and the automation route and its settings cases.
+- **Still unsupported or incomplete.** The retest's objective and procedures remain
+  unsupported links until the plan records a retest phase (M2 scope). The classic
+  "Your next action" panel and the register's queue derive their own next action and can
+  differ from the guided Needs-you card (the classic view is retired in M2). Failure of a
+  tester run is not recorded distinctly from idle on the sheet (`run_status` has no FAILED
+  value), so "Stopped" is shown only for drafting and re-performance, where the records
+  carry it. The agents' `stopped` list is per control, not per round.
+
+## 13. Milestone 1 completion report
+
+**Delivered** (M1a–M1d, commits 4e1987f and 1574154 plus the M1d working tree): the
+guided control workspace. A control opens as a map of where it is: five steps from the
+API's journey that gate nothing; the testing phases with their own state; one Needs-you
+card naming the next action and whose it is, by assignment or engagement role; an Agent
+says block that keeps recorded facts, agent proposals, supporting records and pending
+human decisions apart and reports execution from run records and the automation status;
+a compact trace rail from objective to independent review that draws no link without a
+record; the Outstanding list linked to the step that resolves each item; the sign-offs
+on record; and the step bodies with the W1–W4 interactions (impact decisions, round
+reviews, coverage assessments) through the existing routes. "All details" keeps the
+classic view until Milestone 2.
+
+**Preserved**: authorization (every write through the registered routes and the
+authorization layer), segregation of duties (the signer never decides the impact of
+their own testing; the preparer never assesses coverage; the reviewer role decides notes
+and signs), approval gates (one, named "Approve the test plan" everywhere), and audit
+traceability (immutable sign-off history; the coverage assessment leaves the sign-off
+byte-identical, checked in the browser).
+
+**Tests actually run for M1d**: `make test-critical` 351 passed in 4 min 45 s;
+`make test-fast` (see docs/test-strategy.md §5 for the run); all 701 Node tests pass;
+type checks clean; lint clean except the known `biome.json` line endings.
+
+**Unsupported trace links and incomplete agent functionality**: as listed under M1d
+above. **Recommended next**: Milestone 2 (validate the workspace with users; retire the
+classic view; a retest phase on the plan so the retest's objective and procedures become
+recorded links).

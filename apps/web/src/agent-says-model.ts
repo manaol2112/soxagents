@@ -1,17 +1,21 @@
 import type { ControlJourney, Step } from "./control-journey-model.ts";
 import type { ActivityItem } from "./control-workspace-model.ts";
-import type { Deficiency } from "./engagement-model.ts";
+import type { AgentRuns, Deficiency } from "./engagement-model.ts";
 import type { EvidencePlan } from "./evidence-plan-model.ts";
+import { type Automation, executionOf } from "./execution-model.ts";
 import type { ImpactAssessment } from "./impact-model.ts";
 import type { ControlReview } from "./review-model.ts";
 import type { TestSheet } from "./sheet-model.ts";
 
 /**
- * The one agent block of the control workspace (Milestone 1c): what the agents actually
- * did on the step, what they propose, why, which records support it, and whether a
- * person's decision is pending. Everything comes from the records the workspace already
- * loads; a proposal is always worded as a proposal, a run in progress as in progress,
- * and when the records give no basis the block says so instead of recommending.
+ * The one agent block of the control workspace (Milestone 1c, tightened in 1d): what the
+ * agents actually did on the step, what they propose, why, which records support it,
+ * and whether a person's decision is pending. Everything comes from the records the
+ * workspace already loads. A proposal is always worded as a proposal; an execution state
+ * comes from the run record and the automation status (execution-model), never from the
+ * sheet's workflow state; when the records give no basis the block says so instead of
+ * recommending. The default view is short: the long reason and the references sit
+ * behind "Details".
  */
 export type AgentRef = { label: string; href: string | null };
 
@@ -20,14 +24,18 @@ export type AgentSays = {
   did: string[];
   /** The agents' proposal, worded as a proposal; null when they propose nothing. */
   recommends: string | null;
-  /** Why, in the agents' recorded words; "" when nothing was recorded. */
+  /** Why, in plain English and at most a sentence or two; "" when nothing was recorded. */
   because: string;
+  /** The full recorded reason when `because` had to be shortened; "" otherwise. */
+  becauseFull: string;
   /** The records the proposal rests on: attributes, evidence, assessments, notes. */
   supports: AgentRef[];
   /** The decision a person still has to make, and whose it is; null when none. */
   decision: string | null;
   /** When the records give no basis for a recommendation, why. */
   insufficient: string | null;
+  /** The agent's execution state on this step, when a run record exists. */
+  execution: { label: string; detail: string } | null;
 };
 
 export type AgentInput = {
@@ -41,6 +49,8 @@ export type AgentInput = {
   activity: ActivityItem[];
   deficiencies: Deficiency[];
   hrefs: Record<Step, string>;
+  automation: Automation | null;
+  agents?: AgentRuns | null;
 };
 
 const RESULT_WORDS: Record<string, string> = {
@@ -55,6 +65,9 @@ const SEVERITY_WORDS: Record<string, string> = {
   CONSIDER: "consider",
 };
 
+/** How much of a recorded reason the default view shows. */
+export const BECAUSE_LENGTH = 180;
+
 const when = (iso: string | null): string => {
   if (iso === null || iso === "") {
     return "";
@@ -67,6 +80,21 @@ const when = (iso: string | null): string => {
 
 const plural = (n: number, one: string, many = `${one}s`): string =>
   `${n} ${n === 1 ? one : many}`;
+
+/** A reason cut at a sentence end near the limit, with the whole kept aside. */
+export function shorten(text: string): { short: string; full: string } {
+  const trimmed = text.trim();
+  if (trimmed.length <= BECAUSE_LENGTH) {
+    return { short: trimmed, full: "" };
+  }
+  const head = trimmed.slice(0, BECAUSE_LENGTH);
+  const stop = Math.max(head.lastIndexOf(". "), head.lastIndexOf("; "));
+  const short =
+    stop > 60
+      ? `${head.slice(0, stop + 1)}`
+      : `${head.replace(/\s+\S*$/, "")}…`;
+  return { short, full: trimmed };
+}
 
 /** The sheet's latest results, one per item and attribute: the person's decision when
  * there is one, else the agent's proposal. */
@@ -125,10 +153,18 @@ const empty = (): AgentSays => ({
   did: [],
   recommends: null,
   because: "",
+  becauseFull: "",
   supports: [],
   decision: null,
   insufficient: null,
+  execution: null,
 });
+
+function withReason(says: AgentSays, reason: string): void {
+  const cut = shorten(reason);
+  says.because = cut.short;
+  says.becauseFull = cut.full;
+}
 
 function agentDid(activity: ActivityItem[], categories: string[]): string[] {
   return activity
@@ -167,7 +203,7 @@ function planStep(input: AgentInput): AgentSays {
         advice.decision === "VALID"
           ? "Proposes that the signed-off results stand under the revised plan (VALID)"
           : "Proposes that the testing is re-performed under the revised plan (REPERFORM)";
-      says.because = advice.rationale;
+      withReason(says, advice.rationale);
       for (const change of advice.changes.slice(0, 4)) {
         says.supports.push({
           label: `${change.section.toLowerCase()} ${change.code} ${change.change.toLowerCase()}`,
@@ -185,9 +221,16 @@ function planStep(input: AgentInput): AgentSays {
     return says;
   }
   if (plan !== null && plan.status === "PROPOSED") {
-    says.recommends = "Proposes this test plan for approval";
-    says.because = plan.summary !== "" ? plan.summary : plan.note;
     const phases = plan.phases.filter((phase) => phase.requirements.length > 0);
+    const procedures = phases.reduce((n, p) => n + p.procedures.length, 0);
+    const items = phases.reduce((n, p) => n + p.requirements.length, 0);
+    says.recommends = "Proposes this test plan for approval";
+    // Plain English, not the plan's summary (which restates the control): what the plan
+    // is built from and how much it asks for.
+    withReason(
+      says,
+      `it was built ${plan.source !== null && plan.source !== "" ? `from ${plan.source.toLowerCase()} ` : ""}for ${plan.controlType !== "" ? `a ${plan.controlType.toLowerCase()} control` : "this control"}: ${plural(procedures, "procedure")} and ${plural(items, "evidence item")} across ${plural(phases.length, "phase")}${plan.assumptions.length > 0 ? `, with ${plural(plan.assumptions.length, "assumption")} stated` : ""}.`,
+    );
     for (const phase of phases.slice(0, 3)) {
       says.supports.push({
         label: `${phase.label}: ${plural(phase.procedures.length, "procedure")}, ${plural(phase.requirements.length, "evidence item")}`,
@@ -224,11 +267,14 @@ function requestStep(input: AgentInput): AgentSays {
     const flagged = phase.requirements.filter((item) => item.needsReview);
     if (flagged.length > 0) {
       says.recommends = `Flags ${plural(flagged.length, "evidence requirement")} for a person's review`;
-      says.because = flagged
-        .map((item) => item.coverageNote || item.sufficiencyNote)
-        .filter((note) => note !== "")
-        .slice(0, 2)
-        .join(" ");
+      withReason(
+        says,
+        flagged
+          .map((item) => item.coverageNote || item.sufficiencyNote)
+          .filter((note) => note !== "")
+          .slice(0, 2)
+          .join(" "),
+      );
       for (const item of flagged.slice(0, 4)) {
         says.supports.push({
           label: item.title,
@@ -236,6 +282,16 @@ function requestStep(input: AgentInput): AgentSays {
         });
       }
     }
+  }
+  const agents = input.agents ?? null;
+  if (agents !== null && (agents.reading > 0 || agents.readFailed > 0)) {
+    const run = executionOf({
+      agent: "reader",
+      run: agents.reading > 0 ? "QUEUED" : "IDLE",
+      automation: input.automation,
+      failed: agents.readFailed > 0,
+    });
+    says.execution = { label: run.label, detail: run.detail };
   }
   says.did.push(...agentDid(input.activity, ["evidence"]));
   says.decision =
@@ -251,22 +307,36 @@ function testStep(input: AgentInput): AgentSays {
     return says;
   }
   const found = results(sheet);
-  if (sheet.running) {
-    says.did.push("Testing is running now; results are not in yet.");
+  const stopped = (input.agents?.stopped ?? []).length > 0 && false;
+  const run = executionOf({
+    agent: "tester",
+    run: sheet.runState,
+    automation: input.automation,
+    done: sheet.counts.items > 0 && found.tested === sheet.counts.items,
+    failed: stopped,
+  });
+  if (sheet.status === "OPEN") {
+    says.execution = { label: run.label, detail: run.detail };
   }
   if (found.tested > 0) {
     says.did.push(
       `Tested ${found.tested} of ${plural(sheet.counts.items, "sample")} against ${plural(sheet.attributes.length, "attribute")}, citing ${plural(found.citations, "passage")} in ${plural(found.files.length, "evidence file")}`,
     );
-  } else if (!sheet.running) {
+  } else if (run.state !== "RUNNING") {
     says.insufficient = "No results yet: nothing to propose.";
-    says.decision = null;
+    says.decision =
+      run.state === "UNAVAILABLE"
+        ? "No agent can run here; a person tests the samples or configures a worker."
+        : null;
     return says;
   }
   if (sheet.status === "OPEN" && found.tested > 0) {
     const word = RESULT_WORDS[sheet.proposedConclusion] ?? "incomplete";
     says.recommends = `Proposes a conclusion of ${word}`;
-    says.because = `${plural(found.exceptions, "exception")}, ${found.unable} with insufficient evidence, ${found.review} needing a person's review, across ${found.tested} tested samples.`;
+    withReason(
+      says,
+      `${plural(found.exceptions, "exception")}, ${found.unable} with insufficient evidence, ${found.review} needing a person's review, across ${found.tested} tested samples.`,
+    );
   } else if (sheet.status === "SIGNED_OFF") {
     says.did.push(
       `A person signed the testing off${sheet.signedBy !== null ? ` (${sheet.signedBy})` : ""}${when(sheet.signedAt)}; the agent's results stand as recorded`,
@@ -298,15 +368,36 @@ function concludeStep(input: AgentInput): AgentSays {
   const says = empty();
   const sheet = input.sheet;
   says.did.push(...agentDid(input.activity, ["findings", "design"]));
+  const agents = input.agents ?? null;
+  if (agents !== null && agents.drafting !== "IDLE") {
+    const run = executionOf({
+      agent: "drafter",
+      run: agents.drafting,
+      automation: input.automation,
+      failed: agents.stopped.includes("drafting"),
+    });
+    says.execution = { label: run.label, detail: run.detail };
+  } else if (agents?.stopped.includes("drafting")) {
+    const run = executionOf({
+      agent: "drafter",
+      run: "IDLE",
+      automation: input.automation,
+      failed: true,
+    });
+    says.execution = { label: run.label, detail: run.detail };
+  }
   if (sheet?.proposal !== null && sheet?.proposal !== undefined) {
     const proposal = sheet.proposal;
     const severity =
       SEVERITY_WORDS[proposal.severity] ?? proposal.severity.toLowerCase();
     if (sheet.proposalStatus === "PROPOSED") {
       says.recommends = `Proposes a deficiency: ${proposal.title} (${severity})`;
-      says.because = [proposal.condition, proposal.severityReason]
-        .filter((text) => text !== "")
-        .join(" ");
+      withReason(
+        says,
+        [proposal.condition, proposal.severityReason]
+          .filter((text) => text !== "")
+          .join(" "),
+      );
       says.supports.push(
         {
           label: `Criteria: ${proposal.criteria}`,
@@ -332,7 +423,11 @@ function concludeStep(input: AgentInput): AgentSays {
       href: input.hrefs.CONCLUDE ?? null,
     });
   }
-  if (says.recommends === null && says.did.length === 0) {
+  if (
+    says.recommends === null &&
+    says.did.length === 0 &&
+    says.execution === null
+  ) {
     says.insufficient =
       "No workpaper draft or deficiency proposal on record for this step.";
   }
@@ -348,8 +443,17 @@ function reviewStep(input: AgentInput): AgentSays {
     return says;
   }
   const agentNotes = review.notes.filter((note) => note.raisedBy === "AGENT");
-  if (review.reperforming) {
-    says.did.push("Re-performance is running now.");
+  if (review.status === "OPEN") {
+    const run = executionOf({
+      agent: "reviewer",
+      run: review.reperformState,
+      automation: input.automation,
+      done: review.reperformedAt !== null,
+      failed: (input.agents?.stopped ?? []).includes("reviewing"),
+    });
+    if (run.state !== "READY" || review.reperformedAt === null) {
+      says.execution = { label: run.label, detail: run.detail };
+    }
   }
   if (review.reperformedAt !== null) {
     says.did.push(
@@ -367,10 +471,13 @@ function reviewStep(input: AgentInput): AgentSays {
     )
       .map(([key, n]) => `${n} ${SEVERITY_WORDS[key] ?? key.toLowerCase()}`)
       .join(", ")})`;
-    says.because = proposed
-      .slice(0, 2)
-      .map((note) => `#${note.number}: ${note.text}`)
-      .join(" ");
+    withReason(
+      says,
+      proposed
+        .slice(0, 2)
+        .map((note) => `#${note.number}: ${note.text}`)
+        .join(" "),
+    );
     for (const note of proposed.slice(0, 4)) {
       const codes = note.indexes.map((index) => `A${index + 1}`).join(", ");
       says.supports.push({
@@ -392,7 +499,11 @@ function reviewStep(input: AgentInput): AgentSays {
       ? "You accept or dismiss each note and sign the review off; the agent cannot sign."
       : "The independent reviewer decides each note and signs off; the agent cannot sign.";
   }
-  if (says.did.length === 0 && says.recommends === null) {
+  if (
+    says.did.length === 0 &&
+    says.recommends === null &&
+    says.execution === null
+  ) {
     says.insufficient =
       "The reviewer agent has not re-performed the testing yet; there is nothing to weigh.";
   }
@@ -435,7 +546,8 @@ export function sheetForStep(
 }
 
 /** The review the step is about: the round's review when the journey is at a round with
- * one, else the control's own. */
+ * one, else the control's own; without one, a round's review still open (the step's
+ * work), else the latest round review on record. */
 export function reviewForStep(
   reviews: readonly ControlReview[],
   journey: ControlJourney | null,
@@ -447,8 +559,6 @@ export function reviewForStep(
       return found;
     }
   }
-  // The control's own review; without one, a round's review still open (the step's
-  // work), else the latest round review on record.
   return (
     reviews.find((review) => (review.testRoundId ?? null) === null) ??
     reviews.find((review) => review.status === "OPEN") ??

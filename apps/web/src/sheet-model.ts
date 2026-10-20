@@ -5,6 +5,7 @@
  */
 
 import type { EvidenceCitation } from "./evidence-preview-model.ts";
+import { type Automation, executionOf } from "./execution-model.ts";
 import { parseRunState, type RunState } from "./run-state.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -327,8 +328,13 @@ export function sheetFor(
   );
 }
 
-/** The headline for a sheet: where it stands, in one line. */
-export function sheetHeadline(sheet: TestSheet): {
+/** The headline for a sheet: where it stands, in one line. A queued or working run is
+ * "running" only when an agent worker exists (execution-model); otherwise automation is
+ * unavailable and the headline says so. */
+export function sheetHeadline(
+  sheet: TestSheet,
+  automation: Automation | null = null,
+): {
   label: string;
   tone: "neutral" | "info" | "success" | "warning" | "danger";
 } {
@@ -338,7 +344,16 @@ export function sheetHeadline(sheet: TestSheet): {
       : { label: "Signed off · not effective", tone: "danger" };
   }
   if (sheet.running) {
-    return { label: "The tester is testing", tone: "info" };
+    const run = executionOf({
+      agent: "tester",
+      run: sheet.runState,
+      automation,
+    });
+    return run.state === "RUNNING"
+      ? { label: "The tester is running", tone: "info" }
+      : run.state === "QUEUED"
+        ? { label: "Queued for the tester", tone: "info" }
+        : { label: "Run queued · automation unavailable", tone: "warning" };
   }
   if (sheet.proposedConclusion === "EFFECTIVE") {
     return { label: "Ready to sign off · no exceptions", tone: "success" };

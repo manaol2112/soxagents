@@ -18,6 +18,7 @@ export type ControlFiles = {
 import type { ControlContext } from "./control-context-model.ts";
 import { type ControlJourney, parseJourney } from "./control-journey-model.ts";
 import type { EvidencePlan } from "./evidence-plan-model.ts";
+import type { Automation } from "./execution-model.ts";
 import type { NextSteps } from "./home-model.ts";
 import type { ImpactAssessment } from "./impact-model.ts";
 import type { ControlReview, ReviewNotice } from "./review-model.ts";
@@ -417,6 +418,8 @@ export type ControlRow = {
   progress: Progress;
   actor: Actor;
   yours: boolean;
+  /** Who the control's open work is assigned to, by name; [] when no one. */
+  assignees: string[];
   /** The next step is submitting a drafted request, done together, not per control. */
   drafted: boolean;
   /** An exception in its testing or an open deficiency. */
@@ -610,6 +613,8 @@ export type EngagementState = {
   /** The engagement's plan-revision impact assessments (plan_impact.py), read when a
    * control is open. */
   impact?: ImpactAssessment[] | null;
+  /** Whether an agent worker will pick up queued runs (M1d); null when unknown. */
+  automation?: Automation | null;
   /** The engagement's journey and what waits on the team (next_steps.py), for Home. */
   nextSteps?: NextSteps | null;
   notice: EngagementNotice | null;
@@ -943,6 +948,7 @@ export function parseControls(value: unknown): ControlRow[] | null {
         "NONE",
       ),
       yours: item.yours === true,
+      assignees: strings(item.assignees),
       drafted: item.drafted === true,
       exceptions: item.exceptions === true,
       evidencePhases: records(item.evidence_phases).map((phase) => ({

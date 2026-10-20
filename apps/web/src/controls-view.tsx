@@ -1085,12 +1085,13 @@ function ControlRecord({
     tasks,
     files: engagement.files,
     findings,
+    automation: engagement.automation ?? null,
   };
   const stages = lifecycleOf(input);
   const lanes = agentLanes(input);
   const approach = approachOf(input, CLASSIFICATION_LABELS);
   const figures = figuresOf(input, stages);
-  const stage = stageText(control);
+  const stage = stageText(control, engagement.automation ?? null);
   const link = nextStepLink(control);
   const who = control.yours ? "You" : ACTOR_LABELS[control.actor];
   // Work done on another page links there directly: the evidence plan is approved
@@ -1150,6 +1151,8 @@ function ControlRecord({
         activity: engagement.activity ?? [],
         deficiencies: findings,
         hrefs: stepHrefs,
+        automation: engagement.automation ?? null,
+        agents: control.agents,
       })
     : null;
   const trace = guided
@@ -1165,6 +1168,11 @@ function ControlRecord({
           deficiencies: findings,
           conclusion: control.conclusion,
           hrefs: stepHrefs,
+          round:
+            journey?.stepPhase === "ROLLFORWARD" ||
+            journey?.stepPhase === "RETEST"
+              ? (rounds.find((item) => item.kind === journey.stepPhase) ?? null)
+              : null,
         };
         return { nodes: traceOf(traceInput), rows: traceRows(traceInput) };
       })()
@@ -1363,7 +1371,7 @@ function ControlRecord({
             ),
           },
         ];
-  const lifeState = (key: string): PhaseState => {
+  const stageState = (key: string): PhaseState => {
     const found = stages.find((item) => item.key === key)?.status;
     return found === "done"
       ? "done"
@@ -1374,6 +1382,48 @@ function ControlRecord({
             found === undefined
           ? "todo"
           : "active";
+  };
+  // M1d: the classic panels read their state from the API's journey, the same phase
+  // states the strip shows, so a retest in testing is never "not started"; the stage
+  // derivation remains only when the journey is absent.
+  const JOURNEY_KEYS: Record<string, string[]> = {
+    design: ["DESIGN"],
+    interim: ["INTERIM"],
+    rollforward: ["ROLLFORWARD", "REMEDIATION", "RETEST"],
+  };
+  const lifeState = (key: string): PhaseState => {
+    if (key === "review") {
+      // The control's own review or any round's: open is in progress, all signed is done.
+      if (controlReviews.some((item) => item.status === "OPEN")) {
+        return "active";
+      }
+      return controlReviews.length > 0 ? "done" : "todo";
+    }
+    const names = JOURNEY_KEYS[key] ?? [];
+    const found = (journey?.phases ?? []).filter(
+      (item) => names.includes(item.phase) && item.state !== "NOT_APPLICABLE",
+    );
+    if (journey === null || found.length === 0) {
+      return stageState(key);
+    }
+    if (
+      found.every(
+        (item) => item.state === "SIGNED_OFF" || item.state === "REVIEWED",
+      )
+    ) {
+      return "done";
+    }
+    if (
+      found.every(
+        (item) =>
+          item.state === "AWAITING_PLAN" ||
+          item.state === "PLANNED" ||
+          item.state === "RELEASED",
+      )
+    ) {
+      return "todo";
+    }
+    return "active";
   };
   const planPhase = (phase: Phase) =>
     evidencePlan?.phases.find((item) => item.phase === phase) ?? null;
@@ -1416,6 +1466,7 @@ function ControlRecord({
     ids,
     canAct,
     hasInput,
+    automation: engagement.automation ?? null,
   };
   const keepWorkpaper =
     engagement.workpaperNotice !== null || engagement.workpaperViewing !== null;
@@ -1519,6 +1570,7 @@ function ControlRecord({
               yours: control.yours,
               journey,
               decideImpact,
+              assignees: control.assignees,
             })}
             actionHref={
               decideImpact
@@ -1776,6 +1828,7 @@ function ControlRecord({
                   notice={engagement.sheetNotice}
                   ids={ids}
                   canAct={canAct}
+                  automation={engagement.automation ?? null}
                 />
               </PhaseStep>
               <PhaseStep
@@ -1895,7 +1948,11 @@ function ControlRecord({
               number={1}
               title="Independent review"
               state={lifeState("review")}
-              summary="Once the testing workpaper is prepared, the independent reviewer agent re-performs the testing against the evidence and proposes review notes; a reviewer who did not test or prepare decides each note and signs the control off."
+              summary={
+                guided
+                  ? undefined
+                  : "Once the testing workpaper is prepared, the independent reviewer agent re-performs the testing against the evidence and proposes review notes; a reviewer who did not test or prepare decides each note and signs the control off."
+              }
               task={taskOf("review")}
             >
               <PhaseStep
@@ -1909,13 +1966,22 @@ function ControlRecord({
                     : `${openNotes(review).length} open note${openNotes(review).length === 1 ? "" : "s"}`
                 }
               >
-                <ReviewTab
-                  review={review}
-                  sheet={sheet}
-                  notice={engagement.reviewNotice}
-                  ids={ids}
-                  canAct={canAct}
-                />
+                {guided && review === null ? (
+                  <p className="cw-plain-note">
+                    No review of the control's own has opened. It opens when the
+                    testing is signed off and the effectiveness workpaper is
+                    prepared; the rounds' reviews are listed below.
+                  </p>
+                ) : (
+                  <ReviewTab
+                    review={review}
+                    sheet={sheet}
+                    notice={engagement.reviewNotice}
+                    ids={ids}
+                    canAct={canAct}
+                    automation={engagement.automation ?? null}
+                  />
+                )}
               </PhaseStep>
             </PhasePanel>
             {pendingImpact > 0 ? (
@@ -1947,6 +2013,7 @@ function ControlRecord({
               ids={ids}
               canAct={canAct}
               gaps={coverageGaps}
+              automation={engagement.automation ?? null}
             />
             <section className="cw-plain cw-conclusion">
               <h2>Conclusion</h2>
@@ -1965,6 +2032,11 @@ function ControlRecord({
                   </strong>
                   , on the signed-off review
                   {review?.signedBy ? ` by ${review.signedBy}` : ""}.
+                  {sheet !== null &&
+                  sheet.conclusion === "NOT_EFFECTIVE" &&
+                  control.conclusion === "EFFECTIVE"
+                    ? ` The testing was signed off not effective (${sheet.counts.exceptions} exception${sheet.counts.exceptions === 1 ? "" : "s"}); ${sheet.proposalStatus === "DISMISSED" ? `the proposed deficiency was dismissed by a person${sheet.proposalReason !== "" ? ` (${sheet.proposalReason.replace(/\.$/, "")})` : ""}, and ` : ""}the reviewer concluded the control effective on the signed-off review.`
+                    : ""}
                 </p>
               )}
             </section>

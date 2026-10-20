@@ -133,6 +133,7 @@ const base = (over: Partial<AgentInput> = {}): AgentInput => ({
   activity: [],
   deficiencies: [],
   hrefs,
+  automation: null,
   ...over,
 });
 

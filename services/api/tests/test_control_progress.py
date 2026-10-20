@@ -113,10 +113,15 @@ def test_whose_step_follows_role_assignment_and_the_requester_rule(
     assert as_owner[approving]["yours"] is True
     assert as_reviewer[approving]["yours"] is True
     assert as_contributor[approving]["yours"] is False
-    # A preparer's step is anyone's who can work on tasks.
+    # A preparer's step is an engagement lead's or preparer's (the contributor joined the
+    # team as a preparer); the engagement reviewer and an organization admin who is not
+    # on the team have the permission but not the role, so it is not theirs (M1d).
     assert as_owner[confirming]["next_step"] == "Confirm the population"
     assert as_owner[confirming]["progress"] == "EVIDENCE_RECEIVED"
     assert as_contributor[confirming]["yours"] is True
+    assert as_owner[confirming]["yours"] is True
+    assert as_reviewer[confirming]["yours"] is False
+    assert as_owner[confirming]["assignees"] == []
     # Overdue by the due date, and the team's to chase.
     assert as_owner[late]["overdue"] is True
     assert as_owner[late]["next_step"] == "Chase the overdue evidence request"
@@ -131,6 +136,10 @@ def test_whose_step_follows_role_assignment_and_the_requester_rule(
         connection.commit()
     assert _controls(owner, team)[confirming]["yours"] is False
     assert _controls(contributor, team)[confirming]["yours"] is True
+    # The row names who it waits on, for everyone else.
+    assert _controls(owner, team)[confirming]["assignees"] == [
+        f"contrib-{team['project'].hex[:6]}@example.com"
+    ]
     # The requester of an approval never approves it: the reviewer submits a draft.
     with connect(migrated.url) as connection:
         drafts = [
@@ -161,3 +170,48 @@ def test_whose_step_follows_role_assignment_and_the_requester_rule(
     assert _controls(reviewer, team)[control]["actor"] == "APPROVER"
     assert _controls(reviewer, team)[control]["yours"] is False
     assert _controls(owner, team)[control]["yours"] is True
+
+
+def test_an_admin_off_the_team_is_not_the_preparer(migrated: Database) -> None:
+    """Broad organization permissions never make a preparer's step the viewer's: an
+    admin who is not on the engagement's team sees whose it is, not "needs you"."""
+    team, owner = _engagement(migrated, "yours-admin")
+    with connect(migrated.url) as connection:
+        admin_id = _add_user(
+            connection, team["org"], f"admin-{team['project'].hex[:6]}@example.com", "ADMIN"
+        )
+        ids = _requests(connection, team["project"])
+        confirming = _control_of(connection, ids[2])
+        for request in ids:
+            if _control_of(connection, request) == confirming:
+                _set(connection, request, status="RECEIVED", received_at=datetime.now(UTC))
+        connection.commit()
+    admin = _client(migrated, admin_id, _Scheduler())
+    assert _controls(owner, team)[confirming]["actor"] == "PREPARER"
+    assert _controls(owner, team)[confirming]["yours"] is True
+    assert _controls(admin, team)[confirming]["yours"] is False
+
+
+def test_automation_status_says_whether_queued_runs_will_start(migrated: Database) -> None:
+    from ai_workforce_api.settings import Settings
+    from ai_workforce_api.workspace import automation_of
+
+    team, owner = _engagement(migrated, "automation")
+    base = f"/organizations/{team['org']}/projects/{team['project']}"
+    found = owner.get(f"{base}/workspace/automation")
+    assert found.status_code == 200, found.text
+    # Tests run without a worker or workflow engine: automation is unavailable, and the
+    # web may not say anything is running.
+    assert found.json()["available"] is False and found.json()["provider"] == "none"
+    assert "No agent worker is configured" in found.json()["detail"]
+    local = automation_of(Settings(database_url="postgresql://x", local_worker_enabled=True))
+    assert (local.available, local.provider) == (True, "local")
+    durable = automation_of(Settings(database_url="postgresql://x", workflow_address="t:7233"))
+    assert (durable.available, durable.provider) == (True, "workflow")
+    # A stranger to the organization is refused, as for every workspace read.
+    with connect(migrated.url) as connection:
+        from test_execution import _seed_org
+
+        stranger = _seed_org(connection, "automation-stranger")
+    other = _client(migrated, stranger["user_id"], _Scheduler())
+    assert other.get(f"{base}/workspace/automation").status_code in (403, 404)

@@ -362,6 +362,9 @@ export type NeedsYou = {
   title: string;
   /** "You" when the viewer may do it, else who it waits on. */
   who: string;
+  /** "the preparer (Dana Whitfield)": the role and, when assigned, the people; "" when
+   * the step is the viewer's or no one's. */
+  waitsOn: string;
   mine: boolean;
   /** Why it is open, when the step was reopened or the conclusion is held. */
   reason: string;
@@ -386,6 +389,8 @@ export function needsYou(input: {
   journey: ControlJourney | null;
   /** The viewer is the reviewer who may decide a pending impact assessment. */
   decideImpact?: boolean;
+  /** Who the control's work is assigned to, when the step is not the viewer's. */
+  assignees?: string[];
 }): NeedsYou {
   const journey = input.journey;
   if (input.decideImpact === true) {
@@ -394,6 +399,7 @@ export function needsYou(input: {
       title:
         "Decide whether the signed-off results stand under the revised plan",
       who: "You",
+      waitsOn: "",
       mine: true,
       reason:
         "The test plan changed after results were signed off. Nothing relies on them until you decide; the agent's recommendation is advice.",
@@ -421,9 +427,15 @@ export function needsYou(input: {
               journey.step === "CONCLUDE"
             ? (journey.notFinalBecause[0] ?? "")
             : "";
+  const who = input.yours ? "You" : (ACTOR_WORDS[input.actor] ?? input.actor);
+  const names = (input.assignees ?? []).filter((name) => name !== "");
   return {
     title: input.nextStep,
-    who: input.yours ? "You" : (ACTOR_WORDS[input.actor] ?? input.actor),
+    who,
+    waitsOn:
+      input.yours || input.actor === "NONE"
+        ? ""
+        : `${who.charAt(0).toLowerCase()}${who.slice(1)}${names.length > 0 ? ` (${names.join(", ")})` : ""}`,
     mine: input.yours,
     reason,
     step,

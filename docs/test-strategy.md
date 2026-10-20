@@ -120,3 +120,13 @@ and `workflow-model` (queue sources).
   Node passed**; the whole Node set **697 passed** (two new files: `agent-says-model`,
   `trace-model`); type checks clean; lint clean except the known `biome.json` line
   endings. The critical set was not rerun: no Python, migration or route changed.
+- M1d (`workspace.py` changed: whose-step rule, assignees, the automation route):
+  `make test-critical` **351 passed, 0 failed in 4 min 45 s**; `make test-fast` **82
+  Python passed in 2 min 9 s and 102 Node passed**; the whole Node set **701 passed**;
+  type checks clean; lint clean except the known `biome.json` line endings. Expectations
+  rewritten for the new meanings, each with its with-worker and without-worker pair:
+  the sheet headline ("The tester is testing" → "Run queued · automation unavailable"
+  without a worker), the register's `AGENT_TESTING` detail, the classic lanes (the test
+  builder now states a configured worker, and one case states none), and the
+  whose-step test ("a preparer's step is anyone's who can work on tasks" → an engagement
+  lead's or preparer's, or the assignee's).

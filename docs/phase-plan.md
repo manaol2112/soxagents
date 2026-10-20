@@ -6,7 +6,10 @@ Source specification: AI Employee Workforce Cursor Build Plan.
 
 ## Current milestone
 
-**Milestone 1c: the agent block and the trace rail.** Authorized by the product owner with M1b's conditional acceptance ([milestone-1-plan.md §11](milestone-1-plan.md)). Complete, pending review; no migration, no API change.
+**Milestone 1d: corrections and the guided walkthrough.** Authorized by the product owner with M1c's conditional acceptance ([milestone-1-plan.md §12](milestone-1-plan.md)). Complete, pending the owner's review of the Milestone 1 completion report; no migration; one read-only route (`workspace/automation`).
+
+- Agent execution states come from run records and the automation status, never from the sheet's workflow state; with no worker configured, automation is shown as unavailable. A preparer's step is the viewer's only by assignment or engagement role. Agent says is concise with details expandable. The retest's trace shows its unsupported links instead of borrowing the interim plan. Classic headers, the repeated review explanation and the effective-after-dismissal wording are corrected. Walkthrough verified on seven demo scenarios ([docs/review/README.md](review/README.md)).
+- M1c (complete, committed in 1574154): the agent block and the trace rail ([milestone-1-plan.md §11](milestone-1-plan.md)).
 
 - One "Agent says" block under the Needs-you card: what the agents did (from the records), what they propose and why, the records it rests on, and the decision a person still has to make; when the records give no basis, it says so. A compact trace rail from control objective to independent review, each link stating whether its record exists, opened for the records and a per-attribute table of cited evidence and results. Verified on five demo scenarios ([docs/review/README.md](review/README.md)).
 - M1b (complete, committed in 4e1987f): the Plan step shows each plan-revision impact assessment with the agent's recommendation and the reviewer's decision form (reviewer only, never the signer); the Review step lists each testing round's own review and the coverage assessment of a signed review; Testing and Review carry a banner while an assessment is pending. A round in testing is the step, the stage and the next action before the interim's review. Verified on six fixture-built scenarios ([docs/review/README.md](review/README.md)).

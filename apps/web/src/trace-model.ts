@@ -55,6 +55,16 @@ export type TraceInput = {
   deficiencies: Deficiency[];
   conclusion: "NOT_CONCLUDED" | "EFFECTIVE" | "EXCEPTION";
   hrefs: Record<Step, string>;
+  /** The round the step is about (a roll-forward or retest), when there is one. */
+  round?: TraceRound | null;
+};
+
+/** What the rail needs of a round: its kind, what it retests, and its request. */
+export type TraceRound = {
+  kind: "ROLLFORWARD" | "RETEST";
+  number: number;
+  deficiencyReference: string | null;
+  requestStatus: string | null;
 };
 
 export const TRACE_LABELS: Record<TraceKind, string> = {
@@ -87,11 +97,25 @@ function phaseOf(
   if (exact !== undefined) {
     return exact;
   }
+  if (wanted === "RETEST" || wanted === "REMEDIATION") {
+    // No plan phase records a retest: the rail says so rather than borrowing the
+    // interim's objective, procedures and evidence requirements (M1d).
+    return null;
+  }
   return (
     plan.phases.find((phase) => phase.phase === "INTERIM") ??
     plan.phases[0] ??
     null
   );
+}
+
+/** Whether the step is a retest, which the approved plan has no phase for. */
+function retestOf(input: TraceInput): TraceRound | null {
+  const round = input.round ?? null;
+  const phase = input.journey?.stepPhase ?? null;
+  return round !== null && round.kind === "RETEST" && phase === "RETEST"
+    ? round
+    : null;
 }
 
 function resultOf(
@@ -152,6 +176,7 @@ export function traceOf(input: TraceInput): TraceNode[] {
   const review = input.review;
   const nodes: TraceNode[] = [];
 
+  const retest = retestOf(input);
   const objectives = phase?.objectives ?? [];
   nodes.push(
     objectives.length > 0
@@ -163,14 +188,23 @@ export function traceOf(input: TraceInput): TraceNode[] {
           items: objectives,
           href: input.hrefs.PLAN ?? null,
         }
-      : {
-          kind: "objective",
-          label: TRACE_LABELS.objective,
-          state: "missing",
-          summary: "No control objective is recorded on the test plan.",
-          items: [],
-          href: input.hrefs.PLAN ?? null,
-        },
+      : retest !== null
+        ? {
+            kind: "objective",
+            label: TRACE_LABELS.objective,
+            state: "partial",
+            summary: `Retest round ${retest.number}${retest.deficiencyReference !== null ? ` of ${retest.deficiencyReference}` : ""}: the round record states what is retested; no retest-specific objective is on the approved plan.`,
+            items: [],
+            href: input.hrefs.TEST ?? null,
+          }
+        : {
+            kind: "objective",
+            label: TRACE_LABELS.objective,
+            state: "missing",
+            summary: "No control objective is recorded on the test plan.",
+            items: [],
+            href: input.hrefs.PLAN ?? null,
+          },
   );
 
   nodes.push(
@@ -201,7 +235,9 @@ export function traceOf(input: TraceInput): TraceNode[] {
     summary:
       procedures.length > 0
         ? `${plural(procedures.length, "test procedure")}${phase !== null ? ` for ${phase.label.toLowerCase()}` : ""}`
-        : "No test procedures are recorded on the plan.",
+        : retest !== null
+          ? "No retest-specific procedures are approved on the plan; the interim procedures are not shown as the retest's."
+          : "No test procedures are recorded on the plan.",
     items: procedures,
     href: input.hrefs.PLAN ?? null,
   });
@@ -212,7 +248,7 @@ export function traceOf(input: TraceInput): TraceNode[] {
     state: rows.length > 0 ? "recorded" : "missing",
     summary:
       rows.length > 0
-        ? `${plural(rows.length, "test attribute")}${sheet === null ? " (approved; not yet on a test sheet)" : ""}`
+        ? `${plural(rows.length, "test attribute")}${sheet === null ? " (approved; not yet on a test sheet)" : retest !== null ? " on the retest sheet, carried from the control's approved set" : ""}`
         : "No test attributes are approved.",
     items: rows.map((row) => `${row.code} ${row.attribute}`),
     href: input.hrefs.PLAN ?? null,
@@ -222,24 +258,51 @@ export function traceOf(input: TraceInput): TraceNode[] {
     item.files.map((file) => file.name),
   );
   const citedFiles = new Set(rows.flatMap((row) => row.evidence));
+  const sampleFiles = new Set(
+    (sheet?.items ?? []).flatMap((item) =>
+      (item.files ?? []).map((f) => f.fileName),
+    ),
+  );
   const requirements = phase?.requirements ?? [];
   const received = requirements.filter((item) => item.files.length > 0).length;
-  nodes.push({
-    kind: "evidence",
-    label: TRACE_LABELS.evidence,
-    state:
-      requirementFiles.length === 0 && citedFiles.size === 0
-        ? "missing"
-        : requirements.length > 0 && received < requirements.length
-          ? "partial"
-          : "recorded",
-    summary:
-      requirementFiles.length === 0 && citedFiles.size === 0
-        ? "No evidence is on file for this phase."
-        : `${plural(requirementFiles.length, "file")} on ${plural(requirements.length, "evidence requirement")} (${received} with evidence); ${plural(citedFiles.size, "file")} cited by results`,
-    items: [...new Set([...requirementFiles, ...citedFiles])],
-    href: input.hrefs.REQUEST ?? null,
-  });
+  if (retest !== null) {
+    const files = new Set([...sampleFiles, ...citedFiles]);
+    const requested =
+      retest.requestStatus !== null &&
+      ["PARTIALLY_RECEIVED", "RECEIVED", "CLOSED"].includes(
+        retest.requestStatus,
+      );
+    nodes.push({
+      kind: "evidence",
+      label: TRACE_LABELS.evidence,
+      state: files.size > 0 ? "recorded" : requested ? "partial" : "missing",
+      summary:
+        files.size > 0
+          ? `${plural(files.size, "file")} on the retest samples; ${plural(citedFiles.size, "file")} cited by results. The interim evidence requirements are not the retest's.`
+          : requested
+            ? "The retest request is received; no file is on a retest sample yet."
+            : `No evidence for the retest yet${retest.requestStatus !== null ? ` (request ${retest.requestStatus.toLowerCase().replaceAll("_", " ")})` : ""}.`,
+      items: [...files],
+      href: input.hrefs.TEST ?? null,
+    });
+  } else {
+    nodes.push({
+      kind: "evidence",
+      label: TRACE_LABELS.evidence,
+      state:
+        requirementFiles.length === 0 && citedFiles.size === 0
+          ? "missing"
+          : requirements.length > 0 && received < requirements.length
+            ? "partial"
+            : "recorded",
+      summary:
+        requirementFiles.length === 0 && citedFiles.size === 0
+          ? "No evidence is on file for this phase."
+          : `${plural(requirementFiles.length, "file")} on ${plural(requirements.length, "evidence requirement")} (${received} with evidence); ${plural(citedFiles.size, "file")} cited by results`,
+      items: [...new Set([...requirementFiles, ...citedFiles])],
+      href: input.hrefs.REQUEST ?? null,
+    });
+  }
 
   const tested = sheet?.counts.tested ?? 0;
   const items = sheet?.counts.items ?? 0;
