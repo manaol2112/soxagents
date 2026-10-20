@@ -91,9 +91,12 @@ export async function loadEngagement(
     return EMPTY_ENGAGEMENT;
   }
   const section = model.section;
+  // The Testing destination (M2b) reads the controls, sheets, rounds, reviews and the
+  // queue the guided workspace reads, for every control.
+  const testing = section === "testing";
   const wanted = {
     dashboard: section === "overview",
-    controls: section === "controls" || section === "deficiencies",
+    controls: section === "controls" || section === "deficiencies" || testing,
     plan:
       section === "plan" ||
       section === "timeline" ||
@@ -140,18 +143,27 @@ export async function loadEngagement(
     wanted.dashboard ? apiGet(`${base}/workspace/dashboard`, session) : null,
     wanted.dashboard ? apiGet(`${base}/next-steps`, session) : null,
     open ? apiGet(`${base}/impact`, session) : null,
-    section === "controls"
+    section === "controls" || testing
       ? apiGet(`${base}/workspace/automation`, session)
       : null,
-    wanted.dashboard || section === "controls" || section === "console"
+    wanted.dashboard ||
+    section === "controls" ||
+    section === "console" ||
+    testing
       ? apiGet(`${base}/queue`, session)
       : null,
     wanted.controls ? apiGet(`${base}/workspace/controls`, session) : null,
     wanted.plan ? apiGet(`${base}/workspace/plan`, session) : null,
     wanted.deficiencies ? apiGet(`${base}/deficiencies`, session) : null,
-    section === "controls" ? apiGet(`${base}/control-tests`, session) : null,
-    section === "controls" ? apiGet(`${base}/test-sheets`, session) : null,
-    section === "controls" ? apiGet(`${base}/test-rounds`, session) : null,
+    section === "controls" || testing
+      ? apiGet(`${base}/control-tests`, session)
+      : null,
+    section === "controls" || testing
+      ? apiGet(`${base}/test-sheets`, session)
+      : null,
+    section === "controls" || testing
+      ? apiGet(`${base}/test-rounds`, session)
+      : null,
     open ? apiGet(`${base}/evidence-register`, session) : null,
     open ? apiGet(`${base}/evidence-analyses`, session) : null,
     open ? apiGet(`${base}/evidence-reviews`, session) : null,
@@ -164,7 +176,9 @@ export async function loadEngagement(
           session,
         )
       : null,
-    section === "controls" ? apiGet(`${base}/reviews`, session) : null,
+    section === "controls" || testing
+      ? apiGet(`${base}/reviews`, session)
+      : null,
     open ? apiGet(`${base}/controls/${query.control}/context`, session) : null,
     open
       ? apiGet(`${base}/controls/${query.control}/evidence-plan`, session)

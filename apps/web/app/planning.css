@@ -2804,3 +2804,140 @@ button.pl-since-code:hover {
   gap: 0.5rem 0.9rem;
   align-items: center;
 }
+
+/* The Testing destination (M2b): one header, four views, the plans and phases views
+   embedded from the Test plans page, results and review as tables. */
+.tv-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0 0 0.75rem;
+  padding: 0 1.1rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+
+.tv-tabs a {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.8rem 0.6rem 0.75rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  font-weight: 550;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.tv-tabs a:hover {
+  color: var(--text-strong);
+}
+
+.tv-tabs a[aria-current="page"] {
+  color: var(--text-strong);
+  font-weight: 650;
+  box-shadow: inset 0 -2px 0 var(--text-strong);
+}
+
+.tv-tabs a small {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.pl-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  padding: 0 0 0.5rem;
+}
+
+.tv-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1.1rem 0.5rem;
+}
+
+.tv-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.tv-chips a {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  padding: 0.3rem 0.65rem;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--fs-sm);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.tv-chips a[aria-current="true"] {
+  color: var(--text-strong);
+  border-color: var(--text-strong);
+  font-weight: 600;
+}
+
+.tv-chips small {
+  color: var(--text-muted);
+}
+
+.tv-search {
+  min-width: 12rem;
+}
+
+.tv-wrap {
+  overflow-x: auto;
+}
+
+.tv-table td,
+.tv-table th {
+  vertical-align: top;
+}
+
+.tv-control {
+  display: block;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.tv-sub {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+.tv-next {
+  display: block;
+  max-width: 22rem;
+}
+
+.tv-mine {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.tv-empty {
+  padding: 1.5rem 1.1rem;
+  color: var(--text-muted);
+}
+
+@media (max-width: 720px) {
+  .tv-bar {
+    padding: 0.6rem 0.75rem 0.4rem;
+  }
+
+  .tv-table th:nth-child(3),
+  .tv-table td:nth-child(3) {
+    display: none;
+  }
+}

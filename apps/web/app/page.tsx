@@ -13,6 +13,7 @@ import { loadOnboarding } from "../src/load-onboarding";
 import { loadPlanning } from "../src/load-planning";
 import { loadWorkflow } from "../src/load-workflow";
 import { loadWorkspace } from "../src/load-workspace";
+import { parseTestingView } from "../src/testing-hub-model";
 import { WorkspaceView } from "../src/workspace-view";
 
 export const dynamic = "force-dynamic";
@@ -116,6 +117,8 @@ export default async function Home({ searchParams }: HomeProps) {
       consoleState={consoleState}
       evidenceCenter={evidenceCenter}
       planning={planning}
+      testingView={parseTestingView(firstParam(params.view))}
+      testingFilter={firstParam(params.filter) ?? null}
       library={library}
       evidenceView={parseEvidenceView({
         tab: firstParam(params.tab),

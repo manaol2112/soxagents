@@ -4,11 +4,13 @@
  * action and its reason, whose it is, whether the viewer may act, and where it is done.
  * The web groups and links; it never decides whose an item is or whether it is ready.
  */
-export type QueueBucket = "MINE" | "WAITING" | "BLOCKED";
+export type QueueBucket = "MINE" | "WAITING" | "BLOCKED" | "UPCOMING";
 
 export type QueueItem = {
   id: string;
   kind: string;
+  /** The obligation type the item represents (one code per obligation). */
+  obligation: string;
   source: { type: string; id: string };
   stage: "SETUP" | "PLANS" | "EVIDENCE" | "TESTING" | "REVIEW" | "CLOSE";
   controlId: string | null;
@@ -31,6 +33,8 @@ export type QueueItem = {
 export type Queue = {
   items: QueueItem[];
   counts: Record<QueueBucket, number>;
+  /** How many items the API matched before any page was cut. */
+  total: number;
   generatedAt: string;
 };
 
@@ -48,7 +52,12 @@ const STAGES = new Set([
   "REVIEW",
   "CLOSE",
 ]);
-const BUCKETS = new Set<QueueBucket>(["MINE", "WAITING", "BLOCKED"]);
+const BUCKETS = new Set<QueueBucket>([
+  "MINE",
+  "WAITING",
+  "BLOCKED",
+  "UPCOMING",
+]);
 // The pages a link may open, and the query keys it may carry; anything else is dropped.
 const SECTIONS = new Set([
   "controls",
@@ -58,6 +67,7 @@ const SECTIONS = new Set([
   "setup",
   "console",
   "overview",
+  "deficiencies",
 ]);
 const QUERY_KEYS = new Set(["control", "step", "tab", "request", "filter"]);
 const QUERY_VALUE = /^[A-Za-z0-9_,-]{1,200}$/;
@@ -95,6 +105,7 @@ export function parseQueue(value: unknown): Queue | null {
     items.push({
       id: raw.id,
       kind: str(raw.kind),
+      obligation: str(raw.obligation) || "CONTROL_STEP",
       source: { type: str(source.type), id: str(source.id) },
       stage: stage as QueueItem["stage"],
       controlId: maybe(raw.control_id),
@@ -132,7 +143,9 @@ export function parseQueue(value: unknown): Queue | null {
       MINE: count("MINE"),
       WAITING: count("WAITING"),
       BLOCKED: count("BLOCKED"),
+      UPCOMING: count("UPCOMING"),
     },
+    total: typeof value.total === "number" ? value.total : items.length,
     generatedAt: str(value.generated_at),
   };
 }
@@ -141,13 +154,17 @@ export const BUCKET_LABELS: Record<QueueBucket, string> = {
   MINE: "My actions",
   WAITING: "Waiting on others",
   BLOCKED: "Blocked",
+  UPCOMING: "Upcoming",
 };
 
 export const BUCKET_NOTES: Record<QueueBucket, string> = {
   MINE: "Yours to do now: the role is yours by assignment or engagement role, and the record is ready.",
   WAITING:
     "Someone else's: the client, the preparer, the independent reviewer or an approver.",
-  BLOCKED: "Nothing can be done yet: what holds each item is listed on it.",
+  BLOCKED:
+    "A prerequisite is unmet or no one can act: what holds each item is listed on it.",
+  UPCOMING:
+    "Not due yet: a phase not released, a retest window not reached, or agent work queued for a worker.",
 };
 
 const ROLE_WORDS: Record<string, string> = {
@@ -164,6 +181,9 @@ const ROLE_WORDS: Record<string, string> = {
 export function ownerWords(item: QueueItem): string {
   if (item.bucket === "MINE") {
     return "Yours";
+  }
+  if (item.bucket === "UPCOMING") {
+    return "Not due yet";
   }
   const role = ROLE_WORDS[item.owner.role] ?? item.owner.role.toLowerCase();
   const names = item.owner.names.filter((name) => name !== "");
@@ -244,7 +264,7 @@ export function groupQueue(
       (filter.stage === null || item.stage === filter.stage) &&
       (filter.phase === null || item.phase === filter.phase),
   );
-  return (["MINE", "BLOCKED", "WAITING"] as const)
+  return (["MINE", "BLOCKED", "WAITING", "UPCOMING"] as const)
     .map((bucket) => ({
       bucket,
       items: kept.filter((item) => item.bucket === bucket),
@@ -284,31 +304,37 @@ export function collapseRows(
   items: readonly QueueItem[],
   least = 3,
 ): QueueRowGroup[] {
+  // A control's step, or a drafted request's approval, repeated across many controls
+  // reads as one row with its count; other kinds stay one row each.
+  const key = (item: QueueItem) =>
+    item.kind === "control-step" || item.kind === "request-draft"
+      ? `${item.kind}
+${item.title}`
+      : null;
   const counts = new Map<string, number>();
   for (const item of items) {
-    if (item.kind === "control-step") {
-      counts.set(item.title, (counts.get(item.title) ?? 0) + 1);
+    const k = key(item);
+    if (k !== null) {
+      counts.set(k, (counts.get(k) ?? 0) + 1);
     }
   }
   const rows: QueueRowGroup[] = [];
   const placed = new Set<string>();
   for (const item of items) {
-    const count =
-      item.kind === "control-step" ? (counts.get(item.title) ?? 0) : 0;
-    if (count < least) {
+    const k = key(item);
+    const count = k === null ? 0 : (counts.get(k) ?? 0);
+    if (k === null || count < least) {
       rows.push({ kind: "item", item });
       continue;
     }
-    if (placed.has(item.title)) {
+    if (placed.has(k)) {
       continue;
     }
-    placed.add(item.title);
+    placed.add(k);
     rows.push({
       kind: "group",
       title: item.title,
-      items: items.filter(
-        (other) => other.kind === "control-step" && other.title === item.title,
-      ),
+      items: items.filter((other) => key(other) === k),
     });
   }
   return rows;

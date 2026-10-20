@@ -106,3 +106,24 @@ not on the engagement team).
 | `console-owner-desktop.png`, `console-reviewer-mobile.png` | The agent console's inbox, the same list. |
 | `register-owner-desktop.png` | The register's Needs-attention card from the queue, with the drafted-requests batch. |
 | `control-ac02-owner-desktop.png` | A control whose queue item and Needs-you card say the same thing. |
+
+## m2b — queue completeness, four buckets, the Testing destination
+
+A realistic-scale engagement (`ai_workforce_scale`): 155 controls over five systems in
+mixed states, built through the API by the fixtures' rules-only paths (no live model, no
+worker, no live email: stopped runs are stopped, queued runs say the automation is
+unavailable, sent requests are SIMULATED). Viewers: Dana Whitfield (lead), Riley Okafor
+(independent reviewer). The states and the queue timings are in
+[milestone-2-plan.md §13](../milestone-2-plan.md).
+
+| File | What it shows |
+| --- | --- |
+| `home-owner-desktop.png`, `-mobile.png` | Home for the lead at scale: the four buckets (Upcoming is empty without a worker), 291 drafted-request approvals as one expandable row, the overdue chase, stopped runs, the blocked samples held by an unaccepted population, the queued re-performance blocked by the missing worker, the waits on the reviewer and the control owner. |
+| `home-owner-upcoming-desktop.png` | The queue filtered to Upcoming (empty on this engagement: no worker is configured). |
+| `testing-plans-owner-desktop.png`, `-top.png`, `-mobile.png` | Testing › Plans: the Test plans queue embedded under the Testing header and tabs. |
+| `testing-phases-owner-desktop.png`, `-top.png` | Testing › Phases: release by phase, embedded. |
+| `testing-results-owner-desktop.png`, `-top.png`, `-mobile.png`, `-mobile-top.png` | Testing › Results: every control's testing state, result and next step, with filters and search; the phone layout scrolls the table inside its card. |
+| `testing-results-mine-owner-desktop.png` | Results filtered to the lead's own steps. |
+| `testing-review-owner-desktop.png`, `testing-review-reviewer-desktop.png`, `-mobile.png` | Testing › Review: the open reviews with their stage and the queue's action; the reviewer's own are marked Yours, the signed-off review with a coverage gap stays in Open. |
+| `console-owner-desktop.png`, `-top.png` | The agent console's inbox, the same list without the upcoming items. |
+| `walk-1-conclude-before-desktop.png`, `walk-1-conclude-after-desktop.png`, `walk-2-results-after-desktop.png`, `walk-3-review-reviewer-desktop.png`, `walk-log.md` | The multi-control walkthrough: from the Results and Review views, the lead signs off one control's testing, the reviewer accepts one proposed note, the lead starts a stopped tester run again (queued; the queue reports the automation unavailable), and the Results view and the queue counts after. |

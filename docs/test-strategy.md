@@ -146,3 +146,17 @@ and `workflow-model` (queue sources).
   assertions); the client-side `attentionQueue` tests retired with the function, their
   cases now covered by `test_queue.py` and `queue-model.test.ts`; the register's action
   center tests rewritten for `actionCenterFromQueue`.
+- M2b (queue completeness, four buckets, the Testing destination; `queue.py`, `console.py`,
+  `test_queue.py` grown to six tests, `testing-hub-model.test.ts` added to the fast set):
+  `make test-critical` **362 passed, 0 failed in 4 min 57 s**; `make test-fast` **87 Python
+  passed in 2 min 8 s and 112 Node passed**; the whole Node set **711 passed**; type checks
+  clean (one pre-existing mypy error in `test_round_basis.py`, helpers imported from a
+  module that re-exported them implicitly, fixed by importing from the defining modules);
+  lint clean except the known `biome.json` line endings. One legacy expectation rewritten
+  (`test_waiting`: the console inbox lists, beside its own engagement-wide "past due"
+  count, the one queue's per-control step "Chase the overdue evidence request" under the
+  inbox's `late` kind; the open-results assertion is unchanged). That test had been failing
+  since M2a without being run: it is in the UPDATE class, not the fast or critical sets.
+  The inbox-related UPDATE and CURRENT files (`test_console`, `test_evidence_flow`,
+  `test_waiting`, `test_next_steps`, `test_evidence_review`, `test_workspace`) ran once:
+  58 passed after the rewrite.

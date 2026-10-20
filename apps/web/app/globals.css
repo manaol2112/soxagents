@@ -17037,6 +17037,11 @@ button.answer-done:hover {
   opacity: 0.92;
 }
 
+.home-group.queue-upcoming .home-step {
+  opacity: 0.85;
+  border-left: 3px solid var(--border);
+}
+
 @media (max-width: 720px) {
   .queue-filters {
     padding: 0 0.75rem 0.5rem;

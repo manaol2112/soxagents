@@ -40,15 +40,23 @@ export type PlanningQuery = {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The engagement's planning review queue and, when a control is chosen, its test plan.
- * Read only on the Test plans page. */
+ * Read on the Test plans page and on the Testing destination's Plans and Phases views
+ * (M2b); the Results and Review views read nothing here. */
 export async function loadPlanning(
   model: ShellModel,
   query: PlanningQuery,
 ): Promise<PlanningPageState | null> {
   if (
     model.status !== "ready" ||
-    model.section !== "planning" ||
+    (model.section !== "planning" && model.section !== "testing") ||
     model.selectedProject === null
+  ) {
+    return null;
+  }
+  if (
+    model.section === "testing" &&
+    (query.view === "results" || query.view === "review") &&
+    query.control === null
   ) {
     return null;
   }

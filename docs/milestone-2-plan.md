@@ -250,6 +250,164 @@ per drafted request instead of a count). The multi-control demonstration engagem
 awaiting plan approval) was built through the API and screenshotted for three viewers
 (`docs/review/m2a/`).
 
+## 12. Obligations and their one queue item (M2b)
+
+Every actionable obligation the platform records, the record or rule it is read from, the
+one queue item that represents it (`kind` / `obligation`), whose it is, how it is
+bucketed, and where it is done. "Step" means the guided control workspace's step. An
+obligation never has two items: where a control's next step restates a listed record,
+the record's item stands and the step is dropped (`_STEP_TO_KIND`); a round's window
+item is dropped when its samples, its basis or the control's step on that phase carries
+the hold; a plan task that restates a listed review is dropped. `test_queue.py` checks
+the identities, the owners and the buckets on fixture engagements; the scale engagement
+(§13) checks that no identity repeats.
+
+| Obligation | Read from | Item (`kind` / `obligation`) | Owner | Bucket | Where |
+| --- | --- | --- | --- | --- | --- |
+| Finish setting up and launch | `projects.status = DRAFT` | `setup` / SETUP | Owner | MINE or WAITING | Setup |
+| Plan the evidence; reconcile a kickoff draft | the control's next step (`workspace.step_of`) | `control-step` / EVIDENCE_PLAN | Preparer | MINE or WAITING | Plan step |
+| Approve the test plan (first or revised) | next step; `readiness_state` | `control-step` / PLAN_APPROVAL | Preparer | MINE or WAITING; BLOCKED while an impact assessment or a conflict holds it | Plan step |
+| Settle the attributes | next step | `control-step` / PLAN_ATTRIBUTES | Preparer | MINE or WAITING | Plan step |
+| Release a phase | next step (`release_ready`) | `control-step` / PHASE_RELEASE | Approver | MINE or WAITING; never upcoming, the release is the action | Plan step |
+| Approve a drafted evidence request (the exact message) | `pbc_requests.status = DRAFT`, one per request | `request-draft` / REQUEST_DRAFT_APPROVAL | Approver | MINE or WAITING; BLOCKED while held for planning or a recipient | Request step, request open |
+| Approve an outbound send or another registered action | `approvals.decision = PENDING` | `approval` / SEND_APPROVAL or ACTION_APPROVAL | Approver, never the requester | MINE or WAITING | Approvals |
+| Submit or send a request | next step | `control-step` / EVIDENCE_REQUEST | Preparer | MINE or WAITING | Request step |
+| Evidence awaited from the client; overdue to chase | next step, `overdue` | `control-step` / EVIDENCE_RECEIPT | Client; the chase is the team's | WAITING; the chase MINE for the preparer | Request step (the inbox's `late` kind) |
+| Approve a due reminder | `pbc_follow_ups.status = DUE` | `reminder` / REMINDER_APPROVAL | Approver | MINE or WAITING | Evidence, requests |
+| Read a reply; match an unmatched email | `inbound_messages` | `reply` / REPLY_TRIAGE | Preparer | MINE or WAITING | Evidence, mailbox |
+| Decide the sufficiency of reviewed evidence | `evidence_reviews.decision IS NULL` (READY or NEEDS_PERSON) | `evidence-review` / EVIDENCE_SUFFICIENCY | Preparer | MINE or WAITING | Evidence, mailbox, request open |
+| Accept or confirm the population | next step | `control-step` / POPULATION | Preparer | MINE or WAITING | Test step |
+| Approve the proposed samples | `control_tests.status = PROPOSED` | `samples` / SAMPLES_APPROVAL | Preparer | MINE or WAITING; BLOCKED until the population is accepted or the round is ready; UPCOMING when the retest window alone holds it | Test step |
+| Testing queued for the tester; a round's testing in hand | next step (actor AGENT, or "Finish the … testing") | `control-step` / TESTING_RUN | Agent, or the preparer | The agent's turn is UPCOMING with a worker and BLOCKED ("Automation unavailable") without | Test step |
+| A tester run that stopped | `test_sheets.run_note` | `run-stopped` / TESTING_RUN_STOPPED | Preparer | MINE or WAITING | Test step |
+| Decide open results; sign off the testing | next step (`sheet_left`) | `control-step` / TESTING_DECISION, TESTING_SIGNOFF | Preparer | MINE or WAITING | Test and Conclude steps |
+| Log or dismiss the proposed deficiency | next step | `control-step` / DEFICIENCY_LOG | Preparer | MINE or WAITING | Conclude step |
+| Prepare the workpapers | next step | `control-step` / WORKPAPERS | Preparer | MINE or WAITING | Conclude step |
+| A workpaper draft that stopped | `workpapers.draft_note = DRAFT_FAILED` | `draft-stopped` / WORKPAPER_DRAFT_STOPPED | Preparer | MINE or WAITING | Plan step (design) or Conclude step |
+| The independent review of a control or a round | `control_reviews.status = OPEN`, one per review, with its notes and re-performance | `review` / CONTROL_REVIEW or ROUND_REVIEW; REPERFORMANCE_STOPPED when the agent's re-performance did not finish | Reviewer, or the preparer to answer notes; the agent while queued | MINE or WAITING; a queued re-performance UPCOMING with a worker, BLOCKED without | Review step |
+| Decide the impact of a plan revision on signed-off results | `plan_impact.assessments` PENDING | `impact` / IMPACT_ASSESSMENT | Reviewer (`viewer_can_decide`) | MINE or WAITING; holds the engagement | Plan step |
+| Assess whether a signed-off review covers later work | `control_journey` coverage gaps, against the latest signed review | `coverage` / COVERAGE_ASSESSMENT | Reviewer, independence applied | MINE or WAITING; holds the engagement | Review step |
+| Confirm a round's testing basis | `test_rounds.basis` stale or reconstructed | `round-basis` / ROUND_BASIS | Preparer | MINE or WAITING; holds the engagement | Test step |
+| A round open whose window or release has not come | `round_readiness` holds ("must operate until", "Not released yet") | `round` / ROUND_WINDOW | No one | UPCOMING | Test step |
+| Start a deficiency's remediation | `deficiencies.status = OPEN` | `deficiency` / DEFICIENCY_REMEDIATION | Preparer | MINE or WAITING | Conclude step (Deficiencies when no control) |
+| Remediation in progress | `status = REMEDIATION_IN_PROGRESS` | `deficiency` / DEFICIENCY_REMEDIATION | Client (the remediation owner named) | WAITING, an ordinary wait | Conclude step |
+| Retest a remediated deficiency | `status = READY_FOR_RETEST`: the open retest round's items; without a round, `deficiency` / DEFICIENCY_RETEST | Preparer | MINE or WAITING | Test or Conclude step |
+| What remains before a concluded control is final | `control_journey.finality` reasons when no step is open | `finality` / FINAL_COMPLETION; when a step is open, the step item carries the first reason | No one | UPCOMING | Review step |
+| A plan task blocked or ready for review | `tasks.status` BLOCKED, REVIEW | `task` / TASK_BLOCKED, TASK_REVIEW (dropped when the control's review is listed) | Preparer | BLOCKED; MINE or WAITING | Project plan |
+
+Not represented as queue items, by design or because no record carries an obligation
+yet: an evidence file being read or analysed (the agents' work, shown on the file, not a
+person's obligation); the client's own uploads (the WAITING items above are the team's
+view of them); organization-level work (library governance, invitations, engagement
+creation); and the engagement's close-out and reporting, which Milestone 2c takes up
+with Reports. Roll-forward testing that is not yet released appears as the control's
+upcoming completion item until the phase is released, then as its own steps.
+
+**Buckets.** MINE: the viewer may act and the record is ready. WAITING: another person's
+turn (the client, the preparer, the reviewer, an approver), an ordinary wait, never a
+blocker. BLOCKED: a prerequisite is unmet (the population not accepted, the round not
+ready, an impact assessment pending, a task blocked) or no one can act (queued agent
+work with no worker configured). UPCOMING: nothing is due yet (a phase not released, a
+retest window not reached, agent work queued for a worker that exists, a concluded
+control's remaining round not yet open). A hold on another phase never makes the current
+step upcoming: the holds are read from the step's own phase.
+
+## 13. M2b as built
+
+**Queue completeness** (`queue.py`). Six sources added, each read from the record that
+carries the obligation: evidence sufficiency reviews awaiting a person's decision
+(`evidence_reviews.decision IS NULL`, READY or NEEDS_PERSON, with the agent's proposal
+or why it could not review); historical coverage assessments (the journey's coverage
+gaps, against the latest signed-off review of the control or the round); workpaper
+drafts the agent gave up on (`DRAFT_FAILED`); re-performances that did not finish
+(`REPERFORM_FAILED`, under the review's own item); deficiency remediation and retest
+(`deficiencies.status`, the retest left to the open round's items when one exists); a
+round open whose window or release has not come; and what remains before a concluded
+control is final when no step is open. Every item now carries an `obligation` code; §12
+maps each obligation to its one item. Two control-step prefixes that did not match the
+review wording ("Answer the review notes", "Clear the answered notes") are corrected so
+an open review never appears twice, and "Re-perform", "Independent review" and "Retest
+outstanding" steps defer to the review and deficiency items.
+
+**Four buckets.** UPCOMING joins MINE, WAITING and BLOCKED: nothing is due yet. A
+queued agent turn (the tester's run, the reviewer agent's re-performance, a drafting run)
+is UPCOMING when a worker exists (`workspace.automation_of`, passed into the queue) and
+BLOCKED with "Automation unavailable: no worker is configured" when none does; the
+holds that lift with time or a release ("must operate until", "Not released yet") make
+samples, rounds and the control's step on that phase UPCOMING, read from the step's own
+phase so another phase's hold never counts; remediation in progress is a WAITING item
+owned by the control owner, never a blocker. The console inbox leaves UPCOMING items
+out (nothing waits on a person) and shows the overdue chase under its own `late` kind.
+`limit` and `offset` page the filtered list; `total` says how many matched.
+
+**The Testing destination** (`section=testing`, `testing-hub-model.ts`,
+`testing-hub-view.tsx`). One header and four views. Plans and Phases embed the Test
+plans page's own components (`PlanningPage`, `PhasesView`) with the Testing header in
+place of theirs and their links kept inside the destination (`planningHref` takes the
+section); the plan review, batch approval, answering and release behaviour is the one
+implementation, unchanged. Results lists every in-scope control's testing from the
+register rows, test sheets and rounds the guided workspace reads: the sheet's headline
+(never "running" without a worker), the open round's phase, the result and exceptions,
+the control's next step and whose it is, with filters (to start, testing, to decide or
+sign off, signed off, exceptions, mine) and a search; each row opens the guided
+workspace on the step. Review lists the independent reviews with their stage, notes open,
+the queue's own action on each (including the coverage assessment of a signed-off
+review) and whose it is, with open / mine / signed-off filters. The "Testing" menu entry
+replaces "Test plans"; the legacy page still answers at `section=planning` until the
+replacement is validated. The loaders fetch controls, sheets, rounds, reviews, automation
+and the queue for the destination; the planning review and phase progress only for the
+Plans and Phases views.
+
+**Scale** (`ai_workforce_scale`, built through the API by the fixtures' rules-only
+paths): 155 controls over five systems (SAP ERP, Oracle EBS, Workday, Salesforce,
+ServiceNow); 20 populations received, 15 accepted, 10 sets of samples approved, 8 tester
+runs (6 clean, 2 with an exception), 2 runs stopped, 7 sheets signed off, one deficiency
+logged and moved to remediation, 7 reviews open (3 with the agent's notes to decide, one
+re-performance queued, one stopped) and 2 signed off (one with a coverage gap, one with
+an impact assessment pending and a stale round basis), 5 plans revised, 5 requests sent
+(simulated) with 2 overdue, and 125 controls at "to request" with 291 drafted requests
+awaiting approval. The queue listed 326 items (312 MINE, 7 BLOCKED, 7 WAITING, 0
+UPCOMING without a worker) with no repeated identity.
+
+| Read (in-process test client, five runs) | Median | Max |
+| --- | --- | --- |
+| `GET /queue` (326 items) | 231 ms | 341 ms |
+| `GET /queue?limit=25` | 229 ms | 378 ms |
+| `GET /queue?bucket=MINE` | 215 ms | 249 ms |
+| `GET /console/inbox` | 236 ms | 323 ms |
+| `GET /workspace/controls` (the register) | 175 ms | 208 ms |
+| `GET /test-sheets` | 78 ms | 96 ms |
+| `GET /reviews` | 62 ms | 81 ms |
+| `GET /planning-review` (the Plans view) | 498 ms | 567 ms |
+
+One queue read issues 166 SQL statements in about 140 ms, 128 of them in the register
+builder (`workspace._controls`) the queue reads for every control's journey; the sources
+added in M2b add one statement each. Paging does not cut the cost: the list is computed
+whole, then filtered and cut, because every item's authorization is per viewer. The
+bottleneck is the register builder's per-control statements, not the queue; a
+set-based register read would halve the time and is the first optimisation to make if
+engagements grow past this scale. The Plans view's `planning-review` read is the slowest
+page on the destination at half a second. Home collapses the 291 identical
+drafted-request items into one expandable row, as it already did for repeated steps.
+
+**Validation.** `test_queue.py` (six tests): the new sources and their owners
+(coverage, stopped drafts, stopped re-performance, evidence sufficiency, deficiency
+remediation and retest), the UPCOMING and BLOCKED readings of queued agent work with and
+without a worker, the round window, the inbox's treatment of each, filters that narrow,
+paging; `test_waiting.py` rewritten for the one queue's overdue chase beside the console's
+own count. Node: `testing-hub-model` (views and addresses, result states from sheet,
+round and row, review rows with the queue's action, filters and counts), `queue-model`
+(UPCOMING, obligation, paging, collapsed drafted requests). The scale engagement's
+screenshots and the three-control walkthrough are in `docs/review/m2b/`.
+
+**Remaining duplicated interfaces** (for M2c and M2d): the legacy Test plans page
+(`section=planning`) beside the Testing destination's Plans and Phases views; the console
+inbox's own "past due" count beside the queue's per-control chase items; the console
+page's inbox beside Home's queue (M2c retires the console page as a destination); the
+classic control tabs beside the guided steps (M2d); the guided Plan step links to the plan
+review rather than embedding its sections (the plan has one editor; the embedding is
+M2d's).
+
 ## 10. Out of scope for Milestone 2
 
 The Agent Companion panel (Milestone 3), the onboarding wizard and design tokens

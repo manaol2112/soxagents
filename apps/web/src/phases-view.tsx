@@ -21,7 +21,12 @@ import {
 } from "./planning-model";
 import { UiIcon } from "./ui-icon";
 
-type Ids = { organizationId: string; projectId: string };
+type Ids = {
+  organizationId: string;
+  projectId: string;
+  /** The destination the page's links stay in (M2b); the Test plans page by default. */
+  section?: "planning" | "testing";
+};
 type Released = "INTERIM" | "ROLLFORWARD";
 
 /** One call to the planning route; refreshes the page when it succeeds. */
@@ -78,16 +83,22 @@ export function ViewSwitch({
   ids: Ids;
   view: "plans" | "phases";
 }) {
+  if (ids.section === "testing") {
+    return null;
+  }
   return (
     <nav className="segmented pl-views" aria-label="Test plans views">
       <a
-        href={planningHref(ids.organizationId, ids.projectId)}
+        href={planningHref(ids.organizationId, ids.projectId, {
+          section: ids.section,
+        })}
         aria-current={view === "plans" ? "page" : undefined}
       >
         Plans
       </a>
       <a
         href={planningHref(ids.organizationId, ids.projectId, {
+          section: ids.section,
           view: "phases",
         })}
         aria-current={view === "phases" ? "page" : undefined}
@@ -449,6 +460,7 @@ function PhaseLine({
         <a
           className="pl-control"
           href={planningHref(ids.organizationId, ids.projectId, {
+            section: ids.section,
             control: row.controlId,
           })}
         >
@@ -465,6 +477,7 @@ function PhaseLine({
           <a
             className="text-link pl-plan-link"
             href={planningHref(ids.organizationId, ids.projectId, {
+              section: ids.section,
               control: row.controlId,
             })}
           >

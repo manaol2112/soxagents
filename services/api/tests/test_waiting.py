@@ -68,8 +68,15 @@ def test_open_test_results_and_late_evidence_wait_on_the_team(migrated: Database
             "tab": "interim",
         }
     ]
+    # Past due: the engagement-wide count (the console's own summary, kept until the
+    # console page retires) and, from the one queue (M2a/M2b), the control's own step,
+    # "chase", the team's to do.
     late = [item for item in waiting if item["kind"] == "late"]
-    assert [item["title"] for item in late] == ["1 evidence request past due"]
+    assert sorted(item["title"] for item in late) == [
+        "1 evidence request past due",
+        "Chase the overdue evidence request",
+    ]
+    assert [item["control_ref"] for item in late if item["control_ref"]] == ["ITGC-CM-01"]
     # Drafted requests still wait to be submitted.
     assert any(item["kind"] == "drafts" for item in waiting)
 

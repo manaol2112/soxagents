@@ -84,7 +84,12 @@ describe("the engagement's one queue", () => {
       generated_at: "",
     });
     assert.ok(queue !== null);
-    assert.deepEqual(queue.counts, { MINE: 2, WAITING: 1, BLOCKED: 1 });
+    assert.deepEqual(queue.counts, {
+      MINE: 2,
+      WAITING: 1,
+      BLOCKED: 1,
+      UPCOMING: 0,
+    });
     const all = groupQueue(queue, { bucket: null, stage: null, phase: null });
     assert.deepEqual(
       all.map((group) => [group.bucket, group.items.map((item) => item.id)]),
@@ -201,5 +206,55 @@ describe("the engagement's one queue", () => {
       ),
       ["samples:t1", "Approve the test plan ×4", "control-step:z"],
     );
+  });
+
+  it("lists what is not due yet last, as no one's, with its obligation", () => {
+    const queue = parseQueue({
+      items: [
+        raw({
+          id: "round:r1",
+          kind: "round",
+          obligation: "ROUND_WINDOW",
+          bucket: "UPCOMING",
+          authorized: false,
+          ready: false,
+          owner: { role: "NONE", names: [] },
+          blockers: ["The fixed control must operate until 2027-01-31"],
+          title: "Retest testing not due yet",
+          phase: "RETEST",
+          round_kind: "RETEST",
+          round_id: "r1",
+        }),
+        raw({ id: "b", bucket: "BLOCKED", ready: false, blockers: ["x"] }),
+        raw(),
+      ],
+      counts: { MINE: 1, WAITING: 0, BLOCKED: 1, UPCOMING: 1 },
+      total: 3,
+      generated_at: "",
+    });
+    assert.ok(queue !== null);
+    assert.equal(queue.total, 3);
+    assert.equal(queue.counts.UPCOMING, 1);
+    assert.deepEqual(
+      groupQueue(queue, { bucket: null, stage: null, phase: null }).map(
+        (group) => group.bucket,
+      ),
+      ["MINE", "BLOCKED", "UPCOMING"],
+    );
+    const [upcoming] = groupQueue(queue, {
+      bucket: "UPCOMING",
+      stage: null,
+      phase: null,
+    });
+    assert.ok(upcoming);
+    assert.equal(upcoming.items[0]?.obligation, "ROUND_WINDOW");
+    assert.ok(upcoming.items[0]);
+    assert.equal(ownerWords(upcoming.items[0]), "Not due yet");
+    assert.equal(queue.items[2]?.obligation, "CONTROL_STEP");
+    assert.deepEqual(parseQueueFilter("bucket:UPCOMING"), {
+      bucket: "UPCOMING",
+      stage: null,
+      phase: null,
+    });
   });
 });

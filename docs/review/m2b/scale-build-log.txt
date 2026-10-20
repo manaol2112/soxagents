@@ -1,0 +1,41 @@
+controls in scope: 155 over 5 systems (67s)
+  populations received on 20 controls (70s)
+  populations accepted on 15 controls (75s)
+  samples approved and tickets in on 10 controls (79s)
+  tester ran 8 sheets; 2 runs stopped (81s)
+  7 sheets signed off (83s)
+  deficiency logged and one exception dismissed (83s)
+  effectiveness workpapers prepared (85s)
+  reviews: 7 open, 5 re-performed, 2 signed (87s)
+  deficiency in remediation (87s)
+  5 plans revised, awaiting approval (87s)
+  5 requests sent (simulated), 2 overdue (89s)
+built in 89s
+ORG 01a15b1a-5bec-7b26-aab2-4c7f84a889b4 PROJECT 01a15b1a-5d67-7fde-8120-1314701cbb30
+MIX {'AWAITING_EVIDENCE': 7, 'AWAITING_REVIEW': 6, 'EVIDENCE_RECEIVED': 10, 'PLAN_TO_APPROVE': 5, 'RESULTS_TO_CONFIRM': 1, 'REVIEW_NOTES': 1, 'TO_REQUEST': 125}
+QUEUE {'MINE': 312, 'BLOCKED': 7, 'WAITING': 7, 'UPCOMING': 0} total 326
+     2 control-step/EVIDENCE_RECEIPT
+     1 control-step/IMPACT_ASSESSMENT
+     5 control-step/PLAN_APPROVAL
+     5 control-step/POPULATION
+     1 control-step/TESTING_SIGNOFF
+     1 coverage/COVERAGE_ASSESSMENT
+     1 deficiency/DEFICIENCY_REMEDIATION
+     1 impact/IMPACT_ASSESSMENT
+   291 request-draft/REQUEST_DRAFT_APPROVAL
+     4 review/CONTROL_REVIEW
+     1 review/REPERFORMANCE_STOPPED
+     1 round-basis/ROUND_BASIS
+     2 run-stopped/TESTING_RUN_STOPPED
+    10 samples/SAMPLES_APPROVAL
+duplicate ids: 0
+TIME GET /queue                 min    223 ms  median    231 ms  max    341 ms
+TIME GET /queue?limit=25        min    209 ms  median    229 ms  max    378 ms
+TIME GET /queue?bucket=MINE     min    201 ms  median    215 ms  max    249 ms
+TIME GET /console/inbox         min    233 ms  median    236 ms  max    323 ms
+TIME GET /workspace/controls    min    164 ms  median    175 ms  max    208 ms
+TIME GET /test-sheets           min     78 ms  median     78 ms  max     96 ms
+TIME GET /reviews               min     46 ms  median     62 ms  max     81 ms
+TIME GET /planning-review       min    478 ms  median    498 ms  max    567 ms
+QUERIES per queue read: 166 statements in 139 ms (in-process)
+QUERIES per register read (_controls): 128 statements in 115 ms

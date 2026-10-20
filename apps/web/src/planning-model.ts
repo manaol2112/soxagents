@@ -1521,12 +1521,15 @@ export function planningHref(
     tab?: Tab | null;
     filter?: string | null;
     view?: "plans" | "phases" | null;
+    /** The destination the link stays in: the legacy Test plans page, or the Testing
+     * destination's Plans and Phases views (M2b). */
+    section?: "planning" | "testing" | null | undefined;
   } = {},
 ): string {
   const params = new URLSearchParams({
     organization: organizationId,
     project: projectId,
-    section: "planning",
+    section: options.section ?? "planning",
   });
   if (options.control) {
     params.set("control", options.control);

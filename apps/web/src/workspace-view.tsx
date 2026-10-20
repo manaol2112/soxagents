@@ -119,6 +119,8 @@ import {
   taskStatusChoices,
   workspaceHref,
 } from "./shell-model";
+import type { TestingView } from "./testing-hub-model";
+import { TestingPage } from "./testing-hub-view";
 import { type IconName, UiIcon } from "./ui-icon";
 import { VisitRecorder } from "./visit-recorder";
 import {
@@ -190,9 +192,9 @@ const NAV_GROUPS: ReadonlyArray<{ label: string; items: NavItem[] }> = [
         icon: "shield",
       },
       {
-        id: "planning",
-        label: "Test plans",
-        detail: "Review and approve",
+        id: "testing",
+        label: "Testing",
+        detail: "Plans, phases, results and review",
         icon: "check",
       },
       {
@@ -304,6 +306,8 @@ export function WorkspaceView({
   evidenceView = DEFAULT_EVIDENCE_VIEW,
   evidenceCenter = null,
   planning = null,
+  testingView = "plans",
+  testingFilter = null,
   library = null,
 }: {
   model: ShellModel;
@@ -323,6 +327,9 @@ export function WorkspaceView({
   evidenceView?: EvidenceView;
   evidenceCenter?: EvidenceCenterState | null;
   planning?: PlanningPageState | null;
+  /** The Testing destination's view and its results or review filter (M2b). */
+  testingView?: TestingView;
+  testingFilter?: string | null;
   library?: LibraryPageState | null;
 }) {
   const waiting =
@@ -460,6 +467,8 @@ export function WorkspaceView({
             evidenceView={evidenceView}
             evidenceCenter={evidenceCenter}
             planning={planning}
+            testingView={testingView}
+            testingFilter={testingFilter}
             library={library}
           />
         </main>
@@ -640,6 +649,8 @@ function WorkspaceMain({
   evidenceView,
   evidenceCenter,
   planning,
+  testingView,
+  testingFilter,
   library,
 }: {
   model: ShellModel;
@@ -658,6 +669,8 @@ function WorkspaceMain({
   evidenceView: EvidenceView;
   evidenceCenter: EvidenceCenterState | null;
   planning: PlanningPageState | null;
+  testingView: TestingView;
+  testingFilter: string | null;
   library: LibraryPageState | null;
 }) {
   if (model.status === "loading") {
@@ -745,6 +758,17 @@ function WorkspaceMain({
   }
   if (model.section === "planning") {
     return <PlanningMain model={model} planning={planning} />;
+  }
+  if (model.section === "testing") {
+    return (
+      <TestingMain
+        model={model}
+        planning={planning}
+        engagement={engagement}
+        view={testingView}
+        filter={testingFilter}
+      />
+    );
   }
   if (model.section === "console") {
     return <ConsoleMain model={model} console={consoleState} />;
@@ -1561,6 +1585,36 @@ function NotLaunched({ model }: { model: Ready }) {
         />
       </section>
     </div>
+  );
+}
+
+/** Testing (M2b): plans, phases, results and review across every control. */
+function TestingMain({
+  model,
+  planning,
+  engagement,
+  view,
+  filter,
+}: {
+  model: Ready;
+  planning: PlanningPageState | null;
+  engagement: EngagementState;
+  view: TestingView;
+  filter: string | null;
+}) {
+  const project = model.selectedProject;
+  if (project === null) {
+    return <NoEngagement model={model} what="Testing" />;
+  }
+  return (
+    <TestingPage
+      ids={{ organizationId: model.organization.id, projectId: project.id }}
+      projectName={project.name}
+      view={view}
+      planning={planning}
+      engagement={engagement}
+      filter={filter}
+    />
   );
 }
 

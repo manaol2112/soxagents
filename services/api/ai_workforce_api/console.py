@@ -880,7 +880,10 @@ def register_console(
 
     @app.get(f"{base}/inbox")
     def inbox(organization_id: UUID, project_id: UUID, request: Request) -> InboxBody:
-        return run(request, lambda c, p: _inbox(c, p, organization_id, project_id))
+        from ai_workforce_api.workspace import automation_of
+
+        automated = automation_of(settings).available
+        return run(request, lambda c, p: _inbox(c, p, organization_id, project_id, automated))
 
 
 def _person(
@@ -1321,6 +1324,7 @@ def _inbox(
     principal: Principal,
     organization_id: UUID,
     project_id: UUID,
+    automated: bool = True,
 ) -> InboxBody:
     """What waits on the person, read from the engagement's one queue (queue.py,
     Milestone 2a) in the inbox's own item shape; the activity is the agents' recent work."""
@@ -1328,12 +1332,18 @@ def _inbox(
 
     _person(connection, principal, organization_id, project_id)
     waiting: list[WaitingItem] = []
-    for item in queue(connection, principal, organization_id, project_id).items:
+    for item in queue(connection, principal, organization_id, project_id, automated).items:
         if item.bucket == "WAITING" and item.owner.role == "CLIENT":
             # Evidence out with the client waits on no one here.
             continue
+        if item.bucket == "UPCOMING":
+            # Nothing is due on it yet: the inbox lists what waits on a person.
+            continue
         tab = _QUEUE_TABS.get(item.link.query.get("step", ""), None)
         kind = _QUEUE_KINDS.get(item.kind, item.kind)
+        if item.kind == "control-step" and item.obligation == "EVIDENCE_RECEIPT":
+            # Evidence out with the client, overdue: the inbox's own kind for it.
+            kind = "late"
         if item.kind == "request-draft" and item.blockers:
             kind = "planning" if "Plan the evidence" in item.blockers[0] else "contacts"
         if item.kind == "task":
@@ -1399,13 +1409,18 @@ _QUEUE_KINDS: dict[str, str] = {
     "approval": "approval",
     "samples": "samples",
     "review": "control_review",
+    "coverage": "control_review",
     "request-draft": "drafts",
     "reminder": "reminders",
     "reply": "replies",
     "run-stopped": "results",
+    "draft-stopped": "results",
     "control-step": "results",
+    "finality": "results",
     "impact": "planning",
     "round-basis": "results",
+    "evidence-review": "evidence_review",
+    "deficiency": "deficiencies",
     "setup": "setup",
 }
 # The guided step a queue link opens, as the classic tab the inbox links carried.

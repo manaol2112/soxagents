@@ -107,13 +107,14 @@ export function QueuePanel({
               filter.bucket === null,
               total,
             )}
-            {(["MINE", "BLOCKED", "WAITING"] as const).map((bucket) =>
-              chip(
-                BUCKET_LABELS[bucket],
-                { ...filter, bucket },
-                filter.bucket === bucket,
-                queue.counts[bucket],
-              ),
+            {(["MINE", "BLOCKED", "WAITING", "UPCOMING"] as const).map(
+              (bucket) =>
+                chip(
+                  BUCKET_LABELS[bucket],
+                  { ...filter, bucket },
+                  filter.bucket === bucket,
+                  queue.counts[bucket],
+                ),
             )}
           </div>
           <div className="queue-filter-row">

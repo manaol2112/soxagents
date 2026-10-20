@@ -2,20 +2,38 @@
 its record, its owner, whether the viewer may act, and where it is done; the console
 inbox reads the same list; filters never widen what a viewer sees."""
 
+from datetime import date, timedelta
 from typing import Any
 from uuid import UUID
 
 from support import Database
 from test_control_reviews import _prepared_control
+from test_evidence_analysis import _no_ocr, _Provider
 from test_evidence_intake import _accept_population, _client, _engagement, _request, _Scheduler
+from test_evidence_review import (
+    _decide_path,
+    _opt_into_model,
+    _png,
+    _sent_engagement_request,
+    _store_screenshot,
+)
+from test_evidence_review import _reviews as _evidence_reviews
 from test_execution import _add_user, _seed_org
 from test_outbound import _session, migrated
 from test_phase_release import _prepare_design
-from test_test_rounds import _plans
-from test_testing_engine import _add, _base, _read_all, _year
+from test_round_reviews import _sign_review
+from test_test_rounds import _plans, _rounds, _sheets
+from test_testing_engine import _add, _base, _controls, _read_all, _year
+from test_workpapers import _tested_control
 
-from ai_workforce_api.control_reviews import run_reperformance
+from ai_workforce_api.authorization import Principal, PrincipalKind
+from ai_workforce_api.console import _inbox
+from ai_workforce_api.control_reviews import REPERFORM_FAILED, run_reperformance
 from ai_workforce_api.db import connect
+from ai_workforce_api.evidence_analysis import run_analysis
+from ai_workforce_api.queue import NO_WORKER, queue
+from ai_workforce_api.settings import Settings
+from ai_workforce_api.workpaper_service import DRAFT_FAILED
 
 __all__ = ["migrated"]
 
@@ -79,6 +97,7 @@ def test_each_obligation_appears_once_with_its_owner_and_where_it_is_done(
             i
             for i in body["items"]
             if not (i["bucket"] == "WAITING" and i["owner"]["role"] == "CLIENT")
+            and i["bucket"] != "UPCOMING"
         ]
     )
 
@@ -139,3 +158,206 @@ def test_who_may_act_follows_the_role_not_the_permission(migrated: Database) -> 
         stranger = _seed_org(connection, "queue-stranger")
     other = _client(migrated, stranger["user_id"], _Scheduler())
     assert other.get(f"{base}/queue").status_code in (403, 404)
+
+
+def _items_on(body: dict[str, Any], control_id: str) -> list[dict[str, Any]]:
+    return [item for item in body["items"] if item["control_id"] == control_id]
+
+
+def test_coverage_and_stopped_drafts_are_items_of_their_own(migrated: Database) -> None:
+    team, client, sheet, _file = _prepared_control(migrated, "queue-cover", "DISMISS")
+    base = _base(team)
+    control = sheet["control_id"]
+    review = client.get(f"{base}/reviews").json()[0]
+    _sign_review(migrated, client, team, review["id"])
+    # The design workpaper is prepared after the review signed: the review's coverage
+    # of it is unassessed. One item, the reviewer's, on the signed review's record; the
+    # control's next step (the same gap, in the journey's words) is not repeated.
+    _prepare_design(migrated, team, control)
+    # (The roll-forward round's drafted request is an obligation of its own, as before.)
+    mine = [i for i in _items_on(_queue(client, team), control) if i["kind"] != "request-draft"]
+    assert [item["kind"] for item in mine] == ["coverage"], [i["title"] for i in mine]
+    [gap] = mine
+    assert gap["id"] == f"coverage:{review['id']}"
+    assert gap["obligation"] == "COVERAGE_ASSESSMENT" and gap["blocks"] is True
+    assert gap["owner"]["role"] == "REVIEWER" and gap["bucket"] == "WAITING"
+    assert "since the review covered it" in gap["reason"]
+    assert gap["link"]["query"] == {"control": control, "step": "review"}
+    reviewer = _session(migrated, team["reviewer_id"])
+    [theirs] = [i for i in _items_on(_queue(reviewer, team), control) if i["kind"] == "coverage"]
+    assert theirs["authorized"] is True and theirs["bucket"] == "MINE"
+    # A workpaper draft the agent gave up on is a stopped agent execution, listed as
+    # the preparer's to start again, apart from any testing result.
+    other = next(row["id"] for row in _controls(client, team) if row["id"] != control)
+    with connect(migrated.url) as connection:
+        failed = connection.execute(
+            """
+            INSERT INTO workpapers (
+                organization_id, project_id, engagement_control_id, stage, template_key,
+                status, draft_status, draft_note, requested_by
+            )
+            VALUES (%s, %s, %s, 'EFFECTIVENESS', 'itgc', 'DRAFT', 'IDLE', %s, %s)
+            RETURNING id
+            """,
+            (team["org"], team["project"], other, DRAFT_FAILED, team["owner_id"]),
+        ).fetchone()
+        connection.commit()
+    assert failed is not None
+    key = f"draft-stopped:{failed[0]}"
+    [stopped] = [i for i in _queue(client, team)["items"] if i["id"] == key]
+    assert stopped["obligation"] == "WORKPAPER_DRAFT_STOPPED" and stopped["bucket"] == "MINE"
+    assert stopped["title"] == "Draft the effectiveness workpaper again"
+    assert stopped["reason"] == DRAFT_FAILED
+    assert stopped["link"]["query"] == {"control": other, "step": "conclude"}
+
+
+def test_queued_agent_work_is_upcoming_with_a_worker_and_blocked_without(
+    migrated: Database,
+) -> None:
+    team, client, sheet, _file = _prepared_control(migrated, "queue-agent", "DISMISS")
+    control = sheet["control_id"]
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    principal = Principal(kind=PrincipalKind.USER, id=UUID(str(team["owner_id"])))
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE control_reviews SET reperform_status = 'PENDING' WHERE id = %s",
+            (review["id"],),
+        )
+        connection.commit()
+        # The re-performance is queued: with a worker it is upcoming, nobody's action;
+        # without one it is blocked, and says that automation is unavailable.
+        with_worker = queue(connection, principal, team["org"], team["project"], True)
+        without = queue(connection, principal, team["org"], team["project"], False)
+    [item] = [i for i in with_worker.items if i.id == f"review:{review['id']}"]
+    assert item.bucket == "UPCOMING" and item.owner.role == "AGENT" and item.blockers == []
+    assert with_worker.counts["UPCOMING"] == 1
+    [held] = [i for i in without.items if i.id == f"review:{review['id']}"]
+    assert held.bucket == "BLOCKED" and held.blockers == [NO_WORKER]
+    # Neither lists the control's step beside the review: one obligation, one item.
+    kinds = [i.kind for i in with_worker.items if i.control_id == UUID(control)]
+    assert kinds == ["request-draft", "review"]
+    # The re-performance that did not finish is a stopped execution, the reviewer's
+    # to start again, under the same item.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            """
+            UPDATE control_reviews SET reperform_status = 'IDLE', reperformed_at = NULL,
+                   reperform_note = %s WHERE id = %s
+            """,
+            (REPERFORM_FAILED, review["id"]),
+        )
+        connection.commit()
+    reviewer = _session(migrated, team["reviewer_id"])
+    key = f"review:{review['id']}"
+    [again] = [i for i in _queue(reviewer, team)["items"] if i["id"] == key]
+    assert again["title"] == "Re-perform the testing for the review again"
+    assert again["obligation"] == "REPERFORMANCE_STOPPED" and again["bucket"] == "MINE"
+    assert again["reason"] == REPERFORM_FAILED
+    # The inbox lists what waits on a person: with a worker the queued re-performance
+    # is upcoming and not in it; the test app has no worker, so over the API the same
+    # item is blocked and the inbox says what holds it.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE control_reviews SET reperform_status = 'PENDING' WHERE id = %s",
+            (review["id"],),
+        )
+        connection.commit()
+        quiet = _inbox(connection, principal, team["org"], team["project"], True)
+    assert not any(i.kind == "control_review" for i in quiet.waiting)
+    inbox = client.get(f"{_base(team)}/console/inbox").json()["waiting"]
+    [shown] = [i for i in inbox if i["kind"] == "control_review"]
+    assert "Automation unavailable" in shown["detail"]
+
+
+def test_remediation_waits_on_the_client_and_the_retest_is_the_rounds(
+    migrated: Database,
+) -> None:
+    team, client, _sheet_, _ticket = _tested_control(migrated, "queue-fix")
+    base = _base(team)
+    first = _sheets(client, team)[0]
+    logged = client.post(
+        f"{base}/test-sheets/{first['id']}/deficiency",
+        json={"version": first["version"], "action": "LOG"},
+    )
+    assert logged.status_code == 200, logged.text
+    [deficiency] = client.get(f"{base}/deficiencies").json()
+    control = deficiency["control_id"]
+    key = f"deficiency:{deficiency['id']}"
+    # Logged: starting the remediation is the preparer's, apart from the workpapers.
+    [item] = [i for i in _queue(client, team)["items"] if i["id"] == key]
+    assert item["obligation"] == "DEFICIENCY_REMEDIATION" and item["bucket"] == "MINE"
+    assert item["phase"] == "REMEDIATION" and item["link"]["query"]["step"] == "conclude"
+    assert item["title"].startswith(f"Start the remediation of {deficiency['reference']}")
+    moved = client.post(
+        f"{base}/deficiencies/{deficiency['id']}/progress",
+        json={"version": deficiency["version"], "status": "REMEDIATION_IN_PROGRESS"},
+    )
+    assert moved.status_code == 200, moved.text
+    # In remediation: an ordinary wait on the control owner, not a workflow blocker.
+    [item] = [i for i in _queue(client, team)["items"] if i["id"] == key]
+    assert item["owner"]["role"] == "CLIENT" and item["bucket"] == "WAITING"
+    assert item["authorized"] is False and item["blockers"] == []
+    # Ready for retest with the fix taking effect yesterday: the retest round opens and
+    # is the obligation from here (the deficiency is not repeated); nothing is due on
+    # it until the fixed control has operated long enough, so it is upcoming.
+    fixed = date.today() - timedelta(days=1)
+    moved = client.post(
+        f"{base}/deficiencies/{deficiency['id']}/progress",
+        json={
+            "version": moved.json()["version"],
+            "status": "READY_FOR_RETEST",
+            "remediated_on": fixed.isoformat(),
+        },
+    )
+    assert moved.status_code == 200, moved.text
+    [retest] = _rounds(client, team)
+    assert retest["kind"] == "RETEST" and retest["status"] == "REQUESTED"
+    body = _queue(client, team)
+    assert not any(i["id"] == key for i in body["items"])
+    on_control = _items_on(body, control)
+    # The interim's workpapers are still the preparer's step, due now; the retest round
+    # is its own item, upcoming, with the window that holds it; its requests are the
+    # approver's, as any drafted request.
+    [step] = [i for i in on_control if i["kind"] == "control-step"]
+    assert step["obligation"] == "WORKPAPERS" and step["bucket"] == "MINE"
+    [window] = [i for i in on_control if i["kind"] == "round"]
+    assert window["id"] == f"round:{retest['id']}" and window["bucket"] == "UPCOMING"
+    assert window["obligation"] == "ROUND_WINDOW" and window["phase"] == "RETEST"
+    assert any("must operate until" in blocker for blocker in window["blockers"])
+    assert window["owner"]["role"] == "NONE" and window["authorized"] is False
+    mine = {i["id"] for i in _queue(client, team, bucket="MINE")["items"]}
+    assert window["id"] not in mine and step["id"] in mine
+    assert body["counts"]["UPCOMING"] >= 1
+    # A page of the filtered list, with the whole count.
+    page = _queue(client, team, limit="1", offset="0")
+    assert len(page["items"]) == 1 and page["total"] == len(body["items"])
+    assert page["counts"] == body["counts"]
+
+
+def test_evidence_awaiting_a_sufficiency_decision_is_the_preparers(migrated: Database) -> None:
+    team, client, request = _sent_engagement_request(migrated, "queue-suff")
+    _opt_into_model(client, team)
+    analysis_id = _store_screenshot(client, team, request, _png("x", 20, 20))
+    with connect(migrated.url) as connection:
+        run_analysis(
+            connection, Settings(database_url=migrated.url), _Provider([{}]), analysis_id, _no_ocr
+        )
+    [review] = _evidence_reviews(client, team)
+    assert review["status"] == "NEEDS_PERSON" and review["decision"] is None
+    key = f"evidence-review:{review['id']}"
+    [item] = [i for i in _queue(client, team)["items"] if i["id"] == key]
+    assert item["obligation"] == "EVIDENCE_SUFFICIENCY" and item["stage"] == "EVIDENCE"
+    assert item["title"] == "Decide the sufficiency of settings.png"
+    assert item["reason"].startswith("The agent could not review it")
+    assert item["owner"]["role"] == "PREPARER" and item["bucket"] == "MINE"
+    assert item["link"] == {
+        "section": "evidence",
+        "query": {"tab": "mailbox", "request": request["id"]},
+    }
+    # Decided: it leaves the queue.
+    decided = client.post(
+        _decide_path(team, review["id"]),
+        json={"version": review["version"], "decision": "ACCEPTED"},
+    )
+    assert decided.status_code == 200, decided.text
+    assert not any(i["id"] == key for i in _queue(client, team)["items"])

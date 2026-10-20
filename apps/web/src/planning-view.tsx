@@ -93,7 +93,12 @@ import { UiIcon } from "./ui-icon";
 import { SuggestedAnswer } from "./value-options";
 import { joinAnswers } from "./value-suggestions";
 
-type Ids = { organizationId: string; projectId: string };
+type Ids = {
+  organizationId: string;
+  projectId: string;
+  /** The destination the page's links stay in (M2b); the Test plans page by default. */
+  section?: "planning" | "testing";
+};
 
 const AREAS = new Map<string, string>(
   CONTROL_CATEGORIES.flatMap((category) =>
@@ -253,10 +258,14 @@ export function PlanningPage({
   ids,
   projectName,
   state,
+  header,
 }: {
   ids: Ids;
   projectName: string;
   state: PlanningPageState | null;
+  /** The page header to show instead of the Test plans header (the Testing
+   * destination's, M2b). */
+  header?: ReactNode;
 }) {
   if (state?.controlId) {
     if (state.plan === null) {
@@ -264,7 +273,9 @@ export function PlanningPage({
         <div className="page pl-page">
           <a
             className="text-link is-plain pl-back"
-            href={planningHref(ids.organizationId, ids.projectId)}
+            href={planningHref(ids.organizationId, ids.projectId, {
+              section: ids.section,
+            })}
           >
             ← Test plans
           </a>
@@ -293,11 +304,18 @@ export function PlanningPage({
       <PhasesView
         ids={ids}
         state={state}
-        header={<QueueHeader projectName={projectName} />}
+        header={header ?? <QueueHeader projectName={projectName} />}
       />
     );
   }
-  return <PlanQueue ids={ids} projectName={projectName} state={state} />;
+  return (
+    <PlanQueue
+      ids={ids}
+      projectName={projectName}
+      state={state}
+      header={header}
+    />
+  );
 }
 
 // The planning review queue
@@ -306,10 +324,12 @@ function PlanQueue({
   ids,
   projectName,
   state,
+  header,
 }: {
   ids: Ids;
   projectName: string;
   state: PlanningPageState | null;
+  header?: ReactNode;
 }) {
   const action = useAction(ids);
   const router = useRouter();
@@ -390,7 +410,7 @@ function PlanQueue({
   if (queue === null) {
     return (
       <div className="page pl-page">
-        <QueueHeader projectName={projectName} />
+        {header ?? <QueueHeader projectName={projectName} />}
         <section className="card pl-empty">
           <h2>The test plans could not be loaded</h2>
           <p>Wait a moment and refresh the page.</p>
@@ -415,6 +435,7 @@ function PlanQueue({
   };
   const filterHref = (states: readonly PlanningState[]) =>
     planningHref(ids.organizationId, ids.projectId, {
+      section: ids.section,
       filter: states.join(","),
     });
   const active = (states: readonly PlanningState[]) =>
@@ -424,12 +445,14 @@ function PlanQueue({
     queue.nextControlId === null
       ? null
       : planningHref(ids.organizationId, ids.projectId, {
+          section: ids.section,
           control: queue.nextControlId,
         });
   return (
     <div className="page pl-page">
       <QueueHeader
         projectName={projectName}
+        header={header}
         actions={
           <>
             <button
@@ -810,10 +833,23 @@ function PlanQueue({
 function QueueHeader({
   projectName,
   actions,
+  header,
 }: {
   projectName: string;
   actions?: ReactNode;
+  /** Another page's header in place of this one; the actions follow it. */
+  header?: ReactNode;
 }) {
+  if (header !== undefined) {
+    return (
+      <>
+        {header}
+        {actions === undefined ? null : (
+          <div className="pl-toolbar">{actions}</div>
+        )}
+      </>
+    );
+  }
   return (
     <header className="page-header">
       <div>
@@ -1029,6 +1065,7 @@ function QueueLine({
   onAnswer: (() => void) | null;
 }) {
   const href = planningHref(ids.organizationId, ids.projectId, {
+    section: ids.section,
     control: row.controlId,
   });
   const step = nextStepOf(row);
@@ -1247,7 +1284,11 @@ function PlanReview({
       <article className="card pl-review-shell">
         <div className="pl-shell-bar">
           <nav className="pl-crumbs" aria-label="Breadcrumb">
-            <a href={planningHref(ids.organizationId, ids.projectId)}>
+            <a
+              href={planningHref(ids.organizationId, ids.projectId, {
+                section: ids.section,
+              })}
+            >
               <span aria-hidden="true">←</span> Test plans
             </a>
             <span aria-hidden="true">/</span>

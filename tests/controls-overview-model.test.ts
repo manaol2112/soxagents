@@ -170,6 +170,7 @@ describe("the action center", () => {
   const item = (over: Partial<QueueItem> = {}): QueueItem => ({
     id: "samples:t1",
     kind: "samples",
+    obligation: "SAMPLES_APPROVAL",
     source: { type: "control_test", id: "t1" },
     stage: "TESTING",
     controlId: register[0]?.id ?? "a",

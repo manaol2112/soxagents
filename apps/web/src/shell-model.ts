@@ -13,6 +13,7 @@ export const SECTIONS = [
   "setup",
   "controls",
   "planning",
+  "testing",
   "plan",
   "timeline",
   "deficiencies",
@@ -445,6 +446,7 @@ export const LAUNCHED_SECTIONS: readonly SectionId[] = [
   "overview",
   "controls",
   "planning",
+  "testing",
   "plan",
   "timeline",
   "evidence",
@@ -1164,6 +1166,7 @@ function parseSection(value: string | null): SectionId {
     value === "setup" ||
     value === "controls" ||
     value === "planning" ||
+    value === "testing" ||
     value === "plan" ||
     value === "timeline" ||
     value === "deficiencies" ||

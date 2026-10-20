@@ -13,6 +13,13 @@ Equivalent obligations appear once: a control's next step and the record it is a
 (samples proposed, the control's own review) are the same obligation, so the more
 specific item stands and the generic one is dropped. Separate obligations stay separate:
 each round's review, each assessment, each request's approval, each reminder.
+
+Four buckets (M2b): MINE, the viewer may do it now; WAITING, someone else's turn, an
+ordinary wait on a person; BLOCKED, a prerequisite is unmet or no one can act (no worker
+for queued agent work, a task a person must unblock); UPCOMING, nothing is due yet (a
+phase not released, a retest window not reached, agent work queued for a worker). Every
+item carries an obligation code so the mapping from each obligation to its one item can
+be checked (docs/milestone-2-plan.md §12).
 """
 
 from datetime import UTC, datetime
@@ -27,7 +34,7 @@ from ai_workforce_api.authorization import Action, Principal, _call, _session_pr
 from ai_workforce_api.control_instances import control_label
 from ai_workforce_api.settings import Settings
 
-Bucket = Literal["MINE", "WAITING", "BLOCKED"]
+Bucket = Literal["MINE", "WAITING", "BLOCKED", "UPCOMING"]
 Role = Literal["PREPARER", "REVIEWER", "APPROVER", "CLIENT", "OWNER", "AGENT", "NONE"]
 StageKey = Literal["SETUP", "PLANS", "EVIDENCE", "TESTING", "REVIEW", "CLOSE"]
 
@@ -82,6 +89,8 @@ class QueueLink(BaseModel):
 class QueueItem(BaseModel):
     id: str
     kind: str
+    # The obligation type the item represents (one code per obligation, §12).
+    obligation: str = "CONTROL_STEP"
     source: QueueSource
     stage: StageKey
     control_id: UUID | None = None
@@ -108,6 +117,8 @@ class QueueItem(BaseModel):
 class QueueBody(BaseModel):
     items: list[QueueItem]
     counts: dict[str, int]
+    # How many items match the filters, before any page is cut.
+    total: int = 0
     generated_at: datetime
 
 
@@ -168,12 +179,35 @@ def _round_word(kind: str) -> str:
     return "retest" if kind == "RETEST" else "roll-forward"
 
 
-def _bucket(authorized: bool, ready: bool, role: str) -> Bucket:
+def _bucket(authorized: bool, ready: bool, role: str, upcoming: bool = False) -> Bucket:
+    """MINE when the viewer may act and the record is ready; UPCOMING when nothing is
+    due yet; BLOCKED when a prerequisite is unmet or no one can act; otherwise WAITING,
+    an ordinary wait on the person whose turn it is."""
+    if upcoming:
+        return "UPCOMING"
     if authorized and ready:
         return "MINE"
     if not ready or role == "NONE":
         return "BLOCKED"
     return "WAITING"
+
+
+# Holds that lift by themselves with time or a release, not by anyone's action now.
+_UPCOMING_HOLDS = ("Not released yet", "must operate until")
+
+
+def _upcoming_holds(blockers: list[str]) -> list[str]:
+    """The holds among the blockers that lift only with time or a release: while one
+    stands, nothing on the item is due, whatever else is also outstanding."""
+    return [b for b in blockers if any(hold in b for hold in _UPCOMING_HOLDS)]
+
+
+NO_WORKER = "Automation unavailable: no worker is configured to run the queued agent work"
+
+
+def _agent_turn(automated: bool) -> tuple[Bucket, list[str]]:
+    """Queued agent work: upcoming while a worker will pick it up, blocked when none."""
+    return ("UPCOMING", []) if automated else ("BLOCKED", [NO_WORKER])
 
 
 def _control_link(control_id: UUID, step: str) -> QueueLink:
@@ -188,12 +222,70 @@ def _control_link(control_id: UUID, step: str) -> QueueLink:
 _STEP_TO_KIND: tuple[tuple[str, str], ...] = (
     ("Approve the samples", "samples"),
     ("Decide the reviewer's notes", "review"),
-    ("Answer the review notes", "review"),
-    ("Clear the answered notes", "review"),
+    ("Address the review notes", "review"),
+    ("Clear the answered review notes", "review"),
     ("Sign off the review", "review"),
+    ("Re-perform the testing for review", "review"),
+    ("The reviewer is re-performing", "review"),
+    ("Independent review", "review"),
     ("Decide the impact", "impact"),
     ("Confirm the round's testing basis", "round-basis"),
+    ("Retest outstanding", "deficiency"),
 )
+# Finality reasons that are a coverage assessment (control_journey.coverage_gaps).
+_COVERAGE_TEXTS = (
+    "since the review covered it",
+    "since its review covered it",
+    "did not record the testing version",
+)
+
+# The obligation a control's next step represents, by its wording (workspace.step_of,
+# control_reviews.REVIEW_STEPS, control_journey.finality).
+_STEP_OBLIGATIONS: tuple[tuple[str, str], ...] = (
+    ("Plan the evidence", "EVIDENCE_PLAN"),
+    ("Reconcile the kickoff", "EVIDENCE_PLAN"),
+    ("Revise the test plan", "PLAN_APPROVAL"),
+    ("Approve the test plan", "PLAN_APPROVAL"),
+    ("Test plan not approved", "PLAN_APPROVAL"),
+    ("Settle the attributes", "PLAN_ATTRIBUTES"),
+    ("Release the", "PHASE_RELEASE"),
+    ("Request evidence", "EVIDENCE_REQUEST"),
+    ("Submit the", "EVIDENCE_REQUEST"),
+    ("Send the approved", "EVIDENCE_REQUEST"),
+    ("Approve the samples", "SAMPLES_APPROVAL"),
+    ("Approve the", "REQUEST_APPROVAL"),
+    ("Chase the overdue", "EVIDENCE_RECEIPT"),
+    ("Waiting for", "EVIDENCE_RECEIPT"),
+    ("Link the sample evidence", "EVIDENCE_RECEIPT"),
+    ("Confirm the population", "POPULATION"),
+    ("Accept the population", "POPULATION"),
+    ("Test the evidence", "TESTING_RUN"),
+    ("Testing stopped", "TESTING_RUN_STOPPED"),
+    ("Finish the", "TESTING_RUN"),
+    ("testing in progress", "TESTING_RUN"),
+    ("testing outstanding", "TESTING_RUN"),
+    ("Decide the open test results", "TESTING_DECISION"),
+    ("Sign off the testing", "TESTING_SIGNOFF"),
+    ("testing not signed off", "TESTING_SIGNOFF"),
+    ("Log the proposed deficiency", "DEFICIENCY_LOG"),
+    ("Prepare the workpapers", "WORKPAPERS"),
+    ("Retest outstanding", "DEFICIENCY_RETEST"),
+    ("Roll-forward testing outstanding", "ROUND_OUTSTANDING"),
+    ("impact assessment", "IMPACT_ASSESSMENT"),
+    ("Decide the impact", "IMPACT_ASSESSMENT"),
+    ("Confirm the round's testing basis", "ROUND_BASIS"),
+)
+
+
+def _step_obligation(text: str) -> str:
+    if any(mark in text for mark in _COVERAGE_TEXTS):
+        return "COVERAGE_ASSESSMENT"
+    for mark, code in _STEP_OBLIGATIONS:
+        if text.startswith(mark) or (mark[0].islower() and mark in text):
+            return code
+    if "review" in text.lower():
+        return "CONTROL_REVIEW"
+    return "CONTROL_STEP"
 
 
 def queue(
@@ -201,8 +293,11 @@ def queue(
     principal: Principal,
     organization_id: UUID,
     project_id: UUID,
+    automated: bool = True,
 ) -> QueueBody:
-    """Every open obligation of the engagement for this viewer, authorized once."""
+    """Every open obligation of the engagement for this viewer, authorized once.
+    `automated` says whether a worker exists for queued agent work (workspace
+    .automation_of): without one, queued agent turns are blocked, not upcoming."""
     from ai_workforce_api.workspace import _authorize, _controls
 
     _authorize(connection, principal, organization_id, project_id, Action.TASK_READ)
@@ -218,6 +313,7 @@ def queue(
             QueueItem(
                 id=f"setup:{project_id}",
                 kind="setup",
+                obligation="SETUP",
                 source=QueueSource(type="project", id=project_id),
                 stage="SETUP",
                 title="Finish setting up the engagement, then launch it",
@@ -246,11 +342,15 @@ def queue(
 
     items += _approvals(connection, project_id, viewer)
     items += _impact(connection, principal, organization_id, project_id, viewer, refs)
-    items += _reviews(connection, project_id, viewer, refs)
+    items += _reviews(connection, project_id, viewer, refs, automated)
+    items += _coverage(connection, project_id, viewer, refs, controls)
     rounds_by_id, items_rounds = _rounds(connection, project_id, viewer, refs, assigned)
     items += items_rounds
     items += _samples(connection, project_id, viewer, refs, assigned, rounds_by_id, controls)
     items += _runs(connection, project_id, viewer, refs, assigned)
+    items += _drafts(connection, project_id, viewer, refs, assigned)
+    items += _evidence_reviews(connection, project_id, viewer, refs, assigned)
+    items += _deficiencies(connection, project_id, viewer, refs, assigned, rounds_by_id)
     items += _requests(connection, project_id, viewer, refs, controls)
     items += _reminders(connection, project_id, viewer, refs)
     items += _replies(connection, project_id, viewer)
@@ -272,28 +372,69 @@ def queue(
             and specific.get((item.control_id, "review"))
         )
     ]
+    # A round's window item stands only when nothing else on the round carries the hold.
+    rounds_held = {
+        item.round_id
+        for item in items
+        if item.round_id is not None and item.kind in ("samples", "round-basis")
+    }
+    items = [item for item in items if not (item.kind == "round" and item.round_id in rounds_held)]
     for control in controls.values():
         if not control.included or control.progress == "CONCLUDED" or control.drafted:
             continue
-        if control.next_step == "" or control.actor == "NONE":
-            continue
         step = control.journey.step if control.journey is not None else "PLAN"
         phase = control.journey.step_phase if control.journey is not None else None
+        if control.next_step == "" or control.actor == "NONE":
+            items += _finality(control, step, specific)
+            continue
         same = next(
             (kind for prefix, kind in _STEP_TO_KIND if control.next_step.startswith(prefix)),
             None,
         )
+        if same is None and any(mark in control.next_step for mark in _COVERAGE_TEXTS):
+            same = "coverage"
         if same is not None and specific.get((control.id, same)):
             continue
         role: Role = control.actor if control.actor in ROLE_WORDS else "NONE"
         ready = control.readiness_state not in ("IMPACT_PENDING", "CONFLICT_REQUIRES_REVIEW")
         blockers = [control.readiness_blocker] if control.readiness_blocker and not ready else []
-        if control.journey is not None and control.journey.blockers and role == "CLIENT":
-            blockers = list(control.journey.blockers[:2])
+        journey_blockers = list(control.journey.blockers) if control.journey is not None else []
+        if journey_blockers and role == "CLIENT":
+            blockers = journey_blockers[:2]
+        obligation = _step_obligation(control.next_step)
+        # The holds on the step's own phase (never another phase's): the phase is not
+        # released, or the retest window has not opened, so nothing is due on it yet.
+        # Releasing the phase is itself an action, never upcoming.
+        phase_blockers = (
+            next(
+                (list(p.blockers) for p in control.journey.phases if p.phase == phase),
+                [],
+            )
+            if control.journey is not None and phase is not None
+            else []
+        )
+        holds = _upcoming_holds(phase_blockers) if obligation != "PHASE_RELEASE" else []
+        upcoming = False
+        if role == "AGENT":
+            # The records say it is an agent's turn: queued for a worker, or none exists.
+            bucket, held = _agent_turn(automated)
+            upcoming = bucket == "UPCOMING"
+            ready = ready and not held
+            blockers = blockers + held
+        elif ready and holds:
+            upcoming = True
+            blockers = holds
+            # The step carries the hold: the round's own window item is not repeated.
+            items = [
+                i
+                for i in items
+                if not (i.kind == "round" and i.control_id == control.id and i.phase == phase)
+            ]
         items.append(
             QueueItem(
                 id=f"control-step:{control.id}",
                 kind="control-step",
+                obligation=obligation,
                 source=QueueSource(type="control", id=control.id),
                 stage=_STEP_STAGE.get(step, "TESTING"),
                 control_id=control.id,
@@ -312,11 +453,43 @@ def queue(
                 ready=ready,
                 blockers=blockers,
                 blocks=control.readiness_state == "PLAN_NOT_APPROVED" and step == "PLAN",
-                bucket=_bucket(control.yours, ready, role),
+                bucket=_bucket(control.yours, ready, role, upcoming),
                 link=_control_link(control.id, step),
             )
         )
     return _finish(items)
+
+
+def _finality(control: Any, step: str, specific: dict[tuple[UUID, str], bool]) -> list[QueueItem]:
+    """A control with no step open today that is not final: what remains before its
+    completion (a round or phase not yet due), listed once as upcoming, unless the
+    remaining work is already an item of its own."""
+    journey = control.journey
+    if journey is None or control.final or not journey.not_final_because:
+        return []
+    if any(key[0] == control.id for key in specific):
+        return []
+    text = journey.not_final_because[0]
+    return [
+        QueueItem(
+            id=f"finality:{control.id}",
+            kind="finality",
+            obligation="FINAL_COMPLETION",
+            source=QueueSource(type="control", id=control.id),
+            stage=_STEP_STAGE.get(step, "REVIEW"),
+            control_id=control.id,
+            control_ref=control.control_ref,
+            phase=journey.step_phase,
+            title=text,
+            reason="Keeps the conclusion open; no action is due on it today.",
+            owner=QueueOwner(role="NONE"),
+            authorized=False,
+            ready=False,
+            blockers=[text],
+            bucket="UPCOMING",
+            link=_control_link(control.id, step),
+        )
+    ]
 
 
 def _finish(items: list[QueueItem]) -> QueueBody:
@@ -327,7 +500,7 @@ def _finish(items: list[QueueItem]) -> QueueBody:
             continue
         seen.add(item.id)
         unique.append(item)
-    order: dict[str, int] = {"MINE": 0, "BLOCKED": 1, "WAITING": 2}
+    order: dict[str, int] = {"MINE": 0, "BLOCKED": 1, "WAITING": 2, "UPCOMING": 3}
     stage_order = {key: index for index, key in enumerate(StageKey.__args__)}  # type: ignore[attr-defined]
     unique.sort(
         key=lambda item: (
@@ -339,7 +512,7 @@ def _finish(items: list[QueueItem]) -> QueueBody:
         )
     )
     counts = {bucket: sum(1 for item in unique if item.bucket == bucket) for bucket in order}
-    return QueueBody(items=unique, counts=counts, generated_at=datetime.now(UTC))
+    return QueueBody(items=unique, counts=counts, total=len(unique), generated_at=datetime.now(UTC))
 
 
 def _approvals(
@@ -367,6 +540,9 @@ def _approvals(
             QueueItem(
                 id=f"approval:{row[0]}",
                 kind="approval",
+                obligation=(
+                    "SEND_APPROVAL" if str(row[1]).startswith("mail.") else "ACTION_APPROVAL"
+                ),
                 source=QueueSource(type="approval", id=UUID(str(row[0]))),
                 stage="EVIDENCE",
                 control_id=None if row[7] is None else UUID(str(row[7])),
@@ -401,6 +577,7 @@ def _impact(
             QueueItem(
                 id=f"impact:{body.id}",
                 kind="impact",
+                obligation="IMPACT_ASSESSMENT",
                 source=QueueSource(type="plan_impact_assessment", id=body.id),
                 stage="PLANS",
                 control_id=body.control_id,
@@ -425,8 +602,14 @@ def _impact(
 
 
 def _reviews(
-    connection: psycopg.Connection[Any], project_id: UUID, viewer: _Viewer, refs: dict[UUID, str]
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    viewer: _Viewer,
+    refs: dict[UUID, str],
+    automated: bool,
 ) -> list[QueueItem]:
+    from ai_workforce_api.control_reviews import REPERFORM_FAILED
+
     found: list[QueueItem] = []
     for row in connection.execute(
         """
@@ -435,7 +618,7 @@ def _reviews(
                count(*) FILTER (WHERE n.status = 'PROPOSED'),
                count(*) FILTER (WHERE n.status = 'OPEN'),
                count(*) FILTER (WHERE n.status = 'RESPONDED'),
-               r.created_at, c.control_ref, a.name
+               r.created_at, c.control_ref, a.name, r.reperform_note
         FROM control_reviews r
         JOIN engagement_controls c ON c.id = r.engagement_control_id
         LEFT JOIN engagement_applications a ON a.id = c.engagement_application_id
@@ -456,13 +639,26 @@ def _reviews(
             if round_kind is None
             else f"the {round_kind.lower().replace('rollforward', 'roll-forward')} round of {label}"
         )
+        obligation = "CONTROL_REVIEW" if round_kind is None else "ROUND_REVIEW"
+        upcoming = False
+        held: list[str] = []
         if row[4] != "IDLE":
             title, reason, role = (
                 "Re-performance queued for the reviewer agent",
                 "The review opens for decisions once the agent has re-performed the testing.",
                 "AGENT",
             )
+            bucket, held = _agent_turn(automated)
+            upcoming = bucket == "UPCOMING"
             ready = False
+        elif row[5] is None and str(row[12]) == REPERFORM_FAILED:
+            title, reason, role = (
+                "Re-perform the testing for the review again",
+                REPERFORM_FAILED,
+                "REVIEWER",
+            )
+            obligation = "REPERFORMANCE_STOPPED"
+            ready = True
         elif proposed:
             title, reason, role = (
                 f"Decide {proposed} reviewer note{'' if proposed == 1 else 's'} on {what}",
@@ -509,6 +705,7 @@ def _reviews(
             QueueItem(
                 id=f"review:{row[0]}",
                 kind="review",
+                obligation=obligation,
                 source=QueueSource(type="control_review", id=UUID(str(row[0]))),
                 stage="REVIEW",
                 control_id=control_id,
@@ -521,12 +718,82 @@ def _reviews(
                 owner=QueueOwner(role=role),  # type: ignore[arg-type]
                 authorized=authorized,
                 ready=ready,
-                blockers=[] if ready else [reason],
-                bucket=_bucket(authorized, ready, role),
+                blockers=held if ready or upcoming else held or [reason],
+                bucket=_bucket(authorized, ready, role, upcoming),
                 link=_control_link(control_id, "REVIEW"),
                 at=row[9],
             )
         )
+    return found
+
+
+def _coverage(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    viewer: _Viewer,
+    refs: dict[UUID, str],
+    controls: dict[UUID, Any],
+) -> list[QueueItem]:
+    """A signed-off review whose coverage of later work is unassessed: the reviewer
+    documents that it covers the current versions, or that a review is required
+    (control_reviews.assess_coverage); the gap is the journey's own finding."""
+    gaps: dict[UUID, list[Any]] = {}
+    for control in controls.values():
+        if control.journey is None or control.final:
+            continue
+        for reason in control.not_final:
+            if reason.kind == "REVIEW" and any(mark in reason.text for mark in _COVERAGE_TEXTS):
+                gaps.setdefault(control.id, []).append(reason)
+    if not gaps:
+        return []
+    signed: dict[tuple[UUID, str | None], tuple[UUID, Any]] = {}
+    for row in connection.execute(
+        """
+        SELECT DISTINCT ON (r.engagement_control_id, t.kind)
+               r.id, r.engagement_control_id, t.kind, r.signed_at, r.test_round_id
+        FROM control_reviews r LEFT JOIN test_rounds t ON t.id = r.test_round_id
+        WHERE r.project_id = %s AND r.status = 'SIGNED_OFF'
+        ORDER BY r.engagement_control_id, t.kind, r.signed_at DESC
+        """,
+        (project_id,),
+    ).fetchall():
+        kind = None if row[2] is None else str(row[2])
+        signed[(UUID(str(row[1])), kind)] = (UUID(str(row[0])), row)
+    found: list[QueueItem] = []
+    for control_id, reasons in gaps.items():
+        done: set[UUID] = set()
+        for reason in reasons:
+            phase = str(reason.phase) if reason.phase is not None else "INTERIM"
+            kind = phase if phase in ("ROLLFORWARD", "RETEST") else None
+            match = signed.get((control_id, kind))
+            if match is None or match[0] in done:
+                continue
+            review_id, row = match
+            done.add(review_id)
+            authorized = viewer.may_review(control_id)
+            found.append(
+                QueueItem(
+                    id=f"coverage:{review_id}",
+                    kind="coverage",
+                    obligation="COVERAGE_ASSESSMENT",
+                    source=QueueSource(type="control_review", id=review_id),
+                    stage="REVIEW",
+                    control_id=control_id,
+                    control_ref=refs.get(control_id),
+                    phase=phase,
+                    round_id=None if row[4] is None else UUID(str(row[4])),
+                    round_kind=kind,
+                    title="Assess whether the signed-off review covers the current work",
+                    reason=f"{reason.text}. The reviewer records that it covers the current "
+                    "versions, or that a review is required.",
+                    owner=QueueOwner(role="REVIEWER"),
+                    authorized=authorized,
+                    blocks=True,
+                    bucket=_bucket(authorized, True, "REVIEWER"),
+                    link=_control_link(control_id, "REVIEW"),
+                    at=row[3],
+                )
+            )
     return found
 
 
@@ -543,9 +810,36 @@ def _rounds(
     found: list[QueueItem] = []
     for item in rounds(connection, project_id):
         by_id[item.id] = item
-        if item.status not in ("REQUESTED", "TESTING") or item.basis is None:
+        if item.status not in ("REQUESTED", "TESTING"):
             continue
-        if not item.basis.stale:
+        holds = _upcoming_holds(list(item.readiness_blockers))
+        if item.readiness_state == "NOT_READY" and holds:
+            # The round is open but its window or release has not come: upcoming, no
+            # one's action. Dropped later when the round's samples or basis, or the
+            # control's step on this phase, already carry the hold.
+            found.append(
+                QueueItem(
+                    id=f"round:{item.id}",
+                    kind="round",
+                    obligation="ROUND_WINDOW",
+                    source=QueueSource(type="test_round", id=item.id),
+                    stage="TESTING",
+                    control_id=item.control_id,
+                    control_ref=refs.get(item.control_id, item.control_ref),
+                    phase=item.kind,
+                    round_id=item.id,
+                    round_kind=item.kind,
+                    title=f"{_round_word(item.kind).capitalize()} testing not due yet",
+                    reason=holds[0],
+                    owner=QueueOwner(role="NONE"),
+                    authorized=False,
+                    ready=False,
+                    blockers=holds,
+                    bucket="UPCOMING",
+                    link=_control_link(item.control_id, "TEST"),
+                )
+            )
+        if item.basis is None or not item.basis.stale:
             continue
         authorized = viewer.may_prepare(assigned.get(item.control_id))
         reconstructed = item.basis.source == "RECONSTRUCTED"
@@ -553,6 +847,7 @@ def _rounds(
             QueueItem(
                 id=f"round-basis:{item.id}",
                 kind="round-basis",
+                obligation="ROUND_BASIS",
                 source=QueueSource(type="test_round", id=item.id),
                 stage="TESTING",
                 control_id=item.control_id,
@@ -615,6 +910,7 @@ def _samples(
             QueueItem(
                 id=f"samples:{row[0]}",
                 kind="samples",
+                obligation="SAMPLES_APPROVAL",
                 source=QueueSource(type="control_test", id=UUID(str(row[0]))),
                 stage="TESTING",
                 control_id=control_id,
@@ -631,7 +927,7 @@ def _samples(
                 authorized=authorized,
                 ready=ready,
                 blockers=blockers,
-                bucket=_bucket(authorized, ready, "PREPARER"),
+                bucket=_bucket(authorized, ready, "PREPARER", bool(_upcoming_holds(blockers))),
                 link=_control_link(control_id, "TEST"),
                 at=row[4],
             )
@@ -662,6 +958,7 @@ def _runs(
             QueueItem(
                 id=f"run-stopped:{row[0]}",
                 kind="run-stopped",
+                obligation="TESTING_RUN_STOPPED",
                 source=QueueSource(type="test_sheet", id=UUID(str(row[0]))),
                 stage="TESTING",
                 control_id=control_id,
@@ -675,6 +972,199 @@ def _runs(
                 authorized=authorized,
                 bucket=_bucket(authorized, True, "PREPARER"),
                 link=_control_link(control_id, "TEST"),
+            )
+        )
+    return found
+
+
+def _drafts(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    viewer: _Viewer,
+    refs: dict[UUID, str],
+    assigned: dict[UUID, set[UUID]],
+) -> list[QueueItem]:
+    """A workpaper draft the agent gave up on (workpaper_service.fail_draft): a person
+    starts it again. An agent execution failure, not a testing result."""
+    from ai_workforce_api.workpaper_service import DRAFT_FAILED
+
+    found: list[QueueItem] = []
+    for row in connection.execute(
+        """
+        SELECT id, engagement_control_id, stage, updated_at FROM workpapers
+        WHERE project_id = %s AND status = 'DRAFT' AND draft_status = 'IDLE'
+          AND draft_note = %s
+        ORDER BY updated_at
+        """,
+        (project_id, DRAFT_FAILED),
+    ).fetchall():
+        control_id = UUID(str(row[1]))
+        stage = str(row[2])
+        authorized = viewer.may_prepare(assigned.get(control_id))
+        step = "PLAN" if stage == "DESIGN" else "CONCLUDE"
+        found.append(
+            QueueItem(
+                id=f"draft-stopped:{row[0]}",
+                kind="draft-stopped",
+                obligation="WORKPAPER_DRAFT_STOPPED",
+                source=QueueSource(type="workpaper", id=UUID(str(row[0]))),
+                stage="PLANS" if stage == "DESIGN" else "TESTING",
+                control_id=control_id,
+                control_ref=refs.get(control_id),
+                phase="DESIGN" if stage == "DESIGN" else None,
+                title=f"Draft the {stage.lower().replace('_', ' ')} workpaper again",
+                reason=DRAFT_FAILED,
+                owner=QueueOwner(role="PREPARER"),
+                authorized=authorized,
+                bucket=_bucket(authorized, True, "PREPARER"),
+                link=_control_link(control_id, step),
+                at=row[3],
+            )
+        )
+    return found
+
+
+def _evidence_reviews(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    viewer: _Viewer,
+    refs: dict[UUID, str],
+    assigned: dict[UUID, set[UUID]],
+) -> list[QueueItem]:
+    """Evidence the agent reviewed for sufficiency, or could not: a person accepts or
+    overrides the proposed conclusion (evidence_review.decide)."""
+    found: list[QueueItem] = []
+    for row in connection.execute(
+        """
+        SELECT r.id, r.engagement_control_id, r.status, r.proposed, r.note, f.file_name,
+               r.pbc_request_id, r.created_at
+        FROM evidence_reviews r JOIN evidence_files f ON f.id = r.evidence_file_id
+        WHERE r.project_id = %s AND r.decision IS NULL
+        ORDER BY r.created_at
+        """,
+        (project_id,),
+    ).fetchall():
+        control_id = None if row[1] is None else UUID(str(row[1]))
+        authorized = viewer.may_prepare(
+            assigned.get(control_id) if control_id is not None else None
+        )
+        proposed = str(row[3]).replace("_", " ").lower()
+        reason = (
+            f"The evidence agent proposes: {proposed}. A person accepts or overrides it."
+            if str(row[2]) == "READY"
+            else f"The agent could not review it: {str(row[4]) or 'no reason recorded'}. "
+            "A person concludes."
+        )
+        query = {"tab": "mailbox"}
+        if row[6] is not None:
+            query["request"] = str(row[6])
+        found.append(
+            QueueItem(
+                id=f"evidence-review:{row[0]}",
+                kind="evidence-review",
+                obligation="EVIDENCE_SUFFICIENCY",
+                source=QueueSource(type="evidence_review", id=UUID(str(row[0]))),
+                stage="EVIDENCE",
+                control_id=control_id,
+                control_ref=None if control_id is None else refs.get(control_id),
+                title=f"Decide the sufficiency of {row[5]}",
+                reason=reason,
+                owner=QueueOwner(role="PREPARER"),
+                authorized=authorized,
+                bucket=_bucket(authorized, True, "PREPARER"),
+                link=QueueLink(section="evidence", query=query),
+                at=row[7],
+            )
+        )
+    return found
+
+
+def _deficiencies(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    viewer: _Viewer,
+    refs: dict[UUID, str],
+    assigned: dict[UUID, set[UUID]],
+    rounds_by_id: dict[UUID, Any],
+) -> list[QueueItem]:
+    """Remediation and retest of a logged deficiency (workspace._progress): starting
+    remediation is the preparer's; the fix itself waits on the control owner; a retest
+    with an open round is that round's own items, so it is not repeated here."""
+    retesting = {
+        item.deficiency_id
+        for item in rounds_by_id.values()
+        if item.kind == "RETEST" and item.status in ("REQUESTED", "TESTING")
+    }
+    found: list[QueueItem] = []
+    for row in connection.execute(
+        """
+        SELECT id, reference, title, status, engagement_control_id, remediation_owner,
+               remediation_due, retest_result, updated_at
+        FROM deficiencies WHERE project_id = %s
+          AND status IN ('OPEN', 'REMEDIATION_IN_PROGRESS', 'READY_FOR_RETEST')
+        ORDER BY reference
+        """,
+        (project_id,),
+    ).fetchall():
+        deficiency_id = UUID(str(row[0]))
+        status = str(row[3])
+        control_id = None if row[4] is None else UUID(str(row[4]))
+        owner_name = str(row[5] or "").strip()
+        due = row[6]
+        if status == "READY_FOR_RETEST" and deficiency_id in retesting:
+            continue
+        authorized = viewer.may_prepare(
+            assigned.get(control_id) if control_id is not None else None
+        )
+        if status == "OPEN":
+            title = f"Start the remediation of {row[1]}: {row[2]}"
+            reason = "Logged from the testing; the control owner fixes it before any retest."
+            role: Role = "PREPARER"
+            obligation = "DEFICIENCY_REMEDIATION"
+        elif status == "REMEDIATION_IN_PROGRESS":
+            title = f"Remediation of {row[1]} in progress: record the date the fix took effect"
+            reason = (
+                f"Retest failed on {row[7] and str(row[7]).lower()}; the control owner fixes it "
+                "again."
+                if str(row[7]) == "FAILED"
+                else "The control owner is fixing it; the retest opens once a person records "
+                "the date the fix took effect."
+            )
+            if due is not None:
+                reason += f" Due {due.isoformat()}."
+            role = "CLIENT"
+            obligation = "DEFICIENCY_REMEDIATION"
+            authorized = False
+        else:
+            title = f"Record the retest result of {row[1]}"
+            reason = (
+                "No retest round is open: a person records whether the fixed control "
+                "operated, with its evidence."
+            )
+            role = "PREPARER"
+            obligation = "DEFICIENCY_RETEST"
+        link = (
+            _control_link(control_id, "CONCLUDE")
+            if control_id is not None
+            else QueueLink(section="deficiencies")
+        )
+        found.append(
+            QueueItem(
+                id=f"deficiency:{deficiency_id}",
+                kind="deficiency",
+                obligation=obligation,
+                source=QueueSource(type="deficiency", id=deficiency_id),
+                stage="TESTING",
+                control_id=control_id,
+                control_ref=None if control_id is None else refs.get(control_id),
+                phase="REMEDIATION" if status != "READY_FOR_RETEST" else "RETEST",
+                title=title,
+                reason=reason,
+                owner=QueueOwner(role=role, names=[owner_name] if owner_name else []),
+                authorized=authorized,
+                bucket=_bucket(authorized, True, role),
+                link=link,
+                at=row[8],
             )
         )
     return found
@@ -713,6 +1203,7 @@ def _requests(
             QueueItem(
                 id=f"request-draft:{row[0]}",
                 kind="request-draft",
+                obligation="REQUEST_DRAFT_APPROVAL",
                 source=QueueSource(type="pbc_request", id=UUID(str(row[0]))),
                 stage="EVIDENCE",
                 control_id=control_id,
@@ -756,6 +1247,7 @@ def _reminders(
             QueueItem(
                 id=f"reminder:{row[0]}",
                 kind="reminder",
+                obligation="REMINDER_APPROVAL",
                 source=QueueSource(type="pbc_follow_up", id=UUID(str(row[0]))),
                 stage="EVIDENCE",
                 control_id=control_id,
@@ -794,6 +1286,7 @@ def _replies(
             QueueItem(
                 id=f"reply:{row[0]}",
                 kind="reply",
+                obligation="REPLY_TRIAGE",
                 source=QueueSource(type="inbound_message", id=UUID(str(row[0]))),
                 stage="EVIDENCE",
                 control_id=None if row[6] is None else UUID(str(row[6])),
@@ -837,6 +1330,7 @@ def _tasks(
             QueueItem(
                 id=f"task:{row[0]}",
                 kind="task",
+                obligation="TASK_BLOCKED" if blocked else "TASK_REVIEW",
                 source=QueueSource(type="task", id=UUID(str(row[0]))),
                 stage="TESTING",
                 control_id=control_id,
@@ -863,16 +1357,23 @@ def register_queue(app: FastAPI, settings: Settings) -> None:
         organization_id: UUID,
         project_id: UUID,
         request: Request,
-        bucket: str | None = Query(default=None, pattern="^(MINE|WAITING|BLOCKED)$"),
+        bucket: str | None = Query(default=None, pattern="^(MINE|WAITING|BLOCKED|UPCOMING)$"),
         stage: str | None = Query(default=None, pattern="^[A-Z]{4,8}$"),
         phase: str | None = Query(default=None, pattern="^[A-Z]{5,12}$"),
         control: UUID | None = None,
+        limit: int | None = Query(default=None, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
     ) -> QueueBody:
+        from ai_workforce_api.workspace import automation_of
+
         principal = _session_principal(request)
+        automated = automation_of(settings).available
         try:
             body = _call(
                 settings,
-                lambda connection: queue(connection, principal, organization_id, project_id),
+                lambda connection: queue(
+                    connection, principal, organization_id, project_id, automated
+                ),
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
@@ -885,4 +1386,10 @@ def register_queue(app: FastAPI, settings: Settings) -> None:
             and (phase is None or item.phase == phase)
             and (control is None or item.control_id == control)
         ]
-        return QueueBody(items=items, counts=body.counts, generated_at=body.generated_at)
+        total = len(items)
+        # A page of the filtered list; the counts stay those of the whole queue.
+        if limit is not None or offset:
+            items = items[offset : offset + limit if limit is not None else None]
+        return QueueBody(
+            items=items, counts=body.counts, total=total, generated_at=body.generated_at
+        )
