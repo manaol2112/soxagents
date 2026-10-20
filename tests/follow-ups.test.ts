@@ -2,13 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-  attentionQueue,
   canFollowUpNow,
   followUpNoticeFor,
   followUpWrite,
   latestOutbound,
   parseApprovals,
-  parseEvidence,
   parseEvidenceNotice,
   parseFollowUps,
   parseOutbound,
@@ -162,42 +160,6 @@ describe("follow-up reminders", () => {
     });
     assert.equal(step([sent], [], []), null);
     assert.equal(remindersSent(parseFollowUps([sent]) ?? [], requestId), 1);
-  });
-
-  it("puts due reminders in the decision queue", () => {
-    const queue = attentionQueue({
-      tasks: [],
-      evidence:
-        parseEvidence([
-          {
-            id: requestId,
-            control_ref: "ITGC-AC-01",
-            recipient: "owner@example.com",
-            due_at: "2026-11-01T23:59:00Z",
-            evidence_description: "User access listing.",
-            status: "WAITING_FOR_RESPONSE",
-            attachment_refs: [],
-            version: 2,
-          },
-        ]) ?? [],
-      approvals: [],
-      now,
-      followUps:
-        parseFollowUps([
-          followUp(),
-          followUp({
-            id: "88888888-8888-7888-8888-888888888889",
-            status: "SENT",
-            closed_at: "2026-10-09T10:00:00Z",
-            approval_id: approvalId,
-            outbound_id: approvalId,
-          }),
-        ]) ?? [],
-    });
-    assert.deepEqual(
-      queue.map((item) => [item.kind, item.title]),
-      [["reminder", "ITGC-AC-01"]],
-    );
   });
 
   it("builds reminder writes only from valid ids", () => {

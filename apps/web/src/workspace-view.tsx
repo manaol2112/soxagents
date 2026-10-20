@@ -123,11 +123,9 @@ import { type IconName, UiIcon } from "./ui-icon";
 import { VisitRecorder } from "./visit-recorder";
 import {
   type ApprovalItem,
-  type AttentionItem,
   actionLabel,
   approvalRequestId,
   approvalState,
-  attentionQueue,
   auditPhase,
   canDecide,
   canFollowUpNow,
@@ -771,6 +769,18 @@ function WorkspaceMain({
         organizationId={model.organization.id}
         projectId={model.selectedProject.id}
         consoleHref={sectionHref(model, "console")}
+        work={engagement.work ?? null}
+        filter={engagement.filters.workFilter ?? null}
+        filterHref={(filter) => {
+          const params = new URLSearchParams();
+          params.set("organization", model.organization.id);
+          params.set("project", model.selectedProject?.id ?? "");
+          params.set("section", "overview");
+          if (filter !== "") {
+            params.set("filter", filter);
+          }
+          return `/?${params.toString()}#decision-queue`;
+        }}
       />
     ) : null;
   if (engagement.dashboard?.started === true) {
@@ -966,14 +976,8 @@ function CommandCenter({
   const project = model.selectedProject;
   const evidence = workflow.evidence ?? [];
   const approvals = workflow.approvals ?? [];
-  const queue = attentionQueue({
-    tasks: model.tasks,
-    evidence,
-    approvals,
-    now,
-    inbound: workflow.inbound ?? [],
-    followUps: workflow.followUps ?? [],
-  });
+  // The API's inbox is the engagement's one queue (queue.py): no list is derived here.
+  const queue = workflow.inbox?.waiting ?? [];
   const waiting = pendingApprovals(approvals, now).length;
   const outstanding = evidence.filter(isOutstandingEvidence).length;
   const late = evidence.filter((item) => isLateEvidence(item, now)).length;
@@ -1037,7 +1041,7 @@ function CommandCenter({
           </section>
           <Lifecycle model={model} phase={auditPhase(model.tasks, evidence)} />
           <div className="layout-main">
-            <DecisionQueue model={model} queue={queue} workflow={workflow} />
+            <InboxQueue model={model} items={queue} />
             <ControlLoop model={model} workflow={workflow} waiting={waiting} />
           </div>
           <div className="layout-two">
@@ -1050,44 +1054,6 @@ function CommandCenter({
   );
 }
 
-const QUEUE_META: Record<
-  AttentionItem["kind"],
-  { label: string; icon: IconName; action: string; tone: Tone }
-> = {
-  triage: {
-    label: "Unmatched mail",
-    icon: "mail",
-    action: "Triage",
-    tone: "warning",
-  },
-  reply: { label: "Reply", icon: "mail", action: "Review", tone: "info" },
-  reminder: {
-    label: "Reminder",
-    icon: "clock",
-    action: "Prepare",
-    tone: "warning",
-  },
-  approval: {
-    label: "Approval",
-    icon: "shield",
-    action: "Decide",
-    tone: "info",
-  },
-  blocked: {
-    label: "Blocked",
-    icon: "risk",
-    action: "Unblock",
-    tone: "danger",
-  },
-  evidence: {
-    label: "Evidence",
-    icon: "inbox",
-    action: "Follow up",
-    tone: "warning",
-  },
-  review: { label: "Review", icon: "check", action: "Review", tone: "neutral" },
-};
-
 /** What needs a person now, for the dashboard. */
 function AttentionCard({
   model,
@@ -1098,20 +1064,21 @@ function AttentionCard({
   workflow: WorkflowState;
   now: number;
 }) {
-  // The API's inbox is the one list; the older client-side list stands in only
-  // when it cannot be read.
+  // The API's inbox is the engagement's one queue; nothing is derived here when it
+  // cannot be read.
   if (workflow.inbox !== null) {
     return <InboxQueue model={model} items={workflow.inbox.waiting} />;
   }
-  const queue = attentionQueue({
-    tasks: model.tasks,
-    evidence: workflow.evidence ?? [],
-    approvals: workflow.approvals ?? [],
-    now,
-    inbound: workflow.inbound ?? [],
-    followUps: workflow.followUps ?? [],
-  });
-  return <DecisionQueue model={model} queue={queue} workflow={workflow} />;
+  void now;
+  return (
+    <section id="decision-queue" className="card" aria-labelledby="queue-title">
+      <CardHeader
+        title="Waiting on you"
+        titleId="queue-title"
+        description="The queue could not be read. Reload to try again."
+      />
+    </section>
+  );
 }
 
 const INBOX_META: Record<
@@ -1244,94 +1211,6 @@ function InboxQueue({ model, items }: { model: Ready; items: WaitingItem[] }) {
           <a href={sectionHref(model, "console")}>agent console</a>.
         </p>
       ) : null}
-    </section>
-  );
-}
-
-function DecisionQueue({
-  model,
-  queue,
-  workflow,
-}: {
-  model: Ready;
-  queue: ReturnType<typeof attentionQueue>;
-  workflow: WorkflowState;
-}) {
-  return (
-    <section id="decision-queue" className="card" aria-labelledby="queue-title">
-      <CardHeader
-        title="Waiting on you"
-        titleId="queue-title"
-        description="Approvals, blocked work, late evidence, and reviews that need a person."
-        aside={
-          <span
-            className={`count ${queue.length > 0 ? "tone-danger" : ""}`}
-            role="status"
-            aria-label={`${queue.length} waiting`}
-          >
-            {queue.length}
-          </span>
-        }
-      />
-      {workflow.approvals === null || workflow.evidence === null ? (
-        <div className="card-body">
-          <Banner tone="warning">
-            Some approvals or evidence could not be loaded, so this list may be
-            incomplete.
-          </Banner>
-        </div>
-      ) : null}
-      {queue.length === 0 ? (
-        <div className="queue-clear">
-          <span className="queue-clear-icon" aria-hidden="true">
-            <UiIcon name="check" size={14} />
-          </span>
-          <p>
-            <strong>No approvals, blocked work, or late evidence.</strong>{" "}
-            Drafted requests and proposed samples wait in the agent console's
-            inbox.
-          </p>
-          <a className="text-link" href={sectionHref(model, "console")}>
-            Open the agent console
-          </a>
-        </div>
-      ) : (
-        <ul className="queue">
-          {queue.slice(0, 8).map((item) => {
-            const meta = QUEUE_META[item.kind];
-            const href =
-              item.kind === "approval"
-                ? sectionHref(model, "approvals")
-                : item.kind === "reply" || item.kind === "triage"
-                  ? `${sectionHref(model, "evidence")}&tab=mailbox#replies`
-                  : item.kind === "evidence" || item.kind === "reminder"
-                    ? sectionHref(model, "evidence")
-                    : directoryHref({
-                        section: "tasks",
-                        organizationId: model.organization.id,
-                        projectId: model.selectedProject?.id ?? null,
-                        taskId: item.id,
-                      });
-            return (
-              <li key={`${item.kind}-${item.id}`}>
-                <span className={`queue-icon pill ${toneClass(meta.tone)}`}>
-                  <UiIcon name={meta.icon} size={15} />
-                </span>
-                <span className="queue-copy">
-                  <strong>{item.title}</strong>
-                  <small>
-                    <span className="queue-kind">{meta.label}</span> ·{" "}
-                    {item.detail}
-                  </small>
-                </span>
-                <a className="btn btn-secondary btn-sm" href={href}>
-                  {meta.action}
-                </a>
-              </li>
-            );
-          })}
-        </ul>
-      )}
     </section>
   );
 }

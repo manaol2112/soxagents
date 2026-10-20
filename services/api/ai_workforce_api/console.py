@@ -43,9 +43,7 @@ from ai_workforce_api.console_tools import (
     planned,
     result_text,
 )
-from ai_workforce_api.control_instances import control_label
 from ai_workforce_api.db import connect, independent_steps, transaction
-from ai_workforce_api.evidence_withdrawn import in_force
 from ai_workforce_api.inbound import clean_text
 from ai_workforce_api.model_providers import CLAUDE_CONFIG, chat_provider_for
 from ai_workforce_api.models import (
@@ -1324,164 +1322,46 @@ def _inbox(
     organization_id: UUID,
     project_id: UUID,
 ) -> InboxBody:
+    """What waits on the person, read from the engagement's one queue (queue.py,
+    Milestone 2a) in the inbox's own item shape; the activity is the agents' recent work."""
+    from ai_workforce_api.queue import queue
+
     _person(connection, principal, organization_id, project_id)
     waiting: list[WaitingItem] = []
-    for row in connection.execute(
-        """
-        SELECT a.parameters->>'subject', u.display_name FROM approvals a
-        JOIN users u ON u.id = a.requesting_user_id
-        WHERE a.project_id = %s AND a.decision = 'PENDING' AND a.expires_at > clock_timestamp()
-          AND a.requesting_user_id <> %s
-        ORDER BY a.created_at LIMIT 10
-        """,
-        (project_id, principal.id),
-    ).fetchall():
-        waiting.append(
-            WaitingItem(
-                kind="approval",
-                title="Approve a message",
-                detail=f"{row[0] or 'Evidence request'} · asked by {row[1]}",
-                control_ref=None,
-                link="approvals",
-            )  # fmt: skip
-        )
-    for row in connection.execute(
-        """
-        SELECT c.control_ref, t.sample_size, c.id FROM control_tests t
-        JOIN engagement_controls c ON c.id = t.engagement_control_id
-        WHERE t.project_id = %s AND t.status = 'PROPOSED' ORDER BY c.control_ref LIMIT 10
-        """,
-        (project_id,),
-    ).fetchall():
-        waiting.append(
-            WaitingItem(
-                kind="samples",
-                title=f"Approve samples for {row[0]}",
-                detail=f"{row[1]} samples proposed by the tester",
-                control_ref=row[0],
-                link="controls",
-                control_id=row[2],
-                tab="interim",
-            )  # fmt: skip
-        )
-    for row in connection.execute(
-        """
-        SELECT c.control_ref, f.file_name, v.proposed FROM evidence_reviews v
-        JOIN evidence_files f ON f.id = v.evidence_file_id
-        LEFT JOIN engagement_controls c ON c.id = v.engagement_control_id
-        WHERE v.project_id = %s AND v.decision IS NULL AND NOT """
-        + in_force("f")
-        + """
-        ORDER BY v.created_at LIMIT 10
-        """,
-        (project_id,),
-    ).fetchall():
-        waiting.append(
-            WaitingItem(
-                kind="review",
-                title=f"Sign off the review of {row[1]}",
-                detail=f"Proposed: {str(row[2]).replace('_', ' ').lower()}",
-                control_ref=row[0],
-                link="evidence",
-            )  # fmt: skip
-        )
-    for row in connection.execute(
-        """
-        SELECT c.control_ref, a.name, r.reperform_status, r.reperformed_at,
-               count(*) FILTER (WHERE n.status = 'PROPOSED'),
-               count(*) FILTER (WHERE n.status = 'OPEN'),
-               count(*) FILTER (WHERE n.status = 'RESPONDED')
-        FROM control_reviews r
-        JOIN engagement_controls c ON c.id = r.engagement_control_id
-        LEFT JOIN engagement_applications a ON a.id = c.engagement_application_id
-        LEFT JOIN review_notes n ON n.control_review_id = r.id
-        WHERE r.project_id = %s AND r.status = 'OPEN'
-        GROUP BY r.id, c.control_ref, a.name
-        ORDER BY c.control_ref, a.name NULLS FIRST LIMIT 10
-        """,
-        (project_id,),
-    ).fetchall():
-        label = control_label(str(row[0]), None if row[1] is None else str(row[1]))
-        proposed, open_, responded = int(row[4]), int(row[5]), int(row[6])
-        if row[2] != "IDLE":
+    for item in queue(connection, principal, organization_id, project_id).items:
+        if item.bucket == "WAITING" and item.owner.role == "CLIENT":
+            # Evidence out with the client waits on no one here.
             continue
-        if proposed:
-            title, detail = (
-                f"Decide {_count(proposed, 'reviewer note')} on {label}",
-                "Proposed by the reviewer agent",
+        tab = _QUEUE_TABS.get(item.link.query.get("step", ""), None)
+        kind = _QUEUE_KINDS.get(item.kind, item.kind)
+        if item.kind == "request-draft" and item.blockers:
+            kind = "planning" if "Plan the evidence" in item.blockers[0] else "contacts"
+        if item.kind == "task":
+            kind = "blocked" if not item.ready else "task_review"
+        detail = item.reason
+        if item.blockers:
+            detail = f"{detail + ' · ' if detail else ''}Held by: {item.blockers[0]}"
+        elif item.bucket != "MINE":
+            who = (
+                ", ".join(item.owner.names)
+                if item.owner.names
+                else item.owner.role.lower().replace("_", " ")
             )
-        elif open_:
-            title, detail = (
-                f"Answer {_count(open_, 'review note')} on {label}",
-                "Open for the preparer",
-            )
-        elif responded:
-            title, detail = (
-                f"Clear {_count(responded, 'answered note')} on {label}",
-                "Answered by the preparer",
-            )
-        elif row[3] is not None:
-            title, detail = f"Sign off the review of {label}", "Every note is cleared"
-        else:
-            continue
+            detail = f"{detail + ' · ' if detail else ''}Waits on {who}"
         waiting.append(
             WaitingItem(
-                kind="control_review",
-                title=title,
+                kind=kind,
+                title=(
+                    item.title
+                    if item.control_ref is None or item.kind in ("control-step", "review")
+                    else f"{item.title} ({item.control_ref})"
+                ),
                 detail=detail,
-                control_ref=str(row[0]),
-                link="controls",
-            )  # fmt: skip
-        )
-    waiting.extend(_waiting_elsewhere(connection, project_id))
-    # A kickoff draft held for planning is not ready to submit (evidence_plans): it is
-    # counted apart, with what it waits for.
-    from ai_workforce_api.evidence_plans import reconcile_waiting, unplanned_controls
-
-    held_controls = set(unplanned_controls(connection, project_id))
-    held_controls |= reconcile_waiting(connection, project_id)
-    ready = held = unaddressed = 0
-    for control_id, key, recipient in connection.execute(
-        "SELECT engagement_control_id, operation_key, recipient FROM pbc_requests "
-        "WHERE project_id = %s AND status = 'DRAFT'",
-        (project_id,),
-    ).fetchall():
-        if control_id in held_controls and str(key).startswith(("kickoff-", "scope-")):
-            held += 1
-        elif str(recipient).strip() == "":
-            # No owner email and no coordinator: it cannot be submitted yet.
-            unaddressed += 1
-        else:
-            ready += 1
-    if ready > 0:
-        waiting.append(
-            WaitingItem(
-                kind="drafts",
-                title=f"{_count(ready, 'drafted evidence request')}",
-                detail="Drafted by the evidence coordinator; review and approve each request",
-                control_ref=None,
-                link="evidence",
-            )  # fmt: skip
-        )
-    if unaddressed > 0:
-        waiting.append(
-            WaitingItem(
-                kind="contacts",
-                title=f"{_count(unaddressed, 'drafted request')} without a recipient",
-                detail="Assign the evidence coordinator to enable approval",
-                control_ref=None,
-                link="evidence",
-            )  # fmt: skip
-        )
-    if held > 0:
-        waiting.append(
-            WaitingItem(
-                kind="planning",
-                title=f"{_count(held, 'request')} drafted before evidence planning",
-                detail="Plan the evidence, then reconcile each kickoff draft with its plan",
-                control_ref=None,
-                link="overview",
-            )  # fmt: skip
+                control_ref=item.control_ref,
+                link="mailbox" if item.link.query.get("tab") == "mailbox" else item.link.section,
+                control_id=item.control_id if item.link.section == "controls" else None,
+                tab=tab if item.link.section == "controls" else None,
+            )
         )
     activity: list[ActivityItem] = []
     for row in connection.execute(
@@ -1512,6 +1392,30 @@ def _inbox(
             )
         )
     return InboxBody(waiting=waiting, activity=activity)
+
+
+# The queue's kinds in the inbox's older names, which the web's inbox labels know.
+_QUEUE_KINDS: dict[str, str] = {
+    "approval": "approval",
+    "samples": "samples",
+    "review": "control_review",
+    "request-draft": "drafts",
+    "reminder": "reminders",
+    "reply": "replies",
+    "run-stopped": "results",
+    "control-step": "results",
+    "impact": "planning",
+    "round-basis": "results",
+    "setup": "setup",
+}
+# The guided step a queue link opens, as the classic tab the inbox links carried.
+_QUEUE_TABS: dict[str, str] = {
+    "plan": "design",
+    "request": "evidence",
+    "test": "interim",
+    "conclude": "findings",
+    "review": "review",
+}
 
 
 def _count(n: int, noun: str) -> str:

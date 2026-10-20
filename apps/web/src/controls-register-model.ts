@@ -25,6 +25,7 @@ import {
   STAGES,
 } from "./engagement-model.ts";
 import type { Automation } from "./execution-model.ts";
+import type { QueueItem } from "./queue-model.ts";
 
 type Filters = EngagementState["filters"];
 export type Sort = Filters["sort"];
@@ -545,11 +546,13 @@ export type ActionItem = {
   title: string;
   detail: string;
   count: number;
-  /** Where it is done: a register view, the Approvals page, or the Evidence page. */
+  /** Where it is done: a register view, the Approvals page, the Evidence page, or the
+   * engagement's queue with a filter. */
   to:
     | { kind: "view"; change: Partial<RegisterView> }
     | { kind: "approvals" }
-    | { kind: "evidence" };
+    | { kind: "evidence" }
+    | { kind: "queue"; filter: string };
   /** The drafted requests to submit together, when the viewer may. */
   batch: Array<{ requestId: string; version: number }> | null;
   tone: "action" | "alert";
@@ -561,156 +564,110 @@ const plural = (count: number, one: string, many = `${one}s`) =>
 /** What needs a person across the register, most pressing first, each once: a batch of
  * drafted requests is one item, not one per control. Only what the records show and the
  * viewer may do (canSubmit: may submit requests for approval). */
-export function actionCenter(
+/** The register's "needs attention" card, from the engagement's one queue (M2a): the
+ * viewer's own items on the controls shown, one line per kind, plus the drafted requests
+ * to submit together when the viewer may. Nothing is derived from the rows. */
+export function actionCenterFromQueue(
+  items: readonly QueueItem[],
   controls: readonly ControlRow[],
   canSubmit: boolean,
 ): ActionItem[] {
-  const items: ActionItem[] = [];
-  const drafted = controls.filter((control) => control.drafted);
-  const draftRequests = drafted.flatMap((control) =>
-    control.requests.filter((request) => request.status === "DRAFT"),
+  const shown = new Set(controls.map((control) => control.id));
+  const mine = items.filter(
+    (item) =>
+      item.bucket === "MINE" &&
+      (item.controlId === null || shown.has(item.controlId)),
   );
-  if (draftRequests.length > 0 && canSubmit) {
-    items.push({
-      key: "drafted",
-      title: `Submit ${plural(draftRequests.length, "drafted evidence request")} for approval`,
-      detail: `On ${plural(drafted.length, "control")}. Each still goes to an approver, who checks its exact message before anything is sent.`,
-      count: draftRequests.length,
-      to: { kind: "evidence" },
-      batch: draftRequests.map((request) => ({
-        requestId: request.id,
-        version: request.version,
-      })),
-      tone: "action",
-    });
-  }
-  const approving = controls.filter(
-    (control) => control.yours && control.actor === "APPROVER",
-  );
-  if (approving.length > 0) {
-    items.push({
-      key: "approve",
-      title: `Approve evidence requests on ${plural(approving.length, "control")}`,
-      detail: "Each message is checked and approved on the Approvals page.",
-      count: approving.length,
-      to: { kind: "approvals" },
-      batch: null,
-      tone: "action",
-    });
-  }
-  const mine = (progress: Progress[]) =>
-    controls.filter(
-      (control) =>
-        control.yours &&
-        control.actor !== "APPROVER" &&
-        progress.includes(control.progress),
+  const found: ActionItem[] = [];
+  const drafted = mine.filter((item) => item.kind === "request-draft");
+  if (drafted.length > 0 && canSubmit) {
+    const versions = new Map(
+      controls.flatMap((control) =>
+        control.requests.map(
+          (request) => [request.id, request.version] as const,
+        ),
+      ),
     );
-  const confirm = mine(["RESULTS_TO_CONFIRM"]);
-  if (confirm.length > 0) {
-    items.push({
-      key: "confirm",
-      title: `Confirm the testing of ${plural(confirm.length, "control")}`,
-      detail: "Agent results to confirm, or workpapers to prepare.",
-      count: confirm.length,
-      to: {
-        kind: "view",
-        change: { queue: "team", stage: ["RESULTS_TO_CONFIRM"] },
-      },
-      batch: null,
+    const batch = drafted.flatMap((item) => {
+      const version = versions.get(item.source.id);
+      return version === undefined
+        ? []
+        : [{ requestId: item.source.id, version }];
+    });
+    const onControls = new Set(drafted.map((item) => item.controlId)).size;
+    found.push({
+      key: "drafted",
+      title: `Submit ${plural(drafted.length, "drafted evidence request")} for approval`,
+      detail: `On ${plural(onControls, "control")}. Each still goes to an approver, who checks its exact message before anything is sent.`,
+      count: drafted.length,
+      to: { kind: "evidence" },
+      batch,
       tone: "action",
     });
   }
-  const review = mine(["AWAITING_REVIEW", "REVIEW_NOTES"]);
-  if (review.length > 0) {
-    items.push({
-      key: "review",
-      title: `Review or answer notes on ${plural(review.length, "control")}`,
-      detail: "Independent review sign-offs and notes that are yours.",
-      count: review.length,
-      to: {
-        kind: "view",
-        change: { queue: "team", stage: ["AWAITING_REVIEW", "REVIEW_NOTES"] },
-      },
+  const KINDS: Array<[string, string, string]> = [
+    [
+      "approval",
+      "Approve evidence requests",
+      "Each message is checked and approved on the Approvals page.",
+    ],
+    [
+      "impact",
+      "Decide the impact of plan revisions",
+      "Signed-off results are not relied on until decided.",
+    ],
+    [
+      "samples",
+      "Approve proposed samples",
+      "Testing starts only after a person approves them.",
+    ],
+    [
+      "round-basis",
+      "Confirm a round's testing basis",
+      "The plan changed, or the basis was reconstructed.",
+    ],
+    ["run-stopped", "Run the tester again", "A run stopped before finishing."],
+    [
+      "review",
+      "Decide or answer review notes",
+      "Independent review work that is yours.",
+    ],
+    [
+      "control-step",
+      "Take the next step on a control",
+      "The control's own next action.",
+    ],
+    [
+      "reminder",
+      "Approve due reminders",
+      "They go to the evidence owners once approved.",
+    ],
+    [
+      "reply",
+      "Read the client's replies",
+      "Replies and unmatched emails in the mailbox.",
+    ],
+    ["task", "Clear a blocked task", "Plan tasks that wait on a person."],
+  ];
+  for (const [kind, title, detail] of KINDS) {
+    const of = mine.filter((item) => item.kind === kind);
+    if (of.length === 0) {
+      continue;
+    }
+    found.push({
+      key: kind,
+      title: `${title} (${of.length})`,
+      detail: of.length === 1 ? (of[0]?.title ?? detail) : detail,
+      count: of.length,
+      to:
+        kind === "approval"
+          ? { kind: "approvals" }
+          : { kind: "queue", filter: `bucket:MINE` },
       batch: null,
-      tone: "action",
+      tone: of.some((item) => item.blocks) ? "alert" : "action",
     });
   }
-  const evidence = mine(["EVIDENCE_RECEIVED", "READY_FOR_TESTING"]);
-  if (evidence.length > 0) {
-    items.push({
-      key: "evidence",
-      title: `Move ${plural(evidence.length, "control")} on to testing`,
-      detail: "Populations to accept, samples to approve, or files to link.",
-      count: evidence.length,
-      to: {
-        kind: "view",
-        change: {
-          queue: "team",
-          stage: ["EVIDENCE_RECEIVED", "READY_FOR_TESTING"],
-        },
-      },
-      batch: null,
-      tone: "action",
-    });
-  }
-  const missing = controls.filter((control) =>
-    blockersOf(control).some(
-      (reason) =>
-        reason !== "Agent work stopped" && reason !== "Evidence overdue",
-    ),
-  );
-  if (missing.length > 0) {
-    items.push({
-      key: "missing",
-      title: `Settle what stops ${plural(missing.length, "control")} from being tested`,
-      detail:
-        "Missing information, process understanding, or sources that disagree.",
-      count: missing.length,
-      to: { kind: "view", change: { queue: "blocked" } },
-      batch: null,
-      tone: "alert",
-    });
-  }
-  const stopped = controls.filter(agentStopped);
-  if (stopped.length > 0) {
-    items.push({
-      key: "stopped",
-      title: `Restart agent work on ${plural(stopped.length, "control")}`,
-      detail:
-        "Testing, a draft, a re-performance, or a file read that did not finish.",
-      count: stopped.length,
-      to: { kind: "view", change: { queue: "stopped" } },
-      batch: null,
-      tone: "alert",
-    });
-  }
-  const overdue = controls.filter((control) => control.overdue);
-  if (overdue.length > 0) {
-    items.push({
-      key: "overdue",
-      title: `Chase overdue evidence on ${plural(overdue.length, "control")}`,
-      detail: "Requests past their due date with the owner.",
-      count: overdue.length,
-      to: { kind: "view", change: { queue: "overdue" } },
-      batch: null,
-      tone: "alert",
-    });
-  }
-  const exceptions = controls.filter(
-    (control) => control.exceptions && control.progress !== "CONCLUDED",
-  );
-  if (exceptions.length > 0) {
-    items.push({
-      key: "exceptions",
-      title: `Review exceptions on ${plural(exceptions.length, "control")}`,
-      detail: "Exceptions in testing or open deficiencies.",
-      count: exceptions.length,
-      to: { kind: "view", change: { queue: "findings" } },
-      batch: null,
-      tone: "alert",
-    });
-  }
-  return items;
+  return found;
 }
 
 export type AgentSummary = {

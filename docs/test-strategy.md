@@ -137,3 +137,12 @@ and `workflow-model` (queue sources).
   whole Node set **703 passed**; type checks clean; lint clean except the known
   `biome.json` line endings. The acceptance walkthrough itself ran the twelve stages
   through the API on an isolated database (docs/acceptance-walkthrough.md).
+- M2a (the engagement's one queue; `queue.py`, the console inbox built from it;
+  `test_queue.py` added to the fast and critical sets): `make test-critical` **358 passed,
+  0 failed in 4 min 45 s**; `make test-fast` **87 Python passed in 2 min 4 s and 108 Node
+  passed**; the whole Node set **706 passed**; type checks clean; lint clean except the
+  known `biome.json` line endings. Expectations rewritten for the one queue: the inbox
+  lists one item per drafted request instead of a count (`test_evidence_flow`, two
+  assertions); the client-side `attentionQueue` tests retired with the function, their
+  cases now covered by `test_queue.py` and `queue-model.test.ts`; the register's action
+  center tests rewritten for `actionCenterFromQueue`.

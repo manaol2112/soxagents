@@ -6,7 +6,7 @@ Source specification: AI Employee Workforce Cursor Build Plan.
 
 ## Current milestone
 
-**Milestone 2: consolidate the auditor experience.** Plan written for the product owner's review ([milestone-2-plan.md](milestone-2-plan.md)): one canonical queue, the Testing destination, Reports and Settings, six-item navigation, retirement of the client-side derivations and the classic view only after validation. No Milestone 2 code until the plan is approved.
+**Milestone 2a: the engagement's one queue.** Architecture approved and M2a authorized by the product owner ([milestone-2-plan.md §11](milestone-2-plan.md)). Complete, pending review; no migration; one read-only route (`GET …/queue`). Home, the agent console's inbox and the register read the same list; the client-side queue derivations are deleted. M2b–M2d are not started.
 
 **Milestone 1 accepted (M1a–M1d, commits 4e1987f, 1574154, 71e38e7).** Before Milestone 2: the acceptance walkthrough of one control's full lifecycle ([acceptance-walkthrough.md](acceptance-walkthrough.md), screenshots in `docs/review/acceptance/`) and three follow-ups, pending the owner's review: the classic next-action panel consumes the canonical next step; a round records an explicit testing basis that a person confirms when the plan changes (migration 0093, `POST …/test-rounds/{id}/basis`); a tester run that stops leaves its note and activity, kept apart from testing failures.
 

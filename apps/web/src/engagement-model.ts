@@ -21,6 +21,7 @@ import type { EvidencePlan } from "./evidence-plan-model.ts";
 import type { Automation } from "./execution-model.ts";
 import type { NextSteps } from "./home-model.ts";
 import type { ImpactAssessment } from "./impact-model.ts";
+import type { Queue as WorkQueue } from "./queue-model.ts";
 import type { ControlReview, ReviewNotice } from "./review-model.ts";
 import type { Signoff } from "./signoff-model.ts";
 import type { TestBasis } from "./test-basis-model.ts";
@@ -615,6 +616,8 @@ export type EngagementState = {
   impact?: ImpactAssessment[] | null;
   /** Whether an agent worker will pick up queued runs (M1d); null when unknown. */
   automation?: Automation | null;
+  /** The engagement's one queue of work (M2a); null when not loaded. */
+  work?: WorkQueue | null;
   /** The engagement's journey and what waits on the team (next_steps.py), for Home. */
   nextSteps?: NextSteps | null;
   notice: EngagementNotice | null;
@@ -629,6 +632,8 @@ export type EngagementState = {
     tab: string | null;
     /** The guided workspace's step (?step=), when a link names one. */
     step: string | null;
+    /** The queue's filter on Home (?filter=bucket:MINE,stage:REVIEW,phase:RETEST). */
+    workFilter?: string | null;
     /** The Evidence tab's view (?ev=) and the request opened in it (?request=). */
     evidenceView?: string | null;
     request?: string | null;

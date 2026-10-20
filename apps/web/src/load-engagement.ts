@@ -20,6 +20,7 @@ import { parseAutomation } from "./execution-model";
 import { parseNextSteps } from "./home-model";
 import { parseImpact } from "./impact-model";
 import { apiGet, sessionToken } from "./load-workspace";
+import { parseQueue } from "./queue-model";
 import { parseRequestDetails } from "./request-details-model";
 import {
   parseReviews as parseControlReviews,
@@ -82,6 +83,8 @@ export async function loadEngagement(
     workpaperVersion?: string | null;
     ev?: string | null;
     request?: string | null;
+    /** The queue filter on Home (?filter=). */
+    filter?: string | null;
   },
 ): Promise<EngagementState> {
   if (model.status !== "ready" || model.selectedProject === null) {
@@ -116,6 +119,7 @@ export async function loadEngagement(
     nextSteps,
     impact,
     automation,
+    work,
     controls,
     plan,
     deficiencies,
@@ -138,6 +142,9 @@ export async function loadEngagement(
     open ? apiGet(`${base}/impact`, session) : null,
     section === "controls"
       ? apiGet(`${base}/workspace/automation`, session)
+      : null,
+    wanted.dashboard || section === "controls" || section === "console"
+      ? apiGet(`${base}/queue`, session)
       : null,
     wanted.controls ? apiGet(`${base}/workspace/controls`, session) : null,
     wanted.plan ? apiGet(`${base}/workspace/plan`, session) : null,
@@ -237,6 +244,7 @@ export async function loadEngagement(
     impact: ok(impact) === undefined ? null : parseImpact(ok(impact)),
     automation:
       ok(automation) === undefined ? null : parseAutomation(ok(automation)),
+    work: ok(work) === undefined ? null : parseQueue(ok(work)),
     nextSteps:
       ok(nextSteps) === undefined ? null : parseNextSteps(ok(nextSteps)),
     controls: ok(controls) === undefined ? null : parseControls(ok(controls)),
@@ -280,6 +288,11 @@ export async function loadEngagement(
         query.step !== undefined &&
         /^[a-z]{1,10}$/.test(query.step)
           ? query.step
+          : null,
+      workFilter:
+        typeof query.filter === "string" &&
+        /^[A-Za-z:,_-]{1,80}$/.test(query.filter)
+          ? query.filter
           : null,
       evidenceView:
         query.ev != null && /^[a-z]{1,20}$/.test(query.ev) ? query.ev : null,

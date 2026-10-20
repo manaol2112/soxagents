@@ -8,7 +8,7 @@ import {
   parseSubmitResult,
 } from "../apps/web/src/controls-batch-model.ts";
 import {
-  actionCenter,
+  actionCenterFromQueue,
   agentSummary,
   agentText,
   countLine,
@@ -29,6 +29,7 @@ import {
   overallState,
   parseControls,
 } from "../apps/web/src/engagement-model.ts";
+import type { QueueItem } from "../apps/web/src/queue-model.ts";
 
 function row(id: string, overrides: Partial<ControlRow> = {}): ControlRow {
   return {
@@ -166,44 +167,88 @@ describe("the overview's progress", () => {
 });
 
 describe("the action center", () => {
+  const item = (over: Partial<QueueItem> = {}): QueueItem => ({
+    id: "samples:t1",
+    kind: "samples",
+    source: { type: "control_test", id: "t1" },
+    stage: "TESTING",
+    controlId: register[0]?.id ?? "a",
+    controlRef: "ITGC-AC-01",
+    phase: "INTERIM",
+    roundId: null,
+    roundKind: null,
+    title: "Approve the samples",
+    reason: "",
+    owner: { role: "PREPARER", names: [] },
+    authorized: true,
+    ready: true,
+    blockers: [],
+    blocks: false,
+    bucket: "MINE",
+    link: { section: "controls", query: {} },
+    at: null,
+    ...over,
+  });
+
   it("says a batch of drafted requests once, with what to submit, only for who may", () => {
-    const items = actionCenter(register, true);
-    const drafted = items.find((item) => item.key === "drafted");
-    assert.ok(drafted);
+    const drafted = register.flatMap((control) =>
+      control.requests
+        .filter((request) => request.status === "DRAFT")
+        .map((request) =>
+          item({
+            id: `request-draft:${request.id}`,
+            kind: "request-draft",
+            source: { type: "pbc_request", id: request.id },
+            controlId: control.id,
+          }),
+        ),
+    );
+    const items = actionCenterFromQueue(drafted, register, true);
+    const batch = items.find((entry) => entry.key === "drafted");
+    assert.ok(batch);
     assert.equal(
-      drafted.title,
+      batch.title,
       "Submit 2 drafted evidence requests for approval",
     );
-    assert.deepEqual(drafted.batch, [
+    assert.deepEqual(batch.batch, [
       { requestId: "r1", version: 3 },
       { requestId: "r2", version: 3 },
     ]);
-    // Someone who may not submit is not offered it.
     assert.equal(
-      actionCenter(register, false).some((item) => item.key === "drafted"),
+      actionCenterFromQueue(drafted, register, false).some(
+        (entry) => entry.key === "drafted",
+      ),
       false,
     );
   });
 
-  it("lists only what the records show, each where it is done", () => {
-    const keys = actionCenter(register, true).map((item) => item.key);
-    assert.deepEqual(keys, [
-      "drafted",
-      "approve",
-      "confirm",
-      "missing",
-      "stopped",
-      "overdue",
-    ]);
-    const approve = actionCenter(register, true).find(
-      (item) => item.key === "approve",
+  it("lists only the viewer's items on the controls shown, one line per kind", () => {
+    const items = actionCenterFromQueue(
+      [
+        item(),
+        item({ id: "samples:t2", source: { type: "control_test", id: "t2" } }),
+        item({ id: "approval:a1", kind: "approval" }),
+        item({
+          id: "review:r1",
+          kind: "review",
+          bucket: "WAITING",
+          authorized: false,
+        }),
+        item({ id: "samples:t9", controlId: "not-shown" }),
+      ],
+      register,
+      true,
     );
-    assert.deepEqual(approve?.to, { kind: "approvals" });
-    // Nothing to do: nothing listed.
     assert.deepEqual(
-      actionCenter([row("x", { progress: "CONCLUDED" })], true),
-      [],
+      items.map((entry) => [entry.key, entry.count]),
+      [
+        ["approval", 1],
+        ["samples", 2],
+      ],
     );
+    assert.deepEqual(items[0]?.to, { kind: "approvals" });
+    assert.deepEqual(items[1]?.to, { kind: "queue", filter: "bucket:MINE" });
+    assert.deepEqual(actionCenterFromQueue([], register, true), []);
   });
 });
 

@@ -7,6 +7,8 @@ import {
   stepHref,
   stepsByStage,
 } from "./home-model";
+import { parseQueueFilter, type Queue } from "./queue-model";
+import { QueuePanel } from "./queue-panel";
 import { UiIcon } from "./ui-icon";
 
 const STAGE_LABELS: Record<StageKey, string> = {
@@ -50,46 +52,38 @@ export function NextStepsPanel({
   organizationId,
   projectId,
   consoleHref,
+  work = null,
+  filter = null,
+  filterHref,
 }: {
   next: NextSteps;
   organizationId: string;
   projectId: string;
   consoleHref: string;
+  /** The engagement's one queue (M2a); the stage list below stands in without it. */
+  work?: Queue | null;
+  filter?: string | null;
+  filterHref?: ((filter: string) => string) | undefined;
 }) {
   const groups = stepsByStage(next.steps);
   const first = next.steps[0];
+  if (work !== null && filterHref !== undefined) {
+    return (
+      <>
+        <JourneyBar next={next} />
+        <QueuePanel
+          queue={work}
+          filter={parseQueueFilter(filter)}
+          organizationId={organizationId}
+          projectId={projectId}
+          baseHref={filterHref}
+        />
+      </>
+    );
+  }
   return (
     <>
-      <nav className="home-journey card" aria-label="Engagement stages">
-        <ol>
-          {JOURNEY.map((key, index) => {
-            const stage = next.stages.find((item) => item.key === key);
-            const status = stage?.status ?? "UPCOMING";
-            return (
-              <li
-                key={key}
-                className={`home-stage is-${status.toLowerCase()}`}
-                aria-current={status === "CURRENT" ? "step" : undefined}
-              >
-                <span className="home-stage-mark" aria-hidden="true">
-                  {status === "DONE" ? (
-                    <UiIcon name="check" size={13} />
-                  ) : (
-                    index + 1
-                  )}
-                </span>
-                <span className="home-stage-copy">
-                  <strong>{stage?.label ?? STAGE_LABELS[key]}</strong>
-                  <small>
-                    {status === "CURRENT" ? "Current · " : ""}
-                    {stage?.summary ?? ""}
-                  </small>
-                </span>
-              </li>
-            );
-          })}
-        </ol>
-      </nav>
+      <JourneyBar next={next} />
       <section
         className="card home-next"
         aria-labelledby="home-next-title"
@@ -174,5 +168,40 @@ function StepRow({
         <UiIcon name="arrow" size={13} />
       </a>
     </li>
+  );
+}
+
+function JourneyBar({ next }: { next: NextSteps }) {
+  return (
+    <nav className="home-journey card" aria-label="Engagement stages">
+      <ol>
+        {JOURNEY.map((key, index) => {
+          const stage = next.stages.find((item) => item.key === key);
+          const status = stage?.status ?? "UPCOMING";
+          return (
+            <li
+              key={key}
+              className={`home-stage is-${status.toLowerCase()}`}
+              aria-current={status === "CURRENT" ? "step" : undefined}
+            >
+              <span className="home-stage-mark" aria-hidden="true">
+                {status === "DONE" ? (
+                  <UiIcon name="check" size={13} />
+                ) : (
+                  index + 1
+                )}
+              </span>
+              <span className="home-stage-copy">
+                <strong>{stage?.label ?? STAGE_LABELS[key]}</strong>
+                <small>
+                  {status === "CURRENT" ? "Current · " : ""}
+                  {stage?.summary ?? ""}
+                </small>
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
   );
 }

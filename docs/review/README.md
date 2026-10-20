@@ -84,3 +84,25 @@ One control, ITGC-AC-01, from onboarding to its final conclusion on an isolated 
 twelve stages with a screenshot each (`01-…` to `12-…`), the stage log (`walk-log.md`)
 and the sign-off history the API returned (`signoff-history.json`). The report, with
 what was real and what was simulated, is [docs/acceptance-walkthrough.md](../acceptance-walkthrough.md).
+
+## m2a — the engagement's one queue
+
+A demonstration engagement (`ai_workforce_m2a`) with controls in different states, built
+through the API: ITGC-AC-01 (interim signed off, roll-forward round open, plan revised and
+approved so an impact assessment is pending and the round's basis is stale, review open
+with the agent's note); AC-02 (samples proposed, population accepted); AC-03 (population
+received, not yet accepted: samples blocked); AC-04 (requests drafted, awaiting approval);
+AC-05 and the rest of the library (test plan awaiting approval); AC-06 (the tester's run
+stopped); AC-07 (requests approved; one marked sent, SIMULATED delivery). Viewers: Dana
+Whitfield (lead), Riley Okafor (independent reviewer), Morgan Adeyemi (organization admin
+not on the engagement team).
+
+| File | What it shows |
+| --- | --- |
+| `home-owner-desktop.png`, `-mobile.png` | Home for the lead: My actions, Blocked, Waiting on others, with filter chips; the repeated "Approve the test plan" step as one expandable row. |
+| `home-owner-filtered-desktop.png` | The same queue filtered to My actions in the Testing stage. |
+| `home-reviewer-desktop.png` | The reviewer: the impact decision and the review note are theirs; the preparer's steps wait on the preparer. |
+| `home-admin-off-team-desktop.png` | An admin off the team: preparer's and reviewer's work shown as waiting on others, not as theirs; approvals remain theirs by permission. |
+| `console-owner-desktop.png`, `console-reviewer-mobile.png` | The agent console's inbox, the same list. |
+| `register-owner-desktop.png` | The register's Needs-attention card from the queue, with the drafted-requests batch. |
+| `control-ac02-owner-desktop.png` | A control whose queue item and Needs-you card say the same thing. |

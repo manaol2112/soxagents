@@ -76,6 +76,7 @@ from ai_workforce_api.phase_release import register_phase_release
 from ai_workforce_api.plan_impact import register_plan_impact
 from ai_workforce_api.policy import register_policy
 from ai_workforce_api.projects import register_projects
+from ai_workforce_api.queue import register_queue
 from ai_workforce_api.rcm_systems import SystemScanScheduler, scan_runner
 from ai_workforce_api.rcm_uploads import register_rcm_uploads
 from ai_workforce_api.request_details import register_request_details
@@ -213,6 +214,7 @@ def create_app(
     register_evidence_plans(app, resolved, drafts)
     register_master_plans(app, resolved, drafts)
     register_next_steps(app, resolved)
+    register_queue(app, resolved)
     register_plan_impact(app, resolved)
     register_phase_release(app, resolved)
     scans = drafts if isinstance(drafts, SystemScanScheduler) else None

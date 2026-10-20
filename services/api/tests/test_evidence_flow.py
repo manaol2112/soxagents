@@ -129,7 +129,8 @@ def test_a_control_launched_before_planning_says_to_plan_first(
     waiting = owner.get(f"{_project(team)}/console/inbox").json()["waiting"]
     assert not any(item["kind"] == "drafts" for item in waiting)
     planning = [item for item in waiting if item["kind"] == "planning"]
-    assert [item["title"] for item in planning] == ["1 request drafted before evidence planning"]
+    # One item per drafted request (the engagement's one queue), held for planning.
+    assert len(planning) == 1 and "Plan the evidence" in planning[0]["detail"]
     # Submitting around the plan is refused by the API, not only hidden on the page.
     refused = owner.post(f"{_project(team)}/pbc-requests/{legacy}/submit", json={"version": 1})
     assert refused.status_code == 409
@@ -423,7 +424,8 @@ def test_a_launch_with_no_one_to_send_to_still_drafts_its_requests(
     # The inbox does not call them ready to submit: they wait for a recipient.
     inbox = owner.get(f"{_project(team)}/console/inbox").json()["waiting"]
     assert not any(item["kind"] == "drafts" for item in inbox)
-    assert [item["kind"] for item in inbox if item["kind"] == "contacts"] == ["contacts"]
+    # One item per drafted request (the engagement's one queue), each without a recipient.
+    assert len([item for item in inbox if item["kind"] == "contacts"]) == len(made)
     refused = owner.post(
         f"{_project(team)}/pbc-requests/{made[0][0]}/submit", json={"version": made[0][3]}
     )

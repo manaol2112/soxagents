@@ -54,7 +54,7 @@ import {
 } from "./controls-overview";
 import {
   ACTOR_LABELS,
-  actionCenter,
+  actionCenterFromQueue,
   agentSummary,
   agentText,
   filterChips,
@@ -329,7 +329,11 @@ function ControlRegister({
   const canAssign = canManageProjects(model.organization.role) && active;
   const progress = portfolio(inScope);
   const stages = stageCounts(inScope);
-  const actions = actionCenter(inScope, canSubmit);
+  const actions = actionCenterFromQueue(
+    engagement.work?.items ?? [],
+    inScope,
+    canSubmit,
+  );
   const agents = agentSummary(inScope);
   const applications = new Set(
     inScope.map((control) => control.applicationName).filter(Boolean),
@@ -366,7 +370,9 @@ function ControlRegister({
         ? view$(item.to.change)
         : item.to.kind === "approvals"
           ? href(model, {}, "approvals")
-          : href(model, { tab: "requests" }, "evidence"),
+          : item.to.kind === "queue"
+            ? href(model, { filter: item.to.filter }, "overview")
+            : href(model, { tab: "requests" }, "evidence"),
     ]),
   );
   // The header's one action: the next control that is the viewer's to take on.

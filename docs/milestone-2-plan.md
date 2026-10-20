@@ -198,6 +198,58 @@ critical set when the API changes; the owner reviews each before the next.
 | Mobile density on Testing tables | Cards at 390 as the register does; screenshots gate each stage |
 | Scope creep into the companion | The console page stays as is until Milestone 3; M2 only changes what its inbox reads |
 
+## 11. M2a as built
+
+**The queue** (`queue.py`, `GET …/queue`, read under `task.read`). One list of every open
+obligation on the engagement, read from the records that already carry it and the rules
+that already decide it; nothing new is stored and no item acts. Each item carries a
+stable identity (`kind:record id`), its source record, the control, phase and round, the
+action and its reason, whose it is (role and assigned names), whether the viewer may act
+now (`authorized`, the same rule the action applies: `mark_yours` for a preparer's step,
+`project.update` and the requester-never-approves rule for approvals, the engagement
+reviewer role with independence for reviews, `viewer_can_decide` for impact assessments),
+whether the record is ready and what holds it, whether it holds the engagement up, its
+bucket, and where in the guided workspace it is done. Sources: approvals pending; plan
+impact assessments pending; open reviews, per review (the control's own and each
+round's); rounds whose testing basis is stale or reconstructed; proposed samples, held
+until the population is accepted and, for a round, until the round is ready; stopped
+tester runs; drafted evidence requests, per request, held for planning or a recipient;
+due reminders, per follow-up; replies and unmatched emails, per message; blocked plan
+tasks; the engagement's setup while a draft; and each open control's next step from the
+register row. Equivalent obligations appear once: a control's next step that restates a
+listed record (proposed samples, its own review, a pending assessment, a stale basis) is
+dropped, as is a plan task that restates a listed review; separate obligations stay
+separate (each round's review, each assessment, each request, each reminder).
+
+**Buckets.** MINE when the viewer may act and the record is ready; BLOCKED when the record
+is not ready or no one's; WAITING otherwise, naming the role and the assignees. An
+organization admin who is not on the engagement team sees the preparer's and the
+reviewer's work as waiting, not as theirs; approvals keep their permission rule.
+
+**Filters** (`bucket`, `stage`, `phase`, `control`) narrow the list on the server after
+the viewer's items are computed; they never widen what a viewer sees or may do.
+
+**Consumers.** Home's Do next is the queue, grouped by bucket with filter chips for
+responsibility, stage and phase; a step repeated across many controls ("Approve the test
+plan" on every unapproved control) is one expandable row with its count. The agent
+console's inbox is built from the queue (`console._inbox`), in its older item shape so
+the console page and `next_steps` are unchanged. The register's Needs-attention card is
+built from the queue's items for the controls shown (`actionCenterFromQueue`), with the
+drafted-requests batch kept. The client-side `attentionQueue` and the register's
+row-derived `actionCenter` are deleted; the shell's command center and attention card
+read the inbox. Every row opens the control's step, the request, the approvals page or
+the mailbox, by the link the API gives.
+
+**Validation.** `test_queue.py`: identity and deduplication, owner and authorization by
+role (owner, reviewer, admin off the team), readiness blockers, filters that narrow,
+tenant isolation, and the inbox as the same list. Node: `queue-model` (parsing, grouping,
+filters, links, collapsed rows) and the register's action center from the queue. Two
+legacy inbox expectations rewritten for per-request items (`test_evidence_flow`: one item
+per drafted request instead of a count). The multi-control demonstration engagement
+(`ai_workforce_m2a`: seven controls in different states plus the rest of the library
+awaiting plan approval) was built through the API and screenshotted for three viewers
+(`docs/review/m2a/`).
+
 ## 10. Out of scope for Milestone 2
 
 The Agent Companion panel (Milestone 3), the onboarding wizard and design tokens
