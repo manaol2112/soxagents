@@ -48,10 +48,13 @@ export type NextSteps = {
 const SECTIONS = new Set([
   "setup",
   "planning",
+  "testing",
   "controls",
   "evidence",
   "approvals",
   "plan",
+  "reports",
+  "settings",
   "console",
 ]);
 const QUERY_KEYS = new Set(["filter", "tab", "step", "view"]);

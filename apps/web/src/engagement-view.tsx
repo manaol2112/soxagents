@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-
 import {
   CATEGORIES,
   type ControlRow,
@@ -22,6 +21,7 @@ import {
 } from "./engagement-model";
 import { formatDate } from "./format";
 import { PlanMissingButton } from "./plan-missing";
+import { canonicalQuery } from "./routes";
 import { canManageProjects, type ShellModel } from "./shell-model";
 import { UiIcon } from "./ui-icon";
 import { canRequestEvidence } from "./workflow-model";
@@ -176,6 +176,7 @@ function pageHref(
     organization: model.organization.id,
     section,
   });
+  canonicalQuery(params);
   if (model.selectedProject !== null) {
     params.set("project", model.selectedProject.id);
   }
@@ -343,12 +344,14 @@ export function EngagementDashboard({
               ))}
             </ul>
             <a
-              href={`/?${new URLSearchParams({
-                organization: model.organization.id,
-                project: project.id,
-                section: "setup",
-                step: "profile",
-              }).toString()}`}
+              href={`/?${canonicalQuery(
+                new URLSearchParams({
+                  organization: model.organization.id,
+                  project: project.id,
+                  section: "setup",
+                  step: "profile",
+                }),
+              ).toString()}`}
             >
               Review the period
             </a>

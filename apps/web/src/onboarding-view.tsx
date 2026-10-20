@@ -43,6 +43,7 @@ import {
 } from "./onboarding-model";
 import { ProcessesCard, ReportsCard } from "./process-view";
 import { RecordDialog } from "./record-dialog";
+import { canonicalQuery } from "./routes";
 import { SetupForm } from "./setup-form";
 import type { ShellModel } from "./shell-model";
 import { SystemsScoping } from "./systems-view";
@@ -170,6 +171,7 @@ export function setupHref(
     section: "setup",
     step,
   });
+  canonicalQuery(params);
   if (model.selectedProject !== null) {
     params.set("project", model.selectedProject.id);
   }

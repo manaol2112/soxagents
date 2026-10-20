@@ -238,6 +238,7 @@ _STEP_TO_KIND: tuple[tuple[str, str], ...] = (
     ("Approve the sample request", "approval"),
     ("Approve the follow-up", "approval"),
     ("Testing stopped", "run-stopped"),
+    ("Chase the overdue", "request-overdue"),
     ("Chase the overdue", "reminder"),
     ("Prepare the workpapers", "draft-stopped"),
 )
@@ -374,6 +375,7 @@ def queue(
     items += _drafts(connection, project_id, viewer, refs, assigned)
     items += _evidence_reviews(connection, project_id, viewer, refs, assigned)
     items += _deficiencies(connection, project_id, viewer, refs, assigned, rounds_by_id)
+    items += _overdue(connection, project_id, viewer, refs, assigned)
     items += _requests(connection, project_id, viewer, refs, controls)
     items += _reminders(connection, project_id, viewer, refs)
     items += _replies(connection, project_id, viewer)
@@ -1256,6 +1258,63 @@ def _requests(
     return found
 
 
+def _overdue(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    viewer: _Viewer,
+    refs: dict[UUID, str],
+    assigned: dict[UUID, set[UUID]],
+) -> list[QueueItem]:
+    """Each evidence request past due with the client (workspace.is_late's rule): the
+    client's to answer, the team's to chase. The console's past-due figure counts these
+    items; the control's "Chase the overdue" step defers to them."""
+    found: list[QueueItem] = []
+    for row in connection.execute(
+        """
+        SELECT id, engagement_control_id, recipient, due_at, testing_phase, title
+        FROM pbc_requests
+        WHERE project_id = %s AND (
+            status IN ('OVERDUE', 'ESCALATED')
+            OR (status NOT IN ('RECEIVED', 'CLOSED', 'CANCELLED', 'DRAFT', 'APPROVAL_PENDING')
+                AND due_at < clock_timestamp())
+        )
+        ORDER BY due_at
+        """,
+        (project_id,),
+    ).fetchall():
+        control_id = UUID(str(row[1]))
+        authorized = viewer.may_prepare(assigned.get(control_id))
+        recipient = str(row[2] or "").strip()
+        due = row[3]
+        found.append(
+            QueueItem(
+                id=f"request-overdue:{row[0]}",
+                kind="request-overdue",
+                obligation="EVIDENCE_RECEIPT",
+                source=QueueSource(type="pbc_request", id=UUID(str(row[0]))),
+                stage="EVIDENCE",
+                control_id=control_id,
+                control_ref=refs.get(control_id),
+                phase=None if row[4] is None else str(row[4]),
+                title="Chase the overdue evidence request",
+                reason=(
+                    f"Due {due.date().isoformat() if due is not None else 'date not set'}"
+                    + (f"; with {recipient}" if recipient else "")
+                    + (f": {str(row[5]).strip()}" if row[5] and str(row[5]).strip() else "")
+                ),
+                owner=QueueOwner(role="CLIENT", names=[recipient] if recipient else []),
+                authorized=authorized,
+                bucket=_bucket(authorized, True, "CLIENT"),
+                link=QueueLink(
+                    section="controls",
+                    query={"control": str(control_id), "step": "request", "request": str(row[0])},
+                ),
+                at=due,
+            )
+        )
+    return found
+
+
 def _reminders(
     connection: psycopg.Connection[Any], project_id: UUID, viewer: _Viewer, refs: dict[UUID, str]
 ) -> list[QueueItem]:
@@ -1369,7 +1428,7 @@ def _tasks(
                 ready=not blocked,
                 blockers=["Blocked until someone clears it"] if blocked else [],
                 bucket=_bucket(authorized, not blocked, "PREPARER"),
-                link=QueueLink(section="plan"),
+                link=QueueLink(section="reports", query={"view": "schedule"}),
                 at=row[5],
             )
         )

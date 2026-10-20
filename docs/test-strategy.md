@@ -169,3 +169,13 @@ and `workflow-model` (queue sources).
   answered 307 live from the edge proxy with their record kept
   (`docs/review/m2c/redirects.md`); type checks clean; lint clean except the known
   `biome.json` line endings. No legacy expectation changed.
+- M2d (the guided workspace as the one control interface; `queue.py` overdue source,
+  `console.py` legacy derivation deleted, `next_steps.py` links): `make test-critical`
+  **363 passed, 0 failed in 4 min 59 s**; `make test-fast` **87 Python passed in 2 min
+  10 s and 112 Node passed**; the whole Node set **714 passed**; type checks clean; lint
+  clean except the known `biome.json` line endings. Expectations rewritten: `test_waiting`
+  (the inbox is the queue's list, so the open-results step is titled as the register words
+  it with the control in its own field, and each overdue request is one `late` item from the
+  queue instead of the console's own count); `test_next_steps` (the plans link names
+  Testing); Node `directory`, `library-model`, `planning-model` (addresses name the
+  destinations: `settings&view=tasks`, `settings&view=library`, `testing`). Nothing retired.

@@ -6,6 +6,7 @@ import {
   engagementWrite,
 } from "../../../src/engagement-model";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
+import { canonicalQuery } from "../../../src/routes";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -83,6 +84,8 @@ function redirect(
 ) {
   const destination = browserUrl("/", request);
   destination.searchParams.set("section", section);
+  // The deficiencies, plan and timeline pages live under Reports (M2c): land there.
+  canonicalQuery(destination.searchParams);
   const organizationId = fields.organization_id ?? "";
   const projectId = fields.project_id ?? "";
   if (organizationId !== "") {

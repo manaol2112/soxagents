@@ -321,11 +321,11 @@ describe("the planning review queue", () => {
   it("links to the queue and to one control's plan", () => {
     assert.equal(
       planningHref(ORG, PROJECT, { control: CONTROL, tab: "evidence" }),
-      `/?organization=${ORG}&project=${PROJECT}&section=planning&control=${CONTROL}&tab=evidence`,
+      `/?organization=${ORG}&project=${PROJECT}&section=testing&control=${CONTROL}&tab=evidence`,
     );
     assert.equal(
       planningHref(ORG, PROJECT, { filter: "APPROVED" }),
-      `/?organization=${ORG}&project=${PROJECT}&section=planning&filter=APPROVED`,
+      `/?organization=${ORG}&project=${PROJECT}&section=testing&filter=APPROVED`,
     );
   });
 });
@@ -598,7 +598,7 @@ describe("phase release", () => {
     );
     assert.equal(
       planningHref(ORG, PROJECT, { view: "phases" }),
-      `/?organization=${ORG}&project=${PROJECT}&section=planning&view=phases`,
+      `/?organization=${ORG}&project=${PROJECT}&section=testing&view=phases`,
     );
   });
 });
@@ -764,7 +764,7 @@ describe("a plan that follows a standard pending review", () => {
     const ids = { organizationId: "o", projectId: "p" };
     assert.equal(
       holdHref(ids, "c", "LIBRARY", "access-termination"),
-      "/?organization=o&section=library&project=p&control=access-termination",
+      "/?organization=o&section=settings&view=library&project=p&control=access-termination",
     );
     assert.equal(holdHref(ids, "c", "LIBRARY"), null);
     const groups = holdGroups([
@@ -818,7 +818,7 @@ describe("the standard's steps behind a plan row", () => {
   it("opens the standard's procedure on the Library at its steps", () => {
     const href = standardStepsHref(ORG, PROJECT, "access-termination", "d-1");
     assert.ok(href.startsWith("/?"));
-    assert.match(href, /section=library/);
+    assert.match(href, /section=settings&view=library/);
     assert.match(href, /control=access-termination/);
     // Procedures is the Library's first tab, so the address does not name it.
     assert.doesNotMatch(href, /tab=/);

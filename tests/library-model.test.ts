@@ -358,11 +358,11 @@ describe("the library's addresses and calls", () => {
         control: "access-review",
         tab: "attributes",
       }),
-      `/?organization=${ORG}&section=library&project=${PROJECT}&control=access-review&tab=attributes`,
+      `/?organization=${ORG}&section=settings&view=library&project=${PROJECT}&control=access-review&tab=attributes`,
     );
     assert.equal(
       libraryHref(ORG, null, { control: "access-review", tab: "procedures" }),
-      `/?organization=${ORG}&section=library&control=access-review`,
+      `/?organization=${ORG}&section=settings&view=library&control=access-review`,
     );
     assert.equal(parseLibraryTab("design"), "design");
     assert.equal(parseLibraryTab("nope"), "procedures");

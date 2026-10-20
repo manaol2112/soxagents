@@ -1,5 +1,4 @@
 import { Fragment } from "react";
-
 import { AutoRefresh } from "./auto-refresh";
 import { ConfirmAction } from "./confirm-action";
 import { FilterableOffers } from "./library-offers";
@@ -14,6 +13,7 @@ import {
   systemOffers,
   systemStatus,
 } from "./onboarding-model";
+import { canonicalQuery } from "./routes";
 import { removalNote, ScopedControlTable } from "./scoped-controls";
 import { SetupForm } from "./setup-form";
 import { impactHref } from "./setup-impact-model";
@@ -481,6 +481,7 @@ export function controlHref(
     category: categoryOf(control.domain),
     control: control.id,
   });
+  canonicalQuery(params);
   if (system !== null) {
     // Opened from a system, on the IT tab: the page stays on that tab and that system.
     params.set("category", "it");

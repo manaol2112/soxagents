@@ -20,6 +20,7 @@ import { parseAutomation } from "./execution-model";
 import { parseNextSteps } from "./home-model";
 import { parseImpact } from "./impact-model";
 import { apiGet, sessionToken } from "./load-workspace";
+import { parseMasterPlan, parsePhaseProgress } from "./planning-model";
 import { parseQueue } from "./queue-model";
 import { parseRequestDetails } from "./request-details-model";
 import {
@@ -139,6 +140,8 @@ export async function loadEngagement(
     evidencePlan,
     activity,
     testBasis,
+    masterPlan,
+    phaseProgress,
   ] = await Promise.all([
     wanted.dashboard ? apiGet(`${base}/workspace/dashboard`, session) : null,
     wanted.dashboard ? apiGet(`${base}/next-steps`, session) : null,
@@ -187,6 +190,12 @@ export async function loadEngagement(
     open
       ? apiGet(`${base}/controls/${query.control}/test-basis`, session)
       : null,
+    // The Plan step reviews the plan in place (M2d): the master plan, and the phases
+    // for its release strip.
+    open
+      ? apiGet(`${base}/controls/${query.control}/master-plan`, session)
+      : null,
+    open ? apiGet(`${base}/phase-progress`, session) : null,
   ]);
   // The request opened on the control's Evidence tab, with its details for review.
   const focus =
@@ -256,6 +265,12 @@ export async function loadEngagement(
     dashboard:
       ok(dashboard) === undefined ? null : parseDashboard(ok(dashboard)),
     impact: ok(impact) === undefined ? null : parseImpact(ok(impact)),
+    masterPlan:
+      ok(masterPlan) === undefined ? null : parseMasterPlan(ok(masterPlan)),
+    phaseProgress:
+      ok(phaseProgress) === undefined
+        ? null
+        : parsePhaseProgress(ok(phaseProgress)),
     automation:
       ok(automation) === undefined ? null : parseAutomation(ok(automation)),
     work: ok(work) === undefined ? null : parseQueue(ok(work)),

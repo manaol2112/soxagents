@@ -1,3 +1,4 @@
+import { canonicalQuery } from "./routes.ts";
 /**
  * The standard library as the Library page reads it (standard library, milestone L1): one
  * entry per standard control, its procedures, attributes, evidence, design statement, and
@@ -809,6 +810,7 @@ export function libraryHref(
     organization: organizationId,
     section: "library",
   });
+  canonicalQuery(params);
   if (projectId !== null && projectId !== "") {
     params.set("project", projectId);
   }

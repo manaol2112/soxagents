@@ -1,7 +1,7 @@
 import type { Client } from "./client-model.ts";
 import type { Completion } from "./engagement-lifecycle.ts";
 import type { ProjectNoticeCode } from "./project-form.ts";
-import { parseSection, type SectionId } from "./routes.ts";
+import { canonicalQuery, parseSection, type SectionId } from "./routes.ts";
 
 export type SessionUser = {
   id: string;
@@ -521,7 +521,7 @@ export function workspaceHref(
   if (section !== "overview") {
     params.set("section", section);
   }
-  return `/?${params.toString()}`;
+  return `/?${canonicalQuery(params).toString()}`;
 }
 
 function loadAgents(

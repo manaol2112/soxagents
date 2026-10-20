@@ -86,7 +86,7 @@ describe("workspace directory", () => {
     });
     assert.equal(
       href,
-      "/?organization=org&project=project&section=tasks&taskStatus=BLOCKED",
+      "/?organization=org&project=project&section=settings&taskStatus=BLOCKED&view=tasks",
     );
   });
 });

@@ -144,3 +144,26 @@ baseline are in [milestone-2-plan.md §14](../milestone-2-plan.md).
 | `walk-1-home-mine-testing.png` → `walk-5-deficiency-open.png` | The cross-control walkthrough: Home's queue filtered to the lead's testing work, a control's Test step, Testing › Results filtered to Mine (each row opening its control's step), Reports › Deficiencies, and one deficiency opened from a stored link that resolves to the Reports tab. |
 | `redirects.md` | Every older address requested live: the ten moved sections answer 307 to the destination with the record kept; the retained pages and destinations stay. |
 | `queue-dedup.md` | The queue's items by kind and obligation after the M2c rules, and the (control, obligation) pairs that repeat beyond the per-record kinds. |
+
+## m2d — the guided workspace as the one control interface
+
+The 155-control scale engagement (`ai_workforce_scale`), with the API configured for the
+walkthroughs as the demonstration needs: no model, no worker, no live email (mock mail
+shows the portal's one-time code as a local preview), the client's domain on the
+recipient allowlist. Every action was performed through the pages' own controls; the
+outcome was read back through the API. The feature-parity matrix is
+[docs/milestone-2-parity.md](../milestone-2-parity.md).
+
+| File | What it shows |
+| --- | --- |
+| `before-classic-overview-desktop.png`, `-mobile.png`, `before-classic-testing-desktop.png`, `before-guided-plan-desktop.png` | Before: the classic Overview and Testing tabs (progress bar, next-action panel, metrics, tab bar) beside the guided workspace, whose Plan step linked out to the Test plans page. |
+| `after-guided-plan-desktop.png`, `-mobile.png`, `after-guided-test-desktop.png`, `-mobile.png`, `after-legacy-tab-overview-desktop.png` | After: the stepper is the one interface; the plan is reviewed and approved inside the Plan step; an older `?tab=overview` link opens the Plan step; the Activity record sits below the steps. |
+| `j1-*.png` | The preparer: approving a revised plan from the Plan step, approving a drafted request from the Request step, accepting a received population. |
+| `j2-*.png` | The reviewer: accepting and dismissing the agent's proposed notes on the Review step, at desktop and phone width; the lead's attempt to sign off refused by the API (independence). |
+| `j3-*.png` | The manager: Home, Testing › Results filtered to what needs deciding, Testing › Review, Reports, the register, at desktop and phone width. |
+| `j4-*.png` | The control owner: the portal link, the identity code, the requests, a file uploaded to a requested item and acknowledged. |
+| `j5-*.png` | A concluded control: the sign-off receipts and conclusion on the Review step, the activity record opened by an older `?tab=activity` link; a second sign-off refused by the API. |
+| `j6-*.png` | A deficiency: from remediation in progress to ready for retest from Reports › Deficiencies, the retest round opened, the control's Test step showing the retest phase. |
+| `walkthroughs.md` | The six journeys' log, with what each click did and what the API recorded. |
+| `queue-reconciliation.md` | Home's queue, the console inbox and the register reconciled for three viewers (counts and identities). |
+| `redirects.md` | The ten moved addresses answering 307 with their record kept; the retained pages and destinations staying. |

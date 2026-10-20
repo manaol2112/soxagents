@@ -202,6 +202,20 @@ export function resolveRoute(
   return { section, page: section, tab: null, redirect: null };
 }
 
+/** An address built for an older section, rewritten to the destination that holds the
+ * page now (the same table the redirects use), so internal links never take the hop. */
+export function canonicalQuery(params: URLSearchParams): URLSearchParams {
+  const moved = MOVED[params.get("section") ?? ""];
+  if (moved === undefined) {
+    return params;
+  }
+  params.set("section", moved.section);
+  if (moved.tab !== undefined) {
+    params.set("view", moved.tab);
+  }
+  return params;
+}
+
 /** The destination's address for one of its tabs. */
 export function destinationHref(
   section: "reports" | "settings",

@@ -19,20 +19,12 @@ import {
   phaseItems,
   STEP_TABS,
   STEPS,
+  stepForTab,
   stepperItems,
 } from "./control-journey-model";
 import { PhasePanel, type PhaseState, PhaseStep } from "./control-phases";
 import { ControlStepper } from "./control-stepper";
-import {
-  ActivityTimeline,
-  AiActivity,
-  AuditProgress,
-  NextActionLine,
-  NextActionPanel,
-  RecordSections,
-  SummaryMetrics,
-  TestPlanSummary,
-} from "./control-workspace";
+import { ActivityTimeline, TestPlanSummary } from "./control-workspace";
 import {
   type AttentionItem,
   agentLanes,
@@ -135,6 +127,7 @@ import { HashScroll } from "./hash-scroll";
 import { impactFor } from "./impact-model";
 import { ImpactPanel } from "./impact-panel";
 import { planningHref } from "./planning-model";
+import { PlanReview } from "./planning-view";
 import { RequestReview } from "./request-review";
 import {
   reviewFor as controlReviewFor,
@@ -145,6 +138,7 @@ import { ReviewTab } from "./review-view";
 import { roundsFor } from "./round-model";
 import { RoundReviews } from "./round-reviews";
 import { TestRounds } from "./round-view";
+import { canonicalQuery } from "./routes";
 import { sheetFor } from "./sheet-model";
 import { TestSheetCard } from "./sheet-view";
 import type { ShellModel } from "./shell-model";
@@ -190,6 +184,8 @@ function href(model: Ready, extra: Keep = {}, section = "controls") {
     organization: model.organization.id,
     section,
   });
+  // An older section name (deficiencies) lands on its destination directly.
+  canonicalQuery(params);
   if (model.selectedProject !== null) {
     params.set("project", model.selectedProject.id);
   }
@@ -982,14 +978,22 @@ function ControlRecord({
   keep: Keep;
   siblings: ControlRow[];
 }) {
-  // The guided workspace (Milestone 1a) unless a link asks for a classic tab: the step
-  // comes from the API's journey, or from ?step=, and shows that step's classic body.
+  // The guided workspace is the control's one interface (M2d). The step comes from
+  // the API's journey or from ?step=; an older link's ?tab= opens the step that holds
+  // that tab's work, and ?tab=activity opens the activity record below the steps.
   const journey = control.journey ?? null;
-  const guided = engagement.filters.tab === null;
-  const step = currentStep(journey, engagement.filters.step);
-  const tab = guided
-    ? STEP_TABS[step]
-    : detailTab(control, engagement.filters.tab);
+  const legacyTab =
+    engagement.filters.tab === null
+      ? null
+      : detailTab(control, engagement.filters.tab);
+  const guided = true;
+  const step = currentStep(
+    journey,
+    engagement.filters.step ??
+      (legacyTab === null ? null : stepForTab(legacyTab).toLowerCase()),
+  );
+  const tab = STEP_TABS[step];
+  const showActivity = legacyTab === "activity";
   const tasks = (engagement.plan?.tasks ?? []).filter(
     (task) => task.controlId === control.id,
   );
@@ -1248,7 +1252,7 @@ function ControlRecord({
     canAct,
     canonical,
   });
-  const metrics = summaryMetrics(input);
+  const _metrics = summaryMetrics(input);
   // The request opened on the Evidence tab (?request=), with its review.
   const focused = engagement.filters.request ?? null;
   const focusRow =
@@ -1462,7 +1466,7 @@ function ControlRecord({
   };
   const openFindings = figures.findings.open;
   // The counts beside the Evidence & testing views.
-  const counts: Partial<Record<DetailTab, number | null>> = {
+  const _counts: Partial<Record<DetailTab, number | null>> = {
     evidence: control.requests.filter(
       (request) => request.status !== "CANCELLED",
     ).length,
@@ -1603,41 +1607,13 @@ function ControlRecord({
             }
             blockers={blockersOf(journey)}
             receipts={engagement.signoffs ?? []}
-            classicHref={tabHrefs.overview}
+            activityHref="#activity"
             agent={agent}
             trace={trace}
           />
-        ) : (
-          <>
-            <AuditProgress stages={stages} hrefs={tabHrefs} />
-            {tab === "overview" ? (
-              <>
-                <NextActionPanel
-                  next={nextAction}
-                  ids={ids}
-                  hrefs={tabHrefs}
-                  canAct={canAct}
-                  conclusionHref={tabHrefs.review}
-                />
-                <SummaryMetrics metrics={metrics} hrefs={tabHrefs} />
-              </>
-            ) : nextAction.primary !== null ? (
-              <NextActionLine item={nextAction.primary} hrefs={tabHrefs} />
-            ) : null}
-          </>
-        )}
-      </section>
-      {guided ? null : (
-        <RecordSections tab={tab} hrefs={tabHrefs} counts={counts} />
-      )}
-      <div className="record-tab cw-body">
-        {tab === "overview" ? (
-          <AiActivity
-            lanes={lanes}
-            hrefs={tabHrefs}
-            activity={engagement.activity}
-          />
         ) : null}
+      </section>
+      <div className="record-tab cw-body">
         {tab === "design" ? (
           <>
             <ImpactPanel
@@ -1645,19 +1621,42 @@ function ControlRecord({
               ids={ids}
               hrefs={{ test: stepHrefs.TEST, review: stepHrefs.REVIEW }}
             />
-            <TestPlanSummary
-              plan={evidencePlan}
-              approach={approach}
-              attributes={context?.approved.length ?? 0}
-              questions={
-                context?.issues.filter(
-                  (item) => item.status === "OPEN" && item.kind !== "CONFLICT",
-                ).length ?? 0
-              }
-              href={planningHref(ids.organizationId, ids.projectId, {
-                control: control.id,
-              })}
-            />
+            {engagement.masterPlan != null &&
+            engagement.masterPlan.controlId === control.id ? (
+              // The plan is reviewed and approved here, with the one review component
+              // the Testing destination uses (M2d): the same human approval, revision
+              // checks and audit trail.
+              <PlanReview
+                ids={{
+                  organizationId: ids.organizationId,
+                  projectId: ids.projectId,
+                  section: "testing",
+                }}
+                plan={engagement.masterPlan}
+                queue={null}
+                initialTab="understanding"
+                phases={engagement.phaseProgress?.controls.find(
+                  (row) => row.controlId === control.id,
+                )}
+                canRelease={engagement.phaseProgress?.viewerCanRelease ?? false}
+                embedded
+              />
+            ) : (
+              <TestPlanSummary
+                plan={evidencePlan}
+                approach={approach}
+                attributes={context?.approved.length ?? 0}
+                questions={
+                  context?.issues.filter(
+                    (item) =>
+                      item.status === "OPEN" && item.kind !== "CONFLICT",
+                  ).length ?? 0
+                }
+                href={planningHref(ids.organizationId, ids.projectId, {
+                  control: control.id,
+                })}
+              />
+            )}
             <TestBasisCard ids={ids} basis={engagement.testBasis ?? null} />
             {context === null ? (
               <p className="form-hint">
@@ -2063,18 +2062,27 @@ function ControlRecord({
             </section>
           </>
         ) : null}
-        {tab === "activity" ? (
-          <section className="cw-plain">
-            <h2>Activity</h2>
-            <p className="cw-hint">
+      </div>
+      <details
+        className="cw-fold cw-activity"
+        id="activity"
+        open={showActivity}
+      >
+        <summary>
+          <span>
+            <strong>Activity</strong>
+            <small>
               Everything recorded about this control and its records, from the
               audit trail: agents' work, people's decisions, and the workspace's
               own steps.
-            </p>
-            <ActivityTimeline items={engagement.activity} />
-          </section>
-        ) : null}
-      </div>
+            </small>
+          </span>
+          <UiIcon name="chevron" size={14} />
+        </summary>
+        <div className="cw-fold-body">
+          <ActivityTimeline items={engagement.activity} />
+        </div>
+      </details>
     </div>
   );
 }

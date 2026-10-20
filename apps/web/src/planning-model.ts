@@ -1529,7 +1529,7 @@ export function planningHref(
   const params = new URLSearchParams({
     organization: organizationId,
     project: projectId,
-    section: options.section ?? "planning",
+    section: options.section ?? "testing",
   });
   if (options.control) {
     params.set("control", options.control);

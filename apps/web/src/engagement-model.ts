@@ -2,6 +2,7 @@ import type { EvidenceAnalysis, EvidenceReview } from "./analysis-model.ts";
 import type { ActivityItem } from "./control-workspace-model.ts";
 import type { ChangeNotice } from "./evidence-change-model.ts";
 import type { RegisterApplication, RegisterFile } from "./evidence-model.ts";
+import type { MasterPlan, PhaseProgress } from "./planning-model.ts";
 import type { RequestDetails } from "./request-details-model.ts";
 import type { TestRound } from "./round-model.ts";
 import type { SheetNotice, TestSheet } from "./sheet-model.ts";
@@ -618,6 +619,10 @@ export type EngagementState = {
   automation?: Automation | null;
   /** The engagement's one queue of work (M2a); null when not loaded. */
   work?: WorkQueue | null;
+  /** The open control's master test plan and the engagement's phase progress, for the
+   * plan review inside the Plan step (M2d); null when not loaded. */
+  masterPlan?: MasterPlan | null;
+  phaseProgress?: PhaseProgress | null;
   /** The engagement's journey and what waits on the team (next_steps.py), for Home. */
   nextSteps?: NextSteps | null;
   notice: EngagementNotice | null;

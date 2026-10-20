@@ -126,28 +126,28 @@ def plan_steps(connection: psycopg.Connection[Any], project_id: UUID) -> list[St
             title=f"Decide the impact of plan revisions on {_plural(impact, 'signed-off result')}",
             detail="The plan changed after the results were signed off; a reviewer decides "
             "whether they stand or are re-performed.",
-            section="planning",
+            section="testing",
         ))  # fmt: skip
     if held:
         steps.append(StepBody(
             stage="PLANS", kind="plans_held", blocks=True,
             title=f"Settle what holds {_plural(held, 'test plan')}",
             detail="Each needs something settled before it can be approved.",
-            section="planning",
+            section="testing",
         ))  # fmt: skip
     if revised:
         steps.append(StepBody(
             stage="PLANS", kind="plans_revised",
             title=f"Re-approve {_plural(revised, 'test plan')} changed since approval",
             detail="Each says what changed since you approved it.",
-            section="planning",
+            section="testing",
         ))  # fmt: skip
     if ready:
         steps.append(StepBody(
             stage="PLANS", kind="plans_ready",
             title=f"Approve {_plural(ready, 'test plan')}",
             detail="Nothing holds them; evidence is requested once a plan is approved.",
-            section="planning",
+            section="testing",
             query={"filter": "DRAFT_READY,PENDING_REVIEW,NEEDS_CLARIFICATION"},
         ))  # fmt: skip
     if values:
@@ -155,7 +155,7 @@ def plan_steps(connection: psycopg.Connection[Any], project_id: UUID) -> list[St
             stage="PLANS", kind="plans_values",
             title=f"Answer {_plural(values, 'client value')}",
             detail="Asked on the test plans; testing waits for some of them.",
-            section="planning",
+            section="testing",
         ))  # fmt: skip
     if described:
         steps.append(StepBody(
@@ -163,7 +163,7 @@ def plan_steps(connection: psycopg.Connection[Any], project_id: UUID) -> list[St
             title=f"Describe {_plural(described, 'client control')}",
             detail="Optional: the client's RCM leaves how they operate unsaid. Each "
             "plan's Describe the control asks it; approval does not wait for it.",
-            section="planning",
+            section="testing",
         ))  # fmt: skip
     return steps
 

@@ -1166,13 +1166,14 @@ function asSentence(value: string): string {
   return text.slice(0, 1).toUpperCase() + text.slice(1).toLowerCase();
 }
 
-function PlanReview({
+export function PlanReview({
   ids,
   plan,
   queue,
   initialTab,
   phases,
   canRelease,
+  embedded = false,
 }: {
   ids: Ids;
   plan: MasterPlan;
@@ -1180,6 +1181,9 @@ function PlanReview({
   initialTab: Tab;
   phases: ControlPhases | undefined;
   canRelease: boolean;
+  /** Inside the control's Plan step (M2d): no breadcrumb, pager or repeated title; the
+   * state, the decisions and the review actions stay. */
+  embedded?: boolean;
 }) {
   const [view, setView] = useState<Tab>(initialTab);
   const [selected, setSelected] = useState<string | null>(null);
@@ -1282,70 +1286,78 @@ function PlanReview({
         />
       ) : null}
       <article className="card pl-review-shell">
-        <div className="pl-shell-bar">
-          <nav className="pl-crumbs" aria-label="Breadcrumb">
-            <a
-              href={planningHref(ids.organizationId, ids.projectId, {
-                section: ids.section,
-              })}
-            >
-              <span aria-hidden="true">←</span> Test plans
-            </a>
-            <span aria-hidden="true">/</span>
-            <span>{control.controlRef}</span>
-          </nav>
-          <span className="pl-pager">
-            {place.index >= 0 && queue !== null ? (
-              <span>
-                {place.index + 1} of {queue.controls.length}
-              </span>
-            ) : null}
-            {place.previous === null ? (
-              <span className="pl-pager-btn is-off" aria-hidden="true">
-                ‹
-              </span>
-            ) : (
+        {embedded ? null : (
+          <div className="pl-shell-bar">
+            <nav className="pl-crumbs" aria-label="Breadcrumb">
               <a
-                className="pl-pager-btn"
-                href={href(place.previous) ?? undefined}
-                aria-label="Previous control"
+                href={planningHref(ids.organizationId, ids.projectId, {
+                  section: ids.section,
+                })}
               >
-                ‹
+                <span aria-hidden="true">←</span> Test plans
               </a>
-            )}
-            {place.next === null ? (
-              <span className="pl-pager-btn is-off" aria-hidden="true">
-                ›
-              </span>
-            ) : (
-              <a
-                className="pl-pager-btn"
-                href={href(place.next) ?? undefined}
-                aria-label="Next control"
-              >
-                ›
-              </a>
-            )}
-            {place.nextPending === null ? null : (
-              <a
-                className="pl-pager-next"
-                href={href(place.nextPending) ?? undefined}
-              >
-                Next waiting
-              </a>
-            )}
-          </span>
-        </div>
+              <span aria-hidden="true">/</span>
+              <span>{control.controlRef}</span>
+            </nav>
+            <span className="pl-pager">
+              {place.index >= 0 && queue !== null ? (
+                <span>
+                  {place.index + 1} of {queue.controls.length}
+                </span>
+              ) : null}
+              {place.previous === null ? (
+                <span className="pl-pager-btn is-off" aria-hidden="true">
+                  ‹
+                </span>
+              ) : (
+                <a
+                  className="pl-pager-btn"
+                  href={href(place.previous) ?? undefined}
+                  aria-label="Previous control"
+                >
+                  ‹
+                </a>
+              )}
+              {place.next === null ? (
+                <span className="pl-pager-btn is-off" aria-hidden="true">
+                  ›
+                </span>
+              ) : (
+                <a
+                  className="pl-pager-btn"
+                  href={href(place.next) ?? undefined}
+                  aria-label="Next control"
+                >
+                  ›
+                </a>
+              )}
+              {place.nextPending === null ? null : (
+                <a
+                  className="pl-pager-next"
+                  href={href(place.nextPending) ?? undefined}
+                >
+                  Next waiting
+                </a>
+              )}
+            </span>
+          </div>
+        )}
         <header className="pl-shell-head">
           <div className="pl-id">
-            <p className="pl-kicker">
-              <span className="pl-control-ref">{control.controlRef}</span>
-              {control.application !== "" ? (
-                <span>{control.application}</span>
-              ) : null}
-            </p>
+            {embedded ? null : (
+              <p className="pl-kicker">
+                <span className="pl-control-ref">{control.controlRef}</span>
+                {control.application !== "" ? (
+                  <span>{control.application}</span>
+                ) : null}
+              </p>
+            )}
             <div className="pl-title-row">
-              <h1>{control.title}</h1>
+              {embedded ? (
+                <h2 className="pl-embedded-title">Test plan</h2>
+              ) : (
+                <h1>{control.title}</h1>
+              )}
               <StatePill state={plan.state} />
             </div>
             <p className="pl-meta">

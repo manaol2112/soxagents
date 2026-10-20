@@ -51,7 +51,7 @@ def test_a_launched_engagement_leads_with_its_test_plans(migrated: Database) -> 
     assert stages == sorted(stages, key=order.index)
     kinds = {step["kind"]: step for step in body["steps"] if step["stage"] == "PLANS"}
     ready = kinds["plans_ready"]
-    assert ready["section"] == "planning"
+    assert ready["section"] == "testing"
     assert ready["query"] == {"filter": "DRAFT_READY,PENDING_REVIEW,NEEDS_CLARIFICATION"}
     waiting = int(ready["title"].split()[1])
     # Each control waits on its test plan, not on a request that cannot be made yet.

@@ -57,26 +57,27 @@ def test_open_test_results_and_late_evidence_wait_on_the_team(migrated: Database
         )
     waiting = _waiting(client, team)
     results = [item for item in waiting if item["kind"] == "results"]
+    # The inbox is the one queue's list (M2a; the console's own derivations retired in
+    # M2d): the control's step as the register words it, the control named by its ref.
     assert results == [
         {
             "kind": "results",
-            "title": "Decide the open test results for ITGC-AC-01",
-            "detail": "Results the tester could not settle",
+            "title": "Decide the open test results",
+            "detail": "",
             "control_ref": "ITGC-AC-01",
             "link": "controls",
             "control_id": plan["engagement_control_id"],
             "tab": "interim",
         }
     ]
-    # Past due: the engagement-wide count (the console's own summary, kept until the
-    # console page retires) and, from the one queue (M2a/M2b), the control's own step,
-    # "chase", the team's to do.
+    # Past due: each overdue request is one queue item, the client's to answer and the
+    # team's to chase (M2d); the console's own count is gone, and the control's step
+    # that said the same is not repeated.
     late = [item for item in waiting if item["kind"] == "late"]
-    assert sorted(item["title"] for item in late) == [
-        "1 evidence request past due",
-        "Chase the overdue evidence request",
+    assert [(item["title"], item["control_ref"]) for item in late] == [
+        ("Chase the overdue evidence request (ITGC-CM-01)", "ITGC-CM-01")
     ]
-    assert [item["control_ref"] for item in late if item["control_ref"]] == ["ITGC-CM-01"]
+    assert late[0]["control_id"] is not None and late[0]["tab"] == "evidence"
     # Drafted requests still wait to be submitted.
     assert any(item["kind"] == "drafts" for item in waiting)
 

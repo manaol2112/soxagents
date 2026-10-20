@@ -40,7 +40,7 @@ export function ControlStepper({
   actionHref,
   blockers,
   receipts,
-  classicHref,
+  activityHref,
   agent,
   trace,
 }: {
@@ -54,7 +54,8 @@ export function ControlStepper({
   actionHref: string | null;
   blockers: Blocker[];
   receipts: Signoff[];
-  classicHref: string;
+  /** The control's activity record (the audit trail), below the steps. */
+  activityHref: string;
   /** The agent block for the open step (M1c). */
   agent: Says | null;
   /** The trace rail: the chain of records, and each attribute's row (M1c). */
@@ -109,8 +110,8 @@ export function ControlStepper({
             <UiIcon name={done.final ? "check" : "clock"} size={12} />
             {done.final ? " Final conclusion" : " Not final"}
           </span>
-          <a className="cw-classic" href={classicHref}>
-            All details
+          <a className="cw-classic" href={activityHref}>
+            Activity
           </a>
         </p>
       </nav>

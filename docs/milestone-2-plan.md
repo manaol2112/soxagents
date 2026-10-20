@@ -507,6 +507,116 @@ still name the older sections (the next-steps API, the Home journey bar, the reg
 planning links) work through the redirect and are to be rewritten to the destinations in
 M2d so no request takes the extra hop.
 
+## 15. M2d as built: one control interface, one queue, direct links
+
+**Feature parity first.** Every classic control tab and its actions were inventoried
+against the guided workspace before anything was retired
+([milestone-2-parity.md](milestone-2-parity.md)): the seven tabs, 60-odd write intents
+across the planning, evidence, sampling, testing, exception, remediation, retest,
+assessment, review, conclusion and sign-off routes, the role each needs, where each now
+lives, and the test that covers it. Every action already had a home in a step; the
+Overview and Activity tabs held no writes. No legacy action was hidden without a
+validated replacement.
+
+**The guided workspace is the control's one interface.** The classic tab bar, the audit
+progress bar, the overview's next-action panel, summary metrics and agent roster, and the
+"All details" link are retired. An older `?tab=` link opens the step that holds that
+tab's work (`stepForTab`); `?tab=activity` opens the Activity record, which now sits
+below the steps as a disclosure the stepper links to. No tab was added and no second
+control dashboard exists: the record page is the header, the stepper with its Needs-you
+card, Agent says and trace, the step's body, and the activity record.
+
+**The plan review inside the Plan step.** `PlanReview`, the one component Testing › Plans
+uses, is embedded in the Plan step (exported, with an `embedded` mode that drops the
+breadcrumb, pager and repeated title). Approving, requesting changes, accepting or
+dismissing the planner's revision, answering client values, describing facts, editing
+procedures and evidence, and releasing a phase all run through the same `planning` and
+`phase_release` routes with the same version checks, impact assessments and audit
+events; nothing was reimplemented. The loader reads the master plan and the phase
+progress for an open control.
+
+**One queue, no independent calculation.** The console's inbox is built from the queue
+alone (M2a); the dead legacy derivation (`_waiting_elsewhere`, with its own past-due
+count and sheet-based items) is deleted. Overdue evidence requests are now items of the
+queue themselves (`request-overdue`, one per request past due, the client's to answer and
+the team's to chase); the inbox's `late` entries are those items, and the control's
+"Chase the overdue" step defers to them. The four buckets are preserved; the inbox omits
+UPCOMING and the waits on the client, which wait on no one inside the firm.
+`docs/review/m2d/queue-reconciliation.md` reconciles Home's queue, the inbox and the
+register for the lead, the reviewer and an admin off the team: the inbox count equals
+the queue less those two classes for each viewer, titles match one to one in order, and
+every register row's next step is either the queue's control step or deferred to the
+record's own item.
+
+**Direct links.** Internal links to the moved sections are rewritten to the destinations
+at the source: `canonicalQuery` in `routes.ts` is applied by the shared builders
+(`workspaceHref`, `directoryHref`, the controls page's `href`, the engagement pages'
+`pageHref`, `libraryHref`, `setupHref`, the systems page, the engagement write route's
+redirect) and `planningHref` defaults to Testing; the API's next-steps links name
+`testing`, and the queue's plan-task link names Reports › Schedule. The HTTP redirects
+stay for bookmarks and stored external links and were re-checked live
+(`docs/review/m2d/redirects.md`). Record, control, phase, round and request identifiers
+travel unchanged, as the route tests show.
+
+**Cross-role walkthroughs** (`docs/review/m2d/walkthroughs.md`, screenshots `j1-*` to
+`j6-*`), on the 155-control engagement, every action through the page's own controls:
+
+- The preparer approved a revised plan from the Plan step (state NEEDS_CLARIFICATION →
+  APPROVED, revision 2 approved, two decisions on record), approved a drafted request from
+  the Request step (DRAFT → APPROVAL_PENDING, after the approval checks passed), and
+  accepted a received population (the control's samples item went from BLOCKED to MINE).
+- The reviewer accepted one proposed note and dismissed another with a reason on the
+  Review step (notes OPEN and DISMISSED); the lead's attempt to sign off the review was
+  refused by the API (409, independence).
+- The manager worked from Home, Testing › Results filtered to what needs deciding,
+  Testing › Review, Reports and the register, at desktop and phone width.
+- The control owner opened a portal link, confirmed identity with the one-time code
+  (shown as a local preview: no email is sent in this environment), opened the request
+  and uploaded a file, acknowledged on the page and visible to the team on the request.
+- A concluded control showed its sign-off receipts (testing by Dana Whitfield, review by
+  Riley Okafor) and conclusion; a second sign-off was refused by the API; the activity
+  record opened from an older `?tab=activity` link.
+- A deficiency moved from remediation in progress to ready for retest from Reports ›
+  Deficiencies with the fix date; the retest round opened and the control's Test step
+  showed the Remediation and Retest phases; the queue listed the round as upcoming.
+
+No journey needed a legacy page. Two findings outside the scope of the change: the
+drafted requests on the scale engagement could not be approved until the client's domain
+was on the recipient allowlist (the approval checks say so; the queue's readiness does not
+yet read that check, so the item is MINE while the page refuses), and the portal's
+"Submit evidence" step was not exercised (the upload itself reached the team).
+
+**Legacy capabilities still required.** Producing the five engagement reports (PDF and
+Word) is done in the agent console, which Reports › Status links to and says so. The
+approvals page remains the place where expired and self-approval cases are listed; every
+approval item in the queue opens it. The engagements page sits behind the switcher and
+Settings › Engagements.
+
+**Validation.** Python: `test_queue.py` (seven tests, with the overdue source), the
+inbox-related files (`test_waiting` rewritten: the inbox is the queue's list, so a step
+is titled as the register words it and each overdue request is one `late` item;
+`test_next_steps` points at Testing), the fast set and the critical set. Node: the route
+and link tests (`shell-model`, `directory`, `library-model`, `planning-model`) rewritten
+for the destination addresses, and the whole set. Type checks and lint clean (the known
+`biome.json` endings aside).
+
+**Remaining limitations and technical debt.**
+
+- The queue's readiness for a drafted request does not read the approval checks
+  (recipient allowlist, request quality); the page does. Reading `request_quality` per
+  draft in the queue is the fix, at a cost per request to measure.
+- The console page still exists as a destination (reachable, out of the menu) with its
+  own chat and activity; Milestone 3 makes it the companion panel. Its inbox is the queue.
+- The Settings › Engagement tab is the setup wizard's step pages, which still read as a
+  wizard after launch.
+- Three pages produce addresses to the retained sections (`console`, `approvals`,
+  `projects`) by design; everything else is a destination address. The API's `next_steps`
+  still exists beside the queue for Home's journey bar (figures only).
+- `PlanReview` inside the Plan step loads the master plan and the phase progress on every
+  control open, about two extra reads; the register, sheets, rounds and reviews reads
+  were already there.
+- The 403-control baseline stands (§14); no performance rewrite was undertaken.
+
 ## 10. Out of scope for Milestone 2
 
 The Agent Companion panel (Milestone 3), the onboarding wizard and design tokens

@@ -68,6 +68,9 @@ const SECTIONS = new Set([
   "console",
   "overview",
   "deficiencies",
+  "reports",
+  "settings",
+  "testing",
 ]);
 const QUERY_KEYS = new Set(["control", "step", "tab", "request", "filter"]);
 const QUERY_VALUE = /^[A-Za-z0-9_,-]{1,200}$/;
