@@ -1203,6 +1203,7 @@ class LocalDraftScheduler:
         from ai_workforce_api.testing_engine import MAX_ATTEMPTS as TEST_ATTEMPTS
         from ai_workforce_api.testing_engine import fail_run
 
+        last_error = ""
         for _ in range(TEST_ATTEMPTS):
             try:
                 if self._test(sheet_id) == "AGAIN":
@@ -1211,8 +1212,9 @@ class LocalDraftScheduler:
                 # testing is still open.
                 self._draft_effectiveness(sheet_id)
                 return
-            except Exception:
+            except Exception as error:
                 logger.warning("a test run failed; retrying")
+                last_error = type(error).__name__
                 try:
                     with connect(self._settings.database_url) as connection:
                         connection.execute(
@@ -1223,7 +1225,7 @@ class LocalDraftScheduler:
                 except psycopg.Error:
                     logger.warning("a test run could not be reset for retry")
         with connect(self._settings.database_url) as connection:
-            fail_run(connection, sheet_id)
+            fail_run(connection, sheet_id, last_error)
 
     def schedule_console_turns(self, message_ids: list[UUID]) -> None:
         for message_id in message_ids:

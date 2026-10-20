@@ -5602,3 +5602,33 @@ a.cw-lane:focus-visible {
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
+
+/* Acceptance follow-up: a round's testing basis and its confirmation. */
+.round-basis dd {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.round-basis-form {
+  display: grid;
+  gap: 0.375rem;
+  margin-top: 0.25rem;
+}
+
+.round-basis-form label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.round-basis-form input[type="text"] {
+  font: inherit;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.round-basis-form button {
+  justify-self: start;
+}

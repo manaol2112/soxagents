@@ -54,6 +54,13 @@ class RoundFacts:
     population_blocker: str | None = None
     # Signed-off results of this control await a plan-revision impact decision (W3).
     impact_pending: int = 0
+    # The round's explicit testing basis: absent, or set under a plan revision the
+    # approved plan has since moved past (acceptance follow-up).
+    basis_missing: bool = False
+    basis_stale: bool = False
+    # Reconstructed by migration 0093 for a round opened before basis records existed,
+    # and not yet confirmed by a person.
+    basis_reconstructed: bool = False
     extra: list[str] = field(default_factory=list)
 
 
@@ -66,6 +73,17 @@ def evaluate_round(facts: RoundFacts) -> RoundReadiness:
         blockers.append("Approve the test plan at its current revision")
     if facts.impact_pending:
         blockers.append("Decide the impact of the plan revision on the signed-off results first")
+    if facts.basis_missing:
+        blockers.append("Record the round's testing basis before its samples are approved")
+    elif facts.basis_stale:
+        blockers.append(
+            "Confirm the round's testing basis: the test plan changed after the basis was set"
+        )
+    elif facts.basis_reconstructed:
+        blockers.append(
+            "Confirm the round's testing basis: it was reconstructed when basis records were "
+            "introduced, not approved at the time"
+        )
     if facts.kind == "ROLLFORWARD":
         if facts.interim_conclusion != "EFFECTIVE":
             blockers.append("Interim testing must be signed off effective before a roll-forward")
@@ -105,7 +123,9 @@ def round_facts(
         SELECT r.id, r.kind, r.status, r.test_from, r.engagement_control_id, p.status,
                q.status, d.status, m.status,
                (SELECT s.conclusion FROM test_sheets s
-                WHERE s.engagement_control_id = r.engagement_control_id AND s.test_round_id IS NULL)
+                WHERE s.engagement_control_id = r.engagement_control_id
+                  AND s.test_round_id IS NULL),
+               r.basis, p.approved_revision, r.basis_confirmed_at
         FROM test_rounds r
         LEFT JOIN evidence_plans p ON p.engagement_control_id = r.engagement_control_id
         LEFT JOIN pbc_requests q ON q.id = r.request_id
@@ -158,6 +178,13 @@ def round_facts(
                 deficiency_status=None if row[7] is None else str(row[7]),
                 remediation_request_status=None if row[8] is None else str(row[8]),
                 population_blocker=blocker,
+                basis_missing=not isinstance(row[10], dict),
+                basis_stale=isinstance(row[10], dict)
+                and row[11] is not None
+                and row[10].get("plan_revision") != int(row[11]),
+                basis_reconstructed=isinstance(row[10], dict)
+                and row[10].get("backfilled") is True
+                and row[12] is None,
                 impact_pending=pending.get(control_id, 0),
             )
         )

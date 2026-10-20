@@ -105,6 +105,9 @@ class SheetBody(BaseModel):
     running: bool
     # Queued for the tester, the tester running it now, or neither (agent_runs.py).
     run_state: RunState = "IDLE"
+    # Why the last run stopped before finishing (testing_engine.fail_run), or "": an agent
+    # execution failure, distinct from exceptions in the results.
+    run_note: str = ""
     proposed_conclusion: Conclusion
     conclusion: str | None
     signed_by: str | None
@@ -666,7 +669,7 @@ def _sheet(connection: psycopg.Connection[Any], project_id: UUID, sheet_id: UUID
                s.test_round_id, r.kind,
                (SELECT a.name FROM engagement_applications a
                 WHERE a.id = c.engagement_application_id),
-               s.waiting_note
+               s.waiting_note, s.run_note
         FROM test_sheets s
         JOIN engagement_controls c ON c.id = s.engagement_control_id
         LEFT JOIN users u ON u.id = s.signed_by
@@ -830,6 +833,7 @@ def _sheet(connection: psycopg.Connection[Any], project_id: UUID, sheet_id: UUID
         round_kind=None if row[17] is None else str(row[17]),
         application_name="" if row[18] is None else str(row[18]),
         waiting_note=str(row[19] or ""),
+        run_note=str(row[20] or ""),
     )
 
 

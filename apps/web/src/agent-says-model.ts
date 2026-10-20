@@ -307,7 +307,7 @@ function testStep(input: AgentInput): AgentSays {
     return says;
   }
   const found = results(sheet);
-  const stopped = (input.agents?.stopped ?? []).length > 0 && false;
+  const stopped = !sheet.running && sheet.runNote !== "";
   const run = executionOf({
     agent: "tester",
     run: sheet.runState,
@@ -316,7 +316,12 @@ function testStep(input: AgentInput): AgentSays {
     failed: stopped,
   });
   if (sheet.status === "OPEN") {
-    says.execution = { label: run.label, detail: run.detail };
+    says.execution = stopped
+      ? {
+          label: run.label,
+          detail: `${sheet.runNote} Results already recorded stand; exceptions among them are testing findings, not this.`,
+        }
+      : { label: run.label, detail: run.detail };
   }
   if (found.tested > 0) {
     says.did.push(

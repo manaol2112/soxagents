@@ -1,5 +1,6 @@
 import { formatDate } from "./format";
 import {
+  basisWords,
   ofRound,
   ROUND_STATUS,
   roundNext,
@@ -93,6 +94,60 @@ export function TestRounds({
                   {round.method === "TEST_OF_ONE"
                     ? "Tested once, from current evidence"
                     : `${round.sampleSize} item${round.sampleSize === 1 ? "" : "s"}`}
+                </dd>
+              </div>
+              <div className="round-basis">
+                <dt>Testing basis</dt>
+                <dd>
+                  {basisWords(round.basis)}
+                  {open && round.basis?.stale === true && canAct ? (
+                    <form
+                      method="post"
+                      action="/workspace/round-basis"
+                      autoComplete="off"
+                      className="round-basis-form"
+                    >
+                      <input
+                        type="hidden"
+                        name="organization_id"
+                        value={ids.organizationId}
+                      />
+                      <input
+                        type="hidden"
+                        name="project_id"
+                        value={ids.projectId}
+                      />
+                      <input
+                        type="hidden"
+                        name="control_id"
+                        value={ids.controlId}
+                      />
+                      <input type="hidden" name="round_id" value={round.id} />
+                      <input
+                        type="hidden"
+                        name="version"
+                        value={round.version}
+                      />
+                      <label>
+                        Why the round tests against the plan as approved now
+                        <input
+                          type="text"
+                          name="reason"
+                          maxLength={500}
+                          placeholder="What changed in the plan, and why the round follows it"
+                        />
+                      </label>
+                      <button
+                        type="submit"
+                        className="btn btn-secondary btn-sm"
+                      >
+                        Confirm the testing basis
+                        {round.basis.currentPlanRevision !== null
+                          ? ` (revision ${round.basis.currentPlanRevision})`
+                          : ""}
+                      </button>
+                    </form>
+                  ) : null}
                 </dd>
               </div>
               <div>

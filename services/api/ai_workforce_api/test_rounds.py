@@ -30,14 +30,16 @@ from uuid import UUID
 import psycopg
 from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ai_workforce_api.authorization import (
     Action,
+    Principal,
     _call,
     _session_principal,
     authorize,
 )
+from ai_workforce_api.db import transaction
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.schedule import interim_cutoff
 from ai_workforce_api.settings import Settings
@@ -120,6 +122,9 @@ class RoundBody(BaseModel):
     # (round_readiness.py, W4).
     readiness_state: str | None = None
     readiness_blockers: list[str] = []
+    # The round's explicit testing basis (acceptance follow-up): what it tests against.
+    basis: RoundBasis | None = None
+    version: int = 1
 
 
 def rollforward_size(frequency: str, nature: str) -> tuple[str, int]:
@@ -288,9 +293,10 @@ def _insert_round(
         """
         INSERT INTO test_rounds (
             organization_id, project_id, engagement_control_id, kind, number, method,
-            window_start, window_end, test_from, sample_size, deficiency_id, requested_by
+            window_start, window_end, test_from, sample_size, deficiency_id, requested_by,
+            basis
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT DO NOTHING
         RETURNING id, number
         """,
@@ -307,9 +313,136 @@ def _insert_round(
             size,
             deficiency_id,
             requester,
+            Json(basis_of(cursor, control_id)),
         ),
     ).fetchone()
     return None if row is None else (UUID(str(row[0])), int(row[1]))
+
+
+def basis_of(cursor: psycopg.Cursor[Any], control_id: UUID) -> dict[str, Any]:
+    """The round's testing basis, stated when it is opened and again when a person
+    confirms it: the plan revision approved now, the control's approved attributes and
+    the interim procedures the round carries forward. A round tests against this record,
+    never against whatever the plan says later."""
+    row = cursor.execute(
+        """
+        SELECT p.approved_revision, c.test_attributes,
+               (SELECT ph.procedures FROM evidence_plan_phases ph
+                WHERE ph.plan_id = p.id AND ph.phase = 'INTERIM')
+        FROM engagement_controls c
+        LEFT JOIN evidence_plans p ON p.engagement_control_id = c.id
+        WHERE c.id = %s
+        """,
+        (control_id,),
+    ).fetchone()
+    attributes = [str(item) for item in (row[1] if row is not None else []) or []]
+    procedures = [str(item) for item in (row[2] if row is not None else []) or []]
+    return {
+        "plan_revision": None if row is None or row[0] is None else int(row[0]),
+        "attributes": attributes,
+        "procedures": procedures,
+        "source": "CONTROL_APPROVED_SET",
+        "stamped_at": datetime.now(UTC).isoformat(),
+    }
+
+
+class RoundBasis(BaseModel):
+    """What a round tests against, as recorded when it was opened or last confirmed."""
+
+    plan_revision: int | None
+    attributes: list[str]
+    procedures: list[str]
+    source: str
+    stamped_at: str
+    backfilled: bool = False
+    confirmed_by: str | None = None
+    confirmed_at: datetime | None = None
+    # The plan's approved revision now; the basis is stale when it moved past the record.
+    current_plan_revision: int | None = None
+    stale: bool = False
+
+
+def _basis_body(
+    raw: Any, confirmed_by: Any, confirmed_at: Any, current_revision: Any
+) -> RoundBasis | None:
+    if not isinstance(raw, dict):
+        return None
+    revision = raw.get("plan_revision")
+    current = None if current_revision is None else int(current_revision)
+    backfilled = raw.get("backfilled") is True
+    # A basis reconstructed by migration 0093 for a round opened before basis records
+    # existed was never approved as the round's basis: its source says so, and it
+    # stands only once a person confirms it.
+    reconstructed = backfilled and confirmed_by is None
+    return RoundBasis(
+        plan_revision=None if revision is None else int(revision),
+        attributes=[str(item) for item in raw.get("attributes") or []],
+        procedures=[str(item) for item in raw.get("procedures") or []],
+        source="RECONSTRUCTED"
+        if reconstructed
+        else str(raw.get("source") or "CONTROL_APPROVED_SET"),
+        stamped_at=str(raw.get("stamped_at") or ""),
+        backfilled=backfilled,
+        confirmed_by=None if confirmed_by is None else str(confirmed_by),
+        confirmed_at=confirmed_at,
+        current_plan_revision=current,
+        stale=(current is not None and revision != current) or reconstructed,
+    )
+
+
+class BasisBody(BaseModel):
+    # The round version the person saw: a confirmation never lands on a changed round.
+    version: int = Field(ge=1)
+    reason: str = Field(default="", max_length=500)
+
+
+def confirm_basis(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    round_id: UUID,
+    body: BasisBody,
+) -> RoundBody:
+    """A person confirms the round's testing basis against the plan as approved now,
+    after the plan changed since the basis was set. The record keeps who and when."""
+    authorize(
+        connection,
+        principal=principal,
+        action=Action.TASK_UPDATE,
+        organization_id=organization_id,
+        project_id=project_id,
+    )
+    with transaction(connection) as cursor:
+        row = cursor.execute(
+            "SELECT engagement_control_id, status, version FROM test_rounds "
+            "WHERE id = %s AND project_id = %s FOR UPDATE",
+            (round_id, project_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("round not found")
+        if int(row[2]) != body.version:
+            raise ValueError("the round changed; reload and confirm again")
+        if str(row[1]) not in ("REQUESTED", "TESTING"):
+            raise ValueError("the round is closed; its basis stands as recorded")
+        basis = basis_of(cursor, UUID(str(row[0])))
+        if basis["plan_revision"] is None:
+            raise ValueError("the test plan is not approved at any revision")
+        cursor.execute(
+            """
+            UPDATE test_rounds
+            SET basis = %s, basis_confirmed_by = %s, basis_confirmed_at = clock_timestamp(),
+                version = version + 1
+            WHERE id = %s
+            """,
+            (Json(basis), principal.id, round_id),
+        )
+        _audit(
+            cursor, organization_id, project_id, principal.id, "round.basis_confirmed", "round",
+            round_id, {"plan_revision": basis["plan_revision"], "reason": body.reason[:200]},
+        )  # fmt: skip
+    found = next(item for item in rounds(connection, project_id) if item.id == round_id)
+    return found
 
 
 # Roll-forward
@@ -802,11 +935,14 @@ def rounds(connection: Any, project_id: UUID) -> list[RoundBody]:
                r.conclusion, r.cancel_reason, r.created_at,
                (SELECT a.name FROM engagement_applications a
                 WHERE a.id = c.engagement_application_id),
-               (SELECT v.status FROM control_reviews v WHERE v.test_round_id = r.id)
+               (SELECT v.status FROM control_reviews v WHERE v.test_round_id = r.id),
+               r.basis, bu.display_name, r.basis_confirmed_at, p.approved_revision, r.version
         FROM test_rounds r
         JOIN engagement_controls c ON c.id = r.engagement_control_id
         LEFT JOIN deficiencies d ON d.id = r.deficiency_id
         LEFT JOIN pbc_requests q ON q.id = r.request_id
+        LEFT JOIN users bu ON bu.id = r.basis_confirmed_by
+        LEFT JOIN evidence_plans p ON p.engagement_control_id = r.engagement_control_id
         WHERE r.project_id = %s
         ORDER BY c.control_ref, r.created_at
         """,
@@ -837,6 +973,8 @@ def rounds(connection: Any, project_id: UUID) -> list[RoundBody]:
             created_at=row[20],
             application_name="" if row[21] is None else str(row[21]),
             review_status=None if row[22] is None else str(row[22]),
+            basis=_basis_body(row[23], row[24], row[25], row[26]),
+            version=int(row[27]),
         )
         for row in rows
     ]
@@ -871,6 +1009,20 @@ def register_test_rounds(app: FastAPI, settings: Settings) -> None:
             return _call(settings, work)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
+
+    @app.post(f"{base}/test-rounds/{{round_id}}/basis")
+    def confirm_round_basis(
+        organization_id: UUID, project_id: UUID, round_id: UUID, body: BasisBody, request: Request
+    ) -> RoundBody:
+        principal = _session_principal(request)
+
+        def work(connection: psycopg.Connection[Any]) -> RoundBody:
+            return confirm_basis(connection, principal, organization_id, project_id, round_id, body)
+
+        try:
+            return _call(settings, work)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from None
 
 
 def _audit(

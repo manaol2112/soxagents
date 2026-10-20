@@ -154,6 +154,21 @@ describe("test sheet model", () => {
       label: "The tester is running",
       tone: "info",
     });
+    // A run that stopped before finishing says so: an agent execution failure, with
+    // running again as the recovery; it is not a testing failure.
+    const [stopped] =
+      parseSheets([
+        raw({
+          run_note:
+            "The tester's run stopped before finishing; a person runs it again. (TimeoutError)",
+        }),
+      ]) ?? [];
+    assert.ok(stopped !== undefined);
+    assert.equal(stopped.runNote.startsWith("The tester's run stopped"), true);
+    assert.deepEqual(sheetHeadline(stopped, local), {
+      label: "Tester run stopped · run again",
+      tone: "warning",
+    });
   });
 
   it("builds each write and refuses bad input", () => {

@@ -334,8 +334,66 @@ describe("the trace rail", () => {
     assert.equal(nodes[2]?.state, "missing");
     assert.match(
       nodes[2]?.summary ?? "",
-      /No retest-specific procedures are approved on the plan; the interim procedures are not shown/,
+      /No procedures are recorded on the round's testing basis; the interim procedures are not shown/,
     );
+    // With a recorded basis, the retest's objective and procedures are recorded links
+    // of their own; a stale basis makes them partial until a person confirms it.
+    const withBasis = traceOf(
+      input({
+        journey: atRetest,
+        sheet: retestSheet,
+        round: {
+          kind: "RETEST",
+          number: 1,
+          deficiencyReference: "D-001",
+          requestStatus: "RECEIVED",
+          basis: {
+            planRevision: 2,
+            attributes: ["a", "b"],
+            procedures: ["Inspect the request.", "Compare the access."],
+            confirmedBy: "Dana Whitfield",
+            stale: false,
+            currentPlanRevision: 2,
+          },
+        },
+      }),
+    );
+    assert.equal(withBasis[0]?.state, "recorded");
+    assert.match(
+      withBasis[0]?.summary ?? "",
+      /against its recorded testing basis: plan revision 2, confirmed by Dana Whitfield/,
+    );
+    assert.equal(withBasis[2]?.state, "recorded");
+    assert.match(
+      withBasis[2]?.summary ?? "",
+      /^2 procedures on the round's recorded testing basis \(plan revision 2\)/,
+    );
+    const stale = traceOf(
+      input({
+        journey: atRetest,
+        sheet: retestSheet,
+        round: {
+          kind: "RETEST",
+          number: 1,
+          deficiencyReference: "D-001",
+          requestStatus: "RECEIVED",
+          basis: {
+            planRevision: 1,
+            attributes: ["a"],
+            procedures: ["Inspect the request."],
+            confirmedBy: null,
+            stale: true,
+            currentPlanRevision: 2,
+          },
+        },
+      }),
+    );
+    assert.equal(stale[0]?.state, "partial");
+    assert.match(
+      stale[0]?.summary ?? "",
+      /moved to revision 2, so the basis awaits confirmation/,
+    );
+    assert.equal(stale[2]?.state, "partial");
     assert.match(
       nodes[3]?.summary ?? "",
       /on the retest sheet, carried from the control's approved set/,

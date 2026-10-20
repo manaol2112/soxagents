@@ -846,7 +846,8 @@ def request_run(cursor: psycopg.Cursor[Any], sheet_id: UUID) -> UUID | None:
         UPDATE test_sheets
         SET run_requested_at = clock_timestamp(),
             run_status = CASE WHEN run_status = 'WORKING' THEN 'WORKING' ELSE 'PENDING' END,
-            attempts = CASE WHEN run_status = 'WORKING' THEN attempts ELSE 0 END
+            attempts = CASE WHEN run_status = 'WORKING' THEN attempts ELSE 0 END,
+            run_note = ''
         WHERE id = %s AND status = 'OPEN'
         RETURNING id
         """,
@@ -946,14 +947,34 @@ def open_runs(connection: psycopg.Connection[Any]) -> list[UUID]:
     return [UUID(str(row[0])) for row in rows]
 
 
-def fail_run(connection: psycopg.Connection[Any], sheet_id: UUID) -> None:
-    """After the last retry the run stops. Items left untested show as not tested."""
+TEST_RUN_FAILED = "The tester's run stopped before finishing; a person runs it again."
+
+
+def fail_run(connection: psycopg.Connection[Any], sheet_id: UUID, reason: str = "") -> None:
+    """After the last retry the run stops. Items left untested show as not tested. The
+    sheet keeps a note of the stop (an agent execution failure, distinct from exceptions
+    in the results) and the activity records it, so a person sees what happened and that
+    running it again is the recovery."""
+    note = f"{TEST_RUN_FAILED} ({reason})" if reason else TEST_RUN_FAILED
     with transaction(connection) as cursor:
-        cursor.execute(
-            "UPDATE test_sheets SET run_status = 'IDLE', lease_until = NULL "
-            "WHERE id = %s AND run_status IN ('PENDING', 'WORKING')",
-            (sheet_id,),
-        )
+        row = cursor.execute(
+            """
+            UPDATE test_sheets SET run_status = 'IDLE', lease_until = NULL, run_note = %s
+            WHERE id = %s AND run_status IN ('PENDING', 'WORKING')
+            RETURNING organization_id, project_id, requested_by
+            """,
+            (note[:500], sheet_id),
+        ).fetchone()
+        if row is not None:
+            _audit(
+                cursor,
+                row[0],
+                row[1],
+                row[2],
+                sheet_id,
+                "testing.run_failed",
+                {"agent": "control-tester", "reason": reason[:200]},
+            )
 
 
 def test_runner(settings: Settings, provider: ModelProvider | None = None) -> TestRunner:
@@ -1067,7 +1088,7 @@ def run_sheet(
             UPDATE test_sheets
             SET run_status = CASE WHEN run_requested_at > run_started_at THEN 'PENDING'
                                   ELSE 'IDLE' END,
-                attempts = 0, lease_until = NULL
+                attempts = 0, lease_until = NULL, run_note = ''
             WHERE id = %s AND run_status = 'WORKING'
             RETURNING run_status
             """,

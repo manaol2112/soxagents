@@ -277,6 +277,23 @@ describe("the control's journey", () => {
       review: true,
       final: false,
     });
+    // Remediation is evidence of a fix, reviewed through the retest's review: it never
+    // keeps the review open on its own.
+    const remediated = journey({
+      step: "DONE",
+      final: true,
+      phases: [
+        phase("DESIGN", "REVIEWED"),
+        phase("INTERIM", "REVIEWED"),
+        phase("REMEDIATION", "SIGNED_OFF"),
+        phase("RETEST", "REVIEWED"),
+      ],
+    });
+    assert.deepEqual(completion(remediated), {
+      testing: true,
+      review: true,
+      final: true,
+    });
     assert.deepEqual(
       completion(
         journey({

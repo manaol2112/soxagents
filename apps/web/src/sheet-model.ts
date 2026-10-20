@@ -144,6 +144,9 @@ export type TestSheet = {
   status: "OPEN" | "SIGNED_OFF";
   running: boolean;
   runState: RunState;
+  /** Why the last run stopped before finishing, or "" (an agent execution failure, not
+   * a testing failure: exceptions in the results are results). */
+  runNote: string;
   proposedConclusion: "EFFECTIVE" | "NOT_EFFECTIVE" | "INCOMPLETE";
   conclusion: "EFFECTIVE" | "NOT_EFFECTIVE" | null;
   signedBy: string | null;
@@ -208,6 +211,7 @@ export function parseSheets(value: unknown): TestSheet[] | null {
       status: raw.status === "SIGNED_OFF" ? "SIGNED_OFF" : "OPEN",
       running: raw.running === true,
       runState: parseRunState(raw.run_state, raw.running === true),
+      runNote: typeof raw.run_note === "string" ? raw.run_note : "",
       proposedConclusion:
         raw.proposed_conclusion === "EFFECTIVE" ||
         raw.proposed_conclusion === "NOT_EFFECTIVE"
@@ -342,6 +346,9 @@ export function sheetHeadline(
     return sheet.conclusion === "EFFECTIVE"
       ? { label: "Signed off · effective", tone: "success" }
       : { label: "Signed off · not effective", tone: "danger" };
+  }
+  if (!sheet.running && sheet.runNote !== "") {
+    return { label: "Tester run stopped · run again", tone: "warning" };
   }
   if (sheet.running) {
     const run = executionOf({

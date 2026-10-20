@@ -152,7 +152,7 @@ import { canManageProjects } from "./shell-model";
 import { TestBasisCard } from "./test-basis-view";
 import { testFor } from "./testing-model";
 import { TestPlanCard } from "./testing-view";
-import { traceOf, traceRows } from "./trace-model";
+import { type TraceRound, traceOf, traceRows } from "./trace-model";
 import { UiIcon } from "./ui-icon";
 import { canDecide, canRequestEvidence } from "./workflow-model";
 import { WorkpapersTab } from "./workpaper-view";
@@ -1171,7 +1171,20 @@ function ControlRecord({
           round:
             journey?.stepPhase === "ROLLFORWARD" ||
             journey?.stepPhase === "RETEST"
-              ? (rounds.find((item) => item.kind === journey.stepPhase) ?? null)
+              ? ((): TraceRound | null => {
+                  const found =
+                    rounds.find((item) => item.kind === journey.stepPhase) ??
+                    null;
+                  return found === null
+                    ? null
+                    : {
+                        kind: found.kind,
+                        number: found.number,
+                        deficiencyReference: found.deficiencyReference,
+                        requestStatus: found.requestStatus,
+                        basis: found.basis,
+                      };
+                })()
               : null,
         };
         return { nodes: traceOf(traceInput), rows: traceRows(traceInput) };
@@ -1182,14 +1195,16 @@ function ControlRecord({
   // The viewer's next action: what needs them, most pressing first (attentionOf), then an
   // agent that stopped before finishing; with none, the control's own next step when it
   // is theirs, and a drafted control's batch submission.
-  const fallback: AttentionItem | null =
-    link !== null
+  // The canonical next step, as the register states it: the viewer's action when it is
+  // theirs, else what the control waits on (the same state as the guided Needs-you).
+  const canonical: AttentionItem | null =
+    link !== null && control.progress !== "CONCLUDED" && !control.drafted
       ? {
           key: `next-${control.nextStep}`,
           title: control.nextStep,
-          detail: "",
-          owner: "You",
-          kind: "action",
+          detail: control.overdue ? "Overdue" : "",
+          owner: control.yours ? "You" : who,
+          kind: control.yours ? "action" : "waiting",
           anchor: "",
           quick: null,
           ...(firstEvidence !== undefined &&
@@ -1225,7 +1240,7 @@ function ControlRecord({
     lanes,
     control,
     canAct,
-    fallback,
+    canonical,
   });
   const metrics = summaryMetrics(input);
   // The request opened on the Evidence tab (?request=), with its review.

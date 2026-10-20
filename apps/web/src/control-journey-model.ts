@@ -460,8 +460,10 @@ export function completion(journey: ControlJourney | null): {
     applicable.every(
       (item) => item.state === "SIGNED_OFF" || item.state === "REVIEWED",
     );
+  // Remediation is evidence of the fix, not testing: it is never reviewed on its own
+  // (the retest's review covers it), so it does not hold the review open.
+  const reviewed = applicable.filter((item) => item.phase !== "REMEDIATION");
   const review =
-    applicable.length > 0 &&
-    applicable.every((item) => item.state === "REVIEWED");
+    reviewed.length > 0 && reviewed.every((item) => item.state === "REVIEWED");
   return { testing, review, final: journey.final };
 }

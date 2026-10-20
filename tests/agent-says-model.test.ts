@@ -64,6 +64,7 @@ const sheet = (over: Partial<TestSheet> = {}): TestSheet => ({
   testRoundId: null,
   roundKind: null,
   waitingNote: "",
+  runNote: "",
   method: "SAMPLE",
   attributes: ["A request exists", "The request was approved"],
   status: "OPEN",

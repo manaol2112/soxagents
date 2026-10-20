@@ -65,6 +65,15 @@ export type TraceRound = {
   number: number;
   deficiencyReference: string | null;
   requestStatus: string | null;
+  /** The round's recorded testing basis, when the API states one. */
+  basis?: {
+    planRevision: number | null;
+    attributes: string[];
+    procedures: string[];
+    confirmedBy: string | null;
+    stale: boolean;
+    currentPlanRevision: number | null;
+  } | null;
 };
 
 export const TRACE_LABELS: Record<TraceKind, string> = {
@@ -192,8 +201,14 @@ export function traceOf(input: TraceInput): TraceNode[] {
         ? {
             kind: "objective",
             label: TRACE_LABELS.objective,
-            state: "partial",
-            summary: `Retest round ${retest.number}${retest.deficiencyReference !== null ? ` of ${retest.deficiencyReference}` : ""}: the round record states what is retested; no retest-specific objective is on the approved plan.`,
+            state:
+              retest.basis != null && !retest.basis.stale
+                ? "recorded"
+                : "partial",
+            summary:
+              retest.basis != null
+                ? `Retest round ${retest.number}${retest.deficiencyReference !== null ? ` of ${retest.deficiencyReference}` : ""} against its recorded testing basis: plan revision ${retest.basis.planRevision ?? "(unapproved)"}${retest.basis.confirmedBy !== null ? `, confirmed by ${retest.basis.confirmedBy}` : ", stated when the round opened"}${retest.basis.stale ? `; the plan has moved to revision ${retest.basis.currentPlanRevision}, so the basis awaits confirmation` : ""}.`
+                : `Retest round ${retest.number}${retest.deficiencyReference !== null ? ` of ${retest.deficiencyReference}` : ""}: the round record states what is retested; no retest-specific objective is on the approved plan.`,
             items: [],
             href: input.hrefs.TEST ?? null,
           }
@@ -227,19 +242,29 @@ export function traceOf(input: TraceInput): TraceNode[] {
         },
   );
 
-  const procedures = phase?.procedures ?? [];
+  const basisProcedures = retest?.basis?.procedures ?? [];
+  const procedures =
+    retest !== null ? basisProcedures : (phase?.procedures ?? []);
   nodes.push({
     kind: "procedure",
     label: TRACE_LABELS.procedure,
-    state: procedures.length > 0 ? "recorded" : "missing",
+    state:
+      procedures.length > 0
+        ? retest?.basis?.stale === true
+          ? "partial"
+          : "recorded"
+        : "missing",
     summary:
       procedures.length > 0
-        ? `${plural(procedures.length, "test procedure")}${phase !== null ? ` for ${phase.label.toLowerCase()}` : ""}`
+        ? retest !== null
+          ? `${plural(procedures.length, "procedure")} on the round's recorded testing basis (plan revision ${retest.basis?.planRevision ?? "(unapproved)"}), carried from the approved plan${retest.basis?.stale === true ? "; the plan has moved since, so the basis awaits confirmation" : ""}`
+          : `${plural(procedures.length, "test procedure")}${phase !== null ? ` for ${phase.label.toLowerCase()}` : ""}`
         : retest !== null
-          ? "No retest-specific procedures are approved on the plan; the interim procedures are not shown as the retest's."
+          ? "No procedures are recorded on the round's testing basis; the interim procedures are not shown as the retest's."
           : "No test procedures are recorded on the plan.",
     items: procedures,
-    href: input.hrefs.PLAN ?? null,
+    href:
+      retest !== null ? (input.hrefs.TEST ?? null) : (input.hrefs.PLAN ?? null),
   });
 
   nodes.push({
@@ -248,7 +273,7 @@ export function traceOf(input: TraceInput): TraceNode[] {
     state: rows.length > 0 ? "recorded" : "missing",
     summary:
       rows.length > 0
-        ? `${plural(rows.length, "test attribute")}${sheet === null ? " (approved; not yet on a test sheet)" : retest !== null ? " on the retest sheet, carried from the control's approved set" : ""}`
+        ? `${plural(rows.length, "test attribute")}${sheet === null ? " (approved; not yet on a test sheet)" : retest !== null ? ` on the retest sheet, ${retest.basis != null ? "as recorded on the round's testing basis" : "carried from the control's approved set"}` : ""}`
         : "No test attributes are approved.",
     items: rows.map((row) => `${row.code} ${row.attribute}`),
     href: input.hrefs.PLAN ?? null,

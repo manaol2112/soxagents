@@ -6,7 +6,11 @@ Source specification: AI Employee Workforce Cursor Build Plan.
 
 ## Current milestone
 
-**Milestone 1d: corrections and the guided walkthrough.** Authorized by the product owner with M1c's conditional acceptance ([milestone-1-plan.md §12](milestone-1-plan.md)). Complete, pending the owner's review of the Milestone 1 completion report; no migration; one read-only route (`workspace/automation`).
+**Milestone 2: consolidate the auditor experience.** Plan written for the product owner's review ([milestone-2-plan.md](milestone-2-plan.md)): one canonical queue, the Testing destination, Reports and Settings, six-item navigation, retirement of the client-side derivations and the classic view only after validation. No Milestone 2 code until the plan is approved.
+
+**Milestone 1 accepted (M1a–M1d, commits 4e1987f, 1574154, 71e38e7).** Before Milestone 2: the acceptance walkthrough of one control's full lifecycle ([acceptance-walkthrough.md](acceptance-walkthrough.md), screenshots in `docs/review/acceptance/`) and three follow-ups, pending the owner's review: the classic next-action panel consumes the canonical next step; a round records an explicit testing basis that a person confirms when the plan changes (migration 0093, `POST …/test-rounds/{id}/basis`); a tester run that stops leaves its note and activity, kept apart from testing failures.
+
+**Milestone 1d: corrections and the guided walkthrough.** Authorized by the product owner with M1c's conditional acceptance ([milestone-1-plan.md §12](milestone-1-plan.md)). Complete; no migration; one read-only route (`workspace/automation`).
 
 - Agent execution states come from run records and the automation status, never from the sheet's workflow state; with no worker configured, automation is shown as unavailable. A preparer's step is the viewer's only by assignment or engagement role. Agent says is concise with details expandable. The retest's trace shows its unsupported links instead of borrowing the interim plan. Classic headers, the repeated review explanation and the effective-after-dismissal wording are corrected. Walkthrough verified on seven demo scenarios ([docs/review/README.md](review/README.md)).
 - M1c (complete, committed in 1574154): the agent block and the trace rail ([milestone-1-plan.md §11](milestone-1-plan.md)).

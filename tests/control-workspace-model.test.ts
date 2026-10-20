@@ -72,6 +72,7 @@ const request = (
 
 function sheet(overrides: Partial<TestSheet>): TestSheet {
   return {
+    runNote: "",
     id: "s1",
     controlId: "c1",
     controlRef: "ITGC-AC-01",
@@ -1435,6 +1436,39 @@ describe("the viewer's next action", () => {
         fallback,
       }).primary?.key,
       "next-step",
+    );
+  });
+
+  it("leads with the control's canonical next step, as the viewer's action or as what it waits on", () => {
+    // The same state the guided Needs-you card shows (acceptance follow-up).
+    const mine = item("next-Approve the samples", "action");
+    const led = nextActionOf({
+      attention: [item("decide", "action"), item("wait", "waiting")],
+      lanes: idle,
+      control: row({}),
+      canAct: true,
+      canonical: mine,
+    });
+    assert.equal(led.primary?.key, "next-Approve the samples");
+    assert.deepEqual(
+      led.more.map((entry) => entry.key),
+      ["decide"],
+    );
+    const theirs = {
+      ...item("next-Chase the request", "waiting"),
+      owner: "The preparer",
+    };
+    const waits = nextActionOf({
+      attention: [item("decide", "action"), item("wait", "waiting")],
+      lanes: idle,
+      control: row({}),
+      canAct: true,
+      canonical: theirs,
+    });
+    assert.equal(waits.primary?.key, "decide");
+    assert.deepEqual(
+      waits.waiting.map((entry) => entry.key),
+      ["next-Chase the request", "wait"],
     );
   });
 

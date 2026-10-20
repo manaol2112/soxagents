@@ -794,7 +794,7 @@ def activities_for(
     async def fail_test_run(sheet_id: str) -> None:
         def fail() -> None:
             with connect(database_url) as connection:
-                fail_run(connection, UUID(sheet_id))
+                fail_run(connection, UUID(sheet_id), "the workflow's retries ran out")
 
         await asyncio.to_thread(fail)
 

@@ -77,3 +77,10 @@ open with the agent's notes, not signed (`demo-review-open`).
 Rebuilding the demo database: the builder script lives outside the repository (it drives
 the test fixtures); the API is pointed at `ai_workforce_demo` with the test environment
 (independence required, no model, no worker, no live email).
+
+## acceptance — the lifecycle walkthrough
+
+One control, ITGC-AC-01, from onboarding to its final conclusion on an isolated database,
+twelve stages with a screenshot each (`01-…` to `12-…`), the stage log (`walk-log.md`)
+and the sign-off history the API returned (`signoff-history.json`). The report, with
+what was real and what was simulated, is [docs/acceptance-walkthrough.md](../acceptance-walkthrough.md).

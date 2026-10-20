@@ -638,6 +638,10 @@ export function nextActionOf(input: {
   /** Whether the viewer may start an agent again (the API checks it again). */
   canAct: boolean;
   fallback?: AttentionItem | null;
+  /** The control's canonical next step (the register's next_step, actor and yours), the
+   * same state the guided workspace's Needs-you card shows: it leads, as the viewer's
+   * action or as what the control waits on (M1 acceptance follow-up). */
+  canonical?: AttentionItem | null;
 }): NextAction {
   const stopped: AttentionItem[] = input.lanes
     .filter((lane) => lane.run === "stopped")
@@ -661,6 +665,26 @@ export function nextActionOf(input: {
   ];
   if (yours.length === 0 && input.fallback) {
     yours.push(input.fallback);
+  }
+  if (input.canonical) {
+    const same = (item: AttentionItem) =>
+      item.key === input.canonical?.key ||
+      item.title === input.canonical?.title;
+    if (input.canonical.kind === "waiting") {
+      waiting.splice(
+        0,
+        waiting.length,
+        input.canonical,
+        ...waiting.filter((i) => !same(i)),
+      );
+    } else {
+      yours.splice(
+        0,
+        yours.length,
+        input.canonical,
+        ...yours.filter((i) => !same(i)),
+      );
+    }
   }
   const summary = laneSummary(input.lanes);
   return {
@@ -1328,7 +1352,7 @@ export function agentLanes(input: WorkspaceInput): AgentLane[] {
       sheet !== null &&
       sheet.status === "OPEN" &&
       sheet.runState === "IDLE" &&
-      control.sheetLeft === "TESTING";
+      (control.sheetLeft === "TESTING" || sheet.runNote !== "");
     const untested =
       sheet === null
         ? 0
@@ -1369,7 +1393,9 @@ export function agentLanes(input: WorkspaceInput): AgentLane[] {
         sheet === null
           ? ""
           : stopped
-            ? `Stopped with ${plural(untested, "item")} untested. A person runs it again.`
+            ? sheet.runNote !== ""
+              ? `${sheet.runNote} ${plural(untested, "item")} untested.`
+              : `Stopped with ${plural(untested, "item")} untested. A person runs it again.`
             : sheet.runState === "RUNNING"
               ? `Testing ${plural(sheet.counts.items, "item")}`
               : sheet.runState === "QUEUED"

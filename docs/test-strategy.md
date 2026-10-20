@@ -130,3 +130,10 @@ and `workflow-model` (queue sources).
   builder now states a configured worker, and one case states none), and the
   whose-step test ("a preparer's step is anyone's who can work on tasks" → an engagement
   lead's or preparer's, or the assignee's).
+- Acceptance follow-ups (20 October 2026; migration 0093, `test_rounds.py`,
+  `round_readiness.py`, `testing_engine.py`, the worker loops): `test_round_basis.py` added
+  to the fast and critical sets. `make test-critical` **355 passed, 0 failed in 4 min
+  40 s**; `make test-fast` **86 Python passed in 2 min 15 s and 103 Node passed**; the
+  whole Node set **703 passed**; type checks clean; lint clean except the known
+  `biome.json` line endings. The acceptance walkthrough itself ran the twelve stages
+  through the API on an isolated database (docs/acceptance-walkthrough.md).

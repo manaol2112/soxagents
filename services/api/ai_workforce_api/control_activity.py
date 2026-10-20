@@ -96,6 +96,7 @@ _TITLES: dict[str, tuple[Category, str]] = {
     "testing.signed_off": ("testing", "Testing signed off"),
     "testing.reopened": ("testing", "Testing reopened"),
     "testing.retest": ("testing", "Testing run again"),
+    "testing.run_failed": ("error", "Testing run stopped"),
     "testing.sheet_replaced": ("testing", "Test sheet replaced"),
     "testing.round_started": ("testing", "Roll-forward or retest round started"),
     "testing.round_signed_off": ("testing", "Round signed off"),
