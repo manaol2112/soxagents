@@ -60,14 +60,15 @@ from ai_workforce_api.db import transaction
 from ai_workforce_api.definition_registry import BY_LIBRARY_KEY, definition_version
 from ai_workforce_api.evidence_matching import _words
 from ai_workforce_api.library_governance import Status, category_for, effective_status
-from ai_workforce_api.model_providers import CLAUDE_CONFIG, call_note, live_model, provider_for
-from ai_workforce_api.models import ModelProvider, ModelRequest, complete, record_call
+from ai_workforce_api.model_providers import fallback_note, live_model, provider_for
+from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.statement_registry import statement_for
 from ai_workforce_api.testing_definitions import TESTED, Definition
 
 MatchStatus = Literal["STRONG", "PARTIAL", "NONE"]
-DecidedBy = Literal["RULES", "MODEL"]
+DecidedBy = Literal["RULES", "MODEL", "FALLBACK"]
 
 # A client RCM whose "test procedures" column only restates the activity states no
 # procedure of its own: the client's basis would test nothing specific.
@@ -881,8 +882,19 @@ def run_match(
     note = ""
     call_id: UUID | None = None
     if provider is not None and shortlist:
-        status, raw = complete(
+        call = AgentCaller(
+            connection,
             provider,
+            Job(
+                "evidence-reader",
+                "engagement_control",
+                facts.control_id,
+                facts.organization_id,
+                facts.project_id,
+                actor,
+                agent_instance_id=agent_actor(connection, facts.project_id, "evidence-coordinator"),
+            ),  # fmt: skip
+        ).generate(
             ModelRequest(
                 operation="generate",
                 prompt=adjudicate_prompt(facts, shortlist),
@@ -892,20 +904,20 @@ def run_match(
                 cancelled=False,
                 system=ADJUDICATE_SYSTEM,
             ),
-            CLAUDE_CONFIG,
+            "library-match/1",
+            {"control": str(facts.control_id), "candidates": len(shortlist)},
         )
-        call_id = record_call(
-            connection, actor, facts.organization_id, facts.project_id, "claude", status, raw,
-            CLAUDE_CONFIG,
-        )  # fmt: skip
+        status, raw, call_id = call.status, call.raw, call.call_id
         if status == "SUCCEEDED" and raw.output is not None:
             try:
                 shortlist = check_adjudication(dict(raw.output), facts, shortlist)
                 decided = "MODEL"
             except ValueError as error:
+                decided = "FALLBACK"
                 note = f"The agent's match was rejected ({error}); the rules' candidates stand."
         else:
-            note = call_note(status)
+            decided = "FALLBACK"
+            note = fallback_note(status, "the rules' candidates stand")
     elif provider is None:
         note = "No model is configured; the rules ranked the candidates."
     with transaction(connection) as cursor:

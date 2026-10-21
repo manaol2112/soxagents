@@ -68,6 +68,24 @@ describe("drafted evidence requests", () => {
     assert.equal(draftLabel(undefined), null);
   });
 
+  it("tells a rules draft after a model failure apart from a deliberate one", () => {
+    // Milestone 3a: FALLBACK is the rules' draft after the model failed; the label says
+    // the model did not answer, never that an agent drafted it.
+    const fallback = parseDrafts([
+      draft({
+        source: "FALLBACK",
+        note: "The model did not answer in time. The model did not produce this; the reviewed rules drafted the request instead.",
+      }),
+    ]).get(requestId);
+    assert.equal(fallback?.source, "FALLBACK");
+    assert.deepEqual(draftLabel(fallback), {
+      label: "Drafted from the RCM; the model did not answer",
+      tone: "warning",
+    });
+    const unknown = parseDrafts([draft({ source: "WHATEVER" })]).get(requestId);
+    assert.equal(unknown?.source, null);
+  });
+
   it("titles a request by its summary, else its first line", () => {
     const drafted = parseDrafts([draft()]).get(requestId);
     assert.equal(

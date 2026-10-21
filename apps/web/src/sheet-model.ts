@@ -6,7 +6,12 @@
 
 import type { EvidenceCitation } from "./evidence-preview-model.ts";
 import { type Automation, executionOf } from "./execution-model.ts";
-import { parseRunState, type RunState } from "./run-state.ts";
+import {
+  type CancelState,
+  parseCancelState,
+  parseRunState,
+  type RunState,
+} from "./run-state.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CREDENTIAL =
@@ -147,6 +152,8 @@ export type TestSheet = {
   /** Why the last run stopped before finishing, or "" (an agent execution failure, not
    * a testing failure: exceptions in the results are results). */
   runNote: string;
+  /** A person's cancellation of the run, when one is pending or was the last outcome. */
+  cancelState?: CancelState;
   proposedConclusion: "EFFECTIVE" | "NOT_EFFECTIVE" | "INCOMPLETE";
   conclusion: "EFFECTIVE" | "NOT_EFFECTIVE" | null;
   signedBy: string | null;
@@ -212,6 +219,7 @@ export function parseSheets(value: unknown): TestSheet[] | null {
       running: raw.running === true,
       runState: parseRunState(raw.run_state, raw.running === true),
       runNote: typeof raw.run_note === "string" ? raw.run_note : "",
+      cancelState: parseCancelState(raw.cancel_state),
       proposedConclusion:
         raw.proposed_conclusion === "EFFECTIVE" ||
         raw.proposed_conclusion === "NOT_EFFECTIVE"

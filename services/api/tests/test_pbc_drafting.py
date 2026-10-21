@@ -293,9 +293,12 @@ def test_the_design_request_asks_for_design_evidence_and_no_population(
         note = connection.execute(
             "SELECT source, note FROM pbc_drafts WHERE id = %s", (draft_id,)
         ).fetchone()
+    # Milestone 3a: the rules' draft after a rejected model draft is FALLBACK, not RULES,
+    # and the note names the rejection first.
     assert note == (
-        "RULES",
-        "Model draft rejected: draft asks for a population in a design request.",
+        "FALLBACK",
+        "Model draft rejected: draft asks for a population in a design request. The "
+        "reviewed rules drafted the request.",
     )
 
 
@@ -328,7 +331,16 @@ def test_a_model_draft_is_used_when_it_passes_the_checks(migrated: Database) -> 
     assert request_id is not None
 
 
-def test_a_bad_or_failed_model_draft_falls_back_to_the_rules(migrated: Database) -> None:
+def test_a_bad_or_failed_model_draft_falls_back_to_the_rules(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Milestone 3a: a draft the rules wrote after the model failed is FALLBACK, never
+    RULES, and its note names the failure first (the owner's decision 5). Before 3a the
+    record read RULES with "so the rules were used", which could not be told apart from
+    a deliberate rules draft."""
+    from ai_workforce_api import provenance
+
+    monkeypatch.setattr(provenance, "pause", lambda _seconds: None)
     team, owner, _base_path = _started(migrated, "fallback", RecordingScheduler())
     with connect(migrated.url) as connection:
         ids = connection.execute(
@@ -337,13 +349,33 @@ def test_a_bad_or_failed_model_draft_falls_back_to_the_rules(migrated: Database)
         ).fetchall()
         bad = {**_valid_output(), "summary": "See https://evil.example for the list."}
         assert run_draft(connection, FakeProvider(bad), ids[0][0]) == "DRAFTED"
-        assert run_draft(connection, FakeProvider(error=True), ids[1][0]) == "DRAFTED"
+        failing = FakeProvider(error=True)
+        assert run_draft(connection, failing, ids[1][0]) == "DRAFTED"
+        # A timeout is tried three times before the rules stand in; each attempt is recorded.
+        assert len(failing.requests) == 3
+        calls = connection.execute(
+            "SELECT status, attempt, agent_key, tier, target_type, target_id FROM model_calls "
+            "WHERE project_id = %s ORDER BY created_at",
+            (team["project"],),
+        ).fetchall()
     listed = {item["id"]: item for item in owner.get(f"{_project(team)}/pbc-drafts").json()}
     first, second = listed[str(ids[0][0])], listed[str(ids[1][0])]
-    assert first["source"] == "RULES"
-    assert first["note"] == "Model draft rejected: draft contains a link or a credential."
-    assert second["source"] == "RULES"
-    assert second["note"] == "The model did not answer in time, so the rules were used."
+    assert first["source"] == "FALLBACK"
+    assert first["note"] == (
+        "Model draft rejected: draft contains a link or a credential. The reviewed rules "
+        "drafted the request."
+    )
+    assert second["source"] == "FALLBACK"
+    assert second["note"] == (
+        "The model did not answer in time. The model did not produce this; the reviewed "
+        "rules drafted the request instead."
+    )
+    assert [c[0] for c in calls] == ["SUCCEEDED", "TIMEOUT", "TIMEOUT", "TIMEOUT"]
+    assert [c[1] for c in calls] == [1, 1, 2, 3]
+    assert {(c[2], c[3], c[4]) for c in calls} == {
+        ("evidence-coordinator", "BALANCED", "pbc_request")
+    }
+    assert str(calls[1][5]) == second["pbc_request_id"]
 
 
 def test_a_request_that_left_draft_is_never_rewritten(migrated: Database) -> None:
@@ -502,10 +534,10 @@ def test_claude_answers_through_the_forced_output_tool(monkeypatch: pytest.Monke
     import anthropic
 
     from ai_workforce_api.model_providers import (
-        CLAUDE_CONFIG,
         AnthropicModelProvider,
         live_model,
         provider_for,
+        tier_config,
     )
     from ai_workforce_api.models import complete
 
@@ -519,6 +551,8 @@ def test_claude_answers_through_the_forced_output_tool(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
     provider = AnthropicModelProvider("test-key-not-real", "")
+    # Milestone 3a closure: a live call carries a tier; an untiered one is refused.
+    config = tier_config(Settings(model_provider="anthropic", model_api_key="k"), "BALANCED")
     request = ModelRequest(
         operation="generate",
         prompt=prompt_for(_context()),
@@ -528,7 +562,7 @@ def test_claude_answers_through_the_forced_output_tool(monkeypatch: pytest.Monke
         cancelled=False,
         system="You are the evidence coordinator.",
     )
-    status, raw = complete(provider, request, CLAUDE_CONFIG)
+    status, raw = complete(provider, request, config)
     assert status == "SUCCEEDED"
     assert raw.output == _valid_output()
     assert (raw.input_tokens, raw.output_tokens) == (900, 300)
@@ -541,9 +575,9 @@ def test_claude_answers_through_the_forced_output_tool(monkeypatch: pytest.Monke
     assert created[0]["api_key"] == "test-key-not-real"
     # An answer outside the tool is no answer.
     messages.behaviour = "text"
-    assert complete(provider, request, CLAUDE_CONFIG)[0] == "MALFORMED"
+    assert complete(provider, request, config)[0] == "MALFORMED"
     messages.behaviour = "timeout"
-    assert complete(provider, request, CLAUDE_CONFIG)[0] == "TIMEOUT"
+    assert complete(provider, request, config)[0] == "TIMEOUT"
     assert live_model(Settings(model_provider="anthropic", model_api_key="k")) is True
     assert live_model(Settings(model_provider="anthropic", model_api_key="")) is False
     assert isinstance(

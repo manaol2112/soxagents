@@ -401,12 +401,14 @@ def check_match(output: dict[str, Any], pool: list[Candidate]) -> Match:
     )
 
 
-def no_match(facts: FileFacts, pool: list[Candidate], reason: str) -> Match:
+def no_match(facts: FileFacts, pool: list[Candidate], reason: str, source: str = "RULES") -> Match:
+    """No filing: the rules' suggestions for a person. `source` is FAILED when the model
+    was asked and did not answer usably, so the record never reads as a rules decision."""
     return Match(
         control=None,
         confidence=0.0,
         reason=_clean(reason, 300),
-        source="RULES",
+        source=source,
         suggestions=keyword_suggestions(facts, pool),
     )
 

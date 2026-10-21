@@ -126,6 +126,16 @@ describe("independent review model", () => {
       },
     ]);
     assert.equal(relaxed?.[0]?.independenceRequired, false);
+    // Milestone 3a: FALLBACK says the rules' checks stand and the model did not
+    // re-perform the items; it is never read as the model's work.
+    const fallback = parseReviews([
+      {
+        ...(JSON.parse(JSON.stringify(fixture)) as Record<string, unknown>),
+        reperform_source: "FALLBACK",
+      },
+    ]);
+    assert.equal(fallback?.[0]?.reperformSource, "FALLBACK");
+    assert.equal(first.reperformSource, "MODEL");
     assert.equal(first.notes.length, 2);
     assert.equal(first.notes[0]?.citations[0]?.quote, "Demo Manager");
     assert.equal(first.notes[0]?.reviewerResult, "EXCEPTION");

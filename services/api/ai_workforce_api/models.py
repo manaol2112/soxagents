@@ -3,7 +3,8 @@
 import json
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
 
@@ -36,8 +37,51 @@ class ModelConfig:
     name: str
     provider: str
     model_name: str
-    input_micros_per_token: int
-    output_micros_per_token: int
+    # Prices in nano-dollars per token (1,000 nanos = 1 micro-dollar): $2 per million
+    # tokens is 2,000. Costs are recorded in micro-dollars, rounded up.
+    input_nanos_per_token: int
+    output_nanos_per_token: int
+
+
+# Which tier of model an agent's work runs on (model_providers.tier_config maps a tier to
+# a pinned model). Milestone 3a.
+ModelTier = Literal["FAST", "BALANCED", "DEEP"]
+
+
+@dataclass(frozen=True)
+class Provenance:
+    """What a recorded call was, beyond its outcome: the agent, the record it worked on,
+    the prompt's version and hashes, the job and attempt, its duration and error class.
+    Never the key, never the prompt itself (provenance.py keeps that apart, encrypted)."""
+
+    agent_key: str = ""
+    tier: ModelTier | None = None
+    prompt_version: str = ""
+    prompt_sha256: str = ""
+    output_sha256: str = ""
+    target_type: str = ""
+    target_id: UUID | None = None
+    job_id: UUID | None = None
+    attempt: int = 1
+    duration_ms: int | None = None
+    error: str = ""
+    actor_agent_instance_id: UUID | None = None
+    # What the call was made from: evidence file ids and hashes, the sheet and its
+    # version, the approved plan revision, as the job knew them. Never the prompt.
+    inputs: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Outcome:
+    """One provider attempt: its status, the raw answer, and the error class when it
+    failed (the vendor's status code, never its message), with whether a retry is worth
+    it. A transient failure is overload, a server error, a dropped connection, a timeout
+    or a rate limit."""
+
+    status: str
+    raw: ModelRaw
+    error: str = ""
+    transient: bool = False
 
 
 MODEL_CONFIGS: dict[str, ModelConfig] = {
@@ -58,6 +102,10 @@ class ModelCancelled(Exception):
 
 class ModelRateLimit(Exception):
     """The provider refused the call because of a rate limit."""
+
+
+class ModelBudgetExceeded(Exception):
+    """A budget refused the call before it was dispatched (provenance.py)."""
 
 
 class ModelProviderError(Exception):
@@ -218,6 +266,25 @@ class ModelCallBody(BaseModel):
     cost_micros: int
     output: dict[str, Any] | None = None
     tool_calls: list[ToolProposalBody] = Field(default_factory=list)
+    # Provenance (Milestone 3a): who asked, which agent worked, which model and prompt
+    # version answered, from what, how it ended. The prompt itself is behind /content.
+    requested_by: UUID | None = None
+    agent_instance_id: UUID | None = None
+    agent_key: str | None = None
+    tier: str | None = None
+    model_name: str = ""
+    prompt_version: str | None = None
+    prompt_sha256: str | None = None
+    output_sha256: str | None = None
+    target_type: str | None = None
+    target_id: UUID | None = None
+    job_id: UUID | None = None
+    attempt: int = 1
+    duration_ms: int | None = None
+    error: str = ""
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    has_content: bool = False
+    created_at: datetime | None = None
 
 
 class ModelCallCreate(BaseModel):
@@ -300,11 +367,18 @@ def complete(
     provider: ModelProvider, request: ModelRequest, config: ModelConfig
 ) -> tuple[str, ModelRaw]:
     """Run one generation and name its outcome. A malformed answer is the caller's call."""
-    status, raw = _complete(provider, request, config)
+    found = outcome(provider, request, config)
+    return found.status, found.raw
+
+
+def outcome(provider: ModelProvider, request: ModelRequest, config: ModelConfig) -> Outcome:
+    """One generation with its error class kept (provenance.py records it). A malformed
+    answer keeps the raw output so a stricter caller may still read it."""
+    status, raw, error, transient = _attempt(provider, request, config)
     if status == "SUCCEEDED" and request.operation == "generate":
         if raw.output is None or not _matches(request.output_schema, raw.output):
-            return "MALFORMED", raw
-    return status, raw
+            return Outcome("MALFORMED", raw, "answer did not match the schema", False)
+    return Outcome(status, raw, error, transient)
 
 
 def record_call(
@@ -316,6 +390,8 @@ def record_call(
     status: str,
     raw: ModelRaw,
     config: ModelConfig,
+    provenance: Provenance | None = None,
+    operation: str = "generate",
 ) -> UUID:
     """Record a model call made for a person, such as drafting after their kickoff."""
     return _record_for(
@@ -324,10 +400,11 @@ def record_call(
         organization_id,
         project_id,
         model_config_ref,
-        "generate",
+        operation,
         status,
         raw,
         config,
+        provenance,
     )
 
 
@@ -396,21 +473,35 @@ def _create(
 def _complete(
     provider: ModelProvider, request: ModelRequest, config: ModelConfig
 ) -> tuple[str, ModelRaw]:
+    status, raw, _error, _transient = _attempt(provider, request, config)
+    return status, raw
+
+
+def _attempt(
+    provider: ModelProvider, request: ModelRequest, config: ModelConfig
+) -> tuple[str, ModelRaw, str, bool]:
+    """The status, the raw answer, the error class and whether a retry is worth it."""
+    nothing = ModelRaw(None, (), 0, 0)
     if request.cancelled:
-        return "CANCELLED", ModelRaw(None, (), 0, 0)
+        return "CANCELLED", nothing, "cancelled before the call", False
     try:
         raw = provider.complete(request, config)
     except ModelTimeout:
-        return "TIMEOUT", ModelRaw(None, (), 0, 0)
+        return "TIMEOUT", nothing, "the provider did not answer in time", True
     except ModelCancelled:
-        return "CANCELLED", ModelRaw(None, (), 0, 0)
+        return "CANCELLED", nothing, "cancelled", False
     except ModelRateLimit:
-        return "RATE_LIMITED", ModelRaw(None, (), 0, 0)
-    except ModelProviderError:
-        return "MODEL_ERROR", ModelRaw(None, (), 0, 0)
+        return "RATE_LIMITED", nothing, "the provider rate limited the call", True
+    except ModelBudgetExceeded:
+        return "BUDGET_EXCEEDED", nothing, "a budget refused the call", False
+    except ModelProviderError as error:
+        detail = f"provider error (status {error.status})" if error.status else "provider error"
+        return "MODEL_ERROR", nothing, detail, error.transient
+    except Exception as error:  # noqa: BLE001 - a provider bug is a failed call, recorded
+        return "MODEL_ERROR", nothing, f"provider raised {type(error).__name__}", False
     if raw.input_tokens < 0 or raw.output_tokens < 0:
-        return "MODEL_ERROR", ModelRaw(None, (), 0, 0)
-    return "SUCCEEDED", raw
+        return "MODEL_ERROR", nothing, "the provider reported negative token counts", False
+    return "SUCCEEDED", raw, "", False
 
 
 def _checked(
@@ -468,15 +559,22 @@ def _record_for(
     status: str,
     raw: ModelRaw,
     config: ModelConfig,
+    provenance: Provenance | None = None,
 ) -> UUID:
+    found = provenance if provenance is not None else Provenance()
+    # The error class is kept, never a message that could carry a key or client text.
+    error = _SECRET_TEXT.sub("[redacted]", found.error)[:500]
     with transaction(connection) as cursor:
         cursor.execute(
             """
             INSERT INTO model_calls (
                 organization_id, project_id, actor_user_id, model_config_ref, operation, status,
-                input_tokens, output_tokens, cost_micros
+                input_tokens, output_tokens, cost_micros, model_name, tier, agent_key,
+                prompt_version, prompt_sha256, output_sha256, target_type, target_id, job_id,
+                attempt, duration_ms, error, actor_agent_instance_id, inputs
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -489,24 +587,46 @@ def _record_for(
                 raw.input_tokens,
                 raw.output_tokens,
                 _cost(config, raw),
+                config.model_name,
+                found.tier,
+                found.agent_key or None,
+                found.prompt_version or None,
+                found.prompt_sha256 or None,
+                found.output_sha256 or None,
+                found.target_type or None,
+                found.target_id,
+                found.job_id,
+                max(1, min(found.attempt, 20)),
+                found.duration_ms,
+                error,
+                found.actor_agent_instance_id,
+                Json(found.inputs),
             ),
         )
         row = cursor.fetchone()
         if row is None or not isinstance(row[0], UUID):
             raise NotVisible()
+        payload: dict[str, Any] = {"status": status}
+        if found.agent_key:
+            payload["agent"] = found.agent_key
+        if found.tier:
+            payload["tier"] = found.tier
+            payload["model"] = config.model_name
         cursor.execute(
             """
             INSERT INTO audit_events (
-                organization_id, project_id, actor_user_id, action, target_type, target_id, payload
+                organization_id, project_id, actor_user_id, actor_agent_instance_id, action,
+                target_type, target_id, payload
             )
-            VALUES (%s, %s, %s, 'model.called', 'model_call', %s, %s)
+            VALUES (%s, %s, %s, %s, 'model.called', 'model_call', %s, %s)
             """,
             (
                 organization_id,
                 project_id,
                 actor_id,
+                found.actor_agent_instance_id,
                 row[0],
-                Json({"status": status}),
+                Json(payload),
             ),
         )
     return row[0]
@@ -528,7 +648,11 @@ def _read(
     )
     row = connection.execute(
         """
-        SELECT id, operation, status, model_config_ref, input_tokens, output_tokens, cost_micros
+        SELECT id, operation, status, model_config_ref, input_tokens, output_tokens, cost_micros,
+               actor_user_id, actor_agent_instance_id, agent_key, tier, model_name,
+               prompt_version, prompt_sha256, output_sha256, target_type, target_id, job_id,
+               attempt, duration_ms, error, inputs, created_at,
+               EXISTS (SELECT 1 FROM model_call_contents c WHERE c.model_call_id = model_calls.id)
         FROM model_calls
         WHERE id = %s AND organization_id = %s AND project_id = %s
         """,
@@ -536,7 +660,7 @@ def _read(
     ).fetchone()
     if row is None:
         raise NotVisible()
-    call_id_value, operation, status, model_config_ref, input_tokens, output_tokens, cost = row
+    call_id_value, operation, status, model_config_ref, input_tokens, output_tokens, cost = row[:7]
     if (
         not isinstance(call_id_value, UUID)
         or not isinstance(operation, str)
@@ -555,6 +679,23 @@ def _read(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cost_micros=cost,
+        requested_by=row[7],
+        agent_instance_id=row[8],
+        agent_key=row[9],
+        tier=row[10],
+        model_name=str(row[11] or ""),
+        prompt_version=row[12],
+        prompt_sha256=row[13],
+        output_sha256=row[14],
+        target_type=row[15],
+        target_id=row[16],
+        job_id=row[17],
+        attempt=int(row[18] or 1),
+        duration_ms=row[19],
+        error=str(row[20] or ""),
+        inputs=row[21] if isinstance(row[21], dict) else {},
+        created_at=row[22],
+        has_content=bool(row[23]),
     )
 
 
@@ -577,6 +718,7 @@ _STATUS_CODES = {
     "CANCELLED": 409,
     "RATE_LIMITED": 429,
     "MODEL_ERROR": 503,
+    "BUDGET_EXCEEDED": 429,
 }
 _STATUS_DETAILS = {
     "MALFORMED": "model output is invalid",
@@ -584,14 +726,26 @@ _STATUS_DETAILS = {
     "CANCELLED": "model call was cancelled",
     "RATE_LIMITED": "model rate limit",
     "MODEL_ERROR": "model provider is unavailable",
+    "BUDGET_EXCEEDED": "model budget exhausted",
 }
 
 
 def _cost(config: ModelConfig, raw: ModelRaw) -> int:
-    return (
-        raw.input_tokens * config.input_micros_per_token
-        + raw.output_tokens * config.output_micros_per_token
+    return cost_micros(config, raw.input_tokens, raw.output_tokens)
+
+
+def cost_micros(config: ModelConfig, input_tokens: int, output_tokens: int) -> int:
+    """The cost in micro-dollars, rounded up so a budget is never under-counted."""
+    nanos = (
+        input_tokens * config.input_nanos_per_token + output_tokens * config.output_nanos_per_token
     )
+    return -(-nanos // 1000) if nanos > 0 else 0
+
+
+def estimate_tokens(value: str) -> int:
+    """A rough token count for text before it is sent (about four characters a token,
+    plus a third for the newer tokenizers)."""
+    return max(1, (len(value) * 4) // 12)
 
 
 def _tokens(value: str) -> int:

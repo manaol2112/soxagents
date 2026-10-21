@@ -5632,3 +5632,18 @@ a.cw-lane:focus-visible {
 .round-basis-form button {
   justify-self: start;
 }
+
+/* Milestone 3a: a person cancels a queued or running agent job from its lane. */
+.cw-lane-cancel {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 0.35rem 0.5rem;
+}
+
+.cw-lane-cancel button {
+  font-size: 12px;
+}
+
+.cw-agent-cancel {
+  margin-top: 0.4rem;
+}

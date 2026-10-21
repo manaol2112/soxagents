@@ -28,7 +28,14 @@ from psycopg.types.json import Json
 from pydantic import BaseModel, Field
 
 from ai_workforce_api import independence
-from ai_workforce_api.agent_runs import RunState, run_state
+from ai_workforce_api.agent_runs import (
+    CancelState,
+    RunState,
+    cancel_requested,
+    cancel_state,
+    finish_cancelled,
+    run_state,
+)
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -42,8 +49,9 @@ from ai_workforce_api.control_instances import control_label
 from ai_workforce_api.controls import sample_size
 from ai_workforce_api.db import connect, independent_steps, transaction
 from ai_workforce_api.inbound import clean_line, clean_text
-from ai_workforce_api.model_providers import CLAUDE_CONFIG, call_note, live_model, provider_for
-from ai_workforce_api.models import ModelImage, ModelProvider, ModelRequest, complete, record_call
+from ai_workforce_api.model_providers import live_model, provider_for
+from ai_workforce_api.models import ModelImage, ModelProvider, ModelRequest
+from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.test_sheets import ReopenBody as SheetReopenBody
 from ai_workforce_api.test_sheets import SheetBody, SheetState, _sheet, reopen_work
@@ -198,6 +206,8 @@ def open_reperformances(connection: psycopg.Connection[Any]) -> list[UUID]:
 
 # What a re-performance that gave up says; the register reads it as a stopped agent.
 REPERFORM_FAILED = "The re-performance did not finish. Re-perform to try again."
+# The reviewer's prompt version, recorded on every call (Milestone 3a).
+REVIEWER_PROMPT_VERSION = "independent-reviewer/1"
 
 
 def fail_reperformance(connection: psycopg.Connection[Any], review_id: UUID) -> None:
@@ -221,7 +231,9 @@ def review_runner(settings: Settings, provider: ModelProvider | None = None) -> 
 
     def run(review_id: UUID) -> str:
         with connect(settings.database_url) as connection:
-            return run_reperformance(connection, model if use_model else None, review_id, load)
+            return run_reperformance(
+                connection, model if use_model else None, review_id, load, settings
+            )
 
     return run
 
@@ -450,6 +462,7 @@ def run_reperformance(
     provider: ModelProvider | None,
     review_id: UUID,
     images: ImageLoader | None = None,
+    settings: Settings | None = None,
 ) -> str:
     """Re-perform the control's testing: rules checks, then Claude on each tested item."""
     from ai_workforce_api.evidence_analysis import ocr_choice
@@ -511,7 +524,27 @@ def run_reperformance(
     source = "RULES"
     note = ""
     call_id: UUID | None = None
-    if provider is None:
+    caller: AgentCaller | None = None
+    if provider is not None:
+        caller = AgentCaller(
+            connection,
+            provider,
+            Job(
+                "independent-reviewer",
+                "control_review",
+                review_id,
+                organization_id,
+                project_id,
+                requester,
+                agent_instance_id=agent_actor(connection, project_id, "independent-reviewer"),
+            ),
+            settings=settings,
+            cancelled=lambda: cancel_requested(connection, "review", review_id),
+        )
+    model_items = 0
+    failed_items = 0
+    last_failure = ""
+    if caller is None:
         note = "No model is configured, so the reviewer re-performs the testing by hand."
     else:
         shown_images = ocr_choice(connection, organization_id) == "MODEL"
@@ -522,6 +555,15 @@ def run_reperformance(
             if reviewed_items >= MAX_REVIEWED_ITEMS:
                 note = f"The first {MAX_REVIEWED_ITEMS} items were re-performed."
                 break
+            if caller.cancelled():
+                finish_cancelled(
+                    connection,
+                    "review",
+                    review_id,
+                    actor_agent_instance_id=caller.job.agent_instance_id,
+                    payload={"items_reperformed": reviewed_items},
+                )
+                return "CANCELLED"
             reviewed_items += 1
             files = _item_files(
                 connection, item.id, images if shown_images and images is not None else None
@@ -541,8 +583,7 @@ def run_reperformance(
                 test_of_one=sheet.method == "TEST_OF_ONE",
                 files=tuple(file for file, _data in files),
             )
-            status, raw = complete(
-                provider,
+            call = caller.generate(
                 ModelRequest(
                     operation="generate",
                     prompt=prompt_for(context).replace(
@@ -559,29 +600,63 @@ def run_reperformance(
                         ModelImage("image/jpeg", data) for _file, data in files if data is not None
                     ),
                 ),
-                CLAUDE_CONFIG,
+                REVIEWER_PROMPT_VERSION,
+                {
+                    "review": str(review_id),
+                    "sheet": {"id": str(sheet.id), "version": sheet.version},
+                    "item": str(item.id),
+                    "files": [str(f.file_id) for f, _d in files if f.file_id is not None],
+                },
             )
-            call_id = record_call(
-                connection, requester, organization_id, project_id, "claude", status, raw,
-                CLAUDE_CONFIG,
-            )  # fmt: skip
-            if status in ("SUCCEEDED", "MALFORMED") and raw.output is not None:
+            # A cancellation asked for while the model answered: the answer is not used.
+            if call.status == "CANCELLED" or caller.cancelled():
+                finish_cancelled(
+                    connection,
+                    "review",
+                    review_id,
+                    actor_agent_instance_id=caller.job.agent_instance_id,
+                    payload={"items_reperformed": reviewed_items - 1},
+                )
+                return "CANCELLED"
+            call_id = call.call_id
+            if call.readable and call.raw.output is not None:
                 try:
                     reviewed = check_results(
-                        raw.output, len(sheet.attributes), tuple(f for f, _d in files)
+                        call.raw.output, len(sheet.attributes), tuple(f for f, _d in files)
                     )
                 except ValueError as error:
-                    note = f"The reviewer's answer for {item.label} was rejected: {error}."
+                    failed_items += 1
+                    last_failure = f"The reviewer's answer for {item.label} was rejected: {error}."
                     continue
-                source = "MODEL"
+                model_items += 1
                 findings.extend(
                     disagreements(
                         item.id, item.label, [cell.final for cell in item.cells], reviewed
                     )
                 )
             else:
-                note = call_note(status).replace(", so the rules were used", "")
-    _finish(connection, review_id, sheet.version, source, note, call_id, findings)
+                failed_items += 1
+                last_failure = call.note
+        # The rules' checks always stand. The model's work is MODEL only where it
+        # re-performed at least one item; when every call failed, the record says the
+        # rules stood in (FALLBACK) and names the failure, never the model's work.
+        if model_items:
+            source = "MODEL"
+            if failed_items:
+                note = f"{failed_items} of {model_items + failed_items} items could not be re-performed by the model. {last_failure}"  # noqa: E501
+        elif failed_items:
+            source = "FALLBACK"
+            note = f"{last_failure} The model did not re-perform the items; the rules' checks stand on their own."  # noqa: E501
+    _finish(
+        connection,
+        review_id,
+        sheet.version,
+        source,
+        note,
+        call_id,
+        findings,
+        None if caller is None else caller.job.agent_instance_id,
+    )
     return "DONE"
 
 
@@ -665,6 +740,7 @@ def _finish(
     note: str,
     call_id: UUID | None,
     findings: list[Finding],
+    agent_instance_id: UUID | None = None,
 ) -> None:
     with transaction(connection) as cursor:
         # The agent's earlier proposals are superseded by this re-performance.
@@ -710,6 +786,7 @@ def _finish(
             review_id,
             "review.reperformed",
             {"source": source, "notes": min(len(findings), MAX_NOTES)},
+            agent_instance_id,
         )
 
 
@@ -797,6 +874,7 @@ class ReviewBody(BaseModel):
     reperformed_at: datetime | None
     reperform_source: str | None
     reperform_note: str
+    cancel_state: CancelState = "NONE"
     sheet_status: str | None
     sheet_signed_by: str | None
     sheet_version: int | None
@@ -855,7 +933,8 @@ def _review(
         SELECT r.id, r.engagement_control_id, c.control_ref, a.name, r.status,
                r.reperform_status, r.reperformed_at, r.reperform_source, r.reperform_note,
                r.sheet_version_reviewed, u.display_name, r.signed_at, r.signoff_note,
-               r.version, r.signed_by, r.test_round_id, t.kind, r.coverage
+               r.version, r.signed_by, r.test_round_id, t.kind, r.coverage,
+               r.cancel_requested_at, r.cancelled_at
         FROM control_reviews r
         JOIN engagement_controls c ON c.id = r.engagement_control_id
         LEFT JOIN engagement_applications a ON a.id = c.engagement_application_id
@@ -920,6 +999,7 @@ def _review(
         reperformed_at=row[6],
         reperform_source=None if row[7] is None else str(row[7]),
         reperform_note=str(row[8]),
+        cancel_state=cancel_state(row[5], row[18], row[19], row[8]),
         sheet_status=None if sheet is None else str(sheet[0]),
         sheet_signed_by=None if sheet is None or sheet[1] is None else str(sheet[1]),
         sheet_version=None if sheet is None else int(sheet[2]),
@@ -2037,15 +2117,25 @@ def _audit(
     review_id: UUID,
     action: str,
     payload: dict[str, Any],
+    agent_instance_id: UUID | None = None,
 ) -> None:
     cursor.execute(
         """
         INSERT INTO audit_events (
-            organization_id, project_id, actor_user_id, action, target_type, target_id, payload
+            organization_id, project_id, actor_user_id, actor_agent_instance_id, action,
+            target_type, target_id, payload
         )
-        VALUES (%s, %s, %s, %s, 'control_review', %s, %s)
+        VALUES (%s, %s, %s, %s, %s, 'control_review', %s, %s)
         """,
-        (organization_id, project_id, actor_id, action, review_id, Json(payload)),
+        (
+            organization_id,
+            project_id,
+            actor_id,
+            agent_instance_id,
+            action,
+            review_id,
+            Json(payload),
+        ),  # fmt: skip
     )
 
 

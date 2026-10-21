@@ -25,9 +25,10 @@ from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.authorization import _call, _session_principal
 from ai_workforce_api.controls import DOMAIN_LABELS, ITGC_DOMAINS
 from ai_workforce_api.inbound import clean_line
-from ai_workforce_api.model_providers import CLAUDE_CONFIG, call_note, live_model, provider_for
-from ai_workforce_api.models import ModelProvider, ModelRequest, complete, record_call
+from ai_workforce_api.model_providers import call_note, live_model, provider_for
+from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.onboarding import OnboardingState, _authorize_setup
+from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.rcm_systems import Layer, _known
 from ai_workforce_api.settings import Settings
 
@@ -321,8 +322,19 @@ def suggest(
             "No model is configured, so only the reviewed catalogue and the engagement's "
             "records were used.",
         )
-    status, raw = complete(
+    call = AgentCaller(
+        connection,
         provider,
+        Job(
+            "evidence-reader",
+            "project",
+            project_id,
+            organization_id,
+            project_id,
+            requester,
+            agent_instance_id=agent_actor(connection, project_id, "evidence-coordinator"),
+        ),  # fmt: skip
+    ).generate(
         ModelRequest(
             operation="generate",
             prompt=suggest_prompt(facts),
@@ -332,12 +344,10 @@ def suggest(
             cancelled=False,
             system=SYSTEM_PROMPT,
         ),
-        CLAUDE_CONFIG,
+        "system-suggestions/1",
+        {"project": str(project_id)},
     )
-    record_call(
-        connection, requester, organization_id, project_id, "claude", status, raw,
-        CLAUDE_CONFIG,
-    )  # fmt: skip
+    status, raw = call.status, call.raw
     if status not in ("SUCCEEDED", "MALFORMED") or raw.output is None:
         return rules_suggestion(facts, call_note(status))
     try:

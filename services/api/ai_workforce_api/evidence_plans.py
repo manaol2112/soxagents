@@ -74,8 +74,9 @@ from ai_workforce_api.evidence_planning import (
     rules_plan,
     suite_wording,
 )
-from ai_workforce_api.model_providers import CLAUDE_CONFIG, call_note, live_model, provider_for
-from ai_workforce_api.models import ModelProvider, ModelRequest, complete, record_call
+from ai_workforce_api.model_providers import fallback_note, live_model, provider_for
+from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.settings import Settings
 
 # The email template adds about 500 characters around the description.
@@ -312,9 +313,15 @@ def fingerprint(facts: PlanFacts) -> str:
 @dataclass(frozen=True)
 class Planned:
     output: PlanOutput
-    source: Literal["MODEL", "RULES"]
+    # MODEL: the agent's checked plan. RULES: the rules by design (no model). FALLBACK:
+    # the model failed or its plan was rejected, and the rules' plan stands in.
+    source: Literal["MODEL", "RULES", "FALLBACK"]
     note: str
     call_id: UUID | None
+
+
+# The planner's prompt version, recorded on every call (Milestone 3a).
+PLANNER_PROMPT_VERSION = "engagement-planner/1"
 
 
 def plan_for(
@@ -324,6 +331,7 @@ def plan_for(
     requester: UUID,
     organization_id: UUID,
     project_id: UUID,
+    control_id: UUID | None = None,
 ) -> Planned:
     """Claude's plan when a model is configured and its plan passes the checks; otherwise
     the rules planner's."""
@@ -332,8 +340,20 @@ def plan_for(
         return Planned(
             rules, "RULES", "No model is configured, so the rules planned the evidence.", None
         )
-    status, raw = complete(
+    caller = AgentCaller(
+        connection,
         provider,
+        Job(
+            "engagement-planner",
+            "engagement_control" if control_id is not None else "project",
+            control_id if control_id is not None else project_id,
+            organization_id,
+            project_id,
+            requester,
+            agent_instance_id=agent_actor(connection, project_id, "engagement-planner"),
+        ),
+    )
+    call = caller.generate(
         ModelRequest(
             operation="generate",
             prompt=prompt_for(facts),
@@ -343,19 +363,25 @@ def plan_for(
             cancelled=False,
             system=SYSTEM_PROMPT,
         ),
-        CLAUDE_CONFIG,
+        PLANNER_PROMPT_VERSION,
+        {
+            "control": None if control_id is None else str(control_id),
+            "control_ref": facts.control_ref,
+        },
     )
-    call_id = record_call(
-        connection, requester, organization_id, project_id, "claude", status, raw, CLAUDE_CONFIG
-    )
-    if status == "SUCCEEDED" and raw.output is not None:
+    call_id = call.call_id
+    if call.status == "SUCCEEDED" and call.raw.output is not None:
         try:
-            return Planned(check_plan(raw.output, facts), "MODEL", "", call_id)
+            return Planned(check_plan(call.raw.output, facts), "MODEL", "", call_id)
         except ValueError as error:
-            note = f"The agent's plan was rejected ({error}), so the rules planned the evidence."
+            note = (
+                f"The agent's plan was rejected ({error}). The model did not produce this "
+                "plan; the reviewed rules planned the evidence instead."
+            )
     else:
-        note = call_note(status)
-    return Planned(rules, "RULES", note[:500], call_id)
+        note = fallback_note(call.status, "the reviewed rules planned the evidence instead")
+    # The rules' plan stands in for the model's: FALLBACK, with the failed call linked.
+    return Planned(rules, "FALLBACK", note[:500], call_id)
 
 
 @dataclass
@@ -2894,7 +2920,9 @@ def generate(
     requested from it; an approved plan still releases what the gate allows. Returns what
     changed, the drafts to schedule, and a note for the team."""
     facts = load_facts(connection, project_id, control_id)
-    planned = plan_for(connection, provider, facts, requester, organization_id, project_id)
+    planned = plan_for(
+        connection, provider, facts, requester, organization_id, project_id, control_id
+    )
     with transaction(connection) as cursor:
         changes = persist(
             cursor, organization_id, project_id, control_id, planned, facts, requester,

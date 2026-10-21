@@ -316,7 +316,7 @@ export type Understanding = {
   status: "NONE" | "DRAFT" | "CONFIRMED";
   summary: string;
   steps: ProcessStep[];
-  builtBy: "PERSON" | "AGENT" | "RULES" | "LEGACY";
+  builtBy: "PERSON" | "AGENT" | "RULES" | "LEGACY" | "FALLBACK";
   proposedSummary: string;
   proposedSteps: ProcessStep[] | null;
   proposedNote: string;
@@ -700,7 +700,7 @@ export function parseContext(value: unknown): ControlContext | null {
       steps: records(understanding.steps).map(parseStep),
       builtBy: oneOf(
         understanding.built_by,
-        ["PERSON", "AGENT", "RULES", "LEGACY"] as const,
+        ["PERSON", "AGENT", "RULES", "LEGACY", "FALLBACK"] as const,
         "PERSON",
       ),
       proposedSummary: str(understanding.proposed_summary),

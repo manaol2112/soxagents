@@ -175,7 +175,9 @@ def test_a_rejected_model_answer_falls_back_to_the_rules(migrated: Database) -> 
     with connect(migrated.url) as connection:
         run_analysis(connection, _settings(migrated), empty, UUID(analysis["id"]), _no_ocr)
     read = _analyses(client, seeded, project_id)[0]
-    assert read["source"] == "RULES"
+    # Milestone 3a: the rules' classification after a failed or rejected model answer is
+    # FALLBACK, never RULES, so the failure stays visible (the owner's decision 5).
+    assert read["source"] == "FALLBACK"
     assert "not in the required format" in read["note"]
     assert read["classification"]["kind"] == "population"
     # An unknown kind: the evidence check refuses it.
@@ -184,7 +186,7 @@ def test_a_rejected_model_answer_falls_back_to_the_rules(migrated: Database) -> 
     with connect(migrated.url) as connection:
         run_analysis(connection, _settings(migrated), unknown, UUID(analysis["id"]), _no_ocr)
     read = _analyses(client, seeded, project_id)[0]
-    assert read["source"] == "RULES"
+    assert read["source"] == "FALLBACK"
     assert read["note"].startswith("Model answer rejected")
     assert read["classification"]["kind"] == "population"
 

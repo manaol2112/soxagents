@@ -698,7 +698,7 @@ export type SystemProposal = {
 
 export type RcmSystems = {
   status: "PENDING" | "SCANNING" | "READY" | "FAILED";
-  source: "MODEL" | "RULES" | null;
+  source: "MODEL" | "RULES" | "FALLBACK" | null;
   note: string;
   version: number;
   proposals: SystemProposal[];
@@ -712,7 +712,11 @@ function parseSystems(value: unknown): RcmSystems {
   return {
     status: status ?? "PENDING",
     source:
-      item.source === "MODEL" || item.source === "RULES" ? item.source : null,
+      item.source === "MODEL" ||
+      item.source === "RULES" ||
+      item.source === "FALLBACK"
+        ? item.source
+        : null,
     note: str(item.note),
     version: Number(item.version ?? 1),
     proposals: records(item.proposals).map((entry) => ({
@@ -761,7 +765,7 @@ export type RcmImport = {
       mapped: string | null;
       suggested: string | null;
       reason: string;
-      mappedBy: "MODEL" | "RULES" | null;
+      mappedBy: "MODEL" | "RULES" | "FALLBACK" | null;
       alternative: string | null;
       alternativeReason: string;
     }>
@@ -769,7 +773,7 @@ export type RcmImport = {
   terms: {
     status: "PENDING" | "WORKING" | "READY" | "FAILED";
     mode: "FILL" | "REMAP";
-    source: "MODEL" | "RULES" | null;
+    source: "MODEL" | "RULES" | "FALLBACK" | null;
     note: string;
     modelAvailable: boolean;
   };
@@ -1281,7 +1285,9 @@ export function parseImport(value: unknown): RcmImport | null {
           ? ("MODEL" as const)
           : item.mapped_by === "RULES"
             ? ("RULES" as const)
-            : null,
+            : item.mapped_by === "FALLBACK"
+              ? ("FALLBACK" as const)
+              : null,
     }));
   const terms = isRecord(value.terms) ? value.terms : {};
   return {
@@ -1353,7 +1359,9 @@ export function parseImport(value: unknown): RcmImport | null {
         ) ?? "READY",
       mode: terms.mode === "REMAP" ? "REMAP" : "FILL",
       source:
-        terms.source === "MODEL" || terms.source === "RULES"
+        terms.source === "MODEL" ||
+        terms.source === "RULES" ||
+        terms.source === "FALLBACK"
           ? terms.source
           : null,
       note: str(terms.note),
@@ -2227,8 +2235,9 @@ export type DetailSuggestion = {
   processes: string;
   owner: string;
   basis: Partial<Record<DetailField, SuggestionBasis>>;
-  /** MODEL: the agent answered; RULES: only the catalogue and the records were used. */
-  source: "MODEL" | "RULES";
+  /** MODEL: the agent answered; RULES: only the catalogue and the records were used;
+   * FALLBACK: the agent failed and the catalogue and records were used instead. */
+  source: "MODEL" | "RULES" | "FALLBACK";
   note: string;
 };
 

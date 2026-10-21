@@ -25,7 +25,14 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError
 
-from ai_workforce_api.agent_runs import RunState, run_state
+from ai_workforce_api.agent_runs import (
+    CancelState,
+    RunState,
+    cancel_requested,
+    cancel_state,
+    finish_cancelled,
+    run_state,
+)
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -38,8 +45,9 @@ from ai_workforce_api.authorization import (
 from ai_workforce_api.console_citations import resolve
 from ai_workforce_api.db import connect, independent_steps, transaction
 from ai_workforce_api.inbound import clean_line, clean_text
-from ai_workforce_api.model_providers import CLAUDE_CONFIG, live_model, provider_for
-from ai_workforce_api.models import ModelProvider, ModelRequest, complete, record_call
+from ai_workforce_api.model_providers import fallback_note, live_model, provider_for
+from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.workpaper_fill import Content, Section, Stage, fill, gather, merge
 from ai_workforce_api.workpapers import tabs_for
@@ -260,9 +268,13 @@ def draft_runner(settings: Settings, provider: ModelProvider | None = None) -> D
 
     def run(workpaper_id: UUID) -> str:
         with connect(settings.database_url) as connection:
-            return run_draft(connection, model if use_model else None, workpaper_id)
+            return run_draft(connection, model if use_model else None, workpaper_id, settings)
 
     return run
+
+
+# The workpaper preparer's prompt version, recorded on every call (Milestone 3a).
+PROMPT_VERSION = "workpaper-preparer/1"
 
 
 # The agent's draft
@@ -420,7 +432,10 @@ def prompt_for(content: Content, records: Any, wanted: list[Section]) -> str:
 
 
 def run_draft(
-    connection: psycopg.Connection[Any], provider: ModelProvider | None, workpaper_id: UUID
+    connection: psycopg.Connection[Any],
+    provider: ModelProvider | None,
+    workpaper_id: UUID,
+    settings: Settings | None = None,
 ) -> str:
     independent_steps(connection)
     with transaction(connection) as cursor:
@@ -455,14 +470,31 @@ def run_draft(
         (s for s in content.sections if s.key == "walkthrough-of-one-instance"), None
     )
     note = ""
-    source: Literal["AGENT", "RECORDS"] = "RECORDS"
+    source: Literal["AGENT", "RECORDS", "FALLBACK"] = "RECORDS"
+    # The agent's instance, named on the audit event only when the model drafted.
+    agent_instance: UUID | None = None
     # The agent writes only from something it can read: evidence that has been read, or
     # signed-off testing. With neither, the records are filled and the narratives wait.
     if provider is not None and not has_input(records):
         note = WAITING_NOTE
     elif provider is not None and (wanted or (walkthrough and walkthrough.source != "PERSON")):
-        status, raw = complete(
+        agent_instance = agent_actor(connection, project_id, "workpaper-preparer")
+        caller = AgentCaller(
+            connection,
             provider,
+            Job(
+                "workpaper-preparer",
+                "workpaper",
+                workpaper_id,
+                organization_id,
+                project_id,
+                requester,
+                agent_instance_id=agent_instance,
+            ),
+            settings=settings,
+            cancelled=lambda: cancel_requested(connection, "workpaper", workpaper_id),
+        )
+        call = caller.generate(
             ModelRequest(
                 operation="generate",
                 prompt=prompt_for(content, records, wanted),
@@ -472,21 +504,31 @@ def run_draft(
                 cancelled=False,
                 system=SYSTEM_PROMPT,
             ),
-            CLAUDE_CONFIG,
+            PROMPT_VERSION,
+            {"workpaper": str(workpaper_id), "stage": str(stage), "version": int(current)},
         )
-        record_call(
-            connection, requester, organization_id, project_id, "claude", status, raw,
-            CLAUDE_CONFIG,
-        )  # fmt: skip
-        if status in ("SUCCEEDED", "MALFORMED") and raw.output is not None:
+        # A cancellation asked for while the model answered: the draft is not saved.
+        if call.status == "CANCELLED" or caller.cancelled():
+            finish_cancelled(
+                connection, "workpaper", workpaper_id, actor_agent_instance_id=agent_instance
+            )
+            return "CANCELLED"
+        if call.readable and call.raw.output is not None:
             try:
-                answer = _Answer.model_validate(raw.output)
+                answer = _Answer.model_validate(call.raw.output)
                 content = _apply(connection, project_id, content, answer, wanted)
                 source = "AGENT"
             except ValidationError:
-                note = "The agent's draft did not match the workpaper, so the records were used."
+                # The records fill the sections; the version says the agent's draft was
+                # rejected (FALLBACK), never that the agent wrote it.
+                source = "FALLBACK"
+                note = (
+                    "The agent's draft did not match the workpaper. The model did not "
+                    "produce these sections; the records' plain words stand in."
+                )
         else:
-            note = "The agent did not answer, so the records were used."
+            source = "FALLBACK"
+            note = fallback_note(call.status, "the records' plain words stand in")
     elif provider is None:
         note = "No model is configured, so the narratives are the records' plain words."
     with transaction(connection) as cursor:
@@ -497,7 +539,7 @@ def run_draft(
             (note[:500], workpaper_id),
         )
         _audit(cursor, organization_id, project_id, requester, workpaper_id, "workpaper.drafted",
-               {"source": source})  # fmt: skip
+               {"source": source}, agent_instance)  # fmt: skip
     return "DONE"
 
 
@@ -627,7 +669,7 @@ def _save(
     cursor: psycopg.Cursor[Any],
     workpaper_id: UUID,
     content: Content,
-    source: Literal["AGENT", "RECORDS", "PERSON"],
+    source: Literal["AGENT", "RECORDS", "PERSON", "FALLBACK"],
     person: UUID | None,
     note: str,
 ) -> int:
@@ -661,15 +703,25 @@ def _audit(
     workpaper_id: UUID,
     action: str,
     payload: dict[str, Any],
+    agent_instance_id: UUID | None = None,
 ) -> None:
     cursor.execute(
         """
         INSERT INTO audit_events (
-            organization_id, project_id, actor_user_id, action, target_type, target_id, payload
+            organization_id, project_id, actor_user_id, actor_agent_instance_id, action,
+            target_type, target_id, payload
         )
-        VALUES (%s, %s, %s, %s, 'workpaper', %s, %s)
+        VALUES (%s, %s, %s, %s, %s, 'workpaper', %s, %s)
         """,
-        (organization_id, project_id, actor_id, action, workpaper_id, Json(payload)),
+        (
+            organization_id,
+            project_id,
+            actor_id,
+            agent_instance_id,
+            action,
+            workpaper_id,
+            Json(payload),
+        ),  # fmt: skip
     )
 
 
@@ -694,6 +746,7 @@ class WorkpaperBody(BaseModel):
     drafting: bool
     draft_state: RunState = "IDLE"
     draft_note: str
+    cancel_state: CancelState = "NONE"
     current_version: int
     shown_version: int
     content: Content | None
@@ -927,7 +980,7 @@ def _body(
         """
         SELECT w.id, w.engagement_control_id, c.control_ref, w.stage, w.template_key, w.status,
                w.draft_status, w.draft_note, w.current_version, u.display_name, w.prepared_at,
-               w.prepared_version, w.version
+               w.prepared_version, w.version, w.cancel_requested_at, w.cancelled_at
         FROM workpapers w
         JOIN engagement_controls c ON c.id = w.engagement_control_id
         LEFT JOIN users u ON u.id = w.prepared_by
@@ -967,6 +1020,7 @@ def _body(
         drafting=row[6] in ("PENDING", "WORKING"),
         draft_state=run_state(row[6]),
         draft_note=str(row[7]),
+        cancel_state=cancel_state(row[6], row[13], row[14], row[7]),
         current_version=int(row[8]),
         shown_version=shown,
         content=_content(connection, workpaper_id, shown),

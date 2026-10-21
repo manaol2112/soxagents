@@ -28,6 +28,7 @@ import psycopg
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError
 
+from ai_workforce_api.agent_runs import cancel_requested, finish_cancelled
 from ai_workforce_api.control_design import design_for
 from ai_workforce_api.control_instances import FAMILY_FILES, family_ids, shared_with_family
 from ai_workforce_api.db import connect, independent_steps, transaction
@@ -39,14 +40,9 @@ from ai_workforce_api.evidence_apps import (
 )
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.library_definitions import sheet_definitions
-from ai_workforce_api.model_providers import CLAUDE_CONFIG, call_note, live_model, provider_for
-from ai_workforce_api.models import (
-    ModelImage,
-    ModelProvider,
-    ModelRequest,
-    complete,
-    record_call,
-)
+from ai_workforce_api.model_providers import live_model, provider_for
+from ai_workforce_api.models import ModelImage, ModelProvider, ModelRequest
+from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.test_citations import (
     CITATION_SCHEMA,
@@ -227,6 +223,10 @@ def excerpt(text: str, key: str) -> str:
 
 # The tester's answer
 
+
+# The tester's prompt version, recorded on every call (Milestone 3a). Bump it when the
+# system prompt, the prompt shape or the schema changes.
+PROMPT_VERSION = "control-tester/1"
 
 SYSTEM_PROMPT = """You are the control tester on a SOX IT audit. Test one sample (or, for \
 a control tested once, the control itself) against each of the control's test attributes, \
@@ -986,7 +986,7 @@ def test_runner(settings: Settings, provider: ModelProvider | None = None) -> Te
 
     def run(sheet_id: UUID) -> str:
         with connect(settings.database_url) as connection:
-            return run_sheet(connection, model if use_model else None, sheet_id, load)
+            return run_sheet(connection, model if use_model else None, sheet_id, load, settings)
 
     return run
 
@@ -1024,8 +1024,14 @@ def run_sheet(
     provider: ModelProvider | None,
     sheet_id: UUID,
     images: ImageLoader | None = None,
+    settings: Settings | None = None,
 ) -> str:
-    """Place new files, then test every item whose evidence changed."""
+    """Place new files, then test every item whose evidence changed.
+
+    With a model, every call goes through one AgentCaller for the run (the tester's tier,
+    the budgets, the cancellation check, the provenance record). A person's cancellation
+    stops the run between items; the items tested so far stand and the rest wait for the
+    next run."""
     independent_steps(connection)
     with transaction(connection) as cursor:
         claimed = cursor.execute(
@@ -1066,11 +1072,38 @@ def run_sheet(
         cursor.execute(
             "UPDATE test_sheets SET waiting_note = %s WHERE id = %s", (waiting[:500], sheet_id)
         )
-    tested = 0
-    for item_id in [] if waiting else _items_to_test(connection, sheet_id):
-        _test_item(
+    caller: AgentCaller | None = None
+    if provider is not None:
+        from ai_workforce_api.controls import BUSINESS_TESTER, DOMAIN_AGENTS
+        from ai_workforce_api.pbc_drafting import load_context
+
+        agent_key = DOMAIN_AGENTS.get(
+            load_context(connection, project_id, control_id).domain, BUSINESS_TESTER
+        )
+        caller = AgentCaller(
             connection,
             provider,
+            Job(
+                agent_key,
+                "test_sheet",
+                sheet_id,
+                organization_id,
+                project_id,
+                requester,
+                agent_instance_id=agent_actor(connection, project_id, agent_key),
+            ),
+            settings=settings,
+            cancelled=lambda: cancel_requested(connection, "test-sheet", sheet_id),
+        )
+    tested = 0
+    cancelled = False
+    for item_id in [] if waiting else _items_to_test(connection, sheet_id):
+        if caller is not None and caller.cancelled():
+            cancelled = True
+            break
+        if not _test_item(
+            connection,
+            caller,
             organization_id,
             project_id,
             control_id,
@@ -1079,8 +1112,18 @@ def run_sheet(
             requester,
             item_id,
             images,
-        )
+        ):
+            cancelled = True
+            break
         tested += 1
+    if cancelled:
+        finish_cancelled(
+            connection,
+            "test-sheet",
+            sheet_id,
+            actor_agent_instance_id=None if caller is None else caller.job.agent_instance_id,
+            payload={"items_tested": tested},
+        )
     with transaction(connection) as cursor:
         # A request made while this run worked is picked up by another run.
         again = cursor.execute(
@@ -1102,8 +1145,15 @@ def run_sheet(
                 requester,
                 sheet_id,
                 "testing.items_tested",
-                {"agent": "control-tester", "items": tested},
+                {
+                    "agent": "control-tester" if caller is None else caller.job.agent_key,
+                    "items": tested,
+                    "model": caller is not None,
+                },
+                None if caller is None else caller.job.agent_instance_id,
             )
+    if cancelled:
+        return "CANCELLED"
     return "AGAIN" if again is not None and again[0] == "PENDING" else "DONE"
 
 
@@ -1232,7 +1282,7 @@ def _items_to_test(connection: psycopg.Connection[Any], sheet_id: UUID) -> list[
 
 def _test_item(
     connection: psycopg.Connection[Any],
-    provider: ModelProvider | None,
+    caller: AgentCaller | None,
     organization_id: UUID,
     project_id: UUID,
     control_id: UUID,
@@ -1241,20 +1291,37 @@ def _test_item(
     requester: UUID,
     item_id: UUID,
     images: ImageLoader | None = None,
-) -> None:
+) -> bool:
+    """Test one item and write its result. False when the run was cancelled before the
+    model call: nothing is written and the item waits for the next run."""
     from ai_workforce_api.evidence_analysis import ocr_choice
     from ai_workforce_api.pbc_drafting import load_context
 
+    del requester
     item = connection.execute(
-        "SELECT label, detail, version FROM test_items WHERE id = %s", (item_id,)
+        """
+        SELECT i.label, i.detail, i.version, s.id, s.version,
+               (SELECT p.approved_revision FROM evidence_plans p
+                WHERE p.engagement_control_id = s.engagement_control_id)
+        FROM test_items i JOIN test_sheets s ON s.id = i.test_sheet_id WHERE i.id = %s
+        """,
+        (item_id,),
     ).fetchone()
     if item is None:
-        return
+        return True
     label, detail_raw, version = str(item[0]), item[1], int(item[2])
+    # What the call is made from, kept on its record (Milestone 3a closure).
+    inputs: dict[str, Any] = {
+        "item": str(item_id),
+        "sheet": {"id": str(item[3]), "version": int(item[4])},
+        "plan_revision": None if item[5] is None else int(item[5]),
+        "attributes": len(attributes),
+        "files": [],
+    }
     rows = connection.execute(
         """
         SELECT f.file_name, coalesce(a.confirmed_kind, a.classification ->> 'kind', 'other'),
-               a.extracted_text, v.checks, v.attributes, f.id
+               a.extracted_text, v.checks, v.attributes, f.id, f.content_sha256
         FROM test_item_files t
         JOIN evidence_files f ON f.id = t.evidence_file_id
         JOIN evidence_analyses a ON a.evidence_file_id = f.id
@@ -1267,7 +1334,7 @@ def _test_item(
     # Screenshots go to the tester as images only where the firm lets the model read them.
     shown: dict[UUID, bytes] = {}
     if (
-        provider is not None
+        caller is not None
         and images is not None
         and ocr_choice(connection, organization_id) == "MODEL"
     ):
@@ -1288,17 +1355,18 @@ def _test_item(
         )
         for row in rows
     )
+    inputs["files"] = [{"id": str(row[5]), "sha256": str(row[6])} for row in rows]
     results: list[dict[str, Any]] | None = None
     source = "RULES"
     call_id: UUID | None = None
     note = ""
     # The screenshot review stands in for the tester only without a model; with one, the
     # tester tests again and cites what it relied on.
-    if method == "TEST_OF_ONE" and provider is None:
+    if method == "TEST_OF_ONE" and caller is None:
         results = from_reviews(files, len(attributes))
         if results is not None:
             source = "REVIEW"
-    if results is None and provider is not None:
+    if results is None and caller is not None:
         loaded = load_context(connection, project_id, control_id)
         context = ItemContext(
             control_ref=loaded.control_ref,
@@ -1322,8 +1390,7 @@ def _test_item(
             ),
             design=design_prompt(design_for(connection, control_id)),
         )
-        status, raw = complete(
-            provider,
+        call = caller.generate(
             ModelRequest(
                 operation="generate",
                 prompt=prompt_for(context),
@@ -1338,20 +1405,25 @@ def _test_item(
                     if item.file_id is not None and item.file_id in shown
                 ),
             ),
-            CLAUDE_CONFIG,
+            PROMPT_VERSION,
+            inputs,
         )
-        call_id = record_call(
-            connection, requester, organization_id, project_id, "claude", status, raw,
-            CLAUDE_CONFIG,
-        )  # fmt: skip
-        if status in ("SUCCEEDED", "MALFORMED") and raw.output is not None:
+        # A cancellation asked for while the model answered: the late answer is not
+        # committed; the call stays recorded as made, and the item waits for the next run.
+        if call.status == "CANCELLED" or caller.cancelled():
+            return False
+        call_id = call.call_id
+        # A model failure is FAILED, never dressed as the rules' work: the results are
+        # unable to tell and a person decides, with the failed call linked.
+        source = "FAILED"
+        if call.readable and call.raw.output is not None:
             try:
-                results = supported(check_results(raw.output, len(attributes), files), files)
+                results = supported(check_results(call.raw.output, len(attributes), files), files)
                 source = "MODEL"
             except ValueError as error:
                 note = f"The tester's answer was rejected: {error}."
         else:
-            note = call_note(status).replace(", so the rules were used", "")
+            note = call.note
     if results is None:
         results = unable(
             len(attributes),
@@ -1368,6 +1440,7 @@ def _test_item(
             """,
             (Json(results), source, call_id, note[:500], item_id, version),
         )
+    return True
 
 
 def _audit(
@@ -1378,15 +1451,27 @@ def _audit(
     sheet_id: UUID,
     action: str,
     payload: dict[str, Any],
+    agent_instance_id: UUID | None = None,
 ) -> None:
+    """An event on the sheet. When an agent did the work, the event names the agent's
+    instance beside the person it worked for."""
     cursor.execute(
         """
         INSERT INTO audit_events (
-            organization_id, project_id, actor_user_id, action, target_type, target_id, payload
+            organization_id, project_id, actor_user_id, actor_agent_instance_id, action,
+            target_type, target_id, payload
         )
-        VALUES (%s, %s, %s, %s, 'test_sheet', %s, %s)
+        VALUES (%s, %s, %s, %s, %s, 'test_sheet', %s, %s)
         """,
-        (organization_id, project_id, actor_id, action, sheet_id, Json(payload)),
+        (
+            organization_id,
+            project_id,
+            actor_id,
+            agent_instance_id,
+            action,
+            sheet_id,
+            Json(payload),
+        ),  # fmt: skip
     )
 
 

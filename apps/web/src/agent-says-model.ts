@@ -34,8 +34,13 @@ export type AgentSays = {
   decision: string | null;
   /** When the records give no basis for a recommendation, why. */
   insufficient: string | null;
-  /** The agent's execution state on this step, when a run record exists. */
-  execution: { label: string; detail: string } | null;
+  /** The agent's execution state on this step, when a run record exists. `cancel` names
+   * the queued or running job a person may cancel (Milestone 3a). */
+  execution: {
+    label: string;
+    detail: string;
+    cancel?: { kind: "test-sheet" | "review" | "workpaper"; id: string };
+  } | null;
 };
 
 export type AgentInput = {
@@ -261,7 +266,7 @@ function requestStep(input: AgentInput): AgentSays {
     const read = files.filter((file) => file.readStatus === "READ");
     if (read.length > 0) {
       says.did.push(
-        `Read ${plural(read.length, "evidence file")} for ${phase.label.toLowerCase()} (${read.filter((f) => f.readBy === "MODEL").length} by the model, ${read.filter((f) => f.readBy === "RULES").length} by rules)`,
+        `Read ${plural(read.length, "evidence file")} for ${phase.label.toLowerCase()} (${read.filter((f) => f.readBy === "MODEL").length} by the model, ${read.filter((f) => f.readBy === "RULES").length} by rules${read.some((f) => f.readBy === "FALLBACK" || f.readBy === "FAILED") ? `, ${read.filter((f) => f.readBy === "FALLBACK" || f.readBy === "FAILED").length} after a model failure` : ""})`,
       );
     }
     const flagged = phase.requirements.filter((item) => item.needsReview);
@@ -321,7 +326,16 @@ function testStep(input: AgentInput): AgentSays {
           label: run.label,
           detail: `${sheet.runNote} Results already recorded stand; exceptions among them are testing findings, not this.`,
         }
-      : { label: run.label, detail: run.detail };
+      : {
+          label: run.label,
+          detail:
+            sheet.cancelState === "REQUESTED"
+              ? "Cancellation requested; the tester stops at its next check and the items tested so far stand."
+              : run.detail,
+          ...(sheet.runState !== "IDLE"
+            ? { cancel: { kind: "test-sheet" as const, id: sheet.id } }
+            : {}),
+        };
   }
   if (found.tested > 0) {
     says.did.push(
@@ -457,12 +471,21 @@ function reviewStep(input: AgentInput): AgentSays {
       failed: (input.agents?.stopped ?? []).includes("reviewing"),
     });
     if (run.state !== "READY" || review.reperformedAt === null) {
-      says.execution = { label: run.label, detail: run.detail };
+      says.execution = {
+        label: run.label,
+        detail:
+          review.cancelState === "REQUESTED"
+            ? "Cancellation requested; the reviewer agent stops at its next check."
+            : run.detail,
+        ...(review.reperformState !== "IDLE"
+          ? { cancel: { kind: "review" as const, id: review.id } }
+          : {}),
+      };
     }
   }
   if (review.reperformedAt !== null) {
     says.did.push(
-      `Re-performed the testing from the evidence (${review.reperformSource === "MODEL" ? "the model" : "rules only"})${when(review.reperformedAt)}; raised ${plural(agentNotes.length, "review note")}`,
+      `Re-performed the testing from the evidence (${review.reperformSource === "MODEL" ? "the model" : review.reperformSource === "FALLBACK" ? "rules only; the model failed" : "rules only"})${when(review.reperformedAt)}; raised ${plural(agentNotes.length, "review note")}`,
     );
   }
   const proposed = agentNotes.filter((note) => note.status === "PROPOSED");

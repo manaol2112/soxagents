@@ -342,3 +342,27 @@ The page or sheet a passage is on comes from the stored text, so the preview ope
 **In the preview**, each cited passage is outlined and numbered: on the PDF page itself, on the image, or on the cited rows of a spreadsheet. A list beside it steps through them.
 
 With a model, the screenshot review no longer stands in for the tester on a control tested once; the tester tests it again so it can cite. Results from before 8.4b have no citations: **Test again** on an open sheet adds them. Signed-off sheets are not changed.
+
+## Execution record (Milestone 3a)
+
+The tester's run (`testing_engine.run_sheet`) makes every model call through one agent
+caller for the run: the control's tester (by domain) on the BALANCED tier, the firm's
+budgets checked before each call, a person's cancellation honoured between items, and a
+provenance record per call (model, tier, agent, prompt version `control-tester/1`, hashes,
+job, attempt, duration, error class). The audit event `testing.items_tested` names the
+tester's instance beside the person who asked for the run.
+
+An item's `source` says who produced its results: `MODEL` (the checked answer, a pass only
+with a citation that checks out), `REVIEW` (a control tested once reusing its screenshot
+review, without a model), `RULES` (no model configured: every result is "unable to tell"
+for a person) or `FAILED` (the model failed, was cancelled, was refused by a budget or
+answered unusably: every result is "unable to tell", the note says what happened and the
+failed call is linked). A failure is never written as the rules' work, and nothing is
+concluded from it: the sheet stays INCOMPLETE until a person decides each result.
+
+A person with update rights cancels a queued or running run
+(`POST …/agent-runs/test-sheet/{id}/cancel`): a queued run is finished at once, a running
+one stops between items; the items tested so far stand, the sheet's note reads
+"Cancelled by …. Run it again when ready." and the queue lists the stopped run. A run
+whose worker died is resumed when its lease runs out, and an item written before the
+crash is not tested again. See [operations.md](operations.md).

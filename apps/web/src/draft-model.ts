@@ -16,7 +16,8 @@ export type RequestDraft = {
   id: string;
   requestId: string;
   status: "PENDING" | "DRAFTING" | "DRAFTED" | "FAILED" | "SKIPPED";
-  source: "MODEL" | "RULES" | null;
+  /** FALLBACK: the model failed and the rules drafted the request instead. */
+  source: "MODEL" | "RULES" | "FALLBACK" | null;
   summary: string;
   items: DraftItem[];
   questions: string[];
@@ -69,7 +70,11 @@ export function parseDrafts(value: unknown): Map<string, RequestDraft> {
       requestId: item.pbc_request_id,
       status,
       source:
-        item.source === "MODEL" || item.source === "RULES" ? item.source : null,
+        item.source === "MODEL" ||
+        item.source === "RULES" ||
+        item.source === "FALLBACK"
+          ? item.source
+          : null,
       summary: str(content?.summary),
       items: (Array.isArray(content?.items) ? content.items : [])
         .filter(isRecord)
@@ -103,6 +108,12 @@ export function draftLabel(
   }
   if (draft.status === "FAILED") {
     return { label: "Drafting did not finish", tone: "warning" };
+  }
+  if (draft.source === "FALLBACK") {
+    return {
+      label: "Drafted from the RCM; the model did not answer",
+      tone: "warning",
+    };
   }
   return draft.source === "MODEL"
     ? { label: "Drafted by an agent", tone: "success" }

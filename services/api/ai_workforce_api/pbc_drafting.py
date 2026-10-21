@@ -37,8 +37,9 @@ from ai_workforce_api.authorization import (
 )
 from ai_workforce_api.controls import DOMAIN_LABELS, sample_size
 from ai_workforce_api.db import connect, independent_steps, transaction
-from ai_workforce_api.model_providers import CLAUDE_CONFIG, call_note, live_model, provider_for
-from ai_workforce_api.models import ModelProvider, ModelRequest, complete, record_call
+from ai_workforce_api.model_providers import fallback_note, live_model, provider_for
+from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -725,13 +726,20 @@ def draft_runner(settings: Settings, provider: ModelProvider | None = None) -> D
 
     def run(draft_id: UUID) -> str:
         with connect(settings.database_url) as connection:
-            return run_draft(connection, model if use_model else None, draft_id)
+            return run_draft(connection, model if use_model else None, draft_id, settings)
 
     return run
 
 
+# The evidence coordinator's prompt version, recorded on every call (Milestone 3a).
+PROMPT_VERSION = "evidence-coordinator/1"
+
+
 def run_draft(
-    connection: psycopg.Connection[Any], provider: ModelProvider | None, draft_id: UUID
+    connection: psycopg.Connection[Any],
+    provider: ModelProvider | None,
+    draft_id: UUID,
+    settings: Settings | None = None,
 ) -> str:
     independent_steps(connection)
     with transaction(connection) as cursor:
@@ -757,7 +765,23 @@ def run_draft(
     source = "RULES"
     note = "No model is configured." if provider is None else ""
     call_id: UUID | None = None
+    agent_instance: UUID | None = None
     if provider is not None:
+        agent_instance = agent_actor(connection, project_id, "evidence-coordinator")
+        caller = AgentCaller(
+            connection,
+            provider,
+            Job(
+                "evidence-coordinator",
+                "pbc_request",
+                request_id,
+                organization_id,
+                project_id,
+                requester,
+                agent_instance_id=agent_instance,
+            ),
+            settings=settings,
+        )
         request = ModelRequest(
             operation="generate",
             prompt=prompt_for(context),
@@ -767,25 +791,27 @@ def run_draft(
             cancelled=False,
             system=PHASE_SYSTEM_PROMPT if context.planned else SYSTEM_PROMPT,
         )
-        status, raw = complete(provider, request, CLAUDE_CONFIG)
-        call_id = record_call(
-            connection,
-            requester,
-            organization_id,
-            project_id,
-            "claude",
-            status,
-            raw,
-            CLAUDE_CONFIG,
+        call = caller.generate(
+            request,
+            PROMPT_VERSION,
+            {
+                "request": str(request_id),
+                "control": str(control_id),
+                "planned_items": len(context.planned or ()),
+            },
         )
-        if status == "SUCCEEDED" and raw.output is not None:
+        call_id = call.call_id
+        if call.status == "SUCCEEDED" and call.raw.output is not None:
             try:
-                content = check_draft(raw.output, context)
+                content = check_draft(call.raw.output, context)
                 source = "MODEL"
             except ValueError as error:
-                note = f"Model draft rejected: {error}."
+                # The rules draft instead; the record says the model's draft was rejected.
+                source = "FALLBACK"
+                note = f"Model draft rejected: {error}. The reviewed rules drafted the request."
         else:
-            note = call_note(status)
+            source = "FALLBACK"
+            note = fallback_note(call.status, "the reviewed rules drafted the request instead")
     if content is None:
         content = rules_draft(context)
     text = render(content)
@@ -822,15 +848,16 @@ def run_draft(
             cursor.execute(
                 """
                 INSERT INTO audit_events (
-                    organization_id, project_id, actor_user_id, action, target_type,
-                    target_id, payload
+                    organization_id, project_id, actor_user_id, actor_agent_instance_id, action,
+                    target_type, target_id, payload
                 )
-                VALUES (%s, %s, %s, 'pbc.drafted', 'pbc_request', %s, %s)
+                VALUES (%s, %s, %s, %s, 'pbc.drafted', 'pbc_request', %s, %s)
                 """,
                 (
                     organization_id,
                     project_id,
                     requester,
+                    agent_instance,
                     request_id,
                     Json(
                         {

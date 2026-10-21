@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, field_validator
 
-from ai_workforce_api.agent_runs import RunState, run_state
+from ai_workforce_api.agent_runs import CancelState, RunState, cancel_state, run_state
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -128,6 +128,9 @@ class SheetBody(BaseModel):
     application_name: str = ""
     # Why the tester is waiting for this control (readiness.py), or "".
     waiting_note: str = ""
+    # A person's cancellation of the run: asked for and pending, carried out, or neither
+    # (agent_runs.cancel_state, Milestone 3a).
+    cancel_state: CancelState = "NONE"
 
 
 class VersionBody(BaseModel):
@@ -669,7 +672,7 @@ def _sheet(connection: psycopg.Connection[Any], project_id: UUID, sheet_id: UUID
                s.test_round_id, r.kind,
                (SELECT a.name FROM engagement_applications a
                 WHERE a.id = c.engagement_application_id),
-               s.waiting_note, s.run_note
+               s.waiting_note, s.run_note, s.cancel_requested_at, s.cancelled_at
         FROM test_sheets s
         JOIN engagement_controls c ON c.id = s.engagement_control_id
         LEFT JOIN users u ON u.id = s.signed_by
@@ -834,6 +837,7 @@ def _sheet(connection: psycopg.Connection[Any], project_id: UUID, sheet_id: UUID
         application_name="" if row[18] is None else str(row[18]),
         waiting_note=str(row[19] or ""),
         run_note=str(row[20] or ""),
+        cancel_state=cancel_state(row[6], row[21], row[22], row[20]),
     )
 
 

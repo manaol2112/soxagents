@@ -5,7 +5,12 @@
  */
 
 import type { Citation } from "./console-model.ts";
-import { parseRunState, type RunState } from "./run-state.ts";
+import {
+  type CancelState,
+  parseCancelState,
+  parseRunState,
+  type RunState,
+} from "./run-state.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CREDENTIAL =
@@ -21,7 +26,8 @@ export type WorkpaperSection = {
   citations: Citation[];
   columns: string[];
   rows: string[][];
-  source: "RECORDS" | "AGENT" | "PERSON";
+  /** FALLBACK: the agent failed and the records' plain words stand in. */
+  source: "RECORDS" | "AGENT" | "PERSON" | "FALLBACK";
   /** The template tab the section is on; empty for a workpaper drafted before tabs. */
   tab: string;
   period: string;
@@ -50,6 +56,7 @@ export type Workpaper = {
   drafting: boolean;
   draftState: RunState;
   draftNote: string;
+  cancelState?: CancelState;
   currentVersion: number;
   shownVersion: number;
   reference: string;
@@ -114,7 +121,9 @@ function parseSection(value: unknown): WorkpaperSection | null {
       .filter(Array.isArray)
       .map((row) => (row as unknown[]).map(str)),
     source:
-      value.source === "AGENT" || value.source === "PERSON"
+      value.source === "AGENT" ||
+      value.source === "PERSON" ||
+      value.source === "FALLBACK"
         ? value.source
         : "RECORDS",
     tab: str(value.tab),
@@ -176,6 +185,7 @@ export function parseWorkpapers(value: unknown): Workpaper[] | null {
       drafting: raw.drafting === true,
       draftState: parseRunState(raw.draft_state, raw.drafting === true),
       draftNote: str(raw.draft_note),
+      cancelState: parseCancelState(raw.cancel_state),
       currentVersion: num(raw.current_version),
       shownVersion: num(raw.shown_version),
       reference: str(content?.reference),

@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, field_validator
 
+from ai_workforce_api.agent_runs import cancel_requested, finish_cancelled
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -94,8 +95,15 @@ from ai_workforce_api.evidence_review import (
 )
 from ai_workforce_api.evidence_withdrawn import is_withdrawn
 from ai_workforce_api.inbound import clean_line
-from ai_workforce_api.model_providers import CLAUDE_CONFIG, call_note, live_model, provider_for
-from ai_workforce_api.models import ModelProvider, ModelRaw, ModelRequest, complete, record_call
+from ai_workforce_api.model_providers import (
+    CLAUDE_CONFIG,
+    call_note,
+    fallback_note,
+    live_model,
+    provider_for,
+)
+from ai_workforce_api.models import ModelProvider, ModelRaw, ModelRequest, complete
+from ai_workforce_api.provenance import AgentCaller, CallerProvider, Job, agent_actor
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import ObjectStore, StoreError, digest_of, open_store
 from ai_workforce_api.testing_engine import runs_for_file
@@ -104,6 +112,10 @@ logger = logging.getLogger(__name__)
 
 LEASE_MINUTES = 10
 MAX_ATTEMPTS = 3
+# Prompt versions recorded on every call (Milestone 3a): the reader's (matching,
+# classification, OCR) and the tester's screenshot review.
+READER_PROMPT_VERSION = "evidence-reader/1"
+REVIEW_PROMPT_VERSION = "evidence-review/1"
 EXCERPT_CHARS = 3_000
 StoreFactory = Callable[[Settings, psycopg.Connection[Any]], ObjectStore]
 AnalysisRunner = Callable[[UUID], str]
@@ -223,17 +235,37 @@ def run_analysis(
         )
         return "FAILED"
 
-    def record(status: str, raw: ModelRaw) -> UUID:
-        return record_call(
-            connection,
-            requester,
-            organization_id,
-            project_id,
-            "claude",
-            status,
-            raw,
-            CLAUDE_CONFIG,
+    # Every model call of this read goes through one caller: the reader's FAST tier, the
+    # budgets, the cancellation check and the provenance record (Milestone 3a). The
+    # evidence modules keep their (provider, record) protocol; the caller sits behind it.
+    reader: CallerProvider | None = None
+    if provider is not None:
+        reader = CallerProvider(
+            AgentCaller(
+                connection,
+                provider,
+                Job(
+                    "evidence-reader",
+                    "evidence_file",
+                    file_id,
+                    organization_id,
+                    project_id,
+                    requester,
+                    agent_instance_id=agent_actor(connection, project_id, "evidence-coordinator"),
+                ),
+                settings=settings,
+                cancelled=lambda: cancel_requested(connection, "analysis", analysis_id),
+            ),
+            READER_PROMPT_VERSION,
+            {"analysis": str(analysis_id), "file": {"id": str(file_id), "sha256": str(digest)}},
         )
+    model: ModelProvider | None = reader
+
+    def record(status: str, raw: ModelRaw) -> UUID:
+        # Only the caller records: without a model nothing asks to be recorded.
+        if reader is None:
+            raise RuntimeError("a model call was recorded without a model")
+        return reader.record(status, raw)
 
     request = file_request(connection, project_id, file_id)
     filing = _filing(connection, file_id) if source_kind == "UPLOAD" else None
@@ -245,7 +277,7 @@ def run_analysis(
     file_kind = extraction.file_kind
     if extraction.images:
         extraction, ocr_engine, ocr_call_id = _read_images(
-            connection, organization_id, provider, ocr, record, extraction
+            connection, organization_id, model, ocr, record, extraction
         )
     decided: tuple[Match, UUID | None] | None = None
     if filing is not None and filing[1] == "PENDING":
@@ -257,7 +289,7 @@ def run_analysis(
             text=extraction.text,
             columns=extraction.columns,
         )
-        decided = _match(connection, project_id, provider, record, facts)
+        decided = _match(connection, project_id, model, record, facts)
         if decided[0].control is not None:
             request = control_request(
                 connection,
@@ -268,9 +300,9 @@ def run_analysis(
     context = _context(connection, project_id, str(file_name), extraction, request)
     classification: Classification | None = None
     source = "RULES"
-    note = "No model is configured." if provider is None else ""
+    note = "No model is configured." if model is None else ""
     call_id: UUID | None = None
-    if provider is not None and extraction.text.strip():
+    if model is not None and extraction.text.strip():
         model_request = ModelRequest(
             operation="generate",
             prompt=prompt_for(context),
@@ -280,7 +312,7 @@ def run_analysis(
             cancelled=False,
             system=SYSTEM_PROMPT,
         )
-        status, raw = complete(provider, model_request, CLAUDE_CONFIG)
+        status, raw = complete(model, model_request, CLAUDE_CONFIG)
         call_id = record(status, raw)
         # A MALFORMED answer is still read by the stricter evidence check, which cuts
         # over-long text and lists. The call stays recorded as malformed.
@@ -289,10 +321,17 @@ def run_analysis(
                 classification = check_classification(raw.output, context)
                 source = "MODEL"
             except ValueError as error:
-                note = f"Model answer rejected: {error}."
+                # The rules classify instead, and the record says the model's answer
+                # was rejected: FALLBACK, never RULES.
+                source = "FALLBACK"
+                note = (
+                    f"Model answer rejected: {error}. The reviewed rules classified the "
+                    "file instead."
+                )
         else:
-            note = call_note(status)
-    elif provider is not None:
+            source = "FALLBACK"
+            note = fallback_note(status, "the reviewed rules classified the file instead")
+    elif model is not None:
         note = "Nothing could be read from the file, so the rules were used."
     if classification is None:
         classification = rules_classify(context)
@@ -303,7 +342,7 @@ def run_analysis(
             connection,
             organization_id,
             project_id,
-            provider,
+            model,
             record,
             request,
             context,
@@ -314,6 +353,16 @@ def run_analysis(
     sampling = _sampling(
         connection, project_id, request, classification.kind, content, file_name, content_type
     )
+    # A person cancelled the read while it worked: nothing of it is kept, and the record
+    # says who stopped it. Reading the file again is the recovery.
+    if reader is not None and cancel_requested(connection, "analysis", analysis_id):
+        finish_cancelled(
+            connection,
+            "analysis",
+            analysis_id,
+            actor_agent_instance_id=reader.caller.job.agent_instance_id,
+        )
+        return "CANCELLED"
     with transaction(connection) as cursor:
         saved = cursor.execute(
             """
@@ -544,6 +593,11 @@ def _review(
             "visual review. An owner or admin can turn on model OCR under AI workforce."
         )
     else:
+        # The screenshot review is the control's tester's work: its own agent and tier
+        # within the same job, when the read runs through the caller.
+        if isinstance(provider, CallerProvider):
+            provider = provider.for_agent(tester, "BALANCED", REVIEW_PROMPT_VERSION)
+            record = provider.record
         result, call_id, failed = run_review(provider, images, review_context, record, model_jpeg)
         if result is not None:
             return result, "READY", review_context, call_id, "", tester
@@ -644,8 +698,11 @@ def _match(
         try:
             return check_match(raw.output, pool), call_id
         except ValueError as error:
-            return no_match(facts, pool, f"The agent's answer was rejected: {error}."), call_id
-    return no_match(facts, pool, call_note(status)), call_id
+            return (
+                no_match(facts, pool, f"The agent's answer was rejected: {error}.", "FAILED"),
+                call_id,
+            )
+    return no_match(facts, pool, f"{call_note(status)} A person chooses.", "FAILED"), call_id
 
 
 def _save_filing(

@@ -1589,6 +1589,10 @@ function ControlRecord({
             phases={phaseItems(journey)}
             current={step}
             hrefs={stepHrefs}
+            ids={{
+              organizationId: ids.organizationId,
+              projectId: ids.projectId,
+            }}
             needs={needsYou({
               nextStep: control.nextStep,
               actor: control.actor,

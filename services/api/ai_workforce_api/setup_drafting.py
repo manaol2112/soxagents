@@ -27,8 +27,8 @@ from ai_workforce_api.authorization import Principal, _call, _session_principal
 from ai_workforce_api.controls import DOMAIN_LABELS
 from ai_workforce_api.db import connect, independent_steps, transaction
 from ai_workforce_api.inbound import clean_line, clean_text
-from ai_workforce_api.model_providers import CLAUDE_CONFIG, live_model, provider_for
-from ai_workforce_api.models import ModelProvider, ModelRequest, complete, record_call
+from ai_workforce_api.model_providers import live_model, provider_for
+from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.onboarding import (
     OnboardingBody,
     OnboardingState,
@@ -37,6 +37,7 @@ from ai_workforce_api.onboarding import (
     _snapshot,
     _touch,
 )
+from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.setup_suggest import MAX_SCOPE, SetupFacts, rules_draft
 
@@ -268,12 +269,23 @@ def run_draft(
     organization_id, requester = claimed
     facts = gather_facts(connection, project_id)
     draft = rules_draft(facts)
-    source: Literal["RULES", "AGENT"] = "RULES"
+    source: Literal["RULES", "AGENT", "FALLBACK"] = "RULES"
     note = ""
     call_id: UUID | None = None
     if provider is not None:
-        status, raw = complete(
+        call = AgentCaller(
+            connection,
             provider,
+            Job(
+                "engagement-planner",
+                "project",
+                project_id,
+                organization_id,
+                project_id,
+                requester,
+                agent_instance_id=agent_actor(connection, project_id, "engagement-planner"),
+            ),  # fmt: skip
+        ).generate(
             ModelRequest(
                 operation="generate",
                 prompt=prompt_for(facts),
@@ -283,12 +295,10 @@ def run_draft(
                 cancelled=False,
                 system=SYSTEM_PROMPT,
             ),
-            CLAUDE_CONFIG,
+            "setup-draft/1",
+            {"project": str(project_id)},
         )
-        call_id = record_call(
-            connection, requester, organization_id, project_id, "claude", status, raw,
-            CLAUDE_CONFIG,
-        )  # fmt: skip
+        status, raw, call_id = call.status, call.raw, call.call_id
         if status in ("SUCCEEDED", "MALFORMED") and raw.output is not None:
             try:
                 answer = _Answer.model_validate(raw.output)
@@ -296,8 +306,10 @@ def run_draft(
                 source = "AGENT"
                 note = draft.pop("note", "")
             except ValidationError:
+                source = "FALLBACK"
                 note = "The planner's draft did not fit, so the reviewed rules were used."
         else:
+            source = "FALLBACK"
             note = "The planner did not answer, so the reviewed rules were used."
     else:
         note = "No model is configured, so the reviewed rules drafted the setup."

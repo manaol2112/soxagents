@@ -8,7 +8,17 @@ import { UiIcon } from "./ui-icon";
  * "Details". A proposal is never shown as done; when the records give no basis, that is
  * said in place of a recommendation.
  */
-export function AgentSays({ says }: { says: Says }) {
+export function AgentSays({
+  says,
+  ids = null,
+  back = "",
+}: {
+  says: Says;
+  /** The engagement, for the cancel action; null hides the action. */
+  ids?: { organizationId: string; projectId: string } | null;
+  /** Where the cancel action returns to (a path on this app). */
+  back?: string;
+}) {
   const hasSomething =
     says.did.length > 0 ||
     says.recommends !== null ||
@@ -31,6 +41,38 @@ export function AgentSays({ says }: { says: Says }) {
             <dt>Run</dt>
             <dd>
               <strong>{says.execution.label}.</strong> {says.execution.detail}
+              {says.execution.cancel !== undefined && ids !== null ? (
+                <form
+                  method="post"
+                  action="/workspace/agent-runs"
+                  className="cw-agent-cancel"
+                >
+                  <input
+                    type="hidden"
+                    name="organization_id"
+                    value={ids.organizationId}
+                  />
+                  <input
+                    type="hidden"
+                    name="project_id"
+                    value={ids.projectId}
+                  />
+                  <input
+                    type="hidden"
+                    name="kind"
+                    value={says.execution.cancel.kind}
+                  />
+                  <input
+                    type="hidden"
+                    name="record_id"
+                    value={says.execution.cancel.id}
+                  />
+                  <input type="hidden" name="back" value={back} />
+                  <button type="submit" className="btn btn-ghost btn-sm">
+                    Cancel run
+                  </button>
+                </form>
+              ) : null}
             </dd>
           </>
         ) : null}

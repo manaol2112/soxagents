@@ -57,7 +57,42 @@ class Settings(BaseSettings):
     workflow_address: str = ""
     model_provider: str = ""
     model_api_key: str = Field(default="", repr=False)
+    # The BALANCED tier's model when MODEL_BALANCED is empty (kept from before the tiers).
     model_name: str = ""
+    # Milestone 3a: three configurable tiers, each a pinned model of the provider
+    # (model_providers.py names the defaults and their prices). Empty takes the default.
+    model_fast: str = ""
+    model_balanced: str = ""
+    model_deep: str = ""
+    # Prices for models the table does not know, as JSON: {"model-id": [input, output]}
+    # in dollars per million tokens. A live model without a price is refused.
+    model_prices: str = ""
+    # The DEEP tier is explicitly authorized work only: the roster keys listed here
+    # (comma-separated, for example "independent-reviewer,engagement-planner") run on it;
+    # every other agent runs on FAST or BALANCED as model_providers.AGENT_TIERS says.
+    model_deep_agents: str = ""
+    # Containment: a live model call that does not go through the agent caller (no tier,
+    # no budget, no provenance) is refused unless this is true. Development only; never
+    # for real engagements. Each refusal is logged.
+    model_allow_unmetered: bool = False
+    # Budgets in micro-dollars (1,000,000 = $1). Provisional development defaults: $1 a
+    # call, $10 a job, $50 an engagement a calendar month. 0 means no limit, for tests
+    # with a stubbed provider. A call past a limit is refused before dispatch and
+    # recorded as BUDGET_EXCEEDED.
+    model_budget_call_micros: int = Field(default=1_000_000, ge=0)
+    model_budget_job_micros: int = Field(default=10_000_000, ge=0)
+    model_budget_engagement_month_micros: int = Field(default=50_000_000, ge=0)
+    # The key that encrypts stored prompts and answers (provenance.py): 32 bytes,
+    # base64. Without it, only hashes are kept. Never logged.
+    provenance_key: str = Field(default="", repr=False)
+    # Earlier provenance keys, comma-separated, kept so content sealed under them stays
+    # readable after a rotation. Each key is identified by its id (sha256 prefix).
+    provenance_previous_keys: str = Field(default="", repr=False)
+    # How long encrypted prompts and answers are kept before the deploy step removes
+    # them. The hashes and the call record stay.
+    model_content_retention_days: int = Field(default=90, ge=1, le=3650)
+    # Live tests against the provider run only when this is true (MODEL_LIVE_TESTS=1).
+    model_live_tests: bool = False
     # Runs background work, such as drafting evidence requests, in the API process when
     # no workflow engine is configured. For local development.
     local_worker_enabled: bool = False

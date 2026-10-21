@@ -163,25 +163,99 @@ class AutomationBody(BaseModel):
     available: bool
     provider: Literal["workflow", "local", "none"]
     detail: str
+    # Milestone 3a: the model behind the agents, from the settings and the recorded
+    # calls, never by calling it. "live" is a priced, pinned model per tier; "local" the
+    # mock adapter; "none" a named provider without a key or a price.
+    model: Literal["live", "local", "none"] = "local"
+    model_detail: str = ""
+    models: dict[str, str] = Field(default_factory=dict)
+    last_call_status: str | None = None
+    last_call_at: datetime | None = None
+    # The engagement's model spend this calendar month (UTC) against the limits, in
+    # micro-dollars; 0 as a limit means none (Milestone 3a closure: visible usage).
+    budget: dict[str, int] = Field(default_factory=dict)
 
 
 def automation_of(settings: Settings) -> AutomationBody:
+    from ai_workforce_api.model_providers import (
+        check_model_configuration,
+        live_model,
+        tier_model,
+    )
+
+    model: Literal["live", "local", "none"] = "local"
+    model_detail = "The mock model adapter answers; no call leaves the process."
+    models: dict[str, str] = {}
+    if settings.model_provider not in ("", "mock", "local"):
+        problems = check_model_configuration(settings)
+        if live_model(settings) and not problems:
+            model = "live"
+            models = {tier: tier_model(settings, tier) for tier in ("FAST", "BALANCED", "DEEP")}
+            model_detail = "The agents call the configured provider on three pinned models."
+        else:
+            model = "none"
+            model_detail = (
+                "; ".join(problems)
+                if problems
+                else "A model provider is named without a key, so no model call can be made."
+            )
     if settings.workflow_address != "":
         return AutomationBody(
             available=True,
             provider="workflow",
             detail="A durable workflow engine runs the agents' queued work.",
+            model=model,
+            model_detail=model_detail,
+            models=models,
         )
     if settings.local_worker_enabled:
         return AutomationBody(
             available=True,
             provider="local",
             detail="The API's local worker runs the agents' queued work.",
+            model=model,
+            model_detail=model_detail,
+            models=models,
         )
     return AutomationBody(
         available=False,
         provider="none",
         detail="No agent worker is configured: queued runs stay queued until one is.",
+        model=model,
+        model_detail=model_detail,
+        models=models,
+    )
+
+
+def _with_last_call(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    body: AutomationBody,
+    settings: Settings,
+) -> AutomationBody:
+    """The engagement's latest recorded call, so a page can say when the model last
+    answered or failed without calling it."""
+    from ai_workforce_api.provenance import month_spend
+
+    spent = month_spend(connection, project_id)
+    budget = {
+        "month_spent_micros": spent,
+        "month_limit_micros": settings.model_budget_engagement_month_micros,
+        "month_remaining_micros": max(0, settings.model_budget_engagement_month_micros - spent)
+        if settings.model_budget_engagement_month_micros
+        else 0,
+        "call_limit_micros": settings.model_budget_call_micros,
+        "job_limit_micros": settings.model_budget_job_micros,
+    }
+    row = connection.execute(
+        "SELECT status, created_at FROM model_calls WHERE project_id = %s "
+        "ORDER BY created_at DESC LIMIT 1",
+        (project_id,),
+    ).fetchone()
+    if row is None:
+        return body.model_copy(update={"budget": budget})
+    return body.model_copy(
+        update={"last_call_status": str(row[0]), "last_call_at": row[1], "budget": budget}
     )
 
 
@@ -566,7 +640,7 @@ def register_workspace(app: FastAPI, settings: Settings) -> None:
     def automation(organization_id: UUID, project_id: UUID, request: Request) -> AutomationBody:
         def read(connection: psycopg.Connection[Any], principal: Principal) -> AutomationBody:
             _authorize(connection, principal, organization_id, project_id, Action.TASK_READ)
-            return automation_of(settings)
+            return _with_last_call(connection, project_id, automation_of(settings), settings)
 
         return run(request, read)
 

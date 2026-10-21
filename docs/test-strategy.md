@@ -189,3 +189,27 @@ and `workflow-model` (queue sources).
   planning as before). Browser checks recorded in `docs/review/m2-closure/`: the client
   portal's full submission path, keyboard-only paths, and the drafted-request readiness
   before and after on the 155- and 403-control engagements.
+- M3a (21 October 2026, real agent execution; migration 0094): `make test-fast` with
+  `test_agent_execution` and `test_provenance` added to the fast set **102 Python passed
+  in 2 min 40 s and 112 Node passed**; `make test-critical` with both files added
+  **first run 3 failed, 377 passed in 5 min 10 s (`test_workpapers`: the workpaper drafter's audit call read an `agent_instance` variable that the no-model path never set, an UnboundLocalError in `run_draft`; fixed by initialising it before the branches); rerun after the fix: **380 passed, 0 failed in 5 min 12 s****; type checks clean; lint clean except the known `biome.json` endings. The
+  gated live smoke (`MODEL_LIVE_TESTS=1`, never in the gate) passed 2 of 2 in 31 s for
+  $0.0427. Two legacy expectations rewritten in `test_pbc_drafting`: a rejected or failed
+  model draft was `RULES` with "so the rules were used"; it is `FALLBACK` with the failure
+  named first (the owner's decision 5 for Milestone 3: a model failure stays visible even
+  when the rules produce a result). Nothing retired; no audit-integrity assertion changed.
+- M3a closure (21 October 2026; migration 0095; the console and nine other callers moved
+  onto the agent caller, cancellation semantics, key rotation, budget visibility): targeted
+  Python across every touched module (migrations, provenance, execution, console, drafting,
+  workpapers, reviews, analysis, RCM, setup, scoping, suggestions, library, context, models)
+  first run 9 failed, 142 passed (five legacy expectations and four defects in the new
+  code: a chat message shape in a test, a leftover direct record in the reader, a draft
+  input that was not serialisable, a malformed-answer retry that doubled the reading
+  path's calls, removed); after the fixes 67 passed on the five files that failed;
+  `make test-fast` **106 Python passed in 2 min 28 s and 112 Node passed**; `make test-critical` **384 passed, 0 failed in 5 min 28 s**. Legacy expectations rewritten,
+  each for the owner's decision 5 (a rules result after a failed or rejected model answer
+  is FALLBACK, never RULES): `test_evidence_analysis` (an empty answer, an unknown kind),
+  and `test_pbc_drafting::test_claude_answers_through_the_forced_output_tool` now passes a
+  tier's configuration to the live adapter, as every caller does since the closure (an
+  untiered live call is refused as unmetered). Nothing retired; no audit-integrity
+  assertion changed.

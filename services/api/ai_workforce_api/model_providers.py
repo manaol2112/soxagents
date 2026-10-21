@@ -4,8 +4,10 @@ Only this module names a vendor SDK, so the adapter and the agents never import 
 """
 
 import base64
+import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from ai_workforce_api.models import (
@@ -21,6 +23,7 @@ from ai_workforce_api.models import (
     ModelRateLimit,
     ModelRaw,
     ModelRequest,
+    ModelTier,
     ModelTimeout,
     ToolCall,
     UnavailableModelProvider,
@@ -30,9 +33,123 @@ from ai_workforce_api.settings import Settings
 logger = logging.getLogger(__name__)
 
 LOCAL_PROVIDERS = frozenset({"", "mock", "local"})
-# The default Claude model when MODEL_NAME is empty. Cost per token is not configured yet.
-DEFAULT_CLAUDE_MODEL = "claude-sonnet-5-5"
-CLAUDE_CONFIG = ModelConfig("claude", "anthropic", DEFAULT_CLAUDE_MODEL, 0, 0)
+
+# Milestone 3a: three tiers, each pinned to a model the provider lists, with its price in
+# dollars per million tokens (input, output) as published on 20 October 2026 and checked
+# against the provider's model list and a structured-output call before being chosen.
+# Haiku 5.5's price is for prompts up to 100,000 tokens, which every agent prompt is.
+TIER_DEFAULTS: dict[ModelTier, str] = {
+    "FAST": "claude-haiku-5-5",
+    "BALANCED": "claude-sonnet-5-5",
+    "DEEP": "claude-opus-5-5",
+}
+KNOWN_PRICES: dict[str, tuple[float, float]] = {
+    "claude-haiku-5-5": (0.10, 0.50),
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "claude-opus-5-5": (4.00, 20.00),
+    "claude-sonnet-4-6": (3.00, 15.00),
+    "claude-opus-4-6": (5.00, 25.00),
+    "claude-haiku-4-5-20251001": (1.00, 5.00),
+}
+# Which tier each agent's work runs on (the owner's development defaults, Milestone 3a
+# closure). FAST: routine classification and low-complexity extraction (reading, matching
+# and classifying evidence, RCM scans, system suggestions, the library match). BALANCED:
+# evidence interpretation, testing drafts and routine reviewer analysis (everything else,
+# the independent reviewer included). DEEP: explicitly authorized complex analysis only,
+# through MODEL_DEEP_AGENTS; no agent runs on it by default.
+AGENT_TIERS: dict[str, ModelTier] = {
+    "evidence-reader": "FAST",
+    "evidence-coordinator": "BALANCED",
+    "itgc-access-tester": "BALANCED",
+    "itgc-change-tester": "BALANCED",
+    "itgc-operations-tester": "BALANCED",
+    "business-process-tester": "BALANCED",
+    "workpaper-preparer": "BALANCED",
+    "engagement-planner": "BALANCED",
+    "independent-reviewer": "BALANCED",
+    "reporting-analyst": "BALANCED",
+    "console-lead": "BALANCED",
+}
+TIER_NAMES = frozenset({"fast", "balanced", "deep"})
+# The default Claude model when MODEL_NAME is empty: the BALANCED tier's.
+DEFAULT_CLAUDE_MODEL = TIER_DEFAULTS["BALANCED"]
+# The configuration of modules not yet moved to a tier (the console, setup, scoping, the
+# RCM readers, the library): the BALANCED model at its price. The provider substitutes
+# MODEL_NAME for it when one is set.
+CLAUDE_CONFIG = ModelConfig("claude", "anthropic", DEFAULT_CLAUDE_MODEL, 2_000, 10_000)
+
+
+def nanos_per_token(dollars_per_million: float) -> int:
+    """$2 per million tokens is 2,000 nano-dollars a token."""
+    return round(dollars_per_million * 1_000)
+
+
+def model_prices(settings: Settings) -> dict[str, tuple[int, int]]:
+    """Known prices plus MODEL_PRICES, in nanos per token. A malformed entry is ignored."""
+    prices = {
+        name: (nanos_per_token(i), nanos_per_token(o)) for name, (i, o) in KNOWN_PRICES.items()
+    }
+    if settings.model_prices.strip():
+        try:
+            extra = json.loads(settings.model_prices)
+        except ValueError:
+            extra = None
+        if isinstance(extra, dict):
+            for name, pair in extra.items():
+                if (
+                    isinstance(name, str)
+                    and isinstance(pair, list)
+                    and len(pair) == 2
+                    and all(isinstance(v, (int, float)) and v >= 0 for v in pair)
+                ):
+                    prices[name] = (nanos_per_token(pair[0]), nanos_per_token(pair[1]))
+    return prices
+
+
+def tier_model(settings: Settings, tier: ModelTier) -> str:
+    chosen = {
+        "FAST": settings.model_fast,
+        "BALANCED": settings.model_balanced or settings.model_name,
+        "DEEP": settings.model_deep,
+    }[tier].strip()
+    return chosen or TIER_DEFAULTS[tier]
+
+
+def tier_config(settings: Settings, tier: ModelTier) -> ModelConfig:
+    """The pinned model and price of a tier. A live model without a known price is a
+    configuration error: no call is made whose cost cannot be counted."""
+    model = tier_model(settings, tier)
+    price = model_prices(settings).get(model)
+    if price is None:
+        if live_model(settings):
+            raise ValueError(f"no price is configured for the {tier} model {model}")
+        price = (0, 0)
+    return ModelConfig(tier.lower(), "anthropic", model, price[0], price[1])
+
+
+def agent_tier(agent_key: str, settings: Settings | None = None) -> ModelTier:
+    """The tier an agent runs on: DEEP only when the settings name it, else its default."""
+    if settings is not None and agent_key in deep_agents(settings):
+        return "DEEP"
+    return AGENT_TIERS.get(agent_key, "BALANCED")
+
+
+def deep_agents(settings: Settings) -> frozenset[str]:
+    return frozenset(key.strip() for key in settings.model_deep_agents.split(",") if key.strip())
+
+
+def check_model_configuration(settings: Settings) -> list[str]:
+    """What is wrong with the live model configuration, for the start-up check and the
+    automation status: an empty list when every tier has a priced model."""
+    if not live_model(settings):
+        return []
+    problems: list[str] = []
+    for tier in ("FAST", "BALANCED", "DEEP"):
+        try:
+            tier_config(settings, tier)
+        except ValueError as error:
+            problems.append(str(error))
+    return problems
 
 
 class AnthropicModelProvider:
@@ -43,12 +160,40 @@ class AnthropicModelProvider:
     still checks the result against the schema.
     """
 
-    def __init__(self, api_key: str, model_name: str) -> None:
+    def __init__(self, api_key: str, model_name: str, allow_unmetered: bool = False) -> None:
         self._api_key = api_key
         self._model = model_name or DEFAULT_CLAUDE_MODEL
+        # Containment (Milestone 3a closure): a call that is not a tier's, or a chat turn
+        # outside the agent caller, carries no budget and no provenance and is refused
+        # unless MODEL_ALLOW_UNMETERED authorizes it for development.
+        self._allow_unmetered = allow_unmetered
+        self._metered_depth = 0
+
+    @contextmanager
+    def metered(self) -> Iterator[None]:
+        """The agent caller's mark: chat turns inside this block are metered by it."""
+        self._metered_depth += 1
+        try:
+            yield
+        finally:
+            self._metered_depth -= 1
+
+    def _refuse_unmetered(self, what: str) -> None:
+        if self._allow_unmetered:
+            return
+        logger.warning("unmetered live model %s refused; route it through the agent caller", what)
+        raise ModelProviderError(transient=False, status=None)
+
+    def model_for(self, config: ModelConfig) -> str:
+        """A tier's pinned model; the configured default for the untiered configuration."""
+        if config.provider == "anthropic" and config.name != CLAUDE_CONFIG.name:
+            return config.model_name or self._model
+        return self._model
 
     def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
-        del config
+        if config.provider != "anthropic" or config.name not in TIER_NAMES:
+            self._refuse_unmetered(f"generation under configuration {config.name!r}")
+        model = self.model_for(config)
         if request.cancelled:
             raise ModelCancelled()
         if request.operation != "generate":
@@ -93,7 +238,7 @@ class AnthropicModelProvider:
             blocks: list[Any] = []
             for _turn in range(3):
                 reply = client.messages.create(
-                    model=self._model,
+                    model=model,
                     max_tokens=max_tokens,
                     system=request.system,
                     messages=conversation,
@@ -154,6 +299,8 @@ class AnthropicModelProvider:
         """One assistant turn. Tool calls are returned, never run here."""
         from anthropic import Anthropic, APIError, APITimeoutError, RateLimitError
 
+        if self._metered_depth == 0:
+            self._refuse_unmetered("chat turn")
         client = Anthropic(api_key=self._api_key, timeout=float(timeout_seconds), max_retries=1)
         try:
             message = client.messages.create(**self._chat_request(system, messages, tools))
@@ -177,6 +324,8 @@ class AnthropicModelProvider:
         is the same as converse's: tool calls are returned, never run here."""
         from anthropic import Anthropic, APIError, APITimeoutError, RateLimitError
 
+        if self._metered_depth == 0:
+            self._refuse_unmetered("streaming chat turn")
         client = Anthropic(api_key=self._api_key, timeout=float(timeout_seconds), max_retries=1)
         try:
             with client.messages.stream(**self._chat_request(system, messages, tools)) as stream:
@@ -277,7 +426,9 @@ def _anthropic_message(item: dict[str, Any]) -> dict[str, Any]:
 def chat_provider_for(settings: Settings) -> ChatProvider | None:
     """The console's conversational provider, when a live model is configured."""
     if live_model(settings):
-        return AnthropicModelProvider(settings.model_api_key, settings.model_name)
+        return AnthropicModelProvider(
+            settings.model_api_key, settings.model_name, settings.model_allow_unmetered
+        )
     return None
 
 
@@ -286,7 +437,9 @@ def provider_for(settings: Settings) -> ModelProvider:
     if settings.model_provider in LOCAL_PROVIDERS:
         return LocalModelProvider()
     if live_model(settings):
-        return AnthropicModelProvider(settings.model_api_key, settings.model_name)
+        return AnthropicModelProvider(
+            settings.model_api_key, settings.model_name, settings.model_allow_unmetered
+        )
     return UnavailableModelProvider()
 
 
@@ -295,14 +448,21 @@ def live_model(settings: Settings) -> bool:
 
 
 def call_note(status: str) -> str:
-    """What a person should know when a model call did not give a usable answer."""
+    """What a person should know when a model call did not give a usable answer. It says
+    what happened to the call and nothing about what stood in for it: a caller that falls
+    back to the rules says so itself (fallback_note), so a model failure never reads as
+    the model's work."""
     notes = {
-        "TIMEOUT": "The model did not answer in time, so the rules were used.",
-        "RATE_LIMITED": "The model was rate limited, so the rules were used.",
-        "MODEL_ERROR": (
-            "The model could not be used, so the rules were used. Check MODEL_NAME and "
-            "MODEL_API_KEY."
-        ),
-        "MALFORMED": "The model's answer was not in the required format, so the rules were used.",
+        "TIMEOUT": "The model did not answer in time.",
+        "RATE_LIMITED": "The model was rate limited.",
+        "MODEL_ERROR": "The model could not be used. Check the model configuration and key.",
+        "MALFORMED": "The model's answer was not in the required format.",
+        "CANCELLED": "The model call was cancelled.",
+        "BUDGET_EXCEEDED": "The model budget is exhausted, so the call was not made.",
     }
-    return notes.get(status, f"The model call ended {status.lower()}, so the rules were used.")
+    return notes.get(status, f"The model call ended {status.lower()}.")
+
+
+def fallback_note(status: str, stood_in: str = "the reviewed rules produced this instead") -> str:
+    """A model failure that the rules stood in for: the failure first, the fallback named."""
+    return f"{call_note(status)} The model did not produce this; {stood_in}."

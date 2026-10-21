@@ -21,6 +21,8 @@ When the review opens, the independent reviewer agent re-performs the testing in
 
 Without a model, the rules run and the review says a person re-performs by hand. At most 30 items are re-performed. Every re-performance withdraws the agent's earlier proposals that nobody decided, records its source, the sheet version it looked at, and its model call.
 
+Since Milestone 3a the reviewer's calls run on the DEEP tier through the agent caller, each recorded with its provenance and attributed to the independent reviewer's instance in the audit trail. The re-performance's source is `MODEL` when the model re-performed at least one item (the note counts any items it could not), `FALLBACK` when every model call failed (the rules' checks stand on their own and the note names the failure), or `RULES` when no model is configured. A reviewer can cancel a running re-performance (`POST …/agent-runs/review/{id}/cancel`); re-performing again is the recovery.
+
 ## Review notes
 
 A note (`review_notes`) is about a test result, the sample, a workpaper, the deficiency, or the control in general, with a severity: must fix, should fix, or observation.

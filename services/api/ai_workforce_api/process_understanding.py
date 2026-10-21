@@ -47,8 +47,9 @@ from ai_workforce_api.control_context import (
     supersede_agent_issues,
 )
 from ai_workforce_api.db import transaction
-from ai_workforce_api.model_providers import CLAUDE_CONFIG, call_note
-from ai_workforce_api.models import ModelProvider, ModelRequest, complete, record_call
+from ai_workforce_api.model_providers import fallback_note
+from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ class UnderstandingBody(BaseModel):
     status: Literal["NONE", "DRAFT", "CONFIRMED"]
     summary: str = ""
     steps: list[Step] = []
-    built_by: Literal["PERSON", "AGENT", "RULES", "LEGACY"] = "PERSON"
+    built_by: Literal["PERSON", "AGENT", "RULES", "LEGACY", "FALLBACK"] = "PERSON"
     proposed_summary: str = ""
     proposed_steps: list[Step] | None = None
     proposed_note: str = ""
@@ -354,13 +355,24 @@ def build(
     note for the team. A map the team has is never replaced: the new one is proposed."""
     steps: list[Step] = []
     summary = ""
-    built: Literal["AGENT", "RULES"] = "RULES"
+    built: Literal["AGENT", "RULES", "FALLBACK"] = "RULES"
     note = ""
     call_id: UUID | None = None
     issues: list[AnswerIssue] = []
     if provider is not None:
-        status, raw = complete(
+        call = AgentCaller(
+            connection,
             provider,
+            Job(
+                "engagement-planner",
+                "engagement_control",
+                control_id,
+                organization_id,
+                project_id,
+                requester,
+                agent_instance_id=agent_actor(connection, project_id, "engagement-planner"),
+            ),  # fmt: skip
+        ).generate(
             ModelRequest(
                 operation="generate",
                 prompt=(
@@ -374,12 +386,10 @@ def build(
                 cancelled=False,
                 system=SYSTEM_PROMPT,
             ),
-            CLAUDE_CONFIG,
+            "process-map/1",
+            {"control": str(control_id), "sources": len(sources)},
         )
-        call_id = record_call(
-            connection, requester, organization_id, project_id, "claude", status, raw,
-            CLAUDE_CONFIG,
-        )  # fmt: skip
+        status, raw, call_id = call.status, call.raw, call.call_id
         if status in ("SUCCEEDED", "MALFORMED") and raw.output is not None:
             try:
                 answer = _Answer.model_validate(raw.output)
@@ -388,12 +398,12 @@ def build(
                 issues = answer.issues
                 built = "AGENT"
             except ValidationError:
+                built = "FALLBACK"
                 note = "The agent's map did not fit, so the reviewed rules built one."
         else:
-            note = (call_note(status) or "The agent did not answer.").replace(
-                "the rules were used", "the reviewed rules built the map"
-            )
-    if built == "RULES":
+            built = "FALLBACK"
+            note = fallback_note(status, "the reviewed rules built the map instead")
+    if built in ("RULES", "FALLBACK"):
         steps, summary = rules_map(context, sources)
     with transaction(connection) as cursor:
         current = cursor.execute(

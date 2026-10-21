@@ -14,6 +14,8 @@ The same bytes stored again return the same record. Different bytes are refused.
 
 Storing a file queues one analysis for it (`evidence_analyses`). The evidence coordinator reads the file in the background, on the local worker or a Temporal workflow (`evidence_analysis`), with up to three attempts. The bytes are read through the custody check: if the stored object no longer matches its hash, the analysis fails and the audit trail records it.
 
+Since Milestone 3a every model call of a read goes through one caller (`provenance.py`): the FAST tier for matching, classification and model OCR, the control's tester's BALANCED tier for the screenshot review, the firm's budgets, and a provenance record per call. The analysis says who produced its classification: `MODEL`, `RULES` (no model configured, or nothing readable to send), `FALLBACK` (the model failed or its answer was rejected and the keyword rules classified the file; the note names the failure first and the failed call is linked) or `FAILED`. A person can cancel a queued or running read (`POST …/agent-runs/analysis/{id}/cancel`); reading the file again is the recovery ([operations.md](operations.md)).
+
 ### Reading the file
 
 Reading is deterministic and values-only (`evidence_extraction.py`). The kind comes from the file's bytes, not its name.

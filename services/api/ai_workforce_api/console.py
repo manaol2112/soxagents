@@ -45,17 +45,17 @@ from ai_workforce_api.console_tools import (
 )
 from ai_workforce_api.db import connect, independent_steps, transaction
 from ai_workforce_api.inbound import clean_text
-from ai_workforce_api.model_providers import CLAUDE_CONFIG, chat_provider_for
+from ai_workforce_api.model_providers import chat_provider_for
 from ai_workforce_api.models import (
     ChatProvider,
+    ModelBudgetExceeded,
     ModelCancelled,
     ModelProviderError,
     ModelRateLimit,
-    ModelRaw,
     ModelTimeout,
     StreamingChatProvider,
-    record_call,
 )
+from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -267,32 +267,49 @@ def run_turn(
     note = ""
     unanswered = False
     live = _LiveText(connection, message_id)
+    # Every turn's calls run through the agent caller: the lead agent's tier, the
+    # engagement's budgets and a provenance record per attempt (Milestone 3a closure).
+    caller = AgentCaller(
+        connection,
+        provider,
+        Job(
+            "console-lead",
+            "console_message",
+            message_id,
+            organization_id,
+            project_id,
+            user_id,
+            agent_instance_id=agent_actor(connection, project_id, "engagement-planner"),
+        ),
+        settings=settings,
+    )
+    attempt = 0
     for _round in range(MAX_ROUNDS):
         reply = None
         reason = "The model did not answer."
         for delay in (*RETRY_DELAYS, None):
             # Each attempt writes on from what the agent has said so far this turn.
             live.begin(text)
+            attempt += 1
             try:
-                if isinstance(provider, StreamingChatProvider):
-                    reply = provider.converse_streaming(
-                        system, history + turn, tools, 120, live.add
-                    )
-                else:
-                    reply = provider.converse(system, history + turn, tools, 120)
+                reply = caller.chat(
+                    provider,
+                    system,
+                    history + turn,
+                    tools,
+                    120,
+                    live.add if isinstance(provider, StreamingChatProvider) else None,
+                    attempt=attempt,
+                )
+                break
+            except ModelBudgetExceeded:
+                live.show(text)
+                reason = "The engagement's model budget is exhausted, so the agent did not answer."
                 break
             except (ModelTimeout, ModelRateLimit, ModelProviderError, ModelCancelled) as error:
-                # Words from an attempt that broke off are taken back.
+                # Words from an attempt that broke off are taken back. The attempt is
+                # already recorded by the caller.
                 live.show(text)
-                status = {
-                    "ModelTimeout": "TIMEOUT",
-                    "ModelRateLimit": "RATE_LIMITED",
-                    "ModelCancelled": "CANCELLED",
-                }.get(type(error).__name__, "MODEL_ERROR")
-                record_call(
-                    connection, user_id, organization_id, project_id, "claude", status,
-                    ModelRaw(None, (), 0, 0), CLAUDE_CONFIG,
-                )  # fmt: skip
                 busy = isinstance(error, ModelRateLimit) or (
                     isinstance(error, ModelProviderError) and error.transient
                 )
@@ -311,16 +328,6 @@ def run_turn(
             note = reason
             unanswered = True
             break
-        record_call(
-            connection,
-            user_id,
-            organization_id,
-            project_id,
-            "claude",
-            "SUCCEEDED",
-            ModelRaw(None, (), reply.input_tokens, reply.output_tokens),
-            CLAUDE_CONFIG,
-        )
         blocks: list[dict[str, Any]] = []
         if reply.text:
             blocks.append({"type": "text", "text": reply.text})

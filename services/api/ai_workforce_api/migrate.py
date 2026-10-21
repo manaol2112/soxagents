@@ -144,6 +144,13 @@ def main() -> None:
     with psycopg.connect(settings.database_url, connect_timeout=3) as connection:
         raised = detect_everywhere(connection)
     print(f"plan impact: {raised} assessments raised")
+    # Stored prompts and answers past their retention are removed; the call records and
+    # their hashes stay (Milestone 3a, provenance.py).
+    from ai_workforce_api.provenance import purge_expired_contents
+
+    with psycopg.connect(settings.database_url, connect_timeout=3) as connection:
+        purged = purge_expired_contents(connection)
+    print(f"model call contents: {purged} expired records removed")
 
 
 if __name__ == "__main__":

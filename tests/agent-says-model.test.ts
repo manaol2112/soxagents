@@ -158,6 +158,30 @@ describe("the agent block", () => {
     assert.equal(says.insufficient, null);
   });
 
+  it("offers to cancel a queued or running run and shows a pending cancellation", () => {
+    // Milestone 3a: the execution line names the job a person may cancel; once asked,
+    // it says the tester stops at its next check; an idle sheet offers nothing.
+    const running = agentSays(
+      base({ sheet: sheet({ running: true, runState: "RUNNING" }) }),
+    );
+    assert.deepEqual(running.execution?.cancel, {
+      kind: "test-sheet",
+      id: "s1",
+    });
+    const requested = agentSays(
+      base({
+        sheet: sheet({
+          running: true,
+          runState: "RUNNING",
+          cancelState: "REQUESTED",
+        }),
+      }),
+    );
+    assert.match(requested.execution?.detail ?? "", /Cancellation requested/);
+    const idle = agentSays(base());
+    assert.equal(idle.execution?.cancel, undefined);
+  });
+
   it("says when there is no basis instead of recommending", () => {
     const none = agentSays(base({ sheet: null }));
     assert.equal(none.recommends, null);

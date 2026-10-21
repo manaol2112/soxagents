@@ -35,8 +35,8 @@ from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.controls import BY_KEY, DOMAIN_LABELS
 from ai_workforce_api.db import transaction
 from ai_workforce_api.inbound import clean_line
-from ai_workforce_api.model_providers import CLAUDE_CONFIG
-from ai_workforce_api.models import ModelProvider, ModelRequest, complete, record_call
+from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 
 Status = Literal["RECOMMENDED", "POTENTIAL", "NOT_RECOMMENDED", "JUDGMENT"]
 STATUSES: tuple[Status, ...] = ("RECOMMENDED", "POTENTIAL", "NOT_RECOMMENDED", "JUDGMENT")
@@ -91,7 +91,7 @@ class ControlCall:
 
 @dataclass
 class Assessment:
-    source: Literal["RULES", "AGENT"]
+    source: Literal["RULES", "AGENT", "FALLBACK"]
     summary: str
     hosting: str | None
     hosting_basis: str
@@ -693,9 +693,9 @@ def review(
     call_id: UUID | None = None
     assessment: Assessment | None = None
     fallback = rules_assessment(details, candidates, report, "")
+    fell_back = False
     if provider is not None:
-        status, raw = complete(
-            provider,
+        call = _caller(connection, provider, facts, requester).generate(
             ModelRequest(
                 operation="generate",
                 prompt=assess_prompt(details, candidates, report),
@@ -707,25 +707,28 @@ def review(
                 web_search=MAX_SEARCHES,
                 max_tokens=8192,
             ),
-            CLAUDE_CONFIG,
+            "system-scoping/1",
+            {"application": str(facts.application_id), "candidates": len(candidates)},
         )
-        call_id = record_call(
-            connection, requester, facts.organization_id, facts.project_id, "claude", status,
-            raw, CLAUDE_CONFIG,
-        )  # fmt: skip
+        status, raw, call_id = call.status, call.raw, call.call_id
         if status in ("SUCCEEDED", "MALFORMED") and raw.output is not None:
             try:
                 assessment = check_assessment(
                     raw.output, candidates, raw.sources, raw.searched, report, fallback
                 )
             except ValidationError:
+                fell_back = True
                 note = "The agent's assessment did not fit, so the reviewed rules were used."
         else:
+            fell_back = True
             note = "The agent did not answer, so the reviewed rules were used."
     else:
         note = "No model is configured, so the reviewed rules were used."
     if assessment is None:
         assessment = rules_assessment(details, candidates, report, note)
+        if fell_back:
+            # The rules stood in for a failed model call: the record says so.
+            assessment.source = "FALLBACK"
     return _save_assessment(connection, facts, assessment, call_id, requester)
 
 
@@ -745,8 +748,7 @@ def _read_reports(
             _fail_report(connection, report_id, "A model is needed to read the report. "
                          "Configure one, then upload the report again.")  # fmt: skip
             continue
-        status, raw = complete(
-            provider,
+        call = _caller(connection, provider, facts, requester).generate(
             ModelRequest(
                 operation="generate",
                 prompt=_report_prompt(str(text), candidates),
@@ -757,12 +759,10 @@ def _read_reports(
                 system=REPORT_PROMPT,
                 max_tokens=16000,
             ),
-            CLAUDE_CONFIG,
+            "soc-report/1",
+            {"application": str(facts.application_id), "report": str(report_id)},
         )
-        call_id = record_call(
-            connection, requester, facts.organization_id, facts.project_id, "claude", status,
-            raw, CLAUDE_CONFIG,
-        )  # fmt: skip
+        status, raw, call_id = call.status, call.raw, call.call_id
         if status not in ("SUCCEEDED", "MALFORMED") or raw.output is None:
             _fail_report(connection, report_id, "The agent could not read the report. Try "
                          "again by uploading it again.")  # fmt: skip
@@ -774,6 +774,25 @@ def _read_reports(
                          "not kept. Upload the report again to retry.")  # fmt: skip
             continue
         _save_report(connection, facts, UUID(str(report_id)), read, call_id)
+
+
+def _caller(
+    connection: psycopg.Connection[Any], provider: ModelProvider, facts: Any, requester: UUID
+) -> AgentCaller:
+    """The planner's caller for one application's scoping (Milestone 3a closure)."""
+    return AgentCaller(
+        connection,
+        provider,
+        Job(
+            "engagement-planner",
+            "engagement_application",
+            facts.application_id,
+            facts.organization_id,
+            facts.project_id,
+            requester,
+            agent_instance_id=agent_actor(connection, facts.project_id, "engagement-planner"),
+        ),
+    )
 
 
 def _report_prompt(text: str, candidates: list[Any]) -> str:

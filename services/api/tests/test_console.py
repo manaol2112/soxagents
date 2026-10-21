@@ -824,3 +824,41 @@ def _audit(database: Database) -> str:
     with connect(database.url) as connection:
         rows = connection.execute("SELECT action, payload::text FROM audit_events").fetchall()
     return str(rows)
+
+
+def test_a_turn_is_metered_recorded_and_stopped_by_the_budget(migrated: Database) -> None:
+    """Milestone 3a closure: the console's turns run through the agent caller: each
+    attempt is a call record attributed to the lead agent with its tier and prompt
+    version, and an exhausted budget ends the turn without a call."""
+    team, client, _request = _sent_engagement_request(migrated, "metered", "ITGC-AC-01")
+    asked = _ask(client, team, "Where is ITGC-AC-01?")
+    with connect(migrated.url) as connection:
+        script = _Script([_reply("It is waiting on the owner.")])
+        assert _turn(connection, migrated, script, asked) == "DONE"
+        rows = connection.execute(
+            "SELECT agent_key, tier, operation, prompt_version, status, target_type, target_id "
+            "FROM model_calls WHERE project_id = %s ORDER BY created_at",
+            (team["project"],),
+        ).fetchall()
+    assert len(rows) == 1
+    assert tuple(rows[0][:6]) == (
+        "console-lead", "BALANCED", "propose_tools", "console/1", "SUCCEEDED", "console_message",
+    )  # fmt: skip
+    assert str(rows[0][6]) == str(asked)
+    # Priced as the live BALANCED model would be, with a budget too small for one call:
+    # refused before dispatch, recorded, and the person told why.
+    again = _ask(client, team, "And ITGC-AC-02?")
+    tight = Settings(
+        database_url=migrated.url, model_provider="anthropic", model_api_key="not-real",
+        model_budget_call_micros=1_000,
+    )  # fmt: skip
+    with connect(migrated.url) as connection:
+        script = _Script([_reply("never sent")])
+        assert run_turn(connection, tight, script, again) == "FAILED"
+        refused = connection.execute(
+            "SELECT status, error FROM model_calls WHERE target_id = %s", (again,)
+        ).fetchone()
+    assert script.replies == [_reply("never sent")], "no call was made"
+    assert refused is not None and refused[0] == "BUDGET_EXCEEDED" and "limit a call" in refused[1]
+    note = _thread(client, team)["messages"][-1]["note"]
+    assert note == "The engagement's model budget is exhausted, so the agent did not answer."

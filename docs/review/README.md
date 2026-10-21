@@ -179,3 +179,14 @@ recipient allowlist).
 | `queue-readiness.md` | Drafted-request readiness before and after the closure on the 155- and 403-control engagements, under two allowlists, with the queue's time. |
 | `portal-smoke.md`, `portal-1-link.png` … `portal-8-expired.png`, `portal-6-submitted-mobile.png` | The control owner's full path: link, code, requests, uploads to both items, the submission dialog, the confirmation; the wrong token and the revoked link refused. |
 | `keyboard.md`, `keys-1-stepper-focus.png` … `keys-7-closeout-dialog.png` | Keyboard-only checks: the stepper, the plan review's actions, the queue, the phone-width Details disclosures, the close-out dialog. |
+
+## m3a — Milestone 3a: real agent execution
+
+Test databases built from the migrations (0094 applied); the live smoke against the
+provider with the owner's key on synthetic evidence only.
+
+| File | What it shows |
+| --- | --- |
+| `live-smoke.md` | The models verified and pinned per tier with their prices; one structured call per tier with tokens, cost and duration; the tester on a synthetic control with the live model (no invented pass, every result cited or unable). |
+| `tests.md` | The commands run for the M3a gate and their results: the new execution and provenance tests, the rewritten legacy expectations, the fast and critical sets, type checks and lint. |
+| `closure.md`, `cancel-1-offered.png`, `cancel-2-cancelled.png`, `cancel-3-mobile.png` | The closure items: the caller inventory and containment, the cancellation semantics with the Cancel run action in the browser (queued run, the stop attributed to the person, phone width), key rotation, budgets across retries and on chat turns, the provenance read route. |

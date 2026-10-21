@@ -46,8 +46,9 @@ from ai_workforce_api.control_context import (
 from ai_workforce_api.db import transaction
 from ai_workforce_api.definition_registry import attribute_for
 from ai_workforce_api.library_definitions import DefinitionBody, definition_body
-from ai_workforce_api.model_providers import CLAUDE_CONFIG, call_note
-from ai_workforce_api.models import ModelProvider, ModelRequest, complete, record_call
+from ai_workforce_api.model_providers import call_note
+from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 
 logger = logging.getLogger(__name__)
 
@@ -460,8 +461,19 @@ def generate(
     kept and a note for the team. Without a model, nothing is proposed."""
     if provider is None:
         return 0, "No model is configured, so the agent proposed no attributes."
-    status, raw = complete(
+    call = AgentCaller(
+        connection,
         provider,
+        Job(
+            "engagement-planner",
+            "engagement_control",
+            control_id,
+            organization_id,
+            project_id,
+            requester,
+            agent_instance_id=agent_actor(connection, project_id, "engagement-planner"),
+        ),  # fmt: skip
+    ).generate(
         ModelRequest(
             operation="generate",
             prompt=(
@@ -475,11 +487,10 @@ def generate(
             cancelled=False,
             system=SYSTEM_PROMPT,
         ),
-        CLAUDE_CONFIG,
+        "attributes/1",
+        {"control": str(control_id), "sources": len(sources)},
     )
-    call_id = record_call(
-        connection, requester, organization_id, project_id, "claude", status, raw, CLAUDE_CONFIG,
-    )  # fmt: skip
+    status, raw, call_id = call.status, call.raw, call.call_id
     if status not in ("SUCCEEDED", "MALFORMED") or raw.output is None:
         return 0, call_note(status) or "The agent did not answer."
     try:

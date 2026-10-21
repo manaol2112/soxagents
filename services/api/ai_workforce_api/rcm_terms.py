@@ -22,8 +22,9 @@ from pydantic import BaseModel, Field, ValidationError
 
 from ai_workforce_api.controls import DOMAIN_LABELS
 from ai_workforce_api.db import independent_steps, transaction
-from ai_workforce_api.model_providers import CLAUDE_CONFIG, call_note
-from ai_workforce_api.models import ModelProvider, ModelRequest, complete, record_call
+from ai_workforce_api.model_providers import fallback_note
+from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.rcm_import import (
     FIELD_KEYS,
     VALUE_FIELDS,
@@ -235,25 +236,30 @@ def run_terms(
             cancelled=False,
             system=SYSTEM_PROMPT,
         )
-        status, raw = complete(provider, request, CLAUDE_CONFIG)
-        call_id = record_call(
+        call = AgentCaller(
             connection,
-            requester,
-            organization_id,
-            project_id,
-            "claude",
-            status,
-            raw,
-            CLAUDE_CONFIG,
-        )
+            provider,
+            Job(
+                "evidence-reader",
+                "rcm_import",
+                import_id,
+                organization_id,
+                project_id,
+                requester,
+                agent_instance_id=agent_actor(connection, project_id, "evidence-coordinator"),
+            ),  # fmt: skip
+        ).generate(request, "rcm-terms/1", {"import": str(import_id)})
+        status, raw, call_id = call.status, call.raw, call.call_id
         if status == "SUCCEEDED" and raw.output is not None:
             try:
                 found = check_terms(raw.output, choices)
                 source = "MODEL"
             except ValueError as error:
-                note = f"Model answer rejected: {error}."
+                source = "FALLBACK"
+                note = f"Model answer rejected: {error}. The reviewed rules matched the terms."
         else:
-            note = call_note(status)
+            source = "FALLBACK"
+            note = fallback_note(status, "the reviewed rules matched the terms instead")
     if found is None:
         found = {
             key: {

@@ -19,7 +19,7 @@ The roster is code in `services/api/ai_workforce_api/workforce.py`. A test pins 
 
 Every allowed action must be in the action catalog. No standard worker may hold `permission.modify` or `mail.external`. Listing an action does not bypass policy: `mail.pbc`, `mail.reminder`, `workpaper.update`, and `report.finalize` still wait for a person's approval.
 
-Model tiers are logical names. A later milestone maps `reasoning` and `standard` to real models through configuration, so the roster never names a vendor model.
+Model tiers are logical names; the roster never names a vendor model. Since Milestone 3a the configuration maps three tiers to pinned models ([operations.md](operations.md)): FAST (`claude-haiku-5-5` by default) for routine classification and low-complexity extraction (reading, matching and classifying evidence, RCM scans, the library match); BALANCED (`claude-sonnet-5-5`) for evidence interpretation, testing drafts and routine reviewer analysis (the evidence coordinator, the testers, the screenshot review, workpapers, the independent reviewer, the planner, the console, setup and scoping); DEEP (`claude-opus-5-5`) only for agents explicitly authorized in `MODEL_DEEP_AGENTS` (`model_providers.AGENT_TIERS`). Every call records the model that answered, its tier, the agent, the prompt version and its cost, and runs under the firm's budgets.
 
 ## How it stays in place
 

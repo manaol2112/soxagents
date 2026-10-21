@@ -27,8 +27,9 @@ from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError
 
 from ai_workforce_api.db import connect, independent_steps, transaction
-from ai_workforce_api.model_providers import CLAUDE_CONFIG, call_note, live_model, provider_for
-from ai_workforce_api.models import ModelProvider, ModelRequest, complete, record_call
+from ai_workforce_api.model_providers import fallback_note, live_model, provider_for
+from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.rcm_import import FIELD_KEYS, Sheet, data_rows, headers
 from ai_workforce_api.settings import Settings
 
@@ -558,17 +559,20 @@ def run_scan(
             cancelled=False,
             system=SYSTEM_PROMPT,
         )
-        status, raw = complete(provider, request, CLAUDE_CONFIG)
-        call_id = record_call(
+        call = AgentCaller(
             connection,
-            requester,
-            organization_id,
-            project_id,
-            "claude",
-            status,
-            raw,
-            CLAUDE_CONFIG,
-        )
+            provider,
+            Job(
+                "evidence-reader",
+                "rcm_import",
+                import_id,
+                organization_id,
+                project_id,
+                requester,
+                agent_instance_id=agent_actor(connection, project_id, "evidence-coordinator"),
+            ),  # fmt: skip
+        ).generate(request, "rcm-systems/1", {"import": str(import_id), "rows": len(rows)})
+        status, raw, call_id = call.status, call.raw, call.call_id
         if status == "SUCCEEDED" and raw.output is not None:
             try:
                 read = len(scan_prompt_rows(rows))
@@ -577,9 +581,11 @@ def run_scan(
                 )
                 source = "MODEL"
             except ValueError as error:
-                note = f"Model answer rejected: {error}."
+                source = "FALLBACK"
+                note = f"Model answer rejected: {error}. The reviewed rules scanned the RCM."
         else:
-            note = call_note(status)
+            source = "FALLBACK"
+            note = fallback_note(status, "the reviewed rules scanned the RCM instead")
     if proposals is None:
         proposals = rules_scan(rows)
     with transaction(connection) as cursor:

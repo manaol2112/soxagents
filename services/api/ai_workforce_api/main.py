@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from ai_workforce_api import independence
 from ai_workforce_api.actions import register_actions
+from ai_workforce_api.agent_runs import register_agent_runs
 from ai_workforce_api.agents import register_agents
 from ai_workforce_api.approvals import register_approvals
 from ai_workforce_api.auth import register_auth
@@ -76,6 +77,7 @@ from ai_workforce_api.phase_release import register_phase_release
 from ai_workforce_api.plan_impact import register_plan_impact
 from ai_workforce_api.policy import register_policy
 from ai_workforce_api.projects import register_projects
+from ai_workforce_api.provenance import register_provenance
 from ai_workforce_api.queue import register_queue
 from ai_workforce_api.rcm_systems import SystemScanScheduler, scan_runner
 from ai_workforce_api.rcm_uploads import register_rcm_uploads
@@ -167,6 +169,8 @@ def create_app(
     register_workflows(app, resolved, durable=attached)
     models = model_provider if model_provider is not None else provider_for(resolved)
     register_models(app, resolved, models)
+    register_provenance(app, resolved)
+    register_agent_runs(app, resolved)
     register_manager(app, resolved, models, attached)
     register_handoffs(app, resolved)
     register_actions(app, resolved)

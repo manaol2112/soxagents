@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { parseCancelState } from "../apps/web/src/run-state.ts";
+
 import {
   parseSheetNotice,
   parseSheets,
@@ -77,6 +79,15 @@ function raw(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     ...overrides,
   };
 }
+
+describe("cancellation state", () => {
+  it("reads the API's cancel state and defaults to none", () => {
+    assert.equal(parseCancelState("REQUESTED"), "REQUESTED");
+    assert.equal(parseCancelState("CANCELLED"), "CANCELLED");
+    assert.equal(parseCancelState("anything"), "NONE");
+    assert.equal(parseCancelState(undefined), "NONE");
+  });
+});
 
 describe("test sheet model", () => {
   it("parses a sheet and its cells", () => {

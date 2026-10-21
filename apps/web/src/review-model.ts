@@ -1,7 +1,12 @@
 // The independent review of a control instance (Milestone 9.1): the agent's
 // re-performance, the review notes, and the reviewer's sign-off.
 
-import { parseRunState, type RunState } from "./run-state.ts";
+import {
+  type CancelState,
+  parseCancelState,
+  parseRunState,
+  type RunState,
+} from "./run-state.ts";
 
 export type NoteSeverity = "MUST_FIX" | "SHOULD_FIX" | "OBSERVATION";
 export type NoteStatus =
@@ -71,8 +76,10 @@ export type ControlReview = {
   reperforming: boolean;
   reperformState: RunState;
   reperformedAt: string | null;
-  reperformSource: "MODEL" | "RULES" | null;
+  /** FALLBACK: the rules' checks stand; the model did not re-perform the items. */
+  reperformSource: "MODEL" | "RULES" | "FALLBACK" | null;
   reperformNote: string;
+  cancelState?: CancelState;
   sheetStatus: string | null;
   sheetSignedBy: string | null;
   sheetVersion: number | null;
@@ -215,10 +222,13 @@ export function parseReviews(value: unknown): ControlReview[] | null {
       ),
       reperformedAt: maybe(item.reperformed_at),
       reperformSource:
-        item.reperform_source === "MODEL" || item.reperform_source === "RULES"
+        item.reperform_source === "MODEL" ||
+        item.reperform_source === "RULES" ||
+        item.reperform_source === "FALLBACK"
           ? item.reperform_source
           : null,
       reperformNote: str(item.reperform_note),
+      cancelState: parseCancelState(item.cancel_state),
       sheetStatus: maybe(item.sheet_status),
       sheetSignedBy: maybe(item.sheet_signed_by),
       sheetVersion:

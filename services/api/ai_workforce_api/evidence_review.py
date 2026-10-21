@@ -248,7 +248,7 @@ def run_review(
             return check_review(raw.output, context), call_id, ""
         except ValueError as error:
             return None, call_id, f"The agent's review was rejected: {error}."
-    return None, call_id, call_note(status).replace("the rules were used", "a person reviews it")
+    return None, call_id, f"{call_note(status)} A person reviews the screenshot."
 
 
 def check_review(output: dict[str, Any], context: ReviewContext) -> Review:

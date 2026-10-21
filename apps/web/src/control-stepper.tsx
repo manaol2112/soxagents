@@ -36,6 +36,7 @@ export function ControlStepper({
   phases,
   current,
   hrefs,
+  ids = null,
   needs,
   actionHref,
   blockers,
@@ -49,6 +50,8 @@ export function ControlStepper({
   phases: JourneyPhase[];
   current: Step;
   hrefs: Record<Step, string>;
+  /** The engagement, for the agent block's cancel action (Milestone 3a). */
+  ids?: { organizationId: string; projectId: string } | null;
   needs: NeedsYou;
   /** Where the viewer does the next action, when it is theirs. */
   actionHref: string | null;
@@ -157,7 +160,9 @@ export function ControlStepper({
           </div>
         ) : null}
       </section>
-      {agent !== null ? <AgentSays says={agent} /> : null}
+      {agent !== null ? (
+        <AgentSays says={agent} ids={ids} back={hrefs[current]} />
+      ) : null}
       {blockers.length > 0 ? (
         <section className="cw-blockers" aria-labelledby="cw-blockers-title">
           <h2 id="cw-blockers-title">Outstanding</h2>
