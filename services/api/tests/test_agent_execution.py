@@ -463,6 +463,7 @@ def test_no_page_or_queue_read_calls_the_model(migrated: Database) -> None:
         "/control-tests",
         "/reviews",
         "/workspace/automation",
+        f"/controls/{sheet['control_id']}/evidence-mapping",
     ):
         read = reader.get(f"{base}{path}")
         assert read.status_code == 200, (path, read.text)

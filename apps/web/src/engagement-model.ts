@@ -1,6 +1,7 @@
 import type { EvidenceAnalysis, EvidenceReview } from "./analysis-model.ts";
 import type { ActivityItem } from "./control-workspace-model.ts";
 import type { ChangeNotice } from "./evidence-change-model.ts";
+import type { EvidenceMappingRun } from "./evidence-mapping-model.ts";
 import type { RegisterApplication, RegisterFile } from "./evidence-model.ts";
 import type { MasterPlan, PhaseProgress } from "./planning-model.ts";
 import type { RequestDetails } from "./request-details-model.ts";
@@ -623,6 +624,8 @@ export type EngagementState = {
    * plan review inside the Plan step (M2d); null when not loaded. */
   masterPlan?: MasterPlan | null;
   phaseProgress?: PhaseProgress | null;
+  /** The open control's evidence-to-attribute mapping (M3b); null when none or not loaded. */
+  evidenceMapping?: EvidenceMappingRun | null;
   /** The engagement's journey and what waits on the team (next_steps.py), for Home. */
   nextSteps?: NextSteps | null;
   notice: EngagementNotice | null;

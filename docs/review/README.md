@@ -190,3 +190,16 @@ provider with the owner's key on synthetic evidence only.
 | `live-smoke.md` | The models verified and pinned per tier with their prices; one structured call per tier with tokens, cost and duration; the tester on a synthetic control with the live model (no invented pass, every result cited or unable). |
 | `tests.md` | The commands run for the M3a gate and their results: the new execution and provenance tests, the rewritten legacy expectations, the fast and critical sets, type checks and lint. |
 | `closure.md`, `cancel-1-offered.png`, `cancel-2-cancelled.png`, `cancel-3-mobile.png` | The closure items: the caller inventory and containment, the cancellation semantics with the Cancel run action in the browser (queued run, the stop attributed to the person, phone width), key rotation, budgets across retries and on chat turns, the provenance read route. |
+
+## m3b — Milestone 3b: evidence intelligence
+
+The synthetic corpus, its manifest of independent expectations, the live run's scorecard,
+the gate, and the mapping panel on the owner's development engagement.
+
+| File | What it shows |
+| --- | --- |
+| `corpus/` and `corpus/manifest.json` | The 27 synthetic files across six controls with every planted difficulty, and the expected outcome per file (reader, rows, columns, facts, OCR words, flags) and per approved attribute (acceptable statuses, identifiers to mention, the file that must never be the support). |
+| `live-scorecard.json`, `results.md` | The live model's reading, OCR, classification and mapping of the corpus against the manifest: per file and per attribute, every call's cost, and the summary. |
+| `tests.md` | The commands run for the M3b gate and their results. |
+| (screenshots) | The Test step's mapping panel was checked in headless Chrome at desktop and 390 px (document width 390) on the owner's development engagement. Those screenshots show that engagement's names and documents, which may be client material, so they are kept out of the repository. |
+| `repeatability.md`, `live-scorecard-repeat-1.json` to `-3.json` | The closure's three runs of the unchanged corpus: per-run results, mapping and classification consistency, the investigation of each difference. |

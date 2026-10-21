@@ -213,3 +213,16 @@ and `workflow-model` (queue sources).
   tier's configuration to the live adapter, as every caller does since the closure (an
   untiered live call is refused as unmetered). Nothing retired; no audit-integrity
   assertion changed.
+- M3b (21 October 2026, evidence intelligence; migration 0096): `make test-fast` with
+  `test_evidence_corpus` and the mapping model test added **113 Python passed in 2 min 58 s
+  and 114 Node passed**; `make test-critical` with `test_evidence_corpus` added **391
+  passed, 0 failed in 5 min 33 s**; the corpus tests rerun on the final corpus 7 passed;
+  type checks clean; lint clean except the known `biome.json` endings. The gated live
+  corpus runs (never in the gate) cost $1.84 in all. No legacy expectation rewritten.
+- M3b closure (21 October 2026; migration 0097): `make test-fast` **123 Python passed in
+  3 min 0 s and 114 Node passed**; `make test-critical` **401 passed, 0 failed in 5 min 53 s**;
+  the closure's corpus tests 17 passed. One M3a regression found outside the gate and
+  corrected: `test_evidence_reading::test_claude_receives_images_as_base64_blocks_before_the_prompt`
+  called the live adapter with the untiered configuration, which the M3a containment refuses;
+  it now uses a tier's configuration (the safeguard is intended and unchanged). Three repeat
+  live runs of the unchanged corpus cost $2.61.

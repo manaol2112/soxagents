@@ -179,3 +179,25 @@ Milestone 8.4b. Every evidence file can be previewed in the page, from the **Pre
 - **Spreadsheets, CSVs, and documents** are shown as the text the evidence coordinator read from them, with sheets as headings and rows as tables.
 
 `GET .../evidence-files/{id}/preview` serves a file inline only when its own bytes are a PDF or one of those images, whatever its declared type. An HTML or SVG file is never shown inline. The response is marked `nosniff`, `Content-Security-Policy: sandbox`, and not cached, and is read through the custody check. `GET .../evidence-files/{id}/reading` returns the read text, up to 200,000 characters. A withdrawn file can still be previewed, as it can be downloaded.
+
+## Evidence-to-attribute mapping
+
+Milestone 3b (`evidence_mapping.py`, migration 0096). For a control whose evidence plan is
+approved, **Map evidence** on the Test step (or `POST …/controls/{id}/evidence-mapping`)
+reads the approved attributes at the plan's current revision and, for each, names what
+the plan requires, which in-force files are candidates (the files linked to the
+requirements that serve the attribute, or sent on their requests), the passages that bear
+on it, the facts those passages state and the interpretations drawn from them, what is
+missing, what conflicts, and a status: MISSING, INCOMPLETE, CONTRADICTORY,
+POTENTIALLY_SUFFICIENT or UNKNOWN. Every passage is a quote the file holds, found in its
+stored text and located to a page, a sheet, a data row and a column (with the cell for a
+workbook), or the file; a quote the file does not hold is dropped, a fact without one
+becomes an inference marked unverified, a sufficient status without a verified passage is
+lowered, and a contradiction needs two verified passages. The run is a proposal for the
+tester, never a test conclusion, and changes nothing else: the plan, the attributes, a
+requirement's sufficiency, approvals and sign-offs are untouched. Runs are append-only
+and pinned to the plan revision, the attribute list and each file's content hash; a read
+says when a run is stale (a file replaced, withdrawn or added; the attributes changed; the
+plan approved again). Without a model the rules name the candidates and a person maps.
+The model sees the files as untrusted data inside the evidence block; an instruction in a
+file is content to report, never followed ([milestone-3-plan.md §16](milestone-3-plan.md)).

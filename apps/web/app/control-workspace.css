@@ -5647,3 +5647,119 @@ a.cw-lane:focus-visible {
 .cw-agent-cancel {
   margin-top: 0.4rem;
 }
+
+/* Milestone 3b: the evidence-to-attribute mapping on the Test step. */
+.cw-mapping {
+  margin: 0 0 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--cw-line-soft);
+  border-radius: 10px;
+  background: var(--cw-surface, #fff);
+}
+
+.cw-mapping-head {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.cw-mapping-head h3 {
+  margin: 0 0 0.25rem;
+  font-size: 14px;
+}
+
+.cw-mapping-head p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--cw-muted, #5b6472);
+}
+
+.cw-mapping-stale {
+  color: var(--cw-warning-text, #8a5a00);
+}
+
+.cw-mapping-list {
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.cw-mapping-list > li {
+  padding: 0.55rem 0.7rem;
+  border-left: 3px solid var(--cw-line-soft);
+  background: var(--cw-tint);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.cw-mapping-list > li.is-danger { border-left-color: #c0392b; }
+.cw-mapping-list > li.is-warning { border-left-color: #c98a00; }
+.cw-mapping-list > li.is-success { border-left-color: #2a8a4a; }
+
+.cw-mapping-row {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.cw-mapping-status {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+
+.cw-mapping-status.is-danger { color: #a4321f; }
+.cw-mapping-status.is-warning { color: #8a5a00; }
+.cw-mapping-status.is-success { color: #1f6b3a; }
+.cw-mapping-status.is-neutral { color: var(--cw-muted, #5b6472); }
+
+.cw-mapping-attribute {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.cw-mapping-refs {
+  margin: 0.4rem 0 0;
+  padding: 0 0 0 1rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.cw-mapping-refs li {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.cw-mapping-ref-where {
+  font-size: 12px;
+  color: var(--cw-muted, #5b6472);
+}
+
+.cw-mapping-refs q {
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+
+.cw-mapping-conflicts,
+.cw-mapping-missing {
+  margin: 0.35rem 0 0;
+}
+
+.cw-mapping-more {
+  margin-top: 0.3rem;
+  font-size: 12px;
+}
+
+.cw-mapping-more ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1rem;
+}

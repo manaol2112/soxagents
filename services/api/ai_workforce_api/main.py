@@ -44,6 +44,7 @@ from ai_workforce_api.evidence_analysis import (
 )
 from ai_workforce_api.evidence_center import register_evidence_center
 from ai_workforce_api.evidence_intake import register_evidence_intake
+from ai_workforce_api.evidence_mapping import register_evidence_mapping
 from ai_workforce_api.evidence_plans import register_evidence_plans
 from ai_workforce_api.evidence_portal import register_evidence_portal
 from ai_workforce_api.evidence_review import register_evidence_reviews
@@ -191,6 +192,7 @@ def create_app(
     register_evidence_portal(app, resolved, analyses=analyses)
     register_evidence_versions(app, resolved, analyses=analyses)
     register_evidence_reviews(app, resolved)
+    register_evidence_mapping(app, resolved, model_provider)
     register_control_tests(app, resolved)
     register_control_context(app, resolved, drafts if isinstance(drafts, TestScheduler) else None)
     register_test_sheets(app, resolved, drafts if isinstance(drafts, TestScheduler) else None)

@@ -250,8 +250,9 @@ def test_claude_receives_images_as_base64_blocks_before_the_prompt(
     import anthropic
     from anthropic.types import Message, ToolUseBlock, Usage
 
-    from ai_workforce_api.model_providers import CLAUDE_CONFIG, AnthropicModelProvider
+    from ai_workforce_api.model_providers import AnthropicModelProvider, tier_config
     from ai_workforce_api.models import ModelImage, complete
+    from ai_workforce_api.settings import Settings
 
     calls: list[dict[str, Any]] = []
 
@@ -292,7 +293,10 @@ def test_claude_receives_images_as_base64_blocks_before_the_prompt(
         cancelled=False,
         images=(image,),
     )
-    status, raw = complete(provider, request, CLAUDE_CONFIG)
+    # Since the M3a closure a live call carries a tier's configuration; an untiered one is
+    # refused as unmetered (containment), so the adapter is exercised as the caller uses it.
+    config = tier_config(Settings(model_provider="anthropic", model_api_key="k"), "FAST")
+    status, raw = complete(provider, request, config)
     assert status == "SUCCEEDED"
     assert raw.output == {"pages": [{"text": "Lockout 5"}]}
     content = calls[0]["messages"][0]["content"]
@@ -308,7 +312,7 @@ def test_claude_receives_images_as_base64_blocks_before_the_prompt(
         timeout_seconds=30,
         cancelled=False,
     )
-    complete(provider, plain, CLAUDE_CONFIG)
+    complete(provider, plain, config)
     assert calls[1]["messages"][0]["content"] == "Classify."
 
 

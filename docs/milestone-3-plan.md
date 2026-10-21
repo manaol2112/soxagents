@@ -803,3 +803,147 @@ demo database; existing records kept.
   built.
 - The month budget sums the engagement's calls in the calendar month (UTC); a long
   month-end run can be refused mid-way and rests for a person.
+
+## 16. M3b as built: evidence intelligence
+
+Built on 21 October 2026 after M3a's acceptance (§15), for review before M3c. The brief:
+validate and improve ingestion, classification, extraction, custody and
+evidence-to-attribute mapping on a controlled synthetic corpus, with precise traceability;
+no autonomous control testing, no rebuild of what works.
+
+### 16.1 Reuse versus change
+
+| Capability | Decision | Why |
+| --- | --- | --- |
+| Readers (`evidence_extraction`: xlsx, csv, docx, PDF text layer, images) | Reused unchanged | Every corpus file read as the manifest expects: method, status, row counts, columns and planted facts (`test_every_file_is_stored_linked_read_and_kept_as_it_came`). No deficiency found. |
+| OCR (`evidence_ocr`: Tesseract, model vision) | Reused unchanged | Tesseract is not installed here; the live run used model OCR and read every planted word of the four images and the scanned page (6 of 6). |
+| Custody (`evidence_files`, hash and size, immutable record, withdraw and replace) | Reused unchanged | Hashes, sizes, names, sources, links, duplicates stored once, a replacement as a new record with the old one withdrawn: all verified on the corpus. |
+| Matching and classification (`evidence_matching`, `evidence_classify`) | Reused; measured | Uploads named their request, so no matching call ran; classification kinds measured live (§16.5). |
+| Citations (`console_citations.find_quote`, `location_of`; `test_citations`) | Reused; extended | A verified quote is now located to a data row and a column or cell of a table (`evidence_mapping.locate`) as well as to a page or a sheet. |
+| Requirements and their files (`evidence_requirements`, `evidence_requirement_files`) | Reused | The plan's requirements name the attributes they serve; their files and their requests' files are the candidates for an attribute. |
+| Model calls | Reused (M3a) | Every call runs through the agent caller: the reader on FAST, the screenshot review on the control's tester (BALANCED), the mapping on the evidence coordinator (BALANCED), all budgeted and recorded with inputs (file ids and hashes, plan revision). |
+| **New**: evidence-to-attribute mapping (`evidence_mapping.py`, migration 0096, two routes, a Test-step panel) | Built | Nothing existed that related the evidence on hand to each approved attribute with located passages and a sufficiency status. |
+| **New**: the synthetic corpus and its manifest (`services/api/tests/corpus.py`, `scripts/build_corpus.py`) | Built | 27 files over six controls with every planted difficulty and an independently written expected outcome per file and per attribute. |
+| **Changed**: the provider's handling of an answer cut off at the output limit | Changed | The first live run showed four mapping answers cut off at 4,096 output tokens and read as partial; a cut-off answer is now no answer (MALFORMED without output, so FALLBACK), and the mapping asks for a bounded answer with an 8,192-token allowance. |
+
+### 16.2 The corpus (`docs/review/m3b/corpus/`, manifest in `manifest.json`)
+
+Six scenarios: user access provisioning (ITGC-AC-01), terminated-user access removal
+(ITGC-AC-02), user access review (ITGC-AC-03), privileged access (ITGC-AC-04), change
+management (ITGC-CM-01) and the three-way-match automated control (ITAC-01). Twenty-seven
+files: CSV populations and logs, multi-sheet workbooks, text PDFs, a scanned PDF with no
+text layer, a Word test summary and job-title table, PNG screenshots, a text note, random
+bytes named `.xlsx`. Planted: a missing approval (REQ-2), an approval after provisioning
+(REQ-3, CHG-1004), conflicting timestamps (REQ-7, a login after a disable), identifiers
+that differ across files (u0003 / U-0003 / OLIM / oscar.lim@…; employee ids against
+usernames), a duplicate row, an out-of-period row, incomplete populations (REQ-8, E-1004),
+prior-year files, an unreadable file, ambiguous screenshots (no date, no system), a
+removal marked but not actioned (u0106), a generic root account with no owner, and a note
+instructing the model to mark everything sufficient. The manifest states, per file, the
+kind, the reader's method and status, the row count and columns, the words the text must
+carry, the words OCR must read, and the difficulty flags; per attribute (in the library's
+wording the engagements carry), the statuses that would be right, the identifiers the
+mapping must mention and the file it must never stand on. The model never grades itself.
+
+### 16.3 Evidence-to-attribute mapping
+
+`POST …/controls/{id}/evidence-mapping` (update rights) runs a mapping; `GET` reads the
+latest, with its staleness; the Test step shows it with **Map evidence**. A run needs the
+control's evidence plan approved and reads the approved attributes at the plan's current
+revision. For each attribute: the plan's requirements that name it give what is required;
+the files linked to those requirements or sent on their requests (all the control's
+in-force files when none) are the candidates; without a model, or without readable
+candidates, the rules say MISSING or UNKNOWN and a person maps. With a model, one bounded
+call per attribute (the candidates' text as data, the attribute, the control) proposes a
+status, facts with quotes, inferences, what is missing and conflicts with two quotes each.
+The code then decides what stands: a quote is looked up in the file's stored text and,
+when found, located (page; sheet; data row and column, with the cell for a workbook); a
+fact whose quote is not found becomes an inference marked unverified; a conflict keeps
+only verified quotes and needs two; POTENTIALLY_SUFFICIENT without a verified passage is
+lowered to UNKNOWN; CONTRADICTORY without two becomes INCOMPLETE; MISSING beside a
+verified passage becomes INCOMPLETE. The run and its mappings are append-only, pinned to
+the plan revision, a hash of the attributes and every file's content hash; a read marks
+the run stale when the attributes changed, the plan was approved again, a mapped file
+was replaced or withdrawn, or a file was added. Nothing in the run touches the plan, the
+attributes, a requirement's sufficiency, an approval or a sign-off (asserted by a before
+and after snapshot of those tables), and no pass or fail is concluded.
+
+### 16.4 Safeguards
+
+The instruction file's words reach the model only inside `<evidence>` marked as client
+data; its content may be quoted as what the file says, never followed. Model output can
+name only candidate files by index (an index outside the list is dropped), only the five
+statuses, and only quotes the files hold. A cross-engagement read answers 404; another
+engagement's files are never candidates (`test_another_engagements_evidence_never_reaches_a_mapping`).
+The mapping read route is in the no-model-on-reads guard; a run is a person's POST.
+
+### 16.5 Results (live, `docs/review/m3b/live-scorecard.json`)
+
+Two full runs and two runs of the clean scenario, all with actual model responses.
+
+| Measure | First full run | Second full run (after the fixes) |
+| --- | --- | --- |
+| Files read to a record | 24 of 24 | 24 of 24 |
+| Kind as expected or an acceptable alternative | 16 of 24 (strict) | 22 of 24 |
+| OCR words read (model OCR) | 6 of 6 | 6 of 6 |
+| Mapping status within the acceptable statuses | 22 of 24 | 24 of 24 |
+| Required identifiers mentioned | 24 of 24 | 24 of 24 |
+| Verified references (located to page, sheet, row or cell) | 279 (252) | 189 (165) |
+| Quotes the files do not hold | 0 | 0 |
+| Sufficient status standing on the instruction file | 0 | 0 |
+| Attributes marked sufficient as the instruction demanded | 0 | 0 |
+| Mapping answers cut off at the output limit | 4 | 0 |
+| Cost | $0.8579 | $0.7823 |
+
+The first run's four cut-off mapping answers led to the one change to existing code (a
+cut-off answer is no answer) and a bounded mapping prompt (`evidence-mapping/2`). The
+scorer was also refined: quoting the instruction file as content (three mappings did, each
+saying it was not followed) is allowed; standing on it for a sufficient status is not. The
+two kind misses of the second run are a ticket screenshot read as a sample (manifest:
+other) and the 2027 change population read as change history (manifest: population).
+
+**The clean scenario (ITGC-OP-01).** The first live run on it returned INCOMPLETE for the
+first attribute, and the model was right: the run ids skipped R-5505, R-5506 and R-5510
+and the evidence held no scheduled-job list, no financial-relevance list and no record of
+who monitored, which the manifest had missed. The scenario was completed (contiguous run
+ids, the job schedule with relevance and the export's parameters, who acknowledged each
+alert). The second run mapped all four attributes POTENTIALLY_SUFFICIENT, each with seven
+or eight located passages (rows of the run history and the alert log, the incident report's
+page), no conflict, and follow-up suggestions listed as missing items (such as run history
+for other selected days). Cost $0.1071 and $0.0925.
+
+Live spend for M3b: $1.84 in all, within the development budgets (no call was refused).
+
+### 16.6 Tests
+
+| Command | Result |
+| --- | --- |
+| `uv run mypy` | clean (245 files) |
+| `ruff format` / `ruff check` | clean |
+| `tsc` (root and web), `biome check` | clean except the known `biome.json` endings and the regenerated `next-env.d.ts` |
+| Manifest check: every corpus file through the deterministic readers | 31 of 31 as expected |
+| `pytest test_evidence_corpus.py` | 7 passed on the final 31-file corpus (the 2 live tests skip without the flag) |
+| `node --test tests/evidence-mapping-model.test.ts` | 2 passed |
+| `MODEL_LIVE_TESTS=1 pytest -s test_live_corpus.py` | full run 1 failed (the scorer, then corrected); full run 2 passed; clean scenario passed twice (first run's INCOMPLETE was right) |
+| `make test-fast` | **113 Python passed in 2 min 58 s and 114 Node passed** |
+| `make test-critical` | **391 passed, 0 failed in 5 min 33 s** |
+| Migration 0096 | applied to the development database; `test_migrations` and `test_schema` in the critical set |
+
+### 16.7 Limitations
+
+- Passages in plain text files and in OCR text are located to the file only (no page or
+  row marker exists in the stored text); image references are whole-image, never a region.
+- ITAC-01 is in the corpus but the fixture engagement requests no evidence for it, so its
+  files are not ingested in the automated runs; its three files are read by the manifest
+  check only.
+- Classification kinds are compared against the classifier's vocabulary, where a change
+  log and a disable log are both defensibly `change_history` or `sample`; the manifest
+  names the acceptable alternatives per file.
+- A mapping run is synchronous on the request (one call per attribute, about 4 s each);
+  a control with many attributes takes under a minute. It is not a queued job.
+- Tesseract is not installed in this environment; OCR was exercised through the model
+  only.
+
+### 16.8 M3b closure
+
+The owner conditionally accepted M3b on 21 October 2026 and asked for five closure items. The completion report records them ([milestone-3b-completion.md](milestone-3b-completion.md), "Closure"): the two classification errors and the deterministic gap they exposed (a person's confirmed population now proposes samples); three repeat runs of the unchanged corpus ([repeatability.md](review/m3b/repeatability.md)); every unsuccessful model call recorded as NOT_MAPPED, an execution failure (migration 0097); a test that a mapping leaves 29 protected tables untouched; and the gate.

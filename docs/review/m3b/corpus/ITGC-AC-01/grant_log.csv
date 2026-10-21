@@ -1,0 +1,9 @@
+Username,Email,Role,Granted at,Granted by
+AHASSAN,amina.hassan@client.example,AP Clerk,2027-01-12 14:30,svc_idm
+BOKAFOR,ben.okafor@client.example,GL Viewer,2027-02-03 14:30,svc_idm
+OLIM,oscar.lim@client.example,AP Clerk,2027-03-10 14:30,svc_idm
+DWHITFIELD,dana.whitfield@client.example,Payroll Admin,2027-03-22 14:30,svc_idm
+PNATARAJAN,priya.natarajan@client.example,AR Clerk,2027-04-05 14:30,svc_idm
+LBRANDT,leo.brandt@client.example,Admin,2027-04-19 14:30,svc_idm
+SREYES,sofia.reyes@client.example,AP Clerk,2027-05-14 14:30,svc_idm
+TKELLER,tom.keller@client.example,GL Viewer,2027-06-02 14:30,svc_idm

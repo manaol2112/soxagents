@@ -1024,7 +1024,7 @@ def register_evidence_analysis(
     ) -> AnalysisBody:
         return run(
             request,
-            lambda c, p: _confirm(c, p, organization_id, project_id, analysis_id, body),
+            lambda c, p: _confirm(c, p, organization_id, project_id, analysis_id, body, settings),
         )
 
     @app.get("/organizations/{organization_id}/evidence-settings")
@@ -1218,6 +1218,7 @@ def _confirm(
     project_id: UUID,
     analysis_id: UUID,
     body: ConfirmBody,
+    settings: Settings | None = None,
 ) -> AnalysisBody:
     _person(connection, principal, organization_id, project_id)
     with transaction(connection) as cursor:
@@ -1261,7 +1262,69 @@ def _confirm(
                 Json({"kind": body.kind, "suggested": suggested, "agreed": body.kind == suggested}),
             ),
         )
+        # Sampling starts from a population whoever recognised it: a person who corrects
+        # the reader's kind to population gets the same seeded proposal the reader's own
+        # classification would have drawn (M3b closure). Never over an existing test plan.
+        if body.kind == "population" and suggested != "population" and settings is not None:
+            _propose_from_confirmed(
+                connection, cursor, settings, organization_id, project_id, current[3],
+                principal.id,
+            )  # fmt: skip
     return _select(connection, organization_id, project_id, analysis_id)
+
+
+def _propose_from_confirmed(
+    connection: psycopg.Connection[Any],
+    cursor: psycopg.Cursor[Any],
+    settings: Settings,
+    organization_id: UUID,
+    project_id: UUID,
+    file_id: Any,
+    person: UUID,
+) -> None:
+    request = file_request(connection, project_id, UUID(str(file_id)))
+    if request is None or request[3] is None:
+        return
+    exists = cursor.execute(
+        "SELECT 1 FROM control_tests WHERE engagement_control_id = %s AND project_id = %s",
+        (request[3], project_id),
+    ).fetchone()
+    if exists is not None:
+        return
+    stored = cursor.execute(
+        "SELECT object_key, content_sha256, size_bytes, file_name, content_type "
+        "FROM evidence_files WHERE id = %s AND project_id = %s",
+        (file_id, project_id),
+    ).fetchone()
+    if stored is None:
+        return
+    content = open_store(settings, connection).get(str(stored[0]))
+    if digest_of(content) != stored[1] or len(content) != int(stored[2]):
+        return
+    sampling = _sampling(
+        connection, project_id, request, "population", content, stored[3], stored[4]
+    )
+    if sampling is None:
+        return
+    (period_end, frequency, nature, size, tester), table, round_id, window = sampling
+    propose(
+        cursor,
+        organization_id=organization_id,
+        project_id=project_id,
+        control_id=request[3],
+        file_id=UUID(str(file_id)),
+        file_name=str(stored[3]),
+        sha256=str(stored[1]),
+        table=table,
+        period_end=period_end,
+        frequency=frequency,
+        nature=nature,
+        size=size,
+        proposer=person,
+        tester=tester,
+        test_round_id=round_id,
+        window=window,
+    )
 
 
 def _settings(

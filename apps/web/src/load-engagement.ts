@@ -14,6 +14,7 @@ import {
   QUEUES,
 } from "./engagement-model";
 import { parseChangeNotice } from "./evidence-change-model";
+import { parseEvidenceMapping } from "./evidence-mapping-model";
 import { parseRegister } from "./evidence-model";
 import { parsePlan as parseEvidencePlan } from "./evidence-plan-model";
 import { parseAutomation } from "./execution-model";
@@ -142,6 +143,7 @@ export async function loadEngagement(
     testBasis,
     masterPlan,
     phaseProgress,
+    evidenceMapping,
   ] = await Promise.all([
     wanted.dashboard ? apiGet(`${base}/workspace/dashboard`, session) : null,
     wanted.dashboard ? apiGet(`${base}/next-steps`, session) : null,
@@ -196,6 +198,10 @@ export async function loadEngagement(
       ? apiGet(`${base}/controls/${query.control}/master-plan`, session)
       : null,
     open ? apiGet(`${base}/phase-progress`, session) : null,
+    // The Test step's evidence mapping (M3b): the latest run, read only.
+    open
+      ? apiGet(`${base}/controls/${query.control}/evidence-mapping`, session)
+      : null,
   ]);
   // The request opened on the control's Evidence tab, with its details for review.
   const focus =
@@ -271,6 +277,10 @@ export async function loadEngagement(
       ok(phaseProgress) === undefined
         ? null
         : parsePhaseProgress(ok(phaseProgress)),
+    evidenceMapping:
+      ok(evidenceMapping) === undefined
+        ? null
+        : parseEvidenceMapping(ok(evidenceMapping)),
     automation:
       ok(automation) === undefined ? null : parseAutomation(ok(automation)),
     work: ok(work) === undefined ? null : parseQueue(ok(work)),

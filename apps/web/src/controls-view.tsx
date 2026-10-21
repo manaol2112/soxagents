@@ -101,6 +101,7 @@ import {
   requestStage,
 } from "./evidence-flow";
 import { RequestUpload } from "./evidence-intake";
+import { EvidenceMappingPanel } from "./evidence-mapping-view";
 import {
   agentStatus,
   byApplicationOf,
@@ -1822,6 +1823,23 @@ function ControlRecord({
                   />
                 </PhaseStep>
               ) : null}
+              {engagement.evidenceMapping === undefined ? null : (
+                <EvidenceMappingPanel
+                  run={
+                    engagement.evidenceMapping !== null &&
+                    engagement.evidenceMapping.controlId === control.id
+                      ? engagement.evidenceMapping
+                      : null
+                  }
+                  ids={{
+                    organizationId: ids.organizationId,
+                    projectId: ids.projectId,
+                    controlId: control.id,
+                  }}
+                  back={stepHrefs.TEST ?? ""}
+                  canMap={true}
+                />
+              )}
               <PhaseStep
                 number={2}
                 title="Test results and sign-off"
