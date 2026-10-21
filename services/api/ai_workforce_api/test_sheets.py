@@ -65,6 +65,12 @@ class CellBody(BaseModel):
     overridden_by: str | None
     # The passages the tester relied on: file, words, place, and a box on a screenshot.
     citations: list[dict[str, Any]] = []
+    # What the tester observed and what the attribute expects, and the evidence's limits
+    # (M3c); the rule checks of objective comparisons, as evaluated by the system.
+    observed: str = ""
+    expected: str = ""
+    limitations: str = ""
+    checks: list[dict[str, Any]] = []
 
 
 class ItemFileBody(BaseModel):
@@ -80,7 +86,9 @@ class ItemBody(BaseModel):
     application_id: UUID | None = None
     detail: list[dict[str, str]]
     files: list[ItemFileBody]
-    state: Literal["NO_EVIDENCE", "WAITING", "TESTED"]
+    # FAILED: the tester's model call did not complete (M3c): a technical failure, not a
+    # testing result; the item is tested again on the next run.
+    state: Literal["NO_EVIDENCE", "WAITING", "TESTED", "FAILED"]
     source: str | None
     note: str
     cells: list[CellBody]
@@ -735,7 +743,13 @@ def _sheet(connection: psycopg.Connection[Any], project_id: UUID, sheet_id: UUID
                     if isinstance(entry, dict)
                 ],
                 files=files,
-                state="NO_EVIDENCE" if not files else "TESTED" if tested else "WAITING",
+                state="NO_EVIDENCE"
+                if not files
+                else "TESTED"
+                if tested
+                else "FAILED"
+                if item[7] == "FAILED"
+                else "WAITING",
                 source=None if item[7] is None else str(item[7]),
                 note=str(item[8]),
                 cells=[
@@ -746,6 +760,14 @@ def _sheet(connection: psycopg.Connection[Any], project_id: UUID, sheet_id: UUID
                         citations=[
                             item
                             for item in by_result.get(index, {}).get("citations", [])
+                            if isinstance(item, dict)
+                        ][:4],
+                        observed=str(by_result.get(index, {}).get("observed", "")),
+                        expected=str(by_result.get(index, {}).get("expected", "")),
+                        limitations=str(by_result.get(index, {}).get("limitations", "")),
+                        checks=[
+                            item
+                            for item in by_result.get(index, {}).get("checks", [])
                             if isinstance(item, dict)
                         ][:4],
                         final=finals[index],
@@ -790,7 +812,16 @@ def _sheet(connection: psycopg.Connection[Any], project_id: UUID, sheet_id: UUID
     blocking: list[str] = []
     if counts["no_evidence"]:
         blocking.append(_items(counts["no_evidence"], "has no evidence", "have no evidence"))
-    waiting = counts["items"] - counts["tested"] - counts["no_evidence"]
+    failed = sum(1 for item in items if item.state == "FAILED")
+    waiting = counts["items"] - counts["tested"] - counts["no_evidence"] - failed
+    if failed:
+        blocking.append(
+            _items(
+                failed,
+                "could not be tested: the model call failed (a technical failure, not a result)",
+                "could not be tested: the model call failed (a technical failure, not a result)",
+            )
+        )
     if waiting:
         blocking.append(_items(waiting, "is not tested yet", "are not tested yet"))
     if counts["unable"]:

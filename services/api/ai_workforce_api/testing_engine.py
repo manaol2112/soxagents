@@ -50,6 +50,9 @@ from ai_workforce_api.test_citations import (
     check_citations,
     is_image_name,
 )
+from ai_workforce_api.testing_checks import CHECKS_SCHEMA, instruction_guard
+from ai_workforce_api.testing_checks import apply as apply_checks
+from ai_workforce_api.testing_checks import evaluate as evaluate_checks
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +229,7 @@ def excerpt(text: str, key: str) -> str:
 
 # The tester's prompt version, recorded on every call (Milestone 3a). Bump it when the
 # system prompt, the prompt shape or the schema changes.
-PROMPT_VERSION = "control-tester/1"
+PROMPT_VERSION = "control-tester/3"
 
 SYSTEM_PROMPT = """You are the control tester on a SOX IT audit. Test one sample (or, for \
 a control tested once, the control itself) against each of the control's test attributes, \
@@ -246,6 +249,18 @@ itself. Say what the person must decide.
 and values it names, make its comparison, and apply its pass, exception, insufficient and \
 review rules. Never infer what it says not to infer. A document being present is not a pass.
 
+- For every result, say what you observed and what the attribute expects, in one sentence \
+each (observed, expected), and any limitation of the evidence (limitations). An EXCEPTION \
+without an observed and an expected condition and a cited passage is not kept.
+- Where the attribute turns on an objective comparison, add it to checks: a date on or \
+before another (on_or_before), two identifiers that must match (equal) or must differ \
+(different), a number within a limit (at_most). Each side gives a label, the value, and \
+where it is: the file's index and the exact words containing the value, or file -1 for the \
+item's own population row with the value copied from it. Each side holds one atomic \
+value: one date, one name, one identifier or one number, never a list. To compare one \
+value with several (a developer with each approver), give one check per pair. The \
+comparison is evaluated by the system from the verified values, not from your answer; a \
+comparison it cannot evaluate leaves the result for a person.
 - Cite what you saw: dates, names, IDs, values. Keep each note to one or two sentences.
 - For each result, list the passages it rests on in citations: the file's index, and \
 the exact words copied from that file's text, at most 200 characters (one line or one \
@@ -274,7 +289,11 @@ TEST_SCHEMA: dict[str, Any] = {
                     "index": {"type": "integer"},
                     "result": {"type": "string", "enum": list(RESULTS)},
                     "note": {"type": "string", "maxLength": 400},
+                    "observed": {"type": "string", "maxLength": 400},
+                    "expected": {"type": "string", "maxLength": 400},
+                    "limitations": {"type": "string", "maxLength": 400},
                     "citations": CITATION_SCHEMA,
+                    "checks": CHECKS_SCHEMA,
                 },
                 "required": ["index", "result", "note"],
                 "additionalProperties": False,
@@ -314,6 +333,9 @@ class ItemContext:
     definitions: tuple[dict[str, Any] | None, ...] = ()
     # The control's design, as its statement states it with the client's values (8.9).
     design: dict[str, Any] | None = None
+    # Passages the evidence mapping verified in this item's files (M3b), as context only:
+    # the tester verifies its own citations against the files.
+    passages: tuple[dict[str, str], ...] = ()
 
 
 def definition_prompt(item: Any) -> dict[str, Any]:
@@ -404,8 +426,18 @@ def prompt_for(context: ItemContext) -> str:
         if shown
         else ""
     )
+    context_block = (
+        "Passages an earlier evidence mapping found in this item's files. They are context, "
+        "not results: a passage being relevant does not mean an attribute is met. Verify "
+        "against the files and cite the files yourself.\n"
+        f"<mapped_passages>\n{json.dumps(list(context.passages), ensure_ascii=False)}\n"
+        "</mapped_passages>\n\n"
+        if context.passages
+        else ""
+    )
     return (
         "Test this item against each attribute.\n\n"
+        f"{context_block}"
         f"{images}"
         f"<control_and_item>\n{json.dumps(facts, ensure_ascii=False, indent=1)}\n"
         "</control_and_item>\n\n"
@@ -414,7 +446,10 @@ def prompt_for(context: ItemContext) -> str:
 
 
 def check_results(
-    output: dict[str, Any], attributes: int, files: tuple[ItemFile, ...] = ()
+    output: dict[str, Any],
+    attributes: int,
+    files: tuple[ItemFile, ...] = (),
+    detail: tuple[tuple[str, str], ...] = (),
 ) -> list[dict[str, Any]]:
     """One result per attribute. A missing or repeated index is unable to tell.
 
@@ -430,6 +465,8 @@ def check_results(
     )
     citations: dict[int, list[dict[str, Any]]] = {}
     by_index: dict[int, AttributeResult] = {}
+    extra: dict[int, dict[str, Any]] = {}
+    texts = [(item.file_name, item.text) for item in files]
     for item in raw[: MAX_ATTRIBUTES * 2]:
         if not isinstance(item, dict):
             continue
@@ -444,19 +481,30 @@ def check_results(
             by_index[parsed.index] = parsed
             if len(cited) == len(files):
                 citations[parsed.index] = check_citations(data.get("citations"), cited)
+            extra[parsed.index] = {
+                key: _clean(str(data.get(key) or ""), 400)
+                for key in ("observed", "expected", "limitations")
+            } | {"raw_checks": data.get("checks")}
     if not by_index:
         raise ValueError("answer has no usable results")
-    return [
-        {
+    checked: list[dict[str, Any]] = []
+    for index in range(attributes):
+        found = by_index.get(index)
+        more = extra.get(index, {})
+        result = {
             "index": index,
-            "result": by_index[index].result if index in by_index else "UNABLE",
-            "note": _clean(by_index[index].note, 400)
-            if index in by_index
+            "result": found.result if found is not None else "UNABLE",
+            "note": _clean(found.note, 400)
+            if found is not None
             else "The tester gave no result for this attribute.",
+            "observed": more.get("observed", ""),
+            "expected": more.get("expected", ""),
+            "limitations": more.get("limitations", ""),
             "citations": citations.get(index, []),
         }
-        for index in range(attributes)
-    ]
+        # Objective comparisons are evaluated here from verified values (testing_checks).
+        checked.append(apply_checks(result, evaluate_checks(more.get("raw_checks"), texts, detail)))
+    return checked
 
 
 UNSUPPORTED_PASS = (
@@ -468,20 +516,48 @@ UNSUPPORTED_PASS = (
 def supported(results: list[dict[str, Any]], files: tuple[ItemFile, ...]) -> list[dict[str, Any]]:
     """A pass stands only on evidence the tester can point to: at least one citation that
     checks out against the item's files. Otherwise it is unable to tell, for a person to
-    decide; a pass is never kept on the tester's word alone. Exceptions, unable, and not
-    applicable results are kept as they are."""
+    decide; a pass is never kept on the tester's word alone. A pass that cites a passage
+    giving instructions to an AI goes to a person (M3c). An exception stands only with its
+    observed and expected conditions and its support (M3c); otherwise a person decides.
+    Unable and not applicable results are kept as they are."""
     if not files:
         return [
             {**item, "result": "UNABLE", "note": UNSUPPORTED_PASS} if item["result"] == "PASS"
             else item
             for item in results
         ]  # fmt: skip
-    return [
+    guarded = instruction_guard(
+        results, {str(item.file_id): item.text for item in files if item.file_id is not None}
+    )
+    return [_exception_stands(
         {**item, "result": "UNABLE", "note": _clean(f"{UNSUPPORTED_PASS} {item['note']}", 400)}
         if item["result"] == "PASS" and not item.get("citations")
         else item
-        for item in results
-    ]
+    ) for item in guarded]  # fmt: skip
+
+
+UNSUPPORTED_EXCEPTION = (
+    "The tester proposed an exception without an observed and an expected condition and "
+    "verified supporting evidence, so a person decides this result."
+)
+
+
+def _exception_stands(item: dict[str, Any]) -> dict[str, Any]:
+    """An exception is kept only with its explanation (observed and expected) and support
+    (a verified citation, or a verified rule check); otherwise a person reviews it."""
+    if item.get("result") != "EXCEPTION":
+        return item
+    supported_by = bool(item.get("citations")) or any(
+        isinstance(check, dict) and check.get("holds") is not None
+        for check in item.get("checks", [])
+    )
+    explained = bool(str(item.get("observed") or "").strip()) and bool(
+        str(item.get("expected") or "").strip()
+    )
+    if supported_by and explained:
+        return item
+    return {**item, "result": "REVIEW",
+            "note": _clean(f"{UNSUPPORTED_EXCEPTION} {item.get('note', '')}", 400)}  # fmt: skip
 
 
 def from_reviews(files: tuple[ItemFile, ...], attributes: int) -> list[dict[str, Any]] | None:
@@ -1302,8 +1378,11 @@ def _test_item(
         """
         SELECT i.label, i.detail, i.version, s.id, s.version,
                (SELECT p.approved_revision FROM evidence_plans p
-                WHERE p.engagement_control_id = s.engagement_control_id)
-        FROM test_items i JOIN test_sheets s ON s.id = i.test_sheet_id WHERE i.id = %s
+                WHERE p.engagement_control_id = s.engagement_control_id),
+               i.position, t.population_file_id, t.population_sha256, t.seed
+        FROM test_items i JOIN test_sheets s ON s.id = i.test_sheet_id
+        LEFT JOIN control_tests t ON t.id = s.control_test_id
+        WHERE i.id = %s
         """,
         (item_id,),
     ).fetchone()
@@ -1316,6 +1395,11 @@ def _test_item(
         "sheet": {"id": str(item[3]), "version": int(item[4])},
         "plan_revision": None if item[5] is None else int(item[5]),
         "attributes": len(attributes),
+        # The sample and the population it was drawn from (M3c traceability).
+        "sample": {"label": str(item[0]), "position": int(item[6])},
+        "population": None
+        if item[7] is None
+        else {"file_id": str(item[7]), "sha256": str(item[8]), "seed": str(item[9])},
         "files": [],
     }
     rows = connection.execute(
@@ -1389,7 +1473,9 @@ def _test_item(
                 for found in sheet_definitions(connection, control_id, list(attributes))
             ),
             design=design_prompt(design_for(connection, control_id)),
+            passages=mapped_passages(connection, project_id, control_id, files),
         )
+        inputs["mapping_context"] = len(context.passages)
         call = caller.generate(
             ModelRequest(
                 operation="generate",
@@ -1413,17 +1499,22 @@ def _test_item(
         if call.status == "CANCELLED" or caller.cancelled():
             return False
         call_id = call.call_id
-        # A model failure is FAILED, never dressed as the rules' work: the results are
-        # unable to tell and a person decides, with the failed call linked.
-        source = "FAILED"
         if call.readable and call.raw.output is not None:
             try:
-                results = supported(check_results(call.raw.output, len(attributes), files), files)
+                results = supported(
+                    check_results(call.raw.output, len(attributes), files, context.item_detail),
+                    files,
+                )
                 source = "MODEL"
             except ValueError as error:
-                note = f"The tester's answer was rejected: {error}."
+                note = f"The tester's answer could not be used: {error}."
         else:
             note = call.note
+        if results is None:
+            # Execution failed (M3c): a technical failure, not an audit result. No result
+            # is written, the item waits to be tested again, the failed call is linked.
+            _execution_failed(connection, item_id, version, call_id, note)
+            return True
     if results is None:
         results = unable(
             len(attributes),
@@ -1477,3 +1568,61 @@ def _audit(
 
 def now_text() -> str:
     return datetime.now(UTC).isoformat()
+
+
+FAILED_NOTE = (
+    "Not tested: the tester's model call failed (a technical failure, not a testing "
+    "result). It is tested again on the next run."
+)
+
+
+def _execution_failed(
+    connection: psycopg.Connection[Any],
+    item_id: UUID,
+    version: int,
+    call_id: UUID | None,
+    reason: str,
+) -> None:
+    """The item records that its test did not run: no result, its earlier results withdrawn
+    (they no longer match its evidence), the failed call linked, and it stays to be tested."""
+    with transaction(connection) as cursor:
+        cursor.execute(
+            """
+            UPDATE test_items
+            SET results = '[]'::jsonb, source = 'FAILED', model_call_id = %s, tested_at = NULL,
+                note = %s, needs_test = true, version = version + 1
+            WHERE id = %s AND version = %s
+            """,
+            (call_id, _clean(f"{FAILED_NOTE} {reason}", 500), item_id, version),
+        )
+
+
+def mapped_passages(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    control_id: UUID,
+    files: tuple[ItemFile, ...],
+) -> tuple[dict[str, str], ...]:
+    """The latest current evidence mapping's verified passages in this item's files, by
+    attribute; nothing when there is no mapping or it is stale."""
+    from ai_workforce_api.evidence_mapping import latest_run
+
+    ids = {str(item.file_id) for item in files if item.file_id is not None}
+    if not ids:
+        return ()
+    run = latest_run(connection, project_id, control_id)
+    if run is None or run.stale:
+        return ()
+    found: list[dict[str, str]] = []
+    for mapping in run.mappings:
+        for reference in mapping.references:
+            if str(reference.file_id) in ids:
+                found.append(
+                    {
+                        "attribute_index": str(mapping.attribute_index),
+                        "file": reference.file_name,
+                        "location": reference.location,
+                        "quote": reference.quote,
+                    }
+                )
+    return tuple(found[:20])

@@ -134,13 +134,18 @@ PYTEST := uv run pytest -q -p no:cacheprovider -n $(WORKERS) --dist loadfile --d
 API_TESTS := services/api/tests
 
 # The active work's tests: the workflow-integrity set by default, or the files given.
-FAST_PY ?= $(API_TESTS)/test_control_journey.py $(API_TESTS)/test_workspace.py $(API_TESTS)/test_control_reviews.py $(API_TESTS)/test_round_reviews.py $(API_TESTS)/test_plan_impact.py $(API_TESTS)/test_round_readiness.py $(API_TESTS)/test_round_basis.py $(API_TESTS)/test_signoff_history.py $(API_TESTS)/test_test_rounds.py $(API_TESTS)/test_phase_release.py $(API_TESTS)/test_control_progress.py $(API_TESTS)/test_control_activity.py $(API_TESTS)/test_next_steps.py $(API_TESTS)/test_migrations.py $(API_TESTS)/test_agent_execution.py $(API_TESTS)/test_provenance.py $(API_TESTS)/test_evidence_corpus.py
-FAST_NODE ?= tests/evidence-mapping-model.test.ts tests/queue-model.test.ts tests/testing-hub-model.test.ts tests/control-journey-model.test.ts tests/signoff-model.test.ts tests/controls-register-model.test.ts tests/engagement-model.test.ts tests/review-model.test.ts tests/home-model.test.ts tests/round-model.test.ts tests/control-workspace-model.test.ts tests/controls-overview-model.test.ts
+FAST_PY ?= $(API_TESTS)/test_control_journey.py $(API_TESTS)/test_workspace.py $(API_TESTS)/test_control_reviews.py $(API_TESTS)/test_round_reviews.py $(API_TESTS)/test_plan_impact.py $(API_TESTS)/test_round_readiness.py $(API_TESTS)/test_round_basis.py $(API_TESTS)/test_signoff_history.py $(API_TESTS)/test_test_rounds.py $(API_TESTS)/test_phase_release.py $(API_TESTS)/test_control_progress.py $(API_TESTS)/test_control_activity.py $(API_TESTS)/test_next_steps.py $(API_TESTS)/test_migrations.py $(API_TESTS)/test_agent_execution.py $(API_TESTS)/test_provenance.py $(API_TESTS)/test_evidence_corpus.py $(API_TESTS)/test_grounded_testing.py
+FAST_NODE ?= tests/no-autofill.test.ts tests/evidence-mapping-model.test.ts tests/sheet-model.test.ts tests/agent-says-model.test.ts tests/queue-model.test.ts tests/testing-hub-model.test.ts tests/control-journey-model.test.ts tests/signoff-model.test.ts tests/controls-register-model.test.ts tests/engagement-model.test.ts tests/review-model.test.ts tests/home-model.test.ts tests/round-model.test.ts tests/control-workspace-model.test.ts tests/controls-overview-model.test.ts
 
 # Audit integrity, authorization, segregation of duties, approvals, evidence
 # traceability, review independence, and database integrity (CRITICAL in
 # docs/test-strategy.md). Kept in step with that document.
-CRITICAL_PY := $(addprefix $(API_TESTS)/,test_access.py test_actions.py test_agents.py test_approvals.py test_auth.py test_authorization.py test_execution.py test_security.py test_policy.py test_schema.py test_migrations.py test_independence.py test_control_reviews.py test_round_reviews.py test_plan_impact.py test_round_readiness.py test_round_basis.py test_queue.py test_signoff_history.py test_planning_gate.py test_master_plans.py test_evidence_flow.py test_evidence_versions.py test_evidence.py test_engagement_integrity.py test_handoffs.py test_outbound.py test_smtp_mailbox.py test_mailbox.py test_inbound.py test_health.py test_control_journey.py test_test_rounds.py test_workspace.py test_phase_release.py test_test_citations.py test_console_citations.py test_evidence_review.py test_testing_engine.py test_workpapers.py test_google.py test_invitations.py test_demo_requests.py test_evidence_portal.py test_projects.py test_tasks.py test_workflows.py test_failures.py test_durable.py test_agent_execution.py test_provenance.py test_evidence_corpus.py)
+# Single safeguard tests from files otherwise CURRENT (docs/test-strategy.md §6): the
+# M3a rule that a model failure is never the rules' work, for each agent, the model
+# call's containment, and a pass standing only on cited evidence.
+CRITICAL_PICKED := $(addprefix $(API_TESTS)/,test_evidence_plans.py::test_the_agent_plans_when_its_plan_passes_the_checks test_evidence_analysis.py::test_a_rejected_model_answer_falls_back_to_the_rules test_pbc_drafting.py::test_a_bad_or_failed_model_draft_falls_back_to_the_rules test_evidence_reading.py::test_claude_receives_images_as_base64_blocks_before_the_prompt test_console.py::test_a_failed_answer_can_be_retried_in_place test_console.py::test_a_busy_model_is_tried_again_before_the_turn_gives_up test_system_applicability.py::test_a_report_waits_for_a_model_and_uploads_are_checked test_control_context.py::test_a_pass_stands_only_on_cited_evidence)
+CRITICAL_NODE := tests/no-autofill.test.ts
+CRITICAL_PY := $(addprefix $(API_TESTS)/,test_access.py test_actions.py test_agents.py test_approvals.py test_auth.py test_authorization.py test_execution.py test_security.py test_policy.py test_schema.py test_migrations.py test_independence.py test_control_reviews.py test_round_reviews.py test_plan_impact.py test_round_readiness.py test_round_basis.py test_queue.py test_signoff_history.py test_planning_gate.py test_master_plans.py test_evidence_flow.py test_evidence_versions.py test_evidence.py test_engagement_integrity.py test_handoffs.py test_outbound.py test_smtp_mailbox.py test_mailbox.py test_inbound.py test_health.py test_control_journey.py test_test_rounds.py test_workspace.py test_phase_release.py test_test_citations.py test_console_citations.py test_evidence_review.py test_testing_engine.py test_workpapers.py test_google.py test_invitations.py test_demo_requests.py test_evidence_portal.py test_projects.py test_tasks.py test_workflows.py test_failures.py test_durable.py test_agent_execution.py test_provenance.py test_evidence_corpus.py test_grounded_testing.py) $(CRITICAL_PICKED)
 
 test-fast: require-env
 	set -a && . ./.env && set +a && $(PYTEST) $(FAST_PY)
@@ -148,6 +153,7 @@ test-fast: require-env
 
 test-critical: require-env
 	set -a && . ./.env && set +a && $(PYTEST) $(CRITICAL_PY)
+	pnpm exec node --test $(CRITICAL_NODE)
 
 BASE ?=
 test-changed: require-env

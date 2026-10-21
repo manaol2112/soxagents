@@ -103,6 +103,64 @@ describe("test sheet model", () => {
     assert.equal(parseSheets({}), null);
   });
 
+  it("reads the tester's explanation, rule checks and an execution failure", () => {
+    const [found] =
+      parseSheets([
+        raw({
+          items: [
+            {
+              id: item,
+              position: 1,
+              label: "u0003",
+              detail: [],
+              files: [{ id: file, file_name: "approvals.csv" }],
+              state: "TESTED",
+              source: "MODEL",
+              note: "",
+              cells: [
+                {
+                  index: 0,
+                  proposed: "EXCEPTION",
+                  note: "Approved after access was granted.",
+                  final: "EXCEPTION",
+                  observed: "Approved 2026-03-04; granted 2026-03-02.",
+                  expected: "Approval on or before the grant.",
+                  limitations: "",
+                  checks: [
+                    { kind: "on_or_before", holds: false, why: "after" },
+                    { kind: "equal", holds: "yes", why: "odd" },
+                  ],
+                },
+              ],
+              version: 1,
+            },
+            {
+              id: "item-2",
+              position: 2,
+              label: "u0004",
+              detail: [],
+              files: [{ id: file, file_name: "approvals.csv" }],
+              state: "FAILED",
+              source: "FAILED",
+              note: "Not tested: the tester's model call failed.",
+              cells: [{ index: 0, proposed: null, note: "", final: null }],
+              version: 2,
+            },
+          ],
+        }),
+      ]) ?? [];
+    const cell = found?.items[0]?.cells[0];
+    assert.equal(cell?.observed, "Approved 2026-03-04; granted 2026-03-02.");
+    assert.equal(cell?.expected, "Approval on or before the grant.");
+    assert.deepEqual(
+      cell?.checks.map((check) => check.holds),
+      [false, null],
+    );
+    assert.equal(found?.items[1]?.state, "FAILED");
+    assert.equal(found?.items[1]?.cells[0]?.observed, "");
+    assert.deepEqual(found?.items[1]?.cells[0]?.checks, []);
+  });
+
   it("keeps insufficient evidence apart from human review", () => {
     const [found] =
       parseSheets([

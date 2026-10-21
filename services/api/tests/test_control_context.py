@@ -22,6 +22,7 @@ from ai_workforce_api.db import connect
 from ai_workforce_api.pbc_drafting import load_context
 from ai_workforce_api.readiness import resume_testing
 from ai_workforce_api.testing_engine import (
+    UNSUPPORTED_EXCEPTION,
     UNSUPPORTED_PASS,
     ItemFile,
     run_sheet,
@@ -581,10 +582,17 @@ def test_a_pass_stands_only_on_cited_evidence(migrated: Database) -> None:
         {"index": 1, "result": "PASS", "note": "ok", "citations": [{"quote": "ticket"}]},
         {"index": 2, "result": "EXCEPTION", "note": "late", "citations": []},
         {"index": 3, "result": "UNABLE", "note": "?", "citations": []},
-    ]
+        {"index": 4, "result": "EXCEPTION", "note": "late", "citations": [{"quote": "ticket"}],
+         "observed": "Approved after the grant.", "expected": "Approved before it."},
+    ]  # fmt: skip
     kept = supported(results, files)
-    assert [r["result"] for r in kept] == ["UNABLE", "PASS", "EXCEPTION", "UNABLE"]
+    # Rewritten in M3c (owner's rule: every exception explains the observed and expected
+    # conditions and its supporting evidence). Before, an exception with neither citation
+    # nor explanation (index 2) stood as EXCEPTION; it now goes to a person (REVIEW). An
+    # explained, cited exception (index 4, added) still stands.
+    assert [r["result"] for r in kept] == ["UNABLE", "PASS", "REVIEW", "UNABLE", "EXCEPTION"]
     assert kept[0]["note"].startswith(UNSUPPORTED_PASS)
+    assert kept[2]["note"].startswith(UNSUPPORTED_EXCEPTION)
     assert [r["result"] for r in supported(results[1:2], ())] == ["UNABLE"]
     # End to end: a tester that passes everything without citing anything proves nothing.
     team, client, scheduler = _engagement(migrated, "ctx-pass")

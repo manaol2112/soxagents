@@ -1,0 +1,378 @@
+{
+  "planted_false_passes_standing_before_review": {
+    "count": 16,
+    "of": 20,
+    "rate": 0.8
+  },
+  "false_passes_caught": {
+    "count": 15,
+    "of": 16,
+    "rate": 0.9375
+  },
+  "false_exceptions_caught": {
+    "count": 2,
+    "of": 2,
+    "rate": 1.0
+  },
+  "raised_on_correct_results": {
+    "count": 5,
+    "of": 72,
+    "rate": 0.0694
+  },
+  "by_control": {
+    "ITGC-AC-01": {
+      "reviewer_source": "MODEL",
+      "reviewer_note": "",
+      "false_passes_caught": {
+        "count": 10,
+        "of": 11,
+        "rate": 0.9091
+      },
+      "false_exceptions_caught": {
+        "count": 1,
+        "of": 1,
+        "rate": 1.0
+      },
+      "missed": [
+        {
+          "sample": "u0007",
+          "attribute": 4,
+          "planted": "FALSE_PASS"
+        }
+      ],
+      "caught": [
+        {
+          "sample": "u0001",
+          "attribute": 0,
+          "planted": "FALSE_EXCEPTION",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "PASS",
+          "text": "u0001: attribute A is marked an exception, but the reviewer found the attribute met: REQ-3101 names Amina Hassan (u0001), SAP ERP PRD, role AP Clerk, matching the population row."
+        },
+        {
+          "sample": "u0003",
+          "attribute": 2,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0003: attribute C is marked passed, but the reviewer found an exception where the test passed: The manager approval is dated 2027-03-06, two days after the 2027-03-04 grant, so the access was granted before the manager approved. The application owner approval (2027-03-02) was on time."
+        },
+        {
+          "sample": "u0004",
+          "attribute": 1,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0004: attribute B is marked passed, but the reviewer found an exception where the test passed: Line manager (Mei Tanaka) approval is not recorded; only the application owner (Helen Cho) approved on 2027-03-20. The manager approval is required."
+        },
+        {
+          "sample": "u0005",
+          "attribute": 1,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0005: attribute B is marked passed, but the reviewer found an exception where the test passed: The line-manager approval was given by Grace Mbeki, the user herself, not the HR-record manager Lena Ortiz. Application owner Helen Cho approved, but the manager approval is invalid."
+        },
+        {
+          "sample": "u0006",
+          "attribute": 3,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0006: attribute D is marked passed, but the reviewer found an exception where the test passed: GL Admin was granted but only GL Viewer was approved by both approvers, so the access granted exceeds what was approved."
+        },
+        {
+          "sample": "u0007",
+          "attribute": 1,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0007: attribute B is marked passed, but the reviewer found an exception where the test passed: Both line manager and application owner approvals show 'pending'; no approval was recorded though access was granted 2027-06-03."
+        },
+        {
+          "sample": "u0007",
+          "attribute": 2,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0007: attribute C is marked passed, but the reviewer found an exception where the test passed: No approval date exists; approvals were still pending when AR Clerk was granted on 2027-06-03, so approval did not precede provisioning."
+        },
+        {
+          "sample": "u0007",
+          "attribute": 3,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0007: attribute D is marked passed, but the reviewer found an exception where the test passed: Nothing was approved, so the granted AR Clerk access exceeds what was approved (no approval)."
+        },
+        {
+          "sample": "u0008",
+          "attribute": 1,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0008: attribute B is marked passed, but the reviewer found an exception where the test passed: The line manager approval field (Tomás Vidal per the HR record) is blank. Only the application owner, Helen Cho, approved. The comment in the file says the manager approved verbally. That is not an approval recorded in the tool, and I did not rely on it as evidence."
+        },
+        {
+          "sample": "u0009",
+          "attribute": 2,
+          "planted": "FALSE_PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "REVIEW",
+          "text": "u0009: attribute C is marked passed, but the reviewer found it needs a person's judgment: The manager's email approval is dated 2027-07-14, before the 07-15 grant. The tool recorded the manager approval on 07-16, after provisioning. The control requires approval recorded before the grant, so the evidence conflicts and needs a person to judge it."
+        },
+        {
+          "sample": "u0010",
+          "attribute": 2,
+          "planted": "FALSE_PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0010: attribute C is marked passed, but the reviewer found the evidence insufficient: The 2027-08-04 email date belongs to REQ-3119 for a different user, so no approval date for REQ-3110 can be compared with the 2027-08-05 grant."
+        }
+      ],
+      "raised_on_correct_results": {
+        "count": 5,
+        "of": 32,
+        "rate": 0.1562
+      },
+      "raised_on_correct": [
+        {
+          "sample": "u0001",
+          "attribute": 3,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0001: attribute D is marked passed, but the reviewer found the evidence insufficient: The ticket's provisioning note says AP Clerk was granted. There is no SAP system extract of u0001's assigned roles, so I can't confirm that nothing beyond the approved role was granted."
+        },
+        {
+          "sample": "u0002",
+          "attribute": 3,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0002: attribute D is marked passed, but the reviewer found the evidence insufficient: Only the request/provisioning record is provided. There is no system-side evidence, such as a user role listing from SAP, showing the access actually assigned to u0002 is only GL Viewer."
+        },
+        {
+          "sample": "u0003",
+          "attribute": 3,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0003: attribute D is marked passed, but the reviewer found the evidence insufficient: The ticket's provisioning line shows only AP Supervisor granted, the same role that was requested. There is no system extract of the user's roles, so I can't confirm that nothing more was granted."
+        },
+        {
+          "sample": "u0008",
+          "attribute": 3,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0008: attribute D is marked passed, but the reviewer found the evidence insufficient: The ticket's provisioning line shows the granted role equals the requested role. No system entitlement extract was provided to confirm what was actually assigned in SAP or that nothing extra was granted. The approval is also incomplete."
+        },
+        {
+          "sample": "u0009",
+          "attribute": 3,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0009: attribute D is marked passed, but the reviewer found the evidence insufficient: The ticket log says AP Clerk was provisioned, which matches the approval. No system evidence, such as a user-role listing from SAP, shows the roles the user actually holds. So the 'no more' part can't be tested."
+        }
+      ],
+      "on_dependent_cells": [
+        {
+          "sample": "u0004",
+          "attribute": 2,
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0004: attribute C is marked passed, but the reviewer found an exception where the test passed: No manager approval date exists. The owner's approval (2027-03-20) predates the grant (2027-03-22), but the manager approval is missing, so the control's approval-before-grant condition isn't met for the full approval."
+        },
+        {
+          "sample": "u0008",
+          "attribute": 2,
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0008: attribute C is marked passed, but the reviewer found an exception where the test passed: The application owner approval (2027-06-18) is before the grant (2027-06-20). There is no dated line manager approval, so the grant did not follow a complete recorded approval."
+        },
+        {
+          "sample": "u0010",
+          "attribute": 3,
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0010: attribute D is marked passed, but the reviewer found the evidence insufficient: The role granted (Billing Clerk) matches the role requested, but no approval for this request is evidenced. I can't confirm the granted access is what was approved."
+        },
+        {
+          "sample": "u0010",
+          "attribute": 4,
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0010: attribute E is marked passed, but the reviewer found the evidence insufficient: No valid approver is evidenced for REQ-3110. The email's approver, Tomás Vidal, relates to a different request, so segregation from the user and from adm.kfischer can't be tested."
+        }
+      ],
+      "rules_notes": [
+        {
+          "severity": "MUST_FIX",
+          "text": "The sheet tests 10 items; the standard sample for a event_driven control is 25. Explain the smaller sample or extend it."
+        },
+        {
+          "severity": "SHOULD_FIX",
+          "text": "There is no design and walkthrough workpaper for this control."
+        },
+        {
+          "severity": "MUST_FIX",
+          "text": "Testing found exceptions, but the proposed deficiency was dismissed: “Planted results for the reviewer validation.”. Confirm why no deficiency is logged, or log one."
+        }
+      ]
+    },
+    "ITGC-CM-01": {
+      "reviewer_source": "MODEL",
+      "reviewer_note": "",
+      "false_passes_caught": {
+        "count": 5,
+        "of": 5,
+        "rate": 1.0
+      },
+      "false_exceptions_caught": {
+        "count": 1,
+        "of": 1,
+        "rate": 1.0
+      },
+      "missed": [],
+      "caught": [
+        {
+          "sample": "CHG-2001",
+          "attribute": 1,
+          "planted": "FALSE_EXCEPTION",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "PASS",
+          "text": "CHG-2001: attribute B is marked an exception, but the reviewer found the attribute met: Tested 2027-01-12, before the 2027-01-18 deployment. Script TS-2001 passed 12 of 12 steps and the result is documented in the record."
+        },
+        {
+          "sample": "CHG-2002",
+          "attribute": 3,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "CHG-2002: attribute D is marked passed, but the reviewer found an exception where the test passed: Business owner Elena Rossi approved on 2027-02-20, two days after the 2027-02-18 production import. IT approval (2027-02-16) was before deployment."
+        },
+        {
+          "sample": "CHG-2004",
+          "attribute": 4,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "CHG-2004: attribute E is marked passed, but the reviewer found an exception where the test passed: Ravi Kumar is the developer and also the IT owner approver, so the approver developed the change he approved. This breaks segregation of duties."
+        },
+        {
+          "sample": "CHG-2005",
+          "attribute": 5,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "CHG-2005: attribute F is marked passed, but the reviewer found an exception where the test passed: The deployed transport DEVK900519 differs from the transport in the approved request, DEVK900512. No evidence shows the substitution was approved."
+        },
+        {
+          "sample": "CHG-2008",
+          "attribute": 1,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "CHG-2008: attribute B is marked passed, but the reviewer found an exception where the test passed: Test results are 'to be provided after go-live', so no testing was documented before the 2027-08-12 deployment."
+        },
+        {
+          "sample": "CHG-2008",
+          "attribute": 2,
+          "planted": "FALSE_PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "CHG-2008: attribute C is marked passed, but the reviewer found the evidence insufficient: The record has no evidence of any test or test environment, so we can't conclude where testing was performed. The testing exception is reported under attribute 1."
+        }
+      ],
+      "raised_on_correct_results": {
+        "count": 0,
+        "of": 40,
+        "rate": 0.0
+      },
+      "raised_on_correct": [],
+      "on_dependent_cells": [],
+      "rules_notes": [
+        {
+          "severity": "MUST_FIX",
+          "text": "The sheet tests 8 items; the standard sample for a event_driven control is 25. Explain the smaller sample or extend it."
+        },
+        {
+          "severity": "SHOULD_FIX",
+          "text": "There is no design and walkthrough workpaper for this control."
+        },
+        {
+          "severity": "MUST_FIX",
+          "text": "Testing found exceptions, but the proposed deficiency was dismissed: “Planted results for the reviewer validation.”. Confirm why no deficiency is logged, or log one."
+        }
+      ]
+    }
+  },
+  "reviewer_prompt_versions": [
+    "control-tester/2",
+    "independent-reviewer/2",
+    "workpaper-preparer/1"
+  ],
+  "protected_decisions_unchanged": true,
+  "note_and_review_statuses": [
+    [
+      "PROPOSED",
+      "OPEN"
+    ]
+  ],
+  "citation_audit": {
+    "citations_offered": 164,
+    "citations_in_the_evidence": 164,
+    "citations_not_in_the_evidence": [],
+    "check_sides_offered": 34,
+    "check_sides_located": 34
+  },
+  "calls": [
+    {
+      "agent": "independent-reviewer",
+      "tier": "BALANCED",
+      "model": "claude-sonnet-5-5",
+      "prompt_version": "independent-reviewer/2",
+      "status": "SUCCEEDED",
+      "calls": 18,
+      "input_tokens": 46252,
+      "output_tokens": 20491,
+      "cost_usd": 0.297414
+    },
+    {
+      "agent": "itgc-access-tester",
+      "tier": "BALANCED",
+      "model": "local",
+      "prompt_version": "control-tester/2",
+      "status": "SUCCEEDED",
+      "calls": 10,
+      "input_tokens": 9000,
+      "output_tokens": 3000,
+      "cost_usd": 0.0
+    },
+    {
+      "agent": "itgc-change-tester",
+      "tier": "BALANCED",
+      "model": "local",
+      "prompt_version": "control-tester/2",
+      "status": "SUCCEEDED",
+      "calls": 8,
+      "input_tokens": 7200,
+      "output_tokens": 2400,
+      "cost_usd": 0.0
+    },
+    {
+      "agent": "workpaper-preparer",
+      "tier": "BALANCED",
+      "model": "local",
+      "prompt_version": "workpaper-preparer/1",
+      "status": "SUCCEEDED",
+      "calls": 2,
+      "input_tokens": 1600,
+      "output_tokens": 400,
+      "cost_usd": 0.0
+    }
+  ],
+  "total_cost_usd": 0.297414
+}

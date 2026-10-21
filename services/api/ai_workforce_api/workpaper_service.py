@@ -49,6 +49,13 @@ from ai_workforce_api.model_providers import fallback_note, live_model, provider
 from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.settings import Settings
+from ai_workforce_api.testing_rationale import approve as approve_rationale
+from ai_workforce_api.testing_rationale import basis_of as rationale_basis
+from ai_workforce_api.testing_rationale import edited as rationale_edited
+from ai_workforce_api.testing_rationale import interim_tab
+from ai_workforce_api.testing_rationale import pending as rationale_pending
+from ai_workforce_api.testing_rationale import place as place_rationale
+from ai_workforce_api.testing_rationale import rationale as testing_rationale
 from ai_workforce_api.workpaper_fill import Content, Section, Stage, fill, gather, merge
 from ai_workforce_api.workpapers import tabs_for
 
@@ -532,6 +539,13 @@ def run_draft(
     elif provider is None:
         note = "No model is configured, so the narratives are the records' plain words."
     with transaction(connection) as cursor:
+        if stage == "EFFECTIVENESS":
+            # The AI-proposed testing rationale, pending an auditor's review (M3c).
+            content = place_rationale(
+                content,
+                old,
+                testing_rationale(connection, project_id, control_id, interim_tab(content)),
+            )
         _save(cursor, workpaper_id, content, source, None, note)
         cursor.execute(
             "UPDATE workpapers SET draft_status = 'IDLE', lease_until = NULL, attempts = 0, "
@@ -772,6 +786,9 @@ class EditBody(BaseModel):
 class PrepareBody(BaseModel):
     version: int = Field(ge=1)
     note: str = Field(default="", max_length=500)
+    # The person confirms they reviewed the AI-proposed testing rationale (M3c closure);
+    # required to prepare an effectiveness workpaper whose rationale is pending.
+    rationale_reviewed: bool = False
 
 
 class ReopenBody(BaseModel):
@@ -1072,7 +1089,9 @@ def _edit(
                 sections.append(section)
                 continue
             found = True
-            update: dict[str, Any] = {"source": "PERSON"}
+            # An edit of the AI-proposed rationale is not its review: it stays pending, and
+            # an earlier review is void (M3c closure).
+            update: dict[str, Any] = {"source": "PERSON", **rationale_edited(section)}
             if section.kind == "text":
                 if body.text is None:
                     raise WorkpaperState("a text section takes text")
@@ -1148,6 +1167,35 @@ def _prepare(
             ).fetchone()
             if signed is None:
                 raise WorkpaperState("sign off the control's testing first")
+            # The AI-proposed testing rationale is reviewed by a person before the
+            # workpaper is prepared (M3c closure): an explicit confirmation, recorded.
+            content = _content(connection, workpaper_id, int(current))
+            if content is not None and rationale_pending(content):
+                if not body.rationale_reviewed:
+                    raise WorkpaperState(
+                        "review the AI-proposed testing rationale and confirm it before "
+                        "preparing the workpaper"
+                    )
+                person = cursor.execute(
+                    "SELECT display_name, to_char(clock_timestamp() AT TIME ZONE 'UTC', "
+                    '\'YYYY-MM-DD"T"HH24:MI:SS"Z"\') FROM users WHERE id = %s',
+                    (principal.id,),
+                ).fetchone()
+                reviewed = approve_rationale(
+                    content,
+                    principal.id,
+                    "" if person is None else str(person[0] or ""),
+                    "" if person is None else str(person[1]),
+                    int(current),
+                )
+                number = _save(
+                    cursor, workpaper_id, reviewed, "PERSON", principal.id,
+                    "The AI-proposed testing rationale was reviewed.",
+                )  # fmt: skip
+                _audit(cursor, organization_id, project_id, principal.id, workpaper_id,
+                       "workpaper.rationale_reviewed",
+                       {"version_reviewed": int(current), "version": number,
+                        "basis": rationale_basis(reviewed)})  # fmt: skip
         cursor.execute(
             """
             UPDATE workpapers

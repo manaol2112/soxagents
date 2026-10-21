@@ -45,6 +45,10 @@ const cell = (
   final,
   overrideReason: "",
   overriddenBy: null,
+  observed: "",
+  expected: "",
+  limitations: "",
+  checks: [],
   citations: files.map((fileName) => ({
     fileId: "f",
     fileName,

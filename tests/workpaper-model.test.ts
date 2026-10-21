@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   parseWorkpaperNotice,
   parseWorkpapers,
+  rationalePending,
   rowsToText,
   textToRows,
   workpaperNoticeFor,
@@ -121,6 +122,54 @@ describe("workpaper parsing", () => {
     assert.equal(parsed.versions[0]?.createdBy, null);
   });
 
+  it("reads the rationale's review and says when it is pending", () => {
+    const rationale = {
+      key: "ai-testing-rationale",
+      title: "AI-Proposed Testing Rationale — Pending Auditor Review",
+      kind: "table",
+      source: "AGENT",
+      review: null,
+    };
+    const base = raw() as { content: { sections: unknown[] } };
+    const pendingRaw = {
+      ...base,
+      content: { ...base.content, sections: [rationale] },
+    };
+    const [pending] = parseWorkpapers([pendingRaw]) ?? [];
+    assert.ok(pending !== undefined);
+    assert.equal(pending.sections[0]?.review, null);
+    assert.equal(rationalePending(pending), true);
+    const reviewedRaw = {
+      ...base,
+      content: {
+        ...base.content,
+        sections: [
+          {
+            ...rationale,
+            review: {
+              by: "88888888-8888-7888-8888-888888888888",
+              by_name: "Dana Whitfield",
+              at: "2026-10-21T10:00:00Z",
+              content_version: 4,
+            },
+          },
+        ],
+      },
+    };
+    const [reviewed] = parseWorkpapers([reviewedRaw]) ?? [];
+    assert.ok(reviewed !== undefined);
+    assert.deepEqual(reviewed.sections[0]?.review, {
+      by: "88888888-8888-7888-8888-888888888888",
+      byName: "Dana Whitfield",
+      at: "2026-10-21T10:00:00Z",
+      contentVersion: 4,
+    });
+    assert.equal(rationalePending(reviewed), false);
+    const [plain] = parseWorkpapers([raw()]) ?? [];
+    assert.ok(plain !== undefined);
+    assert.equal(rationalePending(plain), false);
+  });
+
   it("refuses a list with a bad id or a non-list", () => {
     assert.equal(parseWorkpapers([raw({ id: "x" })]), null);
     assert.equal(parseWorkpapers({}), null);
@@ -230,7 +279,21 @@ describe("workpaper writes", () => {
       version: "3",
     });
     assert.ok(!("error" in prepare));
-    assert.deepEqual(prepare.body, { version: 3, note: "" });
+    assert.deepEqual(prepare.body, {
+      version: 3,
+      note: "",
+      rationale_reviewed: false,
+    });
+    // The person's confirmation that they reviewed the AI-proposed rationale (M3c).
+    const confirmed = workpaperWrite({
+      ...ids,
+      intent: "prepare",
+      workpaper_id: paper,
+      version: "3",
+      rationale_reviewed: "yes",
+    });
+    assert.ok(!("error" in confirmed));
+    assert.equal(confirmed.body.rationale_reviewed, true);
     const reopen = workpaperWrite({
       ...ids,
       intent: "reopen",

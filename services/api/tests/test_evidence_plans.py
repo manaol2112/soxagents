@@ -465,7 +465,11 @@ def test_the_agent_plans_when_its_plan_passes_the_checks(migrated: Database) -> 
         calls = connection.execute(
             "SELECT count(*) FROM model_calls WHERE project_id = %s", (project,)
         ).fetchone()
-    assert body.source == "RULES"
+    # Rewritten in M3c's full-suite run (failing since M3a, commit 1483037; this file is in
+    # neither the fast nor the critical set): a rejected model plan is FALLBACK, the rules'
+    # plan standing in with the call linked, never RULES (M3a: a model failure is never
+    # recorded as the rules' work). Before M3a this read "RULES".
+    assert body.source == "FALLBACK"
     assert "rejected" in body.note and "select samples" in body.note
     assert calls == (2,)
 

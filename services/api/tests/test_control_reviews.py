@@ -252,7 +252,8 @@ def test_the_reviewer_decides_notes_a_must_fix_reopens_the_work_and_signs_off(
         assert run_draft(connection, _Provider([{"sections": []}]), UUID(paper["id"])) == "DONE"
     paper = client.get(f"{base}/workpapers", params={"control_id": sheet["control_id"]}).json()[0]
     prepared = client.post(
-        f"{base}/workpapers/{paper['id']}/prepare", json={"version": paper["version"]}
+        f"{base}/workpapers/{paper['id']}/prepare",
+        json={"version": paper["version"], "rationale_reviewed": True},
     )
     assert prepared.status_code == 200, prepared.text
     assert len(team["scheduler"].reviews) == 2
@@ -479,7 +480,10 @@ def _prepared_control(
     with connect(migrated.url) as connection:
         assert run_draft(connection, provider, UUID(paper["id"])) == "DONE"
     paper = client.get(base, params={"control_id": sheet["control_id"]}).json()[0]
-    prepared = client.post(f"{base}/{paper['id']}/prepare", json={"version": paper["version"]})
+    prepared = client.post(
+        f"{base}/{paper['id']}/prepare",
+        json={"version": paper["version"], "rationale_reviewed": True},
+    )
     assert prepared.status_code == 200, prepared.text
     return team, client, sheet, ticket_file
 

@@ -1,0 +1,13 @@
+Access request REQ-3105
+Requested for: Grace Mbeki (u0005)
+Application: SAP ERP PRD
+Role requested: Treasury Analyst
+Requested by: Grace Mbeki on 2027-04-06
+Line manager (HR record): Lena Ortiz
+
+Approvals
+- Line manager approval: Grace Mbeki approved on 2027-04-07 (comment: approving for my manager, who is on leave)
+- Application owner approval: Helen Cho approved on 2027-04-07
+
+Provisioning
+- Granted role Treasury Analyst in SAP ERP PRD on 2027-04-08 by adm.kfischer (Karl Fischer, IAM administrator)

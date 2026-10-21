@@ -605,6 +605,16 @@ function Cell({
   if (item.state === "NO_EVIDENCE") {
     return <span className="mark mark-empty">—</span>;
   }
+  if (item.state === "FAILED") {
+    return (
+      <span
+        className="mark mark-failed"
+        title="Not tested: the model call failed. This is a technical failure, not a testing result. The item is tested again on the next run."
+      >
+        Failed
+      </span>
+    );
+  }
   if (item.state === "WAITING" || cell.final === null) {
     return (
       <span className="mark mark-waiting" title="Being tested">
@@ -634,6 +644,42 @@ function Cell({
           {cell.proposed !== null ? RESULT_LABELS[cell.proposed] : "No result"}
           {cell.note !== "" ? `: ${cell.note}` : ""}
         </p>
+        {cell.observed !== "" ? (
+          <p>
+            <span className="cell-label">Observed</span>
+            {cell.observed}
+          </p>
+        ) : null}
+        {cell.expected !== "" ? (
+          <p>
+            <span className="cell-label">Expected</span>
+            {cell.expected}
+          </p>
+        ) : null}
+        {cell.checks.length > 0 ? (
+          <div>
+            <span className="cell-label">Rule checks</span>
+            <ul className="cell-checks">
+              {cell.checks.map((check, index) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: checks keep their order.
+                <li key={index}>
+                  {check.holds === true
+                    ? "Holds"
+                    : check.holds === false
+                      ? "Does not hold"
+                      : "Not verified"}
+                  : {check.why}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {cell.limitations !== "" ? (
+          <p>
+            <span className="cell-label">Limitations</span>
+            {cell.limitations}
+          </p>
+        ) : null}
         {cell.citations.length > 0 ? (
           <div className="cell-sources">
             <span className="cell-label">Relied on</span>

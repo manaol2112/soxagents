@@ -92,7 +92,7 @@ def test_the_tester_records_its_calls_with_provenance_and_acts_as_the_agent(
     assert instance is not None
     assert len(calls) == 3
     assert {(c[1], c[2], c[3], c[4]) for c in calls} == {
-        ("itgc-access-tester", "BALANCED", "control-tester/1", "test_sheet")
+        ("itgc-access-tester", "BALANCED", "control-tester/3", "test_sheet")
     }
     assert {str(c[5]) for c in calls} == {sheet["id"]}
     assert len({c[6] for c in calls}) == 1, "one job for the run"
@@ -129,7 +129,7 @@ def test_the_tester_records_its_calls_with_provenance_and_acts_as_the_agent(
         "BALANCED",
         "local",
     )
-    assert record["prompt_version"] == "control-tester/1"
+    assert record["prompt_version"] == "control-tester/3"  # M3c and its closure: the prompt changed
     assert len(record["prompt_sha256"]) == 64 and len(record["output_sha256"]) == 64
     assert (record["target_type"], record["target_id"]) == ("test_sheet", sheet["id"])
     assert record["attempt"] == 1 and record["status"] == "SUCCEEDED" and record["error"] == ""
@@ -166,15 +166,21 @@ def test_a_provider_failure_leaves_failed_items_for_a_person_never_a_rules_resul
     assert provider.calls == 3
     assert [tuple(c) for c in calls] == [("MODEL_ERROR", "provider error (status 400)", 1)] * 3
     assert [i[0] for i in items] == ["FAILED", "FAILED", "FAILED"]
-    assert {i[1] for i in items} == {
-        "The model could not be used. Check the model configuration and key."
-    }
-    assert all(r["result"] == "UNABLE" for i in items for r in i[2])
+    # M3c: an execution failure is a technical failure, never an audit result. The item
+    # has no result (before M3c it held UNABLE results, which read as "insufficient
+    # evidence"), it says why, and it is tested again on the next run.
+    assert all(
+        i[1].startswith("Not tested: the tester's model call failed (a technical failure")
+        and i[1].endswith("The model could not be used. Check the model configuration and key.")
+        for i in items
+    )
+    assert all(i[2] == [] for i in items)
     assert all(i[3] is not None for i in items), "the failed call is linked from the item"
     current = _sheet(client, team)
     assert current["proposed_conclusion"] == "INCOMPLETE"
     assert current["run_state"] == "IDLE"
-    assert any("a person" in line for line in current["blocking"])
+    assert {item["state"] for item in current["items"]} == {"FAILED"}
+    assert any("model call failed (a technical failure" in line for line in current["blocking"])
     blocked = client.post(
         f"{_base(team)}/test-sheets/{current['id']}/sign-off", json={"version": current["version"]}
     )
@@ -382,11 +388,11 @@ def test_a_crashed_run_resumes_without_a_duplicate_or_partial_result(
     real_check = testing_engine.check_results
     seen = {"n": 0}
 
-    def crashing(output: Any, count: int, files: Any = ()) -> Any:
+    def crashing(output: Any, count: int, files: Any = (), detail: Any = ()) -> Any:
         seen["n"] += 1
         if seen["n"] == 2:
             raise RuntimeError("the worker died after the model answered")
-        return real_check(output, count, files)
+        return real_check(output, count, files, detail)
 
     monkeypatch.setattr(testing_engine, "check_results", crashing)
     with connect(migrated.url) as connection:

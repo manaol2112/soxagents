@@ -4,6 +4,8 @@ import { formatDate } from "./format";
 import { type SheetTab, SheetTabs } from "./sheet-tabs";
 import { UiIcon } from "./ui-icon";
 import {
+  RATIONALE_KEY,
+  rationalePending,
   rowsToText,
   SOURCE_LABELS,
   WORKPAPER_NOTICES,
@@ -413,6 +415,17 @@ function WorkpaperCard({
                 intent="prepare"
                 version={paper.version}
               />
+              {rationalePending(paper) ? (
+                <label className="wp-review-confirm">
+                  <input
+                    type="checkbox"
+                    name="rationale_reviewed"
+                    value="yes"
+                    required
+                  />
+                  The AI-proposed testing rationale has been reviewed
+                </label>
+              ) : null}
               <button
                 type="submit"
                 className="btn-sm"
@@ -512,6 +525,15 @@ function SectionView({
         </h4>
         <span className="wp-source">{SOURCE_LABELS[section.source]}</span>
       </header>
+      {section.key === RATIONALE_KEY && section.review !== null ? (
+        <p className="wp-reviewed">
+          Reviewed by {section.review.byName || "a team member"}
+          {section.review.at !== ""
+            ? ` on ${formatDate(section.review.at)}`
+            : ""}
+          {` (version ${section.review.contentVersion})`}
+        </p>
+      ) : null}
       {section.kind === "fields" ? (
         <dl className="workpaper-fields wp-fields">
           {section.fields.map((field) => (

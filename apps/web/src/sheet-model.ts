@@ -55,7 +55,31 @@ export type SheetCell = {
   overriddenBy: string | null;
   /** The passages the tester relied on, checked against each file's text. */
   citations: EvidenceCitation[];
+  /** What the tester observed and what the attribute expects (M3c). */
+  observed: string;
+  expected: string;
+  limitations: string;
+  /** Objective comparisons, evaluated by the system from verified values. */
+  checks: RuleCheck[];
 };
+
+export type RuleCheck = {
+  kind: string;
+  /** True or false when both values were verified; null when they could not be. */
+  holds: boolean | null;
+  why: string;
+};
+
+function ruleChecks(raw: unknown): RuleCheck[] {
+  return (Array.isArray(raw) ? raw : [])
+    .filter(isRecord)
+    .slice(0, 4)
+    .map((entry) => ({
+      kind: str(entry.kind),
+      holds: typeof entry.holds === "boolean" ? entry.holds : null,
+      why: str(entry.why),
+    }));
+}
 
 const CITED_FILE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -115,7 +139,8 @@ export type SheetItem = {
   label: string;
   detail: Array<{ column: string; value: string }>;
   files: Array<{ id: string; fileName: string }>;
-  state: "NO_EVIDENCE" | "WAITING" | "TESTED";
+  /** FAILED: the tester's model call failed; a technical failure, not a result. */
+  state: "NO_EVIDENCE" | "WAITING" | "TESTED" | "FAILED";
   source: string | null;
   note: string;
   cells: SheetCell[];
@@ -249,7 +274,9 @@ export function parseSheets(value: unknown): TestSheet[] | null {
             fileName: str(entry.file_name),
           })),
         state:
-          item.state === "TESTED" || item.state === "WAITING"
+          item.state === "TESTED" ||
+          item.state === "WAITING" ||
+          item.state === "FAILED"
             ? item.state
             : "NO_EVIDENCE",
         source: typeof item.source === "string" ? item.source : null,
@@ -267,6 +294,10 @@ export function parseSheets(value: unknown): TestSheet[] | null {
                 ? cell.overridden_by
                 : null,
             citations: cellCitations(cell.citations, num(cell.index)),
+            observed: str(cell.observed),
+            expected: str(cell.expected),
+            limitations: str(cell.limitations),
+            checks: ruleChecks(cell.checks),
           })),
         version: num(item.version),
       })),

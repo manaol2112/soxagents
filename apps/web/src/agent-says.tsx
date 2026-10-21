@@ -46,6 +46,7 @@ export function AgentSays({
                   method="post"
                   action="/workspace/agent-runs"
                   className="cw-agent-cancel"
+                  autoComplete="off"
                 >
                   <input
                     type="hidden"

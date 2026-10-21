@@ -947,3 +947,41 @@ Live spend for M3b: $1.84 in all, within the development budgets (no call was re
 ### 16.8 M3b closure
 
 The owner conditionally accepted M3b on 21 October 2026 and asked for five closure items. The completion report records them ([milestone-3b-completion.md](milestone-3b-completion.md), "Closure"): the two classification errors and the deterministic gap they exposed (a person's confirmed population now proposes samples); three repeat runs of the unchanged corpus ([repeatability.md](review/m3b/repeatability.md)); every unsuccessful model call recorded as NOT_MAPPED, an execution failure (migration 0097); a test that a mapping leaves 29 protected tables untouched; and the gate.
+
+## 17. M3c as built: grounded testing
+
+Built on 21 October 2026 after M3b's acceptance (commit 4f9ef42), for review; not
+committed. The full record is [milestone-3c-completion.md](milestone-3c-completion.md);
+the live results are in [review/m3c/results.md](review/m3c/results.md). The design
+decisions of §6 stand, with two changes the owner made when authorizing M3c: the
+rationale is a section of the effectiveness workpaper, "AI-Proposed Testing Rationale —
+Pending Auditor Review", not a field on the sheet; and an execution failure is not an
+audit result, so a failed item holds no result instead of "unable to tell".
+
+| Capability | Decision |
+| --- | --- |
+| Tester (`testing_engine`), prompt `control-tester/2` | Reused; extended. Each result now carries the observed and expected conditions and the evidence's limitations; the tester proposes objective comparisons, which the code evaluates. The M3b mapping's verified passages reach it as context, never as a result. |
+| **New**: deterministic checks (`testing_checks.py`) | Dates and times, identifiers, numbers: each side verified against the item's own files or population row, evaluated by code. A contradicted pass becomes an exception; a pass resting on a value the evidence does not hold becomes unable; a result never moves up. A pass that cites a line of the evidence giving instructions to an AI goes to a person. |
+| Exceptions | An exception stands only with its observed and expected conditions and a verified citation or rule check; otherwise a person decides it. The agent still never logs, dismisses or resolves a deficiency. |
+| Execution failure | No result written; the item is `FAILED`, says why, links the failed call, blocks sign-off, and is tested again on the next run. |
+| **New**: the rationale section (`testing_rationale.py`) | Written by code from the tester's own results, never by a model; pending until a person edits it; replaced by a new pending version when the results change; never the conclusion, a review or a sign-off. |
+| Reviewer (`control_reviews`), prompt `independent-reviewer/2` | Reused; the same rule checks and instruction guard apply to its answers; a pass or an exception it finds not applicable is now a should-fix note (the validation's one miss). |
+| **New**: the grounded-testing scenario set (`services/api/tests/corpus_m3c.py`, `scripts/build_corpus_m3c.py`) | 18 samples over ITGC-AC-01 and ITGC-CM-01, 98 cells with fixed expected results. The M3b corpus, manifest and expectations are unchanged. |
+
+No migration. Sampling, the approved plans and attributes, evidence records, people's
+results, conclusions, sign-offs, deficiencies and reviews are unchanged by the tester and
+the reviewer (tested on 13 tables).
+
+### 17.1 M3c closure
+
+Conditionally accepted by the owner on 21 October 2026 and closed the same day
+([milestone-3c-completion.md](milestone-3c-completion.md) §11):
+
+- **Rationale review.** The rationale is reviewed explicitly on the existing Prepare action, by a person only; an edit is not a review; the review is recorded and voided by any change to the results or their evidence.
+- **Rule checks.** One atomic value per side; ambiguity is unable to determine; the rules never move a result up.
+- **Supporting evidence.** The policy, owner registers and role listing are supporting evidence for the scenario set, with a separate supplement where they decide the result.
+- **Reviewer.** The reviewer's not-applicable disagreement is now a finding; a fresh live run caught 16 of 16 planted false passes with the tester at 0 false passes.
+- **Known defects.** Two UI defects are recorded in [known-defects.md](known-defects.md).
+
+M3d is not started.
+

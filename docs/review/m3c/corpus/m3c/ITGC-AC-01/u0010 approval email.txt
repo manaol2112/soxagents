@@ -1,0 +1,7 @@
+From: Tomás Vidal <tomas.vidal@northwind.example>
+To: IAM service desk <iam@northwind.example>
+Date: 2027-08-04 11:20
+Subject: Approval REQ-3119
+
+I approve REQ-3119: role Billing Clerk in SAP ERP PRD for Marco Silva (u0099).
+Tomás Vidal, Billing Manager

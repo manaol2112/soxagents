@@ -1,0 +1,13 @@
+Access request REQ-3101
+Requested for: Amina Hassan (u0001)
+Application: SAP ERP PRD
+Role requested: AP Clerk
+Requested by: Amina Hassan on 2027-01-08
+Line manager (HR record): Rafael Duarte
+
+Approvals
+- Line manager approval: Rafael Duarte approved on 2027-01-09
+- Application owner approval: Helen Cho approved on 2027-01-12
+
+Provisioning
+- Granted role AP Clerk in SAP ERP PRD on 2027-01-15 by adm.kfischer (Karl Fischer, IAM administrator)

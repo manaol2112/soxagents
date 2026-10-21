@@ -31,7 +31,26 @@ export type WorkpaperSection = {
   /** The template tab the section is on; empty for a workpaper drafted before tabs. */
   tab: string;
   period: string;
+  /** A person's explicit review of an AI-proposed section (M3c), or null while pending. */
+  review: {
+    by: string;
+    byName: string;
+    at: string;
+    contentVersion: number;
+  } | null;
 };
+
+/** The AI-proposed testing rationale (M3c): reviewed explicitly when preparing. */
+export const RATIONALE_KEY = "ai-testing-rationale";
+
+/** Whether the workpaper holds an AI-proposed rationale no person has reviewed. */
+export function rationalePending(paper: {
+  sections: WorkpaperSection[];
+}): boolean {
+  return paper.sections.some(
+    (section) => section.key === RATIONALE_KEY && section.review === null,
+  );
+}
 
 export type WorkpaperTab = {
   key: string;
@@ -128,6 +147,15 @@ function parseSection(value: unknown): WorkpaperSection | null {
         : "RECORDS",
     tab: str(value.tab),
     period: str(value.period),
+    review:
+      isRecord(value.review) && typeof value.review.by === "string"
+        ? {
+            by: value.review.by,
+            byName: str(value.review.by_name),
+            at: str(value.review.at),
+            contentVersion: Number(value.review.content_version) || 0,
+          }
+        : null,
   };
 }
 
@@ -319,7 +347,12 @@ export function workpaperWrite(fields: Record<string, string>): WorkpaperWrite {
     return {
       intent,
       path: `${base}/${paper}/prepare`,
-      body: { version, note },
+      // The person's confirmation that they reviewed the AI-proposed rationale (M3c).
+      body: {
+        version,
+        note,
+        rationale_reviewed: fields.rationale_reviewed === "yes",
+      },
       controlId: control,
     };
   }

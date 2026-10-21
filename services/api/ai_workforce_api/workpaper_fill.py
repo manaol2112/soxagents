@@ -64,6 +64,18 @@ class Field_(BaseModel):
     value: str = Field(max_length=4000)
 
 
+class SectionReview(BaseModel):
+    """A person's explicit review of an AI-proposed section (M3c closure): who, when, and
+    which revision of the workpaper and of the results it rests on."""
+
+    by: str = Field(max_length=60)
+    by_name: str = Field(default="", max_length=200)
+    at: str = Field(max_length=40)
+    # The workpaper version the person reviewed, and the results basis it showed.
+    content_version: int = Field(ge=1)
+    basis: str = Field(default="", max_length=64)
+
+
 class Section(BaseModel):
     key: str = Field(max_length=60)
     title: str = Field(max_length=200)
@@ -81,6 +93,9 @@ class Section(BaseModel):
     # The template tab the section is on, and the period that tab covers.
     tab: str = Field(default="", max_length=60)
     period: str = Field(default="", max_length=20)
+    # Set only by a person's explicit review (testing_rationale.approve); cleared by any
+    # change to the section or to the results it rests on.
+    review: SectionReview | None = None
 
 
 class Tab(BaseModel):

@@ -29,7 +29,15 @@ Routine, explicitly authorized actions may run automatically. Sensitive or conse
 
 ## Milestone closeout
 
-Testing is risk-based and change-focused (decided by the product owner; docs/test-strategy.md). A milestone gate is: formatting, linting and type checking for the modified code; the targeted tests for the active work (`make test-fast`, or `make test-changed` for the files modified); every applicable audit-critical safeguard test (`make test-critical`: authorization, segregation of duties, approvals, evidence traceability, review independence, database integrity); migration validation whenever the database changes; and focused integration tests for the affected workflows. The entire legacy Python suite (`make test-full`) runs only when the owner explicitly asks. Review the diff for unrelated changes, secrets, unsafe defaults, and accidental data exposure.
+Testing is risk-based and tiered (decided by the product owner; docs/test-strategy.md §1, with the closure checklist in §7):
+
+- Tier 1, routine development: lint, type checks, and targeted tests for the modified components and their dependents; `make test-fast` when a feature change is complete.
+- Tier 2, milestone closure: Tier 1, the relevant targeted and integration tests, `make test-fast`, `make test-critical` (authorization, segregation of duties, approvals, evidence traceability, review independence, database integrity, model-execution safeguards), the milestone's acceptance and safeguard tests, and migration validation whenever the database changes. The full legacy suite is not required at every milestone.
+- Tier 3, major milestone or release: `make test-full` and all applicable integration, security and regression tests, at the end of a major milestone group (such as M3), before a production release, after significant architectural or shared-infrastructure changes, and when targeted or critical tests suggest a wider regression.
+- Escalate within any tier when a change touches model-execution safeguards, authentication, authorization, data integrity, migrations, approval boundaries, sampling, audit conclusions, or shared infrastructure: the selected tests must cover the affected dependencies and critical invariants.
+- When a broader run finds a failure the routine sets missed, add the lightest test that would have caught it to `make test-fast` or `make test-critical` (docs/test-strategy.md §6).
+
+Review the diff for unrelated changes, secrets, unsafe defaults, and accidental data exposure.
 
 A failing test is never classified as obsolete by default. A test whose expectation encodes a superseded workflow is rewritten for the approved behavior, with the old expectation, the new one and the methodology justification recorded; a test is retired only when the functionality it covers has genuinely been removed. Audit-integrity assertions are preserved.
 
@@ -38,6 +46,9 @@ Report:
 - Files changed
 - Behavior implemented
 - Tests executed and their results (commands actually run)
+- Tests intentionally not executed, and why
+- The risk-based justification for the selected coverage
+- The date and commit of the most recent successful full-suite execution, and whether it still applies
 - Critical safeguards validated
 - Legacy tests updated or retired, with justification
 - Areas not tested and the associated risks

@@ -1,35 +1,71 @@
-# Testing strategy: risk-based and change-focused
+# Testing strategy: risk-based and tiered
 
 Decided by the product owner on 19 October 2026, replacing the full Python regression
-suite as the gate for every milestone. The objective: validate the approved workflow
-meaningfully, every time, without an hour of regression against functionality being
-replaced. Nothing here weakens authorization, segregation of duties, approval gates or
-audit traceability; those tests are the ones that always run.
+suite as the gate for every milestone, and revised by the owner on 21 October 2026 into
+three tiers with risk-based escalation. The objective: audit-grade quality without running
+the whole suite for every change. Nothing here weakens authorization, segregation of
+duties, approval gates or audit traceability; those tests are the ones that always run.
 
-## 1. The gate for a milestone (W1–W4 and after)
+## 1. The tiers
+
+### Tier 1: routine development
+
+For an ordinary code change:
 
 1. Formatting, linting and type checking for the modified code (`make format`, `make
    lint`, `make typecheck`).
-2. The targeted tests for the active work: `make test-fast` (the workflow-integrity set
-   by default; `FAST_PY=... FAST_NODE=...` to choose) or `make test-changed` for the files
-   modified.
-3. Every applicable audit-critical safeguard test: `make test-critical`.
-4. Migration validation whenever the database changes: `test_migrations` and
+2. The targeted tests for the modified components and the code that depends on them:
+   the tests of the changed files and their callers, chosen by hand or with `make
+   test-changed`.
+3. `make test-fast` once a feature change is complete.
+
+### Tier 2: milestone closure
+
+Before a milestone is committed:
+
+1. Everything in Tier 1 for the milestone's changes.
+2. The relevant targeted and integration tests for the affected workflows, named in the
+   milestone report.
+3. `make test-fast`.
+4. `make test-critical`: authorization, segregation of duties, approvals, evidence
+   traceability, review independence, database integrity, model-execution safeguards.
+5. The milestone's own acceptance and safeguard tests (and its gated live tests where
+   the milestone measures a model).
+6. Migration validation whenever the database changes: `test_migrations` and
    `test_schema` (in the critical set), the migration applied to the development
    database, and the schema and record-preservation checks reported.
-5. Focused integration tests for the affected workflows (named in the milestone report).
 
-The entire legacy suite, `make test-full`, runs only when the owner explicitly asks.
+The full legacy suite is not required at every milestone.
+
+### Tier 3: major milestone or release
+
+`make test-full` and every applicable integration, security and regression test:
+
+- at the completion of a major milestone group (for example, all of M3);
+- before a production release;
+- after a significant architectural or shared-infrastructure change (the database layer,
+  the agent caller, authentication, the worker, the migration runner);
+- when targeted or critical tests suggest a wider regression risk.
+
+### Risk-based escalation, within any tier
+
+A change that touches model-execution safeguards, authentication, authorization, data
+integrity, migrations, approval boundaries, sampling, audit conclusions or shared
+infrastructure widens its tests: the selection must cover the affected dependencies and
+the critical invariants they hold (for example, a change to the agent caller runs every
+test that asserts a model failure is recorded as FAILED or FALLBACK, not only the
+caller's own tests). A high-risk change does not by itself require the whole suite; the
+milestone report says why the selection is enough, or escalates to Tier 3.
 
 ## 2. Commands
 
 | Command | What it runs | Typical time |
 |---|---|---|
 | `make test-fast` | `FAST_PY` Python files and `FAST_NODE` Node files; defaults are the workflow-integrity set | 2–4 min |
-| `make test-critical` | The CRITICAL files of §4, in parallel (`-n auto --dist loadfile`) | 8–12 min |
+| `make test-critical` | The CRITICAL files of §4 and the single safeguard tests of §6 (`CRITICAL_PICKED`), in parallel on six workers, then the Node safeguard tests (`CRITICAL_NODE`) | ≈ 6 min |
 | `make test-changed [BASE=<ref>]` | `scripts/changed_tests.py`: tests that import or name the changed modules, migration tests when `migrations/` changed, Node tests importing changed web files; one level deep, so it complements `test-critical` rather than replacing it | depends |
 | `make test` | `test-critical` then the Node smoke test (what `make ci` runs) | |
-| `make test-full` | The entire Python suite (≈ 750 tests) with `-rsw` for skips and warnings | ≈ 60 min serial; ≈ 12 min with workers |
+| `make test-full` | The entire Python suite (873 tests and 6 gated live tests in October 2026) with `-rsw` for skips and warnings | ≈ 60 min serial; ≈ 13 min on six workers, when nothing else holds database connections |
 
 Mechanics that keep the tests trustworthy and fast: every Python test still gets its own
 database, now cloned from a per-session template that `apply_migrations` built once
@@ -226,3 +262,79 @@ and `workflow-model` (queue sources).
   called the live adapter with the untiered configuration, which the M3a containment refuses;
   it now uses a tier's configuration (the safeguard is intended and unchanged). Three repeat
   live runs of the unchanged corpus cost $2.61.
+- M3c (grounded testing; `testing_engine.py`, `testing_checks.py`, `testing_rationale.py`,
+  `control_reviews.py`, `workpaper_service.py`, `test_sheets.py`, the sheet's web model and
+  view; `test_grounded_testing.py` added to the fast and critical sets, `sheet-model` and
+  `agent-says-model` to the fast Node set): `make test-critical` **411 passed, 0 failed in
+  5 min 51 s**; `make test-fast` **133 Python passed and 128 Node passed**; every Node file
+  **722 passed**; `make test-full`, run at the owner's direction before acceptance, **873
+  passed, 0 failed, 6 skipped** (the gated live tests) in 12 min 40 s on the final code.
+  Expectations rewritten for M3c, each recorded in `docs/review/m3c/tests.md`: the
+  provider-failure test (an execution failure writes no result), two prompt versions, and
+  `test_control_context`'s unexplained exception (now for a person). Two pre-existing
+  failures found by the full runs and fixed: `test_evidence_plans` expected RULES for a
+  rejected plan, which M3a made FALLBACK; the form check failed on the M3a and M3b forms
+  missing `autoComplete="off"` (code fixed). Earlier full runs that shared PostgreSQL with
+  the live runs hit its 100-connection limit (Temporal holds 24); those tests passed alone.
+- Tiered strategy (decided by the owner on 21 October 2026, §1, §6 and §7): the review of
+  tests the routine sets had missed added eight single safeguard tests to `make
+  test-critical` (`CRITICAL_PICKED`) and the form check to both the fast and the critical
+  Node sets (`CRITICAL_NODE`); the export test's one-microsecond flake was traced to the
+  product and fixed (one timestamp for creation and expiry), its expectation unchanged.
+
+- M3c closure (Tier 2 with escalation: approval enforcement and the workpaper content model changed): `make test-critical` **421 passed**; `make test-fast` **135 Python and 129 Node passed**; every Node file **723 passed**; the 17 non-routine files that touch workpapers, reviews or the rule checks **193 passed**; the live M3c tests 3 passed. `make test-full` not rerun, at the owner's direction; the selection covers the changed paths (see `docs/review/m3c/tests.md`).
+
+## 6. Regression prevention
+
+When a full run, a live run or a later milestone finds a failure that the routine sets
+missed, the milestone that finds it adds the lightest test that would have caught it to
+`make test-fast` or `make test-critical` (a whole file, or one test by its node id in
+`CRITICAL_PICKED`), and records it here. Assertions are not weakened, safeguards are not
+disabled, and expected outcomes are not changed merely to pass (§3).
+
+The review of 21 October 2026:
+
+| Missed failure | Cause | Found | Coverage now |
+| --- | --- | --- | --- |
+| `test_evidence_reading::test_claude_receives_images_as_base64_blocks_before_the_prompt` | M3a's call containment refused the untiered configuration the test used | M3b (fixed in 4f9ef42) | `CRITICAL_PICKED` |
+| `test_evidence_plans::test_the_agent_plans_when_its_plan_passes_the_checks` | Still expected RULES for a rejected model plan, which M3a made FALLBACK; failing since 1483037 | M3c full run | `CRITICAL_PICKED` |
+| `tests/no-autofill.test.ts` | The M3a cancel form and the M3b mapping form lacked `autoComplete="off"` | M3c full Node run | `FAST_NODE` and `CRITICAL_NODE` |
+| `test_control_context::test_a_pass_stands_only_on_cited_evidence` | M3c's rule for unexplained exceptions changed its expectation | M3c full run | `CRITICAL_PICKED` |
+| The same M3a rule for the other agents | Not missed yet; added so the next change to the agent caller is caught | This review | `CRITICAL_PICKED`: `test_evidence_analysis::test_a_rejected_model_answer_falls_back_to_the_rules`, `test_pbc_drafting::test_a_bad_or_failed_model_draft_falls_back_to_the_rules`, `test_console::test_a_failed_answer_can_be_retried_in_place`, `test_console::test_a_busy_model_is_tried_again_before_the_turn_gives_up`, `test_system_applicability::test_a_report_waits_for_a_model_and_uploads_are_checked` |
+| `test_engagement_data::test_an_excel_export_holds_exactly_the_filtered_records` (intermittent) | The export's creation and expiry came from two clock readings, a microsecond apart | M3c full run | Fixed in the product (`exports.py`); the test's 30-day expectation is unchanged |
+| `test_waiting` (earlier) | An UPDATE-class file not run between M2a and M2b | M2b | Its queue behaviour is asserted by `test_queue` (critical) |
+
+## 7. Reporting and the milestone closure checklist
+
+Every milestone report states:
+
+1. The tests executed, with the commands actually run and their results.
+2. The tests intentionally not executed, and why.
+3. The risk-based justification for the selected coverage: what changed, which invariants
+   it could affect, and which tests cover them.
+4. Any outstanding failures or regression risks.
+5. The date and commit of the most recent successful full-suite execution, and whether it
+   still applies to the code being closed.
+
+Closure checklist (Tier 2, and Tier 3 where §1 requires it):
+
+- [ ] Formatting, lint and type checks clean for the changed code (known environment
+      exceptions named).
+- [ ] Targeted and integration tests for the affected workflows run and passing.
+- [ ] `make test-fast` passing.
+- [ ] `make test-critical` passing.
+- [ ] The milestone's acceptance and safeguard tests, and gated live tests where a model
+      is measured, run and passing, with their results recorded.
+- [ ] Migrations validated and applied to the development database, when the schema
+      changed.
+- [ ] Escalation considered (§1): the high-risk areas touched, and why the selection
+      covers them or why Tier 3 ran.
+- [ ] Every rewritten expectation recorded with the old one, the new one and the
+      justification (§3); any test missed by the routine sets added to them (§6).
+- [ ] The diff reviewed for unrelated changes, secrets, unsafe defaults and data exposure.
+- [ ] The report's five items above.
+
+**Most recent successful full-suite execution:** 21 October 2026, `make test-full`, 873
+passed, 0 failed, 6 skipped (the gated live tests), on the M3c working tree (branch
+`milestones-6.5-to-8.1b`, base commit 4f9ef42, M3c uncommitted). To be updated with the M3c
+commit once the owner authorizes it.

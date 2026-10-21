@@ -1,0 +1,13 @@
+Access request REQ-3103
+Requested for: Chloe Park (u0003)
+Application: SAP ERP PRD
+Role requested: AP Supervisor
+Requested by: Chloe Park on 2027-02-27
+Line manager (HR record): Rafael Duarte
+
+Approvals
+- Line manager approval: Rafael Duarte approved on 2027-03-06
+- Application owner approval: Helen Cho approved on 2027-03-02
+
+Provisioning
+- Granted role AP Supervisor in SAP ERP PRD on 2027-03-04 by adm.kfischer (Karl Fischer, IAM administrator)

@@ -9259,6 +9259,57 @@ summary.mark::-webkit-details-marker {
   font-weight: 500;
 }
 
+.mark-failed {
+  color: var(--danger);
+  font-size: 10.5px;
+  font-weight: 600;
+  border: 1px dashed var(--danger);
+}
+
+.inline-form:has(.wp-review-confirm) {
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  max-width: 100%;
+}
+
+.wp-review-confirm {
+  display: inline-flex;
+  gap: 0.375rem;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.inline-form .wp-review-confirm input {
+  height: auto;
+  margin: 0;
+}
+
+/* At phone width the workbook frame is wider than the screen (a known defect): the
+   confirmation and Prepare start at the left so both stay fully visible. */
+@media (max-width: 640px) {
+  .inline-form:has(.wp-review-confirm) {
+    justify-content: flex-start;
+  }
+
+  .wp-review-confirm {
+    max-width: 16rem;
+  }
+}
+
+.wp-reviewed {
+  margin: 0 0 0.5rem;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.cell-checks {
+  margin: 0.125rem 0 0;
+  padding-left: 1rem;
+  color: var(--text-secondary);
+}
+
 .mark.is-overridden {
   box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--accent);
 }

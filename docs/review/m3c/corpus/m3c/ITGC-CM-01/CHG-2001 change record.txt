@@ -1,0 +1,16 @@
+Change request CHG-2001: Vendor payment terms validation
+System: SAP ERP
+Raised on 2027-01-05
+Developer: Ravi Kumar
+Transport in the approved request: DEVK900501
+
+Testing
+- Test environment: QAS (quality assurance system, non-production)
+- Tested on 2027-01-12 by Nadia Farouk (business tester); result: passed (script TS-2001, 12 of 12 steps passed)
+
+Approvals
+- Business owner approval: Elena Rossi approved on 2027-01-14
+- IT owner approval: Marcus Lee approved on 2027-01-15
+
+Deployment
+- Transport DEVK900501 imported to PRD on 2027-01-18 by basis.oivanova (Olga Ivanova, Basis administrator)

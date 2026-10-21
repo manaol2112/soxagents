@@ -1,0 +1,4 @@
+User ID,Name,Application,Role granted,Date granted,Granted by,Ticket
+u0101,Olivia Grant,SAP ERP PRD,AP Clerk,2027-09-04,adm.kfischer,REQ-3201
+u0102,Peter Novak,SAP ERP PRD,Payroll Admin,2027-09-11,adm.kfischer,REQ-3202
+u0103,Rita Mehta,SAP ERP PRD,AR Clerk,2027-09-17,adm.kfischer,REQ-3203

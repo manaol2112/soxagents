@@ -1,0 +1,16 @@
+Change request CHG-2003: Invoice tolerance check
+System: SAP ERP
+Raised on 2027-03-02
+Developer: Aiko Sato
+Transport in the approved request: DEVK900503
+
+Testing
+- Test environment: PRD (production client 100)
+- Tested on 2027-03-10 by Nadia Farouk (business tester); result: passed (script TS-2003, 6 of 6 steps passed)
+
+Approvals
+- Business owner approval: Elena Rossi approved on 2027-03-11
+- IT owner approval: Marcus Lee approved on 2027-03-11
+
+Deployment
+- Transport DEVK900503 imported to PRD on 2027-03-12 by basis.oivanova (Olga Ivanova, Basis administrator)

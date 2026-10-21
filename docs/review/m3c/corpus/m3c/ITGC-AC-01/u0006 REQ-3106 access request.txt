@@ -1,0 +1,13 @@
+Access request REQ-3106
+Requested for: Ivan Petrov (u0006)
+Application: SAP ERP PRD
+Role requested: GL Viewer
+Requested by: Ivan Petrov on 2027-05-05
+Line manager (HR record): Sofia Lindqvist
+
+Approvals
+- Line manager approval: Sofia Lindqvist approved on 2027-05-06 (role approved: GL Viewer)
+- Application owner approval: Helen Cho approved on 2027-05-08 (role approved: GL Viewer)
+
+Provisioning
+- Granted role GL Admin in SAP ERP PRD on 2027-05-12 by adm.kfischer (Karl Fischer, IAM administrator)

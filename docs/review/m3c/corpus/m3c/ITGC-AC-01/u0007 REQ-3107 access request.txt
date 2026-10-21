@@ -1,0 +1,16 @@
+Access request REQ-3107
+Requested for: Jonas Weber (u0007)
+Application: SAP ERP PRD
+Role requested: AR Clerk
+Requested by: Jonas Weber on 2027-05-28
+Line manager (HR record): Mei Tanaka
+
+Approvals
+- Line manager approval: pending
+- Application owner approval: pending
+
+Provisioning
+- Granted role AR Clerk in SAP ERP PRD on 2027-06-03 by adm.kfischer (Karl Fischer, IAM administrator)
+
+Comments
+Email from Jonas Weber to the IAM service desk: "The approvals are to follow; I will forward them once I receive them."

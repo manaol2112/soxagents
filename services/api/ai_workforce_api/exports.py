@@ -393,13 +393,17 @@ def create_export(
     with transaction(connection) as cursor:
         row = cursor.execute(
             """
+            WITH stamp AS (SELECT clock_timestamp() AS now)
             INSERT INTO engagement_exports (
                 id, organization_id, project_id, dataset, file_format, filters, row_count,
                 as_of, file_name, object_key, content_sha256, byte_size, created_by,
-                narrative, expires_at
+                narrative, created_at, expires_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    clock_timestamp() + make_interval(days => %s))
+            -- One timestamp for both, so the retention is exactly the stated days (two
+            -- clock_timestamp() calls could differ by a microsecond).
+            SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                   stamp.now, stamp.now + make_interval(days => %s)
+            FROM stamp
             RETURNING expires_at
             """,
             (

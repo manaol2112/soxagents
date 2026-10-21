@@ -267,6 +267,8 @@ A person can edit any narrative or table section. The edit is saved against the 
 
 **Prepare** freezes a record at its current version, with who prepared it and when: the design tab on its own, the testing tabs together. The testing tabs can be prepared only once interim testing is signed off. A prepared record is changed only after a person reopens it with a reason. Preparing the testing tabs opens the control's [independent review](review.md); a must-fix review note on it reopens it.
 
+The testing tabs carry the section **AI-Proposed Testing Rationale — Pending Auditor Review** (Milestone 3c), written by code from the tester's own results. A person may edit it, but an edit is not a review. Preparing the testing tabs while the rationale is pending is refused unless the person confirms "The AI-proposed testing rationale has been reviewed". That confirmation records the reviewer, the time, the version reviewed and the results basis, and the audit event `workpaper.rationale_reviewed`. Only a person can give it. A later edit, or a change to the results or their evidence files, makes the rationale pending again.
+
 ### Export
 
 **Download the workbook** on a control's Workpapers tab downloads every tab of its records as one `.xlsx` with a sheet per tab (`GET …/workpapers/export.xlsx?control_id=`); a record on its own downloads too. **Export workpapers** on the controls page downloads the engagement binder: an index sheet linking to one sheet per tab. Cell values that start with `=`, `+`, `-`, or `@` are written as text, so nothing in a workpaper runs as a formula.
@@ -356,9 +358,13 @@ An item's `source` says who produced its results: `MODEL` (the checked answer, a
 with a citation that checks out), `REVIEW` (a control tested once reusing its screenshot
 review, without a model), `RULES` (no model configured: every result is "unable to tell"
 for a person) or `FAILED` (the model failed, was cancelled, was refused by a budget or
-answered unusably: every result is "unable to tell", the note says what happened and the
-failed call is linked). A failure is never written as the rules' work, and nothing is
-concluded from it: the sheet stays INCOMPLETE until a person decides each result.
+answered unusably). Since Milestone 3c a `FAILED` item holds **no result**: an execution
+failure is a technical failure, not an audit result, so it is not written as "unable to
+tell". The item's state is `FAILED`, its note starts "Not tested: the tester's model call
+failed (a technical failure, not a testing result)" and says what happened, the failed
+call is linked, and the item is tested again on the next run. A failure is never written
+as the rules' work, and nothing is concluded from it: the sheet stays INCOMPLETE and
+cannot be signed off while an item is `FAILED`.
 
 A person with update rights cancels a queued or running run
 (`POST …/agent-runs/test-sheet/{id}/cancel`): a queued run is finished at once, a running

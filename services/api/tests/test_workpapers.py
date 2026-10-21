@@ -148,9 +148,22 @@ def test_a_signed_off_test_becomes_a_drafted_effectiveness_workpaper(migrated: D
     # Prepared, the workpaper is frozen until reopened.
     current = client.get(base, params={"control_id": sheet["control_id"]}).json()
     effectiveness = next(w for w in current if w["stage"] == "EFFECTIVENESS")
-    prepared = client.post(f"{path}/prepare", json={"version": effectiveness["version"]})
+    # M3c closure: the AI-proposed testing rationale is reviewed explicitly by the person
+    # who prepares; without that confirmation the workpaper is not prepared.
+    unreviewed = client.post(f"{path}/prepare", json={"version": effectiveness["version"]})
+    assert unreviewed.status_code == 409
+    assert "AI-proposed testing rationale" in unreviewed.json()["detail"]
+    prepared = client.post(
+        f"{path}/prepare",
+        json={"version": effectiveness["version"], "rationale_reviewed": True},
+    )
     assert prepared.status_code == 200, prepared.text
     assert prepared.json()["status"] == "PREPARED"
+    reviewed = next(
+        s for s in prepared.json()["content"]["sections"] if s["key"] == "ai-testing-rationale"
+    )
+    assert reviewed["review"]["by"] == str(team["owner_id"])
+    assert reviewed["review"]["content_version"] == 3
     frozen = client.post(f"{path}/sections/conclusion", json={"based_on": 3, "text": "x"})
     assert frozen.status_code == 409
 

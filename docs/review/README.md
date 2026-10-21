@@ -203,3 +203,27 @@ the gate, and the mapping panel on the owner's development engagement.
 | `tests.md` | The commands run for the M3b gate and their results. |
 | (screenshots) | The Test step's mapping panel was checked in headless Chrome at desktop and 390 px (document width 390) on the owner's development engagement. Those screenshots show that engagement's names and documents, which may be client material, so they are kept out of the repository. |
 | `repeatability.md`, `live-scorecard-repeat-1.json` to `-3.json` | The closure's three runs of the unchanged corpus: per-run results, mapping and classification consistency, the investigation of each difference. |
+
+## m3c — grounded testing
+
+The grounded-testing scenario set, its manifest of fixed expectations, the live runs'
+scorecards and the UI check. Synthetic data only: the screenshots come from a separate
+database built from the scenario set (`ai_workforce_m3c_demo`), never the development
+engagement.
+
+| File | What it shows |
+| --- | --- |
+| `corpus/` and `corpus/manifest.json` | The 23 files of the two controls' populations and 18 samples, and for each of the 98 cells its category (clean, planted negative, dependent), the right result, the defensible results, why, and the passage a careless tester could cite. |
+| `results.md` | The live tester and reviewer against the manifest: false passes, false exceptions, unable and human-review rates with their denominators, every inconclusive clean result analysed, the reviewer's detections and its one miss, cost. |
+| `live-tester-run1.json`, `live-tester-run2.json` | Every cell's stored result, note, observed and expected conditions, citations and rule checks; the raw citation audit; every unable and human-review result; the protected-decisions check; each call's cost. |
+| `live-reviewer-run1.json`, `-run2.json`, `-run3-after-fix.json` | The reviewer against planted false passes and false exceptions: caught, missed, raised on correct results, the rules' notes apart, the reviewer's own answers (run 2 on), cost. |
+| `tests.md` | The commands run for the M3c gate and their results. |
+| `ui-test-sheet-desktop.png`, `ui-test-sheet-mobile.png` | ITGC-AC-01's test sheet: the blocking line naming the execution failure as a technical failure, not a result (desktop), and the sheet at 390 px (document width 390). |
+| `ui-test-cell-panel-desktop.png` | u0003 C: the exception decided by a rule check, with the observed and expected conditions, the rule check that does not hold and the cited passage; u0007's cells shown as "Failed" with its reason. |
+| `ui-rationale-desktop.png`, `ui-rationale-mobile.png` | ITGC-CM-01's effectiveness workpaper: section 06, "AI-Proposed Testing Rationale — Pending Auditor Review", drafted by the agent, on the interim tab before the interim conclusion; its summary row and the first samples. At 390 px the workbook frame clips the right edge of every section alike (pre-existing). |
+| `evidence-requirements.md` | The closure's analysis of the documents the agents asked for on clean samples: mandatory, supporting or unnecessary against the approved attributes; the inconsistency; the recommendation. |
+| `corpus-supplement/` and its `manifest.json` | The supplementary scenarios where the policy, the owner register or the role listing decides the result (four samples, 21 cells), separate from the unchanged M3c set. |
+| `live-tester-closure.json`, `live-reviewer-closure.json`, `live-supplement-closure.json` | The closure's fresh live run on the unchanged set and planted errors, and the supplement. |
+| `ui-prepare-confirm-desktop.png`, `ui-prepare-confirm-mobile.png`, `ui-rationale-reviewed-desktop.png` | The Prepare action asking the person to confirm the review of the AI-proposed rationale (the box is required; at 390 px the confirmation and Prepare start at the left), and the rationale after the review: titled reviewed, with the reviewer, date and version. |
+
+A rebuild of either scenario set gives identical text files and expected results; the PDF and workbook files embed their creation time, so their hashes (and the workbook's size) in the manifest change with each build.

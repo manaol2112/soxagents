@@ -1,0 +1,13 @@
+Access request REQ-3104
+Requested for: Daniel Reyes (u0004)
+Application: SAP ERP PRD
+Role requested: Payroll Admin
+Requested by: Daniel Reyes on 2027-03-16
+Line manager (HR record): Mei Tanaka
+
+Approvals
+- Line manager approval: not recorded
+- Application owner approval: Helen Cho approved on 2027-03-20
+
+Provisioning
+- Granted role Payroll Admin in SAP ERP PRD on 2027-03-22 by adm.kfischer (Karl Fischer, IAM administrator)

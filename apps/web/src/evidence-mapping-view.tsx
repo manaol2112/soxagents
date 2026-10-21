@@ -40,7 +40,11 @@ export function EvidenceMappingPanel({
           ) : null}
         </div>
         {canMap ? (
-          <form method="post" action="/workspace/evidence-mapping">
+          <form
+            method="post"
+            action="/workspace/evidence-mapping"
+            autoComplete="off"
+          >
             <input
               type="hidden"
               name="organization_id"

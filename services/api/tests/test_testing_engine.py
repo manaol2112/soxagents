@@ -442,8 +442,8 @@ def _add(client: TestClient, team: dict[str, Any], name: str, text: str, request
 
 
 class _Citing(_Provider):
-    """A tester that cites what it saw: each pass quotes the first line of the first file
-    it was given, as a real tester must for a pass to stand."""
+    """A tester that cites what it saw: each pass and each exception quotes the first line
+    of the first file it was given, as a real tester must for either to stand."""
 
     def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
         raw = super().complete(request, config)
@@ -457,7 +457,7 @@ class _Citing(_Provider):
         )[:120]
         results = [
             {**item, "citations": item.get("citations") or [{"file": 0, "quote": quote}]}
-            if isinstance(item, dict) and item.get("result") == "PASS"
+            if isinstance(item, dict) and item.get("result") in ("PASS", "EXCEPTION")
             else item
             for item in output.get("results", [])
         ]
@@ -497,9 +497,19 @@ def _year(database: Database, team: dict[str, Any]) -> int:
 
 
 def _answer(results: list[str]) -> dict[str, Any]:
+    """A tester's answer. Since M3c an exception carries what was observed and what the
+    attribute expects, as a compliant tester's must (an unexplained one goes to a person)."""
     return {
         "results": [
             {"index": index, "result": result, "note": f"Seen: {result.lower()}."}
+            | (
+                {
+                    "observed": "The evidence shows the attribute is not met.",
+                    "expected": "The attribute is met for this item.",
+                }
+                if result == "EXCEPTION"
+                else {}
+            )  # fmt: skip
             for index, result in enumerate(results)
         ]
     }

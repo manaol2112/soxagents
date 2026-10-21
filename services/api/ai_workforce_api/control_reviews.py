@@ -55,6 +55,7 @@ from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.test_sheets import ReopenBody as SheetReopenBody
 from ai_workforce_api.test_sheets import SheetBody, SheetState, _sheet, reopen_work
+from ai_workforce_api.testing_checks import instruction_guard
 from ai_workforce_api.testing_engine import (
     MAX_IMAGES,
     TEST_SCHEMA,
@@ -207,7 +208,7 @@ def open_reperformances(connection: psycopg.Connection[Any]) -> list[UUID]:
 # What a re-performance that gave up says; the register reads it as a stopped agent.
 REPERFORM_FAILED = "The re-performance did not finish. Re-perform to try again."
 # The reviewer's prompt version, recorded on every call (Milestone 3a).
-REVIEWER_PROMPT_VERSION = "independent-reviewer/1"
+REVIEWER_PROMPT_VERSION = "independent-reviewer/3"
 
 
 def fail_reperformance(connection: psycopg.Connection[Any], review_id: UUID) -> None:
@@ -413,6 +414,13 @@ _DISAGREEMENTS: dict[tuple[str, str], tuple[Severity, str]] = {
     ("PASS", "UNABLE"): ("SHOULD_FIX", "the reviewer found the evidence insufficient"),
     ("PASS", "REVIEW"): ("SHOULD_FIX", "the reviewer found it needs a person's judgment"),
     ("EXCEPTION", "PASS"): ("SHOULD_FIX", "the reviewer found the attribute met"),
+    # M3c: a reviewer who finds the attribute does not apply disagrees with a pass or an
+    # exception on it; before, the pair was silently dropped (the live validation's miss).
+    ("PASS", "NOT_APPLICABLE"): ("SHOULD_FIX", "the reviewer found the attribute does not apply"),
+    ("EXCEPTION", "NOT_APPLICABLE"): (
+        "SHOULD_FIX",
+        "the reviewer found the attribute does not apply",
+    ),
     ("NOT_APPLICABLE", "PASS"): ("OBSERVATION", "the reviewer found the attribute applies"),
     ("NOT_APPLICABLE", "EXCEPTION"): ("MUST_FIX", "the reviewer found an exception"),
     ("UNABLE", "EXCEPTION"): ("MUST_FIX", "the reviewer found an exception"),
@@ -621,8 +629,14 @@ def run_reperformance(
             call_id = call.call_id
             if call.readable and call.raw.output is not None:
                 try:
-                    reviewed = check_results(
-                        call.raw.output, len(sheet.attributes), tuple(f for f, _d in files)
+                    reviewed = instruction_guard(
+                        check_results(
+                            call.raw.output,
+                            len(sheet.attributes),
+                            tuple(f for f, _d in files),
+                            tuple((entry["column"], entry["value"]) for entry in item.detail),
+                        ),
+                        {str(f.file_id): f.text for f, _d in files if f.file_id is not None},
                     )
                 except ValueError as error:
                     failed_items += 1

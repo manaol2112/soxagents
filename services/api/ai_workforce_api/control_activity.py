@@ -106,6 +106,7 @@ _TITLES: dict[str, tuple[Category, str]] = {
     "workpaper.drafted": ("review", "Workpaper drafted"),
     "workpaper.edited": ("review", "Workpaper edited"),
     "workpaper.prepared": ("review", "Workpaper prepared"),
+    "workpaper.rationale_reviewed": ("review", "AI-proposed testing rationale reviewed"),
     "workpaper.reopened": ("review", "Workpaper reopened"),
     "review.reperform_requested": ("review", "Re-performance asked for"),
     "review.reperformed": ("review", "Testing re-performed by the reviewer agent"),
