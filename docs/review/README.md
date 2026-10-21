@@ -167,3 +167,15 @@ outcome was read back through the API. The feature-parity matrix is
 | `walkthroughs.md` | The six journeys' log, with what each click did and what the API recorded. |
 | `queue-reconciliation.md` | Home's queue, the console inbox and the register reconciled for three viewers (counts and identities). |
 | `redirects.md` | The ten moved addresses answering 307 with their record kept; the retained pages and destinations staying. |
+
+## m2-closure — Milestone 2 closure
+
+The 155-control scale engagement, API configured for the checks (no model, no worker, no
+sender; mock mail shows the portal's code as a local preview; the client's domain on the
+recipient allowlist).
+
+| File | What it shows |
+| --- | --- |
+| `queue-readiness.md` | Drafted-request readiness before and after the closure on the 155- and 403-control engagements, under two allowlists, with the queue's time. |
+| `portal-smoke.md`, `portal-1-link.png` … `portal-8-expired.png`, `portal-6-submitted-mobile.png` | The control owner's full path: link, code, requests, uploads to both items, the submission dialog, the confirmation; the wrong token and the revoked link refused. |
+| `keyboard.md`, `keys-1-stepper-focus.png` … `keys-7-closeout-dialog.png` | Keyboard-only checks: the stepper, the plan review's actions, the queue, the phone-width Details disclosures, the close-out dialog. |

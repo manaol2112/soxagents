@@ -869,6 +869,23 @@ def _planning(
         """,
         (pbc.id,),
     ).fetchall()
+    draft = connection.execute(
+        """
+        SELECT status, source, content
+        FROM pbc_drafts
+        WHERE pbc_request_id = %s
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (pbc.id,),
+    ).fetchone()
+    return _planning_from(pbc, rows, draft)
+
+
+def _planning_from(
+    pbc: PbcBody, rows: list[tuple[Any, ...]], draft: tuple[Any, ...] | None
+) -> tuple[PlanningBody, list[str], dict[str, RequestType]]:
+    """_planning from the request's requirement rows and its latest draft row."""
     requirements = [
         PlanningRequirement(
             title=str(r[0]),
@@ -881,16 +898,6 @@ def _planning(
         )
         for r in rows
     ]
-    draft = connection.execute(
-        """
-        SELECT status, source, content
-        FROM pbc_drafts
-        WHERE pbc_request_id = %s
-        ORDER BY created_at DESC, id DESC
-        LIMIT 1
-        """,
-        (pbc.id,),
-    ).fetchone()
     content = draft[2] if draft is not None and isinstance(draft[2], dict) else {}
     assumptions = [str(item) for item in content.get("assumptions", []) if isinstance(item, str)]
     drafted_items = [item for item in content.get("items", []) if isinstance(item, dict)]
@@ -1295,6 +1302,9 @@ def _sending(connection: psycopg.Connection[Any], request_id: UUID) -> bool:
 # Checks before approval and sending
 
 
+_UNREAD = object()
+
+
 def request_checks(
     connection: psycopg.Connection[Any],
     settings: Settings,
@@ -1303,8 +1313,14 @@ def request_checks(
     content: ContentBody,
     domains: list[str],
     attachments: list[AttachmentBody],
+    quality: list[Any] | None = None,
+    held: Any = _UNREAD,
+    drafting: Any = _UNREAD,
+    in_scope: Any = _UNREAD,
 ) -> list[CheckBody]:
-    """What must be true before the request is approved and sent, each in plain words."""
+    """What must be true before the request is approved and sent, each in plain words.
+    `quality` and `held` take the quality checks and the planning hold when the caller
+    read them already (draft_blockers); otherwise they are read here."""
     from ai_workforce_api.evidence_plans import held_for_planning
 
     checks: list[CheckBody] = []
@@ -1331,15 +1347,16 @@ def request_checks(
     )
     from ai_workforce_api.evidence_planning import PHASE_LABELS
 
-    drafting = connection.execute(
-        """
-        SELECT c.control_ref FROM pbc_drafts d
-        JOIN engagement_controls c ON c.id = d.engagement_control_id
-        WHERE d.pbc_request_id = %s AND d.status IN ('PENDING', 'DRAFTING')
-        LIMIT 1
-        """,
-        (pbc.id,),
-    ).fetchone()
+    if drafting is _UNREAD:
+        drafting = connection.execute(
+            """
+            SELECT c.control_ref FROM pbc_drafts d
+            JOIN engagement_controls c ON c.id = d.engagement_control_id
+            WHERE d.pbc_request_id = %s AND d.status IN ('PENDING', 'DRAFTING')
+            LIMIT 1
+            """,
+            (pbc.id,),
+        ).fetchone()
     text = pbc.evidence_description.strip()
     # Still the placeholder the plan wrote (evidence_plans._create_request). Wording a
     # person wrote meanwhile stands: once submitted, the drafter no longer replaces it.
@@ -1400,13 +1417,14 @@ def request_checks(
             else "The due date has passed. Set a new due date.",
         )
     )
-    in_scope = True
-    if pbc.engagement_control_id is not None:
-        row = connection.execute(
-            "SELECT included FROM engagement_controls WHERE id = %s AND project_id = %s",
-            (pbc.engagement_control_id, pbc.project_id),
-        ).fetchone()
-        in_scope = row is not None and bool(row[0])
+    if in_scope is _UNREAD:
+        in_scope = True
+        if pbc.engagement_control_id is not None:
+            row = connection.execute(
+                "SELECT included FROM engagement_controls WHERE id = %s AND project_id = %s",
+                (pbc.engagement_control_id, pbc.project_id),
+            ).fetchone()
+            in_scope = row is not None and bool(row[0])
     checks.append(
         CheckBody(
             key="control",
@@ -1435,13 +1453,18 @@ def request_checks(
     if pbc.status in _UNSENT:
         checks.extend(
             CheckBody(key=item.key, label=item.label, ok=item.ok, detail=item.detail)
-            for item in quality_checks(
-                connection, pbc.id, pbc.project_id, pbc.engagement_control_id,
-                pbc.testing_phase, pbc.evidence_description, pbc.status,
+            for item in (
+                quality
+                if quality is not None
+                else quality_checks(
+                    connection, pbc.id, pbc.project_id, pbc.engagement_control_id,
+                    pbc.testing_phase, pbc.evidence_description, pbc.status,
+                )
             )
         )  # fmt: skip
     if pbc.status in _UNSENT:
-        held = held_for_planning(connection, pbc.id)
+        if held is _UNREAD:
+            held = held_for_planning(connection, pbc.id)
         if held is not None:
             checks.append(
                 CheckBody(
@@ -1478,10 +1501,221 @@ def blocker(
         client_domains(connection, project_id),
         _attachments(connection, request_id),
     )
-    for check in checks:
-        if not check.ok and (keys is None or check.key in keys):
-            return check.detail
-    return None
+    return first_problem(checks, keys)
+
+
+# The order the approval endpoint refuses in (outbound._approve_draft): the planning hold,
+# then the recipient, then the other checks as request_checks lists them.
+_PROBLEM_ORDER = ("planning", "recipient")
+
+
+def first_problem(checks: list[CheckBody], keys: frozenset[str] | None = None) -> str | None:
+    """The first failing check, among the keys given (all when None), in the order the
+    approval is refused; None when every check passes."""
+    failing = [c for c in checks if not c.ok and (keys is None or c.key in keys)]
+    for key in _PROBLEM_ORDER:
+        for check in failing:
+            if check.key == key:
+                return check.detail
+    return failing[0].detail if failing else None
+
+
+def draft_blockers(
+    connection: psycopg.Connection[Any],
+    settings: Settings,
+    organization_id: UUID,
+    project_id: UUID,
+) -> dict[UUID, str | None]:
+    """blocker() for every drafted request of the engagement at once: the first check
+    that fails, or None, by request. The checks are request_checks over the same inputs,
+    built from the same functions as the single-request path, with the shared reads done
+    once and the per-request reads batched (the queue reads this, Milestone 2 closure;
+    the approval endpoint still applies blocker() itself when the action is taken)."""
+    from ai_workforce_api.evidence_plans import (
+        gate_facts,
+        gate_reason_from,
+        reconcile_info,
+        unplanned_controls,
+    )
+    from ai_workforce_api.phase_release import release_reason_from, released_phases
+    from ai_workforce_api.request_quality import quality_checks_many
+
+    pbcs = [
+        _pbc_body(row)
+        for row in connection.execute(
+            f"""
+            SELECT {_PBC_COLUMNS} FROM pbc_requests
+            WHERE organization_id = %s AND project_id = %s AND status = 'DRAFT'
+            ORDER BY created_at
+            """,
+            (organization_id, project_id),
+        ).fetchall()
+    ]
+    if not pbcs:
+        return {}
+    ids = [pbc.id for pbc in pbcs]
+    labels = {item.request_type: item.label for item in request_types(connection)}
+    domains = client_domains(connection, project_id)
+    controls: dict[UUID, ControlBody] = {}
+    areas: dict[UUID, str] = {}
+    included: dict[UUID, bool] = {}
+    for row in connection.execute(
+        "SELECT id, control_ref, title, owner_name, owner_email, domain, included "
+        "FROM engagement_controls WHERE project_id = %s",
+        (project_id,),
+    ).fetchall():
+        included[row[0]] = bool(row[6])
+        controls[row[0]] = ControlBody(
+            id=row[0],
+            control_ref=str(row[1]),
+            title=str(row[2]),
+            owner_name=str(row[3]),
+            owner_email=str(row[4]).strip().lower(),
+        )
+        areas[row[0]] = str(row[5])
+    requirements: dict[UUID, list[tuple[Any, ...]]] = {}
+    for row in connection.execute(
+        """
+        SELECT pbc_request_id, title, categories, objective, rationale, necessity, status,
+               sufficiency
+        FROM evidence_requirements
+        WHERE pbc_request_id = ANY(%s)
+        ORDER BY pbc_request_id, created_at, id
+        """,
+        (ids,),
+    ).fetchall():
+        requirements.setdefault(UUID(str(row[0])), []).append(tuple(row[1:]))
+    drafts: dict[UUID, tuple[Any, ...]] = {}
+    for row in connection.execute(
+        """
+        SELECT DISTINCT ON (pbc_request_id) pbc_request_id, status, source, content
+        FROM pbc_drafts
+        WHERE pbc_request_id = ANY(%s)
+        ORDER BY pbc_request_id, created_at DESC, id DESC
+        """,
+        (ids,),
+    ).fetchall():
+        drafts[UUID(str(row[0]))] = tuple(row[1:])
+    pending_drafts: dict[UUID, tuple[Any, ...]] = {}
+    for row in connection.execute(
+        """
+        SELECT DISTINCT ON (d.pbc_request_id) d.pbc_request_id, c.control_ref
+        FROM pbc_drafts d JOIN engagement_controls c ON c.id = d.engagement_control_id
+        WHERE d.pbc_request_id = ANY(%s) AND d.status IN ('PENDING', 'DRAFTING')
+        ORDER BY d.pbc_request_id
+        """,
+        (ids,),
+    ).fetchall():
+        pending_drafts[UUID(str(row[0]))] = (row[1],)
+    attachments: dict[UUID, list[AttachmentBody]] = {}
+    for row in connection.execute(
+        f"""
+        SELECT {_ATTACHMENT_COLUMNS}, a.pbc_request_id
+        FROM request_attachments a
+        JOIN users u ON u.id = a.added_by
+        LEFT JOIN users s ON s.id = a.shared_by
+        WHERE a.pbc_request_id = ANY(%s) AND a.removed_at IS NULL
+        ORDER BY a.created_at, a.id
+        """,
+        (ids,),
+    ).fetchall():
+        attachments.setdefault(UUID(str(row[-1])), []).append(_attachment(tuple(row[:-1])))
+    quality = quality_checks_many(
+        connection,
+        project_id,
+        [
+            (
+                pbc.id,
+                pbc.engagement_control_id,
+                pbc.testing_phase,
+                pbc.evidence_description,
+                pbc.status,
+            )
+            for pbc in pbcs
+        ],  # fmt: skip
+    )
+    # The planning hold (evidence_plans.held_for_planning), its per-control pieces read
+    # once: whether the engagement kicked off, which controls have a plan, the kickoff
+    # draft each planned control still holds, and the gate and release for a phase.
+    kicked = connection.execute(
+        "SELECT kicked_off_at IS NOT NULL FROM engagement_settings WHERE project_id = %s",
+        (project_id,),
+    ).fetchone()
+    kicked_off = bool(kicked and kicked[0])
+    planned = {
+        UUID(str(row[0]))
+        for row in connection.execute(
+            "SELECT engagement_control_id FROM evidence_plans WHERE project_id = %s",
+            (project_id,),
+        ).fetchall()
+    }
+    unplanned = set(unplanned_controls(connection, project_id))
+    reconciles: dict[UUID, UUID | None] = {}
+    plan_status, settled = gate_facts(connection, project_id)
+    released = released_phases(connection, project_id)
+
+    def held_of(pbc: PbcBody) -> str | None:
+        control = pbc.engagement_control_id
+        if control is None:
+            return None
+        kickoff = pbc.operation_key.startswith(("kickoff-", "scope-"))
+        if kickoff and kicked_off:
+            if control not in planned or control in unplanned:
+                return "plan the evidence first"
+            if control not in reconciles:
+                info = reconcile_info(connection, project_id, control)
+                reconciles[control] = None if info is None else info.request_id
+            if reconciles[control] == pbc.id:
+                return "settle the kickoff draft against the plan first"
+        gated = pbc.drafted_by == "AGENT" and (
+            pbc.testing_phase in ("DESIGN", "INTERIM", "ROLLFORWARD") or kickoff
+        )
+        if not gated:
+            return None
+        gate = gate_reason_from(plan_status.get(control), control in settled, pbc.testing_phase)
+        if gate is not None:
+            return gate
+        if kickoff:
+            return None
+        return release_reason_from(
+            (control, pbc.testing_phase or "") in released, pbc.testing_phase
+        )
+
+    found: dict[UUID, str | None] = {}
+    for pbc in pbcs:
+        control = controls.get(pbc.engagement_control_id) if pbc.engagement_control_id else None
+        planning, kinds, _ = _planning_from(pbc, requirements.get(pbc.id, []), drafts.get(pbc.id))
+        kind = classify(
+            pbc,
+            signals_of(
+                pbc,
+                access=control is not None and areas.get(control.id, "") == "ACCESS",
+                agent=planning.drafted_by == "MODEL",
+                categories=[item.categories for item in planning.requirements],
+                kinds=kinds,
+                titles=[item.title for item in planning.requirements],
+            ),
+            labels,
+        )
+        checks = request_checks(
+            connection,
+            settings,
+            pbc,
+            kind,
+            parse_wording(pbc.evidence_description),
+            domains,
+            attachments.get(pbc.id, []),
+            quality=quality.get(pbc.id),
+            held=held_of(pbc),
+            drafting=pending_drafts.get(pbc.id),
+            in_scope=(
+                included.get(pbc.engagement_control_id, False)
+                if pbc.engagement_control_id is not None
+                else True
+            ),
+        )
+        found[pbc.id] = first_problem(checks)
+    return found
 
 
 # Changing

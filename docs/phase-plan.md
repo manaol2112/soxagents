@@ -6,6 +6,8 @@ Source specification: AI Employee Workforce Cursor Build Plan.
 
 ## Current milestone
 
+**Milestone 2 accepted (21 October 2026; commits 2d5a086, 3309686, 6480232, e818eae and the closure commit).** The [completion report](milestone-2-completion.md) records the acceptance and the remaining noncritical limitations. **Current: planning Milestone 3** (real agentic audit capabilities; [milestone-3-plan.md](milestone-3-plan.md)), presented for the owner's approval before M3a starts. No Milestone 3 code has been written.
+
 **Milestone 2d: the guided workspace as the one control interface.** M2c accepted and committed (6480232); M2d authorized ([milestone-2-plan.md §15](milestone-2-plan.md), [milestone-2-parity.md](milestone-2-parity.md)). Complete, pending the owner's review of the Milestone 2 completion report ([milestone-2-completion.md](milestone-2-completion.md)); no migration. The classic control tabs are retired behind the guided steps, the plan review is inside the Plan step, the console inbox and past-due items read the queue alone, internal links name the six destinations. Milestone 3 is not started.
 
 **Milestone 2c: the six destinations.** M2b accepted conditionally and committed (3309686); M2c authorized ([milestone-2-plan.md §14](milestone-2-plan.md)). Complete, pending review; no migration; no API change beyond the queue's semantic deduplication rules. One menu of six destinations (Home, Controls, Testing, Evidence, Reports, Settings); the older sections redirect with their record kept (`apps/web/proxy.ts`, `routes.ts`); the agent console, approvals and engagements pages stay reachable by address. M2d is not started.

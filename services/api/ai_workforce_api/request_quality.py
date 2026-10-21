@@ -76,6 +76,21 @@ def _day(value: date) -> str:
     return f"{value.day} {value:%B %Y}"
 
 
+_ITEM_COLUMNS = """
+    q.id, q.code, q.title, q.categories, q.period_start, q.period_end,
+    q.pending_change IS NOT NULL,
+    EXISTS (SELECT 1 FROM evidence_requirement_attributes l
+            JOIN control_attributes a ON a.id = l.attribute_id
+            WHERE l.requirement_id = q.id AND a.status = 'APPROVED')
+"""
+_WINDOW_SQL = """
+    SELECT ph.applicability, ph.period_start, ph.period_end
+    FROM evidence_plan_phases ph JOIN evidence_plans p ON p.id = ph.plan_id
+    WHERE p.engagement_control_id = %s AND ph.phase = %s
+"""
+_NORMALIZED = "lower(regexp_replace(btrim(%s), '\\s+', ' ', 'g'))"
+
+
 def quality_checks(
     connection: psycopg.Connection[Any],
     request_id: UUID,
@@ -87,6 +102,123 @@ def quality_checks(
 ) -> list[Check]:
     """The checks above, for one request. A request a person wrote with no control gets the
     wording check only."""
+    if control_id is None:
+        return quality_from(request_id, control_id, phase, wording, status, [], None, False)
+    items = connection.execute(
+        f"""
+        SELECT {_ITEM_COLUMNS}
+        FROM evidence_requirements q
+        WHERE q.pbc_request_id = %s AND q.status = 'REQUESTED'
+        ORDER BY q.code
+        """,
+        (request_id,),
+    ).fetchall()
+    window = None
+    if phase in ("DESIGN", "INTERIM", "ROLLFORWARD"):
+        window = connection.execute(_WINDOW_SQL, (control_id, phase)).fetchone()
+    duplicate = connection.execute(
+        f"""
+        SELECT r.id FROM pbc_requests r
+        WHERE r.project_id = %s AND r.engagement_control_id = %s AND r.id <> %s
+          AND r.testing_phase IS NOT DISTINCT FROM %s::text AND r.status <> ALL(%s::text[])
+          AND lower(regexp_replace(btrim(r.evidence_description), '\\s+', ' ', 'g'))
+              = {_NORMALIZED}
+        LIMIT 1
+        """,
+        (project_id, control_id, request_id, phase, list(_OPEN), wording),
+    ).fetchone()
+    return quality_from(
+        request_id, control_id, phase, wording, status, items, window, duplicate is not None
+    )
+
+
+def quality_checks_many(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    requests: list[tuple[UUID, UUID | None, str | None, str, str]],
+) -> dict[UUID, list[Check]]:
+    """quality_checks for many requests of one engagement, with each of its three reads
+    done once: the items, the phase windows, the duplicates. Same checks, same words."""
+    ids = [item[0] for item in requests]
+    items_by: dict[UUID, list[tuple[Any, ...]]] = {}
+    if ids:
+        for row in connection.execute(
+            f"""
+            SELECT q.pbc_request_id, {_ITEM_COLUMNS}
+            FROM evidence_requirements q
+            WHERE q.pbc_request_id = ANY(%s) AND q.status = 'REQUESTED'
+            ORDER BY q.pbc_request_id, q.code
+            """,
+            (ids,),
+        ).fetchall():
+            items_by.setdefault(UUID(str(row[0])), []).append(tuple(row[1:]))
+    wanted = {
+        (control_id, phase)
+        for _id, control_id, phase, _w, _s in requests
+        if control_id is not None and phase in ("DESIGN", "INTERIM", "ROLLFORWARD")
+    }
+    windows: dict[tuple[UUID, str | None], tuple[Any, ...]] = {}
+    if wanted:
+        for row in connection.execute(
+            """
+            SELECT p.engagement_control_id, ph.phase, ph.applicability, ph.period_start,
+                   ph.period_end
+            FROM evidence_plan_phases ph JOIN evidence_plans p ON p.id = ph.plan_id
+            WHERE p.engagement_control_id = ANY(%s)
+            """,
+            ([control for control, _phase in wanted],),
+        ).fetchall():
+            windows[(UUID(str(row[0])), str(row[1]))] = (row[2], row[3], row[4])
+    # A duplicate: another open request of the same control and phase with the same
+    # normalized wording, found once for the whole engagement.
+    duplicates: set[UUID] = set()
+    if ids:
+        for row in connection.execute(
+            """
+            WITH worded AS (
+                SELECT id, engagement_control_id, testing_phase, status,
+                       lower(regexp_replace(btrim(evidence_description), '\\s+', ' ', 'g')) AS w
+                FROM pbc_requests
+                WHERE project_id = %s AND engagement_control_id IS NOT NULL
+            )
+            SELECT a.id FROM worded a
+            JOIN worded b
+              ON b.engagement_control_id = a.engagement_control_id AND b.id <> a.id
+             AND b.testing_phase IS NOT DISTINCT FROM a.testing_phase
+             AND b.status <> ALL(%s::text[]) AND b.w = a.w
+            WHERE a.id = ANY(%s)
+            """,
+            (project_id, list(_OPEN), ids),
+        ).fetchall():
+            duplicates.add(UUID(str(row[0])))
+    found: dict[UUID, list[Check]] = {}
+    for request_id, control_id, phase, wording, status in requests:
+        found[request_id] = quality_from(
+            request_id,
+            control_id,
+            phase,
+            wording,
+            status,
+            items_by.get(request_id, []),
+            windows.get((control_id, phase)) if control_id is not None else None,
+            request_id in duplicates,
+        )
+    return found
+
+
+def quality_from(
+    request_id: UUID,
+    control_id: UUID | None,
+    phase: str | None,
+    wording: str,
+    status: str,
+    items: list[tuple[Any, ...]],
+    window: tuple[Any, ...] | None,
+    duplicate: bool,
+) -> list[Check]:
+    """The checks from what was read: the request's planned items (code, title,
+    categories, period, pending change, mapped to an approved attribute), the phase's
+    window (applicability, start, end) and whether another open request duplicates it."""
     checks: list[Check] = []
     problems = wording_problems(wording)
     checks.append(
@@ -99,19 +231,7 @@ def quality_checks(
     )
     if control_id is None:
         return checks
-    items = connection.execute(
-        """
-        SELECT q.id, q.code, q.title, q.categories, q.period_start, q.period_end,
-               q.pending_change IS NOT NULL,
-               EXISTS (SELECT 1 FROM evidence_requirement_attributes l
-                       JOIN control_attributes a ON a.id = l.attribute_id
-                       WHERE l.requirement_id = q.id AND a.status = 'APPROVED')
-        FROM evidence_requirements q
-        WHERE q.pbc_request_id = %s AND q.status = 'REQUESTED'
-        ORDER BY q.code
-        """,
-        (request_id,),
-    ).fetchall()
+    _ = request_id
     # Every item that evidences an attribute names one the plan approved.
     unmapped = [
         f"{row[1]} ({row[2]})" for row in items if set(row[3]) & EVIDENCES_ATTRIBUTES and not row[7]
@@ -133,16 +253,6 @@ def quality_checks(
         )
     )
     # Its phase still applies, and each item's period lies within the phase's window.
-    window = None
-    if phase in ("DESIGN", "INTERIM", "ROLLFORWARD"):
-        window = connection.execute(
-            """
-            SELECT ph.applicability, ph.period_start, ph.period_end
-            FROM evidence_plan_phases ph JOIN evidence_plans p ON p.id = ph.plan_id
-            WHERE p.engagement_control_id = %s AND ph.phase = %s
-            """,
-            (control_id, phase),
-        ).fetchone()
     if window is not None and status in ("DRAFT", "APPROVAL_PENDING"):
         applies = str(window[0]) in ("APPLICABLE", "CONDITIONAL")
         checks.append(
@@ -189,24 +299,13 @@ def quality_checks(
         )
     )
     # Another open request of the same control and phase asking for the same thing.
-    duplicate = connection.execute(
-        """
-        SELECT r.id FROM pbc_requests r
-        WHERE r.project_id = %s AND r.engagement_control_id = %s AND r.id <> %s
-          AND r.testing_phase IS NOT DISTINCT FROM %s::text AND r.status <> ALL(%s::text[])
-          AND lower(regexp_replace(btrim(r.evidence_description), '\\s+', ' ', 'g'))
-              = lower(regexp_replace(btrim(%s), '\\s+', ' ', 'g'))
-        LIMIT 1
-        """,
-        (project_id, control_id, request_id, phase, list(_OPEN), wording),
-    ).fetchone()
     checks.append(
         Check(
             key="duplicate",
             label="Not a duplicate",
-            ok=duplicate is None,
+            ok=not duplicate,
             detail="Another open request of this control and phase asks for the same items."
-            if duplicate is not None
+            if duplicate
             else "No other open request asks for the same items.",
         )
     )

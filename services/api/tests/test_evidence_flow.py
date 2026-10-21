@@ -130,7 +130,9 @@ def test_a_control_launched_before_planning_says_to_plan_first(
     assert not any(item["kind"] == "drafts" for item in waiting)
     planning = [item for item in waiting if item["kind"] == "planning"]
     # One item per drafted request (the engagement's one queue), held for planning.
-    assert len(planning) == 1 and "Plan the evidence" in planning[0]["detail"]
+    # The hold is said in the approval endpoint's own words (Milestone 2 closure: the
+    # queue reads request_details.draft_blockers), filed under planning.
+    assert len(planning) == 1 and "Plan the control's evidence first" in planning[0]["detail"]
     # Submitting around the plan is refused by the API, not only hidden on the page.
     refused = owner.post(f"{_project(team)}/pbc-requests/{legacy}/submit", json={"version": 1})
     assert refused.status_code == 409

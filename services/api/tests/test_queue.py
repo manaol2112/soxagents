@@ -18,7 +18,7 @@ from test_evidence_review import (
     _store_screenshot,
 )
 from test_evidence_review import _reviews as _evidence_reviews
-from test_execution import _add_user, _seed_org
+from test_execution import _add_project_member, _add_user, _seed_org
 from test_outbound import _session, migrated
 from test_phase_release import _prepare_design
 from test_round_reviews import _sign_review
@@ -441,3 +441,154 @@ def test_two_records_for_one_obligation_make_one_item(migrated: Database) -> Non
         and pair[1] not in ("REQUEST_DRAFT_APPROVAL", "SEND_APPROVAL", "REMINDER_APPROVAL")
     }
     assert repeated == set(), repeated
+
+
+def _client_with(database: Database, user_id: UUID, **overrides: Any) -> Any:
+    """A signed-in client whose app runs with the given settings (the allowlist, say)."""
+    from uuid import uuid4
+
+    from fastapi.testclient import TestClient
+
+    from ai_workforce_api.auth import token_hash
+    from ai_workforce_api.main import create_app
+
+    settings = Settings(database_url=database.url, session_cookie_secure=False, **overrides)
+    token = uuid4().hex
+    with connect(database.url) as connection:
+        connection.execute(
+            "INSERT INTO auth_sessions (user_id, token_hash, expires_at) "
+            "VALUES (%s, %s, clock_timestamp() + interval '1 hour')",
+            (user_id, token_hash(token)),
+        )
+    return TestClient(
+        create_app(settings, draft_scheduler=_Scheduler()), cookies={"aw_session": token}
+    )
+
+
+def test_a_drafted_request_is_ready_only_when_its_approval_would_pass(migrated: Database) -> None:
+    """Milestone 2 closure: the queue reads a draft's readiness with the approval
+    endpoint's own rule (request_details.blocker), so it never says "yours to approve"
+    when approving would be refused; the endpoint applies the rule again, with its own
+    settings and the record's version, when the action is taken."""
+    team, _client_, _scheduler = _engagement(migrated, "queue-ready")
+    base = _base(team)
+    with connect(migrated.url) as connection:
+        drafts = connection.execute(
+            """
+            SELECT id, recipient, version FROM pbc_requests
+            WHERE project_id = %s AND status = 'DRAFT' AND drafted_by = 'AGENT'
+              AND recipient <> '' ORDER BY created_at
+            """,
+            (team["project"],),
+        ).fetchall()
+    assert len(drafts) >= 2, drafts
+    first, second = drafts[0], drafts[1]
+    domain = str(first[1]).rsplit("@", 1)[1]
+    key = f"request-draft:{first[0]}"
+
+    def item(client: Any, request_id: Any = first[0]) -> dict[str, Any]:
+        [found] = [
+            i for i in _queue(client, team)["items"] if i["id"] == f"request-draft:{request_id}"
+        ]
+        return dict(found)
+
+    # Allowed domain: ready, the approver's, theirs.
+    allowed = _client_with(migrated, team["owner_id"], email_allowed_recipient_domains=domain)
+    ready = item(allowed)
+    assert ready["ready"] is True and ready["bucket"] == "MINE"
+    assert ready["owner"]["role"] == "APPROVER" and ready["blockers"] == []
+    # Blocked domain: held with the endpoint's own words, the preparer's to resolve.
+    blocked = _client_with(
+        migrated, team["owner_id"], email_allowed_recipient_domains="other.example"
+    )
+    held = item(blocked)
+    assert held["ready"] is False and held["bucket"] == "BLOCKED"
+    assert held["owner"]["role"] == "PREPARER"
+    assert held["blockers"] == [f"{first[1]} cannot receive evidence requests."]
+    # Missing recipient: held by the same rule, and the inbox files it under contacts.
+    with connect(migrated.url) as connection:
+        connection.execute("UPDATE pbc_requests SET recipient = '' WHERE id = %s", (second[0],))
+        connection.commit()
+    unaddressed = item(allowed, second[0])
+    assert unaddressed["ready"] is False and unaddressed["blockers"] == ["Assign a recipient."]
+    inbox = allowed.get(f"{base}/console/inbox").json()["waiting"]
+    assert any(i["kind"] == "contacts" and "Assign a recipient" in i["detail"] for i in inbox)
+    # Authorization: a team member who may prepare but not approve sees the ready item
+    # as waiting on an approver, and the endpoint refuses them regardless.
+    with connect(migrated.url) as connection:
+        member_id = _add_user(
+            connection, team["org"], f"prep-{str(first[0])[:6]}@example.com", "CONTRIBUTOR"
+        )
+        _add_project_member(connection, team["org"], team["project"], member_id)
+    member = _client_with(migrated, member_id, email_allowed_recipient_domains=domain)
+    theirs = item(member)
+    assert (
+        theirs["ready"] is True and theirs["authorized"] is False and theirs["bucket"] == "WAITING"
+    )
+    refused = member.post(
+        f"{base}/pbc-requests/{first[0]}/approve", json={"version": first[2], "reason": "Checked."}
+    )
+    assert refused.status_code == 403, refused.text
+    # Changed configuration: the queue said ready under one allowlist; the endpoint running
+    # with another refuses, whatever the queue showed. A stale version is refused too.
+    denied = blocked.post(
+        f"{base}/pbc-requests/{first[0]}/approve", json={"version": first[2], "reason": "Checked."}
+    )
+    assert denied.status_code == 409 and "not allowed" in denied.text, denied.text
+    stale = allowed.post(
+        f"{base}/pbc-requests/{first[0]}/approve",
+        json={"version": first[2] + 7, "reason": "Checked."},
+    )
+    assert stale.status_code == 409, stale.text
+    approved = allowed.post(
+        f"{base}/pbc-requests/{first[0]}/approve", json={"version": first[2], "reason": "Checked."}
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["request"]["status"] == "APPROVAL_PENDING"
+    # Approved: the draft item leaves the queue (the agent's request was approved by its
+    # reviewer, so sending is the next step).
+    after = _queue(allowed, team)["items"]
+    assert not any(i["id"] == key for i in after)
+
+
+def test_the_batched_approval_rule_matches_the_endpoint_rule_for_every_draft(
+    migrated: Database,
+) -> None:
+    """draft_blockers (the queue's read) and blocker (the approval endpoint's read) agree
+    on every drafted request: the same first failing check, in the same words, or none."""
+    from ai_workforce_api.request_details import blocker, draft_blockers
+
+    team, _client_, _scheduler = _engagement(migrated, "queue-rule")
+    with connect(migrated.url) as connection:
+        ids = [
+            UUID(str(row[0]))
+            for row in connection.execute(
+                "SELECT id FROM pbc_requests WHERE project_id = %s AND status = 'DRAFT'",
+                (team["project"],),
+            ).fetchall()
+        ]
+        # One draft without a recipient, one copied to a stranger's domain: both hold.
+        connection.execute("UPDATE pbc_requests SET recipient = '' WHERE id = %s", (ids[0],))
+        connection.execute(
+            "UPDATE pbc_requests SET cc_recipients = ARRAY['x@elsewhere.example'] WHERE id = %s",
+            (ids[1],),
+        )
+        connection.commit()
+        results = []
+        for settings in (
+            Settings(database_url=migrated.url),
+            Settings(database_url=migrated.url, email_allowed_recipient_domains="nowhere.example"),
+        ):
+            batched = draft_blockers(connection, settings, team["org"], team["project"])
+            assert set(batched) == set(ids)
+            single = {
+                request_id: blocker(connection, settings, team["org"], team["project"], request_id)
+                for request_id in ids
+            }
+            assert batched == single
+            results.append(batched)
+        open_list, closed_list = results
+        assert open_list[ids[0]] == "Assign a recipient."
+        assert "elsewhere.example" in str(open_list[ids[1]])
+        # Under an allowlist naming another domain, every recipient is the first problem.
+        assert all("cannot receive" in str(v) for k, v in closed_list.items() if k != ids[0])

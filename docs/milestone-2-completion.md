@@ -1,6 +1,6 @@
 # Milestone 2 completion report: one application
 
-Presented for the product owner's review on 21 October 2026. Milestone 2 ran in four
+**Accepted by the product owner on 21 October 2026** (the M2d report conditionally, the closure report on the same day). Presented for the product owner's review on 21 October 2026. Milestone 2 ran in four
 stages, each reviewed before the next: M2a the engagement's one queue (commit 2d5a086),
 M2b queue completeness, the four buckets and the Testing destination (3309686), M2c the
 six destinations and the redirects (6480232), M2d the guided workspace as the one control
@@ -103,6 +103,66 @@ first (§14).
   upload itself reached the team); keyboard paths were not automated.
 - Live model responses, a running worker and outbound email remain unvalidated in this
   environment; the walkthroughs say where a record was simulated.
+
+## Closure (after the M2d review)
+
+M2d is committed as e818eae. The closure activities asked for are complete; their detail
+is [milestone-2-plan.md §16](milestone-2-plan.md) and the evidence is under
+`docs/review/m2-closure/`.
+
+- **Evidence-request approval readiness.** The queue no longer says a drafted request is
+  the approver's to act on when the approval endpoint would refuse it. It reads
+  `request_details.draft_blockers`, the endpoint's own rule (planning hold, recipient and
+  allowlist, request type, phase release, period, plan mapping, duplicates, wording)
+  batched for the engagement, with the deciding functions shared with the single-request
+  path and a test that the two agree for every draft under two allowlists. A held draft
+  is BLOCKED with the endpoint's words and belongs to the preparer who resolves it; the
+  endpoint applies the rule again, with its own settings and the record's version, when
+  the action is taken; the requester-approver separation is the endpoint's and unchanged.
+  Before and after (`queue-readiness.md`): at 155 controls, 287 drafts all MINE before;
+  after, 283 MINE and 4 BLOCKED with their reasons; under an allowlist naming another
+  domain, 287 BLOCKED. Queue time 205 ms → 581 ms at 155 controls, 297 ms → 808 ms at
+  403 (17 statements for the whole rule). Tests: allowed and blocked domains, a missing
+  recipient, a member who may prepare but not approve (403), the allowlist changed between
+  the queue's reading and the action (409), a stale version (409), the approval (200).
+- **Client portal final submission** (`portal-smoke.md`): the owner opened the authorized
+  link, confirmed identity with the previewed one-time code, uploaded a file to each
+  required item, submitted through the confirmation dialog and saw "Submitted" with the
+  date; the team's record shows the submission time, the `evidence.portal_submitted`
+  audit event and both files on the right request of the right engagement; a wrong
+  token and a revoked link are refused. Outbound email was not exercised (no sender).
+- **Keyboard accessibility** (`keyboard.md`): the stepper, the plan review's actions, the
+  queue, the phone-width Details disclosures and the close-out dialog work by keyboard
+  with visible focus; no material blocker. Noncritical debt: Space on a Details
+  disclosure under the driver, focus after Escape returning to the document, "Log a
+  deficiency" reloading the page, and one unplaced stop in the portal dialog's Tab trail
+  to confirm by hand.
+- **Preserved**: the console reporting interface, the Settings wizard pages and the
+  embedded plan review are unchanged; their limitations and the extra reads stand.
+- **Tests**: `make test-critical` 365 passed, 0 failed (5 min 1 s); `make test-fast` 87 Python and 112 Node
+  passed; type checks clean; lint clean except the known `biome.json` endings. One
+  expectation rewritten (`test_evidence_flow`: the inbox states the planning hold in the
+  approval endpoint's words).
+- **Unresolved critical issues**: none.
+
+## Remaining noncritical limitations at acceptance
+
+- The queue's drafted-request readiness rule costs about 0.35 s per queue read at 155
+  controls (0.5 s at 403); the per-draft wording parse and classification are the
+  remaining cost, to optimise if engagements grow.
+- Opening a control reads the master plan and the phase progress for the embedded plan
+  review, two reads more than before.
+- The console page remains a destination with its own chat and activity list (its inbox
+  is the queue); Milestone 3's companion panel is deferred behind the agent work.
+- Settings › Engagement is the setup wizard's step pages, which still read as a wizard
+  after launch.
+- The API's `next_steps` remains beside the queue for Home's journey bar (figures only).
+- Keyboard: Space on a Details disclosure was not confirmed under the driver (Enter
+  works); focus after Escape on the close-out dialog returns to the document; "Log a
+  deficiency" reloads the page with the form open; one stop in the portal dialog's Tab
+  trail is to be confirmed by hand.
+- Outbound email, a running worker and live model responses remain unvalidated; the
+  walkthroughs state where a record was simulated.
 
 ## Recommended next
 

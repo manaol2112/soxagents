@@ -179,3 +179,13 @@ and `workflow-model` (queue sources).
   queue instead of the console's own count); `test_next_steps` (the plans link names
   Testing); Node `directory`, `library-model`, `planning-model` (addresses name the
   destinations: `settings&view=tasks`, `settings&view=library`, `testing`). Nothing retired.
+- Milestone 2 closure (`request_details.draft_blockers`, `request_quality` batched reads,
+  `evidence_plans.gate_facts`, `phase_release.released_phases`, the queue's draft readiness;
+  `test_queue.py` grown to nine tests): `make test-critical` **365 passed, 0 failed in
+  5 min 1 s**; `make test-fast` **87 Python passed in 2 min 38 s and 112 Node passed**;
+  type checks clean; lint clean except the known `biome.json` line endings. One
+  expectation rewritten (`test_evidence_flow`: the inbox states a held draft's reason in
+  the approval endpoint's own words, "Plan the control's evidence first", filed under
+  planning as before). Browser checks recorded in `docs/review/m2-closure/`: the client
+  portal's full submission path, keyboard-only paths, and the drafted-request readiness
+  before and after on the 155- and 403-control engagements.

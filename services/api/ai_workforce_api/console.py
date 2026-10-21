@@ -883,7 +883,10 @@ def register_console(
         from ai_workforce_api.workspace import automation_of
 
         automated = automation_of(settings).available
-        return run(request, lambda c, p: _inbox(c, p, organization_id, project_id, automated))
+        return run(
+            request,
+            lambda c, p: _inbox(c, p, organization_id, project_id, automated, settings),
+        )
 
 
 def _person(
@@ -1325,6 +1328,7 @@ def _inbox(
     organization_id: UUID,
     project_id: UUID,
     automated: bool = True,
+    settings: Settings | None = None,
 ) -> InboxBody:
     """What waits on the person, read from the engagement's one queue (queue.py,
     Milestone 2a) in the inbox's own item shape; the activity is the agents' recent work."""
@@ -1332,7 +1336,9 @@ def _inbox(
 
     _person(connection, principal, organization_id, project_id)
     waiting: list[WaitingItem] = []
-    for item in queue(connection, principal, organization_id, project_id, automated).items:
+    for item in queue(
+        connection, principal, organization_id, project_id, automated, settings
+    ).items:
         if item.bucket == "WAITING" and item.owner.role == "CLIENT":
             # Evidence out with the client waits on no one here.
             continue
@@ -1345,7 +1351,15 @@ def _inbox(
             # Evidence out with the client, overdue: the inbox's own kind for it.
             kind = "late"
         if item.kind == "request-draft" and item.blockers:
-            kind = "planning" if "Plan the evidence" in item.blockers[0] else "contacts"
+            kind = (
+                "planning"
+                if "plan" in item.blockers[0].lower()
+                else "contacts"
+                if "recipient" in item.blockers[0].lower()
+                or "cannot receive" in item.blockers[0]
+                or "address" in item.blockers[0].lower()
+                else "drafts"
+            )
         if item.kind == "task":
             kind = "blocked" if not item.ready else "task_review"
         detail = item.reason

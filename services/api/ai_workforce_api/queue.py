@@ -318,10 +318,14 @@ def queue(
     organization_id: UUID,
     project_id: UUID,
     automated: bool = True,
+    settings: Settings | None = None,
 ) -> QueueBody:
     """Every open obligation of the engagement for this viewer, authorized once.
     `automated` says whether a worker exists for queued agent work (workspace
-    .automation_of): without one, queued agent turns are blocked, not upcoming."""
+    .automation_of): without one, queued agent turns are blocked, not upcoming.
+    `settings` lets a drafted request's readiness be read with the approval endpoint's
+    own rule (recipient allowlist, planning hold, quality checks); without it, only the
+    record's own facts hold an item."""
     from ai_workforce_api.workspace import _authorize, _controls
 
     _authorize(connection, principal, organization_id, project_id, Action.TASK_READ)
@@ -376,7 +380,9 @@ def queue(
     items += _evidence_reviews(connection, project_id, viewer, refs, assigned)
     items += _deficiencies(connection, project_id, viewer, refs, assigned, rounds_by_id)
     items += _overdue(connection, project_id, viewer, refs, assigned)
-    items += _requests(connection, project_id, viewer, refs, controls)
+    items += _requests(
+        connection, organization_id, project_id, viewer, refs, controls, assigned, settings
+    )
     items += _reminders(connection, project_id, viewer, refs)
     items += _replies(connection, project_id, viewer)
     items += _tasks(connection, project_id, viewer, refs)
@@ -1201,56 +1207,105 @@ def _deficiencies(
 
 def _requests(
     connection: psycopg.Connection[Any],
+    organization_id: UUID,
     project_id: UUID,
     viewer: _Viewer,
     refs: dict[UUID, str],
     controls: dict[UUID, Any],
+    assigned: dict[UUID, set[UUID]],
+    settings: Settings | None,
 ) -> list[QueueItem]:
+    """Each drafted request once. An agent's draft is an approver's to approve; a person's
+    draft is the preparer's to submit for approval. The item is ready only when the
+    approval endpoint's own rule finds nothing in the way (request_details.blocker: the
+    recipient and the allowlist, the planning hold, the quality checks); when something
+    is, the item is blocked with that reason and belongs to the preparer who resolves it.
+    The endpoint applies the rule again when the action is taken, with its own settings
+    and the record's version: the queue's reading never stands in for it."""
     from ai_workforce_api.evidence_plans import reconcile_waiting, unplanned_controls
+    from ai_workforce_api.request_details import draft_blockers
 
     held_controls = set(unplanned_controls(connection, project_id))
     held_controls |= reconcile_waiting(connection, project_id)
+    problems = (
+        draft_blockers(connection, settings, organization_id, project_id)
+        if settings is not None
+        else {}
+    )
     found: list[QueueItem] = []
     for row in connection.execute(
         """
-        SELECT id, engagement_control_id, operation_key, recipient, testing_phase, created_at
+        SELECT id, engagement_control_id, operation_key, recipient, testing_phase, created_at,
+               drafted_by
         FROM pbc_requests WHERE project_id = %s AND status = 'DRAFT'
         ORDER BY created_at
         """,
         (project_id,),
     ).fetchall():
+        request_id = UUID(str(row[0]))
         control_id = UUID(str(row[1]))
-        held = control_id in held_controls and str(row[2]).startswith(("kickoff-", "scope-"))
-        unaddressed = str(row[3] or "").strip() == ""
+        agent_draft = str(row[6] or "") == "AGENT"
         blockers: list[str] = []
-        if held:
-            blockers.append("Plan the evidence, then reconcile the kickoff draft with its plan")
-        elif unaddressed:
-            blockers.append("Assign the evidence coordinator or the control owner's address")
+        if settings is not None:
+            problem = problems.get(request_id)
+            if problem is not None:
+                blockers.append(problem)
+        else:
+            held = control_id in held_controls and str(row[2]).startswith(("kickoff-", "scope-"))
+            if held:
+                blockers.append("Plan the evidence, then reconcile the kickoff draft with its plan")
+            elif str(row[3] or "").strip() == "":
+                blockers.append("Assign a recipient.")
         ready = not blockers
+        # Whose it is: the approver's when ready; the preparer's while something they
+        # resolve holds it; a person's own draft is the preparer's to submit.
+        if not agent_draft:
+            role: Role = "PREPARER"
+            authorized = viewer.may_prepare(assigned.get(control_id))
+            title = "Submit the evidence request for approval"
+            reason = "Written by a person; someone else approves it once submitted."
+            obligation = "EVIDENCE_REQUEST"
+        elif ready:
+            role = "APPROVER"
+            authorized = viewer.approve
+            title = "Review and approve the drafted evidence request"
+            reason = (
+                "Drafted by the evidence coordinator; an approver checks the exact message "
+                "before it is sent."
+            )
+            obligation = "REQUEST_DRAFT_APPROVAL"
+        else:
+            role = "PREPARER"
+            authorized = viewer.may_prepare(assigned.get(control_id))
+            title = "Review and approve the drafted evidence request"
+            reason = (
+                "Drafted by the evidence coordinator; it cannot be approved until this is resolved."
+            )
+            obligation = "REQUEST_DRAFT_APPROVAL"
         found.append(
             QueueItem(
-                id=f"request-draft:{row[0]}",
+                id=f"request-draft:{request_id}",
                 kind="request-draft",
-                obligation="REQUEST_DRAFT_APPROVAL",
-                source=QueueSource(type="pbc_request", id=UUID(str(row[0]))),
+                obligation=obligation,
+                source=QueueSource(type="pbc_request", id=request_id),
                 stage="EVIDENCE",
                 control_id=control_id,
                 control_ref=refs.get(control_id),
                 phase=None if row[4] is None else str(row[4]),
-                title="Review and approve the drafted evidence request",
-                reason=(
-                    "Drafted by the evidence coordinator; an approver checks the exact message "
-                    "before it is sent."
-                ),
-                owner=QueueOwner(role="APPROVER"),
-                authorized=viewer.approve,
+                title=title,
+                reason=reason,
+                owner=QueueOwner(role=role),
+                authorized=authorized,
                 ready=ready,
                 blockers=blockers,
-                bucket=_bucket(viewer.approve, ready, "APPROVER"),
+                bucket=_bucket(authorized, ready, role),
                 link=QueueLink(
                     section="controls",
-                    query={"control": str(control_id), "step": "request", "request": str(row[0])},
+                    query={
+                        "control": str(control_id),
+                        "step": "request",
+                        "request": str(request_id),
+                    },
                 ),
                 at=row[5],
             )
@@ -1458,7 +1513,7 @@ def register_queue(app: FastAPI, settings: Settings) -> None:
             body = _call(
                 settings,
                 lambda connection: queue(
-                    connection, principal, organization_id, project_id, automated
+                    connection, principal, organization_id, project_id, automated, settings
                 ),
             )
         except ValueError as error:

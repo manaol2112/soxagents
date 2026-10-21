@@ -74,7 +74,29 @@ def release_reason(
         "SELECT 1 FROM phase_releases WHERE engagement_control_id = %s AND phase = %s",
         (control_id, phase),
     ).fetchone()
-    return None if row is not None else GATE_RELEASE[phase]
+    return release_reason_from(row is not None, phase)
+
+
+def release_reason_from(released: bool, phase: str | None) -> str | None:
+    """release_reason from whether the phase is released for the control."""
+    if phase not in RELEASED_PHASES:
+        return None
+    return None if released else GATE_RELEASE[phase]
+
+
+def released_phases(connection: psycopg.Connection[Any], project_id: UUID) -> set[tuple[UUID, str]]:
+    """Every (control, phase) released on the engagement, read once."""
+    return {
+        (UUID(str(row[0])), str(row[1]))
+        for row in connection.execute(
+            """
+            SELECT r.engagement_control_id, r.phase FROM phase_releases r
+            JOIN engagement_controls c ON c.id = r.engagement_control_id
+            WHERE c.project_id = %s
+            """,
+            (project_id,),
+        ).fetchall()
+    }
 
 
 class PhaseStatus(BaseModel):

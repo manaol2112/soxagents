@@ -617,6 +617,80 @@ for the destination addresses, and the whole set. Type checks and lint clean (th
   were already there.
 - The 403-control baseline stands (§14); no performance rewrite was undertaken.
 
+## 16. Milestone 2 closure
+
+**M2d committed** as e818eae (generated files, line-ending-only changes and the earlier
+screenshots left out).
+
+**Drafted requests are ready in the queue only when their approval would pass.** The
+approval endpoint (`outbound._approve_draft`) refuses a draft when it is held for
+planning, has no recipient, names a recipient the allowlist does not accept, or fails a
+check of `request_details.blocker` (the request's type, phase, period, mapping to the
+plan, duplicates, wording). The queue now reads that same rule for every draft at once:
+`request_details.draft_blockers` builds `request_checks` from the same functions as
+`blocker`, with the shared reads done once and the per-request reads batched (the items,
+windows and duplicates of `request_quality.quality_checks_many`; the planning hold's
+pieces, `gate_facts`, `released_phases` and the kickoff reconciliation, memoized per
+control). The single-request path keeps its own readers and the deciding functions are
+shared (`gate_reason_from`, `release_reason_from`, `quality_from`), so the two cannot
+drift; `test_queue.py` asserts, for every draft of a fixture engagement under two
+allowlists, that the batched and the single-request readings are identical. In the
+queue a held draft is BLOCKED with the endpoint's own words and belongs to the preparer
+who resolves it; a ready draft is the approver's; a person's own draft is the preparer's
+to submit. The endpoint applies the rule again, with its own settings and the record's
+version, when the action is taken: the queue never stands in for it, and the requester
+never approves their own request (the approval permission and the agent-drafted rule are
+the endpoint's). Tests: allowed domain (ready, the approver's), blocked domain (held with
+the reason, the preparer's), missing recipient (held, filed under contacts in the inbox),
+a member who may prepare but not approve (sees it waiting; refused with 403), the
+allowlist changed between the queue's reading and the action (refused with 409), a stale
+version (409), then the approval itself (200, APPROVAL_PENDING, the item leaves the queue).
+
+Before and after on the scale engagements (`docs/review/m2-closure/queue-readiness.md`):
+at 155 controls, 287 drafts read as MINE before; after, 283 MINE and 4 BLOCKED (two
+"Release the roll-forward phase first", two "Confirm the type"); with an allowlist naming
+another domain, all 287 BLOCKED with "cannot receive evidence requests". At 403
+controls, 747 drafts: 715 MINE and 32 BLOCKED (26 "Approve the control's test plan
+first"). The queue's in-process time went from 205 ms to 581 ms at 155 controls and
+from 297 ms to 808 ms at 403 (the first batched version cost 2.2 s; the per-draft reads
+were then removed: 17 statements for the whole rule).
+
+**The client portal's final submission** (`docs/review/m2-closure/portal-smoke.md`,
+screenshots `portal-*`), in headless Chrome against the 155-control engagement: the owner
+opened the authorized link, asked for the code (shown as a local preview: no email is
+sent in this environment, as the page says), confirmed identity, opened the request,
+uploaded a file to each of the two required items (both acknowledged, "2 of 2 items with
+files"), pressed Submit evidence, confirmed in the dialog, and saw "Submitted" with the
+date. The team's side: `owner_submitted_at` set, the audit event
+`evidence.portal_submitted` recorded on the request, both files on the request of the
+right control (ITGC-AC-07 · Salesforce) in the right engagement. A wrong token answers
+"This link is not valid"; a link the team revoked shows no request and the API refuses a
+code for it (409). Outbound email delivery was not exercised: no sender is configured.
+A link otherwise lives while its requests are open (until their due date plus the grace
+days) and cannot be used after.
+
+**Keyboard-only checks** (`docs/review/m2-closure/keyboard.md`, screenshots `keys-*`),
+real key events in headless Chrome: the stepper's steps are reached in order with
+visible focus and Enter opens a step; the plan review's actions are reached and Enter on
+"Request changes" opens the comment form with the next Tab landing in it; the queue's
+filter chips and rows are reached with visible focus and Enter on a row's Open opens the
+control; the phone-width Results and Review cards' Details disclosures take focus (visible
+when reached by Tab) and open with Enter; the status and close-out dialog takes focus on
+open, keeps Tab inside and closes on Escape; the portal's submission dialog takes focus on
+open. No material blocker was found. Noncritical accessibility debt recorded: Space on a
+Details disclosure did not toggle it under the driver (Enter does; a manual check is
+owed); focus after Escape on the close-out dialog returns to the document, not to an
+opener (the dialog opens from an address); "Log a deficiency" is a link that reloads the
+page with the form open, so focus starts at the top; the portal's submission dialog is
+a native modal (`showModal`) but the driver's Tab trail recorded one stop it could not
+place inside it, to be confirmed by hand.
+
+**Preserved, with their limitations recorded.** The console's reporting interface, the
+Settings › Engagement wizard pages and the embedded `PlanReview` are unchanged; the
+embedded review costs two reads per control open (the master plan and the phase
+progress), and the queue's draft rule costs about 0.35 s per queue read at 155 controls,
+both noted for optimisation.
+
 ## 10. Out of scope for Milestone 2
 
 The Agent Companion panel (Milestone 3), the onboarding wizard and design tokens

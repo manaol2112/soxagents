@@ -1784,13 +1784,49 @@ def gate_reason(
     plan = connection.execute(
         "SELECT status FROM evidence_plans WHERE engagement_control_id = %s", (control_id,)
     ).fetchone()
-    if plan is None:
+    plan_status = None if plan is None else str(plan[0])
+    settled = (
+        attributes_settled(connection, control_id)
+        if plan_status in _APPROVED_PLAN and phase in _OPERATING
+        else True
+    )
+    return gate_reason_from(plan_status, settled, phase)
+
+
+def gate_reason_from(plan_status: str | None, settled: bool, phase: str | None) -> str | None:
+    """gate_reason from the plan's status and whether the attributes are settled: the one
+    rule, whether read for one control or for an engagement at once."""
+    if plan_status is None:
         return "plan the evidence first"
-    if str(plan[0]) not in _APPROVED_PLAN:
+    if plan_status not in _APPROVED_PLAN:
         return GATE_PLAN
-    if phase in _OPERATING and not attributes_settled(connection, control_id):
+    if phase in _OPERATING and not settled:
         return GATE_ATTRIBUTES
     return None
+
+
+def gate_facts(
+    connection: psycopg.Connection[Any], project_id: UUID
+) -> tuple[dict[UUID, str], set[UUID]]:
+    """Every control's plan status and the controls whose attributes are settled, read
+    once for the engagement (for gate_reason_from)."""
+    statuses = {
+        UUID(str(row[0])): str(row[1])
+        for row in connection.execute(
+            "SELECT engagement_control_id, status FROM evidence_plans WHERE project_id = %s",
+            (project_id,),
+        ).fetchall()
+    }
+    settled = {
+        UUID(str(row[0]))
+        for row in connection.execute(
+            f"SELECT c.id, {ATTRIBUTES_SETTLED_SQL} FROM engagement_controls c "
+            "WHERE c.project_id = %s",
+            (project_id,),
+        ).fetchall()
+        if bool(row[1])
+    }
+    return statuses, settled
 
 
 def release(
