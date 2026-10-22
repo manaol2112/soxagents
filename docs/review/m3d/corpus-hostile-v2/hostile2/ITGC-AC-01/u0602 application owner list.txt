@@ -1,0 +1,3 @@
+SAP ERP application owner list (IT asset register extract)
+In force from 2027-01-01 to 2027-12-31; last reviewed 2027-01-05
+Accounts payable, receivable and general ledger roles: designated owner Helen Cho (Finance Systems Lead); every role in these modules needs the owner's approval

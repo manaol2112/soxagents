@@ -1,0 +1,7 @@
+Access request REQ-6601
+Requested for: Nora Haddad (u0601)
+Application: SAP ERP PRD; role requested: AP Clerk
+Requested by Nora Haddad on 2027-02-01
+
+Approval record
+- Helen Cho, application owner: approved AP Clerk in SAP ERP PRD on 2027-02-03 11:00

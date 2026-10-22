@@ -227,3 +227,25 @@ engagement.
 | `ui-prepare-confirm-desktop.png`, `ui-prepare-confirm-mobile.png`, `ui-rationale-reviewed-desktop.png` | The Prepare action asking the person to confirm the review of the AI-proposed rationale (the box is required; at 390 px the confirmation and Prepare start at the left), and the rationale after the review: titled reviewed, with the reviewer, date and version. |
 
 A rebuild of either scenario set gives identical text files and expected results; the PDF and workbook files embed their creation time, so their hashes (and the workbook's size) in the manifest change with each build.
+
+## m3d — reliability and safeguards
+
+These are the scenario sets, their fixed expectations, and the live runs' scorecards. All data is synthetic. The one screen M3d changed is the evidence-mapping panel's list of passages kept for review (the closure); its screenshots come from the synthetic M3c demonstration engagement.
+
+| File | What it shows |
+| --- | --- |
+| `corpus-hostile/` and its `manifest.json` | The hostile-evidence corpus: 13 samples and 12 attacks (vehicle, technique, target agents, the attack's words, what would mean it worked), and the expected result of each of the 65 cells. |
+| `corpus-consistency/`, `corpus-consistency-v2/` | The two evidence-requirement sets and their manifests. The first was found not to meet the plan's "what counts"; the second is corrected, written before any run of it. |
+| `results.md` | Every live measure with its denominator: the hostile corpus by agent, evidence consistency (the M3c set classified by the plan, and the two consistency sets against the M3c-accepted tester), the M3c and M3b regressions, the reviewer's miss, cost. |
+| `live-hostile-run1.json`, `live-hostile-final.json` | The reader, mapping, tester, console and reviewer against the hostile corpus, with each attack's outcome and the reproducibility check. |
+| `live-consistency-run1.json`, `live-consistency-final.json`, `live-consistency-v2-final.json` | Baseline (the M3c-accepted tester) and M3d on the consistency sets, cell by cell. |
+| `live-tester-m3d*.json`, `live-reviewer-m3d*.json`, `live-supplement-m3d*.json` | The M3c regression under the M3d code (the first round, the final round, and a second reviewer run). |
+| `live-scorecard-m3d-final.json`, `live-clean-m3d-final.json` | The M3b regression. |
+| `tests.md` | The commands run for the M3d gate, and the expectations changed with their justification. |
+| `closure.md` | The closure's record against the owner's conditional acceptance: root causes, the unseen set's hash, the plan evaluation, the PostgreSQL finding, and the closure's live results with denominators. |
+| `corpus-hostile-v2/` and its `manifest.json` | The unseen attack set (8 attacks, 45 cells), frozen before the corrections. |
+| `m3c-plan-evaluation.json` | Evaluation m3c-plan/1: the M3c cells whose expectation contradicts the approved plan, and the recorded tester runs scored against both expectations. |
+| `live-hostile-closure.json`, `live-unseen-closure.json` | The original and the unseen attack sets against the closure's agents, with the mapping's concerns and the model's own labels for every attack passage it quoted. |
+| `live-reviewer-closure-{m3c,consistency-v2}-r{1,2,3}.json` | The corrected reviewer, three runs each, on the M3c planted cases and on the corrected consistency set's negatives (unseen by the reviewer). |
+| `live-scorecard-m3d-closure.json`, `live-clean-m3d-closure.json` | The M3b regression under the closure's mapper. |
+| `ui-mapping-concerns-desktop.png`, `ui-mapping-concerns-phone.png` | The mapping panel's passages for review, at 1440 and 390 px. |

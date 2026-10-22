@@ -69,6 +69,8 @@ class Provenance:
     # What the call was made from: evidence file ids and hashes, the sheet and its
     # version, the approved plan revision, as the job knew them. Never the prompt.
     inputs: dict[str, Any] = field(default_factory=dict)
+    # The call's configuration (M3d): model, tier, limits, the output schema's hash.
+    config: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -283,6 +285,9 @@ class ModelCallBody(BaseModel):
     duration_ms: int | None = None
     error: str = ""
     inputs: dict[str, Any] = Field(default_factory=dict)
+    # Milestone 3d: the configuration and what the system made of the answer.
+    config: dict[str, Any] = Field(default_factory=dict)
+    outcome: dict[str, Any] = Field(default_factory=dict)
     has_content: bool = False
     created_at: datetime | None = None
 
@@ -571,10 +576,10 @@ def _record_for(
                 organization_id, project_id, actor_user_id, model_config_ref, operation, status,
                 input_tokens, output_tokens, cost_micros, model_name, tier, agent_key,
                 prompt_version, prompt_sha256, output_sha256, target_type, target_id, job_id,
-                attempt, duration_ms, error, actor_agent_instance_id, inputs
+                attempt, duration_ms, error, actor_agent_instance_id, inputs, config
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s)
+                    %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -601,6 +606,7 @@ def _record_for(
                 error,
                 found.actor_agent_instance_id,
                 Json(found.inputs),
+                Json(found.config),
             ),
         )
         row = cursor.fetchone()
@@ -652,7 +658,9 @@ def _read(
                actor_user_id, actor_agent_instance_id, agent_key, tier, model_name,
                prompt_version, prompt_sha256, output_sha256, target_type, target_id, job_id,
                attempt, duration_ms, error, inputs, created_at,
-               EXISTS (SELECT 1 FROM model_call_contents c WHERE c.model_call_id = model_calls.id)
+               EXISTS (SELECT 1 FROM model_call_contents c WHERE c.model_call_id = model_calls.id),
+               config,
+               (SELECT o.outcome FROM model_call_outcomes o WHERE o.model_call_id = model_calls.id)
         FROM model_calls
         WHERE id = %s AND organization_id = %s AND project_id = %s
         """,
@@ -696,6 +704,8 @@ def _read(
         inputs=row[21] if isinstance(row[21], dict) else {},
         created_at=row[22],
         has_content=bool(row[23]),
+        config=row[24] if isinstance(row[24], dict) else {},
+        outcome=row[25] if isinstance(row[25], dict) else {},
     )
 
 

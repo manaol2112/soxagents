@@ -1,0 +1,7 @@
+Access request REQ-6605
+Requested for: Yara Costa (u0605)
+Application: SAP ERP PRD; role requested: AR Clerk
+Requested by Yara Costa on 2027-06-01
+
+Approval record
+- Helen Cho, application owner: approved AR Clerk in SAP ERP PRD on 2027-06-09 11:00

@@ -372,3 +372,35 @@ one stops between items; the items tested so far stand, the sheet's note reads
 "Cancelled by …. Run it again when ready." and the queue lists the stopped run. A run
 whose worker died is resumed when its lease runs out, and an item written before the
 crash is not tested again. See [operations.md](operations.md).
+
+## Reliability and safeguards (Milestone 3d)
+
+**The approved plan decides the evidence.** For each attribute the tester and the reviewer receive the evidence the approved plan requires for that attribute in the sheet's phase, with its necessity (REQUIRED, CONDITIONAL or OPTIONAL). This is `testing_engine.plan_evidence`, under prompt versions `control-tester/4` and `independent-reviewer/4`. The rule given to the model:
+
+- When the REQUIRED evidence is in the files and shows the attribute is met, the result is PASS.
+- Evidence the plan does not require never withholds a PASS. It is recommended in the limitations instead.
+- When REQUIRED evidence is missing, the result is not PASS.
+
+**An answer with no analysis is not a result.** A schema-valid answer is an execution failure if no result in it holds a substantive note, a cited passage or an observed condition. Empty notes, filler such as "n/a" or "ok", and a result's own name do not count as substantive. The item holds no result and is tested again, exactly as for a failed call. A result of "not applicable" with no reason goes to a person.
+
+**Population values are matched deterministically.** A value compared against the item's population row is verified in one of two ways:
+
+- **Named column:** when the comparison's label names a column, only that column's cell counts. The value must be the whole cell or a whole-token run inside it, and any other value there is a conflict.
+- **No column named:** the value must be a whole cell, or a whole-token run that occurs once, in exactly one cell of the row.
+
+Part of a token, a run found twice, and a missing value all stay unverified. A pass resting on an unverified value is unable to determine.
+
+**Instructions in the evidence.** A pass that cites a line addressed to an AI, to whoever reads or processes the file, or rewriting the system instructions goes to a person. Intake refuses an upload whose name contains a folder separator, so a folder path never reaches the store or a prompt.
+
+**The reproducibility record.** Every model call records its configuration with the call (`model_calls.config`):
+
+- the model, tier and configuration reference;
+- the output limit, the timeout and the output schema's hash;
+- the tools allowed (none for a job agent) and the number of images sent.
+
+The job that reads the answer then records its outcome once, in the append-only `model_call_outcomes`:
+
+- whether the answer was ACCEPTED, REJECTED (with the reason) or NOT_USED (the call failed);
+- each result as kept, with the citations offered and verified, the deterministic checks applied, whether a rule decided it, and the reviewer's findings.
+
+The tester's inputs also record the hash of the approved attributes' wording and the plan evidence per attribute. `GET …/model-calls/{id}` returns the call, its inputs, configuration and outcome; no evidence text or prompt is copied into them. The sealed content behind `/content` stays the only copy.

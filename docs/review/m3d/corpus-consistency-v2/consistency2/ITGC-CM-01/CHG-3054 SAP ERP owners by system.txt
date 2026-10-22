@@ -1,0 +1,3 @@
+Business owners and IT approvers by system (change management standard)
+In force from 2027-01-01 to 2027-12-31
+SAP ERP: business owner Elena Rossi; IT approver Marcus Lee; delegations: none

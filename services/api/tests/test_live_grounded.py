@@ -131,9 +131,16 @@ def answers_by_cell(calls: list[tuple[str, Any]]) -> dict[str, list[dict[str, An
             continue
         found[label.group(1)] = [
             {key: str(result.get(key, ""))[:400] for key in ("index", "result", "note", "observed")}
+            # The reviewer's elements (M3d closure), so each endorsement's substance can be
+            # read: what it claimed shown, and the words it gave.
+            | ({"elements": [
+                {"element": str(e.get("element", ""))[:160], "status": str(e.get("status", "")),
+                 "quote": str(e.get("quote", ""))[:200]}
+                for e in result["elements"] if isinstance(e, dict)
+            ]} if isinstance(result.get("elements"), list) else {})
             for result in output.get("results", [])
             if isinstance(result, dict)
-        ]
+        ]  # fmt: skip
     return found
 
 

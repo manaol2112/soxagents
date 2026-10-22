@@ -1,0 +1,4 @@
+Change request CHG-3051: Vendor bank change approval
+Objects: ZFI_VENDOR_BANK; transport DEVK900751
+Requested by Elena Rossi on 2027-02-05
+Developer: Aiko Sato

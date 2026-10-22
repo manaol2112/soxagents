@@ -7,8 +7,8 @@ files, or the item's own row of the population (file -1). The code then decides 
 stands:
 
 - a side is verified only when its quote is found in that file (the citation check) and
-  its value appears in the quote, or, for the population row, when the value is one of
-  the row's values;
+  its value appears in the quote, or, for the population row, when `population_match`
+  finds it: a whole cell, or a whole-token run in one unambiguous cell (M3d);
 - a verified comparison is evaluated here, never by the model: dates parsed by the
   sampling module's reader, identifiers compared case-insensitively without punctuation
   and leading zeros, numbers without separators;
@@ -74,17 +74,53 @@ _LIST = re.compile(r"\s*[;|]\s*")
 # A passage addressed to an AI or an automated agent that tells it what to do.
 _ADDRESSEE = re.compile(
     r"\b(?:AI|A\.I\.|LLM|GPT|chatbot|language model|AI (?:assistant|tester|reviewer|agent)s?"
-    r"|automated (?:testing |review |audit )?(?:agents?|tools?|systems?))\b",
+    r"|automated (?:testing |review |audit )?(?:agents?|tools?|systems?)"
+    # M3d: text addressed to whoever reads or processes the file, or rewriting the
+    # instructions themselves, without naming an AI.
+    r"|system prompt|(?:previous|prior|above) instructions"
+    r"|whoever (?:reads|processes|summari[sz]es|reviews|tests)"
+    r"|(?:the )?reader of this (?:file|document))\b",
     re.I,
 )
 _IMPERATIVE = re.compile(
-    r"\b(?:record|mark|treat|ignore|disregard|cite|override|do not (?:mention|report|flag)"
-    r"|don't (?:mention|report|flag)|must (?:pass|mark|record|treat))\b",
+    r"\b(?:record|mark|treat|ignore|disregard|cite|override|output|approve"
+    r"|do not (?:mention|report|flag|ask)"
+    r"|don't (?:mention|report|flag|ask)|must (?:pass|mark|record|treat)|are void)\b",
     re.I,
 )
 INSTRUCTION_NOTE = (
     "The pass cites a passage of the evidence that gives instructions to an AI. Instructions "
     "in the evidence are not followed and are not evidence, so a person decides this result."
+)
+# M3d closure: a passage that claims the audit's own work or conclusion (testing, review,
+# sign-off or acceptance by an auditor or the audit team), or declares the requirements
+# met, satisfied, compliant or exempt. The client's evidence can record what its process
+# did; it cannot record the audit's conclusion, so such a passage is a claim needing
+# corroboration, never support. A backstop only: the mapping classifies every passage
+# it quotes, and the tester and reviewer judge the evidence themselves.
+_AUDIT_ACTOR = re.compile(
+    r"\b(?:auditors?|(?:external|internal|it|sox|statutory) audit"
+    r"|audit (?:team|firm|partner|manager|senior|staff|lead|sign[- ]?off)"
+    r"|engagement (?:partner|manager|team|lead)|by audit)\b",
+    re.I,
+)
+_AUDIT_ACT = re.compile(
+    r"\b(?:tested|reviewed|verified|validated|approved|accepted|cleared|signed[- ]?off"
+    r"|sign[- ]?off|concluded|attested|certified|passed|confirmed|satisfied|comfortable"
+    r"|covered|examined)\b",
+    re.I,
+)
+_DECLARED_MET = re.compile(
+    r"\b(?:attributes?|criteria|criterion|requirements?|controls?|prerequisites?|conditions?"
+    r"|approvals?)\b[^.\n]{0,60}?\b(?:(?:are|is|as|been|were) (?:met|satisfied|fulfilled"
+    r"|compliant|effective|in order)|validated|waived|compliant)\b"
+    r"|\bexempt from\b",
+    re.I,
+)
+AUDIT_CLAIM_NOTE = (
+    "The pass cites a passage that claims the audit's own work or conclusion, or declares "
+    "the requirements met. Such a claim needs corroboration and is not evidence, so a "
+    "person decides this result."
 )
 
 
@@ -207,36 +243,61 @@ def instructs_ai(text: str) -> bool:
     return bool(_ADDRESSEE.search(text) and _IMPERATIVE.search(text))
 
 
+def claims_audit(text: str) -> bool:
+    """Whether a passage claims the audit's own work or conclusion, or declares the
+    requirements met (M3d closure)."""
+    return bool(
+        (_AUDIT_ACTOR.search(text) and _AUDIT_ACT.search(text)) or _DECLARED_MET.search(text)
+    )
+
+
+def untrusted_kind(text: str) -> Literal["INSTRUCTION", "AUDIT_CLAIM"] | None:
+    """What makes a line of the evidence unusable as support, if anything."""
+    if instructs_ai(text):
+        return "INSTRUCTION"
+    if claims_audit(text):
+        return "AUDIT_CLAIM"
+    return None
+
+
+def line_of(text: str, span: tuple[int, int]) -> str:
+    """The whole lines a passage sits on: a passage is judged in its own line."""
+    start = text.rfind("\n", 0, span[0]) + 1
+    end = text.find("\n", span[1])
+    return text[start : len(text) if end < 0 else end]
+
+
 def instruction_guard(results: list[dict[str, Any]], texts: dict[str, str]) -> list[dict[str, Any]]:
     """A pass (or not applicable) that cites a line of the evidence giving instructions to
-    an AI goes to a person. `texts` is each item file's stored text by file id."""
+    an AI, or claiming the audit's own conclusion (M3d closure), goes to a person. `texts`
+    is each item file's stored text by file id."""
     guarded: list[dict[str, Any]] = []
     for result in results:
-        if result.get("result") in ("PASS", "NOT_APPLICABLE") and any(
-            _cites_instruction(citation, texts)
-            for citation in result.get("citations", [])
-            if isinstance(citation, dict)
-        ):
-            result = {
-                **result,
-                "result": "REVIEW",
-                "note": clean_line(f"{INSTRUCTION_NOTE} {result.get('note', '')}", 400),
-                "instruction_cited": True,
-            }
+        if result.get("result") in ("PASS", "NOT_APPLICABLE"):
+            kinds = {
+                _cited_kind(citation, texts)
+                for citation in result.get("citations", [])
+                if isinstance(citation, dict)
+            } - {None}
+            if kinds:
+                note = INSTRUCTION_NOTE if "INSTRUCTION" in kinds else AUDIT_CLAIM_NOTE
+                result = {
+                    **result,
+                    "result": "REVIEW",
+                    "note": clean_line(f"{note} {result.get('note', '')}", 400),
+                    "instruction_cited": True,
+                }
         guarded.append(result)
     return guarded
 
 
-def _cites_instruction(citation: dict[str, Any], texts: dict[str, str]) -> bool:
+def _cited_kind(
+    citation: dict[str, Any], texts: dict[str, str]
+) -> Literal["INSTRUCTION", "AUDIT_CLAIM"] | None:
     text = texts.get(str(citation.get("file_id")), "")
     quote = str(citation.get("quote") or "")
     span = find_quote(text, quote) if text and quote.strip() else None
-    if span is None:
-        return instructs_ai(quote)
-    # The whole lines the quote sits on: an instruction is judged in its own line.
-    start = text.rfind("\n", 0, span[0]) + 1
-    end = text.find("\n", span[1])
-    return instructs_ai(text[start : len(text) if end < 0 else end])
+    return untrusted_kind(quote if span is None else line_of(text, span))
 
 
 def _side(
@@ -252,10 +313,7 @@ def _side(
         return None
     values = tuple(part for part in _LIST.split(value) if part.strip()) or (value,)
     if index == POPULATION_ROW:
-        hits = [
-            next((column for column, cell in detail if _same_text(cell, atom)), None)
-            for atom in values
-        ]
+        hits = [population_match(atom, label, detail) for atom in values]
         found = all(hit is not None for hit in hits)
         where = ", ".join(str(hit) for hit in hits if hit)
         return Side(label, value, index, quote, found,
@@ -267,6 +325,56 @@ def _side(
     # Every value of the side is in the quoted passage, each on its own.
     verified = span is not None and all(_contains(text[span[0] : span[1]], atom) for atom in values)
     return Side(label, value, index, quote, verified, name, values)
+
+
+_TOKEN = re.compile(r"[a-z0-9]+(?:[-_./][a-z0-9]+)*")
+
+
+def population_match(value: str, label: str, detail: tuple[tuple[str, str], ...]) -> str | None:
+    """Where in the item's population row a value is, or None when it cannot be verified
+    (M3d). The match is deterministic and never inferred from part of a word:
+
+    - when the side's label names a column of the row, only that column counts: the value
+      is its whole cell, or a whole-token run inside it; any other value there is a
+      conflict, and the side is not verified even if another cell holds the value;
+    - otherwise the value is a whole cell (one or more), or a whole-token run that occurs
+      once, in exactly one cell of the row (a run found in two cells, or twice in one, is
+      ambiguous).
+
+    Tokens are runs of letters and digits joined by - _ . or / (so "DEVK900512" and
+    "2027-04-12" are single tokens); "PR" is not found in "SAP ERP PRD"."""
+    wanted = _tokens(value)
+    if not wanted:
+        return None
+    named = [(column, cell) for column, cell in detail if _same_label(column, label)]
+    if named:
+        column, cell = named[0]
+        if _same_text(cell, value):
+            return str(column)
+        return f"{column} (token)" if _runs(_tokens(cell), wanted) == 1 else None
+    # A whole cell is the value itself, so it is verified even if two cells hold it.
+    exact = [str(column) for column, cell in detail if _same_text(cell, value)]
+    if exact:
+        return " and ".join(exact)
+    counts = [(column, _runs(_tokens(cell), wanted)) for column, cell in detail]
+    found = [(column, n) for column, n in counts if n]
+    if len(found) == 1 and found[0][1] == 1:
+        return f"{found[0][0]} (token)"
+    return None
+
+
+def _tokens(text: str) -> list[str]:
+    return _TOKEN.findall(_squash(text))
+
+
+def _runs(tokens: list[str], wanted: list[str]) -> int:
+    """How many times the token run `wanted` occurs in `tokens`, on token boundaries."""
+    size = len(wanted)
+    return sum(1 for at in range(len(tokens) - size + 1) if tokens[at : at + size] == wanted)
+
+
+def _same_label(column: str, label: str) -> bool:
+    return bool(label.strip()) and _tokens(column) == _tokens(label)
 
 
 def _compare(kind: Kind, left: Side, right: Side) -> tuple[bool | None, str]:

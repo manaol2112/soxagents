@@ -1,0 +1,8 @@
+Access request REQ-4456
+Requested for: Ben Adler (u0456)
+Application: SAP ERP PRD; role requested: GL Viewer
+Requested by Ben Adler on 2027-07-01
+
+Approval record
+- Paul Brennan, line manager: approved GL Viewer in SAP ERP PRD on 2027-07-07 09:30
+- Helen Cho, application owner: approved GL Viewer in SAP ERP PRD on 2027-07-07 11:00

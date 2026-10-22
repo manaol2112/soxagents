@@ -15,6 +15,7 @@ The evidence text and the model's answer are untrusted. Only the control's attri
 can be answered, results come from a fixed list, and every note is cleaned.
 """
 
+import hashlib
 import json
 import logging
 import re
@@ -42,7 +43,7 @@ from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.library_definitions import sheet_definitions
 from ai_workforce_api.model_providers import live_model, provider_for
 from ai_workforce_api.models import ModelImage, ModelProvider, ModelRequest
-from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
+from ai_workforce_api.provenance import AgentCaller, Job, agent_actor, record_outcome
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.test_citations import (
     CITATION_SCHEMA,
@@ -229,7 +230,7 @@ def excerpt(text: str, key: str) -> str:
 
 # The tester's prompt version, recorded on every call (Milestone 3a). Bump it when the
 # system prompt, the prompt shape or the schema changes.
-PROMPT_VERSION = "control-tester/3"
+PROMPT_VERSION = "control-tester/5"
 
 SYSTEM_PROMPT = """You are the control tester on a SOX IT audit. Test one sample (or, for \
 a control tested once, the control itself) against each of the control's test attributes, \
@@ -245,6 +246,17 @@ not cover this item. Say exactly what is needed. Missing evidence is never an EX
 for a person, on a threshold the control does not define, or on evidence that contradicts \
 itself. Say what the person must decide.
 - NOT_APPLICABLE only when the attribute cannot apply to this item, and say why.
+- The approved evidence plan decides what evidence an attribute needs. Where an attribute \
+lists evidence_required_by_plan, judge it on that list: when the REQUIRED evidence is in \
+the files and shows the attribute is met, the result is PASS; evidence the plan does not \
+list as REQUIRED (a register, a policy, a system listing that would only add confidence) \
+never withholds a PASS: recommend it in limitations instead. When REQUIRED evidence for \
+the attribute is not in the files, the result is not PASS: UNABLE, saying which. \
+CONDITIONAL evidence is required only when its condition applies to this item. Each item \
+says what_counts: what it must include and what is not sufficient. Judge the files against \
+that, not against a document's name: evidence that holds what is listed meets the \
+requirement, wherever it is recorded, unless what_counts excludes it. Never treat a \
+document as required because it would add confidence.
 - Where an attribute has a definition, follow it: check its condition, find the evidence \
 and values it names, make its comparison, and apply its pass, exception, insufficient and \
 review rules. Never infer what it says not to infer. A document being present is not a pass.
@@ -336,6 +348,9 @@ class ItemContext:
     # Passages the evidence mapping verified in this item's files (M3b), as context only:
     # the tester verifies its own citations against the files.
     passages: tuple[dict[str, str], ...] = ()
+    # The approved evidence plan's requirements for each attribute (M3d): title and
+    # necessity (REQUIRED, CONDITIONAL, OPTIONAL), by attribute index.
+    required: tuple[tuple[dict[str, str], ...], ...] = ()
 
 
 def definition_prompt(item: Any) -> dict[str, Any]:
@@ -372,7 +387,10 @@ def design_prompt(design: Any) -> dict[str, Any] | None:
 
 def _definition_at(context: ItemContext, index: int) -> dict[str, Any]:
     found = context.definitions[index] if index < len(context.definitions) else None
-    return {"definition": found} if found else {}
+    planned = context.required[index] if index < len(context.required) else ()
+    return ({"definition": found} if found else {}) | (
+        {"evidence_required_by_plan": list(planned)} if planned else {}
+    )
 
 
 def prompt_for(context: ItemContext) -> str:
@@ -484,9 +502,16 @@ def check_results(
             extra[parsed.index] = {
                 key: _clean(str(data.get(key) or ""), 400)
                 for key in ("observed", "expected", "limitations")
-            } | {"raw_checks": data.get("checks")}
+            } | {"raw_checks": data.get("checks"), "offered": bool(data.get("citations"))}
     if not by_index:
         raise ValueError("answer has no usable results")
+    # A schema-valid answer with no analysis in it is not a result (M3d): no result has a
+    # substantive note, a cited passage or an observed condition.
+    if not any(
+        substantive(found.note) or extra[index]["offered"] or extra[index]["observed"]
+        for index, found in by_index.items()
+    ):
+        raise ValueError("answer holds no audit analysis")
     checked: list[dict[str, Any]] = []
     for index in range(attributes):
         found = by_index.get(index)
@@ -502,9 +527,31 @@ def check_results(
             "limitations": more.get("limitations", ""),
             "citations": citations.get(index, []),
         }
+        # Not applicable without a reason could hide an exception: a person decides (M3d).
+        if result["result"] == "NOT_APPLICABLE" and not substantive(str(result["note"])):
+            reason = _clean(f"{UNEXPLAINED_NOT_APPLICABLE} {result['note']}", 400)
+            result = {**result, "result": "REVIEW", "note": reason}
         # Objective comparisons are evaluated here from verified values (testing_checks).
         checked.append(apply_checks(result, evaluate_checks(more.get("raw_checks"), texts, detail)))
     return checked
+
+
+UNEXPLAINED_NOT_APPLICABLE = (
+    "The tester found the attribute not applicable without saying why, so a person decides "
+    "this result."
+)
+# A note that only restates a result or fills the field is not analysis (M3d).
+_FILLER = frozenset({
+    "", "na", "n a", "none", "null", "nil", "tbd", "x", "ok", "okay", "yes", "no", "pass",
+    "passed", "fail", "failed", "exception", "unable", "review", "not applicable",
+    "applicable", "see above", "see evidence", "as above", "same", "done", "checked",
+})  # fmt: skip
+
+
+def substantive(note: str) -> bool:
+    """Whether a note says something beyond a filler word or the result's own name."""
+    words = " ".join(re.sub(r"[^a-z0-9]+", " ", note.lower()).split())
+    return len(words) > 3 and words not in _FILLER
 
 
 UNSUPPORTED_PASS = (
@@ -1395,6 +1442,11 @@ def _test_item(
         "sheet": {"id": str(item[3]), "version": int(item[4])},
         "plan_revision": None if item[5] is None else int(item[5]),
         "attributes": len(attributes),
+        # The approved attributes' wording as tested (M3d): a change of wording is a
+        # different test even under the same plan revision.
+        "attributes_sha256": hashlib.sha256(
+            json.dumps(list(attributes), ensure_ascii=False).encode()
+        ).hexdigest(),
         # The sample and the population it was drawn from (M3c traceability).
         "sample": {"label": str(item[0]), "position": int(item[6])},
         "population": None
@@ -1474,8 +1526,10 @@ def _test_item(
             ),
             design=design_prompt(design_for(connection, control_id)),
             passages=mapped_passages(connection, project_id, control_id, files),
+            required=plan_evidence(connection, UUID(str(item[3])), control_id, attributes),
         )
         inputs["mapping_context"] = len(context.passages)
+        inputs["plan_evidence"] = [len(found) for found in context.required]
         call = caller.generate(
             ModelRequest(
                 operation="generate",
@@ -1506,10 +1560,15 @@ def _test_item(
                     files,
                 )
                 source = "MODEL"
+                record_outcome(connection, call_id, outcome_of(call.raw.output, results))
             except ValueError as error:
                 note = f"The tester's answer could not be used: {error}."
+                record_outcome(
+                    connection, call_id, {"validation": "REJECTED", "reason": str(error)}
+                )
         else:
             note = call.note
+            record_outcome(connection, call_id, {"validation": "NOT_USED", "reason": call.status})
         if results is None:
             # Execution failed (M3c): a technical failure, not an audit result. No result
             # is written, the item waits to be tested again, the failed call is linked.
@@ -1576,6 +1635,41 @@ FAILED_NOTE = (
 )
 
 
+def outcome_of(output: dict[str, Any], results: list[dict[str, Any]]) -> dict[str, Any]:
+    """The outcome record of an accepted answer (M3d): each result as kept, with how many
+    citations were offered and verified and which deterministic checks applied. No quote,
+    note or evidence text: those stay in the result and the sealed content."""
+    offered: dict[int, int] = {}
+    for entry in output.get("results", []) if isinstance(output.get("results"), list) else []:
+        if isinstance(entry, dict) and isinstance(entry.get("index"), int):
+            cited = entry.get("citations")
+            offered.setdefault(entry["index"], len(cited) if isinstance(cited, list) else 0)
+    return {
+        "validation": "ACCEPTED",
+        "results": [
+            {
+                "index": int(result["index"]),
+                "result": str(result["result"]),
+                "decided_by_rule": bool(result.get("decided_by_rule")),
+                "instruction_cited": bool(result.get("instruction_cited")),
+                "citations_offered": offered.get(int(result["index"]), 0),
+                "citations_verified": len(result.get("citations", [])),
+                "checks": [
+                    {
+                        "kind": check.get("kind"),
+                        "holds": check.get("holds"),
+                        "verified": bool(check.get("left", {}).get("verified"))
+                        and bool(check.get("right", {}).get("verified")),
+                    }
+                    for check in result.get("checks", [])
+                    if isinstance(check, dict)
+                ],  # fmt: skip
+            }
+            for result in results
+        ],
+    }
+
+
 def _execution_failed(
     connection: psycopg.Connection[Any],
     item_id: UUID,
@@ -1595,6 +1689,45 @@ def _execution_failed(
             """,
             (call_id, _clean(f"{FAILED_NOTE} {reason}", 500), item_id, version),
         )
+
+
+def plan_evidence(
+    connection: psycopg.Connection[Any],
+    sheet_id: UUID,
+    control_id: UUID,
+    attributes: tuple[str, ...],
+) -> tuple[tuple[dict[str, str], ...], ...]:
+    """The approved evidence plan's requirements for each attribute (M3d): the
+    requirements of the sheet's phase (roll-forward for a roll-forward round, interim
+    otherwise) that name the attribute, with their necessity. Waived ones are left out.
+    Empty when the control has no approved plan."""
+    found = connection.execute(
+        """
+        SELECT r.title, r.necessity, r.attributes, r.description
+        FROM evidence_requirements r
+        JOIN evidence_plans p ON p.id = r.plan_id
+        WHERE r.engagement_control_id = %s AND p.approved_revision IS NOT NULL
+          AND r.status <> 'WAIVED'
+          AND r.phase = (SELECT CASE WHEN t.kind = 'ROLLFORWARD' THEN 'ROLLFORWARD'
+                                     ELSE 'INTERIM' END
+                         FROM test_sheets s LEFT JOIN test_rounds t ON t.id = s.test_round_id
+                         WHERE s.id = %s)
+        ORDER BY r.title
+        """,
+        (control_id, sheet_id),
+    ).fetchall()
+    return tuple(
+        tuple(
+            {
+                "evidence": str(title)[:200],
+                "necessity": str(necessity),
+                "what_counts": " ".join(str(description or "").split())[:500],
+            }
+            for title, necessity, named, description in found
+            if isinstance(named, list) and attribute in named
+        )
+        for attribute in attributes
+    )
 
 
 def mapped_passages(

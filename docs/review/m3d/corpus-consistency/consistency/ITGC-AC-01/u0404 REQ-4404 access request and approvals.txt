@@ -1,0 +1,8 @@
+Access request REQ-4404
+Requested for: Sam Okoye (u0404)
+Application: SAP ERP PRD
+Role requested: AP Clerk
+
+Approvals
+- Approved by Rafael Duarte (line manager) on 2027-10-21
+- Approved by Helen Cho (application owner) on 2027-10-21

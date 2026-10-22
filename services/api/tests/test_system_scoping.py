@@ -46,13 +46,22 @@ def test_a_review_asked_for_mid_run_runs_again_with_what_changed(
     assert owner.post(f"{base}/systems/{workday['id']}/review").status_code == 200
     real_gather = system_scoping.gather
     calls: list[int] = []
+    loads: list[bool] = []
 
     def gather_then_load(connection: Any, application_id: UUID) -> Any:
         facts = real_gather(connection, application_id)
+        if loads and not loads[-1]:
+            # A request made while the library loads renders the engagement, which reads
+            # the system through this same function: it must not load again (M3d closure:
+            # without this guard each nested request loaded and asked again, recursing
+            # until PostgreSQL refused a connection, which hung or starved the full suite).
+            return facts
         if not calls:
+            loads.append(False)
             owner.post(f"{base}/controls/load-library", json={"domains": ITGC})
             # The team asks again while the first run is under way.
             owner.post(f"{base}/systems/{workday['id']}/review")
+            loads[-1] = True
         calls.append(len(facts.controls) if facts is not None else -1)
         return facts
 
@@ -60,6 +69,7 @@ def test_a_review_asked_for_mid_run_runs_again_with_what_changed(
     with connect(migrated.url) as connection:
         assert run_review(connection, None, UUID(workday["id"])) == "DONE"
     assert calls[0] == 0 and calls[-1] > 0
+    assert loads == [True], "the library is loaded once, by the first run"
     workday = _system(owner.get(base).json(), "Workday")
     assert workday["assessment"]["status"] == "IDLE"
     assert any(c["in_scope"] for c in workday["assessment"]["candidates"])

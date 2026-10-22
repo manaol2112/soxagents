@@ -1,0 +1,8 @@
+Access request REQ-4452
+Requested for: Omar Said (u0452)
+Application: SAP ERP PRD; role requested: GL Viewer
+Requested by Omar Said on 2027-03-01
+
+Approval record
+- Sofia Lindqvist, line manager: approved GL Viewer in SAP ERP PRD on 2027-03-10 09:30
+- Helen Cho, application owner: approved GL Viewer in SAP ERP PRD on 2027-03-10 11:00

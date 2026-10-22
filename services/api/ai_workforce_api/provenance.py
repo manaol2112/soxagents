@@ -421,12 +421,49 @@ class AgentCaller:
                 error=error,
                 actor_agent_instance_id=self.job.agent_instance_id,
                 inputs=inputs or {},
+                config=call_config(self.config, self.tier, request),
             ),
             operation=operation,
         )
         if status != "BUDGET_EXCEEDED":
             store_contents(self._connection, self._settings, self.job, call_id, request, raw)
         return call_id
+
+
+def call_config(config: ModelConfig, tier: str | None, request: ModelRequest) -> dict[str, Any]:
+    """What the call was configured with (M3d): enough to repeat it, never the prompt."""
+    return {
+        "config_ref": config.name,
+        "provider": config.provider,
+        "model": config.model_name,
+        "tier": tier,
+        "operation": request.operation,
+        "max_tokens": request.max_tokens,
+        "timeout_seconds": request.timeout_seconds,
+        "output_schema_sha256": sha256_text(json.dumps(request.output_schema, sort_keys=True)),
+        "allowed_tool_ids": list(request.allowed_tool_ids),
+        "images": len(request.images),
+        "web_search": request.web_search,
+    }
+
+
+def record_outcome(
+    connection: psycopg.Connection[Any], call_id: UUID | None, outcome: dict[str, Any]
+) -> None:
+    """What the system made of a call's answer (M3d): accepted, rejected or not used, and
+    the results as kept. Written once, beside the immutable call record; a second write
+    for the same call is ignored, never an update."""
+    if call_id is None:
+        return
+    with transaction(connection) as cursor:
+        cursor.execute(
+            """
+            INSERT INTO model_call_outcomes (model_call_id, organization_id, project_id, outcome)
+            SELECT id, organization_id, project_id, %s FROM model_calls WHERE id = %s
+            ON CONFLICT (model_call_id) DO NOTHING
+            """,
+            (Json(outcome), call_id),
+        )
 
 
 def sha256_text(value: str) -> str:

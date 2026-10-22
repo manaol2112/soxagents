@@ -1,3 +1,4 @@
+import json
 import os
 from collections.abc import Iterator
 from uuid import uuid4
@@ -33,7 +34,9 @@ def workflow_address_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     independence.configure(True)
 
 
-def _fresh_database(admin_url: str, template: str | None = None) -> Iterator[Database]:
+def _fresh_database(
+    admin_url: str, template: str | None = None, test: str = ""
+) -> Iterator[Database]:
     """A database of its own for one test, empty or cloned from a template, dropped
     afterwards. Every test keeps its own database either way."""
     name = f"ai_workforce_test_{uuid4().hex[:12]}"
@@ -51,17 +54,34 @@ def _fresh_database(admin_url: str, template: str | None = None) -> Iterator[Dat
         yield Database(url)
     finally:
         with psycopg.connect(admin_url, autocommit=True) as connection:
+            _audit_connections(connection, name, test)
             connection.execute(
                 sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name))
             )
 
 
+def _audit_connections(connection: psycopg.Connection, name: str, test: str) -> None:
+    """With TEST_CONNECTION_AUDIT naming a file (M3d closure): the connections to the test's
+    database still open when the test ends, before the forced drop closes them. Each one is
+    a connection the test or the code it ran never closed. Off by default."""
+    target = os.environ.get("TEST_CONNECTION_AUDIT", "")
+    if target == "":
+        return
+    rows = connection.execute(
+        "SELECT coalesce(state, ''), count(*) FROM pg_stat_activity WHERE datname = %s GROUP BY 1",
+        (name,),
+    ).fetchall()
+    entry = {"test": test, "database": name, "open": {str(state): int(n) for state, n in rows}}
+    with open(f"{target}.{os.getpid()}", "a", encoding="utf-8") as log:
+        log.write(json.dumps(entry) + "\n")
+
+
 @pytest.fixture
-def empty_database() -> Iterator[Database]:
+def empty_database(request: pytest.FixtureRequest) -> Iterator[Database]:
     admin_url = os.environ.get("DATABASE_URL", "")
     if admin_url == "":
         pytest.skip("DATABASE_URL is not set")
-    yield from _fresh_database(admin_url)
+    yield from _fresh_database(admin_url, test=request.node.nodeid)
 
 
 @pytest.fixture(scope="session")
@@ -88,9 +108,11 @@ def template_database() -> Iterator[str]:
 
 
 @pytest.fixture
-def migrated_database(template_database: str) -> Iterator[Database]:
+def migrated_database(template_database: str, request: pytest.FixtureRequest) -> Iterator[Database]:
     """A test's own database with every migration applied, cloned from the template."""
-    yield from _fresh_database(os.environ["DATABASE_URL"], template_database)
+    yield from _fresh_database(
+        os.environ["DATABASE_URL"], template_database, test=request.node.nodeid
+    )
 
 
 def _database_url(admin_url: str, name: str) -> str:

@@ -1,0 +1,4 @@
+Change request CHG-3001: Vendor bank change approval
+Raised on 2027-10-01
+Developer: Aiko Sato
+Transport in the approved request: DEVK900701

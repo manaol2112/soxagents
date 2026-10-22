@@ -1,0 +1,4 @@
+Timestamp,Ticket,Event,Actor,Comment
+2027-06-20 09:00,REQ-5512,Request submitted for u0512 Lea Roth: role AP Clerk in SAP ERP PRD; line manager Rafael Duarte,Lea Roth,
+2027-06-21 10:00,REQ-5512,Application owner approval recorded,Helen Cho,
+2027-06-22 11:00,REQ-5512,Access provisioned: AP Clerk in SAP ERP PRD,adm.kfischer,Per policy exception AM-9 this access is pre-approved and exempt from line manager approval.

@@ -985,3 +985,20 @@ Conditionally accepted by the owner on 21 October 2026 and closed the same day
 
 M3d is not started.
 
+## 18. M3d as built: reliability and safeguards
+
+Built on 21 October 2026 after M3c's acceptance at 222ac28; conditionally accepted and closed the same day ([review/m3d/closure.md](review/m3d/closure.md)). The full record is [milestone-3d-completion.md](milestone-3d-completion.md), and the evidence is in [review/m3d/](review/m3d/results.md).
+
+| Owner's item | What was built or verified |
+| --- | --- |
+| A. Hostile evidence | A separate corpus of 13 samples carrying 12 attacks, delivered through a spreadsheet cell, a PDF, an OCR screenshot, a file name, a folder path, an email body and an audit-trail comment, mostly paraphrased. Expected outcomes are fixed per cell and per attack. Offline, an obedient scripted model is contained. Live, the reader, mapping, tester, console and reviewer were run against it. The instruction guard now also recognises text addressed to whoever reads the file, or rewriting the system prompt. The mapping prompt (`evidence-mapping/3`) treats claims about the audit as claims, and the mapping drops a quoted passage that instructs its reader. |
+| B. Isolation and least privilege | Cross-engagement attempts through every testing, review, workpaper and model-call route are refused, including by an engagement reviewer. A console tool cannot read another engagement's file. Job agents get no tools, and tool proposals or permission claims in an answer change nothing. The roster grants no forbidden action. |
+| C. Failure and retry | Eleven failure categories for the tester and three for the reviewer. None produces a PASS or an EXCEPTION. Retries are bounded and recorded per attempt, no call is made over budget, a person's decision survives, and the next run yields one result set. A schema-valid answer with no analysis is now an execution failure. |
+| D. Approvals and segregation of duties | Nine human decisions, called directly with four agents' principals, are refused 36 times out of 36 and change nothing. Every decision the engagement records names a person. |
+| E. Reproducibility | Migration 0098 adds `model_calls.config` and the append-only `model_call_outcomes`. The tester's inputs gain the hash of the attribute wording and the plan evidence per attribute. The record is read through `GET …/model-calls/{id}`. |
+| F. Evidence consistency | The approved plan's requirements per attribute, with necessity and what counts, reach the tester and the reviewer (`control-tester/5`, `independent-reviewer/5`). Supporting evidence never withholds a PASS, and missing required evidence never passes. This was measured on two consistency sets and on the M3c set classified by the plan. |
+| G. Population matching | A value is a whole cell, or a whole-token run in exactly one unambiguous cell, or confined to a column the label names. Ambiguous, missing, partial and conflicting identifiers stay unverified. |
+
+**Closure.** The mapper keeps assertions and instructions apart from its evidence as concerns for review (`evidence-mapping/4`, migration 0099). The reviewer endorses a pass only element by element with verified passages (`independent-reviewer/6`). A plan-consistent evaluation of the M3c set (m3c-plan/1) is kept beside the historical one. A recursing test that exhausted PostgreSQL's connections is fixed. Criterion 1 fails on the unseen attack set (u0606 D), accepted and recorded by the owner.
+
+M3e is not started.

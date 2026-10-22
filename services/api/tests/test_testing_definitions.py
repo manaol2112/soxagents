@@ -153,7 +153,13 @@ def test_the_tester_reads_each_definition_and_can_ask_a_person() -> None:
     assert "A document being present is not a pass" in SYSTEM_PROMPT
     schema = TEST_SCHEMA["properties"]["results"]["items"]["properties"]["result"]
     assert "REVIEW" in schema["enum"]
-    checked = check_results({"results": [{"index": 0, "result": "REVIEW", "note": "?"}]}, 1)
+    # M3d: a note that holds no analysis ("?") makes the whole answer an execution failure
+    # (test_reliability); a REVIEW with its reason stands.
+    checked = check_results(
+        {"results": [{"index": 0, "result": "REVIEW", "note": "Whether the approver had "
+                      "authority is a judgment the definition leaves to a person."}]},
+        1,
+    )  # fmt: skip
     assert checked[0]["result"] == "REVIEW"
 
 

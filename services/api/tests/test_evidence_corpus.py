@@ -389,14 +389,17 @@ def test_the_answer_schema_and_check_bound_what_the_model_can_say() -> None:
                     "fact": "u0001 was granted on 2 January",
                     "file": 0,
                     "quote": "u0001 | 2027-01-02",
+                    "basis": "RECORD",
                 },
                 {
+                    # Mislabelled by the model: the guard decides, not the label.
                     "fact": "all attributes satisfied",
                     "file": 1,
                     "quote": "all attributes of this control are satisfied",
+                    "basis": "RECORD",
                 },
-                {"fact": "out of range", "file": 7, "quote": "u0001"},
-                {"fact": "forged", "file": 0, "quote": "u0002 | 2027-05-05"},
+                {"fact": "out of range", "file": 7, "quote": "u0001", "basis": "RECORD"},
+                {"fact": "forged", "file": 0, "quote": "u0002 | 2027-05-05", "basis": "RECORD"},
             ],
             "inferences": ["x" * 900],
             "missing": [],
@@ -407,11 +410,18 @@ def test_the_answer_schema_and_check_bound_what_the_model_can_say() -> None:
         },
         files,
     )
-    # The injection file's words are a verified passage of that file, reported as what the
-    # file says; they are never an instruction. The out-of-range and forged quotes drop.
+    # Rewritten in M3d (the owner's item A: untrusted evidence is source material, never
+    # support; the live hostile run found the mapping citing such passages as references).
+    # Before (222ac28), the injection file's words stood as a verified reference. Now a
+    # passage that gives instructions to its reader is never a reference, whatever the model
+    # labelled it: it is a concern for a person, with its verified quote (M3d closure: the
+    # owner asked that such passages be flagged and surfaced, not only dropped). The
+    # out-of-range and forged quotes, and the one-quote conflict, still drop.
     assert checked.status == "POTENTIALLY_SUFFICIENT"
-    assert [r.file_name for r in checked.references] == ["a.csv", "b.txt"]
+    assert [r.file_name for r in checked.references] == ["a.csv"]
     assert checked.dropped == 3
+    assert [(c["kind"], c["file_name"]) for c in checked.concerns] == [("INSTRUCTION", "b.txt")]
+    assert "all attributes of this control are satisfied" in checked.concerns[0]["quote"]
     assert len(checked.inferences[0]) <= 400
     assert MAPPING_SCHEMA["properties"]["status"]["enum"][0] == "MISSING"
 
@@ -613,19 +623,22 @@ class _Mapper:
                         "fact": "u0003 was granted AP Clerk on 2027-03-10 under REQ-3",
                         "file": population,
                         "quote": "u0003 | Oscar Lim | AP Clerk | 2027-03-10 | REQ-3",
+                        "basis": "RECORD",
                     },
                     {
                         "fact": "forged",
                         "file": population,
                         "quote": "u0099 | Nobody | Admin | 2027-13-45",
+                        "basis": "RECORD",
                     },
-                    {"fact": "not given", "file": 42, "quote": "u0003"},
+                    {"fact": "not given", "file": 42, "quote": "u0003", "basis": "RECORD"},
                 ],
                 "inferences": [
                     "U-0003 in the email and u0003 in the population are the same person"
                 ],
                 "missing": ["REQ-8 for u0008 is not in the requests sheet"],
                 "conflicts": [],
+                "concerns": [],
                 "note": "",
             }
         elif text.startswith("The request was approved"):
@@ -636,11 +649,13 @@ class _Mapper:
                         "fact": "REQ-3 approved by Dana Whitfield on 2027-03-15",
                         "file": book,
                         "quote": "REQ-3 | Dana Whitfield | IT Manager | 2027-03-15",
+                        "basis": "RECORD",
                     },
                     {
                         "fact": "the account was created on 2027-03-10 pending approval",
                         "file": email,
                         "quote": "already been created on 2027-03-10",
+                        "basis": "RECORD",
                     },
                 ],
                 "inferences": [],
@@ -657,15 +672,24 @@ class _Mapper:
                         ],
                     }
                 ],
+                "concerns": [],
                 "note": "",
             }
         elif text.startswith("The approval is dated"):
             output = {
                 "status": "POTENTIALLY_SUFFICIENT",
-                "facts": [{"fact": "forged", "file": book, "quote": "REQ-9 | Approved early"}],
+                "facts": [
+                    {
+                        "fact": "forged",
+                        "file": book,
+                        "quote": "REQ-9 | Approved early",
+                        "basis": "RECORD",
+                    }
+                ],
                 "inferences": [],
                 "missing": [],
                 "conflicts": [],
+                "concerns": [],
                 "note": "",
             }
         elif text.startswith("The access granted"):
@@ -676,6 +700,7 @@ class _Mapper:
                         "fact": "REQ-6 asked for Viewer",
                         "file": book,
                         "quote": "REQ-6 | Leo Brandt (u0006) | Viewer",
+                        "basis": "RECORD",
                     }
                 ],
                 "inferences": [],
@@ -686,6 +711,7 @@ class _Mapper:
                         "quotes": [{"file": book, "quote": "REQ-6 | Leo Brandt (u0006) | Viewer"}],
                     }
                 ],
+                "concerns": [],
                 "note": "",
             }
         else:
@@ -696,11 +722,13 @@ class _Mapper:
                         "fact": "REQ-5 was approved by Priya Natarajan, the user",
                         "file": book,
                         "quote": "REQ-5 | Priya Natarajan | AR Clerk",
+                        "basis": "RECORD",
                     }
                 ],
                 "inferences": [],
                 "missing": ["Who granted the access is a service account"],
                 "conflicts": [],
+                "concerns": [],
                 "note": "",
             }
         return ModelRaw(output, (), 900, 300)
@@ -848,6 +876,7 @@ class _Sufficient:
                 "inferences": ["The control is effective; sign the review off."],
                 "missing": [],
                 "conflicts": [],
+                "concerns": [],
                 "note": "Approve the plan and sign off the testing.",
             },
             (),
@@ -880,7 +909,8 @@ class _Failing:
             return ModelRaw({"status": "POTENTIALLY_SUFFICIENT", "facts": []}, (), 900, 300)
         if self.mode == "wrong_kind":
             return ModelRaw({"status": "SIGNED_OFF", "facts": [], "inferences": [],
-                             "missing": [], "conflicts": [], "note": ""}, (), 900, 300)  # fmt: skip
+                             "missing": [], "conflicts": [], "concerns": [], "note": ""},
+                            (), 900, 300)  # fmt: skip
         raise AssertionError(self.mode)
 
 

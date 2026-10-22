@@ -1,0 +1,4 @@
+Change request CHG-3004: Payment proposal layout
+Raised on 2027-10-22
+Developer: Ravi Kumar
+Transport in the approved request: DEVK900704

@@ -28,6 +28,37 @@ export type MappingReference = {
 };
 
 export type MappingFact = { text: string; reference: number | null };
+
+/** A passage kept apart for a person to review, never support (M3d closure): it asserts
+ * something without the record of it, gives instructions to its reader, or claims to speak
+ * for the audit, a reviewer, an approver or a system. */
+export type ConcernKind =
+  | "INSTRUCTION"
+  | "IMPERSONATION"
+  | "AUDIT_CLAIM"
+  | "UNCORROBORATED";
+
+export type MappingConcern = {
+  kind: ConcernKind;
+  reason: string;
+  fileName: string;
+  quote: string;
+  location: string;
+};
+
+export const CONCERN_KIND_LABELS: Record<ConcernKind, string> = {
+  INSTRUCTION: "Instruction to the reader",
+  IMPERSONATION: "Claims to speak for someone",
+  AUDIT_CLAIM: "Claim about the audit",
+  UNCORROBORATED: "Needs corroboration",
+};
+
+const CONCERN_KINDS: ReadonlyArray<ConcernKind> = [
+  "INSTRUCTION",
+  "IMPERSONATION",
+  "AUDIT_CLAIM",
+  "UNCORROBORATED",
+];
 export type MappingConflict = { text: string; references: number[] };
 
 export type AttributeMapping = {
@@ -41,6 +72,7 @@ export type AttributeMapping = {
   inferences: string[];
   missing: string[];
   conflicts: MappingConflict[];
+  concerns: MappingConcern[];
   note: string;
   source: string;
 };
@@ -124,6 +156,23 @@ function parseReference(value: unknown): MappingReference | null {
   };
 }
 
+function parseConcern(value: unknown): MappingConcern | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const kind = CONCERN_KINDS.find((k) => k === value.kind);
+  if (kind === undefined || str(value.quote) === "") {
+    return null;
+  }
+  return {
+    kind,
+    reason: str(value.reason),
+    fileName: str(value.file_name),
+    quote: str(value.quote),
+    location: str(value.location),
+  };
+}
+
 function parseMapping(value: unknown): AttributeMapping | null {
   if (!isRecord(value) || typeof value.attribute_index !== "number") {
     return null;
@@ -160,6 +209,9 @@ function parseMapping(value: unknown): AttributeMapping | null {
           ? c.references.filter((n): n is number => typeof n === "number")
           : [],
       })),
+    concerns: (Array.isArray(value.concerns) ? value.concerns : [])
+      .map(parseConcern)
+      .filter((c): c is MappingConcern => c !== null),
     note: str(value.note),
     source: str(value.source),
   };
@@ -206,5 +258,11 @@ export function mappingSummary(run: EvidenceMappingRun): string {
   const parts = STATUSES.filter((s) => counts.has(s)).map(
     (s) => `${counts.get(s)} ${MAPPING_STATUS_LABELS[s].toLowerCase()}`,
   );
+  const concerns = run.mappings.reduce((n, m) => n + m.concerns.length, 0);
+  if (concerns > 0) {
+    parts.push(
+      `${concerns} ${concerns === 1 ? "passage" : "passages"} for review`,
+    );
+  }
   return parts.length > 0 ? parts.join(" · ") : "No attributes mapped";
 }

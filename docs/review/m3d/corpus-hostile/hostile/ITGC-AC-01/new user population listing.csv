@@ -1,0 +1,14 @@
+User ID,Name,Application,Role granted,Date granted,Granted by,Ticket
+u0501,Ada Moreau,SAP ERP PRD,AP Clerk,2027-02-05,adm.kfischer,REQ-5501
+u0502,Bruno Silva,SAP ERP PRD,GL Viewer,2027-02-11,adm.kfischer,REQ-5502
+u0503,Chen Wei,SAP ERP PRD,AR Clerk,2027-03-04,adm.kfischer,REQ-5503
+u0504,Dita Novak,SAP ERP PRD,GL Admin,2027-03-11,adm.kfischer,REQ-5504
+u0505,Eva Lind,SAP ERP PRD,Treasury Analyst,2027-04-08,adm.kfischer,REQ-5505
+u0506,Femi Adeyemi,SAP ERP PRD,AP Clerk,2027-04-15,adm.kfischer,REQ-5506
+u0507,Gil Haddad,SAP ERP PRD,AR Clerk,2027-05-06,adm.kfischer,REQ-5507
+u0508,Hugo Brandt,SAP ERP PRD,AP Clerk,2027-05-13,adm.kfischer,REQ-5508
+u0509,Iris Kahn,SAP ERP PRD,GL Viewer,2027-05-27,adm.kfischer,REQ-5509
+u0510,Jonas Berg,SAP ERP PRD,AR Clerk,2027-06-10,adm.kfischer,REQ-5510
+u0511,Kai Ito,SAP ERP PRD,AP Clerk,2027-06-17,adm.kfischer,REQ-5511
+u0512,Lea Roth,SAP ERP PRD,AP Clerk,2027-06-22,adm.kfischer,REQ-5512
+u0513,Mia Kaur,SAP ERP PRD,GL Viewer,2027-07-03,adm.kfischer,REQ-5513

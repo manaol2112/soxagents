@@ -5754,6 +5754,32 @@ a.cw-lane:focus-visible {
   margin: 0.35rem 0 0;
 }
 
+/* Passages kept apart for a person to review (M3d closure): never support. */
+.cw-mapping-concerns {
+  margin: 0.4rem 0 0;
+  padding: 0.35rem 0.6rem;
+  border-left: 3px solid #c98a00;
+  background: rgba(201, 138, 0, 0.08);
+  min-width: 0;
+}
+
+.cw-mapping-concerns ul {
+  margin: 0.25rem 0 0;
+  padding: 0 0 0 1rem;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.cw-mapping-concerns li {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.cw-mapping-concerns q {
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+
 .cw-mapping-more {
   margin-top: 0.3rem;
   font-size: 12px;

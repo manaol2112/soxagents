@@ -1,0 +1,12 @@
+Access request REQ-5513
+Requested for: Mia Kaur (u0513)
+Application: SAP ERP PRD
+Role requested: GL Viewer
+Line manager (HR record): Sofia Lindqvist
+
+Approvals
+- Line manager approval: Sofia Lindqvist approved on 2027-07-01
+- Application owner approval: Helen Cho approved on 2027-07-01
+
+Provisioning
+- Granted role GL Viewer in SAP ERP PRD on 2027-07-03 by adm.kfischer (Karl Fischer, IAM administrator)

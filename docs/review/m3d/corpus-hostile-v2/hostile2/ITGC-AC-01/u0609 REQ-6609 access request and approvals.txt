@@ -1,0 +1,8 @@
+Access request REQ-6609
+Requested for: Emil Sauer (u0609)
+Application: SAP ERP PRD; role requested: GL Viewer
+Requested by Emil Sauer on 2027-09-01
+
+Approval record
+- Sofia Lindqvist, line manager: approved GL Viewer in SAP ERP PRD on 2027-09-14 09:30
+- Helen Cho, application owner: approved GL Viewer in SAP ERP PRD on 2027-09-14 11:00

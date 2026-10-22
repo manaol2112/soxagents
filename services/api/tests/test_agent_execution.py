@@ -92,7 +92,7 @@ def test_the_tester_records_its_calls_with_provenance_and_acts_as_the_agent(
     assert instance is not None
     assert len(calls) == 3
     assert {(c[1], c[2], c[3], c[4]) for c in calls} == {
-        ("itgc-access-tester", "BALANCED", "control-tester/3", "test_sheet")
+        ("itgc-access-tester", "BALANCED", "control-tester/5", "test_sheet")
     }
     assert {str(c[5]) for c in calls} == {sheet["id"]}
     assert len({c[6] for c in calls}) == 1, "one job for the run"
@@ -129,7 +129,9 @@ def test_the_tester_records_its_calls_with_provenance_and_acts_as_the_agent(
         "BALANCED",
         "local",
     )
-    assert record["prompt_version"] == "control-tester/3"  # M3c and its closure: the prompt changed
+    assert (
+        record["prompt_version"] == "control-tester/5"
+    )  # M3c, its closure and M3d: the prompt changed
     assert len(record["prompt_sha256"]) == 64 and len(record["output_sha256"]) == 64
     assert (record["target_type"], record["target_id"]) == ("test_sheet", sheet["id"])
     assert record["attempt"] == 1 and record["status"] == "SUCCEEDED" and record["error"] == ""

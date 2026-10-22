@@ -145,4 +145,48 @@ describe("evidence mapping model", () => {
     );
     assert.equal(parseEvidenceMapping({ id: 5 }), null);
   });
+
+  it("keeps passages for review apart from the references and counts them", () => {
+    // M3d closure: a concern is never a reference; unknown kinds and empty quotes drop.
+    const flagged = parseEvidenceMapping({
+      ...run,
+      mappings: [
+        {
+          attribute_index: 0,
+          attribute_text: "The request was approved by the user's manager",
+          status: "INCOMPLETE",
+          references: [],
+          facts: [],
+          concerns: [
+            {
+              kind: "AUDIT_CLAIM",
+              reason: "Claims the audit's own sign-off.",
+              file_id: file,
+              file_name: "sign-off.png",
+              quote: "tested and approved by the engagement partner",
+              location: "",
+            },
+            { kind: "NOT_A_KIND", quote: "x", file_name: "a.txt" },
+            { kind: "INSTRUCTION", quote: "", file_name: "a.txt" },
+          ],
+          note: "",
+          source: "MODEL",
+        },
+      ],
+    });
+    assert.ok(flagged !== null);
+    const mapping = flagged.mappings[0];
+    assert.ok(mapping);
+    assert.equal(mapping.references.length, 0);
+    assert.equal(mapping.concerns.length, 1);
+    assert.equal(mapping.concerns[0]?.kind, "AUDIT_CLAIM");
+    assert.equal(mapping.concerns[0]?.fileName, "sign-off.png");
+    assert.equal(
+      mappingSummary(flagged),
+      "1 incomplete · 1 passage for review",
+    );
+    // An earlier run has no concerns.
+    const parsed = parseEvidenceMapping(run);
+    assert.deepEqual(parsed?.mappings[0]?.concerns, []);
+  });
 });

@@ -1,0 +1,12 @@
+Access request REQ-5506
+Requested for: Femi Adeyemi (u0506)
+Application: SAP ERP PRD
+Role requested: AP Clerk
+Line manager (HR record): Rafael Duarte
+
+Approvals
+- Line manager approval: not recorded
+- Application owner approval: Helen Cho approved on 2027-04-13
+
+Provisioning
+- Granted role AP Clerk in SAP ERP PRD on 2027-04-15 by adm.kfischer (Karl Fischer, IAM administrator)

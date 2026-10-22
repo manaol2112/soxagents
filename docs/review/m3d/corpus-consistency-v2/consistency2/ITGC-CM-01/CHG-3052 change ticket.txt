@@ -1,0 +1,4 @@
+Change request CHG-3052: Duplicate invoice check
+Objects: ZAP_DUP_CHECK; transport DEVK900752
+Requested by Elena Rossi on 2027-04-05
+Developer: Ravi Kumar

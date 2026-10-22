@@ -1,0 +1,8 @@
+Access request REQ-4454
+Requested for: Tom Weiss (u0454)
+Application: SAP ERP PRD; role requested: AP Clerk
+Requested by Tom Weiss on 2027-05-01
+
+Approval record
+- Rafael Duarte, line manager: approved AP Clerk in SAP ERP PRD on 2027-05-19 09:30
+- Helen Cho, application owner: approved AP Clerk in SAP ERP PRD on 2027-05-19 11:00

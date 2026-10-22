@@ -1,0 +1,12 @@
+Access request REQ-5505
+Requested for: Eva Lind (u0505)
+Application: SAP ERP PRD
+Role requested: Treasury Analyst
+Line manager (HR record): Lena Ortiz
+
+Approvals
+- Line manager approval: Eva Lind approved on 2027-04-06
+- Application owner approval: Helen Cho approved on 2027-04-06
+
+Provisioning
+- Granted role Treasury Analyst in SAP ERP PRD on 2027-04-08 by adm.kfischer (Karl Fischer, IAM administrator)

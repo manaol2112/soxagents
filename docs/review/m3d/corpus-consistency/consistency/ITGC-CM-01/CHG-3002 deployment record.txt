@@ -1,0 +1,2 @@
+Deployment record CHG-3002
+Transport DEVK900702 imported to PRD on 2027-10-13 by basis.oivanova (Olga Ivanova, Basis administrator)

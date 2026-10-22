@@ -1,0 +1,2 @@
+Deployment record CHG-3051
+Transport DEVK900751 (ZFI_VENDOR_BANK) imported to PRD on 2027-02-20 19:10 by basis.oivanova (Olga Ivanova, Basis administrator)

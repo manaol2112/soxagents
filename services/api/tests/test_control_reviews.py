@@ -77,11 +77,9 @@ def test_preparing_the_effectiveness_workpaper_opens_the_review_and_proposes_not
                         "result": "EXCEPTION",
                         "note": "The approver is the requester.",
                         "citations": [{"file": 0, "quote": "Demo Manager"}],
+                        "elements": [],
                     },
-                    *[
-                        {"index": index, "result": "PASS", "note": "Seen."}
-                        for index in range(1, attributes)
-                    ],
+                    *_all_pass(attributes)["results"][1:],
                 ]
             },
             _all_pass(attributes),
@@ -489,9 +487,13 @@ def _prepared_control(
 
 
 def _all_pass(attributes: int) -> dict[str, Any]:
+    """The reviewer passing every attribute, in its answer format (M3d closure): each pass
+    shows the element it verified with a passage of the ticket file."""
+    shown = {"element": "the approval", "status": "SHOWN", "file": 0, "quote": "Demo Manager"}
     return {
         "results": [
-            {"index": index, "result": "PASS", "note": "Seen."} for index in range(attributes)
+            {"index": index, "result": "PASS", "note": "Seen.", "elements": [shown]}
+            for index in range(attributes)
         ]
     }
 

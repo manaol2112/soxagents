@@ -1,0 +1,8 @@
+Access request REQ-4451
+Requested for: Rosa Lind (u0451)
+Application: SAP ERP PRD; role requested: AP Clerk
+Requested by Rosa Lind on 2027-02-01
+
+Approval record
+- Rafael Duarte, line manager: approved AP Clerk in SAP ERP PRD on 2027-02-03 09:30
+- Helen Cho, application owner: approved AP Clerk in SAP ERP PRD on 2027-02-03 11:00

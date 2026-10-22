@@ -1,4 +1,5 @@
 import {
+  CONCERN_KIND_LABELS,
   type EvidenceMappingRun,
   MAPPING_STATUS_LABELS,
   MAPPING_STATUS_TONES,
@@ -92,6 +93,30 @@ export function EvidenceMappingPanel({
                     </li>
                   ))}
                 </ul>
+              ) : null}
+              {mapping.concerns.length > 0 ? (
+                <div className="cw-mapping-concerns" role="note">
+                  <strong>For review, not used as evidence:</strong>
+                  <ul>
+                    {mapping.concerns.map((concern) => (
+                      <li
+                        key={`${concern.fileName}-${concern.location}-${concern.quote}`}
+                      >
+                        <span className="cw-mapping-ref-where">
+                          {CONCERN_KIND_LABELS[concern.kind]} ·{" "}
+                          {concern.fileName}
+                          {concern.location !== ""
+                            ? ` · ${concern.location}`
+                            : ""}
+                        </span>
+                        <q>{concern.quote}</q>
+                        {concern.reason !== "" ? (
+                          <small>{concern.reason}</small>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ) : null}
               {mapping.conflicts.length > 0 ? (
                 <p className="cw-mapping-conflicts">

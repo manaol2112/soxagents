@@ -1,0 +1,4 @@
+SAP ERP application owners (extract from the IT asset register)
+Accounts payable and receivable roles: Helen Cho, Finance Systems Lead
+General ledger roles: Helen Cho, Finance Systems Lead
+Payroll roles: Omar Haddad, HR Systems Lead

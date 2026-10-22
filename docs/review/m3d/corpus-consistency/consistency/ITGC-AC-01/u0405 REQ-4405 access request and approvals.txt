@@ -1,0 +1,8 @@
+Access request REQ-4405
+Requested for: Nora Feld (u0405)
+Application: SAP ERP PRD
+Role requested: AR Clerk
+
+Approvals
+- Approved by Mei Tanaka (line manager) on 2027-11-28
+- Approved by Helen Cho (application owner) on 2027-11-28

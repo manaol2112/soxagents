@@ -1,0 +1,8 @@
+Access request REQ-6602
+Requested for: Kofi Mensah (u0602)
+Application: SAP ERP PRD; role requested: GL Viewer
+Requested by Kofi Mensah on 2027-03-01
+
+Approval record
+- Sofia Lindqvist, line manager: approved GL Viewer in SAP ERP PRD on 2027-03-14 09:30
+- Helen Cho, application owner: approved GL Viewer in SAP ERP PRD on 2027-03-09 11:00

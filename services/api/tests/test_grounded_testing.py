@@ -71,20 +71,28 @@ def grounded_engagement(
     out: Path,
     manifest_year: int | None = None,
     builder: Any = build,
+    before_upload: Any = None,
+    read: Any = None,
 ) -> tuple[dict[str, Any], TestClient, Any, Manifest, dict[str, dict[str, Any]]]:
     """A launched engagement with both controls' populations read, accepted and sampled,
     and every sample's evidence uploaded on the sample request and read (no model). The
     scenario set is written for the engagement's own period year. Returns the sheets by
     control reference."""
     team, client, scheduler = _engagement(database, slug)
-    manifest = builder(out, manifest_year or _year(database, team))
+    built = builder(out, manifest_year or _year(database, team))
+    # The hostile set's manifest also holds its attacks; the harness needs its control.
+    manifest = built.as_manifest() if hasattr(built, "as_manifest") else built
     base = _base(team)
+    # Hooks for the live runs (M3d): a firm setting before upload, and the live reader.
+    read_all = read or _read_all
+    if before_upload is not None:
+        before_upload(client, team)
     for control in manifest.controls:
         kickoff = _request(database, team, control.control_ref)
         _upload(client, team, Path(control.population.path).name,
                 (out / control.population.path).read_bytes(), control.population.content_type,
                 kickoff["id"])  # fmt: skip
-    _read_all(database, scheduler)
+    read_all(database, scheduler)
     for control in manifest.controls:
         control_id = str(_control(database, team, control.control_ref))
         _accept_population(client, team, control_id)
@@ -100,9 +108,23 @@ def grounded_engagement(
         samples = approved.json()["sample_request_id"]
         for sample in control.samples:
             for item in sample.files:
-                _upload(client, team, Path(item.path).name, (out / item.path).read_bytes(),
+                # The name as the client sent it: the path below the control's folder (a
+                # plain file name for the M3c sets; a folder path in the hostile set).
+                sent = item.path.split(f"{control.control_ref}/", 1)[-1]
+                if "/" in sent:
+                    # A folder path never reaches the store: intake refuses the name, and
+                    # the client sends the file again under its own name (M3d).
+                    refused = client.post(
+                        f"{base}/evidence-uploads",
+                        params={"batch_id": str(uuid4()), "name": sent, "request_id": samples},
+                        content=(out / item.path).read_bytes(),
+                        headers={"content-type": item.content_type},
+                    )
+                    assert refused.status_code == 422, refused.text
+                    sent = Path(sent).name
+                _upload(client, team, sent, (out / item.path).read_bytes(),
                         item.content_type, samples)  # fmt: skip
-    _read_all(database, scheduler)
+    read_all(database, scheduler)
     return team, client, scheduler, manifest, sheets_by_control(client, team, database)
 
 
@@ -172,7 +194,23 @@ class Scripted(_Provider):
         output = self.decide(label, request.prompt)
         if isinstance(output, Exception):
             raise output
-        return ModelRaw(output, (), 900, 300)
+        return ModelRaw(with_elements(output, request), (), 900, 300)
+
+
+def with_elements(output: dict[str, Any], request: ModelRequest) -> dict[str, Any]:
+    """The reviewer's answer format (M3d closure): a scripted pass names the element it
+    verified, shown by the passages it cites. A tester's answer is returned unchanged."""
+    item = request.output_schema.get("properties", {}).get("results", {}).get("items", {})
+    if "elements" not in item.get("properties", {}) or not isinstance(output.get("results"), list):
+        return output
+    return {**output, "results": [
+        entry if not isinstance(entry, dict) or "elements" in entry
+        else {**entry, "elements": [
+            {"element": "what the attribute requires", "status": "SHOWN", **citation}
+            for citation in entry.get("citations", []) if isinstance(citation, dict)
+        ] if entry.get("result") == "PASS" else []}
+        for entry in output["results"]
+    ]}  # fmt: skip
 
 
 def answer(results: list[dict[str, Any]]) -> dict[str, Any]:

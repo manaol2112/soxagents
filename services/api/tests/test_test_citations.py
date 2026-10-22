@@ -97,7 +97,10 @@ def test_results_carry_their_checked_citations() -> None:
     assert [len(item["citations"]) for item in results] == [2, 0]
     assert results[0]["citations"][1]["file_id"] == str(files[1].file_id)
     # Without the files, as before, results carry no citations.
-    plain = check_results({"results": [{"index": 0, "result": "PASS", "note": "ok"}]}, 1)
+    # M3d: "ok" alone is not analysis (the answer would be an execution failure).
+    plain = check_results(
+        {"results": [{"index": 0, "result": "PASS", "note": "Approved in the ticket."}]}, 1
+    )
     assert plain[0]["citations"] == []
 
 

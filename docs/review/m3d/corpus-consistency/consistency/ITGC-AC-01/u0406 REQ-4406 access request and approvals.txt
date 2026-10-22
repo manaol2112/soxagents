@@ -1,0 +1,8 @@
+Access request REQ-4406
+Requested for: Tariq Aziz (u0406)
+Application: SAP ERP PRD
+Role requested: GL Viewer
+
+Approvals
+- Approved by Paul Brennan (line manager) on 2027-11-06
+- Approved by Helen Cho (application owner) on 2027-11-06
