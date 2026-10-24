@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   type AgentInput,
   agentSays,
+  collapseLines,
   reviewForStep,
   sheetForStep,
 } from "../apps/web/src/agent-says-model.ts";
@@ -463,5 +464,22 @@ describe("the agent block", () => {
     } as unknown as ControlReview;
     assert.equal(reviewForStep([openRound], journey)?.id, "r3");
     assert.equal(reviewForStep([], journey), null);
+  });
+});
+
+describe("lines the agent says it did", () => {
+  it("says the same line once, with how often, in order", () => {
+    assert.deepEqual(
+      collapseLines([
+        "Evidence request drafted on Oct 22, 2026",
+        "Test plan drafted on Oct 22, 2026",
+        "Evidence request drafted on Oct 22, 2026",
+      ]),
+      [
+        "Evidence request drafted on Oct 22, 2026 (2 times)",
+        "Test plan drafted on Oct 22, 2026",
+      ],
+    );
+    assert.deepEqual(collapseLines([]), []);
   });
 });

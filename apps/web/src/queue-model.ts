@@ -15,6 +15,9 @@ export type QueueItem = {
   stage: "SETUP" | "PLANS" | "EVIDENCE" | "TESTING" | "REVIEW" | "CLOSE";
   controlId: string | null;
   controlRef: string | null;
+  /** How the control instance is named everywhere: its ID, then its application, so one
+   * library control scoped to two systems reads as two (the API's control_label). */
+  controlLabel: string | null;
   phase: string | null;
   roundId: string | null;
   roundKind: string | null;
@@ -24,10 +27,20 @@ export type QueueItem = {
   authorized: boolean;
   ready: boolean;
   blockers: string[];
+  /** The blockers as holds: a stable code, the same words, where the hold is cleared
+   * when the app can clear it, and whether only an administrator can (Home, H2). */
+  holds: QueueHold[];
   blocks: boolean;
   bucket: QueueBucket;
   link: { section: string; query: Record<string, string> };
   at: string | null;
+};
+
+export type QueueHold = {
+  code: string;
+  text: string;
+  fix: { section: string; query: Record<string, string> } | null;
+  system: boolean;
 };
 
 export type Queue = {
@@ -75,6 +88,44 @@ const SECTIONS = new Set([
 const QUERY_KEYS = new Set(["control", "step", "tab", "request", "filter"]);
 const QUERY_VALUE = /^[A-Za-z0-9_,-]{1,200}$/;
 
+/** A link the API gave, kept only for the pages and query keys the web opens. */
+function parseLink(
+  value: unknown,
+): { section: string; query: Record<string, string> } | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const section = str(value.section);
+  if (!SECTIONS.has(section)) {
+    return null;
+  }
+  const query: Record<string, string> = {};
+  if (isRecord(value.query)) {
+    for (const [key, text] of Object.entries(value.query)) {
+      if (
+        QUERY_KEYS.has(key) &&
+        typeof text === "string" &&
+        QUERY_VALUE.test(text)
+      ) {
+        query[key] = text;
+      }
+    }
+  }
+  return { section, query };
+}
+
+function parseHolds(value: unknown): QueueHold[] {
+  return (Array.isArray(value) ? value : [])
+    .filter(isRecord)
+    .filter((hold) => str(hold.code) !== "" && str(hold.text) !== "")
+    .map((hold) => ({
+      code: str(hold.code),
+      text: str(hold.text),
+      fix: parseLink(hold.fix),
+      system: hold.system === true,
+    }));
+}
+
 export function parseQueue(value: unknown): Queue | null {
   if (!isRecord(value) || !Array.isArray(value.items)) {
     return null;
@@ -113,6 +164,7 @@ export function parseQueue(value: unknown): Queue | null {
       stage: stage as QueueItem["stage"],
       controlId: maybe(raw.control_id),
       controlRef: maybe(raw.control_ref),
+      controlLabel: maybe(raw.control_label) ?? maybe(raw.control_ref),
       phase: maybe(raw.phase),
       roundId: maybe(raw.round_id),
       roundKind: maybe(raw.round_kind),
@@ -129,6 +181,7 @@ export function parseQueue(value: unknown): Queue | null {
       blockers: Array.isArray(raw.blockers)
         ? raw.blockers.filter((b): b is string => typeof b === "string")
         : [],
+      holds: parseHolds(raw.holds),
       blocks: raw.blocks === true,
       bucket,
       link: { section, query },
@@ -161,13 +214,13 @@ export const BUCKET_LABELS: Record<QueueBucket, string> = {
 };
 
 export const BUCKET_NOTES: Record<QueueBucket, string> = {
-  MINE: "Yours to do now: the role is yours by assignment or engagement role, and the record is ready.",
+  MINE: "Yours to act on now.",
   WAITING:
-    "Someone else's: the client, the preparer, the independent reviewer or an approver.",
+    "With someone else: the client, the preparer, the independent reviewer or an approver.",
   BLOCKED:
-    "A prerequisite is unmet or no one can act: what holds each item is listed on it.",
+    "Held until something else happens; what holds each item is shown on it.",
   UPCOMING:
-    "Not due yet: a phase not released, a retest window not reached, or agent work queued for a worker.",
+    "Not due yet: a phase not released, a retest window not reached, or agent work waiting to start.",
 };
 
 const ROLE_WORDS: Record<string, string> = {
@@ -204,8 +257,9 @@ const PHASE_WORDS: Record<string, string> = {
 /** "ITGC-AC-01 · Retest round" or "ITGC-AC-01 · Interim". */
 export function whereWords(item: QueueItem): string {
   const parts: string[] = [];
-  if (item.controlRef !== null) {
-    parts.push(item.controlRef);
+  const control = item.controlLabel ?? item.controlRef;
+  if (control !== null) {
+    parts.push(control);
   }
   if (item.roundKind !== null) {
     parts.push(`${PHASE_WORDS[item.roundKind] ?? item.roundKind} round`);
@@ -286,11 +340,20 @@ export function queueHref(
   organizationId: string,
   projectId: string,
 ): string {
+  return linkHref(item.link, organizationId, projectId);
+}
+
+/** The address of a link the API gave (an item's, or a hold's fix). */
+export function linkHref(
+  link: { section: string; query: Record<string, string> },
+  organizationId: string,
+  projectId: string,
+): string {
   const params = new URLSearchParams();
   params.set("organization", organizationId);
   params.set("project", projectId);
-  params.set("section", item.link.section);
-  for (const [key, value] of Object.entries(item.link.query)) {
+  params.set("section", link.section);
+  for (const [key, value] of Object.entries(link.query)) {
     params.set(key, value);
   }
   return `/?${params.toString()}`;
@@ -303,6 +366,15 @@ export type QueueRowGroup =
 /** Rows for display: a control's next step repeated across many controls (such as
  * "Approve the test plan" on every unapproved control) is shown once with its count,
  * opened for the controls; every other item stands alone. Identity is kept per item. */
+/** What a group of one repeated step counts: drafted requests (several to a control) or
+ * controls (one item each). */
+export function groupCount(items: readonly QueueItem[]): string {
+  const noun = items.every((item) => item.kind === "request-draft")
+    ? "request"
+    : "control";
+  return `${items.length} ${noun}${items.length === 1 ? "" : "s"}`;
+}
+
 export function collapseRows(
   items: readonly QueueItem[],
   least = 3,

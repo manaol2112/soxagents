@@ -316,9 +316,10 @@ def _evidence(
         ).fetchall()
     }
     tags = {
-        UUID(str(row[0])): (str(row[1]), row[2])
+        UUID(str(row[0])): (str(row[1]), row[2], list(row[3] or []))
         for row in connection.execute(
-            "SELECT evidence_file_id, scope, engagement_application_id "
+            "SELECT evidence_file_id, scope, engagement_application_id, "
+            "engagement_application_ids "
             "FROM evidence_file_applications WHERE project_id = %s",
             (project_id,),
         ).fetchall()
@@ -345,8 +346,12 @@ def _evidence(
     for found in facts.values():
         files = set(own.get(found.id, set()))
         for file_id in by_ref.get(found.control_ref, set()) - files:
-            scope, application = tags.get(file_id, ("UNKNOWN", None))
-            if scope == "ALL" or (scope == "ONE" and application == found.application_id):
+            scope, application, several = tags.get(file_id, ("UNKNOWN", None, []))
+            if (
+                scope == "ALL"
+                or (scope == "ONE" and application == found.application_id)
+                or (scope == "SOME" and found.application_id in several)
+            ):
                 files.add(file_id)
         found.evidence_read = len(files)
 

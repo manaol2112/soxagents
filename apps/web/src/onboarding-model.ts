@@ -1958,6 +1958,51 @@ export function candidateSections(
     .filter((part) => part.items.length > 0);
 }
 
+/**
+ * The areas of a system's candidate controls, in the order given, with how many of each
+ * are chosen: how the wizard shows where the controls are and moves between them. A
+ * control listed under more than one source counts once.
+ */
+export function candidateAreas(
+  candidates: readonly Candidate[],
+  selected: Readonly<Record<string, boolean>> | null,
+  order: readonly string[],
+): Array<{ domain: string; total: number; chosen: number }> {
+  const refs = new Map<string, Set<string>>();
+  for (const item of candidates) {
+    refs.set(
+      item.domain,
+      (refs.get(item.domain) ?? new Set()).add(item.controlRef),
+    );
+  }
+  const known = [
+    ...order,
+    ...[...refs.keys()].filter((key) => !order.includes(key)),
+  ];
+  return known
+    .filter((domain) => refs.has(domain))
+    .map((domain) => {
+      const area = [...(refs.get(domain) ?? [])];
+      return {
+        domain,
+        total: area.length,
+        chosen: area.filter((ref) => selected?.[ref] === true).length,
+      };
+    });
+}
+
+/** The selection with every one of these controls chosen, or none of them. */
+export function chooseAll(
+  selected: Readonly<Record<string, boolean>> | null,
+  items: readonly Candidate[],
+  value: boolean,
+): Record<string, boolean> {
+  return {
+    ...(selected ?? {}),
+    ...Object.fromEntries(items.map((item) => [item.controlRef, value])),
+  };
+}
+
 export type SystemAssessment = {
   status: "IDLE" | "PENDING" | "WORKING";
   source: "NONE" | "RULES" | "AGENT";
@@ -2035,15 +2080,25 @@ export function systemStatus(
   return system.controlsInScope > 0 ? "scoped" : "no-controls";
 }
 
-/** The wizard's starting selection: the team's saved decision, else what is in scope.
- * A recommendation is never selected for the team. */
+/**
+ * The wizard's starting selection: the team's saved decision, else what is in scope.
+ * A recommendation is never selected for the team. A system just added in the wizard
+ * (`added`) starts with nothing selected but what was decided: its copies of the
+ * standards take their scope from another system's when added, and that is not a choice
+ * anyone made for this one.
+ */
 export function initialSelection(
   candidates: readonly Candidate[],
+  added = false,
 ): Record<string, boolean> {
   return Object.fromEntries(
     candidates.map((item) => [
       item.controlRef,
-      item.decision === null ? item.inScope : item.decision === "SELECTED",
+      item.decision !== null
+        ? item.decision === "SELECTED"
+        : added
+          ? false
+          : item.inScope,
     ]),
   );
 }
@@ -2923,6 +2978,35 @@ export type SetupWrite =
     };
 
 /** Turn one setup form into one API call. Every value is checked before it is sent. */
+const TEAM_ROLES = ["LEAD", "PREPARER", "REVIEWER"];
+
+/**
+ * The roles a person is given in one step: the first as their role, any others as
+ * additional roles (development only; the API refuses them while reviewer independence
+ * is required). Null when none is chosen or one is not a role.
+ */
+export function teamRoles(
+  fields: Record<string, string>,
+  multi: Record<string, string[]>,
+): { engagement_role: string; additional_roles?: string[] } | null {
+  const chosen = [
+    ...new Set(
+      multi.engagement_role ??
+        (fields.engagement_role ? [fields.engagement_role] : []),
+    ),
+  ];
+  const [first, ...rest] = chosen;
+  if (
+    first === undefined ||
+    chosen.some((role) => !TEAM_ROLES.includes(role))
+  ) {
+    return null;
+  }
+  return rest.length === 0
+    ? { engagement_role: first }
+    : { engagement_role: first, additional_roles: rest };
+}
+
 export function setupWrite(
   fields: Record<string, string>,
   multi: Record<string, string[]> = {},
@@ -2958,10 +3042,13 @@ export function setupWrite(
       "reporting_objectives" in fields
         ? text("reporting_objectives", 2000)
         : "";
+    // The profile step's one Save carries the scope too, written with the profile.
+    const scope = "scope" in fields ? text("scope", 4000) : "";
     if (
       client === null ||
       fiscal === null ||
       objectives === null ||
+      scope === null ||
       !ENGAGEMENT_TYPES.some((item) => item.id === type) ||
       (period !== "" && !DATE.test(period)) ||
       (start !== "" && !DATE.test(start)) ||
@@ -2990,6 +3077,7 @@ export function setupWrite(
         ...("reporting_objectives" in fields
           ? { reporting_objectives: objectives }
           : {}),
+        ...("scope" in fields ? { scope } : {}),
       },
     };
   }
@@ -3143,11 +3231,8 @@ export function setupWrite(
   }
   if (intent === "add-member") {
     const userId = fields.user_id ?? "";
-    const role = fields.engagement_role ?? "";
-    if (
-      !UUID.test(userId) ||
-      !["LEAD", "PREPARER", "REVIEWER"].includes(role)
-    ) {
+    const roles = teamRoles(fields, multi);
+    if (!UUID.test(userId) || roles === null) {
       return { error: "invalid" };
     }
     return {
@@ -3155,18 +3240,18 @@ export function setupWrite(
       step: "team",
       method: "POST",
       path: `${base}/team`,
-      body: { user_id: userId, engagement_role: role },
+      body: { user_id: userId, ...roles },
     };
   }
   if (intent === "invite-member") {
     const email = inviteEmail(fields.email ?? "");
     const name = text("display_name", 120);
-    const role = fields.engagement_role ?? "";
+    const roles = teamRoles(fields, multi);
     if (
       email === null ||
       name === null ||
       /[<>@\r\n]/.test(name) ||
-      !["LEAD", "PREPARER", "REVIEWER"].includes(role)
+      roles === null
     ) {
       return { error: "invalid" };
     }
@@ -3175,7 +3260,7 @@ export function setupWrite(
       step: "team",
       method: "POST",
       path: `${base}/team/invite`,
-      body: { email, display_name: name, engagement_role: role },
+      body: { email, display_name: name, ...roles },
     };
   }
   if (

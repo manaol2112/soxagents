@@ -171,19 +171,23 @@ function StepRow({
   );
 }
 
-function JourneyBar({ next }: { next: NextSteps }) {
+/** The engagement's six stages, the current one marked; with `hrefFor`, each stage opens
+ * the place its work is done (Home, docs/home-plan.md). */
+export function JourneyBar({
+  next,
+  hrefFor,
+}: {
+  next: NextSteps;
+  hrefFor?: ((stage: StageKey) => string) | undefined;
+}) {
   return (
     <nav className="home-journey card" aria-label="Engagement stages">
       <ol>
         {JOURNEY.map((key, index) => {
           const stage = next.stages.find((item) => item.key === key);
           const status = stage?.status ?? "UPCOMING";
-          return (
-            <li
-              key={key}
-              className={`home-stage is-${status.toLowerCase()}`}
-              aria-current={status === "CURRENT" ? "step" : undefined}
-            >
+          const body = (
+            <>
               <span className="home-stage-mark" aria-hidden="true">
                 {status === "DONE" ? (
                   <UiIcon name="check" size={13} />
@@ -198,6 +202,21 @@ function JourneyBar({ next }: { next: NextSteps }) {
                   {stage?.summary ?? ""}
                 </small>
               </span>
+            </>
+          );
+          return (
+            <li
+              key={key}
+              className={`home-stage is-${status.toLowerCase()}`}
+              aria-current={status === "CURRENT" ? "step" : undefined}
+            >
+              {hrefFor === undefined ? (
+                body
+              ) : (
+                <a className="home-stage-link" href={hrefFor(key)}>
+                  {body}
+                </a>
+              )}
             </li>
           );
         })}

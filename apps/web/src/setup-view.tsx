@@ -5,7 +5,6 @@ import { ConfirmAction, OnceForm } from "./confirm-action";
 import { DraftingShow } from "./drafting-show";
 import { editEngagementHref } from "./engagement-create";
 import {
-  canLaunch,
   type EngagementPhase,
   engagementPhase,
   launchStepLabel,
@@ -13,9 +12,11 @@ import {
   setupHeadAction,
   setupOpen,
 } from "./engagement-lifecycle";
+import { OptionalMark, RequiredMark } from "./field-marks";
 import { agentMonogram, formatDate, initials } from "./format";
 import {
   type LaunchNext,
+  type LaunchSummary,
   launchNextSteps,
   launchReport,
   METHODOLOGIES,
@@ -43,6 +44,8 @@ import {
   WorkpapersStep,
 } from "./onboarding-view";
 import { PeriodDates } from "./period-dates";
+import { RecordDialog } from "./record-dialog";
+import { SaveWhenChanged } from "./save-when-changed";
 import { impactHref } from "./setup-impact-model";
 import { canManageProjects, type ShellModel } from "./shell-model";
 import { UiIcon } from "./ui-icon";
@@ -153,7 +156,11 @@ export function SetupMain({
         step={setup.step}
         phase={phase}
       />
-      {setup.notice !== null ? (
+      {setup.notice === "setup-launched" &&
+      onboarding.started &&
+      onboarding.launch !== null ? (
+        <LaunchedDialog model={model} onboarding={onboarding} />
+      ) : setup.notice !== null ? (
         <Banner
           tone={
             setup.notice === "setup-saved" ||
@@ -240,7 +247,8 @@ export function SetupMain({
               phase={phase}
             />
           )}
-          {setup.step !== "overview" ? (
+          {setup.step !== "overview" &&
+          !(setup.step === "launch" && onboarding.started) ? (
             <StepFooter
               model={model}
               onboarding={onboarding}
@@ -319,31 +327,32 @@ function SetupHeader({
         </p>
       </div>
       <div className="setup-head-side">
-        <div className="setup-progress">
-          <span className="setup-progress-label">
-            {phase === "closed" ? (
-              <strong>Engagement archived</strong>
-            ) : phase === "completed" ? (
-              <strong>Engagement completed</strong>
-            ) : phase === "paused" ? (
-              <strong>Engagement paused</strong>
-            ) : onboarding.started ? (
-              <strong>Engagement running</strong>
-            ) : (
-              <>
-                <strong>
-                  {progress.done} of {progress.total}
-                </strong>{" "}
-                steps ready
-              </>
-            )}
-          </span>
-          {phase === "setup" || phase === "ready" ? (
-            <span className="setup-meter" aria-hidden="true">
-              <span style={{ width: `${percent}%` }} />
+        {/* A running engagement's status is its pill and the launch banner: no label. */}
+        {phase === "running" ? null : (
+          <div className="setup-progress">
+            <span className="setup-progress-label">
+              {phase === "closed" ? (
+                <strong>Engagement archived</strong>
+              ) : phase === "completed" ? (
+                <strong>Engagement completed</strong>
+              ) : phase === "paused" ? (
+                <strong>Engagement paused</strong>
+              ) : (
+                <>
+                  <strong>
+                    {progress.done} of {progress.total}
+                  </strong>{" "}
+                  steps ready
+                </>
+              )}
             </span>
-          ) : null}
-        </div>
+            {phase === "setup" || phase === "ready" ? (
+              <span className="setup-meter" aria-hidden="true">
+                <span style={{ width: `${percent}%` }} />
+              </span>
+            ) : null}
+          </div>
+        )}
         {action !== null ? (
           <a className="btn" href={action.href}>
             {action.label} <UiIcon name="arrow" size={15} />
@@ -369,6 +378,13 @@ const STEP_SHORT: Record<SetupStep, string> = {
 
 type WorkStep = Exclude<SetupStep, "overview" | "launch">;
 
+/** Which workpaper templates the engagement uses: they apply without a confirmation. */
+function templateWords(onboarding: Onboarding): string {
+  return onboarding.templates.some((template) => template.source === "FIRM")
+    ? "Your firm's templates and the standard ones."
+    : "Standard templates.";
+}
+
 const STEP_OUTCOME: Record<WorkStep, string> = {
   profile:
     "Agree the engagement period, methodology, reporting objective, and scope narrative.",
@@ -376,7 +392,7 @@ const STEP_OUTCOME: Record<WorkStep, string> = {
   controls:
     "Decide which systems and controls are in scope, with one accountable record for each.",
   workpapers:
-    "Preview the workpapers with real controls and confirm the templates the agents will use.",
+    "The workpapers testing is documented in. The standard templates apply unless you customise or upload your firm's; preview them with a real control.",
 };
 
 function StepBrief({
@@ -610,7 +626,7 @@ function OverviewStep({
     workpapers:
       included.length === 0
         ? "Add controls first. Previews use your controls."
-        : `${onboarding.templates.filter((t) => t.source === "FIRM").length > 0 ? "Your firm's templates and the standard ones" : "Standard templates"}${onboarding.templatesConfirmed ? ", confirmed." : ", to review and confirm."}`,
+        : templateWords(onboarding),
   };
   return (
     <>
@@ -796,11 +812,54 @@ function ProfileStep({
         onboarding={onboarding}
         confirmable={confirmable}
       />
+      {/* The planner's draft shows only while it suggests something not yet taken. */}
+      {editable && draft !== null && (pending.scope || pending.periodEnd) ? (
+        <DraftCard
+          model={model}
+          onboarding={onboarding}
+          step="profile"
+          title="The planner's draft of the scope"
+          fields={[
+            pending.scope
+              ? {
+                  key: "scope",
+                  label: "Scope",
+                  value: draft.scopeText,
+                  reason: draft.reasons.scope ?? "",
+                }
+              : null,
+            pending.periodEnd && draft.periodEnd !== null
+              ? {
+                  key: "period_end",
+                  label: "Period end",
+                  value: formatDate(draft.periodEnd),
+                  reason: draft.reasons.period_end ?? "",
+                }
+              : null,
+          ]}
+          empty="The scope and period match the planner's draft."
+        />
+      ) : null}
       <section className="card" aria-labelledby="profile-title">
         <CardHeader
           title="Engagement profile"
           titleId="profile-title"
-          description="The client, the period the controls are tested through, and how the engagement is run. What the audit covers is set by the controls you include in the Controls and systems step."
+          description={
+            editable ? (
+              <>
+                The client, the period the controls are tested through, how the
+                engagement is run, and what it covers.{" "}
+                <span className="field-key">
+                  <span className="field-mark" aria-hidden="true">
+                    *
+                  </span>{" "}
+                  Required before launch.
+                </span>
+              </>
+            ) : (
+              "The client, the period the controls are tested through, how the engagement is run, and what it covers."
+            )
+          }
         />
         <div className="card-body">
           <form
@@ -836,7 +895,10 @@ function ProfileStep({
               ) : null}
             </div>
             <label htmlFor="profile-methodology" className="field-wide">
-              Methodology
+              <span>
+                Methodology
+                {editable ? <RequiredMark /> : null}
+              </span>
               <select
                 id="profile-methodology"
                 name="methodology"
@@ -861,6 +923,7 @@ function ProfileStep({
               start={onboarding.periodStart}
               end={onboarding.periodEnd}
               disabled={!editable}
+              marked={editable}
               endHint={
                 editable && pending.periodEnd && draft !== null ? (
                   <span className="form-hint suggestion-hint">
@@ -871,7 +934,10 @@ function ProfileStep({
               }
             />
             <label htmlFor="profile-fiscal">
-              Fiscal year
+              <span>
+                Fiscal year
+                {editable ? <OptionalMark /> : null}
+              </span>
               <input
                 id="profile-fiscal"
                 name="fiscal_year"
@@ -882,7 +948,10 @@ function ProfileStep({
               />
             </label>
             <label htmlFor="profile-objectives" className="field-wide">
-              Reporting objectives
+              <span>
+                Reporting objectives
+                {editable ? <OptionalMark /> : null}
+              </span>
               <textarea
                 id="profile-objectives"
                 name="reporting_objectives"
@@ -893,6 +962,21 @@ function ProfileStep({
                 placeholder="What the engagement reports on and to whom, such as management's assessment of ITGCs over the ERP for the audit committee."
               />
             </label>
+            <label htmlFor="setup-scope" className="field-wide">
+              <span>
+                Scope
+                {editable ? <RequiredMark /> : null}
+              </span>
+              <textarea
+                id="setup-scope"
+                name="scope"
+                rows={6}
+                maxLength={4000}
+                defaultValue={onboarding.scope}
+                disabled={!editable}
+                placeholder="SOX 404 testing of the client's IT general controls over financial reporting for fiscal year 2027: the in-scope systems, the control areas, and what the team does with each control."
+              />
+            </label>
             {/* Coverage comes from the controls in scope; the stored type is kept. */}
             <input
               type="hidden"
@@ -901,78 +985,7 @@ function ProfileStep({
             />
             {editable ? (
               <div className="form-actions">
-                <button type="submit">Save profile</button>
-              </div>
-            ) : null}
-          </form>
-        </div>
-      </section>
-      {editable && draft !== null ? (
-        <DraftCard
-          model={model}
-          onboarding={onboarding}
-          step="profile"
-          title="The planner's draft of the scope"
-          fields={[
-            pending.scope
-              ? {
-                  key: "scope",
-                  label: "Scope",
-                  value: draft.scopeText,
-                  reason: draft.reasons.scope ?? "",
-                }
-              : null,
-            pending.periodEnd && draft.periodEnd !== null
-              ? {
-                  key: "period_end",
-                  label: "Period end",
-                  value: formatDate(draft.periodEnd),
-                  reason: draft.reasons.period_end ?? "",
-                }
-              : null,
-          ]}
-          empty="The scope and period match the planner's draft."
-        />
-      ) : null}
-      <section className="card" aria-labelledby="scope-title">
-        <CardHeader
-          title="Scope"
-          titleId="scope-title"
-          description="What the engagement covers, as written in the engagement letter. It appears at the top of every workpaper and the report."
-        />
-        <div className="card-body">
-          <form
-            autoComplete="off"
-            method="post"
-            action="/workspace/setup"
-            className="form"
-          >
-            <Identity
-              model={model}
-              onboarding={onboarding}
-              intent="scope"
-              step="profile"
-            />
-            <input
-              type="hidden"
-              name="period_end"
-              value={onboarding.periodEnd ?? ""}
-            />
-            <label htmlFor="setup-scope" className="field-wide">
-              Scope
-              <textarea
-                id="setup-scope"
-                name="scope"
-                rows={7}
-                maxLength={4000}
-                defaultValue={onboarding.scope}
-                disabled={!editable}
-                placeholder="SOX 404 testing of the client's IT general controls over financial reporting for fiscal year 2027: the in-scope systems, the control areas, and what the team does with each control."
-              />
-            </label>
-            {editable ? (
-              <div className="form-actions">
-                <button type="submit">Save scope</button>
+                <SaveWhenChanged label="Save" />
               </div>
             ) : null}
           </form>
@@ -1226,17 +1239,6 @@ function TeamStep({
   return (
     <>
       <StepIssues onboarding={onboarding} step="team" />
-      {onboarding.independenceRequired ? null : (
-        <p className="banner banner-warning" role="note">
-          <UiIcon name="risk" size={15} />
-          <span>
-            Independence checks are off for this workspace. One person can hold
-            several roles, and anyone on the team can act as the independent
-            reviewer, including on their own work. Use this for development
-            only.
-          </span>
-        </p>
-      )}
       <section className="card" aria-labelledby="team-title">
         <CardHeader
           title="Engagement team"
@@ -1401,26 +1403,19 @@ function TeamStep({
                     placeholder="Optional"
                   />
                 </label>
-                <label htmlFor="invite-role">
-                  Role
-                  <select
-                    id="invite-role"
-                    name="engagement_role"
-                    defaultValue={defaultRole}
-                  >
-                    <option value="LEAD">{ROLE_LABELS.LEAD}</option>
-                    <option value="PREPARER">{ROLE_LABELS.PREPARER}</option>
-                    <option value="REVIEWER">{ROLE_LABELS.REVIEWER}</option>
-                  </select>
-                </label>
+                <RoleChoice
+                  id="invite-role"
+                  several={!onboarding.independenceRequired}
+                  defaultRole={defaultRole}
+                />
                 <button type="submit" className="btn-sm">
                   <UiIcon name="plus" size={14} /> Invite
                 </button>
               </div>
               <p className="form-hint">
-                The role applies right away. They show as pending validation
-                until they sign in with this address, and get a welcome email
-                with how to sign in.
+                Roles apply right away. They show as pending validation until
+                they sign in with this address, and get a welcome email with how
+                to sign in.
               </p>
             </form>
             {onboarding.team.length + onboarding.candidates.length > 0 ? (
@@ -1459,18 +1454,11 @@ function TeamStep({
                       ))}
                     </select>
                   </label>
-                  <label htmlFor="setup-role">
-                    Role
-                    <select
-                      id="setup-role"
-                      name="engagement_role"
-                      defaultValue={defaultRole}
-                    >
-                      <option value="LEAD">{ROLE_LABELS.LEAD}</option>
-                      <option value="PREPARER">{ROLE_LABELS.PREPARER}</option>
-                      <option value="REVIEWER">{ROLE_LABELS.REVIEWER}</option>
-                    </select>
-                  </label>
+                  <RoleChoice
+                    id="setup-role"
+                    several={!onboarding.independenceRequired}
+                    defaultRole={defaultRole}
+                  />
                   <button type="submit" className="btn-sm btn-secondary">
                     Add to the team
                   </button>
@@ -1489,6 +1477,56 @@ function TeamStep({
         ) : null}
       </section>
     </>
+  );
+}
+
+const TEAM_ROLE_ORDER = ["LEAD", "PREPARER", "REVIEWER"] as const;
+
+/**
+ * The role field of the team forms. While reviewer independence is off (development),
+ * one person may hold several roles, so they are chosen together; otherwise one person
+ * holds one role, and the field is a single choice.
+ */
+function RoleChoice({
+  id,
+  several,
+  defaultRole,
+}: {
+  id: string;
+  several: boolean;
+  defaultRole: string;
+}) {
+  if (!several) {
+    return (
+      <label htmlFor={id}>
+        Role
+        <select id={id} name="engagement_role" defaultValue={defaultRole}>
+          {TEAM_ROLE_ORDER.map((role) => (
+            <option key={role} value={role}>
+              {ROLE_LABELS[role]}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+  return (
+    <fieldset className="role-choice" id={id}>
+      <legend>Roles</legend>
+      <div className="role-choice-options">
+        {TEAM_ROLE_ORDER.map((role) => (
+          <label key={role} className="role-choice-option">
+            <input
+              type="checkbox"
+              name="engagement_role"
+              value={role}
+              defaultChecked={role === defaultRole}
+            />
+            {ROLE_LABELS[role]}
+          </label>
+        ))}
+      </div>
+    </fieldset>
   );
 }
 
@@ -1821,8 +1859,14 @@ function LaunchAction({
                 value={fingerprint ?? ""}
               />
               <button type="submit" className="btn-launch" disabled={!ready}>
-                <UiIcon name="sparkles" size={15} /> Launch engagement
+                <UiIcon name="sparkles" size={15} />
+                <span className="launch-idle">Launch engagement</span>
+                <span className="launch-busy">Launching…</span>
               </button>
+              <span className="launch-wait" role="status">
+                Setting up the evidence plans, the agents' tasks, and the
+                evidence requests. This can take up to a minute.
+              </span>
             </OnceForm>
           </span>
         ) : (
@@ -1832,6 +1876,65 @@ function LaunchAction({
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * Said once, right after launch: what launching created and what the team does next,
+ * most pressing first (launchNextSteps, counted from the records). Closing it stays on
+ * the launched setup; the steps open where each is done.
+ */
+function LaunchedDialog({
+  model,
+  onboarding,
+}: {
+  model: Ready;
+  onboarding: Onboarding;
+}) {
+  const launch = onboarding.launch as LaunchSummary;
+  const steps = launchNextSteps(launch).slice(0, 3);
+  const [first] = steps;
+  // Drafted and not yet sent: held for their plan, in draft, or awaiting approval.
+  const requests =
+    launch.requestsHeld +
+    launch.requestsDraft +
+    launch.requestsAwaitingApproval;
+  return (
+    <RecordDialog
+      eyebrow="Engagement launched"
+      title="What to do next"
+      description={`${launch.controls} control${launch.controls === 1 ? "" : "s"} in scope · ${launch.tasksTotal} agent task${launch.tasksTotal === 1 ? "" : "s"} · ${requests} evidence request${requests === 1 ? "" : "s"} drafted. Nothing is sent to the client until an approver confirms it.`}
+      closeHref={setupHref(model, "launch")}
+    >
+      <ol className="launched-next launch-dialog-steps">
+        {steps.map((step) => (
+          <li
+            key={step.key}
+            className={step.tone === "ACTION" ? "is-action" : undefined}
+          >
+            <span className="row-text">
+              <span>{step.title}</span>
+              <small>{step.detail}</small>
+            </span>
+            <a
+              className={`btn btn-sm${step === first ? "" : " btn-secondary"}`}
+              href={sectionHref(model, step.target)}
+            >
+              {step.tone === "ACTION" ? "Open" : "View"}
+              <UiIcon name="arrow" size={13} />
+            </a>
+          </li>
+        ))}
+      </ol>
+      <footer className="launch-dialog-foot">
+        <a className="text-link" href={setupHref(model, "launch")}>
+          Stay on setup
+        </a>
+        <a className="btn btn-secondary" href={sectionHref(model, "overview")}>
+          Go to Home
+        </a>
+      </footer>
+    </RecordDialog>
   );
 }
 
@@ -1935,9 +2038,7 @@ function EngagementMemo({
             : onboarding.applications.map((app) => app.name).join(", ")}
         </Row>
         <Row label="Workpapers" step="workpapers">
-          {onboarding.templatesConfirmed
-            ? "Templates confirmed"
-            : "Templates not confirmed"}
+          {templateWords(onboarding)}
         </Row>
         <Row label="Evidence requests">
           {`${included.length} drafted at launch, one per control · due in ${onboarding.dueDays} days, reminders every ${onboarding.followUpDays}. Nothing is sent until approved.`}
@@ -2240,7 +2341,7 @@ function PlanReview({
             : "The work for every control in scope: a walkthrough, an evidence task, a test, and an independent review, then the report. Evidence tasks wait until you approve that control's plan."
         }
       />
-      <ul className="stage-strip" aria-label="Plan summary">
+      <ul className="stage-strip is-wrapping" aria-label="Plan summary">
         {byKind.map((entry) => (
           <li key={entry.kind}>
             <span>{entry.label}</span>
@@ -2279,58 +2380,6 @@ function PlanReview({
             </ol>
           </details>
         ))}
-      </div>
-    </section>
-  );
-}
-
-/** Whether the dashboard shows the setup callout: while setup is still the work. */
-export function showsSetupCallout(onboarding: Onboarding): boolean {
-  return setupOpen(phaseOf(onboarding));
-}
-
-/** Shown on the dashboard until the engagement starts. */
-export function SetupCallout({
-  model,
-  onboarding,
-}: {
-  model: Ready;
-  onboarding: Onboarding;
-}) {
-  const progress = setupProgress(onboarding);
-  const next = progress.next;
-  const percent = Math.round(
-    (progress.done / Math.max(progress.total, 1)) * 100,
-  );
-  const state = next === null ? null : stepReadiness(onboarding, next);
-  return (
-    <section
-      className="card setup-callout"
-      aria-labelledby="setup-callout-title"
-    >
-      <div className="setup-callout-body">
-        <div>
-          <p className="page-context">Engagement setup</p>
-          <h2 id="setup-callout-title">
-            {onboarding.ready
-              ? "Ready to launch."
-              : `Finish setup to start the agents: ${progress.done} of ${progress.total} steps ready`}
-          </h2>
-          <p className="card-desc">
-            {next === null
-              ? "Every step is ready. Check what launching creates, then start the agents."
-              : `Next: ${stepTitle(next)}. ${state?.issues[0] ?? ""}`}
-          </p>
-          <div className="setup-meter" aria-hidden="true">
-            <span style={{ width: `${percent}%` }} />
-          </div>
-        </div>
-        <a className="btn" href={setupHref(model, next ?? "launch")}>
-          {canLaunch(phaseOf(onboarding))
-            ? "Review and launch"
-            : "Continue setup"}{" "}
-          <UiIcon name="arrow" size={15} />
-        </a>
       </div>
     </section>
   );

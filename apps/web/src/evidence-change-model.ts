@@ -45,7 +45,10 @@ export function changeWrite(fields: Record<string, string>): ChangeWrite {
   const project = fields.project_id ?? "";
   const file = fields.file_id ?? "";
   const intent = fields.intent ?? "";
-  const reason = cleanReason(fields.reason ?? "");
+  // A withdrawal's reason is optional (22 Oct 2026); the API records that none was given.
+  const given = (fields.reason ?? "").trim();
+  const reason =
+    intent === "withdraw" && given === "" ? "" : cleanReason(given);
   if (
     !UUID.test(organization) ||
     !UUID.test(project) ||

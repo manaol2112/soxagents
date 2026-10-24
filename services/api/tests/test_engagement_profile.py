@@ -169,6 +169,56 @@ def test_a_period_that_starts_after_it_ends_is_refused(migrated: Database) -> No
     assert owner.get(base).json()["settings"]["period_start"] is None
 
 
+def test_the_profile_and_scope_save_together_or_not_at_all(migrated: Database) -> None:
+    """The profile step has one Save: the profile and the scope land in one transaction,
+    and a scope the API refuses leaves the profile as it was too."""
+    team = _new_engagement(migrated, "one-save")
+    owner, base = team["owner"], _base(team["org"], team["project"])
+    _complete_setup(owner, team)
+    current = owner.get(base).json()["settings"]
+    profile = {
+        "client_name": current["client_name"],
+        "engagement_type": current["engagement_type"],
+        "fiscal_year": "FY2027",
+    }
+    saved = owner.patch(
+        f"{base}/profile", json={**profile, "scope": "  ITGCs over SAP ERP for FY2027.  "}
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["settings"]["fiscal_year"] == "FY2027"
+    assert saved.json()["scope"] == "ITGCs over SAP ERP for FY2027."
+    audited = _setup_audits(migrated, team["project"])
+    refused = owner.patch(
+        f"{base}/profile",
+        json={**profile, "fiscal_year": "FY2028", "scope": "password: hunter2"},
+    )
+    assert refused.status_code == 422, refused.text
+    after = owner.get(base).json()
+    assert after["settings"]["fiscal_year"] == "FY2027"
+    assert after["scope"] == "ITGCs over SAP ERP for FY2027."
+    # Nothing of the refused save reached the audit trail either.
+    assert _setup_audits(migrated, team["project"]) == audited
+    # Without a scope, the profile alone is saved and the scope is kept.
+    alone = owner.patch(f"{base}/profile", json={**profile, "fiscal_year": "FY2029"})
+    assert alone.status_code == 200, alone.text
+    assert alone.json()["settings"]["fiscal_year"] == "FY2029"
+    assert alone.json()["scope"] == "ITGCs over SAP ERP for FY2027."
+    assert _setup_audits(migrated, team["project"]) == {
+        **audited,
+        "onboarding.profile": audited.get("onboarding.profile", 0) + 1,
+    }
+
+
+def _setup_audits(database: Database, project: str) -> dict[str, int]:
+    with connect(database.url) as connection:
+        rows = connection.execute(
+            "SELECT action, count(*) FROM audit_events WHERE project_id = %s "
+            "AND action IN ('onboarding.profile', 'onboarding.scope') GROUP BY action",
+            (project,),
+        ).fetchall()
+    return {str(action): int(count) for action, count in rows}
+
+
 def test_profile_dates_can_be_cleared_explicitly(migrated: Database) -> None:
     team = _new_engagement(migrated, "period-clear")
     owner, base = team["owner"], _base(team["org"], team["project"])
@@ -256,6 +306,47 @@ def test_development_mode_is_said_plainly_in_readiness(migrated: Database) -> No
     independence.configure(False)
     advisories = _readiness(owner, base)["team"]["advisories"]
     assert any(advice.startswith("Development mode") for advice in advisories)
+
+
+def test_several_roles_are_given_at_once_only_without_independence(migrated: Database) -> None:
+    """Development mode lets one person hold several roles, and they are given in one
+    step. With independence required, one person holds one role: a second is refused and
+    nothing changes."""
+    team = _new_engagement(migrated, "roles-at-once")
+    owner, base = team["owner"], _base(team["org"], team["project"])
+    person = str(team["reviewer_id"])
+    both = {"user_id": person, "engagement_role": "PREPARER", "additional_roles": ["REVIEWER"]}
+
+    def roles() -> set[str]:
+        body = owner.get(base).json()
+        return {m["engagement_role"] for m in body["team"] if m["user_id"] == person}
+
+    refused = owner.post(f"{base}/team", json=both)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == "one role per person while reviewer independence is required"
+    assert roles() == set()
+    independence.configure(False)
+    given = owner.post(f"{base}/team", json=both)
+    assert given.status_code == 200, given.text
+    assert roles() == {"PREPARER", "REVIEWER"}
+    with connect(migrated.url) as connection:
+        audited = [
+            row[0]["engagement_role"]
+            for row in connection.execute(
+                "SELECT payload FROM audit_events WHERE project_id = %s "
+                "AND action = 'onboarding.team' AND payload->>'user_id' = %s",
+                (team["project"], person),
+            ).fetchall()
+        ]
+    # Each role is recorded on its own, as when given one at a time.
+    assert sorted(audited) == ["PREPARER", "REVIEWER"]
+    # Repeating a role is harmless.
+    again = owner.post(
+        f"{base}/team",
+        json={**both, "engagement_role": "REVIEWER", "additional_roles": ["REVIEWER"]},
+    )
+    assert again.status_code == 200, again.text
+    assert roles() == {"PREPARER", "REVIEWER"}
 
 
 def test_independence_cannot_be_switched_off_in_production(migrated: Database) -> None:

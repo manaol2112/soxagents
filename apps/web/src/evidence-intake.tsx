@@ -2,8 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { type DragEvent, useEffect, useRef, useState } from "react";
-
-import { planUploads } from "./evidence-model";
+import { planUploads, systemsAnswer } from "./evidence-model";
 import { formatBytes } from "./format";
 import { UiIcon } from "./ui-icon";
 
@@ -50,6 +49,9 @@ function useUpload(
   organizationId: string,
   projectId: string,
   requestId?: string,
+  requirementId?: string,
+  /** Hold picked files until the person says which systems they apply to. */
+  hold = false,
 ) {
   const router = useRouter();
   const [over, setOver] = useState(false);
@@ -58,11 +60,20 @@ function useUpload(
     Array<{ name: string; reason: string }>
   >([]);
   const [running, setRunning] = useState(false);
+  // Why the API refused a file, in its words: the first refusal of the last upload.
+  const [refusal, setRefusal] = useState<string | null>(null);
+  // Picked files waiting for the person's answer (hold).
+  const [pending, setPending] = useState<Picked[] | null>(null);
 
-  const send = async (picked: Picked[]) => {
+  const send = async (picked: Picked[], applications?: string) => {
     if (picked.length === 0 || running) {
       return;
     }
+    if (hold && applications === undefined) {
+      setPending(picked);
+      return;
+    }
+    setPending(null);
     const plan = planUploads(
       picked.map((entry) => ({ path: entry.path, size: entry.file.size })),
     );
@@ -76,6 +87,7 @@ function useUpload(
     }));
     setItems(queue);
     setSkipped(plan.skipped);
+    setRefusal(null);
     if (queue.length === 0) {
       return;
     }
@@ -107,6 +119,12 @@ function useUpload(
         if (requestId !== undefined) {
           query.set("request", requestId);
         }
+        if (requirementId !== undefined) {
+          query.set("requirement", requirementId);
+        }
+        if (applications !== undefined) {
+          query.set("applications", applications);
+        }
         try {
           const response = await fetch(`/workspace/evidence-uploads?${query}`, {
             method: "POST",
@@ -117,7 +135,12 @@ function useUpload(
           });
           const body = (await response.json().catch(() => ({}))) as {
             duplicate?: boolean;
+            detail?: unknown;
           };
+          if (!response.ok && typeof body.detail === "string") {
+            const said = body.detail;
+            setRefusal((current) => current ?? said);
+          }
           mark(
             position,
             !response.ok ? "failed" : body.duplicate ? "duplicate" : "done",
@@ -131,6 +154,13 @@ function useUpload(
     setRunning(false);
     // The register catches up, and keeps refreshing while the agents read.
     router.refresh();
+    // What was added shows on its item, being read; this note goes after a moment,
+    // unless something was not uploaded.
+    window.setTimeout(() => {
+      setItems((current) =>
+        current.some((item) => item.state === "failed") ? current : [],
+      );
+    }, 5000);
   };
 
   const onDrop = async (event: DragEvent<HTMLElement>) => {
@@ -187,6 +217,11 @@ function useUpload(
     finished,
     failed,
     repeated,
+    refusal,
+    pending,
+    confirm: (applications: string) =>
+      pending === null ? undefined : void send(pending, applications),
+    dismiss: () => setPending(null),
     bytes,
     folders,
   };
@@ -351,17 +386,118 @@ export function EvidenceIntake({
 }
 
 /** Add evidence to one request: pick or drop files, filed to it without matching. */
+/**
+ * Which of the control's systems a policy or procedure applies to, asked before it is
+ * uploaded: all of them, or only those ticked. The answer is the person's, and the
+ * evidence coordinator never changes it; the file then serves the same item on each.
+ */
+function SystemsQuestion({
+  count,
+  systems,
+  system,
+  onConfirm,
+  onCancel,
+}: {
+  count: number;
+  systems: Array<{ id: string; name: string }>;
+  system: string | null;
+  onConfirm: (applications: string) => void;
+  onCancel: () => void;
+}) {
+  const [all, setAll] = useState(true);
+  const [ticked, setTicked] = useState<string[]>(
+    system !== null && systems.some((item) => item.id === system)
+      ? [system]
+      : [],
+  );
+  const answer = systemsAnswer(all, ticked);
+  // Opens under its button toward the left, or toward the right where the left has no room.
+  const box = useRef<HTMLDivElement>(null);
+  const [toRight, setToRight] = useState(false);
+  useEffect(() => {
+    if ((box.current?.getBoundingClientRect().left ?? 0) < 8) {
+      setToRight(true);
+    }
+  }, []);
+  return (
+    <div
+      ref={box}
+      className={`upload-systems${toRight ? " is-right" : ""}`}
+      role="dialog"
+      aria-label="Which systems it applies to"
+    >
+      <p className="upload-systems-title">
+        Which systems does {count === 1 ? "this file" : `these ${count} files`}{" "}
+        apply to?
+      </p>
+      <label className="upload-systems-choice">
+        <input type="radio" checked={all} onChange={() => setAll(true)} />
+        All systems
+      </label>
+      <label className="upload-systems-choice">
+        <input type="radio" checked={!all} onChange={() => setAll(false)} />
+        Only some
+      </label>
+      {all ? null : (
+        <div className="upload-systems-list">
+          {systems.map((item) => (
+            <label key={item.id} className="upload-systems-choice">
+              <input
+                type="checkbox"
+                checked={ticked.includes(item.id)}
+                onChange={(event) => {
+                  // Read now: React clears the event before the update runs.
+                  const on = event.currentTarget.checked;
+                  setTicked((current) =>
+                    on
+                      ? [...current, item.id]
+                      : current.filter((id) => id !== item.id),
+                  );
+                }}
+              />
+              {item.name}
+            </label>
+          ))}
+        </div>
+      )}
+      <div className="upload-systems-actions">
+        <button
+          type="button"
+          className="btn-sm"
+          disabled={answer === null}
+          onClick={() => answer !== null && onConfirm(answer)}
+        >
+          Upload
+        </button>
+        <button type="button" className="btn-ghost btn-sm" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function RequestUpload({
   organizationId,
   projectId,
   requestId,
+  requirementId,
   label,
   variant = "row",
+  systems = [],
+  system = null,
 }: {
   organizationId: string;
   projectId: string;
   requestId: string;
+  /** One item of the request the files are for: they serve that item only. */
+  requirementId?: string;
   label: string;
+  /** For a policy or procedure of a control over several systems: the systems, so the
+   * person says which ones it applies to before it is uploaded. */
+  systems?: Array<{ id: string; name: string }>;
+  /** The system of this item's control, ticked first when only some apply. */
+  system?: string | null;
   /** A button in a table row, or a drop zone in a request's side panel. */
   variant?: "row" | "panel";
 }) {
@@ -376,7 +512,17 @@ export function RequestUpload({
     finished,
     failed,
     repeated,
-  } = useUpload(organizationId, projectId, requestId);
+    refusal,
+    pending,
+    confirm,
+    dismiss,
+  } = useUpload(
+    organizationId,
+    projectId,
+    requestId,
+    requirementId,
+    systems.length > 1,
+  );
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: a drop target for the mouse; the button inside picks files from the keyboard.
     <div
@@ -395,7 +541,11 @@ export function RequestUpload({
         }
         disabled={running}
         onClick={() => input.current?.click()}
-        title="Choose files, or drop them here. They are filed to this request."
+        title={
+          requirementId === undefined
+            ? "Choose files, or drop them here. They are filed to this request."
+            : "Choose files, or drop them here. They are evidence for this item only."
+        }
       >
         {running ? (
           <span className="spinner small" aria-hidden="true" />
@@ -419,13 +569,22 @@ export function RequestUpload({
         aria-label={`Evidence files for ${label}`}
         onChange={(event) => fromInput(event.currentTarget)}
       />
+      {pending !== null ? (
+        <SystemsQuestion
+          count={pending.length}
+          systems={systems}
+          system={system}
+          onConfirm={confirm}
+          onCancel={dismiss}
+        />
+      ) : null}
       {!running && total > 0 ? (
         <small
           className={failed > 0 ? "upload-note is-failed" : "upload-note"}
           aria-live="polite"
         >
           {failed > 0
-            ? `${failed} of ${total} not uploaded`
+            ? `${failed} of ${total} not uploaded${refusal !== null ? `: ${refusal.charAt(0).toUpperCase()}${refusal.slice(1)}.` : ""}`
             : `${total - repeated} added${repeated > 0 ? ` · ${repeated} already here` : ""} · being read`}
         </small>
       ) : null}

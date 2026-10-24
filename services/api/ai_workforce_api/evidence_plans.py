@@ -49,6 +49,7 @@ from ai_workforce_api.authorization import (
 )
 from ai_workforce_api.controls import basis_of
 from ai_workforce_api.db import transaction
+from ai_workforce_api.evidence_apps import tag_covers
 from ai_workforce_api.evidence_planning import (
     _MISSING_AS_REASON,
     CATEGORIES,
@@ -2234,7 +2235,9 @@ class RequirementFile(BaseModel):
 
     file_id: UUID
     name: str
-    via: Literal["REQUEST", "LINK"]
+    # REQUEST: on its request. LINK: linked by a person. SHARED: added on the same item of
+    # another application's instance of the control, and applying to this one too.
+    via: Literal["REQUEST", "LINK", "SHARED"]
     link_id: UUID | None = None
     linked_by: str | None = None
     reason: str = ""
@@ -2248,6 +2251,8 @@ class RequirementFile(BaseModel):
     note: str = ""
     period: str = ""
     gaps: list[str] = Field(default_factory=list)
+    # SHARED: the application whose instance it was added on.
+    shared_from: str | None = None
 
 
 class Assessment(BaseModel):
@@ -2260,6 +2265,69 @@ class Assessment(BaseModel):
 
 
 NO_ASSESSMENT = Assessment(proposal="NONE", reason="Nothing has arrived for it yet.")
+
+# A file on a requirement's request serves it as follows (22 Oct 2026, by the product
+# owner's decision):
+# - A file a person added for one item of the request serves that item only
+#   (evidence_matches.requirement_id, migration 0101), whatever the reader found.
+# - Any other file on the request (added on the request itself, or sent by the owner)
+#   serves each of its items, unless the model read the file and found it does not cover
+#   that item, and no person has judged the item yet (a person's judgment rests on the
+#   files they saw). One request often asks for several items and a file answers some of
+#   them: a policy is not the walkthrough. The keyword rules match a file's kind, not its
+#   detail, so a reading by the rules never takes a file off.
+# A person can still link a file to an item it does not serve (link_file). The SQL uses q
+# (evidence_requirements), a (the file's evidence_analyses row, if any), and the file's id.
+
+
+def shared_from_sibling(columns: str) -> str:
+    """SQL: the files a sibling instance shares with q's instance for the same item (the
+    same phase and requirement key): added by a person on that item of the sibling's
+    request, and tagged by a person as applying to q's application too (all of them, or
+    several including it; migrations 0101, 0102). A policy that governs several systems is
+    added once. Selects the given columns over q2 (the sibling's item), sib (its control),
+    f (the file), and a (its reading)."""
+    return f"""
+        SELECT {columns}
+        FROM engagement_controls me
+        JOIN evidence_requirements q2
+          ON q2.project_id = q.project_id AND q2.phase = q.phase
+         AND q2.requirement_key = q.requirement_key AND q2.id <> q.id
+        JOIN engagement_controls sib
+          ON sib.id = q2.engagement_control_id AND sib.project_id = me.project_id
+         AND sib.control_ref = me.control_ref AND sib.id <> me.id
+        JOIN evidence_matches m ON m.requirement_id = q2.id AND m.status = 'FILED'
+        JOIN evidence_file_links l ON l.evidence_file_id = m.evidence_file_id
+        JOIN evidence_files f ON f.id = m.evidence_file_id
+        JOIN evidence_file_applications t
+          ON t.evidence_file_id = f.id AND t.tagged_by = 'PERSON'
+        LEFT JOIN evidence_analyses a ON a.evidence_file_id = f.id
+        WHERE me.id = q.engagement_control_id
+          AND {tag_covers("me.engagement_application_id")}
+    """
+
+
+def request_file_serves(file_id_sql: str) -> str:
+    """The SQL test of whether the file (by the SQL expression of its id) serves q."""
+    return f"""
+    coalesce(
+        (SELECT m.requirement_id = q.id FROM evidence_matches m
+         WHERE m.evidence_file_id = {file_id_sql} AND m.status = 'FILED'
+           AND m.requirement_id IS NOT NULL),
+        NOT (
+            q.sufficiency = 'NOT_REVIEWED'
+            AND coalesce(a.source, '') = 'MODEL'
+            AND EXISTS (
+                SELECT 1 FROM jsonb_array_elements(
+                    CASE WHEN jsonb_typeof(a.classification -> 'items') = 'array'
+                         THEN a.classification -> 'items' ELSE '[]'::jsonb END
+                ) AS item
+                WHERE item ->> 'requirement_id' = q.id::text
+                  AND item ->> 'coverage' = 'NOT_COVERED'
+            )
+        )
+    )
+"""
 
 
 class RequirementBody(BaseModel):
@@ -2299,6 +2367,9 @@ class RequirementBody(BaseModel):
     coverage_note: str
     version: int
     files: list[RequirementFile] = Field(default_factory=list)
+    # Files on its request the reader found do not cover it: not its evidence, and named
+    # so a person can link one that does.
+    passed_over: list[str] = Field(default_factory=list)
     assessment: Assessment = NO_ASSESSMENT
 
 
@@ -2425,8 +2496,13 @@ def requirement_state(
         return sufficiency  # type: ignore[return-value]
     if request_status in ("RECEIVED", "CLOSED"):
         return "RECEIVED"
-    if request_status == "PARTIALLY_RECEIVED" or has_evidence:
+    if has_evidence:
         return "PARTIALLY_RECEIVED"
+    # Partly received means some of the request's items are in, not this one: a file that
+    # serves it would have made it received above (22 Oct 2026; every item of a partly
+    # received request read as partly received before).
+    if request_status == "PARTIALLY_RECEIVED":
+        return "SENT"
     if request_status in ("OVERDUE", "ESCALATED"):
         return "OVERDUE"
     return "SENT"
@@ -2641,7 +2717,10 @@ def _requirements(connection: psycopg.Connection[Any], plan_id: UUID) -> list[Re
                q.sufficiency_note, u.display_name, q.waive_reason, q.origin, q.person_edited,
                q.pending_change, q.needs_review, q.coverage_note, q.version, r.recipient,
                EXISTS (SELECT 1 FROM evidence_file_links l
-                       WHERE l.pbc_request_id = q.pbc_request_id),
+                       LEFT JOIN evidence_analyses a ON a.evidence_file_id = l.evidence_file_id
+                       WHERE l.pbc_request_id = q.pbc_request_id
+                         AND {SERVES})
+               OR EXISTS ({SHARED}),
                EXISTS (SELECT 1 FROM evidence_requirement_files ef
                        JOIN evidence_file_links l
                          ON l.evidence_file_id = ef.evidence_file_id
@@ -2654,11 +2733,13 @@ def _requirements(connection: psycopg.Connection[Any], plan_id: UUID) -> list[Re
         WHERE q.plan_id = %s
         ORDER BY q.phase, CASE q.necessity WHEN 'REQUIRED' THEN 0 WHEN 'CONDITIONAL' THEN 1
                  ELSE 2 END, q.created_at, q.requirement_key
-        """,
+        """.replace("{SERVES}", request_file_serves("l.evidence_file_id")).replace(
+            "{SHARED}", shared_from_sibling("1")
+        ),
         (plan_id,),
     ).fetchall()
     titles = {(str(r[1]), str(r[2])): str(r[3]) for r in rows}
-    files = requirement_files(connection, plan_id)
+    files, passed_over = requirement_files(connection, plan_id)
     found: list[RequirementBody] = []
     for r in rows:
         state = requirement_state(
@@ -2685,6 +2766,7 @@ def _requirements(connection: psycopg.Connection[Any], plan_id: UUID) -> list[Re
                 origin=str(r[24]), person_edited=bool(r[25]), pending_change=r[26],
                 needs_review=bool(r[27]), coverage_note=str(r[28]), version=int(r[29]),
                 request_recipient=r[30], files=mine, assessment=assess(mine),
+                passed_over=passed_over.get(UUID(str(r[0])), []),
             )
         )  # fmt: skip
     return found
@@ -2692,14 +2774,21 @@ def _requirements(connection: psycopg.Connection[Any], plan_id: UUID) -> list[Re
 
 def requirement_files(
     connection: psycopg.Connection[Any], plan_id: UUID
-) -> dict[UUID, list[RequirementFile]]:
-    """Each requirement's files: those on its request, then those a person linked to it.
-    A withdrawn file serves none: both come through evidence_file_links."""
+) -> tuple[dict[UUID, list[RequirementFile]], dict[UUID, list[str]]]:
+    """Each requirement's files: those on its request that serve it
+    (request_file_serves), then those a person linked to it; and, apart, the names of
+    the files on its request the reader found do not cover it. A withdrawn file serves
+    none: both come through evidence_file_links."""
     rows = connection.execute(
         """
         SELECT q.id, f.id, f.file_name, 'REQUEST', NULL::uuid, NULL, '', NULL::int,
                a.status, coalesce(a.confirmed_kind, a.classification ->> 'kind'),
-               a.confirmed_kind IS NOT NULL, a.classification, f.created_at, a.source
+               a.confirmed_kind IS NOT NULL, a.classification, f.created_at, a.source,
+               {SERVES},
+               EXISTS (SELECT 1 FROM evidence_matches m
+                       WHERE m.evidence_file_id = f.id AND m.status = 'FILED'
+                         AND m.requirement_id IS NOT NULL),
+               NULL::uuid
         FROM evidence_requirements q
         JOIN evidence_file_links l ON l.pbc_request_id = q.pbc_request_id
         JOIN evidence_files f ON f.id = l.evidence_file_id
@@ -2708,7 +2797,8 @@ def requirement_files(
         UNION ALL
         SELECT ef.requirement_id, f.id, f.file_name, 'LINK', ef.id, u.display_name, ef.reason,
                ef.version, a.status, coalesce(a.confirmed_kind, a.classification ->> 'kind'),
-               a.confirmed_kind IS NOT NULL, a.classification, f.created_at, a.source
+               a.confirmed_kind IS NOT NULL, a.classification, f.created_at, a.source, true,
+               false, NULL::uuid
         FROM evidence_requirement_files ef
         JOIN evidence_requirements q ON q.id = ef.requirement_id
         JOIN evidence_file_links l
@@ -2718,28 +2808,60 @@ def requirement_files(
         LEFT JOIN evidence_analyses a ON a.evidence_file_id = f.id
         LEFT JOIN users u ON u.id = ef.linked_by
         WHERE q.plan_id = %s AND ef.status = 'LINKED'
+        UNION ALL
+        SELECT q.id, shared.* FROM evidence_requirements q
+        CROSS JOIN LATERAL ({SHARED}) AS shared
+        WHERE q.plan_id = %s
         ORDER BY 13, 3
-        """,
-        (plan_id, plan_id),
+        """.replace("{SERVES}", request_file_serves("f.id")).replace(
+            "{SHARED}",
+            shared_from_sibling(
+                "f.id, f.file_name, 'SHARED', NULL::uuid, "
+                "(SELECT x.name FROM engagement_applications x "
+                " WHERE x.id = sib.engagement_application_id), '', NULL::int, "
+                "a.status, coalesce(a.confirmed_kind, a.classification ->> 'kind'), "
+                "a.confirmed_kind IS NOT NULL, a.classification, f.created_at, a.source, "
+                "true, false, q2.id"
+            ),
+        ),
+        (plan_id, plan_id, plan_id),
     ).fetchall()
     found: dict[UUID, list[RequirementFile]] = {}
+    passed: dict[UUID, list[str]] = {}
     for row in rows:
         requirement_id = UUID(str(row[0]))
-        mine = found.setdefault(requirement_id, [])
-        if any(item.file_id == row[1] for item in mine):
+        if not row[14]:
+            # Added for another item of the request: not this one's, and nothing to say.
+            if not row[15]:
+                passed.setdefault(requirement_id, []).append(str(row[2]))
             continue
-        coverage, note, period, gaps = _coverage(row[11], requirement_id)
-        mine.append(
-            RequirementFile(
-                file_id=row[1], name=str(row[2]), via=row[3], link_id=row[4],
-                linked_by=row[5], reason=str(row[6] or ""), link_version=row[7],
-                read_status=row[8], kind=row[9], kind_confirmed=bool(row[10]),
-                read_by=row[13] if row[13] in ("MODEL", "RULES") else None,
-                coverage=coverage if row[3] == "REQUEST" else None,
-                note=note if row[3] == "REQUEST" else "", period=period, gaps=gaps,
-            )
+        mine = found.setdefault(requirement_id, [])
+        # A shared file was read against the sibling's item: the same item, so what the
+        # reader found there stands here.
+        shared = row[3] == "SHARED"
+        coverage, note, period, gaps = _coverage(
+            row[11], UUID(str(row[16])) if shared else requirement_id
+        )
+        read = row[3] in ("REQUEST", "SHARED")
+        entry = RequirementFile(
+            file_id=row[1], name=str(row[2]), via=row[3], link_id=row[4],
+            linked_by=None if shared else row[5], reason=str(row[6] or ""),
+            link_version=row[7], read_status=row[8], kind=row[9],
+            kind_confirmed=bool(row[10]),
+            read_by=row[13] if row[13] in ("MODEL", "RULES") else None,
+            coverage=coverage if read else None, note=note if read else "",
+            period=period, gaps=gaps, shared_from=str(row[5]) if shared else None,
         )  # fmt: skip
-    return found
+        held = next((i for i, item in enumerate(mine) if item.file_id == row[1]), None)
+        if held is None:
+            mine.append(entry)
+        elif entry.via == "LINK" and mine[held].via == "REQUEST":
+            # Linked by a person and on its request: the link is kept, so it can be removed.
+            mine[held] = entry
+    for requirement_id, names in passed.items():
+        served = {item.name for item in found.get(requirement_id, [])}
+        passed[requirement_id] = [name for name in dict.fromkeys(names) if name not in served]
+    return found, passed
 
 
 def _coverage(
@@ -2790,16 +2912,17 @@ def assess(files: list[RequirementFile]) -> Assessment:
         )
     partial = [f for f in files if f.coverage == "PARTIAL"]
     if partial:
-        follow = [f"{f.name}: {f.note}" for f in partial if f.note]
-        follow += [gap for f in partial for gap in f.gaps]
+        # What it found is the reason; the follow-ups are only what to ask (22 Oct 2026:
+        # each file's note led the follow-ups before).
+        first = partial[0]
+        follow = [gap for f in partial for gap in f.gaps]
         return Assessment(
             proposal="FOLLOW_UP",
-            reason=f"{partial[0].name} covers it in part.",
+            reason=f"{first.name} covers it in part" + (f": {first.note}" if first.note else "."),
             follow_ups=list(dict.fromkeys(follow))[:6],
         )
     assessed = [f for f in files if f.coverage is not None]
     if assessed and len(assessed) == len([f for f in files if f.via == "REQUEST"]):
-        follow = [gap for f in assessed for gap in f.gaps]
         return Assessment(
             proposal="INSUFFICIENT",
             reason=(
@@ -2807,7 +2930,6 @@ def assess(files: list[RequirementFile]) -> Assessment:
                 if len(assessed) > 1
                 else f"{assessed[0].name} does not cover it."
             ),
-            follow_ups=list(dict.fromkeys(follow))[:6],
         )
     unread = [f for f in files if f.read_status == "FAILED"]
     if unread:
@@ -3430,8 +3552,9 @@ def set_sufficiency(
     requirement_id: UUID,
     actor: UUID,
     body: SufficiencyBody,
-) -> None:
-    """A person judges whether what arrived is enough. Only after something arrived."""
+) -> list[UUID]:
+    """A person judges whether what arrived is enough. Only after something arrived.
+    Returns the workpaper drafts it asked the agent for (_design_redraft)."""
     note = " ".join(body.note.split())
     if body.sufficiency in ("INSUFFICIENT", "FOLLOW_UP_REQUIRED") and not note:
         raise ValueError("say what is missing")
@@ -3451,6 +3574,14 @@ def set_sufficiency(
                 ).fetchone()
                 is not None
             )
+            # A policy another system's instance shares with this one has arrived too.
+            or cursor.execute(
+                "SELECT 1 FROM evidence_requirements q WHERE q.id = %s AND EXISTS ("
+                + shared_from_sibling("1")
+                + ")",
+                (requirement_id,),
+            ).fetchone()
+            is not None
         )
         judgeable = row[1] == "REQUESTED" or (row[1] == "PLANNED" and linked)
         if body.sufficiency != "NOT_REVIEWED" and (not judgeable or not arrived):
@@ -3471,6 +3602,80 @@ def set_sufficiency(
             cursor, organization_id, project_id, actor, "evidence_requirement.sufficiency",
             "evidence_requirement", requirement_id, {"sufficiency": body.sufficiency},
         )  # fmt: skip
+        if body.sufficiency == "ACCEPTED" and row[3] is not None:
+            _received_when_accepted(cursor, organization_id, project_id, actor, row[3])
+        if body.sufficiency == "ACCEPTED":
+            return _design_redraft(cursor, organization_id, project_id, control_id, actor)
+    return []
+
+
+def _design_redraft(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID,
+) -> list[UUID]:
+    """Every design item a person accepted: the agent drafts the design workpaper again
+    from the accepted evidence (22 Oct 2026; it was drafted once, from the first file
+    read, and only a person asked for it again). A person's sections stay, and a prepared
+    workpaper is not touched (workpaper_service.ensure)."""
+    from ai_workforce_api.workpaper_service import ensure
+
+    counts = cursor.execute(
+        "SELECT count(*), count(*) FILTER (WHERE sufficiency = 'ACCEPTED') "
+        "FROM evidence_requirements "
+        "WHERE engagement_control_id = %s AND phase = 'DESIGN' AND status = 'REQUESTED'",
+        (control_id,),
+    ).fetchone()
+    if counts is None or counts[0] == 0 or counts[0] != counts[1]:
+        return []
+    return ensure(cursor, organization_id, project_id, control_id, actor, ("DESIGN",))
+
+
+# A request still waiting on the owner; accepting its last item settles it.
+_STILL_ASKED = ("SENT", "WAITING_FOR_RESPONSE", "OVERDUE", "ESCALATED", "PARTIALLY_RECEIVED")
+
+
+def _received_when_accepted(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    actor: UUID,
+    request_id: UUID,
+) -> None:
+    """A request whose every requested item a person accepted is received: nothing more is
+    asked of the owner, so its open reminders are cancelled (22 Oct 2026; a request stayed
+    partly received when the reader had not found every item covered). Migration 0103
+    applies this to requests settled before."""
+    from ai_workforce_api.followups import cancel_open
+
+    counts = cursor.execute(
+        "SELECT count(*), count(*) FILTER (WHERE sufficiency = 'ACCEPTED') "
+        "FROM evidence_requirements WHERE pbc_request_id = %s AND status = 'REQUESTED'",
+        (request_id,),
+    ).fetchone()
+    if counts is None or counts[0] == 0 or counts[0] != counts[1]:
+        return
+    moved = cursor.execute(
+        """
+        UPDATE pbc_requests
+        SET status = 'RECEIVED', escalation_state = 'NONE',
+            first_response_at = coalesce(first_response_at, clock_timestamp()),
+            received_at = clock_timestamp(), updated_at = clock_timestamp(),
+            version = version + 1
+        WHERE id = %s AND project_id = %s AND status = ANY(%s)
+        RETURNING id
+        """,
+        (request_id, project_id, list(_STILL_ASKED)),
+    ).fetchone()
+    if moved is None:
+        return
+    cancel_open(cursor, organization_id, project_id, actor, request_id)
+    _audit(
+        cursor, organization_id, project_id, actor, "pbc_request.received",
+        "pbc_request", request_id, {"by": "every item accepted"},
+    )  # fmt: skip
 
 
 def _linked(cursor: psycopg.Cursor[Any], requirement_id: UUID) -> bool:
@@ -3529,7 +3734,17 @@ def link_file(
         if held is None:
             raise PlanState("the file is not one of this control's evidence files")
         if row[3] is not None and held[0] == row[3]:
-            raise PlanState("the file already serves it through its request")
+            serves = cursor.execute(
+                f"""
+                SELECT {request_file_serves("%s")}
+                FROM evidence_requirements q
+                LEFT JOIN evidence_analyses a ON a.evidence_file_id = %s
+                WHERE q.id = %s
+                """,
+                (body.file_id, body.file_id, requirement_id),
+            ).fetchone()
+            if serves is None or serves[0]:
+                raise PlanState("the file already serves it through its request")
         saved = cursor.execute(
             """
             INSERT INTO evidence_requirement_files (
@@ -4159,12 +4374,18 @@ def register_evidence_plans(
         organization_id: UUID, project_id: UUID, control_id: UUID, requirement_id: UUID,
         body: SufficiencyBody, request: Request,
     ) -> EvidencePlanBody:  # fmt: skip
-        def work(c: psycopg.Connection[Any], p: Principal) -> EvidencePlanBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> tuple[EvidencePlanBody, list[UUID]]:
             allowed(c, p, organization_id, project_id, control_id)
-            set_sufficiency(c, organization_id, project_id, control_id, requirement_id, p.id, body)
-            return plan_body(c, project_id, control_id)
+            queued = set_sufficiency(
+                c, organization_id, project_id, control_id, requirement_id, p.id, body
+            )
+            return plan_body(c, project_id, control_id), queued
 
-        return run(request, work)
+        from ai_workforce_api.workpaper_service import schedule_drafts
+
+        result, queued = run(request, work)
+        schedule_drafts(scheduler, queued)
+        return result
 
     @app.post(f"{requirement}/files")
     def link_requirement_file(

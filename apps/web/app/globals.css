@@ -763,6 +763,20 @@ a:hover {
   font-size: 12.5px;
 }
 
+/* On a phone a card's tools (filters, actions) move under its title when they do not fit
+   beside it, and wrap among themselves, instead of running off the screen. */
+@media (max-width: 640px) {
+  .card-header {
+    flex-wrap: wrap;
+  }
+
+  .card-aside {
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+}
+
 .card-body {
   padding: 1rem 1.125rem 1.125rem;
 }
@@ -1411,7 +1425,7 @@ a.phase-link:hover strong {
 
 /* Control steps */
 
-.steps {
+.loop-steps {
   display: grid;
   gap: 0;
   margin: 0;
@@ -1420,7 +1434,7 @@ a.phase-link:hover strong {
   counter-reset: step;
 }
 
-.steps li {
+.loop-steps li {
   position: relative;
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);
@@ -1428,11 +1442,11 @@ a.phase-link:hover strong {
   padding: 0 0 0.875rem;
 }
 
-.steps li:last-child {
+.loop-steps li:last-child {
   padding-bottom: 0;
 }
 
-.steps li:not(:last-child)::after {
+.loop-steps li:not(:last-child)::after {
   position: absolute;
   top: 24px;
   bottom: 2px;
@@ -1456,14 +1470,14 @@ a.phase-link:hover strong {
   font-variant-numeric: tabular-nums;
 }
 
-.steps strong {
+.loop-steps strong {
   display: block;
   font-size: 13.5px;
   font-weight: 500;
   line-height: 22px;
 }
 
-.steps small {
+.loop-steps small {
   display: block;
   color: var(--text-tertiary);
   font-size: 12.5px;
@@ -1941,6 +1955,26 @@ a.item-card[aria-current="page"] {
   font-weight: 600;
 }
 
+/* A strip that wraps instead of scrolling on a phone: every count stays in view. */
+@media (max-width: 640px) {
+  .stage-strip.is-wrapping {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-auto-flow: row;
+    overflow-x: visible;
+  }
+
+  .stage-strip.is-wrapping li:nth-child(3n + 1) {
+    padding-left: 1.125rem;
+    border-left: 0;
+  }
+
+  /* One line under the whole first row, however many fall on the second. */
+  .stage-strip.is-wrapping li:nth-child(-n + 3) {
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+}
+
 .cell-request {
   display: grid;
   gap: 0.125rem;
@@ -2172,6 +2206,27 @@ select:focus {
   flex-wrap: wrap;
   gap: 0.5rem;
   margin-top: 0.25rem;
+}
+
+/* Which setup fields the launch needs (field-marks.tsx), and the key that says so. */
+.field-mark {
+  margin-left: 0.125rem;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.field-optional {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.field-key {
+  white-space: nowrap;
+}
+
+/* A Save offered only once the form changes, with its state beside it. */
+.form-actions > .form-hint {
+  align-self: center;
 }
 
 .form-hint {
@@ -3565,6 +3620,21 @@ label.check {
   font-weight: 500;
 }
 
+/* On a phone each column keeps a readable width: a wide table scrolls sideways in its own
+   box inside the workbook frame rather than shrinking to a word per line (UI-2). */
+@media (max-width: 640px) {
+  .workpaper-table {
+    width: auto;
+    min-width: 100%;
+  }
+
+  /* A table cell ignores min-width; a preferred width is kept by the table's layout. */
+  .workpaper-table th,
+  .workpaper-table td {
+    width: 8rem;
+  }
+}
+
 .workpaper-section.is-signoff .workpaper-table td {
   height: 48px;
 }
@@ -3657,6 +3727,13 @@ label.check {
   padding: 0.625rem 1.125rem;
   cursor: pointer;
   border-bottom: 1px solid var(--border-subtle);
+}
+
+/* The count stays on one line beside a long control title. */
+.plan-group summary > .cell-sub {
+  flex: none;
+  margin-left: 0.75rem;
+  white-space: nowrap;
 }
 
 .plan-group summary:hover {
@@ -10292,6 +10369,39 @@ button.cite-chip.is-open {
   justify-items: start;
 }
 
+/* One card per file: the file, its details, and its actions (Download, Replace file,
+   Withdraw) under it. */
+.evidence-file-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.evidence-file-item:has(> .evidence-file[open]) {
+  border-color: var(--border-strong);
+  box-shadow: 0 6px 18px -14px rgb(16 24 40 / 35%);
+}
+
+.evidence-file-item > .evidence-file,
+.evidence-file-item > .evidence-file[open] {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.evidence-file-item > .evidence-file-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0 0.875rem 0.75rem;
+}
+
+.evidence-file-item > .evidence-file-tools > .file-changes {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .withdrawn-grid .col-restore {
   width: 12rem;
   text-align: right;
@@ -10347,6 +10457,17 @@ button.cite-chip.is-open {
   content: "·";
   margin: 0 0.5rem;
   color: var(--text-tertiary);
+}
+
+/* On a phone each detail takes its own line, so no separator starts a line. */
+@media (max-width: 640px) {
+  .setup-head-meta {
+    flex-direction: column;
+  }
+
+  .setup-head-meta span + span::before {
+    content: none;
+  }
 }
 
 .setup-head-side {
@@ -10409,10 +10530,9 @@ button.cite-chip.is-open {
   line-height: 1.45;
 }
 
+/* The steps scroll with the page: the page header's Continue and the foot's Previous and
+   Next move between them, so a pinned rail would only cover the form. */
 .setup-rail {
-  position: sticky;
-  top: 72px;
-  z-index: 2;
   padding: 1rem 1.25rem 0.85rem;
 }
 
@@ -10559,6 +10679,22 @@ button.cite-chip.is-open {
 
   .track-item {
     flex: 1 0 7.25rem;
+  }
+}
+
+/* On a phone every step is in view, three to a row, so the current one is never off to
+   the side; the connecting lines belong to the single row and are left out. */
+@media (max-width: 640px) {
+  .setup-track {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    row-gap: 0.875rem;
+    overflow-x: visible;
+    padding-bottom: 0;
+  }
+
+  .track-item:not(:last-child)::before {
+    display: none;
   }
 }
 
@@ -11063,6 +11199,40 @@ button.cite-chip.is-open {
   font-weight: 500;
 }
 
+/* Several roles at once, while reviewer independence is off (RoleChoice). */
+.role-choice {
+  display: grid;
+  gap: 0.375rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.role-choice legend {
+  padding: 0;
+  margin-bottom: 0.375rem;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.role-choice-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.875rem;
+  min-height: 34px;
+  align-items: center;
+}
+
+.role-choice .role-choice-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
 .team-invite-fields .optional {
   color: var(--text-secondary);
   font-weight: 400;
@@ -11087,6 +11257,15 @@ button.cite-chip.is-open {
 
 .team-existing-fields > label {
   display: grid;
+}
+
+/* With several roles to choose, the role column takes what the choices need. */
+.team-invite-fields:has(.role-choice) {
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto auto;
+}
+
+.team-existing-fields:has(.role-choice) {
+  grid-template-columns: minmax(0, 2fr) auto auto;
 }
 
 .firm-domains {
@@ -11151,7 +11330,9 @@ button.cite-chip.is-open {
 }
 
 @media (max-width: 960px) {
-  .team-invite-fields {
+  .team-invite-fields,
+  .team-invite-fields:has(.role-choice),
+  .team-existing-fields:has(.role-choice) {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -12042,6 +12223,47 @@ button.chip-link:hover {
 
 .card:has(.cell-pop[open]) {
   overflow: visible;
+}
+
+.cell-close {
+  display: none;
+  justify-self: end;
+  height: 28px;
+  padding: 0 0.625rem;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+/* On a phone the open result panel is a sheet at the foot of the screen, so the table
+   keeps its own scroll box and the page never widens (UI-1). */
+@media (max-width: 640px) {
+  .grid-scroll:has(.cell-pop[open]) {
+    overflow-x: auto;
+  }
+
+  .cell-panel {
+    position: fixed;
+    top: auto;
+    right: 0.75rem;
+    bottom: 0.75rem;
+    left: 0.75rem;
+    z-index: 60;
+    width: auto;
+    max-height: 70vh;
+  }
+
+  .cell-close {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: block;
+  }
 }
 
 .evidence-file-head .preview-open {
@@ -13857,6 +14079,71 @@ form[data-pending="submit"] button[type="submit"]:not([value])::before {
   animation: setup-form-spin 700ms linear infinite;
 }
 
+/* The launch button while the launch runs, and what it is doing. */
+.launch-busy,
+.launch-wait {
+  display: none;
+}
+
+form[data-pending] .launch-idle {
+  display: none;
+}
+
+form[data-pending] .launch-busy {
+  display: inline;
+}
+
+form[data-pending] .launch-wait {
+  display: block;
+  max-width: 22rem;
+  margin-top: 0.375rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+/* What to do next, said once right after launch (LaunchedDialog). */
+.launch-dialog-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.launch-dialog-steps > li.is-action .row-text > span {
+  font-weight: 600;
+}
+
+.launch-dialog-foot {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 1rem;
+  padding-top: 0.875rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* The agent console from every engagement page (WorkspaceControls). */
+.topbar-ask {
+  gap: 0.375rem;
+}
+
+.topbar-ask svg {
+  color: var(--accent-strong);
+}
+
+.topbar-ask.is-current {
+  color: var(--accent-strong);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+/* On a phone the button is its icon; its name stays for screen readers. */
+@media (max-width: 640px) {
+  .topbar-ask-label {
+    display: none;
+  }
+}
+
 @keyframes setup-form-spin {
   to {
     transform: rotate(360deg);
@@ -14367,6 +14654,9 @@ button.sys-more-clear:hover {
 
 .workbook {
   display: grid;
+  /* One column no wider than the frame: a wide table scrolls in its own box instead of
+     widening the sheet past the frame, which clipped it on a phone (UI-2). */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto;
   min-height: 0;
 }
@@ -14622,6 +14912,28 @@ button.sys-more-clear:hover {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+/* On a phone the section's source badge drops under its title instead of running past
+   the sheet's edge, and the sections give their tables more of the width (UI-2). */
+@media (max-width: 640px) {
+  .wp-book .wp-sections {
+    margin: 0.25rem 0.5rem 1rem;
+  }
+
+  .wp-section.workpaper-section {
+    padding: 1.125rem 1rem;
+  }
+
+  .wp-section.workpaper-section > header {
+    flex-wrap: wrap;
+    row-gap: 0.375rem;
+  }
+
+  /* Sized by its title, so the badge wraps under it rather than squeezing it. */
+  .wp-section.workpaper-section > header h4 {
+    flex: 1 1 auto;
+  }
 }
 
 .wp-section.source-agent .wp-source {
@@ -15238,7 +15550,7 @@ button.sys-more-clear:hover {
   margin: 0;
   font-size: 11.5px;
   font-weight: 400;
-  color: var(--accent, var(--text-muted));
+  color: var(--accent, var(--text-tertiary));
 }
 
 .sw-controls-head {
@@ -15297,6 +15609,74 @@ button.sys-more-clear:hover {
   margin: 0;
 }
 
+/* The control areas, with how many are chosen in each; it stays at the top of the list
+   while it scrolls, and each area is a jump to it. */
+.sw-areas {
+  position: sticky;
+  top: -1rem;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  align-items: center;
+  margin: 0 -1.25rem;
+  padding: 0.5rem 1.25rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* On a phone the bar is one row that scrolls sideways, so it never covers the list. */
+@media (max-width: 640px) {
+  .sw-areas {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .sw-areas > * {
+    flex: none;
+  }
+}
+
+.sw-areas-count {
+  margin-right: 0.25rem;
+  color: var(--text-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.sw-area {
+  display: inline-flex;
+  gap: 0.375rem;
+  align-items: center;
+  height: 28px;
+  padding: 0 0.625rem;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.sw-area:hover {
+  color: var(--text-strong);
+  background: var(--surface-muted);
+}
+
+.sw-area .num {
+  color: var(--text-tertiary);
+}
+
+.sw-area.has-chosen {
+  color: var(--accent-strong);
+  border-color: var(--accent-border);
+}
+
+.sw-area.has-chosen .num {
+  color: var(--accent-strong);
+}
+
 .sw-group {
   min-width: 0;
   margin: 0;
@@ -15305,6 +15685,11 @@ button.sys-more-clear:hover {
 }
 
 .sw-group legend {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
   margin-bottom: 0.35rem;
   color: var(--text-tertiary);
   font-size: 11.5px;
@@ -15322,9 +15707,18 @@ button.sys-more-clear:hover {
   border-radius: 10px;
 }
 
+.sw-group-all {
+  height: 24px;
+  padding: 0 0.5rem;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 .sw-row {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr);
+  grid-template-columns: 14px minmax(0, 1fr) auto;
   gap: 0.6rem;
   align-items: start;
   padding: 0.6rem 0.75rem;
@@ -15363,6 +15757,24 @@ button.sys-more-clear:hover {
   color: var(--text-secondary);
   font-size: 12.5px;
   line-height: 1.45;
+}
+
+/* A row shows its description on one line until opened with Details. */
+.sw-row:not(.is-open) .sw-row-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.sw-row:not(.is-open) .sw-row-from {
+  display: none;
+}
+
+.sw-row-more {
+  height: 24px;
+  padding: 0 0.5rem;
+  font-size: 12px;
 }
 
 /* Where an adapted control comes from (adapted_controls), under its description. */
@@ -17068,6 +17480,7 @@ button.answer-done:hover {
 
 .queue-note {
   margin: 0 0 0.375rem;
+  padding: 0 1rem;
   font-size: 12px;
   color: var(--text-tertiary);
 }
@@ -17108,8 +17521,642 @@ button.answer-done:hover {
   display: none;
 }
 
+/* A grouped row's details take the row's width, so its list does too; the action for
+   all of its controls sits beside it. */
+.queue-group {
+  align-items: flex-start;
+}
+
+.queue-group > details {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The action for all of a group's controls sits at the row's top right, so the list
+   below spans the row; the summary leaves it room. */
+.queue-group.has-action {
+  position: relative;
+}
+
+.queue-group.has-action > details > summary {
+  padding-right: 12rem;
+}
+
+.queue-group-action {
+  position: absolute;
+  top: 0.5rem;
+  right: 1rem;
+}
+
+.queue-group.is-lead > .queue-group-action {
+  top: 0.625rem;
+  right: 0.5rem;
+}
+
+.queue-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: fit-content;
+  color: var(--accent-strong);
+  font-size: var(--fs-sm);
+  font-weight: 550;
+}
+
+.queue-group-toggle svg {
+  transform: rotate(90deg);
+  transition: transform 0.15s ease;
+}
+
+.queue-group > details[open] .queue-group-toggle svg {
+  transform: rotate(-90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .queue-group-toggle svg {
+    transition: none;
+  }
+}
+
 .queue-group-items {
-  margin: 0.5rem 0 0 0.5rem;
-  padding-left: 0.5rem;
-  border-left: 2px solid var(--border);
+  margin: 0.5rem 0 0;
+  padding: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.queue-group-items > .home-step {
+  padding: 0.375rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.queue-group-items > .home-step:last-child {
+  border-bottom: 0;
+}
+
+.queue-group-items .home-step-copy strong {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+@media (max-width: 640px) {
+  .queue-group {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .queue-group.has-action > details > summary {
+    padding-right: 0;
+  }
+
+  .queue-group-action,
+  .queue-group.is-lead > .queue-group-action {
+    position: static;
+    order: -1;
+    justify-content: space-between;
+  }
+}
+
+/* Home, redesigned (docs/home-plan.md): the header's next action, the journey's stages as
+   links, what needs the viewer, the rest of the work folded, and a rail at a glance. */
+.home-page .page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.home-primary {
+  max-width: 24rem;
+}
+
+.home-primary > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-menu > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  cursor: pointer;
+}
+
+.home-menu > summary svg {
+  transform: rotate(90deg);
+  transition: transform 0.15s ease;
+}
+
+.home-menu[open] > summary svg {
+  transform: rotate(-90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-menu > summary svg {
+    transition: none;
+  }
+}
+
+.home-menu-panel {
+  width: 12rem;
+  gap: 0.125rem;
+  padding: 0.375rem;
+}
+
+.home-menu-panel a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-decoration: none;
+  border-radius: 6px;
+}
+
+.home-menu-panel a:hover {
+  background: var(--surface-muted);
+}
+
+.home-stage:has(.home-stage-link) {
+  padding: 0;
+}
+
+.home-stage-link {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: flex-start;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.75rem 0.875rem;
+  color: inherit;
+  text-decoration: none;
+}
+
+.home-stage-link:hover {
+  background: var(--surface-muted);
+}
+
+.home-stage.is-current .home-stage-link:hover {
+  background: transparent;
+}
+
+.home-stage-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.home-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+@media (min-width: 1200px) {
+  .home-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(19rem, 22rem);
+  }
+}
+
+.home-main,
+.home-rail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.25rem;
+  min-width: 0;
+}
+
+.home-needs .card-header .count,
+.home-others .card-header .text-link {
+  flex: none;
+  white-space: nowrap;
+}
+
+.home-step-hold {
+  color: var(--warning);
+  font-weight: 550;
+}
+
+.home-more {
+  padding: 0.625rem 1rem 0.75rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.home-fold {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.home-fold > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  padding: 0.75rem 1rem;
+  list-style: none;
+  cursor: pointer;
+}
+
+.home-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.home-fold > summary:hover {
+  background: var(--surface-muted);
+}
+
+.home-fold-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.home-fold-summary {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.home-card-fold > summary {
+  align-items: center;
+  list-style: none;
+  cursor: pointer;
+  border-bottom: 0;
+}
+
+.home-card-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.home-card-fold > summary > span {
+  display: grid;
+  gap: 0.125rem;
+}
+
+.home-card-fold > summary > svg {
+  flex: none;
+  color: var(--text-tertiary);
+  transition: transform 0.15s ease;
+}
+
+.home-card-fold[open] > summary > svg {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-card-fold > summary > svg {
+    transition: none;
+  }
+}
+
+.home-card-fold[open] > summary {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.glance-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.glance-item {
+  min-width: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.glance-item:nth-child(odd) {
+  border-right: 1px solid var(--border-subtle);
+}
+
+.glance-item a {
+  display: grid;
+  gap: 0.125rem;
+  height: 100%;
+  padding: 0.75rem 1rem 0.875rem;
+  color: inherit;
+  text-decoration: none;
+}
+
+.glance-item a:hover {
+  background: var(--surface-muted);
+}
+
+.glance-label {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.glance-value {
+  color: var(--text-strong);
+  font-size: 1.25rem;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.glance-detail {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+}
+
+.glance-item.is-risk .glance-value {
+  color: var(--danger);
+}
+
+.glance-item.is-attention .glance-value {
+  color: var(--warning);
+}
+
+.glance-item.is-good .glance-value {
+  color: var(--success);
+}
+
+.home-severity strong.severity-none {
+  color: var(--text-tertiary);
+}
+
+.card-foot {
+  margin: 0;
+  padding: 0.625rem 1rem 0.75rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.mini-timeline.is-stacked .mini-row {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.25rem;
+}
+
+.mini-timeline.is-stacked .mini-label {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0 0.5rem;
+  overflow: visible;
+  color: var(--text);
+  white-space: normal;
+}
+
+.mini-timeline.is-stacked .mini-label small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+}
+
+.mini-axis {
+  position: relative;
+  height: 1.25rem;
+  margin-top: 0.25rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.mini-axis > span {
+  position: absolute;
+  top: 0.25rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.mini-axis > .mini-today {
+  top: -1.1rem;
+  padding: 0 0.25rem;
+  color: var(--danger);
+  font-weight: 600;
+  background: var(--surface);
+}
+
+.home-back {
+  margin: 0;
+}
+
+.home-back a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--accent-strong);
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  text-decoration: none;
+}
+
+.home-back a:hover {
+  text-decoration: underline;
+}
+
+.queue-more-filters > summary {
+  padding: 0.25rem 0;
+  color: var(--accent-strong);
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.queue-more-filters[open] > summary {
+  margin-bottom: 0.375rem;
+}
+
+/* On a phone the schedule is a link to the timeline; everything else stacks. */
+@media (max-width: 640px) {
+  .home-schedule .card-body {
+    display: none;
+  }
+
+  .home-primary {
+    flex: 1 1 100%;
+    max-width: none;
+    justify-content: space-between;
+  }
+}
+
+/* Home H2: the causes behind a group of held rows, each with where it is cleared. */
+.home-causes {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.home-causes > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  font-size: var(--fs-xs);
+}
+
+.home-cause-count {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.notice-examples {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+/* A row's less frequent actions behind one button (row-menu.tsx). */
+.row-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.row-menu-button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+
+.row-menu-button:hover,
+.row-menu.is-open .row-menu-button {
+  color: var(--text-strong);
+  background: var(--surface-muted);
+  border-color: var(--border);
+}
+
+.row-menu-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  min-width: 12rem;
+  padding: 0.3rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px -12px rgb(16 24 40 / 30%);
+}
+
+.row-menu-list.is-right {
+  right: auto;
+  left: 0;
+}
+
+.row-menu-list a,
+.row-menu-list button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  width: 100%;
+  height: auto;
+  min-height: 32px;
+  padding: 0.35rem 0.6rem;
+  color: var(--text-strong);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  text-decoration: none;
+  white-space: normal;
+}
+
+.row-menu-list a:hover,
+.row-menu-list a:focus-visible,
+.row-menu-list button:hover:not(:disabled),
+.row-menu-list button:focus-visible {
+  background: var(--surface-muted);
+}
+
+.row-menu-list .is-danger {
+  color: var(--danger);
+}
+
+.row-menu-list button:disabled {
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+}
+
+.row-menu-section {
+  margin: 0.35rem 0 0;
+  padding: 0.35rem 0.6rem 0.2rem;
+  color: var(--text-tertiary);
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.row-menu-section:first-child {
+  margin-top: 0;
+  border-top: 0;
+}
+
+.row-menu-list small {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+}
+
+/* Which systems a policy applies to, asked before it is uploaded (evidence-intake.tsx). */
+.request-upload {
+  position: relative;
+}
+
+.upload-systems {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  gap: 0.4rem;
+  width: min(18rem, calc(100vw - 2rem));
+  padding: 0.75rem 0.85rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px -12px rgb(16 24 40 / 30%);
+  text-align: left;
+}
+
+.upload-systems.is-right {
+  right: auto;
+  left: 0;
+}
+
+.upload-systems-title {
+  margin: 0 0 0.15rem;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.upload-systems-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: normal;
+}
+
+.upload-systems-list {
+  display: grid;
+  gap: 0.3rem;
+  padding-left: 1.5rem;
+}
+
+.upload-systems-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
 }

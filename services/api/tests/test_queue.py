@@ -4,7 +4,7 @@ inbox reads the same list; filters never widen what a viewer sees."""
 
 from datetime import date, timedelta
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from support import Database
 from test_control_reviews import _prepared_control
@@ -28,6 +28,7 @@ from test_workpapers import _tested_control
 
 from ai_workforce_api.authorization import Principal, PrincipalKind
 from ai_workforce_api.console import _inbox
+from ai_workforce_api.control_instances import control_label
 from ai_workforce_api.control_reviews import REPERFORM_FAILED, run_reperformance
 from ai_workforce_api.db import connect
 from ai_workforce_api.evidence_analysis import run_analysis
@@ -234,6 +235,12 @@ def test_queued_agent_work_is_upcoming_with_a_worker_and_blocked_without(
     assert with_worker.counts["UPCOMING"] == 1
     [held] = [i for i in without.items if i.id == f"review:{review['id']}"]
     assert held.bucket == "BLOCKED" and held.blockers == [NO_WORKER]
+    # The hold names the system condition: no fix in the app, an administrator's to clear
+    # (Home shows it once as a notice). The item with a worker has no hold.
+    assert [(h.code, h.text, h.fix, h.system) for h in held.holds] == [
+        ("NO_WORKER", NO_WORKER, None, True)
+    ]
+    assert item.holds == []
     # Neither lists the control's step beside the review: one obligation, one item.
     kinds = [i.kind for i in with_worker.items if i.control_id == UUID(control)]
     assert kinds == ["request-draft", "review"]
@@ -497,6 +504,7 @@ def test_a_drafted_request_is_ready_only_when_its_approval_would_pass(migrated: 
     ready = item(allowed)
     assert ready["ready"] is True and ready["bucket"] == "MINE"
     assert ready["owner"]["role"] == "APPROVER" and ready["blockers"] == []
+    assert ready["holds"] == []
     # Blocked domain: held with the endpoint's own words, the preparer's to resolve.
     blocked = _client_with(
         migrated, team["owner_id"], email_allowed_recipient_domains="other.example"
@@ -505,12 +513,25 @@ def test_a_drafted_request_is_ready_only_when_its_approval_would_pass(migrated: 
     assert held["ready"] is False and held["bucket"] == "BLOCKED"
     assert held["owner"]["role"] == "PREPARER"
     assert held["blockers"] == [f"{first[1]} cannot receive evidence requests."]
+    # The deployment's outbound allowlist is a system condition, with no fix in the app.
+    assert held["holds"] == [
+        {"code": "RECIPIENT_NOT_ALLOWED", "text": held["blockers"][0], "fix": None, "system": True}
+    ]
     # Missing recipient: held by the same rule, and the inbox files it under contacts.
     with connect(migrated.url) as connection:
         connection.execute("UPDATE pbc_requests SET recipient = '' WHERE id = %s", (second[0],))
         connection.commit()
     unaddressed = item(allowed, second[0])
     assert unaddressed["ready"] is False and unaddressed["blockers"] == ["Assign a recipient."]
+    # A missing recipient is cleared in the evidence contacts.
+    assert unaddressed["holds"] == [
+        {
+            "code": "RECIPIENT_MISSING",
+            "text": "Assign a recipient.",
+            "fix": {"section": "evidence", "query": {"tab": "requests"}},
+            "system": False,
+        }
+    ]
     inbox = allowed.get(f"{base}/console/inbox").json()["waiting"]
     assert any(i["kind"] == "contacts" and "Assign a recipient" in i["detail"] for i in inbox)
     # Authorization: a team member who may prepare but not approve sees the ready item
@@ -592,3 +613,98 @@ def test_the_batched_approval_rule_matches_the_endpoint_rule_for_every_draft(
         assert "elsewhere.example" in str(open_list[ids[1]])
         # Under an allowlist naming another domain, every recipient is the first problem.
         assert all("cannot receive" in str(v) for k, v in closed_list.items() if k != ids[0])
+
+
+def test_every_blocker_is_a_hold_with_its_code_and_where_it_is_cleared() -> None:
+    """Home (docs/home-plan.md): each blocker the queue writes becomes a hold with a
+    stable code and the place it is cleared; system conditions have no fix in the app;
+    a blocker another rule writes is cleared on the item's own page."""
+    from ai_workforce_api.queue import (
+        ASSIGN_RECIPIENT,
+        PLAN_FIRST,
+        POPULATION_FIRST,
+        TASK_HELD,
+        QueueLink,
+        _code_of,
+        _hold,
+    )
+    from ai_workforce_api.request_details import problem_code
+
+    control = uuid4()
+    own = QueueLink(section="controls", query={"control": str(control), "step": "test"})
+    plan = {"section": "controls", "query": {"control": str(control), "step": "plan"}}
+    cases = {
+        NO_WORKER: ("NO_WORKER", None, True),
+        PLAN_FIRST: ("PLAN_FIRST", plan, False),
+        POPULATION_FIRST: ("POPULATION_FIRST", plan, False),
+        ASSIGN_RECIPIENT: (
+            "RECIPIENT_MISSING",
+            {"section": "evidence", "query": {"tab": "requests"}},
+            False,
+        ),
+        TASK_HELD: ("TASK_BLOCKED", own.model_dump(), False),
+        "Not released yet: the interim phase opens on 1 June": ("NOT_RELEASED", None, False),
+        "Approve the evidence plan first": ("STEP", own.model_dump(), False),
+    }
+    for text, (code, fix, system) in cases.items():
+        hold = _hold(_code_of(text), text, own, control)
+        assert (hold.code, hold.text, hold.system) == (code, text, system), text
+        assert (hold.fix.model_dump() if hold.fix is not None else None) == fix, text
+    # A drafted request's checks name their own codes.
+    assert problem_code("recipient", "Assign a recipient.") == "RECIPIENT_MISSING"
+    assert (
+        problem_code("recipient", "x@client.example cannot receive evidence requests.")
+        == "RECIPIENT_NOT_ALLOWED"
+    )
+    assert (
+        problem_code("cc", "y@other.example is outside the client's email domains (a.example).")
+        == "RECIPIENT_OUTSIDE_DOMAINS"
+    )
+    assert problem_code("recipient", "nope is not a valid email address.") == "RECIPIENT_INVALID"
+    assert problem_code("planning", "Plan the evidence first.") == "PLANNING_HOLD"
+    assert problem_code("due", "The due date has passed. Set a new due date.") == "DUE_PASSED"
+    assert problem_code("control", "The control is no longer in scope.") == "CONTROL_OUT_OF_SCOPE"
+    assert problem_code("title", "") == "REQUEST_CHECK"
+
+
+def test_an_item_names_its_control_instance_with_its_application(migrated: Database) -> None:
+    """One library control scoped to two systems is two controls with one ID (Milestone
+    8.5): each item names its instance as every page does (control_label), so a list of
+    the same step across controls never shows the same ID twice without its system."""
+    team, client, sheet, _file = _prepared_control(migrated, "queue-label", "DISMISS")
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            "INSERT INTO engagement_applications (organization_id, project_id, name) "
+            "VALUES (%s, %s, %s) RETURNING id",
+            (team["org"], team["project"], "SAP ECC"),
+        ).fetchone()
+        assert row is not None
+        connection.execute(
+            "UPDATE engagement_controls SET engagement_application_id = %s WHERE id = %s",
+            (row[0], sheet["control_id"]),
+        )
+        connection.commit()
+    body = _queue(client, team)
+    on_controls = [item for item in body["items"] if item["control_id"] is not None]
+    assert any(item["control_id"] == sheet["control_id"] for item in on_controls)
+    # Each item reads as the register reads the same control, and the moved one as its
+    # new application.
+    register = client.get(f"{_base(team)}/workspace/controls")
+    assert register.status_code == 200, register.text
+    labels = {row["id"]: row["label"] for row in register.json()}
+    for item in on_controls:
+        assert item["control_label"] == labels[item["control_id"]], item
+    [moved] = {
+        item["control_label"] for item in on_controls if item["control_id"] == sheet["control_id"]
+    }
+    # The console inbox names each item's control the same way, keyed by the queue's id.
+    inbox = client.get(f"{_base(team)}/console/inbox").json()["waiting"]
+    by_id = {item["id"]: item for item in body["items"]}
+    assert inbox and all(entry["id"] in by_id for entry in inbox)
+    for entry in inbox:
+        assert entry["control_label"] == by_id[entry["id"]]["control_label"], entry
+    assert moved == control_label(_ref_of(on_controls, sheet["control_id"]), "SAP ECC")
+
+
+def _ref_of(items: list[dict[str, Any]], control_id: str) -> str:
+    return str(next(item["control_ref"] for item in items if item["control_id"] == control_id))

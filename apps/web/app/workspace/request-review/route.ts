@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 import { detailsWrite } from "../../../src/request-details-model";
-import { reviewWrite } from "../../../src/request-review-model";
+import { approveAndSend, reviewWrite } from "../../../src/request-review-model";
 
 // The request details changes (request-details-model.ts); the rest are review actions.
 const DETAILS = new Set([
@@ -31,13 +31,45 @@ export async function POST(request: Request) {
   } catch {
     fields = {};
   }
+  const session = sessionToken((await cookies()).get("aw_session")?.value);
+  if (fields.intent === "approve-send") {
+    // Approve the agent's draft, then send it with that approval (two recorded steps).
+    const outcome = await approveAndSend(fields, async (path, body, ms) => {
+      try {
+        const headers = new Headers({ "content-type": "application/json" });
+        if (session !== undefined) {
+          headers.set("cookie", `aw_session=${session}`);
+        }
+        const response = await fetch(`${apiBaseUrl()}${path}`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+          cache: "no-store",
+          signal: AbortSignal.timeout(ms),
+        });
+        const payload = (await response.json().catch(() => null)) as {
+          detail?: unknown;
+        } | null;
+        return {
+          status: response.status,
+          detail:
+            response.status !== 200 && typeof payload?.detail === "string"
+              ? payload.detail
+              : "",
+          payload,
+        };
+      } catch {
+        return { status: 0, detail: "", payload: null };
+      }
+    });
+    return NextResponse.json(outcome);
+  }
   const write = DETAILS.has(String(fields.intent))
     ? detailsWrite(fields)
     : reviewWrite(fields);
   if ("error" in write) {
     return NextResponse.json({ status: 422, detail: "" });
   }
-  const session = sessionToken((await cookies()).get("aw_session")?.value);
   let status = 0;
   let detail = "";
   try {

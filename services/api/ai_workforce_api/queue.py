@@ -14,6 +14,11 @@ Equivalent obligations appear once: a control's next step and the record it is a
 specific item stands and the generic one is dropped. Separate obligations stay separate:
 each round's review, each assessment, each request's approval, each reminder.
 
+Each blocker is also given as a hold (Home, docs/home-plan.md): a stable code, the same
+words, where it is cleared when the app can clear it, and whether it is a system
+condition only an administrator clears (no worker, the outbound recipient allowlist).
+The holds are additive: the blockers, the buckets and the counts are as before.
+
 Four buckets (M2b): MINE, the viewer may do it now; WAITING, someone else's turn, an
 ordinary wait on a person; BLOCKED, a prerequisite is unmet or no one can act (no worker
 for queued agent work, a task a person must unblock); UPCOMING, nothing is due yet (a
@@ -86,6 +91,16 @@ class QueueLink(BaseModel):
     query: dict[str, str] = Field(default_factory=dict)
 
 
+class QueueHold(BaseModel):
+    """What holds an item: a stable code, its words (one of the item's blockers), where it
+    is cleared when the app can clear it, and whether only an administrator can."""
+
+    code: str
+    text: str
+    fix: QueueLink | None = None
+    system: bool = False
+
+
 class QueueItem(BaseModel):
     id: str
     kind: str
@@ -95,6 +110,9 @@ class QueueItem(BaseModel):
     stage: StageKey
     control_id: UUID | None = None
     control_ref: str | None = None
+    # How the control instance is named everywhere (control_instances.control_label): its
+    # ID, then its application, so one library control scoped to two systems reads as two.
+    control_label: str | None = None
     phase: str | None = None
     round_id: UUID | None = None
     round_kind: str | None = None
@@ -107,6 +125,8 @@ class QueueItem(BaseModel):
     authorized: bool
     ready: bool = True
     blockers: list[str] = Field(default_factory=list)
+    # The blockers as holds, one each, in the same order.
+    holds: list[QueueHold] = Field(default_factory=list)
     # It holds the engagement up until settled.
     blocks: bool = False
     bucket: Bucket
@@ -203,6 +223,12 @@ def _upcoming_holds(blockers: list[str]) -> list[str]:
 
 
 NO_WORKER = "Automation unavailable: no worker is configured to run the queued agent work"
+PLAN_FIRST = "Plan the evidence, then reconcile the kickoff draft with its plan"
+ASSIGN_RECIPIENT = "Assign a recipient."
+POPULATION_FIRST = "Accept the population on the evidence plan first"
+TASK_HELD = "Blocked until someone clears it"
+# Conditions only an administrator clears: the deployment, not the engagement.
+SYSTEM_HOLDS = frozenset({"NO_WORKER", "RECIPIENT_NOT_ALLOWED"})
 
 
 def _agent_turn(automated: bool) -> tuple[Bucket, list[str]]:
@@ -267,6 +293,9 @@ _STEP_OBLIGATIONS: tuple[tuple[str, str], ...] = (
     ("Chase the overdue", "EVIDENCE_RECEIPT"),
     ("Waiting for", "EVIDENCE_RECEIPT"),
     ("Link the sample evidence", "EVIDENCE_RECEIPT"),
+    ("Review the design evidence", "EVIDENCE_REVIEW"),
+    ("Drafting the design workpaper", "WORKPAPERS"),
+    ("Prepare the design workpaper", "WORKPAPERS"),
     ("Confirm the population", "POPULATION"),
     ("Accept the population", "POPULATION"),
     ("Test the evidence", "TESTING_RUN"),
@@ -492,6 +521,9 @@ def queue(
                 link=_control_link(control.id, step),
             )
         )
+    for item in items:
+        if item.control_id is not None and item.control_id in controls:
+            item.control_label = controls[item.control_id].label or item.control_ref
     return _finish(items)
 
 
@@ -527,6 +559,40 @@ def _finality(control: Any, step: str, specific: dict[tuple[UUID, str], bool]) -
     ]
 
 
+def _code_of(text: str) -> str:
+    """The code of a blocker this module writes; STEP for one another rule writes (the
+    control's readiness, its phase, a round), which the item's own page explains."""
+    if text == NO_WORKER:
+        return "NO_WORKER"
+    if text == PLAN_FIRST:
+        return "PLAN_FIRST"
+    if text == ASSIGN_RECIPIENT:
+        return "RECIPIENT_MISSING"
+    if text == POPULATION_FIRST:
+        return "POPULATION_FIRST"
+    if text == TASK_HELD:
+        return "TASK_BLOCKED"
+    if _upcoming_holds([text]):
+        return "NOT_RELEASED"
+    return "STEP"
+
+
+def _hold(code: str, text: str, link: QueueLink, control_id: UUID | None) -> QueueHold:
+    """A hold with where it is cleared: the evidence contacts for a missing recipient, the
+    control's Plan step for planning; nothing for a system condition or a hold that lifts
+    with time; otherwise the item's own page, which says how."""
+    fix: QueueLink | None
+    if code in SYSTEM_HOLDS or code == "NOT_RELEASED":
+        fix = None
+    elif code == "RECIPIENT_MISSING":
+        fix = QueueLink(section="evidence", query={"tab": "requests"})
+    elif code in ("PLAN_FIRST", "PLANNING_HOLD", "POPULATION_FIRST") and control_id is not None:
+        fix = _control_link(control_id, "PLAN")
+    else:
+        fix = link
+    return QueueHold(code=code, text=text, fix=fix, system=code in SYSTEM_HOLDS)
+
+
 def _finish(items: list[QueueItem]) -> QueueBody:
     seen: set[str] = set()
     unique: list[QueueItem] = []
@@ -534,6 +600,10 @@ def _finish(items: list[QueueItem]) -> QueueBody:
         if item.id in seen:
             continue
         seen.add(item.id)
+        if item.blockers and not item.holds:
+            item.holds = [
+                _hold(_code_of(text), text, item.link, item.control_id) for text in item.blockers
+            ]
         unique.append(item)
     order: dict[str, int] = {"MINE": 0, "BLOCKED": 1, "WAITING": 2, "UPCOMING": 3}
     stage_order = {key: index for index, key in enumerate(StageKey.__args__)}  # type: ignore[attr-defined]
@@ -543,6 +613,7 @@ def _finish(items: list[QueueItem]) -> QueueBody:
             not item.blocks,
             stage_order.get(item.stage, 9),
             item.control_ref or "~",
+            item.control_label or "",
             item.title,
         )
     )
@@ -938,7 +1009,7 @@ def _samples(
         control = controls.get(control_id)
         if round_body is None and control is not None and control.population_pending:
             # Samples come only from a population a person accepted as complete.
-            blockers.append("Accept the population on the evidence plan first")
+            blockers.append(POPULATION_FIRST)
         ready = not blockers
         authorized = viewer.may_prepare(assigned.get(control_id))
         found.append(
@@ -1223,12 +1294,12 @@ def _requests(
     The endpoint applies the rule again when the action is taken, with its own settings
     and the record's version: the queue's reading never stands in for it."""
     from ai_workforce_api.evidence_plans import reconcile_waiting, unplanned_controls
-    from ai_workforce_api.request_details import draft_blockers
+    from ai_workforce_api.request_details import draft_problems, problem_code
 
     held_controls = set(unplanned_controls(connection, project_id))
     held_controls |= reconcile_waiting(connection, project_id)
     problems = (
-        draft_blockers(connection, settings, organization_id, project_id)
+        draft_problems(connection, settings, organization_id, project_id)
         if settings is not None
         else {}
     )
@@ -1246,17 +1317,25 @@ def _requests(
         control_id = UUID(str(row[1]))
         agent_draft = str(row[6] or "") == "AGENT"
         blockers: list[str] = []
+        codes: list[str] = []
         if settings is not None:
             problem = problems.get(request_id)
             if problem is not None:
-                blockers.append(problem)
+                blockers.append(problem[1])
+                codes.append(problem_code(*problem))
         else:
             held = control_id in held_controls and str(row[2]).startswith(("kickoff-", "scope-"))
             if held:
-                blockers.append("Plan the evidence, then reconcile the kickoff draft with its plan")
+                blockers.append(PLAN_FIRST)
+                codes.append("PLAN_FIRST")
             elif str(row[3] or "").strip() == "":
-                blockers.append("Assign a recipient.")
+                blockers.append(ASSIGN_RECIPIENT)
+                codes.append("RECIPIENT_MISSING")
         ready = not blockers
+        link = QueueLink(
+            section="controls",
+            query={"control": str(control_id), "step": "request", "request": str(request_id)},
+        )
         # Whose it is: the approver's when ready; the preparer's while something they
         # resolve holds it; a person's own draft is the preparer's to submit.
         if not agent_draft:
@@ -1298,15 +1377,12 @@ def _requests(
                 authorized=authorized,
                 ready=ready,
                 blockers=blockers,
+                holds=[
+                    _hold(code, text, link, control_id)
+                    for code, text in zip(codes, blockers, strict=True)
+                ],
                 bucket=_bucket(authorized, ready, role),
-                link=QueueLink(
-                    section="controls",
-                    query={
-                        "control": str(control_id),
-                        "step": "request",
-                        "request": str(request_id),
-                    },
-                ),
+                link=link,
                 at=row[5],
             )
         )
@@ -1477,11 +1553,11 @@ def _tasks(
                 control_id=control_id,
                 control_ref=None if control_id is None else refs.get(control_id),
                 title=str(row[1]),
-                reason="Blocked until someone clears it" if blocked else "Ready for review",
+                reason=TASK_HELD if blocked else "Ready for review",
                 owner=QueueOwner(role="PREPARER"),
                 authorized=authorized,
                 ready=not blocked,
-                blockers=["Blocked until someone clears it"] if blocked else [],
+                blockers=[TASK_HELD] if blocked else [],
                 bucket=_bucket(authorized, not blocked, "PREPARER"),
                 link=QueueLink(section="reports", query={"view": "schedule"}),
                 at=row[5],

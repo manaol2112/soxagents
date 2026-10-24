@@ -280,3 +280,43 @@ export function reviewProblem(status: number, detail: string): string | null {
   }
   return "The action could not be completed. Please try again.";
 }
+
+/** One call to the API: its status, its reason when refused, and its answer. */
+export type ReviewCall = (
+  path: string,
+  body: unknown,
+  timeoutMs: number,
+) => Promise<{ status: number; detail: string; payload: unknown }>;
+
+/**
+ * Approve an agent's draft and send it, in one press: the approval as the reviewer's own
+ * (the same call and checks as Approve), then the send with that approval (the same as
+ * "Send to the recipient"). Each step is recorded on its own; a send that fails after the
+ * approval leaves the request approved, and says so (`approved`).
+ */
+export async function approveAndSend(
+  fields: Fields,
+  call: ReviewCall,
+): Promise<{ status: number; detail: string; approved: boolean }> {
+  const approve = reviewWrite({ ...fields, intent: "approve" });
+  if ("error" in approve) {
+    return { status: 422, detail: "", approved: false };
+  }
+  const first = await call(approve.path, approve.body, 8000);
+  if (first.status !== 200) {
+    return { status: first.status, detail: first.detail, approved: false };
+  }
+  const answer = first.payload as { approval?: { id?: unknown } } | null;
+  const approvalId =
+    typeof answer?.approval?.id === "string" ? answer.approval.id : "";
+  const send = reviewWrite({
+    ...fields,
+    intent: "send",
+    approval_id: approvalId,
+  });
+  if ("error" in send) {
+    return { status: 0, detail: "", approved: true };
+  }
+  const second = await call(send.path, send.body, 15000);
+  return { status: second.status, detail: second.detail, approved: true };
+}

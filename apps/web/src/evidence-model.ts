@@ -57,9 +57,11 @@ export type RegisterFile = {
   reviewStatus: string | null;
   reviewProposed: string | null;
   reviewDecision: string | null;
-  /** Which of its control's applications the file shows: ONE, ALL, or UNKNOWN. */
+  /** Which of its control's applications the file shows: ONE, ALL, UNKNOWN, or SOME
+   * (several a person named, in namedApplications). */
   application: RegisterApplication | null;
-  applicationScope: "ONE" | "ALL" | "UNKNOWN" | null;
+  applicationScope: "ONE" | "SOME" | "ALL" | "UNKNOWN" | null;
+  namedApplications: RegisterApplication[];
   applicationBy: "AGENT" | "PERSON" | null;
 };
 
@@ -238,10 +240,18 @@ export function parseRegister(value: unknown): EvidenceRegister | null {
           : null,
       applicationScope:
         item.application_scope === "ONE" ||
+        item.application_scope === "SOME" ||
         item.application_scope === "ALL" ||
         item.application_scope === "UNKNOWN"
           ? item.application_scope
           : null,
+      namedApplications: (Array.isArray(item.applications)
+        ? item.applications
+        : []
+      )
+        .filter(isRecord)
+        .filter((entry) => typeof entry.id === "string")
+        .map((entry) => ({ id: str(entry.id), name: str(entry.name) })),
       applicationBy:
         item.application_by === "AGENT" || item.application_by === "PERSON"
           ? item.application_by
@@ -522,6 +532,9 @@ export function applicationLabel(file: RegisterFile): string {
   if (file.applicationScope === "ONE" && file.application !== null) {
     return file.application.name;
   }
+  if (file.applicationScope === "SOME") {
+    return file.namedApplications.map((app) => app.name).join(", ");
+  }
   return file.applicationScope === "UNKNOWN" ? "Application not known" : "";
 }
 
@@ -572,7 +585,9 @@ export function byApplicationOf(
   for (const app of applications) {
     const mine = files.filter(
       (file) =>
-        file.applicationScope === "ONE" && file.application?.id === app.id,
+        (file.applicationScope === "ONE" && file.application?.id === app.id) ||
+        (file.applicationScope === "SOME" &&
+          file.namedApplications.some((named) => named.id === app.id)),
     );
     if (mine.length > 0 || applications.length > 1) {
       groups.push({ key: app.id, label: app.name, files: mine });
@@ -688,6 +703,19 @@ export type UploadTarget =
   | { path: string; query: string };
 
 /** The API call for one uploaded file, from the live upload route's query. */
+/** What an upload says about the systems a file applies to: ALL, or the ticked ones
+ * (in the order ticked); null while none is ticked. */
+export function systemsAnswer(
+  all: boolean,
+  ticked: readonly string[],
+): string | null {
+  if (all) {
+    return "ALL";
+  }
+  const unique = [...new Set(ticked)];
+  return unique.length === 0 ? null : unique.join(",");
+}
+
 export function uploadTarget(params: URLSearchParams): UploadTarget {
   const organization = params.get("organization") ?? "";
   const project = params.get("project") ?? "";
@@ -695,8 +723,19 @@ export function uploadTarget(params: URLSearchParams): UploadTarget {
   const name = params.get("name") ?? "";
   const folder = params.get("path") ?? "";
   const request = params.get("request") ?? "";
+  // An item of the request the file is added for; only with its request.
+  const requirement = params.get("requirement") ?? "";
+  // The applications a person says it applies to: ALL, or application ids.
+  const applications = params.get("applications") ?? "";
   if (
     (request !== "" && !UUID.test(request)) ||
+    (requirement !== "" && (request === "" || !UUID.test(requirement))) ||
+    (applications !== "" &&
+      (request === "" ||
+        (applications !== "ALL" &&
+          !applications
+            .split(",")
+            .every((part, index) => index < 50 && UUID.test(part))))) ||
     !UUID.test(organization) ||
     !UUID.test(project) ||
     !UUID.test(batch) ||
@@ -710,6 +749,13 @@ export function uploadTarget(params: URLSearchParams): UploadTarget {
   if (request !== "") {
     // Added on a request: filed to it, not matched.
     query.set("request_id", request);
+  }
+  if (requirement !== "") {
+    // Added on one item of the request: for that item only.
+    query.set("requirement_id", requirement);
+  }
+  if (applications !== "") {
+    query.set("applications", applications);
   }
   return {
     path: `/organizations/${organization}/projects/${project}/evidence-uploads`,

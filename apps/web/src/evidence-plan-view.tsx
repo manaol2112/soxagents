@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useId, useState, useTransition } from "react";
+import { type ReactNode, useId, useState, useTransition } from "react";
 
 import {
   APPLICABILITY_LABELS,
@@ -9,7 +9,9 @@ import {
   CATEGORIES,
   CHANGE_KINDS,
   CONTROL_TYPE_LABELS,
+  compactFileNote,
   type EvidencePlan,
+  fileIsReading,
   groupByCategory,
   JUDGEABLE,
   NECESSITY_LABELS,
@@ -29,6 +31,7 @@ import {
   waitsOnPerson,
 } from "./evidence-plan-model";
 import { formatDate } from "./format";
+import { RowMenu, type RowMenuItem } from "./row-menu";
 import { UiIcon } from "./ui-icon";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
@@ -292,6 +295,59 @@ type Asking =
  * by a person with why), what the evidence reader found and proposes (marked as the
  * agent's), and a person's decision. Accepting is always a person's act.
  */
+/** What an item's file line says on the control's evidence (compactFileNote). */
+function CompactFileNote({ file }: { file: RequirementFile }) {
+  if (fileIsReading(file)) {
+    // While the agent reads it: a moving "Reading", and whatever else there is to say.
+    const rest = compactFileNote({
+      ...file,
+      readStatus: "READY",
+      coverage: null,
+    });
+    return (
+      <>
+        <ReadingMark label="Reading" />
+        {rest !== "" ? <small>{rest}</small> : null}
+      </>
+    );
+  }
+  const note = compactFileNote(file);
+  return note === "" ? null : <small>{note}</small>;
+}
+
+/** The agent at work: a word and three dots that rise in turn (still where motion is
+ * reduced). */
+function ReadingMark({ label }: { label: string }) {
+  return (
+    <small className="ep-reading" role="status">
+      {label}
+      <span className="ep-dots" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+    </small>
+  );
+}
+
+/** The reader's note is kept to a length, so it can stop mid-sentence: say so. */
+function endsCleanly(text: string): string {
+  const trimmed = text.trimEnd();
+  return /[.!?)"']$/.test(trimmed) ? trimmed : `${trimmed}…`;
+}
+
+/** A file's form opened from the item's menu, under the file's line. */
+export type FileForm = "replace" | "withdraw" | "application";
+
+/** What a page shows of a file on an item's line: its name (opening it), a flag, its
+ * actions for the item's menu, and the form one of them opened. */
+export type FileLine = {
+  name: ReactNode;
+  flag: ReactNode;
+  actions: RowMenuItem[];
+  form: ReactNode;
+};
+
 export function RequirementRow({
   item,
   canAct,
@@ -299,6 +355,8 @@ export function RequirementRow({
   linkable = [],
   proposed = false,
   compact = false,
+  fileLine,
+  upload = null,
 }: {
   item: PlanRequirement;
   canAct: boolean;
@@ -310,12 +368,44 @@ export function RequirementRow({
   /** On the control's evidence: one line until the item waits on a person, its plan
    * wording and files on request. */
   compact?: boolean;
+  /** A file's name (opening it), its actions, and the form one opened, where the page
+   * offers them; the actions join the item's menu. */
+  fileLine?: (
+    file: RequirementFile,
+    form: FileForm | null,
+    setForm: (form: FileForm | null) => void,
+  ) => FileLine;
+  /** Adding evidence for this item, where the page offers it: shown on the item always. */
+  upload?: ReactNode;
 }) {
   const shown = requirementStatus(item.state, proposed);
   const id = useId();
   const [asking, setAsking] = useState<Asking | null>(null);
   const [words, setWords] = useState("");
   const [fileId, setFileId] = useState("");
+  const [showFound, setShowFound] = useState(false);
+  const [fileForm, setFileForm] = useState<{
+    fileId: string;
+    form: FileForm;
+  } | null>(null);
+  const lines = new Map(
+    item.files.map((file) => [
+      file.fileId,
+      fileLine?.(
+        file,
+        fileForm?.fileId === file.fileId ? fileForm.form : null,
+        (form) =>
+          setFileForm(form === null ? null : { fileId: file.fileId, form }),
+      ) ?? null,
+    ]),
+  );
+  // The files' actions in the item's menu, under each file's name (or "File").
+  const fileActions = item.files.flatMap((file) =>
+    (lines.get(file.fileId)?.actions ?? []).map((entry) => ({
+      ...entry,
+      section: item.files.length === 1 ? "File" : file.name,
+    })),
+  );
   const judgeable = JUDGEABLE.includes(item.state);
   const open = item.state !== "NOT_APPLICABLE" && item.state !== "REMOVED";
   const assessed = item.files.length > 0;
@@ -334,7 +424,83 @@ export function RequirementRow({
     setWords(prefill);
     setFileId("");
   };
-  const buttons =
+  // On the control's evidence: Accept, and one menu with the other judgments and what
+  // can be done to the item's files.
+  const judgments: RowMenuItem[] = canAct
+    ? [
+        ...(judgeable
+          ? [
+              {
+                label: "Insufficient",
+                onSelect: () => ask({ kind: "INSUFFICIENT" }),
+              },
+              {
+                label: "Follow up",
+                onSelect: () =>
+                  ask(
+                    { kind: "FOLLOW_UP_REQUIRED" },
+                    proposal.followUps.join("; ").slice(0, 1000),
+                  ),
+              },
+            ]
+          : []),
+        ...(open && linkable.length > 0
+          ? [
+              {
+                label: "Use a file the control holds",
+                onSelect: () => ask({ kind: "LINK" }),
+              },
+            ]
+          : []),
+        ...(open && item.pendingChange === null
+          ? [
+              {
+                label: "Mark not applicable",
+                onSelect: () => ask({ kind: "WAIVE" }),
+              },
+            ]
+          : []),
+        ...(item.state === "NOT_APPLICABLE"
+          ? [
+              {
+                label: "Restore",
+                onSelect: () =>
+                  action.run(`restore-${item.id}`, {
+                    intent: "restore",
+                    requirement_id: item.id,
+                    version: item.version,
+                  }),
+              },
+            ]
+          : []),
+      ]
+    : [];
+  const menu = [...judgments, ...fileActions];
+  const accept = canAct && judgeable && item.state !== "ACCEPTED";
+  const compactButtons =
+    asking === null && (accept || menu.length > 0) ? (
+      <span className="ep-buttons is-compact">
+        {accept ? (
+          <button
+            type="button"
+            className="btn-sm"
+            disabled={action.pending}
+            onClick={() =>
+              action.run(`judge-${item.id}`, {
+                intent: "sufficiency",
+                requirement_id: item.id,
+                sufficiency: "ACCEPTED",
+                version: item.version,
+              })
+            }
+          >
+            Accept
+          </button>
+        ) : null}
+        {menu.length > 0 ? <RowMenu label={item.title} items={menu} /> : null}
+      </span>
+    ) : null;
+  const fullButtons =
     canAct && asking === null ? (
       <span className="ep-buttons">
         {judgeable && item.state !== "ACCEPTED" ? (
@@ -407,27 +573,79 @@ export function RequirementRow({
         ) : null}
       </span>
     ) : null;
+  const buttons = compact ? compactButtons : fullButtons;
+  // What the reader found, said on the item's line only when it proposes something; a
+  // reading by the rules alone ("a person judges it") stays under Details.
+  const quietAssessment = compact && proposal.proposal === "NONE";
+  // Files the agent is still reading: the item says so, moving, until the reading lands.
+  const reading = item.files.filter(fileIsReading).length;
+  // On the control's evidence the reader's proposal is one line; what it found and the
+  // points to raise open on request (Follow up starts from those points).
+  const points = proposal.followUps.length;
+  const assessment = (
+    <p
+      className={`ep-assess is-${proposal.proposal.toLowerCase()}${decided ? " is-decided" : ""}`}
+    >
+      <span
+        className="cw-ai"
+        title="The evidence reader's proposal, not a decision"
+      >
+        AI
+      </span>
+      {proposal.proposal === "NONE" ? null : (
+        <>
+          {decided ? "The reader proposed: " : null}
+          <strong>{PROPOSAL_LABELS[proposal.proposal]}.</strong>{" "}
+        </>
+      )}
+      {compact && proposal.proposal !== "NONE" ? (
+        <button
+          type="button"
+          className="ep-points-toggle"
+          aria-expanded={showFound}
+          onClick={() => setShowFound((value) => !value)}
+        >
+          {showFound
+            ? "Hide"
+            : points > 0
+              ? `${points} point${points === 1 ? "" : "s"} to raise`
+              : "Why"}
+        </button>
+      ) : (
+        proposal.reason
+      )}
+    </p>
+  );
   // The evidence that serves the item and what the reader found.
   const evidence = assessed ? (
     <div className="ep-evidence">
       <ul className="ep-files">
         {item.files.map((file) => (
-          <li key={file.fileId}>
+          <li
+            key={file.fileId}
+            className={fileIsReading(file) ? "is-reading" : undefined}
+          >
             <UiIcon name="file" size={13} />
-            <span className="ep-file-name">{file.name}</span>
-            <small>
-              {file.via === "LINK"
-                ? `linked by ${file.linkedBy ?? "a person"}`
-                : "on its request"}
-              {file.readStatus === "PENDING" || file.readStatus === "WORKING"
-                ? " · being read"
-                : file.readStatus === "FAILED"
-                  ? " · could not be read"
-                  : file.coverage !== null
-                    ? ` · ${COVERAGE_WORDS[file.coverage]}${file.readBy === "RULES" ? " (by the rules)" : ""}`
-                    : ""}
-              {file.period ? ` · ${file.period}` : ""}
-            </small>
+            {lines.get(file.fileId)?.name ?? (
+              <span className="ep-file-name">{file.name}</span>
+            )}
+            {compact ? (
+              <CompactFileNote file={file} />
+            ) : (
+              <small>
+                {file.via === "LINK"
+                  ? `linked by ${file.linkedBy ?? "a person"}`
+                  : "on its request"}
+                {file.readStatus === "PENDING" || file.readStatus === "WORKING"
+                  ? " · being read"
+                  : file.readStatus === "FAILED"
+                    ? " · could not be read"
+                    : file.coverage !== null
+                      ? ` · ${COVERAGE_WORDS[file.coverage]}${file.readBy === "RULES" ? " (by the rules)" : ""}`
+                      : ""}
+                {file.period ? ` · ${file.period}` : ""}
+              </small>
+            )}
             {canAct && file.via === "LINK" && file.linkId !== null ? (
               <button
                 type="button"
@@ -438,39 +656,52 @@ export function RequirementRow({
                 Unlink
               </button>
             ) : null}
+            {lines.get(file.fileId)?.flag ?? null}
+            {lines.get(file.fileId)?.form ?? null}
           </li>
         ))}
       </ul>
-      <p
-        className={`ep-assess is-${proposal.proposal.toLowerCase()}${decided ? " is-decided" : ""}`}
-      >
-        <span
-          className="cw-ai"
-          title="The evidence reader's proposal, not a decision"
-        >
-          AI
-        </span>
-        {proposal.proposal === "NONE" ? null : (
-          <>
-            {decided ? "The reader proposed: " : null}
-            <strong>{PROPOSAL_LABELS[proposal.proposal]}.</strong>{" "}
-          </>
-        )}
-        {proposal.reason}
-      </p>
-      {proposal.followUps.length > 0 ? (
-        <ul className="ep-follow">
-          {proposal.followUps.map((line) => (
-            <li key={line}>{line}</li>
-          ))}
-        </ul>
-      ) : null}
+      {compact && reading > 0 ? (
+        <p className="ep-assess is-reading">
+          <span className="cw-ai is-thinking" title="The evidence reader">
+            AI
+          </span>
+          <ReadingMark
+            label={`Reading ${reading} file${reading === 1 ? "" : "s"}`}
+          />
+        </p>
+      ) : quietAssessment ? null : (
+        assessment
+      )}
+      {compact && !showFound ? null : (
+        <>
+          {compact && proposal.proposal !== "NONE" ? (
+            <p className="ep-found">{endsCleanly(proposal.reason)}</p>
+          ) : null}
+          {compact
+            ? item.files
+                .filter((file) => file.period !== "")
+                .map((file) => (
+                  <p key={`period-${file.fileId}`} className="ep-found">
+                    Period: {file.period}
+                  </p>
+                ))
+            : null}
+          {proposal.followUps.length > 0 ? (
+            <ul className="ep-follow">
+              {proposal.followUps.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          ) : null}
+        </>
+      )}
     </div>
   ) : null;
   return (
     <li
       id={`req-${item.id}`}
-      className={`cc-item ep-item${item.needsReview ? " is-review" : ""}`}
+      className={`cc-item ep-item${item.needsReview ? " is-review" : ""}${compact ? " is-compact" : ""}`}
     >
       <span className={`ep-dot ${shown.tone}`} aria-hidden="true" />
       <div className="cc-item-body">
@@ -487,7 +718,7 @@ export function RequirementRow({
           {item.needsReview ? (
             <span className="cc-badge is-question">Needs review</span>
           ) : null}
-          {compact && assessed ? (
+          {fold && assessed ? (
             <span className="ep-file-count">
               {item.files.length} {item.files.length === 1 ? "file" : "files"}
             </span>
@@ -495,6 +726,16 @@ export function RequirementRow({
         </p>
         {compact ? null : <p className="cc-text">{item.description}</p>}
         {fold ? null : evidence}
+        {item.passedOver.length > 0 ? (
+          <p className="ep-passed">
+            {item.passedOver.join(", ")} came in on its request, but the reader
+            found {item.passedOver.length === 1 ? "it does" : "they do"} not
+            cover this item.
+            {canAct && open && linkable.length > 0
+              ? " Use it from the menu if it does."
+              : ""}
+          </p>
+        ) : null}
         {!assessed &&
         (item.state === "RECEIVED" ||
           item.state === "PARTIALLY_RECEIVED" ||
@@ -510,6 +751,7 @@ export function RequirementRow({
           <summary>{compact ? "Details" : "Why, period, and request"}</summary>
           {compact ? <p className="cc-text">{item.description}</p> : null}
           {fold ? evidence : null}
+          {quietAssessment && assessed ? assessment : null}
           {fold ? buttons : null}
           <p className="cc-why">
             <span>Why</span>
@@ -738,6 +980,7 @@ export function RequirementRow({
         >
           {shown.label}
         </span>
+        {upload}
         {fold ? null : buttons}
       </div>
     </li>

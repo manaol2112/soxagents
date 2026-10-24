@@ -147,10 +147,12 @@ export function stepHref(
   }
   return waitingHref(
     {
+      id: "",
       kind: step.kind,
       title: step.title,
       detail: step.detail,
       controlRef: step.controlRef,
+      controlLabel: step.controlRef,
       link: step.link,
       controlId: step.controlId,
       tab: step.tab,

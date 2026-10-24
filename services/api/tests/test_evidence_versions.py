@@ -58,7 +58,10 @@ def test_a_wrong_file_is_withdrawn_kept_and_restored(migrated: Database) -> None
     _read(migrated, scheduler.analyses[0])
     assert _status(migrated, request["id"]) == "RECEIVED"
 
-    assert client.post(f"{files}/{file_id}/withdraw", json={"reason": ""}).status_code == 422
+    # A reason is the person's to give (22 Oct 2026; an empty one was refused before).
+    assert client.post(f"{files}/{file_id}/withdraw", json={"reason": "x" * 501}).status_code == (
+        422
+    )
     withdrawn = client.post(
         f"{files}/{file_id}/withdraw", json={"reason": "Uploaded the wrong period"}
     )

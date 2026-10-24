@@ -483,6 +483,11 @@ class KnownSystem(BaseModel):
 class TeamAdd(BaseModel):
     user_id: UUID
     engagement_role: Literal["LEAD", "PREPARER", "REVIEWER"]
+    # Further roles for the same person, given in the same transaction. Only while reviewer
+    # independence is off (development): with it on, one person holds one role.
+    additional_roles: list[Literal["LEAD", "PREPARER", "REVIEWER"]] = Field(
+        default_factory=list, max_length=2
+    )
 
 
 class TeamRemove(BaseModel):
@@ -703,7 +708,11 @@ def register_onboarding(
                 principal,
                 organization_id,
                 project_id,
-                TeamAdd(user_id=user_id, engagement_role=body.engagement_role),
+                TeamAdd(
+                    user_id=user_id,
+                    engagement_role=body.engagement_role,
+                    additional_roles=body.additional_roles,
+                ),
             )
 
         try:
@@ -1619,9 +1628,10 @@ def _readiness(
     missing_app = [c.control_ref for c in on_systems if c.application_id is None]
     if missing_app and applications:
         rcm_issues.append(f"Choose the systems {_list(missing_app)} covers.")
+    # The workpaper templates need no confirmation (product owner, 22 October 2026): the
+    # standard ones, or the firm's once saved, apply by default, and a change applies to
+    # workpapers not yet started. The step is there to customise and preview.
     template_issues: list[str] = []
-    if settings.templates_confirmed_at is None:
-        template_issues.append("Review the workpaper previews and confirm the templates.")
     # Evidence requests are not part of setup: launch drafts one per control and sends
     # none, and the client's PBC coordinator and domains are set in the Evidence section.
     agent_issues = [
@@ -1711,20 +1721,36 @@ def _update_scope(
     body: ScopeUpdate,
 ) -> OnboardingBody:
     _authorize_setup(connection, principal, organization_id, project_id)
-    scope = body.scope.strip()
+    scope = _checked_scope(body.scope)
+    with transaction(connection) as cursor:
+        _write_scope(cursor, organization_id, project_id, principal.id, scope)
+        _touch(cursor, project_id, "period_end = %s", (body.period_end,))
+    return _snapshot(connection, organization_id, project_id)
+
+
+def _checked_scope(text: str) -> str:
+    scope = text.strip()
     if contains_secret({"scope": scope}):
         raise ValueError("scope holds a secret")
-    with transaction(connection) as cursor:
-        cursor.execute(
-            """
-            UPDATE projects SET scope = %s, version = version + 1, updated_at = clock_timestamp()
-            WHERE id = %s AND organization_id = %s AND scope IS DISTINCT FROM %s
-            """,
-            (scope, project_id, organization_id, scope),
-        )
-        _touch(cursor, project_id, "period_end = %s", (body.period_end,))
-        _audit(cursor, organization_id, project_id, principal.id, "onboarding.scope", {})
-    return _snapshot(connection, organization_id, project_id)
+    return scope
+
+
+def _write_scope(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    actor_id: UUID,
+    scope: str,
+) -> None:
+    """The engagement's scope narrative, within the caller's transaction."""
+    cursor.execute(
+        """
+        UPDATE projects SET scope = %s, version = version + 1, updated_at = clock_timestamp()
+        WHERE id = %s AND organization_id = %s AND scope IS DISTINCT FROM %s
+        """,
+        (scope, project_id, organization_id, scope),
+    )
+    _audit(cursor, organization_id, project_id, actor_id, "onboarding.scope", {})
 
 
 def _confirm_period(
@@ -1771,11 +1797,13 @@ def _update_profile(
     project_id: UUID,
     body: ProfileUpdate,
 ) -> OnboardingBody:
-    """The client, the kind of engagement, and the period end, named at creation."""
+    """The client, the kind of engagement, the period, and, when given, the scope: the
+    profile step's one Save, written in one transaction so it lands whole or not at all."""
     _authorize_setup(connection, principal, organization_id, project_id)
     client = body.client_name.strip()
     if contains_secret({"client": client}):
         raise ValueError("client name holds a secret")
+    scope = None if body.scope is None else _checked_scope(body.scope)
     with transaction(connection) as cursor:
         from ai_workforce_api.clients import assign_client, fold
 
@@ -1824,6 +1852,8 @@ def _update_profile(
                 "period_end": body.period_end and body.period_end.isoformat(),
             },
         )  # fmt: skip
+        if scope is not None:
+            _write_scope(cursor, organization_id, project_id, principal.id, scope)
     return _snapshot(connection, organization_id, project_id)
 
 
@@ -2019,67 +2049,89 @@ def _add_member(
     if member is None:
         raise NotVisible()
     relaxed = not independence.required()
+    roles = list(dict.fromkeys([body.engagement_role, *body.additional_roles]))
+    if len(roles) > 1 and not relaxed:
+        # Segregation of duties: with independence required, one person holds one role.
+        raise OnboardingState(ONE_ROLE)
     with transaction(connection) as cursor:
-        if body.engagement_role == "LEAD":
-            # One lead. A new lead moves the previous one to preparer.
-            cursor.execute(
-                """
-                UPDATE project_memberships
-                SET engagement_role = 'PREPARER', version = version + 1
-                WHERE project_id = %s AND engagement_role = 'LEAD' AND user_id <> %s
-                """,
-                (project_id, body.user_id),
+        for role in roles:
+            _assign_role(
+                cursor, principal, organization_id, project_id, body.user_id, role, relaxed
             )
-            cursor.execute(
-                """
-                DELETE FROM project_member_roles
-                WHERE project_id = %s AND engagement_role = 'LEAD' AND user_id <> %s
-                """,
-                (project_id, body.user_id),
-            )
-        current = cursor.execute(
-            "SELECT engagement_role FROM project_memberships "
-            "WHERE project_id = %s AND user_id = %s",
-            (project_id, body.user_id),
-        ).fetchone()
-        if relaxed and current is not None and current[0] != body.engagement_role:
-            # Development only: keep the role they have and add this one.
-            cursor.execute(
-                """
-                INSERT INTO project_member_roles (project_id, user_id, engagement_role)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (project_id, user_id, engagement_role) DO NOTHING
-                """,
-                (project_id, body.user_id, body.engagement_role),
-            )
-        else:
-            cursor.execute(
-                """
-                INSERT INTO project_memberships (
-                    organization_id, project_id, user_id, engagement_role
-                )
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (project_id, user_id) DO UPDATE
-                SET engagement_role = EXCLUDED.engagement_role,
-                    version = project_memberships.version + 1
-                """,
-                (organization_id, project_id, body.user_id, body.engagement_role),
-            )
-            if not relaxed:
-                # One role per person: any extra roles from development go.
-                cursor.execute(
-                    "DELETE FROM project_member_roles WHERE project_id = %s AND user_id = %s",
-                    (project_id, body.user_id),
-                )
-        _audit(
-            cursor,
-            organization_id,
-            project_id,
-            principal.id,
-            "onboarding.team",
-            {"user_id": str(body.user_id), "engagement_role": body.engagement_role},
-        )
     return _snapshot(connection, organization_id, project_id)
+
+
+ONE_ROLE = "one role per person while reviewer independence is required"
+
+
+def _assign_role(
+    cursor: psycopg.Cursor[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    user_id: UUID,
+    role: str,
+    relaxed: bool,
+) -> None:
+    """One role for one person, within the caller's transaction."""
+    if role == "LEAD":
+        # One lead. A new lead moves the previous one to preparer.
+        cursor.execute(
+            """
+            UPDATE project_memberships
+            SET engagement_role = 'PREPARER', version = version + 1
+            WHERE project_id = %s AND engagement_role = 'LEAD' AND user_id <> %s
+            """,
+            (project_id, user_id),
+        )
+        cursor.execute(
+            """
+            DELETE FROM project_member_roles
+            WHERE project_id = %s AND engagement_role = 'LEAD' AND user_id <> %s
+            """,
+            (project_id, user_id),
+        )
+    current = cursor.execute(
+        "SELECT engagement_role FROM project_memberships WHERE project_id = %s AND user_id = %s",
+        (project_id, user_id),
+    ).fetchone()
+    if relaxed and current is not None and current[0] != role:
+        # Development only: keep the role they have and add this one.
+        cursor.execute(
+            """
+            INSERT INTO project_member_roles (project_id, user_id, engagement_role)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (project_id, user_id, engagement_role) DO NOTHING
+            """,
+            (project_id, user_id, role),
+        )
+    else:
+        cursor.execute(
+            """
+            INSERT INTO project_memberships (
+                organization_id, project_id, user_id, engagement_role
+            )
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (project_id, user_id) DO UPDATE
+            SET engagement_role = EXCLUDED.engagement_role,
+                version = project_memberships.version + 1
+            """,
+            (organization_id, project_id, user_id, role),
+        )
+        if not relaxed:
+            # One role per person: any extra roles from development go.
+            cursor.execute(
+                "DELETE FROM project_member_roles WHERE project_id = %s AND user_id = %s",
+                (project_id, user_id),
+            )
+    _audit(
+        cursor,
+        organization_id,
+        project_id,
+        principal.id,
+        "onboarding.team",
+        {"user_id": str(user_id), "engagement_role": role},
+    )
 
 
 def _remove_member(

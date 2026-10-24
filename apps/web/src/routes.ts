@@ -82,21 +82,24 @@ export const REPORT_TAB_LABELS: Record<ReportTab, string> = {
   status: "Status and reports",
 };
 
+/** This engagement's settings first, then the firm's (from `SETTINGS_FIRM_FROM` on). */
 export const SETTINGS_TABS = [
   "engagement",
+  "tasks",
   "library",
   "workforce",
-  "tasks",
   "engagements",
 ] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 export const SETTINGS_TAB_LABELS: Record<SettingsTab, string> = {
-  engagement: "Engagement",
-  library: "Library",
+  engagement: "Engagement setup",
+  library: "Standard library",
   workforce: "AI workforce",
   tasks: "Tasks",
-  engagements: "Engagements",
+  engagements: "All engagements",
 };
+/** The first tab that is the firm's rather than this engagement's. */
+export const SETTINGS_FIRM_FROM: SettingsTab = "library";
 
 /** The page a destination's tab renders: the section that existed before. */
 const REPORT_PAGES: Record<ReportTab, SectionId> = {

@@ -52,7 +52,10 @@ FAMILY_FILES = """
                              AND (t.scope = 'ALL'
                                   OR (t.scope = 'ONE'
                                       AND t.engagement_application_id
-                                          = me.engagement_application_id)))))
+                                          = me.engagement_application_id)
+                                  OR (t.scope = 'SOME'
+                                      AND me.engagement_application_id
+                                          = ANY(t.engagement_application_ids))))))
 """
 
 
@@ -74,7 +77,7 @@ def shared_with_family(connection: Any, file_id: UUID) -> bool:
     """Whether a sibling instance may test the file too (see FAMILY_FILES)."""
     row = connection.execute(
         "SELECT 1 FROM evidence_file_applications "
-        "WHERE evidence_file_id = %s AND scope IN ('ALL', 'ONE')",
+        "WHERE evidence_file_id = %s AND scope IN ('ALL', 'ONE', 'SOME')",
         (file_id,),
     ).fetchone()
     return row is not None

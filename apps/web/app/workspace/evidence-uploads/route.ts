@@ -38,8 +38,19 @@ export async function POST(request: Request) {
       },
     );
     if (response.status !== 200) {
+      // The API's own reason for a refusal (a plain sentence it wrote), so the person
+      // knows what to do; nothing else of the answer is passed on.
+      const refused = (await response.json().catch(() => ({}))) as {
+        detail?: unknown;
+      };
       return NextResponse.json(
-        { error: response.status === 422 ? "invalid" : "refused" },
+        {
+          error: response.status === 422 ? "invalid" : "refused",
+          detail:
+            response.status === 409 && typeof refused.detail === "string"
+              ? refused.detail.slice(0, 200)
+              : null,
+        },
         { status: response.status },
       );
     }

@@ -826,3 +826,12 @@
   font-family: var(--font-mono);
   font-size: var(--fs-2xs);
 }
+
+/* A new contact added from a request's owner: the fields stack in the narrow pop-up. */
+.ec-owner-pop .rr-contact-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.ec-owner-pop .rr-contact {
+  margin: 0;
+}

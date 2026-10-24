@@ -189,7 +189,9 @@ def place(
 
 
 def place_by_application(
-    items: list[UUID | None], tag: tuple[str, UUID | None, str] | None
+    items: list[UUID | None],
+    tag: tuple[str, UUID | None, str] | None,
+    several: tuple[UUID, ...] = (),
 ) -> tuple[Literal["PLACED", "UNPLACED", "EXCLUDED"], list[int], str]:
     """For a control tested once per application: the item of the application it shows.
 
@@ -201,7 +203,14 @@ def place_by_application(
     if len(items) == 1:
         if scope == "ONE" and items[0] is not None and application != items[0]:
             return "EXCLUDED", [], "Shows another application of this control."
+        if scope == "SOME" and items[0] is not None and items[0] not in several:
+            return "EXCLUDED", [], "Applies to other applications of this control."
         return "PLACED", [0], "The control is tested once, so every file is its evidence."
+    if scope == "SOME":
+        named = [index for index, item in enumerate(items) if item in several]
+        if named:
+            return "PLACED", named, "Applies to the applications a person named."
+        return "UNPLACED", [], "It applies to applications this control does not cover."
     if scope == "ALL":
         return "PLACED", list(range(len(items))), "Applies to every application."
     if scope == "ONE" and application in items:
@@ -1333,14 +1342,13 @@ def _place_new_files(
         (sheet_id,),
     ).fetchall()
     keys = [str(row[1]) for row in items]
-    tags = {
-        row[0]: (str(row[1]), row[2], str(row[3]))
-        for row in connection.execute(
-            "SELECT evidence_file_id, scope, engagement_application_id, reason "
-            "FROM evidence_file_applications WHERE project_id = %s",
-            (project_id,),
-        ).fetchall()
-    }
+    tag_rows = connection.execute(
+        "SELECT evidence_file_id, scope, engagement_application_id, reason, "
+        "engagement_application_ids FROM evidence_file_applications WHERE project_id = %s",
+        (project_id,),
+    ).fetchall()
+    tags = {row[0]: (str(row[1]), row[2], str(row[3])) for row in tag_rows}
+    several = {row[0]: tuple(row[4] or ()) for row in tag_rows}
     apps = control_applications(connection, project_id, control_id)
     with transaction(connection) as cursor:
         for file_id, name, folder, text, request_id, kind in files:
@@ -1359,7 +1367,7 @@ def _place_new_files(
                 placement, reason = "EXCLUDED", "The population the samples came from."
             elif method == "TEST_OF_ONE":
                 placement, found, reason = place_by_application(
-                    [row[2] for row in items], tags.get(file_id)
+                    [row[2] for row in items], tags.get(file_id), several.get(file_id, ())
                 )
             else:
                 placement, found, reason = place(

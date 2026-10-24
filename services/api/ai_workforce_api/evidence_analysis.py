@@ -35,7 +35,13 @@ from ai_workforce_api.authorization import (
 from ai_workforce_api.control_instances import family_applications
 from ai_workforce_api.control_tests import approved, control_for_population, propose
 from ai_workforce_api.db import connect, independent_steps, transaction
-from ai_workforce_api.evidence_apps import model_tag, rules_tag, save_tag
+from ai_workforce_api.evidence_apps import (
+    model_tag,
+    own_application,
+    request_default,
+    rules_tag,
+    save_tag,
+)
 from ai_workforce_api.evidence_classify import (
     CLASSIFY_SCHEMA,
     MAX_ITEMS,
@@ -297,7 +303,9 @@ def run_analysis(
                 decided[0].control.control_id,
                 evidence_hint(str(file_name), file_kind, extraction.text),
             )
-    context = _context(connection, project_id, str(file_name), extraction, request)
+    context = _context(
+        connection, project_id, str(file_name), extraction, request, _added_for(connection, file_id)
+    )
     classification: Classification | None = None
     source = "RULES"
     note = "No model is configured." if model is None else ""
@@ -471,7 +479,8 @@ def run_analysis(
                 ),
             ),
         )
-        # Which of the control's applications the file shows: Claude's answer, else rules.
+        # Which of the control's applications the file shows: Claude's answer, else rules;
+        # when neither can tell, the application of the request it came in on.
         if request is not None and request[3] is not None:
             apps = family_applications(cursor, project_id, request[3])
             if apps:
@@ -481,9 +490,12 @@ def run_analysis(
                     organization_id,
                     project_id,
                     file_id,
-                    tag
-                    or rules_tag(
-                        apps, str(file_name), str(folder), extraction.text, classification.kind
+                    request_default(
+                        tag
+                        or rules_tag(
+                            apps, str(file_name), str(folder), extraction.text, classification.kind
+                        ),
+                        own_application(cursor, project_id, request[3]),
                     ),
                 )
         # The control's tester places the new file on its samples and tests them.
@@ -748,20 +760,31 @@ def _save_filing(
     return "OWNER" if row[1] == "OWNER" else "AGENT"
 
 
+def _added_for(connection: psycopg.Connection[Any], file_id: UUID) -> UUID | None:
+    """The item of its request a person added the file for, if any."""
+    row = connection.execute(
+        "SELECT requirement_id FROM evidence_matches "
+        "WHERE evidence_file_id = %s AND status = 'FILED'",
+        (file_id,),
+    ).fetchone()
+    return None if row is None or row[0] is None else UUID(str(row[0]))
+
+
 def _planned_items(
-    connection: psycopg.Connection[Any], request_id: UUID
+    connection: psycopg.Connection[Any], request_id: UUID, only: UUID | None = None
 ) -> tuple[RequestedItem, ...]:
-    """The plan requirements a request carries, in the order its text lists them."""
+    """The plan requirements a request carries, in the order its text lists them; only the
+    one a file was added for, when it was added on an item."""
     from ai_workforce_api.pbc_drafting import PRIMARY_KIND
 
     rows = connection.execute(
         """
         SELECT id, title, description, categories, period_label FROM evidence_requirements
-        WHERE pbc_request_id = %s AND status = 'REQUESTED'
+        WHERE pbc_request_id = %s AND status = 'REQUESTED' AND (%s::uuid IS NULL OR id = %s)
         ORDER BY CASE necessity WHEN 'REQUIRED' THEN 0 WHEN 'CONDITIONAL' THEN 1 ELSE 2 END,
                  created_at, requirement_key
         """,
-        (request_id,),
+        (request_id, only, only),
     ).fetchall()
     return tuple(
         RequestedItem(
@@ -782,6 +805,7 @@ def _context(
     file_name: str,
     extraction: Extraction,
     request: RequestRef | None,
+    added_for: UUID | None = None,
 ) -> ClassifyContext:
     items: tuple[RequestedItem, ...] = ()
     control: dict[str, Any] = {}
@@ -791,7 +815,7 @@ def _context(
             "SELECT content FROM pbc_drafts WHERE pbc_request_id = %s AND status = 'DRAFTED'",
             (request[0],),
         ).fetchone()
-        planned = _planned_items(connection, request[0])
+        planned = _planned_items(connection, request[0], added_for)
         if planned:
             # A request made from the evidence plan: each item is a requirement, so what the
             # file covers is recorded against the requirement itself.

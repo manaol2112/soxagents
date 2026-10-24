@@ -98,6 +98,8 @@ export async function loadEngagement(
   const testing = section === "testing";
   const wanted = {
     dashboard: section === "overview",
+    // Settings › AI workforce shows the engagement's open work by agent (docs/home-plan.md, D5).
+    agentWork: section === "agents",
     controls: section === "controls" || section === "deficiencies" || testing,
     plan:
       section === "plan" ||
@@ -145,7 +147,9 @@ export async function loadEngagement(
     phaseProgress,
     evidenceMapping,
   ] = await Promise.all([
-    wanted.dashboard ? apiGet(`${base}/workspace/dashboard`, session) : null,
+    wanted.dashboard || wanted.agentWork
+      ? apiGet(`${base}/workspace/dashboard`, session)
+      : null,
     wanted.dashboard ? apiGet(`${base}/next-steps`, session) : null,
     open ? apiGet(`${base}/impact`, session) : null,
     section === "controls" || testing

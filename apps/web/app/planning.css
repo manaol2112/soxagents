@@ -3006,10 +3006,40 @@ button.pl-since-code:hover {
   }
 }
 
-/* A destination with tabs (M2c): Reports and Settings lead with their tab bar; the page
-   inside keeps its own header. */
+/* A destination with tabs (M2c): Reports and Settings lead with their tab bar. The tab
+   names the page, so the page inside keeps its description and actions as the tab's
+   introduction, and its own title is left to assistive technology. */
 .destination-head {
-  padding: 1.25rem 1.1rem 0;
+  padding: 0.25rem 0 0;
+}
+
+.destination-body {
+  margin-top: 1.5rem;
+}
+
+.destination-body .page-header .page-title > h1,
+.destination-body .page-header > div > .page-context {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.destination-body .page-header .page-desc {
+  max-width: 72ch;
+  margin: 0;
+}
+
+/* Between this engagement's tabs and the firm's. */
+.tv-tabs-divider {
+  flex: none;
+  align-self: center;
+  width: 1px;
+  height: 1.125rem;
+  margin: 0 0.5rem;
+  background: var(--border-strong, var(--border));
 }
 
 .destination-title {
@@ -3020,8 +3050,13 @@ button.pl-since-code:hover {
 }
 
 .destination-head .tv-tabs {
-  margin: 0.75rem 0 0;
+  gap: 0.5rem;
+  margin: 1rem 0 0;
   padding: 0;
+}
+
+.destination-head .page-desc {
+  max-width: 72ch;
 }
 
 .destination-links {
@@ -3046,6 +3081,10 @@ button.pl-since-code:hover {
 
 @media (max-width: 720px) {
   .destination-head {
-    padding: 0.75rem 0.75rem 0;
+    padding: 0.5rem 0 0;
+  }
+
+  .destination-body {
+    margin-top: 1rem;
   }
 }

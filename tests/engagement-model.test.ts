@@ -747,6 +747,33 @@ describe("the redesigned register and record", () => {
       label: "Open evidence requests",
       tab: "evidence",
     });
+    // Design comes before operating testing: its evidence on the Evidence tab, its
+    // workpaper on the Testing tab.
+    assert.deepEqual(
+      recordAction({ ...first, nextStep: "Review the design evidence" }),
+      { label: "Review the design evidence", tab: "evidence" },
+    );
+    for (const nextStep of [
+      "Prepare the design workpaper",
+      "Drafting the design workpaper",
+    ]) {
+      assert.deepEqual(recordAction({ ...first, nextStep }), {
+        label: "Open the design workpaper",
+        tab: "testing",
+      });
+    }
+    // A test plan to approve or revise is done on the Plan step, where its approval
+    // is; sent to the evidence requests, the Open button went round in a circle.
+    for (const nextStep of [
+      "Approve the test plan",
+      "Revise the test plan as the reviewer asked",
+      "Test plan not approved at its current revision",
+    ]) {
+      assert.deepEqual(recordAction({ ...first, nextStep }), {
+        label: "Review the test plan",
+        tab: "design",
+      });
+    }
     assert.deepEqual(recordAction(second), {
       label: "Open the review",
       tab: "review",

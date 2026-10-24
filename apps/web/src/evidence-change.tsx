@@ -23,6 +23,10 @@ type Props = {
   /** A control's Evidence tab to come back to; otherwise the evidence page. */
   controlId?: string;
   keep?: Record<string, string>;
+  /** Open on this form, as a menu choice does, instead of on the two buttons. */
+  start?: "replace" | "withdraw";
+  /** Cancel closes the form (the menu's caller hides it) instead of showing the buttons. */
+  onCancel?: () => void;
 };
 
 function Hidden({
@@ -31,7 +35,7 @@ function Hidden({
   fileId,
   controlId,
   keep,
-}: Omit<Props, "fileName" | "blocked">) {
+}: Omit<Props, "fileName" | "blocked" | "start" | "onCancel">) {
   return (
     <>
       <input type="hidden" name="organization_id" value={organizationId} />
@@ -53,9 +57,20 @@ export function FileChanges(props: Props) {
     props;
   const router = useRouter();
   const input = useRef<HTMLInputElement>(null);
-  const [mode, setMode] = useState<"idle" | "replace" | "withdraw">("idle");
+  const [mode, setMode] = useState<"idle" | "replace" | "withdraw">(
+    props.start ?? "idle",
+  );
   const [picked, setPicked] = useState<File | null>(null);
-  const [reason, setReason] = useState("");
+  const [reason, setReason] = useState(
+    props.start === "replace" ? "Corrected version" : "",
+  );
+  const cancel = () => {
+    if (props.onCancel !== undefined) {
+      props.onCancel();
+    } else {
+      setMode("idle");
+    }
+  };
   const [sending, setSending] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -226,9 +241,9 @@ export function FileChanges(props: Props) {
               type="button"
               className="btn-ghost btn-sm"
               onClick={() => {
-                setMode("idle");
                 setPicked(null);
                 setProblem(null);
+                cancel();
               }}
               disabled={sending}
             >
@@ -253,27 +268,11 @@ export function FileChanges(props: Props) {
             It comes off its request, testing, and workpapers. The file and who
             withdrew it stay on record, and it can be restored.
           </p>
-          <label>
-            Why
-            <input
-              name="reason"
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-              placeholder="For example: wrong period, uploaded by mistake"
-              minLength={3}
-              maxLength={500}
-              required
-            />
-          </label>
           <div className="file-changes-actions">
             <button type="submit" className="btn-sm btn-danger">
               Withdraw
             </button>
-            <button
-              type="button"
-              className="btn-ghost btn-sm"
-              onClick={() => setMode("idle")}
-            >
+            <button type="button" className="btn-ghost btn-sm" onClick={cancel}>
               Cancel
             </button>
           </div>

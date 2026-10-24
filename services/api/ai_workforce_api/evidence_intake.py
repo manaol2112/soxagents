@@ -133,7 +133,9 @@ class RegisterFile(BaseModel):
     # Which of its control's applications the file shows (ONE), all of them (ALL), or
     # not known yet (UNKNOWN); and who said so.
     application: RegisterApplication | None = None
-    application_scope: Literal["ONE", "ALL", "UNKNOWN"] | None = None
+    application_scope: Literal["ONE", "SOME", "ALL", "UNKNOWN"] | None = None
+    # SOME: the applications a person named (migration 0102).
+    applications: list[RegisterApplication] = []
     application_by: Literal["AGENT", "PERSON"] | None = None
     application_reason: str = ""
     application_version: int | None = None
@@ -165,9 +167,11 @@ class RegisterBody(BaseModel):
 
 
 class ApplicationBody(BaseModel):
-    # ONE with the application, or ALL when the file applies to every application.
-    scope: Literal["ONE", "ALL"]
+    # ONE with the application, SOME with several (a person only), or ALL when the file
+    # applies to every application.
+    scope: Literal["ONE", "SOME", "ALL"]
     application_id: UUID | None = None
+    application_ids: list[UUID] = Field(default_factory=list, max_length=50)
 
 
 class FilingBody(BaseModel):
@@ -202,6 +206,8 @@ def register_evidence_intake(
         request: Request,
         path: str = "",
         request_id: UUID | None = None,
+        requirement_id: UUID | None = None,
+        applications: str = "",
     ) -> UploadBody:
         file_name = clean_name(name)
         folder = clean_folder(path)
@@ -223,6 +229,8 @@ def register_evidence_intake(
                 content_type,
                 content,
                 request_id,
+                requirement_id,
+                applications,
             ),
         )
         await asyncio.to_thread(schedule_analyses, analyses, [] if queued is None else [queued])
@@ -350,16 +358,101 @@ def _upload(
     content_type: str,
     content: bytes,
     request_id: UUID | None = None,
+    requirement_id: UUID | None = None,
+    applications: str = "",
+) -> tuple[UploadBody, UUID | None]:
+    """Store one file. Added on an item, it is for that item; with applications ("ALL", or
+    one or more application ids, comma separated), the person says which of the control's
+    applications it applies to, which is never overwritten by the coordinator."""
+    chosen = _chosen_applications(applications)
+    if chosen is not None and request_id is None:
+        raise IntakeState("say which applications a file applies to on its request")
+    if chosen is not None and request_id is not None:
+        # Checked before anything is stored: only the control's own applications.
+        control_id = _request_target(connection, project_id, request_id)[1]
+        named = [
+            *chosen.application_ids,
+            *([chosen.application_id] if chosen.application_id else []),
+        ]
+        covered = {
+            row[0]
+            for row in connection.execute(
+                "SELECT c.engagement_application_id FROM engagement_controls c "
+                "JOIN engagement_controls me ON me.id = %s AND me.project_id = c.project_id "
+                "WHERE c.project_id = %s AND c.control_ref = me.control_ref",
+                (control_id, project_id),
+            ).fetchall()
+        }
+        if any(item not in covered for item in named):
+            raise IntakeState("the control does not cover that application")
+    stored, queued = _store_upload(
+        connection, store, principal, organization_id, project_id, batch_id, file_name,
+        folder, content_type, content, request_id, requirement_id,
+    )  # fmt: skip
+    if chosen is not None:
+        # Testing follows the file's reading, which places it by this choice.
+        _set_application(connection, principal, organization_id, project_id, stored.file_id,
+                         chosen, place_again=False)  # fmt: skip
+    return stored, queued
+
+
+def _chosen_applications(value: str) -> ApplicationBody | None:
+    """The applications a person named on an upload: ALL, one id, or several."""
+    if value.strip() == "":
+        return None
+    if value.strip().upper() == "ALL":
+        return ApplicationBody(scope="ALL")
+    try:
+        ids = list(dict.fromkeys(UUID(part.strip()) for part in value.split(",") if part.strip()))
+    except ValueError:
+        raise IntakeState("name the applications by their ids, or ALL") from None
+    if not ids or len(ids) > 50:
+        raise IntakeState("name the applications by their ids, or ALL")
+    if len(ids) == 1:
+        return ApplicationBody(scope="ONE", application_id=ids[0])
+    return ApplicationBody(scope="SOME", application_ids=ids)
+
+
+def _store_upload(
+    connection: psycopg.Connection[Any],
+    store: Any,
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    batch_id: UUID,
+    file_name: str,
+    folder: str,
+    content_type: str,
+    content: bytes,
+    request_id: UUID | None = None,
+    requirement_id: UUID | None = None,
 ) -> tuple[UploadBody, UUID | None]:
     _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
     _require_active(connection, organization_id, project_id)
-    # A file added on a request is filed to it by the person: nothing to match.
+    # A file added on a request is filed to it by the person: nothing to match. One added
+    # on an item of the request is for that item only.
     target = None if request_id is None else _request_target(connection, project_id, request_id)
+    if requirement_id is not None:
+        if target is None:
+            raise IntakeState("an item's evidence is added on its request")
+        _request_item(connection, target[0], requirement_id)
     digest = digest_of(content)
     existing = _existing(connection, project_id, digest, folder, file_name)
     if existing is not None and is_withdrawn(connection, existing):
-        raise IntakeState("this file was withdrawn; restore it from the withdrawn files")
+        if requirement_id is None or target is None:
+            raise IntakeState("this file was withdrawn; restore it from the withdrawn files")
+        # The same file added again on an item: a person restores it for that item.
+        queued_again = _restore_for_item(
+            connection, principal, organization_id, project_id, target, requirement_id, existing
+        )
+        return UploadBody(
+            file_id=existing, file_name=file_name, folder_path=folder, duplicate=True
+        ), queued_again
     if existing is not None:
+        if requirement_id is not None and target is not None:
+            # The file is held already: it serves this item too.
+            _serve_item(connection, principal, organization_id, project_id, target[1],
+                        requirement_id, existing)  # fmt: skip
         return UploadBody(
             file_id=existing, file_name=file_name, folder_path=folder, duplicate=True
         ), None
@@ -401,9 +494,10 @@ def _upload(
                     """
                     INSERT INTO evidence_matches (
                         organization_id, project_id, evidence_file_id, status,
-                        engagement_control_id, pbc_request_id, filed_by, decided_by, reason
+                        engagement_control_id, pbc_request_id, filed_by, decided_by, reason,
+                        requirement_id
                     )
-                    VALUES (%s, %s, %s, 'FILED', %s, %s, 'PERSON', %s, %s)
+                    VALUES (%s, %s, %s, 'FILED', %s, %s, 'PERSON', %s, %s, %s)
                     """,
                     (
                         organization_id,
@@ -412,7 +506,10 @@ def _upload(
                         target[1],
                         target[0],
                         principal.id,
-                        "Added on its evidence request.",
+                        "Added on its evidence request."
+                        if requirement_id is None
+                        else "Added on an item of its evidence request.",
+                        requirement_id,
                     ),
                 )
             cursor.execute(
@@ -433,6 +530,9 @@ def _upload(
                             "content_sha256": digest,
                             "size_bytes": len(content),
                             "batch_id": str(batch_id),
+                            "requirement_id": None
+                            if requirement_id is None
+                            else str(requirement_id),
                         }
                     ),
                 ),
@@ -449,6 +549,89 @@ def _upload(
     return UploadBody(
         file_id=file_id, file_name=file_name, folder_path=folder, duplicate=False
     ), queued
+
+
+def _request_item(connection: psycopg.Connection[Any], request_id: UUID, item: UUID) -> None:
+    """The item must be one the request asks for."""
+    row = connection.execute(
+        "SELECT 1 FROM evidence_requirements "
+        "WHERE id = %s AND pbc_request_id = %s AND status = 'REQUESTED'",
+        (item, request_id),
+    ).fetchone()
+    if row is None:
+        raise IntakeState("this item is not one the request asks for")
+
+
+def _serve_item(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    item: UUID,
+    file_id: UUID,
+) -> None:
+    """A file already held, added again on an item: a person links it to the item, unless
+    it serves the item already."""
+    from ai_workforce_api.evidence_plans import LinkBody, PlanState, link_file
+
+    row = connection.execute(
+        "SELECT version FROM evidence_requirements WHERE id = %s", (item,)
+    ).fetchone()
+    if row is None:
+        raise NotVisible()
+    try:
+        link_file(
+            connection, organization_id, project_id, control_id, item, principal.id,
+            LinkBody(file_id=file_id, reason="Added on this item of its request.",
+                     version=int(row[0])),
+        )  # fmt: skip
+    except PlanState as refused:
+        if "already serves" not in str(refused):
+            raise IntakeState(str(refused)) from refused
+
+
+def _restore_for_item(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    target: tuple[UUID, UUID],
+    item: UUID,
+    file_id: UUID,
+) -> UUID | None:
+    """A withdrawn file added again on an item of a request: the person restores it (the
+    restoration is recorded, with who and why), and it is for that item. On the same
+    request it is read again against that item only, which places it for testing; on
+    another request of the control it is linked to the item. Returns the reading to run."""
+    from ai_workforce_api.evidence_analysis import restart_analysis
+    from ai_workforce_api.evidence_versions import restore
+
+    # Testing follows the new reading (evidence_analysis runs it), so the restore's own
+    # runs are not scheduled here.
+    restore(
+        connection, principal, organization_id, project_id, file_id,
+        "Added again on an item of its evidence request.",
+    )  # fmt: skip
+    with transaction(connection) as cursor:
+        row = cursor.execute(
+            "SELECT m.pbc_request_id, a.id FROM evidence_matches m "
+            "LEFT JOIN evidence_analyses a ON a.evidence_file_id = m.evidence_file_id "
+            "WHERE m.evidence_file_id = %s AND m.status = 'FILED' FOR UPDATE OF m",
+            (file_id,),
+        ).fetchone()
+        if row is not None and row[0] == target[0]:
+            cursor.execute(
+                "UPDATE evidence_matches SET requirement_id = %s, version = version + 1 "
+                "WHERE evidence_file_id = %s AND status = 'FILED'",
+                (item, file_id),
+            )
+            if row[1] is None:
+                return None
+            restart_analysis(cursor, UUID(str(row[1])), principal.id)
+            return UUID(str(row[1]))
+    _serve_item(connection, principal, organization_id, project_id, target[1], item, file_id)
+    return None
 
 
 def _request_target(
@@ -503,7 +686,10 @@ _REGISTER = (
            a.id, a.status, a.classification ->> 'kind', a.confirmed_kind,
            a.classification ->> 'summary',
            v.status, v.proposed, v.decision,
-           t.scope, ea.id, ea.name, t.tagged_by, t.reason, t.version, ca.name
+           t.scope, ea.id, ea.name, t.tagged_by, t.reason, t.version, ca.name,
+           (SELECT coalesce(jsonb_agg(jsonb_build_object('id', x.id, 'name', x.name)
+                                      ORDER BY x.name), '[]'::jsonb)
+            FROM engagement_applications x WHERE x.id = ANY(t.engagement_application_ids))
     FROM evidence_files f
     LEFT JOIN users u ON u.id = f.stored_by
     LEFT JOIN evidence_matches m ON m.evidence_file_id = f.id
@@ -687,6 +873,10 @@ def _row(row: tuple[Any, ...]) -> RegisterFile:
         application_by=None if row[33] is None else row[33],
         application_reason=str(row[34] or ""),
         application_version=None if row[35] is None else int(row[35]),
+        applications=[
+            RegisterApplication.model_validate(item)
+            for item in (row[37] if isinstance(row[37], list) else [])
+        ],
     )
 
 
@@ -762,7 +952,8 @@ def _file(
                     """
                     UPDATE evidence_matches
                     SET status = 'NEEDS_MATCH', engagement_control_id = NULL,
-                        pbc_request_id = NULL, filed_by = NULL, decided_by = NULL,
+                        pbc_request_id = NULL, requirement_id = NULL, filed_by = NULL,
+                        decided_by = NULL,
                         reason = 'Taken off its control by a person.', version = version + 1
                     WHERE id = %s
                     """,
@@ -783,7 +974,8 @@ def _file(
                     """
                     UPDATE evidence_matches
                     SET status = 'FILED', engagement_control_id = %s, pbc_request_id = %s,
-                        filed_by = 'PERSON', decided_by = %s, reason = '',
+                        requirement_id = NULL, filed_by = 'PERSON', decided_by = %s,
+                        reason = '',
                         version = version + 1
                     WHERE id = %s
                     """,
@@ -847,12 +1039,17 @@ def _set_application(
     project_id: UUID,
     file_id: UUID,
     body: ApplicationBody,
+    place_again: bool = True,
 ) -> tuple[RegisterBody, list[UUID]]:
-    """Set which application a file shows, and have the tester place it again."""
+    """Set which application a file shows, and have the tester place it again (not for a
+    file just added: its reading places it)."""
     _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
     _require_active(connection, organization_id, project_id)
     if (body.scope == "ONE") != (body.application_id is not None):
         raise IntakeState("choose one application, or all of them")
+    named = list(dict.fromkeys(body.application_ids))
+    if (body.scope == "SOME") != (len(named) >= 2):
+        raise IntakeState("choose at least two applications, or one, or all of them")
     queued: list[UUID] = []
     with transaction(connection) as cursor:
         link = cursor.execute(
@@ -862,7 +1059,7 @@ def _set_application(
         ).fetchone()
         if link is None or link[0] is None:
             raise IntakeState("file the evidence to a control first")
-        if body.application_id is not None:
+        for application_id in [*named, *([body.application_id] if body.application_id else [])]:
             # Any application of the control's family: the file becomes the evidence of
             # the instance that covers it.
             allowed = cursor.execute(
@@ -870,7 +1067,7 @@ def _set_application(
                 "JOIN engagement_controls me ON me.id = %s AND me.project_id = c.project_id "
                 "WHERE c.project_id = %s AND c.control_ref = me.control_ref "
                 "AND c.engagement_application_id = %s",
-                (link[0], project_id, body.application_id),
+                (link[0], project_id, application_id),
             ).fetchone()
             if allowed is None:
                 raise IntakeState("the control does not cover that application")
@@ -878,23 +1075,26 @@ def _set_application(
             """
             INSERT INTO evidence_file_applications (
                 evidence_file_id, organization_id, project_id, scope,
-                engagement_application_id, tagged_by, decided_by, reason
+                engagement_application_id, engagement_application_ids, tagged_by,
+                decided_by, reason
             )
-            VALUES (%s, %s, %s, %s, %s, 'PERSON', %s, 'Set by a person.')
+            VALUES (%s, %s, %s, %s, %s, %s, 'PERSON', %s, 'Set by a person.')
             ON CONFLICT (evidence_file_id) DO UPDATE
             SET scope = EXCLUDED.scope,
                 engagement_application_id = EXCLUDED.engagement_application_id,
+                engagement_application_ids = EXCLUDED.engagement_application_ids,
                 tagged_by = 'PERSON', decided_by = EXCLUDED.decided_by,
                 reason = EXCLUDED.reason, version = evidence_file_applications.version + 1
             """,
-            (file_id, organization_id, project_id, body.scope, body.application_id,
-             principal.id),
+            (file_id, organization_id, project_id, body.scope,
+             body.application_id if body.scope == "ONE" else None,
+             named if body.scope == "SOME" else [], principal.id),
         )  # fmt: skip
         for sheet in cursor.execute(
             "SELECT id, status FROM test_sheets WHERE project_id = %s "
-            "AND engagement_control_id = ANY(%s) AND status = 'OPEN' "
+            "AND engagement_control_id = ANY(%s) AND status = 'OPEN' AND %s "
             "ORDER BY created_at FOR UPDATE",
-            (project_id, family_ids(cursor, project_id, UUID(str(link[0])))),
+            (project_id, family_ids(cursor, project_id, UUID(str(link[0]))), place_again),
         ).fetchall():
             # Off the items it was on, and placed again on its next run.
             for (item_id,) in cursor.execute(
@@ -926,7 +1126,13 @@ def _set_application(
                 project_id,
                 principal.id,
                 file_id,
-                Json({"scope": body.scope, "application_id": str(body.application_id or "")}),
+                Json(
+                    {
+                        "scope": body.scope,
+                        "application_id": str(body.application_id or ""),
+                        "application_ids": [str(item) for item in named],
+                    }
+                ),
             ),
         )
     return _register(connection, principal, organization_id, project_id, file_id), queued

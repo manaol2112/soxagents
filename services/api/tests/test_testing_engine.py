@@ -531,7 +531,13 @@ def _controls(client: TestClient, team: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def test_each_file_is_tagged_with_the_application_it_shows() -> None:
-    from ai_workforce_api.evidence_apps import Application, model_tag, rules_tag
+    from ai_workforce_api.evidence_apps import (
+        Application,
+        Tag,
+        model_tag,
+        request_default,
+        rules_tag,
+    )
 
     names = [
         "Oracle E-Business Suite (HALPRD)",
@@ -562,6 +568,17 @@ def test_each_file_is_tagged_with_the_application_it_shows() -> None:
     assert model_tag(apps, "aws iam") is not None
     assert model_tag(apps, "ALL") is not None and model_tag(apps, "ALL").scope == "ALL"  # type: ignore[union-attr]
     assert model_tag(apps, "SAP ERP") is None
+    # A file no rule or answer places takes the application of its request's instance; a
+    # file that shows another application, or all of them, keeps its own tag.
+    ad = apps[3]
+    unknown = rules_tag(apps, "notes.txt", "", "", "other")
+    assert request_default(unknown, ad) == Tag(
+        "ONE", ad, "Uploaded to the request for Microsoft Active Directory."
+    )
+    assert request_default(unknown, None).scope == "UNKNOWN"
+    shown = rules_tag(apps, "PWD-06_AWS_IAM_Account_Password_Policy.png", "", "", "configuration")
+    assert request_default(shown, ad) == shown
+    assert request_default(policy, ad) == policy
 
 
 def test_a_control_over_several_applications_is_tested_per_application(
@@ -603,11 +620,17 @@ def test_a_control_over_several_applications_is_tested_per_application(
     register = client.get(f"{_base(team)}/evidence-register").json()
     tags = {row["file_name"]: (row["application_scope"], (row["application"] or {}).get("name"))
             for row in register["files"]}  # fmt: skip
+    # The notes name no application, so they take the one of the request they came in on
+    # (22 Oct 2026; they were left UNKNOWN before, though testing placed them on this
+    # instance all the same). The Oracle file still shows its own application.
     assert tags == {
         "PWD-01_AD_settings.csv": ("ONE", "Microsoft Active Directory"),
         "PWD-04_Oracle_DB_profiles.csv": ("ONE", "Oracle Database"),
-        "notes.csv": ("UNKNOWN", None),
+        "notes.csv": ("ONE", "Microsoft Active Directory"),
     }
+    notes = next(row for row in register["files"] if row["file_name"] == "notes.csv")
+    assert notes["application_by"] == "AGENT"
+    assert notes["application_reason"] == "Uploaded to the request for Microsoft Active Directory."
     # The register names each file's instance and offers the family's applications.
     filed = next(row for row in register["files"] if row["file_name"] == "notes.csv")
     assert filed["control"]["control_ref"] == "ITGC-AC-05"
@@ -665,6 +688,54 @@ def test_a_control_over_several_applications_is_tested_per_application(
     assert {name: s["files"] for name, s in rows["Oracle Database"].items()} == {
         "Oracle Database": 1
     }
+
+
+def test_earlier_files_left_unknown_take_their_requests_application(migrated: Database) -> None:
+    """Migration 0100: a file the coordinator left UNKNOWN on an instance's request takes
+    that instance's application; a person's tag stays as it is."""
+    from pathlib import Path
+
+    team, client, scheduler = _engagement_with_apps(migrated, "backfill", ["AWS IAM"])
+    instances = {
+        row["application_name"]: row for row in _controls(client, team)
+        if row["control_ref"] == "ITGC-AC-05"
+    }  # fmt: skip
+    request = _instance_request(migrated, team, instances["AWS IAM"]["id"])["id"]
+    _add(client, team, "notes.csv", "Item,Value\nreviewed,yes\n", request)
+    _add(client, team, "minutes.csv", "Item,Value\nmet,yes\n", request)
+    _read_all(migrated, scheduler)
+    names = {row["file_name"]: row["id"] for row in client.get(
+        f"{_base(team)}/evidence-register").json()["files"]}  # fmt: skip
+    # As tagged before this change: the coordinator could not tell; a person said the
+    # minutes cover no one application.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE evidence_file_applications SET scope = 'UNKNOWN', "
+            "engagement_application_id = NULL, reason = 'Not clear.' "
+            "WHERE evidence_file_id = %s",
+            (names["notes.csv"],),
+        )
+        connection.execute(
+            "UPDATE evidence_file_applications SET scope = 'UNKNOWN', "
+            "engagement_application_id = NULL, tagged_by = 'PERSON', decided_by = %s "
+            "WHERE evidence_file_id = %s",
+            (team["owner_id"], names["minutes.csv"]),
+        )
+        migration = Path(__file__).resolve().parents[3] / "migrations"
+        sql = (migration / "0100_request_application_default.sql").read_text(encoding="utf-8")
+        connection.execute(sql)  # type: ignore[arg-type]
+        rows = dict(
+            (str(row[0]), (row[1], row[2], row[3]))
+            for row in connection.execute(
+                "SELECT t.evidence_file_id, t.scope, a.name, t.reason "
+                "FROM evidence_file_applications t "
+                "LEFT JOIN engagement_applications a ON a.id = t.engagement_application_id "
+                "WHERE t.evidence_file_id = ANY(%s)",
+                ([UUID(names["notes.csv"]), UUID(names["minutes.csv"])],),
+            ).fetchall()
+        )
+    assert rows[names["notes.csv"]] == ("ONE", "AWS IAM", "Uploaded to the request for AWS IAM.")
+    assert rows[names["minutes.csv"]][:2] == ("UNKNOWN", None)
 
 
 def _engagement_with_apps(

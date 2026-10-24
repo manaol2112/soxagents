@@ -14,13 +14,17 @@ import {
 } from "../apps/web/src/evidence-plan-model.ts";
 import {
   evidenceSummary,
+  evidenceTotal,
   fileServes,
   focusPhase,
   linkableFiles,
   matchesStatus,
   phaseDigest,
+  placedFiles,
   proposals,
+  requestReference,
   requestRows,
+  requestsByPhase,
   requirementGroups,
 } from "../apps/web/src/evidence-workspace-model.ts";
 
@@ -382,7 +386,19 @@ describe("the evidence workspace", () => {
     ]);
   });
 
-  it("offers only files that do not serve the item yet, and not those on its request", () => {
+  it("shows each file under the items it serves once the plan is approved, so the file list holds the rest", () => {
+    // The plan awaits approval: its items are not shown, so every file stays in the list.
+    assert.deepEqual([...placedFiles(plan())], []);
+    assert.deepEqual([...placedFiles(null)], []);
+    const approved = { ...plan(), status: "APPROVED" };
+    // users.csv and policy.pdf serve items; new.csv serves none and stays in the list.
+    assert.deepEqual([...placedFiles(approved)].sort(), [
+      "f-policy",
+      "f-users",
+    ]);
+  });
+
+  it("offers only files that do not serve the item yet, including one on its request it was not given", () => {
     const held = files.files.map((file) => ({
       id: file.id,
       fileName: file.fileName,
@@ -391,10 +407,12 @@ describe("the evidence workspace", () => {
     const design = plan().phases[0]?.requirements[0];
     const rolled = plan().phases[2]?.requirements[0];
     assert.ok(design && rolled);
-    // policy.pdf is on the design request already; users.csv and new.csv can be linked.
+    // policy.pdf is on the design request but does not serve the design item (the reader
+    // found it does not cover it), so a person can link it. Before 22 Oct 2026 a file on
+    // the item's own request was never offered, as it always served the item.
     assert.deepEqual(
       linkableFiles(design, held).map((file) => file.id),
-      ["f-users", "f-new"],
+      ["f-users", "f-policy", "f-new"],
     );
     // The roll-forward item already has policy.pdf.
     assert.deepEqual(
@@ -548,5 +566,68 @@ describe("the evidence on one page", () => {
     assert.equal(phaseDigest(none, []).line, "Not applicable");
     const empty = phaseOf([]);
     assert.equal(phaseDigest(empty, []).line, "Nothing planned");
+  });
+
+  it("sums every phase in one line for the evidence card's header", () => {
+    const first = phaseOf(["ACCEPTED", "RECEIVED", "NOT_APPLICABLE"]);
+    const second = phaseOf(["ACCEPTED"]);
+    // A requirement that does not apply is not counted; one received waits on a person.
+    assert.equal(
+      evidenceTotal([
+        phaseDigest(first, first.requirements),
+        phaseDigest(second, second.requirements),
+      ]),
+      "2 of 3 accepted · 1 to review",
+    );
+    assert.equal(
+      evidenceTotal([
+        { total: 9, accepted: 0, waiting: 0 },
+        { total: 7, accepted: 2, waiting: 0 },
+      ]),
+      "2 of 16 accepted",
+    );
+    assert.equal(evidenceTotal([]), "Nothing planned");
+    assert.equal(
+      evidenceTotal([{ total: 2, accepted: 1, waiting: 1 }]),
+      "1 of 2 accepted · 1 to review",
+    );
+  });
+});
+
+describe("each phase's request, once, with its items", () => {
+  it("names a request as the API and the client's email do", () => {
+    assert.equal(
+      requestReference("01a165ee-bc24-7c2d-bab3-0655791df11a"),
+      "PBC-791DF11A",
+    );
+  });
+
+  it("puts each request under its planned phase, and the rest on their own", () => {
+    const rows = [
+      { id: "a", phase: "DESIGN" },
+      { id: "b", phase: "INTERIM" },
+      { id: "c", phase: "INTERIM" },
+      { id: "d", phase: "RETEST" },
+      { id: "e", phase: null },
+    ];
+    const grouped = requestsByPhase(rows, ["DESIGN", "INTERIM", "ROLLFORWARD"]);
+    assert.deepEqual(
+      [...grouped.byPhase].map(([phase, set]) => [
+        phase,
+        set.map((row) => row.id),
+      ]),
+      [
+        ["DESIGN", ["a"]],
+        ["INTERIM", ["b", "c"]],
+      ],
+    );
+    assert.deepEqual(
+      grouped.other.map((row) => row.id),
+      ["d", "e"],
+    );
+    // Every request is shown exactly once.
+    const shown =
+      [...grouped.byPhase.values()].flat().length + grouped.other.length;
+    assert.equal(shown, rows.length);
   });
 });

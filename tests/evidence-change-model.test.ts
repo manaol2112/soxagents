@@ -41,6 +41,12 @@ describe("withdraw and restore writes", () => {
     reason: "Uploaded the wrong period",
   };
 
+  it("withdraws without a reason when none is given", () => {
+    const quiet = changeWrite({ ...fields, reason: "  " });
+    assert.ok(!("error" in quiet));
+    assert.deepEqual(quiet.body, { reason: "" });
+  });
+
   it("builds the call with the reason", () => {
     assert.deepEqual(changeWrite(fields), {
       intent: "withdraw",
@@ -57,7 +63,7 @@ describe("withdraw and restore writes", () => {
       { ...fields, intent: "delete" },
       { ...fields, file_id: "../x" },
       { ...fields, organization_id: "x" },
-      { ...fields, reason: "" },
+      { ...fields, intent: "restore", reason: "" },
     ]) {
       assert.deepEqual(changeWrite(bad), { error: "invalid" });
     }

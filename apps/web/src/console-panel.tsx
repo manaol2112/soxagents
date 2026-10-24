@@ -13,6 +13,15 @@ import {
 import { formatDate } from "./format";
 import { UiIcon } from "./ui-icon";
 
+/** Which control a waiting item is on, unless its title already says, then why it waits. */
+function waitingWords(item: WaitingItem): string {
+  const named =
+    item.controlRef !== null && item.title.includes(item.controlRef);
+  return [named ? null : item.controlLabel, item.detail]
+    .filter((part) => part !== null && part !== "")
+    .join(" · ");
+}
+
 type Tab = "chats" | "waiting" | "activity";
 
 const PANEL_KEY = "aw-console-panel";
@@ -179,14 +188,22 @@ export function ConsoleShell({
             ) : (
               <ul className="cv-waiting">
                 {waiting.map((item) => (
-                  <li key={`${item.kind}-${item.title}`}>
+                  // The same step on several controls shares its title: the queue
+                  // item's id keeps each row its own.
+                  <li
+                    key={
+                      item.id !== ""
+                        ? item.id
+                        : `${item.href}|${item.title}|${item.controlLabel ?? ""}|${item.detail}`
+                    }
+                  >
                     <a href={item.href}>
                       <span className="cv-waiting-icon" aria-hidden="true">
                         <UiIcon name={ICONS[item.kind] ?? "bell"} size={14} />
                       </span>
                       <span>
                         <strong>{item.title}</strong>
-                        <small>{item.detail}</small>
+                        <small>{waitingWords(item)}</small>
                       </span>
                       <UiIcon name="chevron" size={14} />
                     </a>

@@ -1709,6 +1709,13 @@ a.cw-lane:focus-visible {
     max-width: 100%;
     overflow-x: auto;
   }
+
+  /* A workpaper table already scrolls in its own box: as a block it was squeezed to the
+     box's width, a word per line (UI-2). */
+  .cw-body .workpaper-table {
+    display: table;
+    max-width: none;
+  }
 }
 
 /* An evidence file's details stay inside its card, however long its names are. */
@@ -1971,6 +1978,14 @@ a.cw-lane:focus-visible {
   border-radius: 8px;
 }
 
+/* An item's lines wrap within it: a long file name, reading, or actions never widen it
+   past its card on a narrow screen. */
+.ep-item > .cc-item-body,
+.ep-item .ep-evidence,
+.ep-item .ep-files {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .ep-files {
   display: grid;
   gap: 0.2rem;
@@ -1999,13 +2014,128 @@ a.cw-lane:focus-visible {
 }
 
 .ep-files small {
+  min-width: 0;
   color: var(--cw-muted);
   font-size: 12px;
+  white-space: normal;
 }
 
 .cw .ep-files .btn-sm {
   height: auto;
   padding: 0 0.3rem;
+}
+
+/* A file's name opens its preview; its actions sit at the end of its line. */
+.cw .ep-files .ep-file-open {
+  display: inline;
+  width: auto;
+  height: auto;
+  padding: 0;
+  color: var(--cw-ink);
+  background: none;
+  border: 0;
+  box-shadow: none;
+  font-size: inherit;
+  font-weight: 550;
+  line-height: inherit;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.cw .ep-files .ep-file-open:hover,
+.cw .ep-files .ep-file-open:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* A file whose application is not known says so once; it opens the choice. */
+.cw .ep-files .ep-file-flag {
+  height: 20px;
+  padding: 0 0.45rem;
+  color: var(--warning);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+  border-radius: 999px;
+  box-shadow: none;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.cw .ep-files .ep-file-flag:hover {
+  text-decoration: underline;
+}
+
+/* Replace, Withdraw, or the application opens its form across the line. */
+/* A file on the item's request that the reader found does not cover it. */
+.ep-passed {
+  margin: 0;
+  color: var(--cw-muted);
+  font-size: 12.5px;
+}
+
+.ep-file-form {
+  flex-basis: 100%;
+  min-width: 0;
+  margin-top: 0.35rem;
+}
+
+.cw .ep-files .ep-file-form .btn-sm {
+  height: 28px;
+  padding: 0 0.75rem;
+}
+
+.ep-file-app {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+  font-size: 12px;
+}
+
+.ep-file-app label {
+  min-width: 0;
+  color: var(--cw-text);
+  font-weight: 550;
+}
+
+.cw .ep-file-app select {
+  flex: 0 1 15rem;
+  width: auto;
+  min-width: 0;
+  height: 28px;
+  font-size: 12.5px;
+}
+
+/* On the control's evidence an item shows Accept, and the rest in its menu. */
+.ep-buttons.is-compact {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* The reader's points open on request, from its one-line proposal. */
+.cw .ep-assess .ep-points-toggle {
+  display: inline;
+  width: auto;
+  height: auto;
+  padding: 0;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  box-shadow: none;
+  font-size: inherit;
+  font-weight: 550;
+}
+
+.cw .ep-assess .ep-points-toggle:hover {
+  text-decoration: underline;
+}
+
+.ep-found {
+  margin: 0;
+  color: var(--cw-text);
+  font-size: 12.5px;
 }
 
 .ep-assess {
@@ -3726,36 +3856,89 @@ a.cw-lane:focus-visible {
   margin-bottom: 0.75rem;
 }
 
-/* The control's evidence on one page: each phase a fold with its one line, the items
-   inside; the requests, files, and planning basis fold below. */
-.ew-reqs {
-  gap: 0.6rem;
-}
-
-.ew-phase-fold {
+/* The control's evidence on one page: two cards. Evidence by phase (a row per phase with
+   its progress, the planning basis last) and Requests and files, each row folding open. */
+.ew-card {
+  display: grid;
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--cw-line);
   border-radius: var(--radius-lg);
+  overflow: hidden;
 }
 
-.ew-phase-fold > summary {
+.ew-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+  padding: 0.85rem 1.15rem;
+  border-bottom: 1px solid var(--cw-line);
+}
+
+.ew-card-head h3 {
+  margin: 0;
+  color: var(--cw-ink);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.ew-card-meta {
+  color: var(--cw-muted);
+  font-size: 12.5px;
+}
+
+.ew-card-meta.is-waiting {
+  color: var(--cw-amber);
+  font-weight: 600;
+}
+
+.ew-reqs {
+  gap: 0;
+}
+
+/* A row: a phase, or requests, files and the planning basis. */
+.ew-phase-fold,
+.ew-row {
+  min-width: 0;
+}
+
+.ew-phase-fold + .ew-phase-fold,
+.ew-phase-fold + .ew-row,
+.ew-row + .ew-row {
+  border-top: 1px solid var(--cw-line-soft, var(--cw-line));
+}
+
+.ew-phase-fold > summary,
+.ew-row > summary {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) 7rem minmax(9rem, auto) auto;
   gap: 0.25rem 1rem;
   align-items: center;
-  padding: 0.8rem 1.15rem;
+  padding: 0.75rem 1.15rem;
   cursor: pointer;
   list-style: none;
 }
 
-.ew-phase-fold > summary::-webkit-details-marker {
+.ew-row > summary {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.ew-phase-fold > summary::-webkit-details-marker,
+.ew-row > summary::-webkit-details-marker {
   display: none;
 }
 
-.ew-phase-fold > summary:focus-visible {
+.ew-phase-fold > summary:hover,
+.ew-row > summary:hover {
+  background: var(--cw-tint, var(--surface-muted));
+}
+
+.ew-phase-fold > summary:focus-visible,
+.ew-row > summary:focus-visible {
   outline: 2px solid var(--cw-accent);
   outline-offset: -2px;
-  border-radius: var(--radius-lg);
 }
 
 .ew-phase-name {
@@ -3766,10 +3949,11 @@ a.cw-lane:focus-visible {
   min-width: 0;
 }
 
-.ew-phase-name strong {
+.ew-phase-name strong,
+.ew-row-title {
   color: var(--cw-ink);
-  font-size: 14px;
-  font-weight: 650;
+  font-size: 13.5px;
+  font-weight: 600;
 }
 
 .ew-phase-name small {
@@ -3777,7 +3961,24 @@ a.cw-lane:focus-visible {
   font-size: 12px;
 }
 
-.ew-phase-line {
+/* How much of the phase is accepted. */
+.ew-meter {
+  display: block;
+  height: 6px;
+  overflow: hidden;
+  background: var(--cw-line-soft, var(--cw-line));
+  border-radius: 999px;
+}
+
+.ew-meter > span {
+  display: block;
+  height: 100%;
+  background: var(--cw-green, var(--success));
+  border-radius: inherit;
+}
+
+.ew-phase-line,
+.ew-row-line {
   color: var(--cw-muted);
   font-size: 12.5px;
   text-align: right;
@@ -3788,14 +3989,101 @@ a.cw-lane:focus-visible {
   font-weight: 600;
 }
 
-.ew-phase-fold > summary svg {
+.ew-phase-fold > summary svg,
+.ew-row > summary svg {
   color: var(--cw-muted);
   transform: rotate(90deg);
   transition: transform 120ms ease;
 }
 
-.ew-phase-fold[open] > summary svg {
+.ew-phase-fold[open] > summary svg,
+.ew-row[open] > summary svg {
   transform: rotate(-90deg);
+}
+
+/* A phase's request, once, above the items it asks for: which request, due and to whom,
+   where it stands, and its actions (controls-view RequestLines). */
+.ew-request-lines {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ew-phase-fold > .ew-request-lines {
+  margin: 0 1.15rem 0.75rem;
+}
+
+.ew-request-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.35rem 1rem;
+  align-items: center;
+  padding: 0.6rem 0.8rem;
+  background: var(--cw-tint);
+  border: 1px solid var(--cw-line-soft);
+  border-radius: var(--radius);
+}
+
+.ew-request-line.is-open {
+  border-color: var(--cw-accent);
+}
+
+.ew-request-main {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.ew-request-main strong {
+  color: var(--cw-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ew-request-main small {
+  overflow: hidden;
+  color: var(--cw-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ew-request-actions {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.ew-request-hint {
+  margin: 0;
+}
+
+@media (max-width: 560px) {
+  .ew-request-line {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ew-request-main small {
+    white-space: normal;
+  }
+
+  .ew-request-line > .pill {
+    justify-self: start;
+  }
+}
+
+/* Reference rather than work: the planning basis, a phase that does not apply. */
+.ew-row.is-quiet .ew-row-title,
+.ew-phase-fold.is-quiet .ew-phase-name strong {
+  color: var(--cw-muted);
+  font-weight: 550;
+}
+
+.ew-row.is-quiet > summary,
+.ew-phase-fold.is-quiet > summary {
+  background: var(--cw-tint, transparent);
 }
 
 .ew-phase-fold > .cc-list,
@@ -3808,7 +4096,14 @@ a.cw-lane:focus-visible {
   display: grid;
   gap: 1rem;
   min-width: 0;
-  padding: 0 1.15rem 1.15rem;
+  padding: 0.25rem 1.15rem 1.15rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ew-phase-fold > summary svg,
+  .ew-row > summary svg {
+    transition: none;
+  }
 }
 
 @media (max-width: 560px) {
@@ -3816,13 +4111,33 @@ a.cw-lane:focus-visible {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
+  .ew-meter {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
   .ew-phase-line {
+    grid-column: 1;
+    grid-row: 3;
+    text-align: left;
+  }
+
+  .ew-phase-fold > summary svg {
+    grid-column: 2;
+    grid-row: 1 / span 3;
+  }
+
+  .ew-row > summary {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .ew-row-line {
     grid-column: 1;
     grid-row: 2;
     text-align: left;
   }
 
-  .ew-phase-fold > summary svg {
+  .ew-row > summary svg {
     grid-column: 2;
     grid-row: 1 / span 2;
   }
@@ -5788,4 +6103,113 @@ a.cw-lane:focus-visible {
 .cw-mapping-more ul {
   margin: 0.25rem 0 0;
   padding-left: 1rem;
+}
+
+/* The Needs-you action lands here (#cw-work): clear of the sticky top bar. */
+#cw-work {
+  scroll-margin-top: 4.25rem;
+}
+
+/* The agent reading a file: a light sweeping across its line, a pulsing AI mark, and
+   three dots rising in turn. Still where the person asks for reduced motion. */
+.ep-files li.is-reading {
+  position: relative;
+  overflow: hidden;
+  border-radius: 6px;
+}
+
+.ep-files li.is-reading::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    color-mix(in srgb, var(--accent) 14%, transparent) 45%,
+    transparent 70%
+  );
+  transform: translateX(-100%);
+  animation: ep-sweep 1.8s ease-in-out infinite;
+  content: "";
+  pointer-events: none;
+}
+
+.ep-reading {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.15rem;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ep-dots {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.ep-dots i {
+  width: 3px;
+  height: 3px;
+  background: currentColor;
+  border-radius: 50%;
+  animation: ep-dot 1.2s ease-in-out infinite;
+}
+
+.ep-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.ep-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.ep-assess.is-reading {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.cw-ai.is-thinking {
+  animation: ep-think 1.6s ease-in-out infinite;
+}
+
+@keyframes ep-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes ep-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes ep-think {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ep-files li.is-reading::after,
+  .ep-dots i,
+  .cw-ai.is-thinking {
+    animation: none;
+  }
+
+  .ep-files li.is-reading::after {
+    display: none;
+  }
 }

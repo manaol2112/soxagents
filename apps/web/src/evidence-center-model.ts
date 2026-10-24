@@ -498,6 +498,7 @@ export type BulkAction =
   | "DUE"
   | "PRIORITY"
   | "APPROVE"
+  | "APPROVE_SEND"
   | "SUBMIT"
   | "RETURN";
 
@@ -506,12 +507,14 @@ export const BULK_LABELS: Record<BulkAction, string> = {
   DUE: "Change due date",
   PRIORITY: "Set priority",
   APPROVE: "Approve",
+  APPROVE_SEND: "Approve and send",
   SUBMIT: "Submit for approval",
   RETURN: "Return for changes",
 };
 
 export type CenterIntent =
   | "bulk"
+  | "contact"
   | "view-save"
   | "view-remove"
   | "create"
@@ -587,7 +590,11 @@ export function centerWrite(fields: Fields): CenterWrite {
         }
         body.priority = priority;
       }
-      if (action === "APPROVE" || action === "RETURN") {
+      if (
+        action === "APPROVE" ||
+        action === "APPROVE_SEND" ||
+        action === "RETURN"
+      ) {
         const reason = text(fields, "reason");
         if (reason.length > 500 || SECRET.test(reason))
           return { error: "invalid" };
@@ -596,6 +603,24 @@ export function centerWrite(fields: Fields): CenterWrite {
         body.reason = reason;
       }
       return { intent, path: `${project}/evidence-requests/bulk`, body };
+    }
+    case "contact": {
+      // A new engagement contact, added from a request's owner in the list (the same
+      // call and checks as the request's own panel, request-details-model).
+      const name = text(fields, "name");
+      const email = text(fields, "email").toLowerCase();
+      const role = text(fields, "role");
+      return name === "" ||
+        name.length > 200 ||
+        role.length > 120 ||
+        !EMAIL.test(email) ||
+        SECRET.test(`${name} ${role}`)
+        ? { error: "invalid" }
+        : {
+            intent,
+            path: `${project}/engagement-contacts`,
+            body: { name, email, role },
+          };
     }
     case "view-save": {
       const name = text(fields, "name");
@@ -719,6 +744,33 @@ export type BulkOutcome = {
   ok: boolean;
   detail: string;
 };
+
+/**
+ * What a change to many requests did, in one line. Approve and send says how many went
+ * out, and how many were approved but not sent (the approval stands; the reason is listed
+ * with each), apart from those that could not change at all.
+ */
+export function bulkSummary(
+  action: BulkAction,
+  result: { done: number; refused: number; outcomes: BulkOutcome[] },
+): string {
+  const n = (count: number) => `${count} request${count === 1 ? "" : "s"}`;
+  if (action === "APPROVE_SEND") {
+    const held = result.outcomes.filter(
+      (item) => !item.ok && item.detail.startsWith("Approved"),
+    ).length;
+    const refused = result.refused - held;
+    return [
+      `${n(result.done)} approved and sent`,
+      held > 0 ? `${held} approved but not sent` : "",
+      refused > 0 ? `${refused} could not change` : "",
+    ]
+      .filter((part) => part !== "")
+      .join("; ")
+      .concat(".");
+  }
+  return `${n(result.done)} updated${result.refused > 0 ? `; ${result.refused} could not change` : ""}.`;
+}
 
 export function parseBulkResult(
   value: unknown,

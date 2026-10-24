@@ -119,8 +119,11 @@ import {
   proposals as evidenceProposals,
   evidenceSummary,
   fileServes,
+  placedFiles,
   type RequestRow,
+  requestReference,
   requestRows,
+  requestsByPhase,
 } from "./evidence-workspace-model";
 import { EvidenceWorkspace } from "./evidence-workspace-view";
 import { formatDate } from "./format";
@@ -1602,12 +1605,14 @@ function ControlRecord({
               decideImpact,
               assignees: control.assignees,
             })}
+            // Open lands on the work itself, below the summary, so the same
+            // Needs-you card is not the first thing seen again.
             actionHref={
               decideImpact
-                ? stepHrefs.PLAN
+                ? `${stepHrefs.PLAN}#cw-work`
                 : nextAction.primary !== null
                   ? (nextAction.primary.href ??
-                    tabHrefs[nextAction.primary.tab])
+                    `${tabHrefs[nextAction.primary.tab]}#cw-work`)
                   : null
             }
             blockers={blockersOf(journey)}
@@ -1618,7 +1623,7 @@ function ControlRecord({
           />
         ) : null}
       </section>
-      <div className="record-tab cw-body">
+      <div className="record-tab cw-body" id="cw-work">
         {tab === "design" ? (
           <>
             <ImpactPanel
@@ -1720,21 +1725,61 @@ function ControlRecord({
               id: file.id,
               fileName: file.fileName,
               requestId: file.request?.id ?? null,
+              blocked: changeBlocked(file),
+              // Only when the coordinator could not tell; a file still being read
+              // has no tag yet, and one on an instance's request takes its application.
+              applicationUnknown: file.applicationScope === "UNKNOWN",
             }))}
-            requests={
-              <EvidenceRequests
-                model={model}
-                control={control}
-                tabHref={tabHrefs.evidence}
-                focus={focusRow?.id ?? null}
-                review={requestReview}
-                rows={requestRows(
-                  control.requests,
-                  evidencePlan,
-                  engagement.files,
-                )}
-              />
+            applications={engagement.files?.applications ?? []}
+            system={
+              (engagement.files?.applications ?? []).find(
+                (app) => app.name === control.applicationName,
+              )?.id ?? null
             }
+            requests={(() => {
+              const rows = requestRows(
+                control.requests,
+                evidencePlan,
+                engagement.files,
+              );
+              const grouped = requestsByPhase(
+                rows,
+                (evidencePlan?.phases ?? []).map((phase) => phase.phase),
+              );
+              // Under a phase each item has its own Add evidence, so its request has none;
+              // a request for no planned phase, or before the plan is shown, keeps it.
+              const lines = (set: RequestRow[], showPhase = false) => (
+                <RequestLines
+                  model={model}
+                  control={control}
+                  tabHref={tabHrefs.evidence}
+                  focus={focusRow?.id ?? null}
+                  rows={set}
+                  showPhase={showPhase}
+                  upload={showPhase}
+                />
+              );
+              return {
+                rows,
+                byPhase: Object.fromEntries(
+                  [...grouped.byPhase].map(([phase, set]) => [
+                    phase,
+                    lines(set),
+                  ]),
+                ),
+                other: lines(grouped.other, true),
+                all: lines(rows, true),
+                head: (
+                  <RequestHead
+                    model={model}
+                    review={requestReview}
+                    drafted={
+                      rows.filter((row) => row.status === "DRAFT").length
+                    }
+                  />
+                ),
+              };
+            })()}
             library={
               <ControlEvidence
                 model={model}
@@ -1742,6 +1787,7 @@ function ControlRecord({
                 files={engagement.files}
                 notice={engagement.changeNotice}
                 serves={fileServes(evidencePlan)}
+                placed={placedFiles(evidencePlan)}
               />
             }
             rcmItems={control.pbcItems}
@@ -2094,9 +2140,8 @@ function ControlRecord({
           <span>
             <strong>Activity</strong>
             <small>
-              Everything recorded about this control and its records, from the
-              audit trail: agents' work, people's decisions, and the workspace's
-              own steps.
+              The audit trail: agents' work, people's decisions, and the
+              workspace's steps.
             </small>
           </span>
           <UiIcon name="chevron" size={14} />
@@ -2146,33 +2191,24 @@ const PHASE_WORDS: Record<string, string> = {
 /** The control's requests across phases: what each carries, its due date and status,
  * the files that came back, and where to add one. Sending is approved on the Evidence
  * page; nothing goes to the owner from here. */
-function EvidenceRequests({
+/** Above the control's evidence: why uploads are held, the request opened for review,
+ * and how requests go out. */
+function RequestHead({
   model,
-  control,
-  tabHref,
-  focus,
   review,
-  rows,
+  drafted,
 }: {
   model: Ready;
-  control: ControlRow;
-  /** The Evidence tab's address, for each request's own link. */
-  tabHref: string;
   /** The request opened for review, and its panel. */
-  focus: string | null;
   review: ReactNode;
-  rows: RequestRow[];
+  drafted: number;
 }) {
-  const canUpload =
-    canRequestEvidence(model.organization.role) &&
-    model.selectedProject?.status === "ACTIVE";
   const blocked = uploadBlocked(
     model.selectedProject?.status ?? "",
     model.organization.role,
   );
-  const drafted = rows.filter((row) => row.status === "DRAFT").length;
   return (
-    <div className="stack">
+    <>
       {blocked !== null ? (
         <p className="upload-blocked" role="status">
           <UiIcon name="info" size={15} />
@@ -2180,131 +2216,123 @@ function EvidenceRequests({
         </p>
       ) : null}
       {review}
-      {rows.length === 0 ? (
-        <p className="form-hint">
-          No requests yet. They are made from the evidence plan.
+      {drafted > 0 ? (
+        <p className="form-hint ew-request-hint">
+          {drafted} drafted request{drafted === 1 ? " waits" : "s wait"} for
+          review. Nothing goes to the owner until a person approves it.
         </p>
-      ) : (
-        <div className="table-wrap">
-          <table className="table data-grid ew-requests">
-            <thead>
-              <tr>
-                <th scope="col">Phase</th>
-                <th scope="col">Request</th>
-                <th scope="col" className="col-date">
-                  Due
-                </th>
-                <th scope="col" className="col-status">
-                  Status
-                </th>
-                <th scope="col">Files</th>
-                <th scope="col" className="col-open">
-                  <span className="sr-only">Review</span>
-                </th>
-                {canUpload ? (
-                  <th scope="col" className="col-upload">
-                    <span className="sr-only">Add evidence</span>
-                  </th>
-                ) : null}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((request) => (
-                <tr
-                  key={request.id}
-                  className={request.id === focus ? "is-open" : undefined}
-                  aria-current={request.id === focus ? "true" : undefined}
-                >
-                  <td className="cell-muted">
-                    {PHASE_WORDS[request.phase ?? "INTERIM"] ?? request.phase}
-                  </td>
-                  <td className="cell-title">
-                    <span title={request.title}>{request.title}</span>
-                    {request.carries.length > 0 ? (
-                      <small
-                        className="ew-carries"
-                        title={request.carries.join("\n")}
-                      >
-                        {request.carries.length} planned item
-                        {request.carries.length === 1 ? "" : "s"}:{" "}
-                        {request.carries.join("; ")}
-                      </small>
-                    ) : (
-                      <small className="ew-carries">
-                        {REQUEST_KIND[request.kind]}
-                      </small>
-                    )}
-                  </td>
-                  <td className="col-date cell-muted">
-                    {formatDate(request.dueAt)}
-                  </td>
-                  <td className="col-status">
-                    {(() => {
-                      const stage =
-                        REQUEST_STAGES[requestStage(request, control)];
-                      return (
-                        <span
-                          className={`pill pill-dot ${
-                            stage.tone === "done"
-                              ? "tone-success"
-                              : stage.tone === "warn"
-                                ? "tone-warning"
-                                : stage.tone === "info"
-                                  ? "tone-info"
-                                  : ""
-                          }`}
-                        >
-                          {stage.label}
-                        </span>
-                      );
-                    })()}
-                  </td>
-                  <td className="cell-muted">{request.files}</td>
-                  <td className="col-open">
-                    {request.id === focus ? (
-                      <span className="ew-open-now">Open</span>
-                    ) : (
-                      <a
-                        className="text-link"
-                        href={evidenceHref(tabHref, {
-                          view: "requests",
-                          request: request.id,
-                        })}
-                        aria-label={`Review ${request.title}`}
-                      >
-                        Review
-                      </a>
-                    )}
-                  </td>
-                  {canUpload ? (
-                    <td className="col-upload">
-                      {request.status !== "CANCELLED" &&
-                      request.status !== "CLOSED" ? (
-                        <RequestUpload
-                          organizationId={model.organization.id}
-                          projectId={model.selectedProject?.id ?? ""}
-                          requestId={request.id}
-                          label={request.title}
-                        />
-                      ) : null}
-                    </td>
-                  ) : null}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Requests, one line each: which request (its reference and kind), when it is due and to
+ * whom, where it stands, what came back, and Review, with Add evidence where its items do
+ * not carry their own. Under a phase the items it asks for are listed right below, each
+ * with its Add evidence, so the request lists neither again.
+ */
+function RequestLines({
+  model,
+  control,
+  tabHref,
+  focus,
+  rows,
+  showPhase = false,
+  upload = true,
+}: {
+  model: Ready;
+  control: ControlRow;
+  /** The Evidence tab's address, for each request's own link. */
+  tabHref: string;
+  /** The request opened for review. */
+  focus: string | null;
+  rows: RequestRow[];
+  /** Name each request's phase: where they are not listed under it. */
+  showPhase?: boolean;
+  /** Offer Add evidence on the request (not where its items offer their own). */
+  upload?: boolean;
+}) {
+  if (rows.length === 0) {
+    return (
       <p className="form-hint">
-        {drafted > 0
-          ? `Open a request to review it, approve it, and send it, here. ${drafted} drafted request${drafted === 1 ? " waits" : "s wait"} for review. `
-          : "Open a request to see where it stands and what comes next. "}
-        Nothing is sent to the owner before a person approves it.{" "}
-        <a className="text-link" href={href(model, {}, "evidence")}>
-          Every control's requests and replies are on the Evidence page.
-        </a>
+        No requests yet. They are made from the evidence plan.
       </p>
-    </div>
+    );
+  }
+  const canUpload =
+    upload &&
+    canRequestEvidence(model.organization.role) &&
+    model.selectedProject?.status === "ACTIVE";
+  return (
+    <ul className="ew-request-lines">
+      {rows.map((request) => {
+        const stage = REQUEST_STAGES[requestStage(request, control)];
+        return (
+          <li
+            key={request.id}
+            className={`ew-request-line${request.id === focus ? " is-open" : ""}`}
+            aria-current={request.id === focus ? "true" : undefined}
+          >
+            <span className="ew-request-main">
+              <strong>
+                {request.kind === "EVIDENCE"
+                  ? "Request"
+                  : `${REQUEST_KIND[request.kind]} request`}{" "}
+                <span className="mono">{requestReference(request.id)}</span>
+              </strong>
+              <small>
+                {showPhase && request.phase !== null
+                  ? `${PHASE_WORDS[request.phase] ?? request.phase} · `
+                  : ""}
+                Due {formatDate(request.dueAt)}
+                {request.recipient ? ` · to ${request.recipient}` : ""}
+                {` · ${request.files} file${request.files === 1 ? "" : "s"}`}
+              </small>
+            </span>
+            <span
+              className={`pill pill-dot ${
+                stage.tone === "done"
+                  ? "tone-success"
+                  : stage.tone === "warn"
+                    ? "tone-warning"
+                    : stage.tone === "info"
+                      ? "tone-info"
+                      : ""
+              }`}
+            >
+              {stage.label}
+            </span>
+            <span className="ew-request-actions">
+              {request.id === focus ? (
+                <span className="ew-open-now">Open</span>
+              ) : (
+                <a
+                  className="btn btn-sm btn-secondary"
+                  href={evidenceHref(tabHref, {
+                    view: "requests",
+                    request: request.id,
+                  })}
+                  aria-label={`Review ${request.title}`}
+                >
+                  Review
+                </a>
+              )}
+              {canUpload &&
+              request.status !== "CANCELLED" &&
+              request.status !== "CLOSED" ? (
+                <RequestUpload
+                  organizationId={model.organization.id}
+                  projectId={model.selectedProject?.id ?? ""}
+                  requestId={request.id}
+                  label={request.title}
+                />
+              ) : null}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -2321,13 +2349,20 @@ function ControlEvidence({
   files,
   notice,
   serves,
+  placed,
 }: {
   model: Ready;
   control: ControlRow;
   files: ControlFiles | null;
   notice: ChangeNotice | null;
   /** The plan requirements each file serves (evidence-workspace-model.fileServes). */
-  serves?: Map<string, Array<{ label: string; via: "REQUEST" | "LINK" }>>;
+  serves?: Map<
+    string,
+    Array<{ label: string; via: "REQUEST" | "LINK" | "SHARED" }>
+  >;
+  /** The files shown on their evidence items' lines, with their actions there; they are
+   * not listed again here (evidence-workspace-model.placedFiles). */
+  placed?: Set<string>;
 }) {
   if (files === null) {
     return null;
@@ -2339,6 +2374,8 @@ function ControlEvidence({
     (file) => file.state === "READING" || isReading(file),
   );
   const keep = { section: "controls", control: control.id, tab: "evidence" };
+  const listed = files.files.filter((file) => !placed?.has(file.id));
+  const under = files.files.length - listed.length;
   return (
     <section className="control-evidence" aria-label="Evidence received">
       {reading ? <AutoRefresh /> : null}
@@ -2351,25 +2388,42 @@ function ControlEvidence({
           <span>{CHANGE_NOTICES[notice]}</span>
         </p>
       ) : null}
-      <h4>
-        Evidence received
-        <span className="view-count">{files.files.length}</span>
-        {reading ? (
-          <span className="pill pill-dot tone-info">
-            <span className="spinner small" aria-hidden="true" /> The agents are
-            reading new files
-          </span>
-        ) : null}
-      </h4>
+      {under > 0 ? (
+        <p className="form-hint evidence-under">
+          {under === files.files.length
+            ? under === 1
+              ? "The file is"
+              : `All ${under} files are`
+            : under === 1
+              ? "1 file is"
+              : `${under} files are`}{" "}
+          shown under the evidence{" "}
+          {under === 1 ? "item it serves" : "items they serve"} above, where{" "}
+          {under === 1 ? "it is" : "each is"} previewed, downloaded, replaced,
+          or withdrawn.
+        </p>
+      ) : null}
+      {listed.length > 0 || under === 0 || reading ? (
+        <h4>
+          {under > 0 ? "Serving no item yet" : "Evidence received"}
+          <span className="view-count">{listed.length}</span>
+          {reading ? (
+            <span className="pill pill-dot tone-info">
+              <span className="spinner small" aria-hidden="true" /> The agents
+              are reading new files
+            </span>
+          ) : null}
+        </h4>
+      ) : null}
       {files.files.length === 0 ? (
         <p className="form-hint">
           No files yet. Add evidence to a request above, or drop a folder on the
           Evidence page.
         </p>
-      ) : (
+      ) : listed.length === 0 ? null : (
         <div className="app-groups">
           {byApplicationOf(
-            files.files,
+            listed,
             files.applications,
             control.applicationName,
           ).map((group) => {
@@ -2438,7 +2492,7 @@ function ControlEvidence({
                           ? "The evidence coordinator is reading this file."
                           : "");
                       return (
-                        <li key={file.id}>
+                        <li key={file.id} className="evidence-file-item">
                           <details className="evidence-file">
                             <summary>
                               <span className="evidence-file-head">
@@ -2503,7 +2557,7 @@ function ControlEvidence({
                                     : `Serves: ${(serves.get(file.id) ?? [])
                                         .map(
                                           (item) =>
-                                            `${item.label}${item.via === "LINK" ? " (linked)" : ""}`,
+                                            `${item.label}${item.via === "LINK" ? " (linked)" : item.via === "SHARED" ? " (shared)" : ""}`,
                                         )
                                         .join("; ")}`}
                                 </span>
@@ -2593,26 +2647,28 @@ function ControlEvidence({
                                 canAct={canAct}
                                 keep={keep}
                               />
-                              <div className="evidence-file-tools">
-                                <a
-                                  className="btn btn-secondary btn-sm"
-                                  href={`/workspace/evidence-files/${file.id}?organization=${model.organization.id}&project=${model.selectedProject?.id ?? ""}`}
-                                >
-                                  Download
-                                </a>
-                                {canAct ? (
-                                  <FileChanges
-                                    organizationId={model.organization.id}
-                                    projectId={model.selectedProject?.id ?? ""}
-                                    fileId={file.id}
-                                    fileName={file.fileName}
-                                    blocked={changeBlocked(file)}
-                                    controlId={control.id}
-                                  />
-                                ) : null}
-                              </div>
                             </div>
                           </details>
+                          {/* On the row, not inside it: a file added by mistake is
+                              withdrawn or replaced (its record stays), never deleted. */}
+                          <div className="evidence-file-tools">
+                            <a
+                              className="btn btn-secondary btn-sm"
+                              href={`/workspace/evidence-files/${file.id}?organization=${model.organization.id}&project=${model.selectedProject?.id ?? ""}`}
+                            >
+                              Download
+                            </a>
+                            {canAct ? (
+                              <FileChanges
+                                organizationId={model.organization.id}
+                                projectId={model.selectedProject?.id ?? ""}
+                                fileId={file.id}
+                                fileName={file.fileName}
+                                blocked={changeBlocked(file)}
+                                controlId={control.id}
+                              />
+                            ) : null}
+                          </div>
                         </li>
                       );
                     })}

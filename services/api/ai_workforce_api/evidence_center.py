@@ -41,6 +41,8 @@ from ai_workforce_api.authorization import (
     authorize,
 )
 from ai_workforce_api.db import transaction
+from ai_workforce_api.followups import FollowUpTimer
+from ai_workforce_api.mailbox import MailboxProvider, open_mailbox
 from ai_workforce_api.pbc import _COLUMNS as _PBC_COLUMNS
 from ai_workforce_api.pbc import PbcBody, PbcState
 from ai_workforce_api.pbc import _body as _pbc_body
@@ -56,6 +58,9 @@ from ai_workforce_api.request_details import (
     title_of,
 )
 from ai_workforce_api.settings import Settings
+
+# How a send reaches the mail provider (outbound.MailboxFactory), passed in for tests.
+MailboxFactory = Callable[[Settings, psycopg.Connection[Any], UUID, UUID], MailboxProvider]
 
 Stage = Literal[
     "DRAFT",
@@ -356,7 +361,9 @@ class BulkItem(BaseModel):
 
 
 class BulkBody(BaseModel):
-    action: Literal["ASSIGN", "DUE", "PRIORITY", "APPROVE", "SUBMIT", "RETURN"]
+    # APPROVE_SEND approves each agent's draft and sends it with that approval, the two
+    # recorded on their own (product owner, 22 October 2026: "Approve only" still exists).
+    action: Literal["ASSIGN", "DUE", "PRIORITY", "APPROVE", "APPROVE_SEND", "SUBMIT", "RETURN"]
     items: list[BulkItem] = Field(min_length=1, max_length=MAX_BULK)
     # Only check: say what each request would need, change nothing.
     preview: bool = False
@@ -386,7 +393,12 @@ class BulkResult(BaseModel):
 # Routes
 
 
-def register_evidence_center(app: FastAPI, settings: Settings) -> None:
+def register_evidence_center(
+    app: FastAPI,
+    settings: Settings,
+    mailbox: MailboxFactory | None = None,
+    timer: FollowUpTimer | None = None,
+) -> None:
     base = "/organizations/{organization_id}/projects/{project_id}"
 
     def run[T](request: Request, work: Callable[[psycopg.Connection[Any], Principal], T]) -> T:
@@ -463,7 +475,12 @@ def register_evidence_center(app: FastAPI, settings: Settings) -> None:
     def bulk_change(
         organization_id: UUID, project_id: UUID, body: BulkBody, request: Request
     ) -> BulkResult:
-        return run(request, lambda c, p: bulk(c, settings, p, organization_id, project_id, body))
+        return run(
+            request,
+            lambda c, p: bulk(
+                c, settings, p, organization_id, project_id, body, mailbox=mailbox, timer=timer
+            ),
+        )
 
     @app.get(f"{base}/evidence-views")
     def list_views(organization_id: UUID, project_id: UUID, request: Request) -> list[ViewBody]:
@@ -1230,9 +1247,13 @@ def bulk(
     organization_id: UUID,
     project_id: UUID,
     body: BulkBody,
+    mailbox: MailboxFactory | None = None,
+    timer: FollowUpTimer | None = None,
 ) -> BulkResult:
     """One change to many requests, each on its own: a request that cannot change says why
-    and the others go through. A preview runs the checks and changes nothing."""
+    and the others go through. A preview runs the checks and changes nothing. Approve and
+    send approves, then sends with that approval through the one send path
+    (outbound.send_request); a send refused after the approval leaves it approved, said."""
     from ai_workforce_api.approvals import ApprovalDecision, ApprovalState, _decide
     from ai_workforce_api.outbound import (
         ApproveDraftBody,
@@ -1243,7 +1264,11 @@ def bulk(
     )
     from ai_workforce_api.request_details import _assign, blocker
 
-    needed = Action.PROJECT_UPDATE if body.action in ("APPROVE", "RETURN") else Action.TASK_UPDATE
+    needed = (
+        Action.PROJECT_UPDATE
+        if body.action in ("APPROVE", "APPROVE_SEND", "RETURN")
+        else Action.TASK_UPDATE
+    )
     authorize(
         connection,
         principal=principal,
@@ -1320,7 +1345,7 @@ def bulk(
                 _assign(connection, settings, principal, organization_id, project_id,
                         item.id, change)  # fmt: skip
                 outcome(True, "Changed.")
-            elif body.action == "APPROVE":
+            elif body.action in ("APPROVE", "APPROVE_SEND"):
                 if current.drafted_by != "AGENT":
                     outcome(False, "Written by a person: submit it for someone else to approve.")
                     continue
@@ -1331,16 +1356,23 @@ def bulk(
                 if problem is not None:
                     outcome(False, problem)
                     continue
+                sending = body.action == "APPROVE_SEND"
                 if body.preview:
-                    outcome(True, "Ready to approve.")
+                    outcome(True, "Ready to approve and send." if sending else "Ready to approve.")
                     continue
                 note = ApproveDraftBody(
                     version=current.version, reason=reason or "Reviewed and approved."
                 )
-                _approve_draft(
+                approved = _approve_draft(
                     connection, settings, principal, organization_id, project_id, item.id, note
                 )
-                outcome(True, "Approved. Not sent.")
+                if not sending:
+                    outcome(True, "Approved. Not sent.")
+                    continue
+                outcome(*_send_approved(
+                    connection, settings, principal, organization_id, project_id, item.id,
+                    approved.approval.id, mailbox, timer,
+                ))  # fmt: skip
             elif body.action == "SUBMIT":
                 if current.status != "DRAFT":
                     outcome(False, "Not a draft.")
@@ -1399,6 +1431,37 @@ def bulk(
     )
 
 
+def _send_approved(
+    connection: psycopg.Connection[Any],
+    settings: Settings,
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    request_id: UUID,
+    approval_id: UUID,
+    mailbox: MailboxFactory | None,
+    timer: FollowUpTimer | None,
+) -> tuple[bool, str]:
+    """Send a request just approved, with that approval: whether it went, and what to say.
+    The approval stands whatever the send does."""
+    from ai_workforce_api.outbound import OutboundState, send_request
+
+    try:
+        sent = send_request(
+            connection, settings, principal, organization_id, project_id, request_id,
+            approval_id, mailbox or open_mailbox, timer,
+        )  # fmt: skip
+    except OutboundState as error:
+        return False, f"Approved, but not sent: {_sentence(error.detail)}"
+    except AccessDenied, NotVisible:
+        return False, "Approved, but your role does not permit sending it."
+    if sent.status == "ACCEPTED":
+        return True, "Approved and sent."
+    if sent.status == "UNKNOWN":
+        return False, "Approved and handed to the mail provider, but delivery is not confirmed."
+    return False, "Approved, but the mail provider refused it. Send it again from the request."
+
+
 _INTERNAL = {
     "pbc request changed": "The request changed since the list loaded. Reload and try again.",
     "request is not a draft": "Not a draft awaiting review.",
@@ -1413,6 +1476,7 @@ _INTERNAL = {
     "requester cannot approve": "You submitted it; another approver must decide it.",
     "approval is already decided": "A decision is already recorded.",
     "the evidence coordinator is not set up": "The evidence coordinator is not set up.",
+    "live email is off": "Email sending is off; the approval stands, to send once it is on.",
 }
 
 

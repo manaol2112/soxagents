@@ -134,10 +134,14 @@ export type ThreadSummary = {
 };
 
 export type WaitingItem = {
+  /** The queue item's id: one per obligation (empty from an older API). */
+  id: string;
   kind: string;
   title: string;
   detail: string;
   controlRef: string | null;
+  /** The control instance as every page names it: its ID, then its application. */
+  controlLabel: string | null;
   link: string;
   /** The control record to open, and its tab, when the item is about one control. */
   controlId: string | null;
@@ -319,11 +323,18 @@ export function parseInbox(value: unknown): ConsoleInbox | null {
   const waiting = (Array.isArray(value.waiting) ? value.waiting : [])
     .filter(isRecord)
     .map((item) => ({
+      id: str(item.id),
       kind: str(item.kind),
       title: str(item.title),
       detail: str(item.detail),
       controlRef:
         typeof item.control_ref === "string" ? item.control_ref : null,
+      controlLabel:
+        typeof item.control_label === "string"
+          ? item.control_label
+          : typeof item.control_ref === "string"
+            ? item.control_ref
+            : null,
       link: str(item.link),
       controlId: typeof item.control_id === "string" ? item.control_id : null,
       tab: typeof item.tab === "string" ? item.tab : null,

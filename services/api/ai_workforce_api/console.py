@@ -769,10 +769,15 @@ class AskBody(BaseModel):
 
 
 class WaitingItem(BaseModel):
+    # The queue item's id: one per obligation, so the same step on two controls is two.
+    id: str = ""
     kind: str
     title: str
     detail: str
     control_ref: str | None
+    # The control instance as every page names it (queue.QueueItem.control_label): its ID,
+    # then its application, so one step on several controls reads as several.
+    control_label: str | None = None
     link: str
     # The control record to open, and its tab, when the item is about one control.
     control_id: UUID | None = None
@@ -1381,6 +1386,7 @@ def _inbox(
             detail = f"{detail + ' · ' if detail else ''}Waits on {who}"
         waiting.append(
             WaitingItem(
+                id=item.id,
                 kind=kind,
                 title=(
                     item.title
@@ -1389,6 +1395,7 @@ def _inbox(
                 ),
                 detail=detail,
                 control_ref=item.control_ref,
+                control_label=item.control_label,
                 link="mailbox" if item.link.query.get("tab") == "mailbox" else item.link.section,
                 control_id=item.control_id if item.link.section == "controls" else None,
                 tab=tab if item.link.section == "controls" else None,

@@ -1512,12 +1512,41 @@ _PROBLEM_ORDER = ("planning", "recipient")
 def first_problem(checks: list[CheckBody], keys: frozenset[str] | None = None) -> str | None:
     """The first failing check, among the keys given (all when None), in the order the
     approval is refused; None when every check passes."""
+    found = first_failing(checks, keys)
+    return None if found is None else found[1]
+
+
+def first_failing(
+    checks: list[CheckBody], keys: frozenset[str] | None = None
+) -> tuple[str, str] | None:
+    """first_problem with its check's key: (key, detail), or None."""
     failing = [c for c in checks if not c.ok and (keys is None or c.key in keys)]
     for key in _PROBLEM_ORDER:
         for check in failing:
             if check.key == key:
-                return check.detail
-    return failing[0].detail if failing else None
+                return (check.key, check.detail)
+    return (failing[0].key, failing[0].detail) if failing else None
+
+
+# What holds a drafted request, as a stable code the queue can name and link to its fix
+# (Home, docs/home-plan.md). The recipient's codes follow address_problem's own reasons.
+def problem_code(key: str, detail: str) -> str:
+    if key == "planning":
+        return "PLANNING_HOLD"
+    if key in ("recipient", "cc"):
+        if detail == "Assign a recipient.":
+            return "RECIPIENT_MISSING"
+        if detail.endswith("cannot receive evidence requests."):
+            # The deployment's outbound allowlist: a system setting, not the engagement's.
+            return "RECIPIENT_NOT_ALLOWED"
+        if "is outside the client's email domains" in detail:
+            return "RECIPIENT_OUTSIDE_DOMAINS"
+        return "RECIPIENT_INVALID"
+    if key == "due":
+        return "DUE_PASSED"
+    if key == "control":
+        return "CONTROL_OUT_OF_SCOPE"
+    return "REQUEST_CHECK"
 
 
 def draft_blockers(
@@ -1526,6 +1555,22 @@ def draft_blockers(
     organization_id: UUID,
     project_id: UUID,
 ) -> dict[UUID, str | None]:
+    """blocker() for every drafted request of the engagement at once (draft_problems
+    without the checks' keys)."""
+    return {
+        request_id: None if found is None else found[1]
+        for request_id, found in draft_problems(
+            connection, settings, organization_id, project_id
+        ).items()
+    }
+
+
+def draft_problems(
+    connection: psycopg.Connection[Any],
+    settings: Settings,
+    organization_id: UUID,
+    project_id: UUID,
+) -> dict[UUID, tuple[str, str] | None]:
     """blocker() for every drafted request of the engagement at once: the first check
     that fails, or None, by request. The checks are request_checks over the same inputs,
     built from the same functions as the single-request path, with the shared reads done
@@ -1681,7 +1726,7 @@ def draft_blockers(
             (control, pbc.testing_phase or "") in released, pbc.testing_phase
         )
 
-    found: dict[UUID, str | None] = {}
+    found: dict[UUID, tuple[str, str] | None] = {}
     for pbc in pbcs:
         control = controls.get(pbc.engagement_control_id) if pbc.engagement_control_id else None
         planning, kinds, _ = _planning_from(pbc, requirements.get(pbc.id, []), drafts.get(pbc.id))
@@ -1714,7 +1759,7 @@ def draft_blockers(
                 else True
             ),
         )
-        found[pbc.id] = first_problem(checks)
+        found[pbc.id] = first_failing(checks)
     return found
 
 

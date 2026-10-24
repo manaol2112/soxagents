@@ -268,7 +268,9 @@ def test_setup_gaps_are_named_and_block_the_plan(migrated: Database) -> None:
     # Owners are not assigned on setup: a missing one is neither a blocker nor a note.
     assert issues["rcm"] == []
     assert advisories["rcm"] == []
-    assert issues["workpapers"] == ["Review the workpaper previews and confirm the templates."]
+    # The templates need no confirmation (product owner, 22 October 2026): the standard
+    # ones apply by default, so the step names nothing to do.
+    assert issues["workpapers"] == []
 
 
 def test_an_engagement_starts_without_control_owners(migrated: Database) -> None:
@@ -332,7 +334,12 @@ def test_systems_belong_to_the_rcm_step_not_to_scope(migrated: Database) -> None
     assert all(control["application_ids"] for control in added["controls"])
 
 
-def test_changing_a_template_needs_the_previews_confirmed_again(migrated: Database) -> None:
+def test_changing_a_template_leaves_the_engagement_ready(migrated: Database) -> None:
+    """Rewritten 22 October 2026. It asserted that changing a control's template made the
+    engagement unready until the templates were confirmed again; the product owner removed
+    that confirmation, since the standard or firm templates apply by default and a change
+    applies only to workpapers not yet started. The previews and the change itself are
+    still checked."""
     team = _new_engagement(migrated, "templates")
     owner, org, project = team["owner"], team["org"], team["project"]
     _complete_setup(owner, team)
@@ -356,8 +363,11 @@ def test_changing_a_template_needs_the_previews_confirmed_again(migrated: Databa
         json={**_control_fields(control), "template_key": firm["key"]},
     )
     after = owner.get(_base(org, project)).json()
-    assert after["settings"]["templates_confirmed_at"] is None
-    assert after["ready"] is False
+    assert (
+        next(c for c in after["controls"] if c["id"] == control["id"])["template_key"]
+        == (firm["key"])
+    )
+    assert after["ready"] is True, after["readiness"]
 
 
 def test_only_people_who_run_the_engagement_change_its_setup(migrated: Database) -> None:

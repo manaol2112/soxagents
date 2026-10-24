@@ -181,7 +181,7 @@ def create_app(
     register_mailbox(app, resolved)
     register_pbc(app, resolved)
     register_request_details(app, resolved)
-    register_evidence_center(app, resolved)
+    register_evidence_center(app, resolved, timer=timer)
     register_outbound(app, resolved, timer=timer)
     register_followups(app, resolved, timer)
     register_inbound(app, resolved)

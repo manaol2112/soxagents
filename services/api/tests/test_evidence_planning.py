@@ -629,7 +629,11 @@ def test_receipt_and_sufficiency_are_separate_states() -> None:
     )
     assert requirement_state("REQUESTED", "SENT", None, "NOT_REVIEWED") == "SENT"
     assert requirement_state("REQUESTED", "RECEIVED", None, "NOT_REVIEWED") == "RECEIVED"
-    assert requirement_state("REQUESTED", "PARTIALLY_RECEIVED", None, "NOT_REVIEWED") == (
+    # A partly received request has some of its items in. An item with nothing of its own
+    # is still awaited; one with a file that serves it is partly received (22 Oct 2026:
+    # every item of a partly received request read as partly received before).
+    assert requirement_state("REQUESTED", "PARTIALLY_RECEIVED", None, "NOT_REVIEWED") == "SENT"
+    assert requirement_state("REQUESTED", "PARTIALLY_RECEIVED", None, "NOT_REVIEWED", True) == (
         "PARTIALLY_RECEIVED"
     )
     assert requirement_state("REQUESTED", "RECEIVED", None, "ACCEPTED") == "ACCEPTED"

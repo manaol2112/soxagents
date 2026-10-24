@@ -96,6 +96,7 @@ function useReviewAction(ids: Ids, requestId: string) {
     setProblem(null);
     let status = 0;
     let detail = "";
+    let approved = false;
     try {
       const response = await fetch("/workspace/request-review", {
         method: "POST",
@@ -110,16 +111,23 @@ function useReviewAction(ids: Ids, requestId: string) {
       const body = (await response.json()) as {
         status?: unknown;
         detail?: unknown;
+        approved?: unknown;
       };
       status = typeof body.status === "number" ? body.status : 0;
       detail = typeof body.detail === "string" ? body.detail : "";
+      approved = body.approved === true;
     } catch {
       status = 0;
     }
     setBusy("");
-    const message = reviewProblem(status, detail);
+    const refused = reviewProblem(status, detail);
+    // Approved and sent in one press, but the send was refused: the approval stands.
+    const message =
+      refused !== null && approved
+        ? `Approved, but not sent. ${refused}`
+        : refused;
     setProblem(message);
-    if (message === null) {
+    if (message === null || approved) {
       startTransition(() => router.refresh());
     }
     return message === null;
@@ -555,6 +563,23 @@ export function RequestReview({
                   className="btn"
                   disabled={busy || detail === null || failing.length > 0}
                   onClick={() =>
+                    review.run("approve-send", {
+                      intent: "approve-send",
+                      version: detail?.version ?? request.version,
+                      reason: note.trim() || "Reviewed and approved.",
+                    })
+                  }
+                >
+                  <UiIcon name="mail" size={13} />
+                  {review.busy === "approve-send"
+                    ? "Approving and sending…"
+                    : "Approve and send"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={busy || detail === null || failing.length > 0}
+                  onClick={() =>
                     review.run("approve", {
                       intent: "approve",
                       version: detail?.version ?? request.version,
@@ -563,7 +588,7 @@ export function RequestReview({
                   }
                 >
                   <UiIcon name="check" size={13} />
-                  {review.busy === "approve" ? "Approving…" : "Approve"}
+                  {review.busy === "approve" ? "Approving…" : "Approve only"}
                 </button>
                 {!noting ? (
                   <button
@@ -1758,7 +1783,7 @@ export function ContactSearch({
 }
 
 /** A person at the client, added inline and saved to the engagement's contacts. */
-function NewContact({
+export function NewContact({
   id,
   email,
   domains,

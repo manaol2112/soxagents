@@ -690,14 +690,21 @@ def _get_control(context: ToolContext, args: ControlArgs) -> dict[str, Any]:
 def _file_applications(context: ToolContext, file_ids: list[UUID]) -> dict[UUID, str]:
     rows = context.connection.execute(
         """
-        SELECT t.evidence_file_id, t.scope, a.name FROM evidence_file_applications t
+        SELECT t.evidence_file_id, t.scope, a.name,
+               (SELECT string_agg(x.name, ', ' ORDER BY x.name) FROM engagement_applications x
+                WHERE x.id = ANY(t.engagement_application_ids))
+        FROM evidence_file_applications t
         LEFT JOIN engagement_applications a ON a.id = t.engagement_application_id
         WHERE t.evidence_file_id = ANY(%s)
         """,
         (file_ids,),
     ).fetchall()
     return {
-        row[0]: "all applications" if row[1] == "ALL" else str(row[2] or "not known")
+        row[0]: "all applications"
+        if row[1] == "ALL"
+        else str(row[3] or "not known")
+        if row[1] == "SOME"
+        else str(row[2] or "not known")
         for row in rows
     }
 

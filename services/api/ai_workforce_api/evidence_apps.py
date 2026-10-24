@@ -20,6 +20,7 @@ import psycopg
 from ai_workforce_api.inbound import clean_line
 
 Scope = Literal["ONE", "ALL", "UNKNOWN"]
+# A person may also name several applications (SOME); the coordinator never does.
 _GENERIC = frozenset(
     {
         "microsoft", "oracle", "enterprise", "suite", "system", "systems", "server",
@@ -30,6 +31,18 @@ _GENERIC = frozenset(
 _SHORT = {"database": "db", "directory": "ad", "kubernetes": "k8s", "windows": "win"}
 # Short words that are ordinary English, so they do not name an application in text.
 _COMMON = frozenset({"red", "hat", "bs", "el", "ai", "od", "hel", "mad", "active", "net"})
+
+
+def tag_covers(application_sql: str, alias: str = "t") -> str:
+    """SQL: the file's application tag (evidence_file_applications as alias) covers the
+    application: every one (ALL), that one (ONE), or one of several a person named (SOME,
+    migration 0102)."""
+    return (
+        f"({alias}.scope = 'ALL'"
+        f" OR ({alias}.scope = 'ONE' AND {alias}.engagement_application_id = {application_sql})"
+        f" OR ({alias}.scope = 'SOME'"
+        f" AND {application_sql} = ANY({alias}.engagement_application_ids)))"
+    )
 
 
 @dataclass(frozen=True)
@@ -59,6 +72,32 @@ def control_applications(
         (control_id, project_id),
     ).fetchall()
     return [Application(id=UUID(str(row[0])), name=str(row[1])) for row in rows]
+
+
+def own_application(
+    connection: psycopg.Connection[Any] | psycopg.Cursor[Any], project_id: UUID, control_id: UUID
+) -> Application | None:
+    """The application a control instance is for, if it is one application's instance."""
+    row = connection.execute(
+        """
+        SELECT a.id, a.name FROM engagement_controls c
+        JOIN engagement_applications a
+          ON a.project_id = c.project_id AND a.id = c.engagement_application_id
+        WHERE c.id = %s AND c.project_id = %s
+        """,
+        (control_id, project_id),
+    ).fetchone()
+    return None if row is None else Application(id=UUID(str(row[0])), name=str(row[1]))
+
+
+def request_default(tag: Tag, own: Application | None) -> Tag:
+    """A file the reader could not place takes the application of the request it came in
+    on: the request belongs to one instance of the control, for one application (by the
+    product owner's decision, 22 Oct 2026). A file the reader sees showing another
+    application, or all of them, keeps that tag; a person can always change it."""
+    if tag.scope != "UNKNOWN" or own is None:
+        return tag
+    return Tag("ONE", own, clean_line(f"Uploaded to the request for {own.name}.", 300))
 
 
 def _words(name: str) -> list[str]:

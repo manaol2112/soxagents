@@ -1,8 +1,11 @@
+import { GroupItems, GroupToggle } from "./home-work";
+import { clearable, groupAction } from "./home-work-model";
 import {
   BUCKET_LABELS,
   BUCKET_NOTES,
   collapseRows,
   filterWords,
+  groupCount,
   groupQueue,
   ownerWords,
   type Queue,
@@ -81,11 +84,13 @@ export function QueuePanel({
     >
       <header className="card-header">
         <div>
-          <h2 id="home-next-title">{compact ? "Needs attention" : "Work"}</h2>
+          <h2 id="home-next-title">
+            {compact ? "Needs attention" : "All open work"}
+          </h2>
           <p className="card-desc">
             {compact
-              ? "The engagement's one queue, for these controls."
-              : "Everything open on the engagement, by whose it is. One list: the register, the agent console and this page read the same records."}
+              ? "What is open on these controls."
+              : "What is open on this engagement, by whose turn it is."}
           </p>
         </div>
         <div className="card-aside">
@@ -99,8 +104,8 @@ export function QueuePanel({
         </div>
       </header>
       {compact ? null : (
-        <nav className="queue-filters" aria-label="Filter the queue">
-          <div className="queue-filter-row">
+        <nav className="queue-filters" aria-label="Filter the work">
+          <div className="queue-filter-row queue-segmented">
             {chip(
               "All",
               { ...filter, bucket: null },
@@ -117,36 +122,42 @@ export function QueuePanel({
                 ),
             )}
           </div>
-          <div className="queue-filter-row">
-            {chip(
-              "Every stage",
-              { ...filter, stage: null },
-              filter.stage === null,
-            )}
-            {(Object.keys(STAGE_WORDS) as QueueItem["stage"][])
-              .filter((stage) =>
-                queue.items.some((item) => item.stage === stage),
-              )
-              .map((stage) =>
-                chip(
-                  STAGE_WORDS[stage],
-                  { ...filter, stage },
-                  filter.stage === stage,
-                ),
+          <details
+            className="queue-more-filters"
+            open={filter.stage !== null || filter.phase !== null}
+          >
+            <summary>Filter by stage or phase</summary>
+            <div className="queue-filter-row">
+              {chip(
+                "Every stage",
+                { ...filter, stage: null },
+                filter.stage === null,
               )}
-          </div>
-          <div className="queue-filter-row">
-            {chip(
-              "Every phase",
-              { ...filter, phase: null },
-              filter.phase === null,
-            )}
-            {PHASES.filter(([key]) =>
-              queue.items.some((item) => item.phase === key),
-            ).map(([key, label]) =>
-              chip(label, { ...filter, phase: key }, filter.phase === key),
-            )}
-          </div>
+              {(Object.keys(STAGE_WORDS) as QueueItem["stage"][])
+                .filter((stage) =>
+                  queue.items.some((item) => item.stage === stage),
+                )
+                .map((stage) =>
+                  chip(
+                    STAGE_WORDS[stage],
+                    { ...filter, stage },
+                    filter.stage === stage,
+                  ),
+                )}
+            </div>
+            <div className="queue-filter-row">
+              {chip(
+                "Every phase",
+                { ...filter, phase: null },
+                filter.phase === null,
+              )}
+              {PHASES.filter(([key]) =>
+                queue.items.some((item) => item.phase === key),
+              ).map(([key, label]) =>
+                chip(label, { ...filter, phase: key }, filter.phase === key),
+              )}
+            </div>
+          </details>
         </nav>
       )}
       {groups.length === 0 ? (
@@ -173,7 +184,12 @@ export function QueuePanel({
               <span className="home-group-current">{group.items.length}</span>
             </h3>
             {compact ? null : (
-              <p className="queue-note">{BUCKET_NOTES[group.bucket]}</p>
+              <p className="queue-note">
+                {BUCKET_NOTES[group.bucket]}
+                {group.bucket === "BLOCKED" && group.items.some(clearable)
+                  ? ` ${group.items.filter(clearable).length} of these you can clear yourself; Home lists them under Needs you.`
+                  : ""}
+              </p>
             )}
             <ul className="home-steps">
               {collapseRows(
@@ -187,47 +203,13 @@ export function QueuePanel({
                     href={queueHref(row.item, organizationId, projectId)}
                   />
                 ) : (
-                  <li
+                  <QueueGroup
                     key={`group-${row.title}`}
-                    className="home-step queue-group"
-                  >
-                    <details>
-                      <summary className="home-step-copy">
-                        <strong>
-                          {row.title}
-                          <span className="home-step-ref">
-                            {" "}
-                            {row.items.length} controls
-                          </span>
-                        </strong>
-                        <small>
-                          {ownerWords(row.items[0] as QueueItem)}. Open for the
-                          list.
-                        </small>
-                      </summary>
-                      <ul className="home-steps queue-group-items">
-                        {row.items.map((item) => (
-                          <li key={item.id} className="home-step">
-                            <span className="home-step-copy">
-                              <strong>
-                                <span className="home-step-ref">
-                                  {item.controlRef ?? ""}
-                                </span>
-                                {item.title}
-                              </strong>
-                            </span>
-                            <a
-                              className="btn btn-sm btn-secondary"
-                              href={queueHref(item, organizationId, projectId)}
-                            >
-                              {item.bucket === "MINE" ? "Open" : "View"}
-                              <UiIcon name="arrow" size={13} />
-                            </a>
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
-                  </li>
+                    title={row.title}
+                    items={row.items}
+                    organizationId={organizationId}
+                    projectId={projectId}
+                  />
                 ),
               )}
             </ul>
@@ -235,6 +217,57 @@ export function QueuePanel({
         ))
       )}
     </section>
+  );
+}
+
+/** A step repeated across controls: its count, the list folded under it, and where it is
+ * done for all of them together when the viewer has it to do and a page does that. */
+function QueueGroup({
+  title,
+  items,
+  organizationId,
+  projectId,
+}: {
+  title: string;
+  items: QueueItem[];
+  organizationId: string;
+  projectId: string;
+}) {
+  const action = items.some((item) => item.bucket === "MINE")
+    ? groupAction(items, organizationId, projectId)
+    : null;
+  return (
+    <li
+      className={`home-step queue-group${action !== null ? " has-action" : ""}`}
+    >
+      <details>
+        <summary className="home-step-copy">
+          <strong>
+            {title}
+            <span className="home-step-ref"> {groupCount(items)}</span>
+          </strong>
+          {/* Whose it is, except the viewer's own (the section says so). */}
+          {(items[0] as QueueItem).bucket === "MINE" ? null : (
+            <small>{ownerWords(items[0] as QueueItem)}.</small>
+          )}
+          <GroupToggle items={items} />
+        </summary>
+        <GroupItems
+          items={items}
+          href={(item) => queueHref(item, organizationId, projectId)}
+          verb={(item) => (item.bucket === "MINE" ? "Open" : "View")}
+        />
+      </details>
+      {action !== null ? (
+        <a
+          className="btn btn-sm btn-secondary queue-group-action"
+          href={action.href}
+        >
+          {action.label}
+          <UiIcon name="arrow" size={13} />
+        </a>
+      ) : null}
+    </li>
   );
 }
 
@@ -260,7 +293,9 @@ function QueueRow({
         </strong>
         <small>
           {item.reason !== "" ? `${item.reason} ` : ""}
-          <span className="queue-owner">{ownerWords(item)}.</span>
+          {item.bucket === "MINE" ? null : (
+            <span className="queue-owner">{ownerWords(item)}.</span>
+          )}
           {item.blockers.length > 0 ? (
             <span className="queue-blockers">
               {" "}

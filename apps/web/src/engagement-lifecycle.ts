@@ -75,6 +75,15 @@ export function isClosed(status: string): boolean {
   return status === "COMPLETED" || status === "ARCHIVED";
 }
 
+/**
+ * Whether Home lists work to do and a next action. A paused engagement adds nothing new
+ * until it is resumed, and a completed or archived one is read-only, so Home shows where
+ * it stands instead (docs/home-plan.md, "One Home in every state").
+ */
+export function homeListsWork(status: string): boolean {
+  return status !== "PAUSED" && !isClosed(status);
+}
+
 export function engagementPhase(facts: LifecycleFacts): EngagementPhase {
   if (facts.status === "ARCHIVED") {
     return "closed";
@@ -219,6 +228,13 @@ export function closedNotice(status: string): string | null {
     return "This engagement is archived and read-only. Its records stay readable.";
   }
   return null;
+}
+
+/** What Home says while the engagement is paused, or null when it is not. */
+export function pausedNotice(status: string): string | null {
+  return status === "PAUSED"
+    ? "This engagement is paused. Nothing new is added until an owner or admin resumes it under Settings › All engagements."
+    : null;
 }
 
 /** What a completion confirmation says it does. */

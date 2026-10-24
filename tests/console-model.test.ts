@@ -89,6 +89,38 @@ describe("agent console model", () => {
     });
     assert.equal(inbox?.waiting[0]?.link, "evidence");
     assert.equal(inbox?.activity.length, 1);
+    // An older API without ids or labels: none, and the control's ID stands for it.
+    assert.equal(inbox?.waiting[0]?.id, "");
+    assert.equal(inbox?.waiting[0]?.controlLabel, null);
+  });
+
+  it("keeps the same step on two systems apart by its id and its control's name", () => {
+    const inbox = parseInbox({
+      waiting: [
+        {
+          id: "control-step:a",
+          kind: "results",
+          title: "Approve the test plan",
+          control_ref: "ITGC-AC-06",
+          control_label: "ITGC-AC-06 · SAP ECC",
+          link: "controls",
+        },
+        {
+          id: "control-step:b",
+          kind: "results",
+          title: "Approve the test plan",
+          control_ref: "ITGC-AC-06",
+          link: "controls",
+        },
+      ],
+    });
+    assert.deepEqual(
+      inbox?.waiting.map((item) => [item.id, item.controlLabel]),
+      [
+        ["control-step:a", "ITGC-AC-06 · SAP ECC"],
+        ["control-step:b", "ITGC-AC-06"],
+      ],
+    );
   });
 
   it("reads the agent's reply as paragraphs, lists, and tables", () => {

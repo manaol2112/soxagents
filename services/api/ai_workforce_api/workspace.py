@@ -472,6 +472,10 @@ class ControlRow(BaseModel):
     # Operating phases a person released (phase_release.py), and the one ready to release.
     released_phases: list[str] = Field(default_factory=list)
     release_ready: str | None = None
+    # The design work in hand before operating testing (_design_steps): reviewing the
+    # design evidence, or the design workpaper the agent drafts and a person prepares.
+    design_step: str | None = None
+    design_by: Actor = "NONE"
     # Its attributes are settled: operating evidence is requested only then.
     attributes_settled: bool = True
     # A kickoff draft holds plan items until a person reconciles it (evidence_plans).
@@ -1240,6 +1244,7 @@ def _controls(
         ).fetchall()
     }
     settle = reconcile_waiting(connection, project_id)
+    design = _design_steps(connection, project_id)
     from ai_workforce_api.phase_release import phase_statuses
     from ai_workforce_api.test_rounds import rounds as load_rounds
 
@@ -1405,6 +1410,8 @@ def _controls(
                 (item.phase for item in phases.phases if item.step == "READY"), None
             )
         current.reconcile = current.id in settle
+        if current.id in design:
+            current.design_step, current.design_by = design[current.id]
         current.final, current.not_final = fin.final, fin.reasons
         if current.id in reopens:
             current.reopen_reason, current.reopened_from = reopens[current.id]  # type: ignore[assignment]
@@ -1480,6 +1487,7 @@ def _application_states(
         JOIN evidence_file_applications t ON t.evidence_file_id = l.evidence_file_id
         WHERE me.project_id = %s
           AND (t.scope = 'ALL' OR t.engagement_application_id = a.id
+               OR (t.scope = 'SOME' AND a.id = ANY(t.engagement_application_ids))
                OR (c.id = me.id AND t.scope = 'UNKNOWN'))
         GROUP BY 1, 2
         """,
@@ -1746,6 +1754,10 @@ def step_of(control: ControlRow, stages: StageBody, now: datetime | None = None)
         if statuses & _OUT:
             waiting = "sample evidence" if kind == "SAMPLES" else "evidence"
             return Step(f"Waiting for {waiting}", "CLIENT")
+    # Design comes first: its evidence judged, then its workpaper drafted and prepared,
+    # which completes design and makes the interim ready to release (phase_release).
+    if control.design_step is not None and "INTERIM" not in control.released_phases:
+        return Step(control.design_step, control.design_by)
     if control.release_ready is not None and control.evidence_plan == "PLANNED":
         word = "roll-forward" if control.release_ready == "ROLLFORWARD" else "interim"
         return Step(f"Release the {word} phase", "APPROVER")
@@ -1756,6 +1768,14 @@ def step_of(control: ControlRow, stages: StageBody, now: datetime | None = None)
     if not control.requests:
         return Step("Request evidence", "PREPARER")
     if stages.test not in ("SUCCEEDED",):
+        if (
+            control.evidence_plan == "PLANNED"
+            and "INTERIM" not in control.released_phases
+            and control.test_status is None
+        ):
+            # Operating testing starts with the interim release, once design is complete
+            # (22 Oct 2026: a population was asked for while design was still open).
+            return Step("Prepare the design workpaper", "PREPARER")
         if control.test_status is None and control.nature != "AUTOMATED":
             return Step("Confirm the population", "PREPARER")
         return Step("Test the evidence", "AGENT")
@@ -1846,6 +1866,58 @@ def _review_step(control: ControlRow) -> Step:
     return Step(step[0], _REVIEW_ACTORS.get(control.review_left, "PREPARER"))
 
 
+# The design steps (_design_steps) and the stage each is.
+_DESIGN_PROGRESS: dict[str, Progress] = {
+    "Review the design evidence": "EVIDENCE_RECEIVED",
+    "Drafting the design workpaper": "RESULTS_TO_CONFIRM",
+    "Prepare the design workpaper": "RESULTS_TO_CONFIRM",
+}
+
+
+def _design_steps(
+    connection: psycopg.Connection[Any], project_id: UUID
+) -> dict[UUID, tuple[str, Actor]]:
+    """Each control's design work in hand, from its design items and design workpaper:
+    evidence arrived and not judged, or every item accepted and the workpaper not yet
+    prepared (the agent drafting it, or a person to prepare it). A design item a person
+    found short is followed up through its requests, so it sets no step here."""
+    found: dict[UUID, tuple[str, Actor]] = {}
+    for control_id, items, accepted, short, waiting, status, draft in connection.execute(
+        """
+        SELECT q.engagement_control_id, count(*),
+               count(*) FILTER (WHERE q.sufficiency = 'ACCEPTED'),
+               count(*) FILTER (WHERE q.sufficiency IN ('INSUFFICIENT', 'FOLLOW_UP_REQUIRED')),
+               count(*) FILTER (
+                   WHERE q.sufficiency IN ('NOT_REVIEWED', 'UNDER_REVIEW')
+                     AND (r.status IN ('PARTIALLY_RECEIVED', 'RECEIVED', 'CLOSED')
+                          OR EXISTS (SELECT 1 FROM evidence_file_links l
+                                     WHERE l.pbc_request_id = q.pbc_request_id)
+                          OR EXISTS (SELECT 1 FROM evidence_requirement_files ef
+                                     WHERE ef.requirement_id = q.id AND ef.status = 'LINKED'))
+               ),
+               max(w.status), max(w.draft_status)
+        FROM evidence_requirements q
+        LEFT JOIN pbc_requests r ON r.id = q.pbc_request_id
+        LEFT JOIN workpapers w
+          ON w.engagement_control_id = q.engagement_control_id AND w.stage = 'DESIGN'
+        WHERE q.project_id = %s AND q.phase = 'DESIGN' AND q.status = 'REQUESTED'
+        GROUP BY q.engagement_control_id
+        """,
+        (project_id,),
+    ).fetchall():
+        if items == accepted:
+            if status == "PREPARED":
+                continue
+            found[UUID(str(control_id))] = (
+                ("Drafting the design workpaper", "AGENT")
+                if draft in ("PENDING", "WORKING")
+                else ("Prepare the design workpaper", "PREPARER")
+            )
+        elif short == 0 and waiting > 0:
+            found[UUID(str(control_id))] = ("Review the design evidence", "PREPARER")
+    return found
+
+
 def progress_of(control: ControlRow, stages: StageBody, step: Step) -> Progress:
     """The control's one stage in the work, from its records. A control has exactly one,
     so the stages add up to the controls in scope; exceptions are shown beside it."""
@@ -1890,6 +1962,8 @@ def progress_of(control: ControlRow, stages: StageBody, step: Step) -> Progress:
     # The stage never disagrees with the step: a population still to confirm comes first.
     if step.text == "Confirm the population":
         return "EVIDENCE_RECEIVED"
+    if step.text in _DESIGN_PROGRESS:
+        return _DESIGN_PROGRESS[step.text]
     if stages.test not in ("NONE", "READY", "DRAFT"):
         return "AGENT_TESTING"
     return "READY_FOR_TESTING"

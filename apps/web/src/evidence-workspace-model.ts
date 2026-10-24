@@ -13,6 +13,7 @@ import {
   type Phase,
   type PlanPhase,
   type PlanRequirement,
+  planAwaitsApproval,
   type RequirementState,
   waitsOnPerson,
 } from "./evidence-plan-model.ts";
@@ -311,6 +312,33 @@ export type RequestRow = ControlRequest & {
   files: number;
 };
 
+/** A request's reference, as the API and the client's email name it: "PBC-" and the last
+ * eight characters of its id (evidence_center.reference_of). */
+export function requestReference(id: string): string {
+  return `PBC-${id.replaceAll("-", "").slice(-8).toUpperCase()}`;
+}
+
+/**
+ * The requests under the phase whose items they ask for, so each phase shows its request
+ * once, beside its items; a request for no planned phase (a follow-up, samples, or a phase
+ * the plan does not hold) is listed on its own.
+ */
+export function requestsByPhase<T extends { phase: string | null }>(
+  rows: readonly T[],
+  phases: readonly string[],
+): { byPhase: Map<string, T[]>; other: T[] } {
+  const byPhase = new Map<string, T[]>();
+  const other: T[] = [];
+  for (const row of rows) {
+    if (row.phase !== null && phases.includes(row.phase)) {
+      byPhase.set(row.phase, [...(byPhase.get(row.phase) ?? []), row]);
+    } else {
+      other.push(row);
+    }
+  }
+  return { byPhase, other };
+}
+
 /** The control's requests across phases, with what each carries and what came back. */
 export function requestRows(
   requests: readonly ControlRequest[],
@@ -340,10 +368,10 @@ export function requestRows(
  * person, with what the reader found. */
 export function fileServes(
   plan: EvidencePlan | null,
-): Map<string, Array<{ label: string; via: "REQUEST" | "LINK" }>> {
+): Map<string, Array<{ label: string; via: "REQUEST" | "LINK" | "SHARED" }>> {
   const serves = new Map<
     string,
-    Array<{ label: string; via: "REQUEST" | "LINK" }>
+    Array<{ label: string; via: "REQUEST" | "LINK" | "SHARED" }>
   >();
   for (const phase of plan?.phases ?? []) {
     for (const requirement of phase.requirements) {
@@ -373,22 +401,41 @@ export type HeldFile = {
   id: string;
   fileName: string;
   requestId: string | null;
+  /** Why it cannot be replaced or withdrawn now (evidence-change-model.changeBlocked). */
+  blocked?: string | null;
+  /** The control has several applications and which one the file shows is not known. */
+  applicationUnknown?: boolean;
 };
 
-/** The control's files a requirement does not have yet, to link to it: not already
- * serving it, and not on its own request (those serve it already). */
+/**
+ * The files the evidence items show, each on the line of the item it serves, with its
+ * actions there. The control's file list then holds only the files no item shows. Before
+ * the plan is approved the items are not shown, so no file is.
+ */
+export function placedFiles(plan: EvidencePlan | null): Set<string> {
+  if (
+    plan === null ||
+    plan.status === "NOT_PLANNED" ||
+    planAwaitsApproval(plan)
+  ) {
+    return new Set();
+  }
+  return new Set(
+    requirementGroups(plan, "all", "all").flatMap(({ items }) =>
+      items.flatMap((item) => item.files.map((file) => file.fileId)),
+    ),
+  );
+}
+
+/** The control's files a requirement does not have yet, to link to it: any not serving
+ * it, including one on its own request the reader found does not cover it. */
 export function linkableFiles(
   requirement: PlanRequirement,
   files: readonly HeldFile[],
 ): Array<{ id: string; name: string }> {
   const have = new Set(requirement.files.map((file) => file.fileId));
   return files
-    .filter(
-      (file) =>
-        !have.has(file.id) &&
-        (requirement.requestId === null ||
-          file.requestId !== requirement.requestId),
-    )
+    .filter((file) => !have.has(file.id))
     .map((file) => ({ id: file.id, name: file.fileName }));
 }
 
@@ -423,6 +470,25 @@ export function carriedBy(
 
 /** A phase of the evidence in one line: how many items, how many a person accepted, and
  * how many wait on a person now. A phase with something waiting opens by itself. */
+/** All phases in one line, for the evidence card's header: "3 of 18 accepted · 2 to
+ * review", counted the same way as each phase's own line. */
+export function evidenceTotal(
+  digests: ReadonlyArray<{ total: number; accepted: number; waiting: number }>,
+): string {
+  const total = digests.reduce((sum, item) => sum + item.total, 0);
+  const accepted = digests.reduce((sum, item) => sum + item.accepted, 0);
+  const waiting = digests.reduce((sum, item) => sum + item.waiting, 0);
+  if (total === 0) {
+    return "Nothing planned";
+  }
+  return [
+    `${accepted} of ${total} accepted`,
+    waiting > 0 ? `${waiting} to review` : "",
+  ]
+    .filter((part) => part !== "")
+    .join(" · ");
+}
+
 export function phaseDigest(
   phase: Pick<PlanPhase, "applicability">,
   items: readonly PlanRequirement[],

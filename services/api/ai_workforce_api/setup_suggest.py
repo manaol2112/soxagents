@@ -322,3 +322,6 @@ class ProfileUpdate(BaseModel):
     fiscal_year: str | None = Field(default=None, max_length=20)
     methodology: Methodology | None = None
     reporting_objectives: str | None = Field(default=None, max_length=2000)
+    # What the engagement covers, saved with the profile in the same transaction so the
+    # step's one Save cannot leave half of it written. Left out: kept as it is.
+    scope: str | None = Field(default=None, max_length=4000)

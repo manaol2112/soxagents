@@ -16,6 +16,7 @@ import {
   BULK_LABELS,
   type BulkAction,
   type BulkOutcome,
+  bulkSummary,
   type CenterList,
   type CenterQuery,
   type CenterRow,
@@ -38,7 +39,7 @@ import { formatDate } from "./format";
 import type { EvidenceCenterState } from "./load-evidence-center";
 import { RecordDialog } from "./record-dialog";
 import type { Contact } from "./request-details-model";
-import { ContactSearch, RequestReview } from "./request-review";
+import { ContactSearch, NewContact, RequestReview } from "./request-review";
 import { reviewProblem } from "./request-review-model";
 import { UiIcon } from "./ui-icon";
 
@@ -846,7 +847,23 @@ function OwnerCell({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  // The address typed when the person is not a contact yet: a new one is added here.
+  const [creating, setCreating] = useState<string | null>(null);
   const editable = canAct && UNSENT.has(row.status);
+  const assign = async (email: string): Promise<boolean> => {
+    const answer = await post(ids, {
+      intent: "bulk",
+      action: "ASSIGN",
+      recipient: email,
+      items: [{ id: row.id, version: row.version }],
+    });
+    const outcome = parseBulkResult(answer.body)?.outcomes[0];
+    if (answer.status === 200 && outcome?.ok) {
+      return true;
+    }
+    setProblem(outcome?.detail || reviewProblem(answer.status, answer.detail));
+    return false;
+  };
   // The control's owner, from the engagement's control register, comes first.
   const ordered = [
     ...contacts.filter((item) => item.role.includes(row.controlRef)),
@@ -876,6 +893,7 @@ function OwnerCell({
         onClick={() => {
           setOpen(!open);
           setProblem(null);
+          setCreating(null);
         }}
       >
         {label}
@@ -886,43 +904,67 @@ function OwnerCell({
           <span className="sr-only" id={`${id}-label`}>
             Owner of {row.reference}
           </span>
-          <ContactSearch
-            id={`${id}-search`}
-            labelledBy={`${id}-label`}
-            contacts={ordered}
-            exclude={row.recipient === "" ? [] : [row.recipient]}
-            domains={[]}
-            placeholder="Search engagement contacts"
-            disabled={busy}
-            focus
-            onPick={async (email) => {
-              setBusy(true);
-              const answer = await post(ids, {
-                intent: "bulk",
-                action: "ASSIGN",
-                recipient: email,
-                items: [{ id: row.id, version: row.version }],
-              });
-              setBusy(false);
-              const result = parseBulkResult(answer.body);
-              const outcome = result?.outcomes[0];
-              if (answer.status === 200 && outcome?.ok) {
-                setOpen(false);
+          {creating !== null ? (
+            <NewContact
+              id={`${id}-new`}
+              email={creating}
+              domains={[]}
+              busy={busy}
+              onCancel={() => setCreating(null)}
+              onSave={async (contact) => {
+                setBusy(true);
+                setProblem(null);
+                const added = await post(ids, {
+                  intent: "contact",
+                  ...contact,
+                });
+                const ok =
+                  (added.status === 200 || added.status === 201) &&
+                  (await assign(contact.email));
+                setBusy(false);
+                if (added.status !== 200 && added.status !== 201) {
+                  // The API says why in plain words (an address outside the allowed
+                  // domains, say); otherwise the general reason for the status.
+                  setProblem(
+                    added.detail !== ""
+                      ? added.detail
+                      : reviewProblem(added.status, added.detail),
+                  );
+                  return;
+                }
+                if (ok) {
+                  setCreating(null);
+                  setOpen(false);
+                }
                 refresh();
-              } else {
-                setProblem(
-                  outcome?.detail ||
-                    reviewProblem(answer.status, answer.detail),
-                );
-              }
-            }}
-            onCreate={() =>
-              setProblem(
-                "Open the request to add a new contact and assign them.",
-              )
-            }
-            onClose={() => setOpen(false)}
-          />
+              }}
+            />
+          ) : (
+            <ContactSearch
+              id={`${id}-search`}
+              labelledBy={`${id}-label`}
+              contacts={ordered}
+              exclude={row.recipient === "" ? [] : [row.recipient]}
+              domains={[]}
+              placeholder="Search engagement contacts"
+              disabled={busy}
+              focus
+              onPick={async (email) => {
+                setBusy(true);
+                const ok = await assign(email);
+                setBusy(false);
+                if (ok) {
+                  setOpen(false);
+                  refresh();
+                }
+              }}
+              onCreate={(email) => {
+                setProblem(null);
+                setCreating(email);
+              }}
+              onClose={() => setOpen(false)}
+            />
+          )}
           {problem !== null ? <p className="ec-problem">{problem}</p> : null}
         </div>
       ) : null}
@@ -1012,6 +1054,7 @@ function BulkBar({
   const [checked, setChecked] = useState<BulkOutcome[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
+  const [left, setLeft] = useState<BulkOutcome[]>([]);
   const items = [...selected].map(([itemId, version]) => ({
     id: itemId,
     version,
@@ -1020,7 +1063,9 @@ function BulkBar({
     ...(list.canAct
       ? (["ASSIGN", "DUE", "PRIORITY", "SUBMIT"] as BulkAction[])
       : []),
-    ...(list.canApprove ? (["APPROVE", "RETURN"] as BulkAction[]) : []),
+    ...(list.canApprove
+      ? (["APPROVE", "APPROVE_SEND", "RETURN"] as BulkAction[])
+      : []),
   ];
   const fields = () => ({
     intent: "bulk",
@@ -1059,12 +1104,12 @@ function BulkBar({
     });
     setBusy(false);
     const parsed = parseBulkResult(answer.body);
-    if (answer.status === 200 && parsed !== null) {
+    if (answer.status === 200 && parsed !== null && action !== null) {
       setChecked(null);
       setAction(null);
-      setResult(
-        `${parsed.done} request${parsed.done === 1 ? "" : "s"} updated${parsed.refused > 0 ? `; ${parsed.refused} could not change` : ""}.`,
-      );
+      setResult(bulkSummary(action, parsed));
+      // Each request that did not go all the way, with why: an approval kept unsent too.
+      setLeft(parsed.outcomes.filter((item) => !item.ok));
       onDone();
     } else {
       setResult(reviewProblem(answer.status, answer.detail));
@@ -1151,7 +1196,9 @@ function BulkBar({
             </select>
           </>
         ) : null}
-        {action === "APPROVE" || action === "RETURN" ? (
+        {action === "APPROVE" ||
+        action === "APPROVE_SEND" ||
+        action === "RETURN" ? (
           <>
             <label className="sr-only" htmlFor={`${id}-reason`}>
               {action === "RETURN" ? "Changes requested" : "Approval note"}
@@ -1208,7 +1255,9 @@ function BulkBar({
             {passing} of {checked.length} ready.
             {action === "APPROVE"
               ? " Approved requests are not sent until each is sent."
-              : ""}
+              : action === "APPROVE_SEND"
+                ? " Each is approved, then sent to its recipient. A request that cannot be sent stays approved."
+                : ""}
           </p>
           {checked.some((item) => !item.ok) ? (
             <ul aria-label="Requests that cannot change">
@@ -1229,6 +1278,16 @@ function BulkBar({
         <p className="ec-result" role="status">
           {result}
         </p>
+      ) : null}
+      {result !== null && left.length > 0 ? (
+        <ul className="ec-bulk-review" aria-label="Requests not done">
+          {left.slice(0, 50).map((item) => (
+            <li key={item.id}>
+              <span className="mono">{item.reference}</span> {item.title}
+              <span className="ec-muted"> — {item.detail}</span>
+            </li>
+          ))}
+        </ul>
       ) : null}
     </section>
   );

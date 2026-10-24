@@ -1,7 +1,8 @@
 """Withdrawing, restoring, and replacing evidence files (Milestone 8.3b).
 
 A file's custody record is never changed or deleted. A person who added the wrong file
-withdraws it, with a reason: it leaves the register, its request, its control's testing,
+withdraws it, with a reason if they give one (22 Oct 2026; who and when are always
+recorded): it leaves the register, its request, its control's testing,
 and the workpapers, and its record and bytes stay for the audit trail. A withdrawal can be
 restored. Replacing stores the new file as a new custody record that takes the old one's
 place (its control, request, application, and sample items), withdraws the old one, and
@@ -63,6 +64,22 @@ class ReasonBody(BaseModel):
         return cleaned
 
 
+# Recorded when a person withdraws a file without saying why (the record needs a reason).
+NO_REASON = "No reason given."
+
+
+class WithdrawBody(BaseModel):
+    """A withdrawal's reason is the person's to give or not."""
+
+    reason: str = Field(default="", max_length=500, validate_default=True)
+
+    @field_validator("reason")
+    @classmethod
+    def plain(cls, value: str) -> str:
+        cleaned = clean_line(value, 500)
+        return cleaned if len(cleaned) >= 3 else NO_REASON
+
+
 class ReplacedBody(BaseModel):
     replaced: UUID
     file_id: UUID
@@ -95,12 +112,13 @@ def register_evidence_versions(
         organization_id: UUID,
         project_id: UUID,
         file_id: UUID,
-        body: ReasonBody,
         request: Request,
+        body: WithdrawBody | None = None,
     ) -> RegisterBody:
+        reason = NO_REASON if body is None else body.reason
         result, runs = run(
             request,
-            lambda c, p: withdraw(c, p, organization_id, project_id, file_id, body.reason),
+            lambda c, p: withdraw(c, p, organization_id, project_id, file_id, reason),
         )
         schedule_runs(tests(), runs)
         return result
@@ -485,8 +503,8 @@ def replace(
              content_type, file_name, principal.id),
         )  # fmt: skip
         old_match = cursor.execute(
-            "SELECT id, receipt_request_id, receipt_status_before, receipt_status_set "
-            "FROM evidence_matches WHERE evidence_file_id = %s FOR UPDATE",
+            "SELECT id, receipt_request_id, receipt_status_before, receipt_status_set, "
+            "requirement_id FROM evidence_matches WHERE evidence_file_id = %s FOR UPDATE",
             (file_id,),
         ).fetchone()
         if control_id is None:
@@ -502,9 +520,10 @@ def replace(
                 INSERT INTO evidence_matches (
                     organization_id, project_id, evidence_file_id, status,
                     engagement_control_id, pbc_request_id, filed_by, decided_by, reason,
-                    receipt_request_id, receipt_status_before, receipt_status_set
+                    receipt_request_id, receipt_status_before, receipt_status_set,
+                    requirement_id
                 )
-                VALUES (%s, %s, %s, 'FILED', %s, %s, 'PERSON', %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, 'FILED', %s, %s, 'PERSON', %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     organization_id,
@@ -517,6 +536,8 @@ def replace(
                     None if old_match is None else old_match[1],
                     None if old_match is None else old_match[2],
                     None if old_match is None else old_match[3],
+                    # The item it was added for, while it is on the same request.
+                    None if old_match is None or request_id is None else old_match[4],
                 ),
             )
             if old_match is not None:
@@ -532,10 +553,11 @@ def replace(
             """
             INSERT INTO evidence_file_applications (
                 evidence_file_id, organization_id, project_id, scope,
-                engagement_application_id, tagged_by, decided_by, reason
+                engagement_application_id, engagement_application_ids, tagged_by,
+                decided_by, reason
             )
             SELECT %s, organization_id, project_id, scope, engagement_application_id,
-                   tagged_by, decided_by, reason
+                   engagement_application_ids, tagged_by, decided_by, reason
             FROM evidence_file_applications WHERE evidence_file_id = %s
             """,
             (new_id, file_id),

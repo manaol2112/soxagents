@@ -247,6 +247,69 @@ def test_bulk_approval_skips_requests_without_a_recipient(migrated: Database) ->
     assert sent is not None and sent[0] == 0
 
 
+def test_bulk_approve_and_send_approves_then_sends_each_through_the_one_send_path(
+    migrated: Database,
+) -> None:
+    """Approve and send (product owner, 22 October 2026): each agent's draft is approved,
+    then sent with that approval, both recorded; one without a recipient is refused and
+    nothing of it changes; Approve alone still sends nothing."""
+    team = _ready(migrated, "ec-approve-send")
+    owner = team["owner"]
+    rows = _all(owner, team, view="approval")[:3]
+    assert len(rows) == 3
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE pbc_requests SET recipient = '' WHERE id = %s", (UUID(rows[0]["id"]),)
+        )
+        connection.commit()
+        member = _add_user(connection, team["org"], f"c-{uuid4().hex[:6]}@example.com",
+                           "CONTRIBUTOR")  # fmt: skip
+        _add_project_member(connection, team["org"], team["project"], member)
+    rows = [item for item in _all(owner, team) if item["id"] in {r["id"] for r in rows}]
+    # Only someone who may approve may approve and send.
+    assert _bulk(_session(migrated, member), team, rows, action="APPROVE_SEND").status_code == 403
+    preview = _bulk(owner, team, rows, action="APPROVE_SEND", preview=True).json()
+    said = {item["id"]: item for item in preview["outcomes"]}
+    unaddressed = (
+        rows[0]["id"]
+        if rows[0]["recipient"] == ""
+        else next(item["id"] for item in rows if item["recipient"] == "")
+    )
+    assert said[unaddressed]["detail"] == "Assign a recipient."
+    assert all(
+        item["detail"] == "Ready to approve and send."
+        for key, item in said.items()
+        if key != unaddressed
+    )
+    with connect(migrated.url) as connection:
+        nothing = connection.execute(
+            "SELECT count(*) FROM outbound_messages WHERE project_id = %s", (team["project"],)
+        ).fetchone()
+    assert nothing is not None and nothing[0] == 0
+    applied = _bulk(owner, team, rows, action="APPROVE_SEND", reason="Checked and sent.").json()
+    assert applied["done"] == 2 and applied["refused"] == 1, applied
+    outcome = {item["id"]: item for item in applied["outcomes"]}
+    for key, item in outcome.items():
+        assert item["detail"] == ("Assign a recipient." if key == unaddressed
+                                  else "Approved and sent."), item  # fmt: skip
+    with connect(migrated.url) as connection:
+        sent = connection.execute(
+            "SELECT pbc_request_id, status FROM outbound_messages WHERE project_id = %s",
+            (team["project"],),
+        ).fetchall()
+        approvals = connection.execute(
+            "SELECT count(*) FROM audit_events WHERE project_id = %s AND action = 'pbc.updated' "
+            "AND payload->>'status' = 'APPROVAL_PENDING'",
+            (team["project"],),
+        ).fetchone()
+    # One message per approved request, each through the one send path, none for the other.
+    assert sorted(str(row[0]) for row in sent) == sorted(k for k in outcome if k != unaddressed)
+    assert {str(row[1]) for row in sent} == {"ACCEPTED"}
+    assert approvals is not None and approvals[0] >= 2
+    after = {item["id"]: item for item in _all(owner, team)}
+    assert after[unaddressed]["status"] == "DRAFT"
+
+
 def test_a_persons_request_names_its_control_and_goes_to_someone_else(
     migrated: Database,
 ) -> None:

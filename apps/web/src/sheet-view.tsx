@@ -2,6 +2,7 @@ import { AutoRefresh } from "./auto-refresh";
 import { PreviewButton } from "./evidence-preview";
 import type { Automation } from "./execution-model";
 import { formatDate } from "./format";
+import { PanelClose } from "./panel-close";
 import {
   RESULT_LABELS,
   RESULT_MARKS,
@@ -633,6 +634,7 @@ function Cell({
         {RESULT_MARKS[final]}
       </summary>
       <div className="cell-panel">
+        <PanelClose />
         <p className="cell-heading">
           <strong>
             {item.label} · A{cell.index + 1}

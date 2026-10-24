@@ -433,6 +433,7 @@ export {
   type Route,
   resolveRoute,
   SECTIONS,
+  SETTINGS_FIRM_FROM,
   SETTINGS_TAB_LABELS,
   SETTINGS_TABS,
   type SectionId,

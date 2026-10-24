@@ -3,7 +3,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
+  compactFileNote,
   type EvidencePlan,
+  fileIsReading,
   filterRequirements,
   groupByCategory,
   NO_FILTER,
@@ -15,6 +17,7 @@ import {
   planAwaitsApproval,
   planProblem,
   planWrite,
+  type RequirementFile,
   requestProgress,
   requestsOfPhase,
   requirementStatus,
@@ -214,6 +217,35 @@ describe("evidence plan", () => {
     assert.equal(plan.runs[0]?.added, 2);
     assert.equal(plan.runs[0]?.flagged, 1);
     assert.equal(plan.changes[0]?.kind, "PROCESS");
+  });
+
+  it("reads the files on an item's request the reader found do not cover it", () => {
+    const parsed = parsePlan({
+      control_id: CONTROL,
+      status: "APPROVED",
+      phases: [
+        {
+          phase: "DESIGN",
+          applicability: "APPLICABLE",
+          requirements: [
+            requirement({
+              id: "d1",
+              phase: "DESIGN",
+              passed_over: ["policy.pdf", 4, ""],
+            }),
+            requirement({ id: "d2", phase: "DESIGN" }),
+          ],
+        },
+      ],
+    });
+    const items = parsed?.phases.find(
+      (phase) => phase.phase === "DESIGN",
+    )?.requirements;
+    // A name that is not text is not a file name: it is left out.
+    assert.deepEqual(
+      items?.map((item) => item.passedOver),
+      [["policy.pdf"], []],
+    );
   });
 
   it("refuses what is not a plan and fills a phase the API left out", () => {
@@ -617,6 +649,66 @@ describe("master test plan review", () => {
     assert.equal(
       planProblem(403),
       "Your role cannot change this control's plan.",
+    );
+  });
+});
+
+describe("an item's file line on the control's evidence", () => {
+  const file = (over: Partial<RequirementFile>): RequirementFile => ({
+    fileId: "f-1",
+    name: "users.csv",
+    via: "REQUEST",
+    linkId: null,
+    linkedBy: null,
+    reason: "",
+    linkVersion: null,
+    readStatus: "READY",
+    readBy: "MODEL",
+    kind: null,
+    kindConfirmed: false,
+    coverage: null,
+    note: "",
+    period: "",
+    gaps: [],
+    sharedFrom: null,
+    ...over,
+  });
+
+  it("knows a file the agent is still reading", () => {
+    assert.equal(fileIsReading(file({ readStatus: "PENDING" })), true);
+    assert.equal(fileIsReading(file({ readStatus: "WORKING" })), true);
+    assert.equal(fileIsReading(file({ readStatus: "READY" })), false);
+    assert.equal(fileIsReading(file({ readStatus: "FAILED" })), false);
+  });
+
+  it("says nothing for a file on its request read by the rules alone", () => {
+    assert.equal(
+      compactFileNote(file({ readBy: "RULES", coverage: "NOT_COVERED" })),
+      "",
+    );
+  });
+
+  it("says what the model found, who linked a file, and its reading", () => {
+    // The period is with what the reader found, on request, not on the file's line.
+    assert.equal(
+      compactFileNote(file({ coverage: "PARTIAL", period: "Q3 2026" })),
+      "covers it in part",
+    );
+    assert.equal(
+      compactFileNote(file({ via: "LINK", linkedBy: "Dana" })),
+      "linked by Dana",
+    );
+    assert.equal(
+      compactFileNote(file({ via: "SHARED", sharedFrom: "SAP S/4HANA" })),
+      "shared from SAP S/4HANA",
+    );
+    assert.equal(
+      compactFileNote(file({ readStatus: "WORKING" })),
+      "being read",
+    );
+    assert.equal(
+      compactFileNote(file({ readStatus: "FAILED", coverage: "COVERED" })),
+      "could not be read",
     );
   });
 });

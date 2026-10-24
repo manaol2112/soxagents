@@ -119,6 +119,51 @@ describe("engagement profile", () => {
     assert.equal(methodologyLabel("EXTERNAL_ICFR"), "External audit of ICFR");
   });
 
+  it("gives a person several roles in one step, and refuses a role that is not one", () => {
+    const person = "33333333-3333-7333-8333-333333333333";
+    const add = (roles: string[]) =>
+      setupWrite(
+        {
+          ...ids,
+          intent: "add-member",
+          user_id: person,
+          engagement_role: roles.at(-1) ?? "",
+        },
+        { engagement_role: roles },
+      );
+    assert.deepEqual(
+      "error" in add(["PREPARER"]) ? null : add(["PREPARER"]).body,
+      {
+        user_id: person,
+        engagement_role: "PREPARER",
+      },
+    );
+    const both = add(["PREPARER", "REVIEWER", "PREPARER"]);
+    assert.deepEqual("error" in both ? null : both.body, {
+      user_id: person,
+      engagement_role: "PREPARER",
+      additional_roles: ["REVIEWER"],
+    });
+    assert.deepEqual(add([]), { error: "invalid" });
+    assert.deepEqual(add(["PREPARER", "OWNER"]), { error: "invalid" });
+    const invited = setupWrite(
+      {
+        ...ids,
+        intent: "invite-member",
+        email: "new@firm.example",
+        display_name: "",
+        engagement_role: "REVIEWER",
+      },
+      { engagement_role: ["LEAD", "REVIEWER"] },
+    );
+    assert.deepEqual("error" in invited ? null : invited.body, {
+      email: "new@firm.example",
+      display_name: "",
+      engagement_role: "LEAD",
+      additional_roles: ["REVIEWER"],
+    });
+  });
+
   it("sends the whole profile and refuses a bad one", () => {
     const profile = {
       ...ids,
@@ -156,6 +201,20 @@ describe("engagement profile", () => {
       assert.deepEqual(setupWrite({ ...profile, ...bad }), {
         error: "invalid",
       });
+    }
+    // The step's one Save carries the scope with the profile; a bad scope refuses both.
+    const withScope = setupWrite({ ...profile, scope: "  ITGCs over SAP.  " });
+    assert.ok(!("error" in withScope));
+    assert.equal(
+      "error" in withScope ? null : withScope.path,
+      `${base}/profile`,
+    );
+    assert.equal(
+      "error" in withScope ? null : withScope.body.scope,
+      "ITGCs over SAP.",
+    );
+    for (const scope of ["x".repeat(4001), "api_key: abc"]) {
+      assert.deepEqual(setupWrite({ ...profile, scope }), { error: "invalid" });
     }
     // Fields left off the form are kept as they are.
     const short = setupWrite({

@@ -188,6 +188,10 @@ def test_a_population_gets_a_proposed_test_plan_that_a_person_approves(
     assert blocked.status_code == 409
     assert "population is not validated" in blocked.json()["detail"]
     _accept_population(client, team, test["engagement_control_id"])
+    with connect(migrated.url) as connection:
+        accepted = connection.execute(
+            "SELECT status FROM pbc_requests WHERE id = %s", (request["id"],)
+        ).fetchone()
     approved = client.post(f"{base}/approve", json={"version": version})
     assert approved.status_code == 200, approved.text
     body = approved.json()
@@ -207,7 +211,13 @@ def test_a_population_gets_a_proposed_test_plan_that_a_person_approves(
     assert drafted[2] == "DRAFT"
     assert "We selected 25 items" in drafted[1]
     assert f"1. u{spare:04d}" in drafted[1]
-    assert original == ("SENT",)
+    # Rewritten 23 October 2026 (Release 1 closure): this expected the request to stay
+    # SENT. Since migration 0103 (owner, 23 October) a request is RECEIVED once every item
+    # it asked for is accepted, so accepting its population (its one item) receives it.
+    # What the assertion guards is kept: drafting the sample request leaves the request it
+    # came from exactly as it was.
+    assert accepted == ("RECEIVED",)
+    assert original == accepted
     assert client.post(f"{base}/approve", json={"version": body["version"]}).status_code == 409
     locked = client.post(
         f"{base}/samples/2/replace",

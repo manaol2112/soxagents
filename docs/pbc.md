@@ -23,6 +23,14 @@ The control link is a reference such as `control/access-review`. The control inv
 
 **The reviewer approves the agent's draft.** A request the evidence coordinator drafted for a control (from its plan, at kickoff, on a scope change, or for its samples: any request tied to a control) is approved by the person who reviews it, in one step: they read it, edit it if needed, and approve it (`POST …/pbc-requests/{id}/approve` with the version and a note). The agent is recorded as having asked (`requesting_agent_id`, the evidence coordinator) and the reviewer as the approver, so no second person is needed and nobody approves their own request. It needs project.update (owners, admins, project managers); it is refused for a request with no recipient, a kickoff draft held for planning, or a request a person wrote (never tied to a control): that one is submitted for someone else to approve. The request then waits in `APPROVAL_PENDING`, approved, until someone sends it; sending stays a separate click. The public decision endpoint is unchanged: a requester never approves there.
 
+**Approve and send (product owner, 22 October 2026).** This changes the earlier decision that sending stays a separate click (`docs/phase-plan.md`). A reviewer may now approve an agent's draft and send it in one press:
+
+- **One request:** the request's panel offers **Approve and send**. The web route makes the approve call, then the send call with that approval (`request-review-model.approveAndSend`).
+- **Many requests:** the bulk action `APPROVE_SEND` (`POST …/evidence-requests/bulk`) runs Approve's checks for each request, approves it, then sends it through the same send path (`outbound.send_request`).
+- **Separately recorded:** the approval and the send are each recorded and audited on their own.
+- **A refused send:** the request stays approved and says why ("Approved, but not sent: …"), to be sent again later.
+- **The separate path:** **Approve only**, and the bulk **Approve**, still approve without sending.
+
 **Approval and return for revision.** Someone who prepares requests without the right to approve them submits a draft instead: that asks for an approval of its exact message and moves it to `APPROVAL_PENDING`. The person who submitted it never approves it, and only someone with project.update may. Rejecting the approval (with a reason) returns the request to `DRAFT` for revision, unless another approval of it is still open or approved; the approver, time, and reason are in the audit trail (`pbc.returned_for_revision`). An approved request waits in `APPROVAL_PENDING` until someone sends it. Each request on the control register carries its latest approval (`approval_decision`, `approval_reason`, who decided) and whether the person reading may decide it (`viewer_can_decide`); `GET …/pbc-requests/{id}` reads one request whole.
 
 `PARTIALLY_RECEIVED` or `RECEIVED` records the first response time. `RECEIVED` also records the received time. `ESCALATED` is the only status whose escalation state is `ESCALATED`. `CANCELLED` requires a reason. `CLOSED` is the end of the record.
@@ -202,3 +210,5 @@ The reminder goes out in the request's original mail thread, with the request re
 ### Records
 
 Reminders are stored in `pbc_follow_ups`. A database trigger keeps the request, sequence, and due time fixed, allows only forward moves from `DUE` and `APPROVAL_PENDING`, and blocks deletes. Audit events `follow_up.due`, `follow_up.submitted`, `follow_up.sent`, `follow_up.skipped`, `follow_up.failed`, and `follow_up.cancelled` hold the sequence, status, and reason only. The scheduler records its own changes with no actor; the web app shows these as Workspace.
+
+**A request settled by acceptance (product owner, 22 Oct 2026).** A request is received when a person has accepted every item it asked for, whatever the evidence reader found: nothing more is asked of the owner, so its open reminders are cancelled as resolved, and the change is in the audit trail (`pbc_request.received`). Before, it stayed partly received while the reader had not found every item covered. Migration 0103 applies this to requests already settled that way.

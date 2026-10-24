@@ -7,7 +7,9 @@ import {
   detailsEditable,
   engagementPhase,
   hasLaunched,
+  homeListsWork,
   launchStepLabel,
+  pausedNotice,
   requestsClosedReason,
   scopeOpen,
   setupHeadAction,
@@ -98,6 +100,20 @@ describe("engagement lifecycle", () => {
     }
     assert.equal(detailsEditable("ARCHIVED"), false);
     assert.equal(detailsEditable("PAUSED"), true);
+  });
+
+  it("lists work on Home only while the engagement runs", () => {
+    assert.equal(homeListsWork("ACTIVE"), true);
+    // A draft never reaches Home (lockedBeforeLaunch); were it to, its setup is the work.
+    assert.equal(homeListsWork("DRAFT"), true);
+    for (const status of ["PAUSED", "COMPLETED", "ARCHIVED"]) {
+      assert.equal(homeListsWork(status), false, status);
+    }
+    // Paused is said on Home; completed and archived carry the shell's closed strip.
+    assert.match(pausedNotice("PAUSED") ?? "", /paused.*resumes it/);
+    for (const status of ["ACTIVE", "DRAFT", "COMPLETED", "ARCHIVED"]) {
+      assert.equal(pausedNotice(status), null, status);
+    }
   });
 
   it("explains each status and what archiving does", () => {

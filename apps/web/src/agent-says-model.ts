@@ -172,13 +172,28 @@ function withReason(says: AgentSays, reason: string): void {
 }
 
 function agentDid(activity: ActivityItem[], categories: string[]): string[] {
-  return activity
-    .filter((item) => item.by === "agent" && categories.includes(item.category))
-    .slice(0, 3)
-    .map(
-      (item) =>
-        `${item.title}${item.detail !== "" ? `: ${item.detail}` : ""}${when(item.at)}`,
-    );
+  return collapseLines(
+    activity
+      .filter(
+        (item) => item.by === "agent" && categories.includes(item.category),
+      )
+      .map(
+        (item) =>
+          `${item.title}${item.detail !== "" ? `: ${item.detail}` : ""}${when(item.at)}`,
+      ),
+  ).slice(0, 3);
+}
+
+/** The same line said several times, said once with how often: two requests drafted on
+ * one day read as one line, not two identical ones. Order is kept. */
+export function collapseLines(lines: readonly string[]): string[] {
+  const counts = new Map<string, number>();
+  for (const line of lines) {
+    counts.set(line, (counts.get(line) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([line, count]) =>
+    count === 1 ? line : `${line} (${count} times)`,
+  );
 }
 
 function planStep(input: AgentInput): AgentSays {

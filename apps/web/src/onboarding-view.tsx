@@ -365,14 +365,6 @@ export function RcmStep({
             <strong className="kpi-value">{counts.key}</strong>
             <span className="kpi-detail">Relied on for the opinion</span>
           </article>
-          <article className="kpi">
-            <p className="kpi-label">Samples to test</p>
-            <strong className="kpi-value">{counts.samples}</strong>
-            <span className="kpi-detail">
-              Across{" "}
-              {tab === undefined ? "these controls" : lowerLabel(tab.label)}
-            </span>
-          </article>
         </section>
       )}
       {editing !== null ? (
@@ -1985,11 +1977,6 @@ export function WorkpapersStep({
           title="Workpaper templates"
           titleId="templates-title"
           description="One workbook per control, with design, interim testing, and roll-forward tabs. Each kind of control has a standard workbook. Customise one and save it as your firm's, or upload the workpaper your firm uses, then preview it filled in with a real control."
-          aside={
-            onboarding.templatesConfirmed && !onboarding.started ? (
-              <span className="pill pill-dot tone-success">Confirmed</span>
-            ) : undefined
-          }
         />
         {onboarding.started && editable ? (
           <p className="templates-after-launch">
@@ -2123,40 +2110,6 @@ export function WorkpapersStep({
           current={previewControl}
           template={setup.template ?? ""}
         />
-      ) : null}
-      {/* Confirming the templates is a step before launch. */}
-      {editable && included.length > 0 && !onboarding.started ? (
-        <section className="card">
-          <div className="card-body confirm-row">
-            <div>
-              <strong>
-                {onboarding.templatesConfirmed
-                  ? "Templates confirmed"
-                  : "Happy with how testing will be documented?"}
-              </strong>
-              <p className="card-desc">
-                Changing a control's template later asks for confirmation again.
-              </p>
-            </div>
-            <form autoComplete="off" method="post" action="/workspace/setup">
-              <Identity
-                model={model}
-                onboarding={onboarding}
-                intent="confirm-templates"
-                step="workpapers"
-              />
-              <button
-                type="submit"
-                className={onboarding.templatesConfirmed ? "btn-secondary" : ""}
-              >
-                <UiIcon name="check" size={15} />
-                {onboarding.templatesConfirmed
-                  ? "Confirm again"
-                  : "Use these templates"}
-              </button>
-            </form>
-          </div>
-        </section>
       ) : null}
     </>
   );

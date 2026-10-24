@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   apiQuery,
+  bulkSummary,
   type CenterQuery,
   centerHref,
   centerWrite,
@@ -199,6 +200,85 @@ describe("the evidence command center writes", () => {
   const base = `/organizations/${ORG}/projects/${PROJECT}`;
   const fields = { organization_id: ORG, project_id: PROJECT };
   const items = [{ id: REQUEST, version: 3 }];
+
+  it("approves and sends many at once, with the note, and says what went out", () => {
+    assert.deepEqual(
+      centerWrite({
+        ...fields,
+        intent: "bulk",
+        action: "APPROVE_SEND",
+        items,
+        reason: "Checked the batch.",
+      }),
+      {
+        intent: "bulk",
+        path: `${base}/evidence-requests/bulk`,
+        body: {
+          action: "APPROVE_SEND",
+          items,
+          preview: false,
+          reason: "Checked the batch.",
+        },
+      },
+    );
+    const outcome = (ok: boolean, detail: string) => ({
+      id: detail,
+      reference: "PBC-1",
+      title: "",
+      ok,
+      detail,
+    });
+    assert.equal(
+      bulkSummary("APPROVE_SEND", {
+        done: 3,
+        refused: 2,
+        outcomes: [
+          outcome(true, "Approved and sent."),
+          outcome(false, "Approved, but not sent: Email sending is off."),
+          outcome(false, "Assign a recipient."),
+        ],
+      }),
+      "3 requests approved and sent; 1 approved but not sent; 1 could not change.",
+    );
+    assert.equal(
+      bulkSummary("APPROVE_SEND", { done: 1, refused: 0, outcomes: [] }),
+      "1 request approved and sent.",
+    );
+    assert.equal(
+      bulkSummary("ASSIGN", { done: 2, refused: 1, outcomes: [] }),
+      "2 requests updated; 1 could not change.",
+    );
+  });
+
+  it("adds a new contact from a request's owner, checked as the request's panel does", () => {
+    assert.deepEqual(
+      centerWrite({
+        ...fields,
+        intent: "contact",
+        name: " Dana Lee ",
+        email: " Dana.Lee@Client.example ",
+        role: "IT manager",
+      }),
+      {
+        intent: "contact",
+        path: `${base}/engagement-contacts`,
+        body: {
+          name: "Dana Lee",
+          email: "dana.lee@client.example",
+          role: "IT manager",
+        },
+      },
+    );
+    for (const bad of [
+      { name: "", email: "dana@client.example" },
+      { name: "Dana", email: "not-an-address" },
+      { name: "Dana", email: "dana@client.example", role: "password: x" },
+    ]) {
+      assert.deepEqual(centerWrite({ ...fields, intent: "contact", ...bad }), {
+        error: "invalid",
+      });
+    }
+  });
 
   it("changes many requests at once, checked first", () => {
     assert.deepEqual(

@@ -1,4 +1,4 @@
-import type { AgentSays as Says } from "./agent-says-model";
+import { collapseLines, type AgentSays as Says } from "./agent-says-model";
 import { UiIcon } from "./ui-icon";
 
 /**
@@ -82,7 +82,7 @@ export function AgentSays({
             <dt>Did</dt>
             <dd>
               <ul>
-                {says.did.map((line) => (
+                {collapseLines(says.did).map((line) => (
                   <li key={line}>{line}</li>
                 ))}
               </ul>

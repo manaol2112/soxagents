@@ -173,6 +173,8 @@ class InviteBody(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     display_name: str = Field(default="", max_length=120)
     engagement_role: EngagementRole
+    # Further roles, only while reviewer independence is off (onboarding.TeamAdd).
+    additional_roles: list[EngagementRole] = Field(default_factory=list, max_length=2)
 
 
 class DomainBody(BaseModel):

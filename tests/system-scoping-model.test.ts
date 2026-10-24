@@ -7,7 +7,9 @@ import {
   applySuggestion,
   basisLabel,
   type Candidate,
+  candidateAreas,
   candidateSections,
+  chooseAll,
   cuecRows,
   filterOffers,
   initialSelection,
@@ -777,6 +779,25 @@ describe("the system wizard", () => {
     assert.deepEqual(start, { A: true, B: false, C: false, D: true });
   });
 
+  it("starts a system just added with only what was decided, not another system's scope", () => {
+    // Its copies of the standards came in scope with another system's: not a choice.
+    const added = initialSelection(
+      [
+        candidate("ITGC-AC-01", { inScope: true }),
+        candidate("ITGC-AC-02", { inScope: true, status: "RECOMMENDED" }),
+        candidate("ITGC-AC-03", { inScope: false }),
+        candidate("ITGC-AC-04", { inScope: true, decision: "SELECTED" }),
+      ],
+      true,
+    );
+    assert.deepEqual(added, {
+      "ITGC-AC-01": false,
+      "ITGC-AC-02": false,
+      "ITGC-AC-03": false,
+      "ITGC-AC-04": true,
+    });
+  });
+
   it("asks why a recommended control is left out", () => {
     const items = [
       candidate("A", { status: "RECOMMENDED" }),
@@ -900,6 +921,51 @@ describe("a system scoped from the library and the client's controls", () => {
       "On AD",
     );
     assert.deepEqual(candidateSections([], "AD"), []);
+  });
+
+  it("counts each area's controls and how many are chosen, a control once", () => {
+    const at = (ref: string, domain: string, origin: Candidate["origin"]) => ({
+      ...item(ref, origin),
+      domain,
+    });
+    const candidates = [
+      at("ITGC-CM-01", "CHANGE", "LIBRARY"),
+      at("ITGC-AC-01", "ACCESS", "LIBRARY"),
+      at("ITGC-AC-02", "ACCESS", "LIBRARY"),
+      // The same control from the client's RCM counts once.
+      at("ITGC-AC-02", "ACCESS", "RCM"),
+      at("X-1", "OTHER", "SYSTEM"),
+    ];
+    assert.deepEqual(
+      candidateAreas(candidates, { "ITGC-AC-02": true, "ITGC-CM-01": false }, [
+        "ACCESS",
+        "CHANGE",
+      ]),
+      [
+        { domain: "ACCESS", total: 2, chosen: 1 },
+        { domain: "CHANGE", total: 1, chosen: 0 },
+        // An area the order does not name still shows, last.
+        { domain: "OTHER", total: 1, chosen: 0 },
+      ],
+    );
+    assert.deepEqual(candidateAreas([], null, ["ACCESS"]), []);
+  });
+
+  it("chooses or clears a whole area, leaving the rest as it was", () => {
+    const area = [item("ITGC-AC-01", "LIBRARY"), item("ITGC-AC-02", "LIBRARY")];
+    assert.deepEqual(chooseAll({ "ITGC-CM-01": true }, area, true), {
+      "ITGC-CM-01": true,
+      "ITGC-AC-01": true,
+      "ITGC-AC-02": true,
+    });
+    assert.deepEqual(
+      chooseAll({ "ITGC-AC-01": true, "ITGC-CM-01": true }, area, false),
+      { "ITGC-AC-01": false, "ITGC-AC-02": false, "ITGC-CM-01": true },
+    );
+    assert.deepEqual(chooseAll(null, area, true), {
+      "ITGC-AC-01": true,
+      "ITGC-AC-02": true,
+    });
   });
 
   it("suggests the system's code in references as the API does", () => {

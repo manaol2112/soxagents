@@ -167,14 +167,46 @@ def test_the_next_step_names_who_a_control_waits_on() -> None:
             "TEAM",
             False,
         ),
+        # A population only once the interim is released (22 Oct 2026: it was asked for
+        # while design was still open); before then, design is the work in hand.
         (
-            _row(requests=[_request("EVIDENCE", "RECEIVED")]),
+            _row(released_phases=["INTERIM"], requests=[_request("EVIDENCE", "RECEIVED")]),
             "Confirm the population",
             "TEAM",
             False,
         ),
         (
-            _row(nature="AUTOMATED", requests=[_request("EVIDENCE", "RECEIVED")]),
+            _row(requests=[_request("EVIDENCE", "RECEIVED")]),
+            "Prepare the design workpaper",
+            "TEAM",
+            False,
+        ),
+        (
+            _row(
+                design_step="Review the design evidence",
+                design_by="PREPARER",
+                requests=[_request("EVIDENCE", "RECEIVED")],
+            ),
+            "Review the design evidence",
+            "TEAM",
+            False,
+        ),
+        (
+            _row(
+                design_step="Drafting the design workpaper",
+                design_by="AGENT",
+                requests=[_request("EVIDENCE", "RECEIVED")],
+            ),
+            "Drafting the design workpaper",
+            "AGENT",
+            False,
+        ),
+        (
+            _row(
+                nature="AUTOMATED",
+                released_phases=["INTERIM"],
+                requests=[_request("EVIDENCE", "RECEIVED")],
+            ),
             "Test the evidence",
             "AGENT",
             False,
@@ -247,8 +279,15 @@ def test_every_control_has_one_stage_from_its_records() -> None:
         "EVIDENCE_RECEIVED"
     )
     received = [_request("EVIDENCE", "RECEIVED")]
-    assert stage(_row(requests=received), "RECEIVED") == "EVIDENCE_RECEIVED"
-    assert stage(_row(nature="AUTOMATED", requests=received), "RECEIVED") == ("READY_FOR_TESTING")
+    # The population to confirm, once the interim is released (22 Oct 2026); before then
+    # the design workpaper is the work in hand, a result to confirm.
+    assert stage(_row(requests=received, released_phases=["INTERIM"]), "RECEIVED") == (
+        "EVIDENCE_RECEIVED"
+    )
+    assert stage(_row(requests=received), "RECEIVED") == "RESULTS_TO_CONFIRM"
+    assert stage(
+        _row(nature="AUTOMATED", requests=received, released_phases=["INTERIM"]), "RECEIVED"
+    ) == ("READY_FOR_TESTING")
     assert stage(_row(test_status="PROPOSED", requests=received), "RECEIVED") == (
         "EVIDENCE_RECEIVED"
     )

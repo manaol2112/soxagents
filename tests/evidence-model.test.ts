@@ -18,6 +18,7 @@ import {
   parseRegister,
   planUploads,
   type RegisterFile,
+  systemsAnswer,
   uploadBlocked,
   uploadTarget,
 } from "../apps/web/src/evidence-model.ts";
@@ -284,6 +285,73 @@ describe("evidence register model", () => {
       ),
       { error: "invalid" },
     );
+    // The systems a person says a file applies to: all, or the ones ticked.
+    assert.equal(systemsAnswer(true, [control]), "ALL");
+    assert.equal(systemsAnswer(false, []), null);
+    assert.equal(
+      systemsAnswer(false, [control, file, control]),
+      `${control},${file}`,
+    );
+    const onSystems = uploadTarget(
+      new URLSearchParams({
+        organization: org,
+        project,
+        batch,
+        name: "a.pdf",
+        request: file,
+        applications: `${control},${file}`,
+      }),
+    );
+    assert.ok(!("error" in onSystems));
+    assert.match(onSystems.query, /applications=/);
+    for (const extra of [
+      { applications: "ALL" },
+      { request: file, applications: "x" },
+    ]) {
+      assert.deepEqual(
+        uploadTarget(
+          new URLSearchParams({
+            organization: org,
+            project,
+            batch,
+            name: "a",
+            ...extra,
+          }),
+        ),
+        { error: "invalid" },
+      );
+    }
+    // A file added on one item of the request carries the item, for that item only.
+    const onItem = uploadTarget(
+      new URLSearchParams({
+        organization: org,
+        project,
+        batch,
+        name: "a.csv",
+        request: file,
+        requirement: control,
+      }),
+    );
+    assert.ok(!("error" in onItem));
+    assert.match(onItem.query, new RegExp(`requirement_id=${control}`));
+    // An item only with its request, and only an id.
+    for (const extra of [
+      { requirement: control },
+      { request: file, requirement: "x" },
+    ]) {
+      assert.deepEqual(
+        uploadTarget(
+          new URLSearchParams({
+            organization: org,
+            project,
+            batch,
+            name: "a.csv",
+            ...extra,
+          }),
+        ),
+        { error: "invalid" },
+      );
+    }
     const base = {
       organization_id: org,
       project_id: project,
@@ -353,6 +421,29 @@ describe("evidence register model", () => {
     assert.deepEqual(
       byApplicationOf([parsed()], [ad]).map((group) => group.label),
       ["Active Directory"],
+    );
+    // Several a person named: the file sits under each of them, and says so.
+    const sap = {
+      id: "cccccccc-cccc-7ccc-8ccc-cccccccccccc",
+      name: "SAP S/4HANA",
+    };
+    const some = parsed({
+      id: "11111111-0000-7000-8000-000000000004",
+      application_scope: "SOME",
+      applications: [ad, sap, { id: 5 }],
+    });
+    assert.deepEqual(some.namedApplications, [ad, sap]);
+    assert.equal(applicationLabel(some), "Active Directory, SAP S/4HANA");
+    assert.deepEqual(
+      byApplicationOf([some], [ad, db, sap]).map((group) => [
+        group.label,
+        group.files.length,
+      ]),
+      [
+        ["Active Directory", 1],
+        ["Oracle Database", 0],
+        ["SAP S/4HANA", 1],
+      ],
     );
     const base = { organization_id: org, project_id: project, file_id: file };
     assert.deepEqual(applicationWrite({ ...base, application: ad.id }), {

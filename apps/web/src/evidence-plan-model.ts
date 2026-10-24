@@ -250,7 +250,10 @@ export const POPULATION_LABELS: Record<string, string> = {
 export type RequirementFile = {
   fileId: string;
   name: string;
-  via: "REQUEST" | "LINK";
+  /** SHARED: added on the same item of another system, and applying to this one too. */
+  via: "REQUEST" | "LINK" | "SHARED";
+  /** SHARED: the system it was added on. */
+  sharedFrom: string | null;
   linkId: string | null;
   linkedBy: string | null;
   reason: string;
@@ -265,6 +268,44 @@ export type RequirementFile = {
   period: string;
   gaps: string[];
 };
+
+/**
+ * What an item's file line says on the control's evidence, only where it tells a person
+ * something: a file still being read or not readable, a file a person linked or shared
+ * from another system, and what the model found (a reading by the rules alone matches a
+ * file's kind, not its detail, so it is left out). The period it shows is with what the
+ * reader found, on request. Empty when there is nothing to say.
+ */
+/** Whether the agent is still reading the file. */
+export function fileIsReading(
+  file: Pick<RequirementFile, "readStatus">,
+): boolean {
+  return file.readStatus === "PENDING" || file.readStatus === "WORKING";
+}
+
+export function compactFileNote(file: RequirementFile): string {
+  const found: Record<NonNullable<RequirementFile["coverage"]>, string> = {
+    COVERED: "covers it",
+    PARTIAL: "covers it in part",
+    NOT_COVERED: "does not cover it",
+  };
+  return [
+    file.via === "LINK"
+      ? `linked by ${file.linkedBy ?? "a person"}`
+      : file.via === "SHARED"
+        ? `shared from ${file.sharedFrom ?? "another system"}`
+        : "",
+    file.readStatus === "PENDING" || file.readStatus === "WORKING"
+      ? "being read"
+      : file.readStatus === "FAILED"
+        ? "could not be read"
+        : file.coverage !== null && file.readBy !== "RULES"
+          ? found[file.coverage]
+          : "",
+  ]
+    .filter((part) => part !== "")
+    .join(" · ");
+}
 
 /** The evidence reader's proposal for a requirement. A proposal only: a person accepts. */
 export type Assessment = {
@@ -310,6 +351,8 @@ export type PlanRequirement = {
   coverageNote: string;
   version: number;
   files: RequirementFile[];
+  /** Files on its request the reader found do not cover it: not its evidence. */
+  passedOver: string[];
   assessment: Assessment;
 };
 
@@ -503,6 +546,9 @@ function parseRequirement(item: Raw): PlanRequirement {
     version: num(item.version),
     files: records(item.files).map(parseRequirementFile),
     assessment: parseAssessment(item.assessment),
+    passedOver: Array.isArray(item.passed_over)
+      ? item.passed_over.map((name) => str(name)).filter((name) => name !== "")
+      : [],
   };
 }
 
@@ -511,7 +557,13 @@ function parseRequirementFile(item: Raw): RequirementFile {
   return {
     fileId: str(item.file_id),
     name: str(item.name),
-    via: item.via === "LINK" ? "LINK" : "REQUEST",
+    via:
+      item.via === "LINK"
+        ? "LINK"
+        : item.via === "SHARED"
+          ? "SHARED"
+          : "REQUEST",
+    sharedFrom: strOrNull(item.shared_from),
     linkId: strOrNull(item.link_id),
     linkedBy: strOrNull(item.linked_by),
     reason: str(item.reason),

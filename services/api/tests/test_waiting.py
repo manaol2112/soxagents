@@ -59,8 +59,13 @@ def test_open_test_results_and_late_evidence_wait_on_the_team(migrated: Database
     results = [item for item in waiting if item["kind"] == "results"]
     # The inbox is the one queue's list (M2a; the console's own derivations retired in
     # M2d): the control's step as the register words it, the control named by its ref.
+    # Rewritten 23 October 2026 (Release 1 closure): the item now also carries its queue id
+    # and the control's label as every page names it (queue.QueueItem); still compared
+    # exactly, field by field.
     assert results == [
         {
+            "id": f"control-step:{plan['engagement_control_id']}",
+            "control_label": "ITGC-AC-01 · SAP ERP",
             "kind": "results",
             "title": "Decide the open test results",
             "detail": "",

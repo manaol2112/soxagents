@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import {
   analysisFor,
   analysisInProgress,
@@ -30,7 +30,6 @@ import {
   PRIORITIES,
   paginate,
   TASK_STATUSES,
-  upcomingDeadlines,
 } from "./directory";
 import {
   createEngagementHref,
@@ -44,12 +43,14 @@ import {
   closedNotice,
   deleteConsequence,
   detailsEditable,
+  homeListsWork,
   requestsClosedReason,
   statusActions,
   statusMeaning,
 } from "./engagement-lifecycle";
 import { EMPTY_ENGAGEMENT, type EngagementState } from "./engagement-model";
 import {
+  AgentWorkCard,
   ControlsMain,
   DeficienciesMain,
   EngagementDashboard,
@@ -87,18 +88,13 @@ import type { LibraryPageState } from "./load-library";
 import type { PlanningPageState } from "./load-planning";
 import { LoadingScreen } from "./loading-screen";
 import { NavScroll } from "./nav-scroll";
-import {
-  EMPTY_SETUP,
-  type Onboarding,
-  type SetupState,
-  uniqueKeys,
-} from "./onboarding-model";
+import { EMPTY_SETUP, type SetupState, uniqueKeys } from "./onboarding-model";
 import { PlanMissingButton } from "./plan-missing";
 import { PlanningPage } from "./planning-view";
 import type { RecipientLink } from "./portal-model";
 import { RecordDialog } from "./record-dialog";
 import { SetupForm } from "./setup-form";
-import { SetupCallout, SetupMain, showsSetupCallout } from "./setup-view";
+import { SetupMain } from "./setup-view";
 import {
   type AgentDetail,
   type AgentNotice,
@@ -114,6 +110,7 @@ import {
   REPORT_TAB_LABELS,
   REPORT_TABS,
   roleLabel,
+  SETTINGS_FIRM_FROM,
   SETTINGS_TAB_LABELS,
   SETTINGS_TABS,
   type SectionId,
@@ -133,7 +130,6 @@ import {
   actionLabel,
   approvalRequestId,
   approvalState,
-  auditPhase,
   canDecide,
   canFollowUpNow,
   canRequestEvidence,
@@ -148,8 +144,6 @@ import {
   type EvidenceRequest,
   evidenceFileFor,
   type InboundReply,
-  isLateEvidence,
-  isOutstandingEvidence,
   latestOutbound,
   type MailboxMode,
   pendingApprovals,
@@ -214,7 +208,8 @@ const NAV_GROUPS: ReadonlyArray<{ label: string; items: NavItem[] }> = [
       {
         id: "settings",
         label: "Settings",
-        detail: "Engagement, library, AI workforce and engagements",
+        detail:
+          "Engagement setup, tasks, library, AI workforce and engagements",
         icon: "layers",
       },
     ],
@@ -481,7 +476,14 @@ function SidebarControls({
 
 function WorkspaceControls({ model }: { model: Ready }) {
   const sectionLabel =
-    NAV.find((item) => item.id === model.section)?.label ?? "Home";
+    model.section === "console"
+      ? "Agent console"
+      : (NAV.find((item) => item.id === model.section)?.label ?? "Home");
+  // The agent console is out of the menu (Milestone 2c) but always one click away, to
+  // ask about anything in the engagement, once it has launched.
+  const canAsk =
+    model.selectedProject !== null &&
+    !lockedBeforeLaunch("console", model.selectedProject);
   return (
     <>
       <nav aria-label="Breadcrumb">
@@ -520,6 +522,17 @@ function WorkspaceControls({ model }: { model: Ready }) {
         </ol>
       </nav>
       <div className="topbar-actions">
+        {canAsk ? (
+          <a
+            className={`btn btn-secondary btn-sm topbar-ask${model.section === "console" ? " is-current" : ""}`}
+            href={sectionHref(model, "console")}
+            aria-current={model.section === "console" ? "page" : undefined}
+            aria-label="Ask the agent about this engagement"
+          >
+            <UiIcon name="sparkles" size={14} />
+            <span className="topbar-ask-label">Ask the agent</span>
+          </a>
+        ) : null}
         <details className="menu">
           <summary className="icon-button" aria-label="Notifications">
             <UiIcon name="bell" size={17} />
@@ -699,7 +712,13 @@ function WorkspaceMain({
   }
   if (model.section === "agents") {
     return (
-      <AgentsMain model={model} workflow={workflow} creating={creatingAgent} />
+      <AgentsMain
+        model={model}
+        workflow={workflow}
+        engagement={engagement}
+        now={now}
+        creating={creatingAgent}
+      />
     );
   }
   if (model.section === "library") {
@@ -777,8 +796,9 @@ function WorkspaceMain({
         tab={tab}
         tabs={SETTINGS_TABS}
         labels={SETTINGS_TAB_LABELS}
+        dividerBefore={SETTINGS_FIRM_FROM}
         title="Settings"
-        description="The engagement's setup, the standard library, the AI workforce and the engagements."
+        description="Set up this engagement and its tasks, and manage your firm's standard library, AI workforce and engagements."
       >
         {page === "library" ? (
           <LibraryPage model={model} library={library} />
@@ -786,6 +806,8 @@ function WorkspaceMain({
           <AgentsMain
             model={model}
             workflow={workflow}
+            engagement={engagement}
+            now={now}
             creating={creatingAgent}
           />
         ) : page === "tasks" ? (
@@ -841,27 +863,41 @@ function WorkspaceMain({
         }}
       />
     ) : null;
-  if (engagement.dashboard?.started === true) {
-    return (
-      <EngagementDashboard
-        model={model}
-        engagement={engagement}
-        home={home}
-        attention={
-          home === null ? (
-            <AttentionCard model={model} workflow={workflow} now={now} />
-          ) : null
-        }
-      />
-    );
+  if (model.selectedProject === null) {
+    return <FirstEngagement model={model} />;
   }
+  // One Home for every launched engagement, running, paused or closed (docs/home-plan.md,
+  // D4). A draft never reaches it: `lockedBeforeLaunch` sends it to setup first.
+  const workFilter = engagement.filters.workFilter ?? null;
   return (
-    <CommandCenter
+    <EngagementDashboard
       model={model}
-      workflow={workflow}
-      now={now}
-      onboarding={setup.onboarding}
+      engagement={engagement}
       home={home}
+      attention={
+        home === null ? (
+          <AttentionCard model={model} workflow={workflow} now={now} />
+        ) : null
+      }
+      next={engagement.nextSteps ?? null}
+      queue={engagement.work ?? null}
+      allWork={workFilter !== null && workFilter !== ""}
+      workHref={(filter) => {
+        const params = new URLSearchParams();
+        params.set("organization", model.organization.id);
+        params.set("project", model.selectedProject?.id ?? "");
+        params.set("section", "overview");
+        if (filter !== "") {
+          params.set("filter", filter);
+        }
+        return `/?${params.toString()}${filter === "" ? "" : "#decision-queue"}`;
+      }}
+      activity={
+        <RecentActivity
+          model={model}
+          open={!homeListsWork(model.selectedProject.status)}
+        />
+      }
     />
   );
 }
@@ -970,144 +1006,21 @@ export function sectionHref(
   });
 }
 
-function nextStep(
-  model: Ready,
-  queueLength: number,
-  outstandingEvidence: number,
-): { lede: string; action: string; href: string } {
-  const project = model.selectedProject;
-  if (project === null) {
-    return {
-      lede: "Start by creating an engagement. Its scope, work, evidence, and decisions all live in one place.",
-      action: "Create an engagement",
-      href: createEngagementHref(model),
-    };
-  }
-  if (project.status === "DRAFT") {
-    return {
-      lede: "This engagement is still being set up. Finish setup to start the work.",
-      action: "Finish scoping",
-      href: sectionHref(model, "projects"),
-    };
-  }
-  if (queueLength > 0) {
-    return {
-      lede: `${queueLength} item${queueLength === 1 ? " is" : "s are"} waiting on a person. Agents keep working on everything else.`,
-      action: "Work the queue",
-      href: "#decision-queue",
-    };
-  }
-  if (model.tasks.length === 0) {
-    return {
-      lede: "Nothing is planned yet. Add the first task and assign it to a person or an agent.",
-      action: "Plan the work",
-      href: sectionHref(model, "tasks"),
-    };
-  }
-  if (outstandingEvidence === 0) {
-    return {
-      lede: "No action is currently required. Request evidence for each control to progress fieldwork.",
-      action: "Request evidence",
-      href: sectionHref(model, "evidence"),
-    };
-  }
-  return {
-    lede: "You're all caught up. Nothing is waiting on you.",
-    action: "Open the work",
-    href: sectionHref(model, "tasks"),
-  };
-}
-
-function CommandCenter({
-  model,
-  workflow,
-  now,
-  onboarding,
-  home,
-}: {
-  model: Ready;
-  workflow: WorkflowState;
-  now: number;
-  onboarding: Onboarding | null;
-  home: ReactNode;
-}) {
-  const project = model.selectedProject;
-  const evidence = workflow.evidence ?? [];
-  const approvals = workflow.approvals ?? [];
-  // The API's inbox is the engagement's one queue (queue.py): no list is derived here.
-  const queue = workflow.inbox?.waiting ?? [];
-  const waiting = pendingApprovals(approvals, now).length;
-  const outstanding = evidence.filter(isOutstandingEvidence).length;
-  const late = evidence.filter((item) => isLateEvidence(item, now)).length;
-  const open = model.tasks.filter(
-    (task) => task.status !== "SUCCEEDED" && task.status !== "CANCELLED",
-  ).length;
-  const blocked = model.tasks.filter(
-    (task) => task.status === "BLOCKED",
-  ).length;
-  const step = nextStep(model, queue.length, outstanding);
+/** Home before any engagement exists: the one thing to do is create one. */
+function FirstEngagement({ model }: { model: Ready }) {
   return (
     <div className="page">
       <PageHeader
         context="Home"
-        title={project?.name ?? model.organization.name}
-        badge={
-          project === null ? undefined : <StatusPill status={project.status} />
-        }
-        description={step.lede}
+        title={model.organization.name}
+        description="Start by creating an engagement. Its scope, work, evidence, and decisions all live in one place."
         actions={
-          <a className="btn" href={step.href}>
-            {step.action}
+          <a className="btn" href={createEngagementHref(model)}>
+            Create an engagement
             <UiIcon name="arrow" size={15} />
           </a>
         }
       />
-      {project === null ? null : (
-        <>
-          {home}
-          {onboarding !== null && showsSetupCallout(onboarding) ? (
-            <SetupCallout model={model} onboarding={onboarding} />
-          ) : null}
-          <section className="kpis" aria-label="Engagement metrics">
-            <Metric
-              icon="shield"
-              label="Waiting on you"
-              value={queue.length}
-              detail={queue.length === 0 ? "Queue is clear" : "Need a person"}
-              tone={queue.length > 0 ? "risk" : "positive"}
-            />
-            <Metric
-              icon="activity"
-              label="Open work"
-              value={open}
-              detail={blocked === 0 ? "None blocked" : `${blocked} blocked`}
-              tone={blocked > 0 ? "risk" : "default"}
-            />
-            <Metric
-              icon="inbox"
-              label="Evidence outstanding"
-              value={workflow.evidence === null ? null : outstanding}
-              detail={late === 0 ? "Nothing overdue" : `${late} overdue`}
-              tone={late > 0 ? "risk" : "default"}
-            />
-            <Metric
-              icon="check"
-              label="Approvals waiting"
-              value={workflow.approvals === null ? null : waiting}
-              detail={waiting === 0 ? "No decisions due" : "Decide to unblock"}
-            />
-          </section>
-          <Lifecycle model={model} phase={auditPhase(model.tasks, evidence)} />
-          <div className="layout-main">
-            <InboxQueue model={model} items={queue} />
-            <ControlLoop model={model} workflow={workflow} waiting={waiting} />
-          </div>
-          <div className="layout-two">
-            <UpcomingCard model={model} />
-            <ActivityCard model={model} />
-          </div>
-        </>
-      )}
     </div>
   );
 }
@@ -1273,15 +1186,8 @@ function InboxQueue({ model, items }: { model: Ready; items: WaitingItem[] }) {
   );
 }
 
-function ControlLoop({
-  model,
-  workflow,
-  waiting,
-}: {
-  model: Ready;
-  workflow: WorkflowState;
-  waiting: number;
-}) {
+/** How the agents are governed, beside the agents it describes (docs/home-plan.md, D5). */
+function ControlLoop({ waiting }: { waiting: number }) {
   const steps: ReadonlyArray<[string, string]> = [
     ["Agent proposes", "An agent drafts work or asks to take an action."],
     ["Firm rules apply", "Actions your firm has not allowed are refused."],
@@ -1294,15 +1200,11 @@ function ControlLoop({
       <CardHeader
         title="Agent controls"
         titleId="loop-title"
-        description={
-          workflow.activeAgents === null
-            ? "AI workforce"
-            : `${workflow.activeAgents} active agent${workflow.activeAgents === 1 ? "" : "s"}`
-        }
+        description="How every agent action is governed, from proposal to the audit trail."
         aside={<UiIcon name="shield" size={16} />}
       />
       <div className="card-body">
-        <ol className="steps">
+        <ol className="loop-steps">
           {steps.map(([title, detail], index) => (
             <li
               key={title}
@@ -1321,147 +1223,30 @@ function ControlLoop({
           ))}
         </ol>
       </div>
-      <div className="card-footer">
-        <a className="text-link" href={sectionHref(model, "agents")}>
-          Manage the workforce
-        </a>
-      </div>
     </section>
   );
 }
 
-function Lifecycle({ model, phase }: { model: Ready; phase: number }) {
-  const phases: ReadonlyArray<{
-    title: string;
-    detail: string;
-    section: SectionId | null;
-  }> = [
-    { title: "Scope", detail: "Define the engagement", section: "projects" },
-    { title: "Evidence", detail: "Request and collect", section: "evidence" },
-    { title: "Test", detail: "Run control work", section: "tasks" },
-    { title: "Review", detail: "Approve and resolve", section: "approvals" },
-    { title: "Report", detail: "Close and sign off", section: null },
-  ];
-  return (
-    <section className="card" aria-labelledby="lifecycle-title">
-      <CardHeader
-        title="Audit lifecycle"
-        titleId="lifecycle-title"
-        aside={
-          <span className="num">
-            Phase {phase + 1} of {phases.length}
-          </span>
-        }
-      />
-      <ol className="lifecycle">
-        {phases.map((item, index) => {
-          const body = (
-            <>
-              <span className="phase-bar" aria-hidden="true" />
-              <span className="phase-copy">
-                <span>
-                  {index < phase
-                    ? "Complete"
-                    : index === phase
-                      ? "In progress"
-                      : `Step ${index + 1}`}
-                </span>
-                <strong>{item.title}</strong>
-                <small>{item.detail}</small>
-              </span>
-            </>
-          );
-          return (
-            <li
-              key={item.title}
-              className={
-                index < phase
-                  ? "phase-complete"
-                  : index === phase
-                    ? "phase-current"
-                    : undefined
-              }
-              aria-current={index === phase ? "step" : undefined}
-            >
-              {item.section === null ? (
-                <span className="phase-link">{body}</span>
-              ) : (
-                <a
-                  className="phase-link"
-                  href={sectionHref(model, item.section)}
-                >
-                  {body}
-                </a>
-              )}
-            </li>
-          );
-        })}
-      </ol>
-    </section>
-  );
-}
-
-function UpcomingCard({ model }: { model: Ready }) {
-  const deadlines = upcomingDeadlines(model.tasks);
-  return (
-    <section className="card" aria-labelledby="upcoming-title">
-      <CardHeader
-        title="Coming up"
-        titleId="upcoming-title"
-        description="Open work in deadline order"
-        aside={<UiIcon name="clock" size={16} />}
-      />
-      {deadlines.length === 0 ? (
-        <EmptyState
-          icon="clock"
-          title="No open deadlines"
-          detail="Work with a deadline appears here in date order."
-        />
-      ) : (
-        <ul className="rows">
-          {deadlines.map((task) => (
-            <li key={task.id}>
-              <a
-                href={directoryHref({
-                  section: "tasks",
-                  organizationId: model.organization.id,
-                  projectId: model.selectedProject?.id ?? null,
-                  taskId: task.id,
-                })}
-              >
-                {task.title}
-              </a>
-              <time dateTime={task.deadline ?? undefined}>
-                {task.deadline === null ? "" : formatDate(task.deadline)}
-              </time>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-function ActivityCard({ model }: { model: Ready }) {
+/** The engagement's recent activity, from the audit trail: folded at the foot of Home,
+ * and open when Home lists no work (paused or closed), where it is the main content. */
+function RecentActivity({ model, open }: { model: Ready; open: boolean }) {
   const activity = model.projectDetail?.activity ?? [];
+  if (activity.length === 0) {
+    return null;
+  }
   return (
-    <section className="card" aria-labelledby="activity-title">
-      <CardHeader
-        title="Recent activity"
-        titleId="activity-title"
-        description="From the audit trail"
-        aside={<UiIcon name="activity" size={16} />}
-      />
-      {activity.length === 0 ? (
-        <EmptyState
-          icon="activity"
-          title="No activity yet"
-          detail="Every change to this engagement is recorded here."
-        />
-      ) : (
-        <ActivityRows activity={activity.slice(0, 6)} />
-      )}
-    </section>
+    <details className="card home-card-fold" open={open}>
+      <summary className="card-header">
+        <span>
+          <strong>Recent activity</strong>
+          <small className="card-desc">
+            The latest changes, from the audit trail.
+          </small>
+        </span>
+        <UiIcon name="chevron" size={14} />
+      </summary>
+      <ActivityRows activity={activity.slice(0, 6)} />
+    </details>
   );
 }
 
@@ -1632,6 +1417,7 @@ function Destination({
   labels,
   title,
   description,
+  dividerBefore,
   children,
 }: {
   model: Ready;
@@ -1641,33 +1427,43 @@ function Destination({
   labels: Record<string, string>;
   title: string;
   description: string;
+  /** A tab that starts a second group (Settings: the firm's, after this engagement's). */
+  dividerBefore?: string;
   children: ReactNode;
 }) {
   const current = tab ?? tabs[0];
   return (
     <div className="destination">
       <div className="destination-head">
-        <p className="page-context">{model.selectedProject?.name ?? ""}</p>
+        {model.selectedProject !== null ? (
+          <p className="page-context">{model.selectedProject.name}</p>
+        ) : null}
         <h1 className="destination-title">{title}</h1>
         <p className="page-desc">{description}</p>
         <nav className="tv-tabs" aria-label={`${title} views`}>
           {tabs.map((item) => (
-            <a
-              key={item}
-              href={destinationHref(
-                section,
-                item,
-                model.organization.id,
-                model.selectedProject?.id ?? null,
-              )}
-              aria-current={item === current ? "page" : undefined}
-            >
-              {labels[item] ?? item}
-            </a>
+            <Fragment key={item}>
+              {item === dividerBefore ? (
+                <span className="tv-tabs-divider" aria-hidden="true" />
+              ) : null}
+              <a
+                href={destinationHref(
+                  section,
+                  item,
+                  model.organization.id,
+                  model.selectedProject?.id ?? null,
+                )}
+                aria-current={item === current ? "page" : undefined}
+              >
+                {labels[item] ?? item}
+              </a>
+            </Fragment>
           ))}
         </nav>
       </div>
-      {children}
+      {/* The tab names the page: the page inside keeps its description and actions, and
+          its own title is left to assistive technology (planning.css). */}
+      <div className="destination-body">{children}</div>
     </div>
   );
 }
@@ -3721,10 +3517,14 @@ function agentHref(model: Ready, agentId: string): string {
 function AgentsMain({
   model,
   workflow,
+  engagement,
+  now,
   creating,
 }: {
   model: Ready;
   workflow: WorkflowState;
+  engagement: EngagementState;
+  now: number;
   creating: boolean;
 }) {
   if (creating && model.canManageAgents) {
@@ -3735,15 +3535,26 @@ function AgentsMain({
       <AgentPage model={model} workflow={workflow} detail={model.agentDetail} />
     );
   }
-  return <AgentListPage model={model} workflow={workflow} />;
+  return (
+    <AgentListPage
+      model={model}
+      workflow={workflow}
+      engagement={engagement}
+      now={now}
+    />
+  );
 }
 
 function AgentListPage({
   model,
   workflow,
+  engagement,
+  now,
 }: {
   model: Ready;
   workflow: WorkflowState;
+  engagement: EngagementState;
+  now: number;
 }) {
   const rows = agentRows(model, workflow);
   const standard = rows.filter((row) => row.source === "standard");
@@ -3851,6 +3662,21 @@ function AgentListPage({
           <AgentTable model={model} rows={custom} showTeam={false} />
         )}
       </section>
+      <div className="layout-two">
+        <ControlLoop
+          waiting={
+            workflow.approvals === null
+              ? 0
+              : pendingApprovals(workflow.approvals, now).length
+          }
+        />
+        {project !== null && engagement.dashboard !== null ? (
+          <AgentWorkCard
+            work={engagement.dashboard.work}
+            projectName={project.name}
+          />
+        ) : null}
+      </div>
       <EvidenceReadingCard
         settings={workflow.evidenceSettings}
         organizationId={model.organization.id}

@@ -416,11 +416,13 @@ button.cite-open:hover {
 
 .cx-phase-body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
 }
 
 .cx-step {
   display: grid;
+  min-width: 0;
   gap: 0.75rem;
   padding: 0.875rem 1rem 1rem;
   background: var(--cx-surface);

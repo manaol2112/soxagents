@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode, useRef, useState } from "react";
-
+import { OptionalMark, RequiredMark } from "./field-marks";
 import { periodStartFor } from "./onboarding-model";
 
 /** Period start and end. An empty start fills from the end: the twelve months
@@ -11,11 +11,14 @@ export function PeriodDates({
   end,
   disabled,
   endHint,
+  marked = false,
 }: {
   start: string | null;
   end: string | null;
   disabled: boolean;
   endHint?: ReactNode;
+  /** Says which date the launch needs: the end; the start defaults from it. */
+  marked?: boolean;
 }) {
   const suggested = end !== null && end !== "" ? periodStartFor(end) : null;
   const [endValue, setEndValue] = useState(end ?? "");
@@ -46,7 +49,10 @@ export function PeriodDates({
   return (
     <>
       <label htmlFor="profile-period-start">
-        Period start
+        <span>
+          Period start
+          {marked ? <OptionalMark /> : null}
+        </span>
         <input
           id="profile-period-start"
           name="period_start"
@@ -63,7 +69,10 @@ export function PeriodDates({
         ) : null}
       </label>
       <label htmlFor="profile-period">
-        Period end
+        <span>
+          Period end
+          {marked ? <RequiredMark /> : null}
+        </span>
         <input
           id="profile-period"
           name="period_end"

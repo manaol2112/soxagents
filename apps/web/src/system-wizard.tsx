@@ -11,7 +11,9 @@ import {
   basisLabel,
   type Candidate,
   CONTROL_CATEGORIES,
+  candidateAreas,
   candidateSections,
+  chooseAll,
   type DetailField,
   type DetailSuggestion,
   initialSelection,
@@ -153,7 +155,7 @@ function Wizard({
       return;
     }
     setSelected((current) => {
-      const start = initialSelection(candidates);
+      const start = initialSelection(candidates, created);
       if (current === null) {
         return start;
       }
@@ -167,7 +169,7 @@ function Wizard({
             ),
           };
     });
-  }, [candidates]);
+  }, [candidates, created]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -453,6 +455,37 @@ function Wizard({
                   save.
                 </p>
               )}
+              {candidates.length > 0 ? (
+                // Where the controls are, how many are chosen in each area, and a way
+                // to move straight to one: it stays in view while the list scrolls.
+                <nav className="sw-areas" aria-label="Control areas">
+                  <span className="sw-areas-count" role="status">
+                    {chosen.length} of{" "}
+                    {new Set(candidates.map((item) => item.controlRef)).size}{" "}
+                    selected
+                  </span>
+                  {candidateAreas(candidates, selected, DOMAIN_ORDER).map(
+                    (area) => (
+                      <button
+                        key={area.domain}
+                        type="button"
+                        className={`sw-area${area.chosen > 0 ? " has-chosen" : ""}`}
+                        onClick={(event) =>
+                          moveTo(
+                            event.currentTarget,
+                            `${id}-area-${area.domain}`,
+                          )
+                        }
+                      >
+                        {DOMAIN_LABELS[area.domain] ?? area.domain}
+                        <span className="num">
+                          {area.chosen}/{area.total}
+                        </span>
+                      </button>
+                    ),
+                  )}
+                </nav>
+              ) : null}
               {candidates.length === 0 ? (
                 <p className="form-hint">
                   No IT controls are loaded yet. Load the library or upload the
@@ -484,9 +517,46 @@ function Wizard({
                     }))
                       .filter((group) => group.items.length > 0)
                       .map((group) => (
-                        <fieldset key={group.domain} className="sw-group">
+                        <fieldset
+                          key={group.domain}
+                          className="sw-group"
+                          // The area bar moves to the first section holding the area.
+                          id={
+                            sections.find((other) =>
+                              other.items.some(
+                                (item) => item.domain === group.domain,
+                              ),
+                            ) === section
+                              ? `${id}-area-${group.domain}`
+                              : undefined
+                          }
+                        >
                           <legend>
-                            {DOMAIN_LABELS[group.domain] ?? group.domain}
+                            <span>
+                              {DOMAIN_LABELS[group.domain] ?? group.domain}
+                            </span>
+                            <button
+                              type="button"
+                              className="btn-ghost btn-sm sw-group-all"
+                              onClick={() =>
+                                setSelected((current) =>
+                                  chooseAll(
+                                    current,
+                                    group.items,
+                                    !group.items.every(
+                                      (item) =>
+                                        current?.[item.controlRef] === true,
+                                    ),
+                                  ),
+                                )
+                              }
+                            >
+                              {group.items.every(
+                                (item) => selected?.[item.controlRef] === true,
+                              )
+                                ? "Clear"
+                                : `Select all ${group.items.length}`}
+                            </button>
                           </legend>
                           <ul>
                             {group.items.map((item) => (
@@ -942,6 +1012,21 @@ function DetailsStep({
   );
 }
 
+/** Scrolls the list to an area, its heading just clear of the area bar above it. */
+function moveTo(from: HTMLElement, targetId: string) {
+  const target = document.getElementById(targetId);
+  const list = from.closest(".sw-body");
+  const bar = from.closest<HTMLElement>(".sw-areas");
+  if (target === null || list === null || bar === null) {
+    return;
+  }
+  // Where the bar sits once it sticks: at the top of the list.
+  list.scrollTop +=
+    target.getBoundingClientRect().top -
+    (list.getBoundingClientRect().top + bar.offsetHeight) -
+    8;
+}
+
 function ControlRow({
   item,
   checked,
@@ -952,8 +1037,16 @@ function ControlRow({
   onChange: (value: boolean) => void;
 }) {
   const id = useId();
+  const [open, setOpen] = useState(false);
+  const more =
+    item.description !== "" ||
+    item.support !== "" ||
+    item.missing !== "" ||
+    item.adaptedFrom.length > 0;
   return (
-    <li className={`sw-row${checked ? " is-checked" : ""}`}>
+    <li
+      className={`sw-row${checked ? " is-checked" : ""}${open ? " is-open" : ""}`}
+    >
       <input
         id={id}
         type="checkbox"
@@ -1007,12 +1100,12 @@ function ControlRow({
                 ? ` (${item.confidence.toLowerCase()} confidence)`
                 : ""}
             </span>
-            {item.support !== "" ? (
+            {open && item.support !== "" ? (
               <span className="sw-row-note">
                 <b>Based on</b> {item.support}
               </span>
             ) : null}
-            {item.missing !== "" ? (
+            {open && item.missing !== "" ? (
               <span className="sw-row-note">
                 <b>To confirm</b> {item.missing}
               </span>
@@ -1020,6 +1113,17 @@ function ControlRow({
           </span>
         ) : null}
       </label>
+      {more ? (
+        <button
+          type="button"
+          className="btn-ghost btn-sm sw-row-more"
+          aria-expanded={open}
+          aria-label={`${open ? "Hide" : "Show"} details: ${item.controlRef}`}
+          onClick={() => setOpen(!open)}
+        >
+          {open ? "Less" : "Details"}
+        </button>
+      ) : null}
     </li>
   );
 }

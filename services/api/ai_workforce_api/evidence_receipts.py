@@ -25,7 +25,22 @@ _SEND_ACTION = "mail.pbc"
 
 
 def covered(cursor: psycopg.Cursor[Any], project_id: UUID, request_id: UUID) -> bool:
-    """Whether the files filed to the request, together, cover every requested item."""
+    """Whether the files filed to the request, together, cover every requested item. An
+    item is placed by the requirement the reader names where it names one, in the order
+    the request lists its requirements (evidence_analysis._planned_items): a file added
+    for one item is read against that item alone, so its first item is not the request's."""
+    planned = [
+        str(row[0])
+        for row in cursor.execute(
+            """
+            SELECT id FROM evidence_requirements
+            WHERE pbc_request_id = %s AND status = 'REQUESTED'
+            ORDER BY CASE necessity WHEN 'REQUIRED' THEN 0 WHEN 'CONDITIONAL' THEN 1 ELSE 2 END,
+                     created_at, requirement_key
+            """,
+            (request_id,),
+        ).fetchall()
+    ]
     draft = cursor.execute(
         "SELECT content FROM pbc_drafts WHERE pbc_request_id = %s AND status = 'DRAFTED'",
         (request_id,),
@@ -49,11 +64,12 @@ def covered(cursor: psycopg.Cursor[Any], project_id: UUID, request_id: UUID) -> 
         if not isinstance(classification, dict):
             continue
         for item in classification.get("items", []):
-            if (
-                isinstance(item, dict)
-                and item.get("coverage") == "COVERED"
-                and isinstance(item.get("index"), int)
-            ):
+            if not isinstance(item, dict) or item.get("coverage") != "COVERED":
+                continue
+            named = str(item.get("requirement_id") or "")
+            if named in planned:
+                found.add(planned.index(named))
+            elif isinstance(item.get("index"), int):
                 found.add(item["index"])
     return all(index in found for index in range(wanted))
 

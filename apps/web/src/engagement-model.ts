@@ -339,9 +339,28 @@ export function recordAction(
   ) {
     return { label: "Confirm the population", tab: "testing" };
   }
+  // The test plan is reviewed and approved, or revised, on the control's Plan step: the
+  // evidence plan is part of it, and nothing is requested before it is approved.
+  if (
+    control.nextStep.startsWith("Approve the test plan") ||
+    control.nextStep.startsWith("Revise the test plan") ||
+    control.nextStep.startsWith("Test plan not approved")
+  ) {
+    return { label: "Review the test plan", tab: "design" };
+  }
   if (control.nextStep.startsWith("Settle the attributes")) {
     // Operating evidence follows the attributes (the planning gate).
     return { label: "Settle the attributes", tab: "design" };
+  }
+  // Design comes before operating testing: its evidence judged, then its workpaper.
+  if (control.nextStep === "Review the design evidence") {
+    return { label: "Review the design evidence", tab: "evidence" };
+  }
+  if (
+    control.nextStep === "Prepare the design workpaper" ||
+    control.nextStep === "Drafting the design workpaper"
+  ) {
+    return { label: "Open the design workpaper", tab: "testing" };
   }
   return { label: "Open evidence requests", tab: "evidence" };
 }
