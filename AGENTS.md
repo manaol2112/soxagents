@@ -27,11 +27,23 @@ Routine, explicitly authorized actions may run automatically. Sensitive or conse
 - Never claim a test passed unless the command actually ran and passed.
 - Do not commit credentials, tokens, or confidential evidence. Do not log access tokens, refresh tokens, or secrets.
 
+## Product and UX standards
+
+Apply to every feature, for every control type (ITGC, ITAC, business process, MRC, ITDM, IPE, entity-level); details in `docs/design-system.md`.
+
+- Design the user journey before building: the screen is understood in five seconds, the next action is obvious, repeated steps are removed, and advanced detail opens on request.
+- The agent prepares the work first: it reuses what is known, surfaces only real exceptions, recommends with its reasons, and asks only for missing facts or human judgment. Prefer one traceable grouped decision over one card per control.
+- No full-page reload for a small change: update the affected component, refetch only what changed, and keep navigation and filter state. Optimistic updates only where rollback is safe; an approval or other audit-critical action shows success only after the server confirms it.
+- Stay fast at scale: server-side paging, targeted queries, lazy loading, debounced search, background agent work, and protection against stale responses.
+- Motion is purposeful and short (hover 100–150 ms, expand 150–250 ms, dialogs 200–300 ms, page 150–250 ms) and off under reduced motion.
+- Reuse the existing components and tokens. No new UI framework, state library, or animation dependency without a demonstrated need, and no redesign of unrelated screens.
+- A feature is complete only when it meets the UI acceptance checklist in `docs/design-system.md`.
+
 ## Milestone closeout
 
 Testing is risk-based and tiered (decided by the product owner; docs/test-strategy.md §1, with the closure checklist in §7):
 
-- Tier 1, routine development: lint, type checks, and targeted tests for the modified components and their dependents; `make test-fast` when a feature change is complete.
+- Tier 1, routine development: lint, type checks, and targeted tests for the modified components and their dependents; the critical safeguard tests the change could affect (approval enforcement, plan applicability, evidence traceability, authorization, testing gates, approval history), not the whole critical tier; focused UI checks for changed interactions; `make test-fast` when a feature change is complete. Do not run the full suite after each step. Report each step's tests, counts, time, deferrals, and unverified risks (docs/test-strategy.md §1).
 - Tier 2, milestone closure: Tier 1, the relevant targeted and integration tests, `make test-fast`, `make test-critical` (authorization, segregation of duties, approvals, evidence traceability, review independence, database integrity, model-execution safeguards), the milestone's acceptance and safeguard tests, and migration validation whenever the database changes. The full legacy suite is not required at every milestone.
 - Tier 3, major milestone or release: `make test-full` and all applicable integration, security and regression tests, at the end of a major milestone group (such as M3), before a production release, after significant architectural or shared-infrastructure changes, and when targeted or critical tests suggest a wider regression.
 - Escalate within any tier when a change touches model-execution safeguards, authentication, authorization, data integrity, migrations, approval boundaries, sampling, audit conclusions, or shared infrastructure: the selected tests must cover the affected dependencies and critical invariants.

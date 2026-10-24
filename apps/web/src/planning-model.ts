@@ -7,6 +7,12 @@
  * may be approved: the API says what holds it.
  */
 
+import {
+  groupApproveBody,
+  implementationName,
+  UNIT_KINDS,
+} from "./shared-plans-model.ts";
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SECRET =
   /(?:api[_-]?key|secret|token|password|passwd|pwd)\s*[:=]\s*\S|sk-[A-Za-z0-9]{10,}/i;
@@ -213,6 +219,8 @@ export type QueueRow = {
   controlRef: string;
   title: string;
   application: string;
+  /** The units it operates in, when split by them (Release 1); "" otherwise. */
+  units: string;
   state: PlanningState;
   revision: number;
   approvedRevision: number | null;
@@ -397,6 +405,7 @@ export type MasterPlan = {
     area: string;
     keyControl: boolean;
     application: string;
+    units: string;
     classifications: string[];
     /** Where the control came from, what its plan is built from, and the standard it
      * follows with the firm's review of it (milestone L2). */
@@ -773,6 +782,7 @@ export function parseQueue(value: unknown): Queue | null {
       controlRef: str(row.control_ref),
       title: str(row.title),
       application: str(row.application),
+      units: str(row.units),
       state: stateOf(row.state),
       revision: num(row.revision),
       approvedRevision:
@@ -835,6 +845,7 @@ export function parseMasterPlan(value: unknown): MasterPlan | null {
       area: str(control.area),
       keyControl: control.key_control === true,
       application: str(control.application),
+      units: str(control.units),
       classifications: strings(control.classifications),
       source: str(control.source),
       testBasis: str(control.test_basis),
@@ -1085,16 +1096,18 @@ export function missingValueOf(
   return undefined;
 }
 
-/** The client values the given plans ask for, one question per system and value, the
- * systems and then the values in order. */
+/** The client values the given plans ask for, one question per system (and units, for a
+ * control split by them: each entity answers for itself) and value, the systems and then
+ * the values in order. */
 export function valueQuestions(rows: readonly QueueRow[]): ValueQuestion[] {
   const found = new Map<string, ValueQuestion>();
   for (const row of rows) {
+    const where = implementationName(row.application, row.units);
     for (const item of row.openValues) {
-      const id = `${row.application}\u0000${item.key}`;
+      const id = `${where}\u0000${item.key}`;
       const question = found.get(id) ?? {
         ...item,
-        system: row.application,
+        system: where,
         controls: [],
       };
       question.blocks = question.blocks || item.blocks;
@@ -1491,7 +1504,7 @@ export function filterQueue(
       (states.length === 0 || states.includes(row.state)) &&
       matches(row, filters) &&
       (words === "" ||
-        `${row.controlRef} ${row.title} ${row.application} ${row.process}`
+        `${row.controlRef} ${row.title} ${row.application} ${row.units} ${row.process}`
           .toLowerCase()
           .includes(words)),
   );
@@ -1520,7 +1533,9 @@ export function planningHref(
     control?: string | null;
     tab?: Tab | null;
     filter?: string | null;
-    view?: "plans" | "phases" | null;
+    /** phases: release by phase; each: every plan on its own (the review queue); none:
+     * the plans by control (shared plans, the default). */
+    view?: "plans" | "phases" | "each" | null;
     /** The destination the link stays in: the legacy Test plans page, or the Testing
      * destination's Plans and Phases views (M2b). */
     section?: "planning" | "testing" | null | undefined;
@@ -1540,8 +1555,8 @@ export function planningHref(
   if (options.filter) {
     params.set("filter", options.filter);
   }
-  if (options.view === "phases") {
-    params.set("view", "phases");
+  if (options.view === "phases" || options.view === "each") {
+    params.set("view", options.view);
   }
   return `/?${params.toString()}`;
 }
@@ -1553,6 +1568,10 @@ export function parseTab(value: string | null): Tab {
 // Actions
 
 export type PlanningIntent =
+  | "approve-family"
+  | "scope-unit-add"
+  | "coverage"
+  | "split"
   | "values-many"
   | "approve"
   | "request-changes"
@@ -1714,6 +1733,48 @@ export function planningWrite(fields: Fields): PlanningWrite {
           control_ids: [...new Set(controls)],
           reason,
         })
+      : { error: "invalid" };
+  }
+  if (intent === "approve-family") {
+    // One decision for every implementation whose plan is the control's shared plan
+    // (shared_plans.approve_group); the API checks it against what was shown.
+    const body = groupApproveBody(fields);
+    return body === null
+      ? { error: "invalid" }
+      : ok(`${base}/planning-review/families/approve`, body);
+  }
+  if (intent === "scope-unit-add") {
+    const kind = text(fields, "kind");
+    const name = text(fields, "name").trim();
+    return (UNIT_KINDS as readonly string[]).includes(kind) &&
+      clean(name, 1, 200)
+      ? ok(`${base}/scope-units`, { kind, name })
+      : { error: "invalid" };
+  }
+  if (intent === "coverage" || intent === "split") {
+    const control = text(fields, "control_id");
+    const listed = Array.isArray(fields.unit_ids) ? fields.unit_ids : [];
+    const units = listed.filter(
+      (item): item is string => typeof item === "string" && UUID.test(item),
+    );
+    if (!UUID.test(control) || units.length !== listed.length) {
+      return { error: "invalid" };
+    }
+    if (intent === "coverage") {
+      return units.length <= 200
+        ? ok(`${base}/controls/${control}/coverage`, {
+            unit_ids: [...new Set(units)],
+          })
+        : { error: "invalid" };
+    }
+    const reason = text(fields, "reason").trim();
+    return units.length >= 2 && units.length <= 50 && clean(reason, 10, 1000)
+      ? ok(
+          `${base}/controls/${control}/split`,
+          { unit_ids: [...new Set(units)], reason },
+          "POST",
+          true,
+        )
       : { error: "invalid" };
   }
   if (intent === "batch-approve") {
@@ -2032,6 +2093,7 @@ export type ControlPhases = {
   controlRef: string;
   title: string;
   application: string;
+  units: string;
   planStatus: string | null;
   phases: PhaseStatus[];
 };
@@ -2050,6 +2112,7 @@ function parseControlPhases(value: Json): ControlPhases {
     controlRef: str(value.control_ref),
     title: str(value.title),
     application: str(value.application),
+    units: str(value.units),
     planStatus: strOrNull(value.plan_status),
     phases: records(value.phases).map((item) => {
       const step = oneOf(item.step, PHASE_STEPS, "WAITING");

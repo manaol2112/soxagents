@@ -28,6 +28,7 @@ import {
 import { LAYOUT_KEY } from "./controls-toolbar";
 import { CATEGORIES, type ControlRow } from "./engagement-model";
 import { formatDate } from "./format";
+import { implementationName } from "./shared-plans-model";
 import { UiIcon } from "./ui-icon";
 
 type Ids = { organizationId: string; projectId: string };
@@ -547,7 +548,7 @@ export function ControlsTable({
                   <td className="ct-pick">
                     <input
                       type="checkbox"
-                      aria-label={`Select ${row.controlRef} ${row.applicationName}`}
+                      aria-label={`Select ${row.controlRef} ${implementationName(row.applicationName, row.units)}`}
                       checked={selected.has(row.id)}
                       onChange={(event) => toggle(row.id, event.target.checked)}
                     />
@@ -561,7 +562,8 @@ export function ControlsTable({
                   {columns.map((key) => (
                     <td key={key} className={`ct-${key}`}>
                       {key === "application" ? (
-                        row.applicationName || "None"
+                        implementationName(row.applicationName, row.units) ||
+                        "None"
                       ) : key === "owner" ? (
                         row.ownerName || row.ownerEmail || "PBC coordinator"
                       ) : key === "status" ? (

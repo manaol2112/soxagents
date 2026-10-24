@@ -19,6 +19,7 @@ import {
   releaseIsEarly,
   STEP_TONES,
 } from "./planning-model";
+import { implementationName } from "./shared-plans-model";
 import { UiIcon } from "./ui-icon";
 
 type Ids = {
@@ -76,6 +77,8 @@ function useRelease(ids: Ids) {
 }
 
 /** Plans (the review queue) or phases (release by phase). */
+/** The ways to see the plans: by control (shared plans, the default), each plan on its
+ * own, and, on Test plans, by phase (Testing has its own Phases view). */
 export function ViewSwitch({
   ids,
   view,
@@ -83,28 +86,28 @@ export function ViewSwitch({
   ids: Ids;
   view: "plans" | "phases";
 }) {
-  if (ids.section === "testing") {
-    return null;
-  }
+  const link = (target: "controls" | "each" | "phases") =>
+    planningHref(ids.organizationId, ids.projectId, {
+      section: ids.section,
+      view: target === "controls" ? null : target,
+    });
   return (
-    <nav className="segmented pl-views" aria-label="Test plans views">
+    <nav className="segmented pl-views" aria-label="How the plans are shown">
+      <a href={link("controls")}>By control</a>
       <a
-        href={planningHref(ids.organizationId, ids.projectId, {
-          section: ids.section,
-        })}
+        href={link("each")}
         aria-current={view === "plans" ? "page" : undefined}
       >
-        Plans
+        Each plan
       </a>
-      <a
-        href={planningHref(ids.organizationId, ids.projectId, {
-          section: ids.section,
-          view: "phases",
-        })}
-        aria-current={view === "phases" ? "page" : undefined}
-      >
-        Phases
-      </a>
+      {ids.section === "testing" ? null : (
+        <a
+          href={link("phases")}
+          aria-current={view === "phases" ? "page" : undefined}
+        >
+          Phases
+        </a>
+      )}
     </nav>
   );
 }
@@ -163,7 +166,7 @@ export function PhasesView({
     return (progress?.controls ?? []).filter(
       (row) =>
         words === "" ||
-        `${row.controlRef} ${row.title} ${row.application}`
+        `${row.controlRef} ${row.title} ${row.application} ${row.units}`
           .toLowerCase()
           .includes(words),
     );
@@ -467,7 +470,9 @@ function PhaseLine({
           <span className="pl-ref">{row.controlRef}</span>
           <span className="pl-title">{row.title}</span>
         </a>
-        <span className="pl-sub">{row.application || "No system"}</span>
+        <span className="pl-sub">
+          {implementationName(row.application, row.units) || "No system"}
+        </span>
       </td>
       {row.phases.length > 0 &&
       row.phases.every((item) => item.step === "AWAITING_PLAN") ? (

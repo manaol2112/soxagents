@@ -18,6 +18,8 @@ export type RegisterControl = {
   controlRef: string;
   /** The instance's application (Milestone 8.5); "" when the control has none. */
   application: string;
+  /** The units it operates in, when split by them (Release 1); "" otherwise. */
+  units: string;
   title: string;
   area: string;
   /** The applications the control covers, each tested on its own. */
@@ -127,14 +129,16 @@ const optional = (value: unknown): string | null =>
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** "ITGC-AC-01 · Oracle": the control and the application its instance tests. */
+/** "ITGC-AC-01 · Oracle": the control and the application its instance tests, then the
+ * units it operates in when split by them ("RTR-02 · Acme UK Ltd"). */
 export function controlLabel(control: {
   controlRef: string;
   application: string;
+  units?: string;
 }): string {
-  return control.application === ""
-    ? control.controlRef
-    : `${control.controlRef} · ${control.application}`;
+  return [control.controlRef, control.application, control.units ?? ""]
+    .filter((part) => part !== "")
+    .join(" · ");
 }
 
 function parseControl(value: unknown): RegisterControl | null {
@@ -149,6 +153,7 @@ function parseControl(value: unknown): RegisterControl | null {
     id: value.id,
     controlRef: str(value.control_ref),
     application: str(value.application),
+    units: str(value.units),
     title: str(value.title),
     area: str(value.area),
     applications: (Array.isArray(value.applications) ? value.applications : [])

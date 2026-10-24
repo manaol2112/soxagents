@@ -82,7 +82,7 @@ class ContextBody(BaseModel):
 
 class ClassificationsBody(BaseModel):
     # None goes back to what the control's area and nature imply.
-    classifications: list[Classification] | None = Field(default=None, max_length=6)
+    classifications: list[Classification] | None = Field(default=None, max_length=7)
 
 
 class IssueDecision(BaseModel):

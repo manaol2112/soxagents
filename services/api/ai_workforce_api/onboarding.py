@@ -1388,7 +1388,10 @@ _CONTROL_COLUMNS = """
     engagement_application_id,
     (SELECT a.name FROM engagement_applications a
      WHERE a.id = engagement_controls.engagement_application_id),
-    process_id
+    process_id,
+    (SELECT string_agg(u.name, ' · ' ORDER BY u.name) FROM engagement_control_scopes s
+     JOIN engagement_scope_units u ON u.id = s.unit_id
+     WHERE s.engagement_control_id = engagement_controls.id AND s.role = 'OPERATES')
 """
 
 
@@ -1447,7 +1450,11 @@ def _control(row: tuple[Any, ...]) -> ControlBody:
         ],
         application_id=row[24],
         application_name="" if row[25] is None else str(row[25]),
-        label=control_label(str(row[2]), None if row[25] is None else str(row[25])),
+        label=control_label(
+            str(row[2]),
+            None if row[25] is None else str(row[25]),
+            None if row[27] is None else str(row[27]),
+        ),
         process_id=row[26],
     )
 

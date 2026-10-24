@@ -3088,3 +3088,625 @@ button.pl-since-code:hover {
     margin-top: 1rem;
   }
 }
+
+/* Test plans by control (Unified planning R1, shared-plans-view.tsx): the decisions that
+   cover the plans, exceptions first, and one control's shared plan in a drawer. */
+.cp-switch {
+  justify-self: start;
+}
+
+.cp-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  padding: 0.85rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.cp-summary p {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-base);
+}
+
+.cp-summary strong {
+  color: var(--text-strong);
+}
+
+.cp-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cp-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.6rem;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border-radius: 999px;
+  font-size: var(--fs-sm);
+}
+
+.cp-count strong {
+  color: var(--text-strong);
+}
+
+.cp-count.is-together strong {
+  color: var(--accent);
+}
+
+.cp-count.is-separate strong {
+  color: var(--warning);
+}
+
+.cp-done {
+  animation: cp-rise 220ms ease-out;
+}
+
+.cp-group {
+  padding: 0;
+  overflow: hidden;
+}
+
+.cp-group-head {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+details.cp-group > summary.cp-group-head {
+  grid-template-columns: minmax(0, 1fr) auto;
+  cursor: pointer;
+  list-style: none;
+}
+
+details.cp-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.cp-group:not([open]) > summary.cp-group-head {
+  border-bottom: 0;
+}
+
+details.cp-group > summary svg {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  align-self: center;
+  color: var(--text-tertiary);
+  transition: transform 180ms ease;
+}
+
+details.cp-group[open] > summary svg {
+  transform: rotate(180deg);
+}
+
+.cp-group-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-strong);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.cp-group-line {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cp-group.is-together .cp-group-head {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.cp-group.is-separate .cp-group-head {
+  box-shadow: inset 3px 0 0 var(--warning);
+}
+
+.cp-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cp-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  border-top: 1px solid var(--border-subtle);
+  transition: background 120ms ease;
+}
+
+.cp-row:first-child {
+  border-top: 0;
+}
+
+.cp-row:hover {
+  background: var(--surface-hover);
+}
+
+.pl-page .cp-row-main {
+  display: grid;
+  justify-content: stretch;
+  justify-items: start;
+  gap: 0.2rem;
+  width: 100%;
+  height: auto;
+  padding: 0;
+  color: inherit;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  font-weight: 400;
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+}
+
+.pl-page .cp-row-main:hover,
+.pl-page .cp-row-main:focus-visible {
+  background: none;
+}
+
+.pl-page .cp-row-main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.cp-row-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.6rem;
+}
+
+.cp-row-title .mono {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cp-row-title strong {
+  color: var(--text-strong);
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+.cp-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.6rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* Approved and confirmed; the refreshed list moves it to Approved. */
+.cp-row.is-settled {
+  opacity: 0.6;
+  transition: opacity 150ms ease;
+}
+
+.cp-row.is-settled .cp-row-main {
+  cursor: default;
+}
+
+.cp-row-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--success);
+  font-size: var(--fs-sm);
+  font-weight: 550;
+}
+
+.cp-summary p {
+  transition: opacity 150ms ease;
+}
+
+.cp-summary.is-updating p {
+  opacity: 0.55;
+}
+
+.cp-row-note {
+  color: var(--warning);
+}
+
+.cp-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.cp-empty,
+.cp-muted {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cp-empty {
+  padding: 0.85rem 1rem;
+}
+
+.cp-more {
+  margin: 0.4rem 1rem 0.75rem;
+}
+
+/* The drawer: from the right, over a dimmed page. */
+.cp-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  justify-content: flex-end;
+  background: rgb(15 23 42 / 0.4);
+  animation: cp-fade 200ms ease-out;
+}
+
+.cp-drawer {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(560px, 100%);
+  height: 100%;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: -24px 0 64px rgb(15 23 42 / 0.18);
+  animation: cp-slide 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  outline: none;
+}
+
+.cp-drawer-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.1rem 1.25rem 0.9rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.cp-drawer-head h2 {
+  margin: 0.1rem 0 0.25rem;
+  color: var(--text-strong);
+  font-size: var(--fs-lg);
+}
+
+.cp-drawer-ref {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cp-drawer-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cp-drawer-body {
+  display: grid;
+  align-content: start;
+  gap: 1.25rem;
+  padding: 1rem 1.25rem 1.5rem;
+  overflow-y: auto;
+}
+
+.cp-block {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.cp-block h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-base);
+}
+
+.cp-block h3 small {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+}
+
+.cp-impls {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cp-impl {
+  padding: 0.5rem 0.65rem;
+  background: var(--surface-muted);
+  border-radius: var(--radius);
+}
+
+.cp-impl-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem 0.75rem;
+}
+
+.cp-impl-name {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.45rem;
+  color: var(--text-strong);
+  font-size: var(--fs-base);
+  font-weight: 550;
+}
+
+.cp-impl-name svg {
+  color: var(--success);
+}
+
+.cp-impl-name small {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+}
+
+.cp-dot {
+  width: 7px;
+  height: 7px;
+  background: var(--border-strong);
+  border-radius: 50%;
+}
+
+.cp-impl-reason {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.6rem;
+  margin: 0.35rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* A link-styled button in the drawer, which sits outside .pl-page (a portal): the base
+   button fill is reset here, not inherited. */
+button.cp-toggle,
+button.cp-add-unit {
+  height: auto;
+  padding: 0;
+  color: var(--accent-strong);
+  background: none;
+  border: 0;
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 550;
+}
+
+button.cp-toggle:hover,
+button.cp-toggle:focus-visible,
+button.cp-add-unit:hover,
+button.cp-add-unit:focus-visible {
+  color: var(--accent);
+  background: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.cp-diffs {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-sm);
+  animation: cp-rise 180ms ease-out;
+}
+
+.cp-diff-pair {
+  display: grid;
+  gap: 0.15rem;
+  margin-top: 0.2rem;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.cp-shared {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.cp-shared > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.cp-shared ol {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0 0 0.6rem;
+  padding-left: 0;
+  list-style: none;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  animation: cp-rise 180ms ease-out;
+}
+
+.cp-shared .mono {
+  color: var(--text-secondary);
+}
+
+.cp-full {
+  justify-self: start;
+  font-size: var(--fs-sm);
+}
+
+.cp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.cp-form {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.75rem;
+  background: var(--surface-muted);
+  border-radius: var(--radius);
+  animation: cp-rise 180ms ease-out;
+}
+
+.cp-form-title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.cp-units {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.cp-unit {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-strong);
+  font-size: var(--fs-base);
+}
+
+.cp-unit small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.cp-add-unit {
+  justify-self: start;
+  height: auto;
+  padding: 0;
+  font-size: var(--fs-sm);
+}
+
+.cp-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.cp-add-row select {
+  flex: 0 1 14rem;
+  width: auto;
+}
+
+.cp-add-row input {
+  flex: 1 1 12rem;
+  width: auto;
+}
+
+.cp-reason,
+.cp-comment {
+  display: grid;
+  gap: 0.3rem;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 550;
+}
+
+.cp-comment small {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.cp-drawer-foot {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.9rem 1.25rem 1.1rem;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.cp-drawer-foot .btn {
+  justify-self: end;
+}
+
+.cp-foot-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+@keyframes cp-slide {
+  from {
+    transform: translateX(32px);
+    opacity: 0;
+  }
+
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@keyframes cp-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes cp-rise {
+  from {
+    transform: translateY(4px);
+    opacity: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .cp-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cp-row > .btn,
+  .cp-row > .btn-ghost,
+  .cp-row > a {
+    justify-self: start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-backdrop,
+  .cp-drawer,
+  .cp-done,
+  .cp-diffs,
+  .cp-shared ol,
+  .cp-form {
+    animation: none;
+  }
+
+  details.cp-group > summary svg,
+  .cp-row,
+  .cp-summary p {
+    transition: none;
+  }
+}

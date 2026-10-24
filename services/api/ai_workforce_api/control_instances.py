@@ -21,9 +21,20 @@ SEPARATOR = " · "
 _NAMED = re.compile(r"^(?P<ref>.+?)\s*(?:·|\(|\bfor\b|/|-\s)\s*(?P<app>[^()]+?)\)?\s*$")
 
 
-def control_label(control_ref: str, application: str | None) -> str:
-    """How a control instance is named everywhere: its ID, then its application."""
-    return f"{control_ref}{SEPARATOR}{application}" if application else control_ref
+def control_label(control_ref: str, application: str | None, units: str | None = None) -> str:
+    """How a control instance is named everywhere: its ID, then its application, then the
+    units it operates in when it was split by them (Unified planning R1)."""
+    return SEPARATOR.join(part for part in (control_ref, application, units) if part)
+
+
+def operating_units(alias: str) -> str:
+    """SQL for the names of the units a control row operates in, joined; NULL for none.
+    `alias` is the engagement_controls row's alias in the enclosing query."""
+    return (
+        "(SELECT string_agg(u.name, ' · ' ORDER BY u.name) FROM engagement_control_scopes s "
+        "JOIN engagement_scope_units u ON u.id = s.unit_id "
+        f"WHERE s.engagement_control_id = {alias}.id AND s.role = 'OPERATES')"
+    )
 
 
 def parse_control_name(value: str) -> tuple[str, str | None]:
@@ -38,7 +49,9 @@ def parse_control_name(value: str) -> tuple[str, str | None]:
 
 
 # Files a family shares: a file filed to a sibling is evidence for this instance too
-# when it is tagged as covering every application, or as showing this one.
+# when it is tagged as covering every application, this one, or several including this one,
+# and the sibling operates in the same units: a control split by entity, location, or
+# process never takes another unit's evidence (Release 1; consolidation is Release 2).
 FAMILY_FILES = """
     SELECT l.evidence_file_id
     FROM evidence_file_links l
@@ -47,6 +60,8 @@ FAMILY_FILES = """
     WHERE c.project_id = me.project_id
       AND (c.id = me.id
            OR (c.control_ref = me.control_ref
+               AND split_part(c.implementation_key, ':', 2)
+                   = split_part(me.implementation_key, ':', 2)
                AND EXISTS (SELECT 1 FROM evidence_file_applications t
                            WHERE t.evidence_file_id = l.evidence_file_id
                              AND (t.scope = 'ALL'
@@ -116,7 +131,12 @@ def _current_library(cursor: psycopg.Cursor[Any], source_id: UUID) -> dict[str, 
     }
 
 
-def _clone(cursor: psycopg.Cursor[Any], source_id: UUID, application_id: UUID | None) -> UUID:
+def _clone(
+    cursor: psycopg.Cursor[Any],
+    source_id: UUID,
+    application_id: UUID | None,
+    implementation_key: str = "",
+) -> UUID:
     """The family's instance for another system. A copy of a library control on an earlier
     version starts at the library's current version (its attributes, evidence items, title,
     and design), since a new instance has no testing to keep; the siblings keep theirs until
@@ -130,7 +150,7 @@ def _clone(cursor: psycopg.Cursor[Any], source_id: UUID, application_id: UUID | 
             owner_email, application_ids, test_attributes, pbc_items, template_key,
             agent_key, source, rcm_import_id, source_row,
             domain_label, frequency_label, nature_label, custom_fields,
-            engagement_application_id
+            engagement_application_id, implementation_key
         )
         SELECT organization_id, project_id, library_key,
                coalesce(%(library_version)s, library_version), control_ref, domain,
@@ -141,7 +161,7 @@ def _clone(cursor: psycopg.Cursor[Any], source_id: UUID, application_id: UUID | 
                coalesce(%(test_attributes)s::jsonb, test_attributes),
                coalesce(%(pbc_items)s::jsonb, pbc_items), template_key,
                agent_key, source, rcm_import_id, source_row, domain_label, frequency_label,
-               nature_label, custom_fields, %(app)s
+               nature_label, custom_fields, %(app)s, %(key)s
         FROM engagement_controls WHERE id = %(source)s
         RETURNING id
         """,
@@ -154,16 +174,21 @@ def _clone(cursor: psycopg.Cursor[Any], source_id: UUID, application_id: UUID | 
             "test_attributes": fresh.get("test_attributes"),
             "pbc_items": fresh.get("pbc_items"),
             "app": application_id,
+            # Empty: the database takes the system as the key (migration 0104). A split
+            # names its unit, so the copy is a separate implementation on the same system.
+            "key": implementation_key,
             "source": source_id,
         },
     ).fetchone()
     assert row is not None
     copied = UUID(str(row[0]))
-    if fresh:
-        # Its attributes follow the definition: keys linked, low-confidence ones proposed.
-        from ai_workforce_api.library_definitions import link_definitions
+    # Its attributes follow the definition: keys linked, low-confidence ones proposed. Every
+    # copy, not only one of a library control on an earlier version: a copy made after
+    # launch (a system added late, a split per unit) would otherwise carry its source's
+    # attributes unlinked and be planned as a generic control (Unified planning R1).
+    from ai_workforce_api.library_definitions import link_definitions
 
-        link_definitions(cursor, copied, None)
+    link_definitions(cursor, copied, None)
     return copied
 
 
@@ -179,13 +204,17 @@ def _delete_instance(cursor: psycopg.Cursor[Any], control_id: UUID, label: str) 
 
 
 def clone_instance(
-    cursor: psycopg.Cursor[Any], source_id: UUID, application_id: UUID | None
+    cursor: psycopg.Cursor[Any],
+    source_id: UUID,
+    application_id: UUID | None,
+    implementation_key: str = "",
 ) -> UUID:
-    """A copy of the control for another system: the family's instance there. Its
-    statement names its own system (milestone 8.9)."""
+    """A copy of the control for another system, or for another unit it operates in
+    separately (implementations.split): the family's instance there. Its statement names
+    its own system (milestone 8.9)."""
     from ai_workforce_api.control_design import refresh_statement
 
-    copied = _clone(cursor, source_id, application_id)
+    copied = _clone(cursor, source_id, application_id, implementation_key)
     refresh_statement(cursor, copied)
     return copied
 
@@ -215,7 +244,12 @@ def reconcile_family(
         (control_id, project_id),
     ).fetchall()
     wanted = list(dict.fromkeys(application_ids))
-    by_app = {row[1]: UUID(str(row[0])) for row in rows if row[1] is not None}
+    # A system's implementations: one, or several where the control operates separately
+    # per unit on it (implementations.split). All of them stay while the system does.
+    by_app: dict[Any, list[UUID]] = {}
+    for row in rows:
+        if row[1] is not None:
+            by_app.setdefault(row[1], []).append(UUID(str(row[0])))
     unassigned = [UUID(str(row[0])) for row in rows if row[1] is None]
     ref = str(rows[0][2]) if rows else ""
     kept: list[UUID] = []
@@ -233,7 +267,7 @@ def reconcile_family(
         return [keep]
     for app in wanted:
         if app in by_app:
-            kept.append(by_app[app])
+            kept.extend(by_app[app])
         elif unassigned:
             # A row without an application takes the first new one.
             taken = unassigned.pop(0)

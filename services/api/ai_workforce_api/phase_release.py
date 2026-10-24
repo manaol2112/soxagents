@@ -119,6 +119,8 @@ class ControlPhases(BaseModel):
     control_ref: str
     title: str
     application: str
+    # The units it operates in, when split by them (Release 1).
+    units: str = ""
     plan_status: str | None
     phases: list[PhaseStatus]
 
@@ -140,6 +142,9 @@ def _statuses(
         """,
         params,
     ).fetchall()
+    from ai_workforce_api.implementations import operating_names
+
+    units = operating_names(connection, project_id)
     scope = "project_id = %(p)s" + (" AND engagement_control_id = %(c)s" if one else "")
     applicability: dict[tuple[UUID, str], str] = {
         (UUID(str(row[0])), str(row[1])): str(row[2])
@@ -247,6 +252,7 @@ def _statuses(
                 control_ref=str(ref),
                 title=str(title),
                 application=str(application),
+                units=units.get(control, ""),
                 plan_status=plan_status,
                 phases=phases,
             )  # fmt: skip

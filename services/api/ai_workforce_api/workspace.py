@@ -35,7 +35,7 @@ from ai_workforce_api.authorization import (
     authorize,
 )
 from ai_workforce_api.control_activity import ActivityItem, control_activity
-from ai_workforce_api.control_instances import control_label
+from ai_workforce_api.control_instances import control_label, operating_units
 from ai_workforce_api.control_journey import Actor as JourneyActor
 from ai_workforce_api.control_journey import (
     ControlJourney,
@@ -402,6 +402,8 @@ class ControlRow(BaseModel):
     # The instance's application (Milestone 8.5), and the name pages show.
     application_id: UUID | None = None
     application_name: str = ""
+    # The units it operates in, when split by them (Release 1).
+    units: str = ""
     label: str = ""
     stage: str
     stages: StageBody
@@ -1167,11 +1169,12 @@ def _controls(
                (SELECT a.layer FROM engagement_applications a
                 WHERE a.id = c.engagement_application_id),
                (SELECT a.hosting FROM engagement_applications a
-                WHERE a.id = c.engagement_application_id)
+                WHERE a.id = c.engagement_application_id),
+               {units}
         FROM engagement_controls c
         WHERE c.project_id = %s
-        ORDER BY c.control_ref, 21 NULLS FIRST
-        """,
+        ORDER BY c.control_ref, 21 NULLS FIRST, 25 NULLS FIRST
+        """.replace("{units}", operating_units("c")),
         (project_id,),
     ).fetchall()
     stages: dict[UUID, dict[str, str]] = {}
@@ -1361,7 +1364,12 @@ def _controls(
                 systems=list(row[15]),
                 application_id=row[20],
                 application_name="" if row[21] is None else str(row[21]),
-                label=control_label(str(row[1]), None if row[21] is None else str(row[21])),
+                units="" if row[24] is None else str(row[24]),
+                label=control_label(
+                    str(row[1]),
+                    None if row[21] is None else str(row[21]),
+                    None if row[24] is None else str(row[24]),
+                ),
                 sample_size=sample_size(str(row[6]), str(row[8])),
                 # The lifecycle reads CONCLUDED only for a final conclusion.
                 stage=_stage(stage_body, conclusion if fin.final else "NOT_CONCLUDED"),

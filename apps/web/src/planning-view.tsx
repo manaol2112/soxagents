@@ -89,6 +89,8 @@ import {
   valueQuestions,
   valuesItems,
 } from "./planning-model";
+import { implementationName } from "./shared-plans-model";
+import { ControlsView } from "./shared-plans-view";
 import { UiIcon } from "./ui-icon";
 import { SuggestedAnswer } from "./value-options";
 import { joinAnswers } from "./value-suggestions";
@@ -299,6 +301,15 @@ export function PlanningPage({
       />
     );
   }
+  if (state?.view === "controls") {
+    return (
+      <ControlsView
+        ids={ids}
+        state={state}
+        header={header ?? <QueueHeader projectName={projectName} />}
+      />
+    );
+  }
   if (state?.view === "phases") {
     return (
       <PhasesView
@@ -437,6 +448,7 @@ function PlanQueue({
     planningHref(ids.organizationId, ids.projectId, {
       section: ids.section,
       filter: states.join(","),
+      view: "each",
     });
   const active = (states: readonly PlanningState[]) =>
     states.length === filter.length &&
@@ -1086,7 +1098,9 @@ function QueueLine({
           <span className="pl-ref">{row.controlRef}</span>
           <span className="pl-title">{row.title}</span>
         </a>
-        <span className="pl-sub">{row.application || "No system"}</span>
+        <span className="pl-sub">
+          {implementationName(row.application, row.units) || "No system"}
+        </span>
       </td>
       <td>
         <StatePill state={row.state} />
@@ -1347,8 +1361,10 @@ export function PlanReview({
             {embedded ? null : (
               <p className="pl-kicker">
                 <span className="pl-control-ref">{control.controlRef}</span>
-                {control.application !== "" ? (
-                  <span>{control.application}</span>
+                {control.application !== "" || control.units !== "" ? (
+                  <span>
+                    {implementationName(control.application, control.units)}
+                  </span>
                 ) : null}
               </p>
             )}

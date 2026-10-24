@@ -92,6 +92,8 @@ class RegisterControl(BaseModel):
     area: str
     # The instance's application (Milestone 8.5): pages show "ID · application".
     application: str = ""
+    # The units it operates in, when split by them (Release 1).
+    units: str = ""
     applications: list[RegisterApplication] = []
 
 
@@ -767,8 +769,15 @@ def _register(
         """,
         (project_id,),
     ).fetchall()
+    from ai_workforce_api.implementations import operating_names
+
+    units = operating_names(connection, project_id)
+    files = [_row(row) for row in rows]
+    for file in files:
+        if file.control is not None:
+            file.control.units = units.get(file.control.id, "")
     return RegisterBody(
-        files=[_row(row) for row in rows],
+        files=files,
         controls=[
             RegisterControl(
                 id=row[0],
@@ -777,6 +786,7 @@ def _register(
                 area=str(row[3]),
                 applications=[RegisterApplication.model_validate(item) for item in row[4]],
                 application="" if row[5] is None else str(row[5]),
+                units=units.get(UUID(str(row[0])), ""),
             )
             for row in controls
         ],

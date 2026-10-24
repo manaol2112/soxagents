@@ -143,6 +143,7 @@ import { roundsFor } from "./round-model";
 import { RoundReviews } from "./round-reviews";
 import { TestRounds } from "./round-view";
 import { canonicalQuery } from "./routes";
+import { implementationName } from "./shared-plans-model";
 import { sheetFor } from "./sheet-model";
 import { TestSheetCard } from "./sheet-view";
 import type { ShellModel } from "./shell-model";
@@ -842,6 +843,9 @@ function ControlLine({
                   size={14}
                 />
               </span>
+            ) : null}
+            {control.units !== "" ? (
+              <span className="cr-where">{control.units}</span>
             ) : null}
           </a>
           <span className="cr-state-col" data-label="Status">
@@ -1546,9 +1550,11 @@ function ControlRecord({
         <header className="cw-head">
           <div className="cw-id">
             <p className="cw-kicker">
-              {control.applicationName !== "" ? (
+              {control.applicationName !== "" || control.units !== "" ? (
                 <>
-                  <span>{control.applicationName}</span>
+                  <span>
+                    {implementationName(control.applicationName, control.units)}
+                  </span>
                   <span aria-hidden="true">/</span>
                 </>
               ) : null}

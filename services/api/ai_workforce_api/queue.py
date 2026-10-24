@@ -36,7 +36,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ai_workforce_api.authorization import Action, Principal, _call, _session_principal
-from ai_workforce_api.control_instances import control_label
+from ai_workforce_api.control_instances import control_label, operating_units
 from ai_workforce_api.settings import Settings
 
 Bucket = Literal["MINE", "WAITING", "BLOCKED", "UPCOMING"]
@@ -724,22 +724,26 @@ def _reviews(
                count(*) FILTER (WHERE n.status = 'PROPOSED'),
                count(*) FILTER (WHERE n.status = 'OPEN'),
                count(*) FILTER (WHERE n.status = 'RESPONDED'),
-               r.created_at, c.control_ref, a.name, r.reperform_note
+               r.created_at, c.control_ref, a.name, r.reperform_note, {units}
         FROM control_reviews r
         JOIN engagement_controls c ON c.id = r.engagement_control_id
         LEFT JOIN engagement_applications a ON a.id = c.engagement_application_id
         LEFT JOIN test_rounds t ON t.id = r.test_round_id
         LEFT JOIN review_notes n ON n.control_review_id = r.id
         WHERE r.project_id = %s AND r.status = 'OPEN'
-        GROUP BY r.id, t.kind, c.control_ref, a.name
+        GROUP BY r.id, t.kind, c.id, c.control_ref, a.name
         ORDER BY r.created_at
-        """,
+        """.replace("{units}", operating_units("c")),
         (project_id,),
     ).fetchall():
         control_id = UUID(str(row[1]))
         proposed, open_, responded = int(row[6]), int(row[7]), int(row[8])
         round_kind = None if row[3] is None else str(row[3])
-        label = control_label(str(row[10]), None if row[11] is None else str(row[11]))
+        label = control_label(
+            str(row[10]),
+            None if row[11] is None else str(row[11]),
+            None if row[13] is None else str(row[13]),
+        )
         what = (
             label
             if round_kind is None

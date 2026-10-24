@@ -13,6 +13,12 @@ import {
   type Queue,
   type Tab,
 } from "./planning-model";
+import {
+  type Families,
+  parseFamilies,
+  parseScopeUnits,
+  type ScopeUnit,
+} from "./shared-plans-model";
 import type { ShellModel } from "./shell-model";
 
 export type PlanningPageState = {
@@ -24,8 +30,13 @@ export type PlanningPageState = {
   tab: Tab;
   /** The states the queue is filtered to (none: every control). */
   filter: PlanningState[];
-  /** Plans (the review queue) or phases (release by phase). */
-  view: "plans" | "phases";
+  /** By control (the shared plans, by exception; the default on Test plans), plans (the
+   * review queue, plan by plan), or phases (release by phase). */
+  view: "controls" | "plans" | "phases";
+  /** Each control's implementations and review group; null when not read or not loaded. */
+  families: Families | null;
+  /** The engagement's legal entities, locations, and other units controls operate in. */
+  units: ScopeUnit[];
   /** Each control's phases and their release; null when it could not be loaded. */
   phases: PhaseProgress | null;
 };
@@ -64,12 +75,22 @@ export async function loadPlanning(
   const base = `/organizations/${model.organization.id}/projects/${model.selectedProject.id}`;
   const controlId =
     query.control !== null && UUID.test(query.control) ? query.control : null;
-  const [queue, plan, phases] = await Promise.all([
+  // The plans open by control (shared plans); "each" is every plan on its own.
+  const view: PlanningPageState["view"] =
+    query.view === "phases"
+      ? "phases"
+      : query.view === "each"
+        ? "plans"
+        : "controls";
+  const byControl = view === "controls" && controlId === null;
+  const [queue, plan, phases, families, units] = await Promise.all([
     apiGet(`${base}/planning-review`, session),
     controlId === null
       ? null
       : apiGet(`${base}/controls/${controlId}/master-plan`, session),
     apiGet(`${base}/phase-progress`, session),
+    byControl ? apiGet(`${base}/planning-review/families`, session) : null,
+    byControl ? apiGet(`${base}/scope-units`, session) : null,
   ]);
   const filter = (query.filter ?? "")
     .split(",")
@@ -83,7 +104,13 @@ export async function loadPlanning(
     controlId,
     tab: parseTab(query.tab),
     filter,
-    view: query.view === "phases" ? "phases" : "plans",
+    view,
     phases: phases.status === 200 ? parsePhaseProgress(phases.body) : null,
+    families:
+      families !== null && families.status === 200
+        ? parseFamilies(families.body)
+        : null,
+    units:
+      units !== null && units.status === 200 ? parseScopeUnits(units.body) : [],
   };
 }

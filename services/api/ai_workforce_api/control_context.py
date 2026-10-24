@@ -39,6 +39,7 @@ Classification = Literal[
     "BUSINESS_PROCESS",
     "ENTITY_LEVEL",
     "KEY_REPORT",
+    "MANAGEMENT_REVIEW",
 ]
 CLASSIFICATIONS: tuple[Classification, ...] = (
     "ITGC",
@@ -47,6 +48,7 @@ CLASSIFICATIONS: tuple[Classification, ...] = (
     "BUSINESS_PROCESS",
     "ENTITY_LEVEL",
     "KEY_REPORT",
+    "MANAGEMENT_REVIEW",
 )
 DocumentKind = Literal[
     "NARRATIVE", "POLICY", "PROCEDURE", "FLOWCHART", "WALKTHROUGH", "SYSTEM", "PRIOR_YEAR",

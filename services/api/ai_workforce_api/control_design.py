@@ -523,13 +523,19 @@ def set_values(
     targets: dict[UUID, set[str]] = {control_id: set(cleaned)}
     with transaction(connection) as cursor:
         if body.everywhere:
+            # Only to controls in the same units (Release 1): a control split by entity,
+            # location, or process may have a different answer in each, so an answer for
+            # one never fills another by itself (split_part: the units in the key).
             for other, library_key in cursor.execute(
                 """
                 SELECT id, library_key FROM engagement_controls
                 WHERE project_id = %s AND id <> %s AND library_key IS NOT NULL
                   AND library_version >= %s
+                  AND split_part(implementation_key, ':', 2) = (
+                      SELECT split_part(implementation_key, ':', 2)
+                      FROM engagement_controls WHERE id = %s)
                 """,
-                (project_id, control_id, DEFINED_SINCE),
+                (project_id, control_id, DEFINED_SINCE, control_id),
             ).fetchall():
                 other_statement = statement_for(str(library_key))
                 if other_statement is None:

@@ -507,6 +507,15 @@ describe("controls per application", () => {
       controlLabel({ controlRef: "ITGC-AC-01", application: "" }),
       "ITGC-AC-01",
     );
+    // A control split by entity is filed to the entity named, never to its sibling.
+    assert.equal(
+      controlLabel({
+        controlRef: "RTR-02",
+        application: "",
+        units: "Acme UK Ltd",
+      }),
+      "RTR-02 · Acme UK Ltd",
+    );
   });
 });
 

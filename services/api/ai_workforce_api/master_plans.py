@@ -67,8 +67,10 @@ from ai_workforce_api.evidence_plans import (
     _audit,
     release,
 )
+from ai_workforce_api.implementations import CoverageBody, Scope, ScopeUnit, SplitBody, UnitCreate
 from ai_workforce_api.library_governance import Category, category_for, effective_status
 from ai_workforce_api.settings import Settings
+from ai_workforce_api.shared_plans import FamiliesBody, GroupApproveBody, GroupResult
 
 # Planning states, derived from the records (never stored).
 PlanningState = Literal[
@@ -220,6 +222,9 @@ class _Plan:
     library_status: str = ""
     # The business process the team named for the control, if any (migration 0059).
     process: str = ""
+    # The units the control operates in, when split by them (Release 1): shown with the
+    # system; never part of the plan's content or fingerprint.
+    units: str = ""
 
 
 def _load(
@@ -267,6 +272,11 @@ def _load(
         )  # fmt: skip
     if not plans:
         return plans
+    from ai_workforce_api.implementations import operating_names
+
+    for found_id, names in operating_names(connection, project_id).items():
+        if found_id in plans:
+            plans[found_id].units = names
     scope = "project_id = %(p)s" + (" AND engagement_control_id = %(c)s" if one else "")
     by_plan: dict[UUID, _Plan] = {}
     for row in connection.execute(
@@ -1015,6 +1025,8 @@ class ControlSection(BaseModel):
     area: str
     key_control: bool
     application: str
+    # The units it operates in, when split by them (Release 1).
+    units: str = ""
     classifications: list[str]
     # Where the control came from, what its plan is built from, and the standard it
     # follows, with the firm's methodology review of it (milestone L2).
@@ -1243,6 +1255,7 @@ def body_of(
             area=plan.domain,
             key_control=plan.key_control,
             application=plan.application,
+            units=plan.units,
             classifications=plan.classifications,
             source=plan.source,
             test_basis=plan.test_basis,
@@ -1642,6 +1655,8 @@ class QueueRow(BaseModel):
     control_ref: str
     title: str
     application: str
+    # The units it operates in, when split by them (Release 1).
+    units: str = ""
     state: PlanningState
     state_label: str
     revision: int
@@ -1709,6 +1724,7 @@ def planning_queue(connection: psycopg.Connection[Any], project_id: UUID) -> Que
                 control_ref=plan.control_ref,
                 title=plan.title,
                 application=plan.application,
+                units=plan.units,
                 state=state,
                 state_label=STATE_LABELS[state],
                 revision=plan.revision,
@@ -1814,6 +1830,15 @@ class SubmitBody(BaseModel):
     note: str = Field(default="", max_length=2000)
 
 
+@dataclass(frozen=True)
+class GroupLink:
+    """The group decision an approval is part of (shared_plans.approve_group), and the
+    shared plan's fingerprint it approved."""
+
+    group_decision_id: UUID
+    shared_hash: str
+
+
 class PendingRevisionDecision(BaseModel):
     version: int = Field(ge=1)
     decision: Literal["ACCEPT", "DISMISS"]
@@ -1840,8 +1865,13 @@ def _record(
     actor: UUID,
     decision: Literal["APPROVED", "CHANGES_REQUESTED"],
     comment: str,
+    group: GroupLink | None = None,
 ) -> tuple[int, str]:
-    """Store the plan as the reviewer saw it, once per revision, and the decision on it."""
+    """Store the plan as the reviewer saw it, once per revision, and the decision on it,
+    with the implementation's scope and, for a group decision, the group and the shared
+    plan's fingerprint (migration 0104)."""
+    from ai_workforce_api.implementations import scope_of
+
     plan = _load(cursor.connection, project_id, control_id)[control_id]
     assert plan.plan_id is not None
     snapshot = content(plan)
@@ -1874,17 +1904,22 @@ def _record(
         ).fetchone()  # fmt: skip
         assert version is not None
     findings = [item.model_dump() for item in findings_of(plan)]
+    scope = scope_of(cursor.connection, project_id, control_id)
     cursor.execute(
         """
         INSERT INTO plan_decisions (
             organization_id, project_id, plan_id, plan_version_id, engagement_control_id,
-            revision, decision, comment, findings, content_hash, decided_by
+            revision, decision, comment, findings, content_hash, decided_by,
+            group_decision_id, shared_hash, scope
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             organization_id, project_id, plan.plan_id, version[0], control_id, plan.revision,
             decision, comment, json.dumps(findings), digest, actor,
+            None if group is None else group.group_decision_id,
+            None if group is None else group.shared_hash,
+            json.dumps(scope.model_dump()),
         ),
     )  # fmt: skip
     return plan.revision, digest
@@ -1897,11 +1932,12 @@ def approve(
     control_id: UUID,
     actor: UUID,
     body: ApproveBody,
+    group: GroupLink | None = None,
 ) -> list[UUID]:
     """A person approves the plan's current revision, with its attributes. Refused while
     anything that would change it is undecided. The client values answered with it are
     recorded first, in the same transaction. Returns the other controls those values
-    also filled, for their own follow-up."""
+    also filled, for their own follow-up. Part of a group decision, it says so."""
     from ai_workforce_api.control_context import ContextState
     from ai_workforce_api.control_design import ValuesBody, set_values
 
@@ -1910,6 +1946,10 @@ def approve(
             cursor, project_id, control_id
         )
         if status == "APPROVED":
+            if group is not None:
+                # Approved since the group decision was shown (another reviewer, or the
+                # same request sent twice): the group decision must not stand without it.
+                raise PlanState("a plan was approved meanwhile; review the control again")
             # Its current revision is approved (the database holds it so): approving it
             # again records nothing new.
             return []
@@ -1939,7 +1979,7 @@ def approve(
             raise PlanState("settle the control's attributes first")
         revision, digest = _record(
             cursor, organization_id, project_id, control_id, actor, "APPROVED",
-            body.comment.strip(),
+            body.comment.strip(), group,
         )  # fmt: skip
         cursor.execute(
             """
@@ -2643,6 +2683,14 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
         if action is not Action.TASK_READ and not found[0]:
             raise PlanState("the control is out of scope")
 
+    def implementation_call[T](work: Callable[[], T]) -> T:
+        from ai_workforce_api.implementations import ImplementationState
+
+        try:
+            return work()
+        except ImplementationState as error:
+            raise PlanState(error.detail) from None
+
     def may_decide(
         connection: psycopg.Connection[Any], principal: Principal, organization_id: UUID,
         project_id: UUID, action: Action = Action.PROJECT_UPDATE,
@@ -2741,6 +2789,109 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
             return BatchResult(
                 outcomes=outcomes, approved=sum(1 for item in outcomes if item.approved)
             )
+
+        return run(request, work)
+
+    @app.get(f"{base}/planning-review/families")
+    def plan_families(organization_id: UUID, project_id: UUID, request: Request) -> FamiliesBody:
+        from ai_workforce_api.shared_plans import families
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> FamiliesBody:
+            allowed(c, p, organization_id, project_id, None, Action.TASK_READ)
+            body = families(c, project_id)
+            body.viewer_can_decide = may_decide(c, p, organization_id, project_id)
+            return body
+
+        return run(request, work)
+
+    @app.post(f"{base}/planning-review/families/approve")
+    def approve_family(organization_id: UUID, project_id: UUID, request: Request,
+                       body: GroupApproveBody) -> GroupResult:  # fmt: skip
+        """One decision for every implementation whose plan is the shared plan; each gets
+        its own recorded approval (shared_plans.approve_group)."""
+        from ai_workforce_api.pbc_drafting import schedule
+        from ai_workforce_api.readiness import resume_testing
+        from ai_workforce_api.shared_plans import approve_group
+        from ai_workforce_api.testing_engine import TestScheduler, schedule_runs
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> GroupResult:
+            allowed(c, p, organization_id, project_id, None, Action.PROJECT_UPDATE)
+            result = approve_group(c, organization_id, project_id, p.id, body)
+            for control_id in result.approved:
+                schedule(scheduler, release(c, organization_id, project_id, control_id, p.id))
+                schedule_runs(
+                    scheduler if isinstance(scheduler, TestScheduler) else None,
+                    resume_testing(c, project_id, control_id),
+                )
+            return result
+
+        return run(request, work)
+
+    @app.get(f"{base}/scope-units")
+    def scope_units(organization_id: UUID, project_id: UUID, request: Request) -> list[ScopeUnit]:
+        from ai_workforce_api.implementations import units
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> list[ScopeUnit]:
+            allowed(c, p, organization_id, project_id, None, Action.TASK_READ)
+            return units(c, project_id)
+
+        return run(request, work)
+
+    @app.post(f"{base}/scope-units")
+    def add_scope_unit(organization_id: UUID, project_id: UUID, request: Request,
+                       body: UnitCreate) -> list[ScopeUnit]:  # fmt: skip
+        from ai_workforce_api.implementations import add_unit
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> list[ScopeUnit]:
+            allowed(c, p, organization_id, project_id, None, Action.TASK_UPDATE)
+            return implementation_call(lambda: add_unit(c, organization_id, project_id, p.id,
+                                                        body))  # fmt: skip
+
+        return run(request, work)
+
+    @app.post(f"{control}/coverage")
+    def set_control_coverage(organization_id: UUID, project_id: UUID, control_id: UUID,
+                             request: Request, body: CoverageBody) -> Scope:  # fmt: skip
+        from ai_workforce_api.implementations import set_coverage
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> Scope:
+            allowed(c, p, organization_id, project_id, control_id, Action.TASK_UPDATE)
+            return implementation_call(lambda: set_coverage(
+                c, organization_id, project_id, control_id, p.id, body
+            ))  # fmt: skip
+
+        return run(request, work)
+
+    @app.post(f"{control}/split")
+    def split_control(organization_id: UUID, project_id: UUID, control_id: UUID,
+                      request: Request, body: SplitBody) -> list[UUID]:  # fmt: skip
+        """Operate the control separately per unit: an engagement lead's or authorized
+        reviewer's decision (project.update), with its reason. The new implementations are
+        planned with the reviewed rules."""
+        from ai_workforce_api.evidence_plans import generate
+        from ai_workforce_api.implementations import split
+        from ai_workforce_api.pbc_drafting import schedule
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> list[UUID]:
+            allowed(c, p, organization_id, project_id, control_id, Action.PROJECT_UPDATE)
+            created = implementation_call(lambda: split(
+                c, organization_id, project_id, control_id, p.id, body
+            ))  # fmt: skip
+            # The implementations are planned together, with the reviewed rules, so they share
+            # one plan: the original again too, unless a person approved its plan (which
+            # stays; any difference is then shown and reviewed on its own).
+            source = c.execute(
+                "SELECT status FROM evidence_plans WHERE engagement_control_id = %s",
+                (control_id,),
+            ).fetchone()
+            again = [] if source is not None and source[0] in APPROVED_STATUSES else [control_id]
+            drafts: list[UUID] = []
+            for planned in [*again, *created]:
+                _changes, queued, _note = generate(c, None, organization_id, project_id,
+                                                   planned, p.id)  # fmt: skip
+                drafts += queued
+            schedule(scheduler, drafts)
+            return created
 
         return run(request, work)
 

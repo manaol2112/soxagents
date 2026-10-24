@@ -14,6 +14,7 @@ export const CLASSIFICATIONS = [
   ["BUSINESS_PROCESS", "Business process control"],
   ["ENTITY_LEVEL", "Entity-level control"],
   ["KEY_REPORT", "Key report"],
+  ["MANAGEMENT_REVIEW", "Management review control"],
 ] as const;
 export type Classification = (typeof CLASSIFICATIONS)[number][0];
 

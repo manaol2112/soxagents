@@ -2296,6 +2296,8 @@ def shared_from_sibling(columns: str) -> str:
         JOIN engagement_controls sib
           ON sib.id = q2.engagement_control_id AND sib.project_id = me.project_id
          AND sib.control_ref = me.control_ref AND sib.id <> me.id
+         -- Only a sibling in the same units: never another entity's evidence (Release 1).
+         AND split_part(sib.implementation_key, ':', 2) = split_part(me.implementation_key, ':', 2)
         JOIN evidence_matches m ON m.requirement_id = q2.id AND m.status = 'FILED'
         JOIN evidence_file_links l ON l.evidence_file_id = m.evidence_file_id
         JOIN evidence_files f ON f.id = m.evidence_file_id

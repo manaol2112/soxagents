@@ -26,7 +26,12 @@ import psycopg
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from ai_workforce_api.authorization import NotVisible, Principal
-from ai_workforce_api.control_instances import FAMILY_FILES, control_label, parse_control_name
+from ai_workforce_api.control_instances import (
+    FAMILY_FILES,
+    control_label,
+    operating_units,
+    parse_control_name,
+)
 from ai_workforce_api.evidence_withdrawn import in_force
 from ai_workforce_api.models import ChatTool
 from ai_workforce_api.settings import Settings
@@ -442,27 +447,36 @@ class MilestoneArgs(BaseModel):
 
 
 def _control(context: ToolContext, control_ref: str) -> tuple[UUID, str]:
-    """A control by its ID, and its application when it has one instance per application."""
+    """A control by its ID, and its application or the units it operates in when it has one
+    instance per application or unit."""
     ref, application = parse_control_name(control_ref)
     rows = context.connection.execute(
-        """
-        SELECT c.id, c.control_ref, a.name FROM engagement_controls c
+        f"""
+        SELECT c.id, c.control_ref, a.name, {operating_units("c")} AS units
+        FROM engagement_controls c
         LEFT JOIN engagement_applications a ON a.id = c.engagement_application_id
         WHERE c.project_id = %s AND lower(c.control_ref) = lower(%s)
-        ORDER BY a.name NULLS FIRST
+        ORDER BY a.name NULLS FIRST, units NULLS FIRST
         """,
         (context.project_id, ref.strip()),
     ).fetchall()
     if not rows:
         raise ToolFailed(f"No control {control_ref} in this engagement.")
+
+    def named(row: Any) -> str:
+        return control_label(str(row[1]), row[2], row[3])
+
     if application is not None:
         wanted = application.strip().lower()
-        rows = [row for row in rows if row[2] is not None and wanted in str(row[2]).lower()] or rows
+        rows = [
+            row for row in rows if wanted in named(row).removeprefix(str(row[1])).lower()
+        ] or rows
     if len(rows) > 1:
-        names = ", ".join(control_label(str(row[1]), row[2]) for row in rows)
-        raise ToolFailed(f"{ref} is tested per application. Name one: {names}.")
+        names = ", ".join(named(row) for row in rows)
+        per = "unit" if any(row[3] for row in rows) else "application"
+        raise ToolFailed(f"{ref} is tested per {per}. Name one: {names}.")
     row = rows[0]
-    return UUID(str(row[0])), control_label(str(row[1]), row[2])
+    return UUID(str(row[0])), named(row)
 
 
 def _analysis(context: ToolContext, file_id: UUID) -> tuple[UUID, int]:

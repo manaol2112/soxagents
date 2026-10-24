@@ -385,6 +385,8 @@ export type ControlRow = {
   /** The one application this instance tests (Milestone 8.5), and "ID · application". */
   applicationId: string | null;
   applicationName: string;
+  /** The units it operates in, when split by them (Release 1); "" otherwise. */
+  units: string;
   label: string;
   sampleSize: number;
   stage: string;
@@ -851,6 +853,7 @@ export function parseControls(value: unknown): ControlRow[] | null {
       systems: strings(item.systems),
       applicationId: maybe(item.application_id),
       applicationName: str(item.application_name),
+      units: str(item.units),
       label: str(item.label) || str(item.control_ref),
       sampleSize: num(item.sample_size),
       stage: str(item.stage),

@@ -19,6 +19,27 @@ For an ordinary code change:
    test-changed`.
 3. `make test-fast` once a feature change is complete.
 
+Decided by the owner on 23 October 2026, for active development:
+
+- After each meaningful change, run only the tests above plus the critical safeguard tests
+  the change could affect (approval enforcement, plan applicability, evidence
+  traceability, authorization and permissions, testing gates, approval history). Run the
+  relevant critical files, not the whole critical tier, and never skip one the change
+  could affect.
+- For a significant UI change, also check rendering, navigation, preserved form and filter
+  state, loading and error states, layouts at 390 px and 1440 px, keyboard use, motion
+  (and reduced motion), no unnecessary page reload, and that the page agrees with the
+  server after the action (the UI acceptance checklist in `docs/design-system.md`).
+- Do not run the full suite automatically after a step; it belongs to Tier 3, migration
+  validation, final verification before a merge or release, or the owner's request.
+- After each step report: the tests executed, passed and failed counts, execution time,
+  the tests deliberately deferred, and the risks not yet verified. Never describe targeted
+  runs as regression testing of the application. Before asking to commit, merge, or
+  release, list the outstanding full-regression requirements.
+- On machines where application control blocks `pytest.exe` (the `make test-*` targets
+  fail at once), run the same selection with `python -m pytest`, checking first that every
+  named file exists: a missing path collects nothing and exits 0.
+
 ### Tier 2: milestone closure
 
 Before a milestone is committed:
@@ -285,6 +306,7 @@ and `workflow-model` (queue sources).
 - M3c closure (Tier 2 with escalation: approval enforcement and the workpaper content model changed): `make test-critical` **421 passed**; `make test-fast` **135 Python and 129 Node passed**; every Node file **723 passed**; the 17 non-routine files that touch workpapers, reviews or the rule checks **193 passed**; the live M3c tests 3 passed. `make test-full` not rerun, at the owner's direction; the selection covers the changed paths (see `docs/review/m3c/tests.md`).
 - M3d (Tier 2 with escalation; reliability and safeguards; migration 0098; shared `provenance.py` and `models.py`; `test_reliability.py` and `test_hostile_evidence.py` added to the fast and critical sets): `make test-critical` **447 passed**; `make test-fast` **161 Python and 129 Node passed**; every Node file **723 passed**; lint and types clean except the known line endings. Escalated to the full Python suite for the shared model-call record. It ran four times: 900 passed and 1 failed; two hangs in `test_system_scoping` with connections idle in transaction; then **895 passed, 1 failed** (`test_security`'s race test, "too many clients already"). A control run of the 222ac28 code had 6 connection failures and no hang. The failed tests passed alone. The suite now runs at the edge of PostgreSQL's 100 connections (Temporal holds 25), so Tier 3 should use fewer workers or more connections. Expectations rewritten, none retired: see `docs/review/m3d/tests.md`.
 - M3d closure (the owner's conditional acceptance; migration 0099; the mapper, the reviewer and the instruction guard changed; `test_plan_evaluation.py` added to the fast and critical sets): `make test-critical` **454 passed**; `make test-fast` **168 Python and 130 Node passed**; every Node file **724 passed**; `make test-full` once, after the connection fix, **908 passed, 0 failed, 13 skipped**, peak 41 connections. The full-suite failures and hangs of the first M3d gate were one test's unbounded recursion (below, §6), not M3d. Expectations changed: see `docs/review/m3d/tests.md`.
+- Unified planning R1 closure (Tier 3 at the owner's request; migration 0104; shared plans, implementations, the reference plan, labels for split controls; `test_shared_plans.py` added to `CRITICAL_PY`, `test_sampling`'s approval test to `CRITICAL_PICKED`, `test_waiting.py` to `FAST_PY`): `make test-critical` **467 passed**; `make test-fast` **169 Python and 172 Node passed**; every Node file **778 passed**; `make test-full` **929 passed, 0 failed, 13 skipped** (live, opt-in), after a first run with 2 failures from earlier branch work (§6). Migration replay on an empty database and on disposable copies of the demonstration and development databases, with 0104 rolled back and applied again: no row changed. Record: docs/unified-planning-r1.md.
 
 ## 6. Regression prevention
 
@@ -306,6 +328,10 @@ The review of 21 October 2026:
 | `test_engagement_data::test_an_excel_export_holds_exactly_the_filtered_records` (intermittent) | The export's creation and expiry came from two clock readings, a microsecond apart | M3c full run | Fixed in the product (`exports.py`); the test's 30-day expectation is unchanged |
 | Full-suite connection exhaustion and hangs (`test_system_scoping::test_a_review_asked_for_mid_run_runs_again_with_what_changed`) | The test's patched `gather` posted before recording its call; each nested request re-entered it until PostgreSQL refused a connection (74 for one test) | M3d closure, by sampling `pg_stat_activity` and the `TEST_CONNECTION_AUDIT` diagnostic | The test asserts the library loads once (`loads == [True]`); `TEST_CONNECTION_AUDIT` records any connection a test leaves open |
 | `test_waiting` (earlier) | An UPDATE-class file not run between M2a and M2b | M2b | Its queue behaviour is asserted by `test_queue` (critical) |
+| A group plan decision recorded twice, the second with no plan records (Unified planning R1) | Two requests from a fast double press both passed the read-time checks; approving an approved plan records nothing, so the second group decision stood empty | R1 closure, by a UI check counting records after a double press | Fixed in the product (`approve` refuses inside a group decision; `approve_group` checks one record per plan). `test_shared_plans.py` added to `CRITICAL_PY`; `test_a_group_decision_never_stands_without_a_record_for_each_plan` fails without the fix |
+| `test_sampling::test_a_population_gets_a_proposed_test_plan_that_a_person_approves` | Expected the kickoff request to stay SENT; migration 0103 (owner) receives a request once its items are accepted. Rewritten: the request is RECEIVED on acceptance and unchanged by the sample request (old and new expectations in the test) | R1 closure full run | `CRITICAL_PICKED` |
+| `test_waiting::test_open_test_results_and_late_evidence_wait_on_the_team` | The inbox items gained `id` and `control_label` (queue.QueueItem); the exact comparison now asserts both | R1 closure full run | `FAST_PY` |
+| A split control's entities sharing values and evidence (R1) | "Fill every control that has none" and the family's shared files did not know units | R1 closure review | Fixed in the product (`set_values`, `FAMILY_FILES`, `shared_from_sibling` match on units); asserted in `test_shared_plans.py` (critical), each shown to fail without its fix; both evidence rules by `test_evidence_is_never_shared_across_entities_and_still_shared_across_systems` (added at the commit authorization) |
 
 ## 7. Reporting and the milestone closure checklist
 

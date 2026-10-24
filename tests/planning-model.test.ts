@@ -489,6 +489,106 @@ describe("test plan actions", () => {
     assert.deepEqual(planningWrite({ intent: "replan" }), { error: "invalid" });
   });
 
+  it("sends a group decision, a scope unit, coverage and a split only when well formed", () => {
+    const hash = "b".repeat(64);
+    const family = planningWrite({
+      ...IDS,
+      intent: "approve-family",
+      control_ref: "ITGC-AC-01",
+      items: [
+        { control_id: CONTROL, version: 4 },
+        { control_id: OTHER, version: 2 },
+      ],
+      presented_hash: hash,
+      comment: "",
+    });
+    assert.ok(!("error" in family));
+    assert.equal(family.path, `${BASE}/planning-review/families/approve`);
+    assert.deepEqual(
+      planningWrite({
+        ...IDS,
+        intent: "approve-family",
+        control_ref: "ITGC-AC-01",
+        items: [{ control_id: CONTROL, version: 4 }],
+        presented_hash: "stale",
+      }),
+      { error: "invalid" },
+    );
+    const unit = planningWrite({
+      ...IDS,
+      intent: "scope-unit-add",
+      kind: "SERVICE_CENTER",
+      name: "  Krakow SSC ",
+    });
+    assert.ok(!("error" in unit));
+    assert.equal(unit.path, `${BASE}/scope-units`);
+    assert.deepEqual(unit.body, { kind: "SERVICE_CENTER", name: "Krakow SSC" });
+    assert.deepEqual(
+      planningWrite({
+        ...IDS,
+        intent: "scope-unit-add",
+        kind: "PLANET",
+        name: "x",
+      }),
+      { error: "invalid" },
+    );
+    const coverage = planningWrite({
+      ...IDS,
+      intent: "coverage",
+      control_id: CONTROL,
+      unit_ids: [OTHER, OTHER],
+    });
+    assert.ok(!("error" in coverage));
+    assert.equal(coverage.path, `${BASE}/controls/${CONTROL}/coverage`);
+    assert.deepEqual(coverage.body, { unit_ids: [OTHER] });
+    // Covering nothing is allowed: a central control may name no unit it covers.
+    assert.ok(
+      !(
+        "error" in
+        planningWrite({
+          ...IDS,
+          intent: "coverage",
+          control_id: CONTROL,
+          unit_ids: [],
+        })
+      ),
+    );
+    const split = planningWrite({
+      ...IDS,
+      intent: "split",
+      control_id: CONTROL,
+      unit_ids: [CONTROL, OTHER],
+      reason: "Each entity runs its own close.",
+    });
+    assert.ok(!("error" in split));
+    assert.equal(split.path, `${BASE}/controls/${CONTROL}/split`);
+    assert.equal(split.slow, true);
+    // A split needs two units and a reason; it is never made on one unit or none.
+    for (const fields of [
+      { unit_ids: [OTHER], reason: "Each entity runs its own close." },
+      { unit_ids: [CONTROL, OTHER], reason: "short" },
+      { unit_ids: [CONTROL, "x"], reason: "Each entity runs its own close." },
+    ]) {
+      assert.deepEqual(
+        planningWrite({
+          ...IDS,
+          intent: "split",
+          control_id: CONTROL,
+          ...fields,
+        }),
+        { error: "invalid" },
+      );
+    }
+    assert.equal(
+      planningHref(ORG, PROJECT, { view: "each" }),
+      `/?organization=${ORG}&project=${PROJECT}&section=testing&view=each`,
+    );
+    assert.equal(
+      planningHref(ORG, PROJECT, { view: "plans" }),
+      `/?organization=${ORG}&project=${PROJECT}&section=testing`,
+    );
+  });
+
   it("says what went wrong in words a person can act on", () => {
     assert.equal(planningProblem(200), null);
     assert.equal(
@@ -1104,6 +1204,23 @@ describe("answering the client values from the queue", () => {
       { control_id: OTHER, values: { "admin-role": "Oracle service desk" } },
       { control_id: ITEM, values: { "admin-role": "SAP security team" } },
     ]);
+  });
+
+  it("asks a control split by entity for each entity's values on their own", () => {
+    const split = (controlId: string, units: string): QueueRow =>
+      ({ ...row(controlId, "RTR-02", "", [ADMIN]), units }) as QueueRow;
+    const questions = valueQuestions([
+      split(CONTROL, "Northwind UK Ltd"),
+      split(OTHER, "Northwind US Inc."),
+    ]);
+    // Two questions, not one answer for both: each entity may name a different reviewer.
+    assert.deepEqual(
+      questions.map((q) => [q.system, q.controls.map((c) => c.id)]),
+      [
+        ["Northwind UK Ltd", [CONTROL]],
+        ["Northwind US Inc.", [OTHER]],
+      ],
+    );
   });
 
   it("saves them in one call and refuses what the API would refuse", () => {
