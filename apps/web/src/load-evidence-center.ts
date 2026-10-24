@@ -6,6 +6,7 @@ import {
   type CenterQuery,
   parseCenterList,
 } from "./evidence-center-model";
+import { type Owners, parseOwners } from "./evidence-owners-model";
 import { apiGet, sessionToken } from "./load-workspace";
 import {
   type Contact,
@@ -24,6 +25,8 @@ export type EvidenceCenterState = {
   details: RequestDetails | null;
   /** The request to one person for several controls open in the side panel. */
   group: GroupView | null;
+  /** The requests addressed to no one, with suggested owners, when assigning. */
+  owners: Owners | null;
   /** The engagement's people at the client, for assigning owners. */
   contacts: Contact[];
 };
@@ -46,7 +49,7 @@ export async function loadEvidenceCenter(
   const session = sessionToken((await cookies()).get("aw_session")?.value);
   const base = `/organizations/${model.organization.id}/projects/${model.selectedProject.id}`;
   // The list as the person sees it: requests travelling together are one request.
-  const [list, details, group, contacts] = await Promise.all([
+  const [list, details, group, owners, contacts] = await Promise.all([
     apiGet(`${base}/evidence-requests?${apiQuery(query)}&grouped=1`, session),
     query.request === null
       ? null
@@ -54,6 +57,7 @@ export async function loadEvidenceCenter(
     query.group === null
       ? null
       : apiGet(`${base}/evidence-groups/${query.group}`, session),
+    query.assigning ? apiGet(`${base}/evidence-owners`, session) : null,
     apiGet(`${base}/engagement-contacts`, session),
   ]);
   return {
@@ -66,6 +70,10 @@ export async function loadEvidenceCenter(
     group:
       group !== null && group.status === 200
         ? parseGroupView(group.body)
+        : null,
+    owners:
+      owners !== null && owners.status === 200
+        ? parseOwners(owners.body)
         : null,
     contacts: contacts.status === 200 ? parseContacts(contacts.body) : [],
   };

@@ -47,6 +47,7 @@ from ai_workforce_api.evidence_center import register_evidence_center
 from ai_workforce_api.evidence_groups import register_evidence_groups
 from ai_workforce_api.evidence_intake import register_evidence_intake
 from ai_workforce_api.evidence_mapping import register_evidence_mapping
+from ai_workforce_api.evidence_owners import register_evidence_owners
 from ai_workforce_api.evidence_plans import register_evidence_plans
 from ai_workforce_api.evidence_portal import register_evidence_portal
 from ai_workforce_api.evidence_review import register_evidence_reviews
@@ -191,6 +192,7 @@ def create_app(
     register_evidence(app, resolved, analyses=analyses)
     register_consolidation(app, resolved)
     register_evidence_groups(app, resolved, timer=timer)
+    register_evidence_owners(app, resolved)
     register_evidence_analysis(app, resolved, analyses)
     register_evidence_intake(app, resolved, analyses=analyses)
     register_evidence_portal(app, resolved, analyses=analyses)

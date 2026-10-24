@@ -169,3 +169,51 @@ items do not fit.
   (R2a's freshness contract requires the approved revision); the panel says so.
 - Statuses (Missing, Provided, Verified, Accepted, Ready for testing) are R2b-3; a sent
   group shows the least advanced of its requests' stages, and each control's own.
+
+# R2b-2: bulk owner assignment
+
+Authorized with the R2b-1 commit (2869d8c). Built on the clean-slate policy: validated on
+freshly onboarded synthetic engagements; no work for historical records.
+
+## Behavior
+
+- **Who needs an owner.** Every draft request addressed to no one. The Evidence page says
+  how many ("9 requests have no owner") with **Assign owners**, and the evidence
+  coordinator link when none is set. Such a request stays unsendable: it joins no request
+  for a person, and approval refuses it.
+- **Suggestions from reliable records only, with their source**, first that applies:
+  1. *Control owner in the RCM* (the control's recorded owner).
+  2. *Receives this control's other requests*: the one person a person confirmed for the
+     same control's other requests (approved or sent, or assigned by a person).
+  3. *Named for ITGC-AC-05 in the engagement contacts*: the one contact whose role a
+     person wrote names the control.
+  4. *Receives the change management requests for SAP ERP*: the one person confirmed for
+     the same area's requests on the same system.
+  An ambiguous record (two people), an address the engagement cannot send to, or no record
+  suggests nothing. Nothing is invented: not an address, and not a name (a name shows only
+  where a record holds one).
+- **Bulk confirmation with individual overrides.** One section per suggested person, with
+  its sources and its requests, all checked; **Change for all** or **Change** on any
+  request picks someone else from the engagement's people or a typed address; unchecking
+  leaves a request out. Requests with no suggestion wait in their own section for a pick.
+  **Assign N requests** confirms them in one action.
+- **Confirming** sets each recipient through the single request's own assignment: the
+  same address checks (valid, allowed, within the client's domains), version check, and
+  audit (`pbc.assignment_changed`, the person's); copies, due date, and priority stay. A
+  request that cannot change says why beside it; the others go through. An assigned
+  draft then travels with that person's other requests for the phase (R2b-1).
+- **No schema change.** Routes: `GET …/evidence-owners`, `POST …/evidence-owners/assign`.
+
+## Proposed, not built
+
+- **System owners.** The approved sources include application and system owners, but no
+  record holds one (`engagement_applications` has no owner). Recording a business and an
+  IT owner per system at onboarding would make them a reliable source; that is a schema
+  and onboarding change for the owner's decision.
+
+## Known limitations
+
+- Assignment applies to drafts only; a request awaiting approval or sent keeps its
+  recipient.
+- A draft whose due date has passed is refused until its date is changed (the single
+  request's assignment rule).

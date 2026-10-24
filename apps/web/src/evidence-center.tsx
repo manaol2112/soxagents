@@ -35,6 +35,7 @@ import {
   viewQuery,
 } from "./evidence-center-model";
 import { requestStage } from "./evidence-flow";
+import { OwnersPanel } from "./evidence-owners";
 import { formatDate } from "./format";
 import type { EvidenceCenterState } from "./load-evidence-center";
 import { RecordDialog } from "./record-dialog";
@@ -132,15 +133,21 @@ export function EvidenceCenter({
   return (
     <div className="ec" aria-busy={pending}>
       <Kpis ids={ids} list={list} query={query} />
-      {coordinatorMissing && list.kpis.needs_assignment > 0 ? (
+      {list.kpis.needs_assignment > 0 ? (
         <p className="ec-setup" role="status">
           <UiIcon name="info" size={14} />
           <span>
             {list.kpis.needs_assignment} request
-            {list.kpis.needs_assignment === 1 ? " has" : "s have"} no recipient
-            and no evidence coordinator is set for the engagement.
+            {list.kpis.needs_assignment === 1 ? " has" : "s have"} no owner.
           </span>
-          <a href={setupHref}>Set the evidence coordinator</a>
+          {list.canAct ? (
+            <a href={centerHref(ids, query, { assigning: true })}>
+              Assign owners
+            </a>
+          ) : null}
+          {coordinatorMissing ? (
+            <a href={setupHref}>Set the evidence coordinator</a>
+          ) : null}
         </p>
       ) : null}
       <Toolbar
@@ -214,6 +221,26 @@ export function EvidenceCenter({
             <p className="banner banner-warning" role="status">
               It changed since the list loaded. Close this and open it again
               from the list.
+            </p>
+          </RecordDialog>
+        )
+      ) : null}
+      {query.assigning ? (
+        state.owners !== null ? (
+          <OwnersPanel
+            ids={ids}
+            owners={state.owners}
+            closeHref={centerHref(ids, query, { assigning: false })}
+            canAct={list.canAct}
+          />
+        ) : (
+          <RecordDialog
+            eyebrow="Evidence requests"
+            title="Owners could not be loaded"
+            closeHref={centerHref(ids, query, { assigning: false })}
+          >
+            <p className="banner banner-warning" role="status">
+              Close this and try again.
             </p>
           </RecordDialog>
         )

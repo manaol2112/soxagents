@@ -360,6 +360,8 @@ export type CenterQuery = {
   group: string | null;
   /** The new request panel is open. */
   creating: boolean;
+  /** The owner assignment panel is open. */
+  assigning: boolean;
 };
 
 export const DEFAULT_QUERY: CenterQuery = {
@@ -378,6 +380,7 @@ export const DEFAULT_QUERY: CenterQuery = {
   request: null,
   group: null,
   creating: false,
+  assigning: false,
 };
 
 const list = (value: string | null): string[] =>
@@ -419,6 +422,7 @@ export function parseCenterQuery(
         ? group
         : null,
     creating: get("rnew") === "1",
+    assigning: get("rassign") === "1",
   };
 }
 
@@ -448,9 +452,16 @@ export function centerHref(
   const next = { ...query, ...patch };
   const filtering = Object.keys(patch).some(
     (key) =>
-      !["page", "size", "request", "group", "creating", "sort", "dir"].includes(
-        key,
-      ),
+      ![
+        "page",
+        "size",
+        "request",
+        "group",
+        "creating",
+        "assigning",
+        "sort",
+        "dir",
+      ].includes(key),
   );
   if (filtering && patch.page === undefined) {
     next.page = 1;
@@ -479,6 +490,7 @@ export function centerHref(
   if (next.request !== null) params.set("request", next.request);
   else if (next.group !== null) params.set("group", next.group);
   if (next.creating) params.set("rnew", "1");
+  if (next.assigning) params.set("rassign", "1");
   return `/?${params.toString()}`;
 }
 
@@ -541,7 +553,8 @@ export type CenterIntent =
   | "create"
   | "request-planned"
   | "group-approve-send"
-  | "group-send";
+  | "group-send"
+  | "owners-assign";
 
 export type CenterWrite =
   | { error: "invalid" }
@@ -689,6 +702,27 @@ export function centerWrite(fields: Fields): CenterWrite {
             body: { members, reason },
           }
         : { error: "invalid" };
+    }
+    case "owners-assign": {
+      // Each request with the owner the person confirmed for it.
+      const chosen = items(fields.items);
+      const raw = Array.isArray(fields.items) ? fields.items : [];
+      const recipients = raw.map((item) =>
+        isRecord(item) ? str(item.recipient).trim().toLowerCase() : "",
+      );
+      if (chosen === null || recipients.some((item) => !EMAIL.test(item))) {
+        return { error: "invalid" };
+      }
+      return {
+        intent,
+        path: `${project}/evidence-owners/assign`,
+        body: {
+          items: chosen.map((item, index) => ({
+            ...item,
+            recipient: recipients[index],
+          })),
+        },
+      };
     }
     case "group-send": {
       const groupId = text(fields, "group_id");
