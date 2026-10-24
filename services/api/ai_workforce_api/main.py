@@ -26,6 +26,7 @@ from ai_workforce_api.auth import register_auth
 from ai_workforce_api.authorization import register_authorization
 from ai_workforce_api.clients import register_clients
 from ai_workforce_api.console import ConsoleScheduler, console_runner, register_console
+from ai_workforce_api.consolidation import register_consolidation
 from ai_workforce_api.context_routes import register_control_context
 from ai_workforce_api.control_reviews import register_control_reviews, review_runner
 from ai_workforce_api.control_tests import register_control_tests
@@ -187,6 +188,7 @@ def create_app(
     register_inbound(app, resolved)
     analyses = drafts if isinstance(drafts, EvidenceAnalysisScheduler) else None
     register_evidence(app, resolved, analyses=analyses)
+    register_consolidation(app, resolved)
     register_evidence_analysis(app, resolved, analyses)
     register_evidence_intake(app, resolved, analyses=analyses)
     register_evidence_portal(app, resolved, analyses=analyses)
