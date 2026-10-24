@@ -14,6 +14,7 @@ import {
   projectLabels,
   resolveRoute,
   showsSignInPrompt,
+  switcherProjects,
   taskStatusChoices,
   type WorkspaceSnapshot,
   workspaceHref,
@@ -338,6 +339,34 @@ describe("projectLabels", () => {
       "Contoso Ltd · SOX FY 2027 (period end 2027-12-31)",
     );
     assert.equal(labels.get("d"), "Internal review");
+  });
+});
+
+describe("switcherProjects", () => {
+  const project = (id: string, status: string) => ({ id, status }) as Project;
+  const all = [
+    project("a", "ACTIVE"),
+    project("b", "ARCHIVED"),
+    project("c", "COMPLETED"),
+    project("d", "DRAFT"),
+  ];
+
+  it("leaves archived engagements out of the switcher", () => {
+    assert.deepEqual(
+      switcherProjects(all, "a").map((item) => item.id),
+      ["a", "c", "d"],
+    );
+    assert.deepEqual(
+      switcherProjects(all, null).map((item) => item.id),
+      ["a", "c", "d"],
+    );
+  });
+
+  it("keeps the open engagement in place even when it is archived", () => {
+    assert.deepEqual(
+      switcherProjects(all, "b").map((item) => item.id),
+      ["a", "b", "c", "d"],
+    );
   });
 });
 

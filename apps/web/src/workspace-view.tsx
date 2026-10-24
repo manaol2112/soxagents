@@ -116,6 +116,7 @@ import {
   type SectionId,
   type ShellModel,
   showsSignInPrompt,
+  switcherProjects,
   type TaskDetail,
   type TaskNotice,
   taskStatusChoices,
@@ -589,18 +590,19 @@ function ProjectSelector({
   selectedProject: Project | null;
   section: SectionId;
 }) {
-  const first = projects[0];
+  const shown = switcherProjects(projects, selectedProject?.id ?? null);
+  const first = shown[0];
   if (first === undefined) {
     return <span className="crumb">No engagements</span>;
   }
-  const labels = projectLabels(projects);
+  const labels = projectLabels(shown);
   return (
     <div className="crumb-select">
       <ChoiceForm
         label="Engagement"
         name="project"
         value={selectedProject?.id ?? first.id}
-        options={projects.map((project) => ({
+        options={shown.map((project) => ({
           value: project.id,
           label: labels.get(project.id) ?? project.name,
         }))}

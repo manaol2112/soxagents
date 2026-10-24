@@ -390,6 +390,20 @@ export function deriveShell(snapshot: WorkspaceSnapshot): ShellModel {
 }
 
 /**
+ * The engagements the switcher offers: the ones still in use, and the one open now even
+ * when it is archived, so its name stays in place. Archived engagements are found on the
+ * Engagements page, as the recent list already leaves them out (recentOf).
+ */
+export function switcherProjects(
+  projects: readonly Project[],
+  selectedId: string | null,
+): Project[] {
+  return projects.filter(
+    (project) => project.status !== "ARCHIVED" || project.id === selectedId,
+  );
+}
+
+/**
  * What the engagement switcher shows for each engagement: the client, then the name.
  * Two engagements can share a name, so the client comes first; when both still match,
  * the period end tells them apart.
