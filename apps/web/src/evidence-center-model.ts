@@ -59,6 +59,7 @@ export type Stage =
   | "AWAITING_EVIDENCE"
   | "EVIDENCE_RECEIVED"
   | "UNDER_REVIEW"
+  | "READY_FOR_TESTING"
   | "COMPLETED"
   | "CHANGES_REQUESTED"
   | "PARTIALLY_RECEIVED"
@@ -74,6 +75,7 @@ export const STAGE_TONES: Record<Stage, string> = {
   AWAITING_EVIDENCE: "info",
   EVIDENCE_RECEIVED: "warning",
   UNDER_REVIEW: "warning",
+  READY_FOR_TESTING: "success",
   COMPLETED: "success",
   CHANGES_REQUESTED: "warning",
   PARTIALLY_RECEIVED: "warning",
@@ -141,6 +143,10 @@ export type CenterRow = {
   approvalReason: string | null;
   approvalDecidedBy: string | null;
   viewerCanDecide: boolean;
+  /** Its items: how many, how many the client provided, how many a person accepted. */
+  itemsTotal: number;
+  itemsProvided: number;
+  itemsAccepted: number;
   kickoff: boolean;
   /** One request to one person for several controls: it opens its own review. */
   group: boolean;
@@ -268,6 +274,9 @@ function parseRow(value: Record<string, unknown>): CenterRow | null {
         ? value.approval_decided_by
         : null,
     viewerCanDecide: value.viewer_can_decide === true,
+    itemsTotal: num(value.items_total),
+    itemsProvided: num(value.items_provided),
+    itemsAccepted: num(value.items_accepted),
     kickoff: value.kickoff === true,
     group: value.group === true,
     groupStatus: str(value.group_status),
@@ -495,6 +504,27 @@ export function centerHref(
 }
 
 /** Whether any filter narrows the list (the view and figure included). */
+/** A sent request's progress, in words: what the client provided, and what a person
+ * accepted. Empty before it is sent, or when it asks for nothing. */
+export function progressLine(row: {
+  status: string;
+  itemsTotal: number;
+  itemsProvided: number;
+  itemsAccepted: number;
+}): string {
+  if (
+    row.itemsTotal === 0 ||
+    row.status === "DRAFT" ||
+    row.status === "APPROVAL_PENDING"
+  ) {
+    return "";
+  }
+  const provided = `${row.itemsProvided} of ${row.itemsTotal} provided`;
+  return row.itemsAccepted > 0
+    ? `${provided} · ${row.itemsAccepted} accepted`
+    : provided;
+}
+
 export function filtered(query: CenterQuery): boolean {
   return (
     query.q !== "" ||

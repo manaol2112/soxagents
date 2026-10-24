@@ -1151,3 +1151,54 @@ a.gp-name:focus-visible {
     padding-left: 1.6rem;
   }
 }
+
+/* Evidence statuses (Release 2b-3): a sent request's progress in the list, and each item's
+   status in its panel. */
+.ec-progress {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.gp-statuses li {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.1rem 0;
+}
+
+.gp-item-status {
+  justify-self: start;
+  padding: 0 0.45rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+}
+
+.gp-item-status.is-missing {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+}
+
+.gp-item-status.is-verified {
+  color: var(--info, var(--accent));
+  background: var(--info-soft, var(--surface-muted));
+}
+
+.gp-item-status.is-accepted {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: var(--success-border, var(--border-subtle));
+}
+
+.gp-item-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

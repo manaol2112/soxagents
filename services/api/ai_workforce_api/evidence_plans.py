@@ -3600,9 +3600,12 @@ def set_sufficiency(
             """,
             (body.sufficiency, note, body.sufficiency, actor, body.sufficiency, requirement_id),
         )
+        # Each decision with its note: the requirement holds only the latest, so the trail
+        # keeps every earlier one (an item sent back, then accepted, keeps why it was).
         _audit(
             cursor, organization_id, project_id, actor, "evidence_requirement.sufficiency",
-            "evidence_requirement", requirement_id, {"sufficiency": body.sufficiency},
+            "evidence_requirement", requirement_id,
+            {"sufficiency": body.sufficiency, "note": note},
         )  # fmt: skip
         if body.sufficiency == "ACCEPTED" and row[3] is not None:
             _received_when_accepted(cursor, organization_id, project_id, actor, row[3])

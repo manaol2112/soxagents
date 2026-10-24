@@ -11,6 +11,7 @@ import {
   type GroupMember,
   type GroupView,
   groupStatusLine,
+  memberProgress,
   seenMembers,
 } from "./request-group-model";
 import { UiIcon } from "./ui-icon";
@@ -248,6 +249,19 @@ export function GroupPanel({
                     <>
                       <dt>Sent</dt>
                       <dd>{formatDate(view.sentAt)}</dd>
+                      {view.itemsTotal > 0 ? (
+                        <>
+                          <dt>Provided</dt>
+                          <dd>
+                            {view.itemsProvided} of {view.itemsTotal}
+                            {view.itemsAccepted > 0 ? (
+                              <span className="gp-sub">
+                                {view.itemsAccepted} accepted
+                              </span>
+                            ) : null}
+                          </dd>
+                        </>
+                      ) : null}
                     </>
                   ) : view.approvedAt !== null && view.status === "APPROVED" ? (
                     <>
@@ -334,7 +348,7 @@ function Member({
           {member.controlTitle || member.title}
         </a>
         {showStage ? (
-          <span className="gp-stage">{member.stageLabel}</span>
+          <span className="gp-stage">{memberProgress(member)}</span>
         ) : member.dueDiffers ? (
           <span className="gp-stage">Due {formatDate(member.dueAt)}</span>
         ) : null}
@@ -342,7 +356,25 @@ function Member({
       {member.systems.length > 0 ? (
         <p className="gp-sub">{member.systems.join(", ")}</p>
       ) : null}
-      {member.items.length > 0 ? (
+      {member.statuses.length > 0 ? (
+        <ul className="gp-items gp-statuses">
+          {member.statuses.map((item) => (
+            <li key={`${item.title}-${item.status}`}>
+              <span
+                className={`gp-item-status is-${item.status.toLowerCase()}`}
+              >
+                {item.label}
+              </span>
+              <span className="gp-item-title">
+                {item.title}
+                {item.note !== "" ? (
+                  <span className="gp-sub">Still needed: {item.note}</span>
+                ) : null}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : member.items.length > 0 ? (
         <ul className="gp-items">
           {member.items.map((item) => (
             <li key={item}>{item}</li>

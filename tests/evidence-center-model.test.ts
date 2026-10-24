@@ -13,6 +13,7 @@ import {
   parseBulkResult,
   parseCenterList,
   parseCenterQuery,
+  progressLine,
   viewQuery,
 } from "../apps/web/src/evidence-center-model.ts";
 
@@ -453,5 +454,23 @@ describe("the test plan attributes a request supports", () => {
     });
     assert.deepEqual(list?.rows[0]?.supports, ["A1", "A3"]);
     assert.deepEqual(parseCenterList(api)?.rows[0]?.supports, []);
+  });
+});
+
+describe("a sent request's progress", () => {
+  it("counts what the client provided and what a person accepted, once sent", () => {
+    const row = {
+      status: "SENT",
+      itemsTotal: 8,
+      itemsProvided: 3,
+      itemsAccepted: 0,
+    };
+    assert.equal(progressLine(row), "3 of 8 provided");
+    assert.equal(
+      progressLine({ ...row, itemsAccepted: 2 }),
+      "3 of 8 provided · 2 accepted",
+    );
+    assert.equal(progressLine({ ...row, status: "DRAFT" }), "");
+    assert.equal(progressLine({ ...row, itemsTotal: 0 }), "");
   });
 });

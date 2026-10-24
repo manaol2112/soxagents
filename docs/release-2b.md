@@ -217,3 +217,62 @@ freshly onboarded synthetic engagements; no work for historical records.
   recipient.
 - A draft whose due date has passed is refused until its date is changed (the single
   request's assignment rule).
+
+# R2b-3: statuses and bulk
+
+Authorized with the R2b-2 commit (1777e3a). Validated on freshly onboarded synthetic
+engagements.
+
+## Statuses
+
+Each requested item is one of four, derived from the records, never stored
+(`evidence_status.py`):
+
+| Status | When |
+| --- | --- |
+| Missing | Nothing serves it yet, or a person found what came short (their note shows as "Still needed") |
+| Provided | A file serves it: on its request, linked by a person, or a policy shared by another system's instance of the control |
+| Verified | Provided, and the evidence reader proposes it is covered. A proposal only: it never becomes acceptance |
+| Accepted | A person accepted it as sufficient |
+
+A request is **Ready for testing** when a person accepted every item (waived items need
+nothing). Client progress counts the items provided ("4 of 16 provided · 1 accepted"), in
+the Evidence list for every sent request and in a grouped request's panel, which also shows
+each control's items with their status and each control's own progress. The Completed
+figure counts requests ready for testing and closed requests.
+
+**Owner's closure checks.** *Verified is optional:* a person accepts an item straight
+from Provided; the reader's verification is advisory and never a step to wait for
+(`set_sufficiency` asks only that something arrived). *The audit trail is kept:* sending an
+item back changes only its outstanding status; its files and submissions stay, and every
+decision is recorded with who, when, and now its note (the requirement holds only the
+latest note, so an earlier "still needed" note was lost once the item was accepted; the
+decision's audit event now carries it).
+
+**Defect corrected.** The list's stage compared a requirement's sufficiency with
+`SUFFICIENT`, the reader's proposal vocabulary; a person's acceptance is stored as
+`ACCEPTED`, so a request whose items were all accepted never completed. It now reads
+`ACCEPTED` and shows Ready for testing. `test_the_lifecycle_is_read_from_the_records`
+encoded the defect: its old expectation (`SUFFICIENT` items give Completed) is replaced by
+the approved one (`ACCEPTED` items give Ready for testing); the methodology is unchanged
+(only a person's acceptance completes an item, the reader only proposes), and the
+assertion that a file arriving never completes a request is kept.
+
+## Bulk
+
+- A grouped request can be selected in the list like any request, at the version the list
+  showed (the sum of its requests').
+- **Approve and send** goes only to a request that is fully ready: for a grouped request,
+  every request in it passes its checks; the preview names the control and the reason
+  for one that does not, and it is refused while the others go through. It runs the
+  R2b-1 approval and single email.
+- Approve without sending, submitting, and returning do not apply to a grouped request:
+  it is approved and sent in one step, said per request.
+- Routing (owner, due date, priority) applies to every request in a grouped request not
+  yet approved, **all or nothing**: one that cannot change leaves the others unchanged.
+
+## Known limitations
+
+- The client portal shows the statuses per control request (R2d).
+- Verified needs the reader's model reading; with the keyword rules only, an item stays
+  Provided until a person judges it (the reader's own rule).

@@ -6,6 +6,19 @@ const STATUSES = new Set(["PROPOSED", "APPROVED", "SENT", "NOT_SENT"]);
 
 export type GroupStatus = "PROPOSED" | "APPROVED" | "SENT" | "NOT_SENT";
 
+/** An item's status once sent: Missing, Provided, Verified (the reader's proposal), or
+ * Accepted (a person's). */
+export type ItemState = "MISSING" | "PROVIDED" | "VERIFIED" | "ACCEPTED";
+const ITEM_STATES = new Set(["MISSING", "PROVIDED", "VERIFIED", "ACCEPTED"]);
+
+export type ItemStatus = {
+  title: string;
+  status: ItemState;
+  label: string;
+  /** What is still needed, when a person found what came short. */
+  note: string;
+};
+
 export type GroupMember = {
   id: string;
   reference: string;
@@ -24,6 +37,8 @@ export type GroupMember = {
   version: number;
   /** What stops it being approved, in words; null when it is ready. */
   problem: string | null;
+  /** Once sent: each item with its status. */
+  statuses: ItemStatus[];
 };
 
 export type GroupView = {
@@ -54,6 +69,11 @@ export type GroupView = {
   leadRequestId: string;
   canApprove: boolean;
   notice: string;
+  /** Once sent: the client's progress and a person's acceptance. */
+  itemsTotal: number;
+  itemsProvided: number;
+  itemsAccepted: number;
+  readyForTesting: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -91,6 +111,14 @@ function parseMember(value: Record<string, unknown>): GroupMember | null {
     stageLabel: str(value.stage_label),
     version: num(value.version) || 1,
     problem: typeof value.problem === "string" ? value.problem : null,
+    statuses: records(value.statuses)
+      .filter((item) => ITEM_STATES.has(str(item.status)))
+      .map((item) => ({
+        title: str(item.title),
+        status: str(item.status) as ItemState,
+        label: str(item.label),
+        note: str(item.note),
+      })),
   };
 }
 
@@ -139,6 +167,10 @@ export function parseGroupView(value: unknown): GroupView | null {
     leadRequestId: str(value.lead_request_id),
     canApprove: value.can_approve === true,
     notice: str(value.notice),
+    itemsTotal: num(value.items_total),
+    itemsProvided: num(value.items_provided),
+    itemsAccepted: num(value.items_accepted),
+    readyForTesting: value.ready_for_testing === true,
   };
 }
 
@@ -177,6 +209,20 @@ export function approveBlocker(
   return view.ready ? null : "This request is not ready to send.";
 }
 
+/** A sent control's progress, from its items: ready for testing when a person accepted
+ * every one, else how many the client provided; its stage when no items are known. */
+export function memberProgress(member: GroupMember): string {
+  const items = member.statuses;
+  if (items.length === 0) {
+    return member.stageLabel;
+  }
+  if (items.every((item) => item.status === "ACCEPTED")) {
+    return "Ready for testing";
+  }
+  const provided = items.filter((item) => item.status !== "MISSING").length;
+  return `${provided} of ${items.length} provided`;
+}
+
 /** The status line under the title, in words. */
 export function groupStatusLine(view: GroupView): string {
   switch (view.status) {
@@ -187,7 +233,7 @@ export function groupStatusLine(view: GroupView): string {
         ? "Approved; delivery not yet confirmed"
         : "Approved; not yet sent";
     case "SENT":
-      return "Sent";
+      return view.readyForTesting ? "Ready for testing" : "Sent";
     default:
       return "Not sent";
   }

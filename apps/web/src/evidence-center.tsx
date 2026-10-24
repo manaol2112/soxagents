@@ -30,6 +30,7 @@ import {
   PAGE_SIZES,
   PHASE_LABELS,
   parseBulkResult,
+  progressLine,
   type Sort,
   STAGE_TONES,
   viewQuery,
@@ -661,8 +662,7 @@ function RequestTable({
       </div>
     );
   }
-  // A group is reviewed and sent from its own panel, never changed in bulk.
-  const page = list.rows.filter((row) => !row.group);
+  const page = list.rows;
   const allOnPage =
     page.length > 0 && page.every((row) => selected.has(row.id));
   const all =
@@ -799,14 +799,12 @@ function Row({
       className={`${checked ? "is-selected" : ""}${opened ? " is-open" : ""}`}
     >
       <td className="ec-check">
-        {row.group ? null : (
-          <input
-            type="checkbox"
-            aria-label={`Select ${row.reference}`}
-            checked={checked}
-            onChange={(event) => onCheck(event.target.checked)}
-          />
-        )}
+        <input
+          type="checkbox"
+          aria-label={`Select ${row.reference}`}
+          checked={checked}
+          onChange={(event) => onCheck(event.target.checked)}
+        />
       </td>
       <td className="ec-request">
         <a href={href} className="ec-title" title={row.title}>
@@ -871,6 +869,9 @@ function Row({
         </span>
         {row.overdue ? <span className="ec-flag is-late">Overdue</span> : null}
         {row.held ? <span className="ec-flag">{row.heldReason}</span> : null}
+        {progressLine(row) !== "" ? (
+          <span className="ec-progress">{progressLine(row)}</span>
+        ) : null}
       </td>
       <td className={`num ec-due${row.overdue ? " is-late" : ""}`}>
         {formatDate(row.dueAt)}

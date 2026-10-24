@@ -72,10 +72,12 @@ def test_the_lifecycle_is_read_from_the_records() -> None:
     received = [("RECEIVED", "NOT_REVIEWED"), ("RECEIVED", "NOT_REVIEWED")]
     assert lifecycle_of("RECEIVED", None, True, True, False, received) == "EVIDENCE_RECEIVED"
     assert lifecycle_of("RECEIVED", None, True, True, False, []) == "EVIDENCE_RECEIVED"
-    judging = [("RECEIVED", "SUFFICIENT"), ("RECEIVED", "NOT_REVIEWED")]
+    # A requirement's sufficiency is a person's judgment: ACCEPTED, never the reader's
+    # SUFFICIENT proposal (the expectation corrected in Release 2b-3; docs/release-2b.md).
+    judging = [("RECEIVED", "ACCEPTED"), ("RECEIVED", "NOT_REVIEWED")]
     assert lifecycle_of("RECEIVED", None, True, True, False, judging) == "UNDER_REVIEW"
-    done = [("RECEIVED", "SUFFICIENT"), ("WAIVED", "NOT_REVIEWED")]
-    assert lifecycle_of("RECEIVED", None, True, True, False, done) == "COMPLETED"
+    done = [("RECEIVED", "ACCEPTED"), ("WAIVED", "NOT_REVIEWED")]
+    assert lifecycle_of("RECEIVED", None, True, True, False, done) == "READY_FOR_TESTING"
     assert lifecycle_of("CLOSED", None, True, True, False, []) == "COMPLETED"
     assert lifecycle_of("CANCELLED", "REJECTED", True, True, False, []) == "REJECTED"
     assert lifecycle_of("CANCELLED", None, True, True, False, []) == "CANCELLED"

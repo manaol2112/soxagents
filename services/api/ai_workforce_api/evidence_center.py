@@ -70,6 +70,7 @@ Stage = Literal[
     "AWAITING_EVIDENCE",
     "EVIDENCE_RECEIVED",
     "UNDER_REVIEW",
+    "READY_FOR_TESTING",
     "COMPLETED",
     "CHANGES_REQUESTED",
     "PARTIALLY_RECEIVED",
@@ -90,6 +91,7 @@ STAGES: tuple[Stage, ...] = (
     "PARTIALLY_RECEIVED",
     "EVIDENCE_RECEIVED",
     "UNDER_REVIEW",
+    "READY_FOR_TESTING",
     "COMPLETED",
     "REJECTED",
     "CANCELLED",
@@ -102,6 +104,8 @@ STAGE_LABELS: dict[str, str] = {
     "AWAITING_EVIDENCE": "Awaiting evidence",
     "EVIDENCE_RECEIVED": "Evidence received",
     "UNDER_REVIEW": "Under review",
+    # Every item accepted by a person (Release 2b-3): testing can start.
+    "READY_FOR_TESTING": "Ready for testing",
     "COMPLETED": "Completed",
     "CHANGES_REQUESTED": "Changes requested",
     "PARTIALLY_RECEIVED": "Partially received",
@@ -208,10 +212,12 @@ def lifecycle_of(
     if status == "PARTIALLY_RECEIVED":
         return "CLARIFICATION_NEEDED" if clarification else "PARTIALLY_RECEIVED"
     if status == "RECEIVED":
+        # Every item a person accepted (a waived one needs nothing): testing can start. The
+        # reader's proposal never counts: only a person's acceptance does.
         if requirements and all(
-            state == "WAIVED" or sufficiency == "SUFFICIENT" for state, sufficiency in requirements
+            state == "WAIVED" or sufficiency == "ACCEPTED" for state, sufficiency in requirements
         ):
-            return "COMPLETED"
+            return "READY_FOR_TESTING"
         judged = [item for item in requirements if item[0] != "WAIVED"]
         if any(sufficiency != "NOT_REVIEWED" for _, sufficiency in judged):
             return "UNDER_REVIEW"
@@ -263,6 +269,11 @@ class RowBody(BaseModel):
     kickoff: bool = False
     # The approved attributes of the test plan its items evidence (internal), by code.
     supports: list[str] = []
+    # Its items (Release 2b-3): how many, how many the client provided, how many a person
+    # accepted.
+    items_total: int = 0
+    items_provided: int = 0
+    items_accepted: int = 0
     # One request the person receives for several controls (evidence_groups, Release 2b):
     # PROPOSED until approved, then APPROVED, SENT. Its id opens the group's review.
     group: bool = False
@@ -532,6 +543,8 @@ class _Facts:
     supports: dict[UUID, list[str]] = field(default_factory=dict)
     # The (control, phase) pairs a person released (phase_release.py).
     released: set[tuple[UUID, str]] = field(default_factory=set)
+    # Each request's items: how many, provided, accepted (evidence_status.py).
+    progress: dict[UUID, Any] = field(default_factory=dict)
 
 
 def _facts(connection: psycopg.Connection[Any], project_id: UUID) -> _Facts:
@@ -654,6 +667,9 @@ def _facts(connection: psycopg.Connection[Any], project_id: UUID) -> _Facts:
     }
     facts.names = {item.email: item.name for item in contacts(connection, project_id)}
     facts.labels = {item.request_type: item.label for item in request_types(connection)}
+    from ai_workforce_api.evidence_status import progress
+
+    facts.progress = progress(connection, project_id)
     return facts
 
 
@@ -800,6 +816,9 @@ def _row(
             ),
             kickoff=pbc.operation_key.startswith(("kickoff-", "scope-")),
             supports=facts.supports.get(pbc.id, []),
+            items_total=facts.progress[pbc.id].total if pbc.id in facts.progress else 0,
+            items_provided=facts.progress[pbc.id].provided if pbc.id in facts.progress else 0,
+            items_accepted=facts.progress[pbc.id].accepted if pbc.id in facts.progress else 0,
         ),
         owner_user_id=pbc.owner_user_id,
         drafting=drafting,
@@ -825,10 +844,13 @@ def kpi_of(row: RowBody, kpi: Kpi) -> bool:
             row.files > 0 and row.status != "CANCELLED"
         )
     if kpi == "needs_review":
-        return row.status in ("PARTIALLY_RECEIVED", "RECEIVED") and row.stage != "COMPLETED"
+        return row.status in ("PARTIALLY_RECEIVED", "RECEIVED") and row.stage not in (
+            "COMPLETED",
+            "READY_FOR_TESTING",
+        )
     if kpi == "overdue":
         return row.overdue
-    return row.stage == "COMPLETED"
+    return row.stage in ("COMPLETED", "READY_FOR_TESTING")
 
 
 def _attention(row: _Row, principal: Principal, can_act: bool, can_approve: bool) -> bool:
@@ -989,12 +1011,8 @@ def listing(
     start = (page - 1) * size
     return ListBody(
         rows=[row.body for row in chosen[start : start + size]],
-        # A group is reviewed and sent from its own panel, not changed in bulk.
-        matching=[
-            MatchBody(id=row.body.id, version=row.body.version)
-            for row in chosen
-            if not row.body.group
-        ],
+        # A group is selected like any request: bulk changes treat it as one (_bulk_group).
+        matching=[MatchBody(id=row.body.id, version=row.body.version) for row in chosen],
         total=len(chosen),
         page=page,
         size=size,
@@ -1322,9 +1340,22 @@ def bulk(
 
         approvals = request_approvals(connection, project_id)
     outcomes: list[OutcomeBody] = []
+    groups: dict[UUID, Any] | None = None
     for item in body.items:
         current = _read(connection, organization_id, project_id, item.id)
         if current is None:
+            # One request to one person for several controls (evidence_groups): changed as
+            # one request, approved and sent only when every request in it is ready.
+            if groups is None:
+                from ai_workforce_api.evidence_groups import bulk_targets
+
+                groups = bulk_targets(connection, principal, organization_id, project_id)
+            if item.id in groups:
+                outcomes.append(_bulk_group(
+                    connection, settings, principal, organization_id, project_id, item,
+                    groups[item.id], body, reason, mailbox, timer,
+                ))  # fmt: skip
+                continue
             outcomes.append(
                 OutcomeBody(
                     id=item.id,
@@ -1454,6 +1485,101 @@ def bulk(
         refused=len(outcomes) - done,
         outcomes=outcomes,
     )
+
+
+def _bulk_group(
+    connection: psycopg.Connection[Any],
+    settings: Settings,
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    item: BulkItem,
+    target: Any,
+    body: BulkBody,
+    reason: str,
+    mailbox: MailboxFactory | None,
+    timer: FollowUpTimer | None,
+) -> OutcomeBody:
+    """A change to many requests, for one that travels to one person for several
+    controls: routing applies to each of its requests; it is approved and sent in one
+    step, and only when every request in it is ready."""
+    from ai_workforce_api.approvals import ApprovalState
+    from ai_workforce_api.evidence_groups import (
+        ApproveSendBody,
+        GroupState,
+        SeenMember,
+        approve_and_send,
+        bulk_problem,
+    )
+    from ai_workforce_api.outbound import OutboundState
+    from ai_workforce_api.request_details import _assign
+
+    def outcome(ok: bool, detail: str) -> OutcomeBody:
+        return OutcomeBody(
+            id=item.id, reference=target.reference, title=target.title, ok=ok, detail=detail
+        )
+
+    if item.version != target.version:
+        return outcome(False, "The request changed since the list loaded. Reload and try again.")
+    if body.action in ("APPROVE", "SUBMIT"):
+        return outcome(False, "This request is approved and sent in one step: Approve and send.")
+    if body.action == "RETURN":
+        return outcome(False, "No approval is waiting on this request.")
+    if target.status == "SENT":
+        return outcome(False, "The request has been sent; it can no longer change.")
+    try:
+        if body.action in ("ASSIGN", "DUE", "PRIORITY"):
+            if target.status != "PROPOSED":
+                return outcome(False, "The request is approved; it can no longer change here.")
+            if body.preview:
+                return outcome(True, "Ready to change.")
+            # All or nothing: a request in it that cannot change leaves the others as they
+            # were, so the group is never left half changed.
+            with transaction(connection):
+                for member, version in target.members:
+                    current = _read(connection, organization_id, project_id, member)
+                    if current is None or current.version != version:
+                        raise CenterState(
+                            "The request changed since the list loaded. Reload and try again."
+                        )
+                    _assign(
+                        connection, settings, principal, organization_id, project_id, member,
+                        AssignmentBody(
+                            version=current.version,
+                            recipient=body.recipient if body.recipient is not None
+                            else current.recipient,
+                            cc=body.cc if body.cc is not None else current.cc_recipients,
+                            due_on=body.due_on or current.due_at.astimezone(UTC).date(),
+                            priority=body.priority or current.priority,  # type: ignore[arg-type]
+                        ),
+                    )  # fmt: skip
+            return outcome(True, "Changed.")
+        # Approve and send: only a request that is fully ready.
+        if target.status == "PROPOSED":
+            problem = bulk_problem(connection, settings, organization_id, project_id, target)
+            if problem is not None:
+                return outcome(False, problem)
+        if body.preview:
+            return outcome(True, "Ready to approve and send.")
+        sent = approve_and_send(
+            connection, settings, principal, organization_id, project_id, item.id,
+            ApproveSendBody(
+                members=[SeenMember(id=m, version=v) for m, v in target.members],
+                reason=reason or "Reviewed and approved.",
+            ),
+            mailbox or open_mailbox, timer,
+        )  # fmt: skip
+    except (GroupState, DetailsState, CenterState) as error:
+        return outcome(False, error.detail)
+    except (OutboundState, ApprovalState, PbcState) as error:
+        return outcome(False, _sentence(error.detail))
+    except AccessDenied, NotVisible:
+        return outcome(False, "Your role does not permit this change.")
+    if sent.status == "SENT":
+        return outcome(True, "Approved and sent.")
+    if sent.status == "NOT_SENT":
+        return outcome(False, f"Not sent: {sent.reason}")
+    return outcome(False, f"Approved, but not sent: {sent.notice or 'delivery is pending.'}")
 
 
 def _send_approved(

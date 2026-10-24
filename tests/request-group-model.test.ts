@@ -11,6 +11,7 @@ import {
 import {
   approveBlocker,
   groupStatusLine,
+  memberProgress,
   parseGroupView,
   seenMembers,
 } from "../apps/web/src/request-group-model.ts";
@@ -214,5 +215,82 @@ describe("one request to one person for several controls", () => {
         body: {},
       },
     );
+  });
+});
+
+describe("statuses once sent", () => {
+  it("reads each item's status, and says when the request is ready for testing", () => {
+    const sent = parseGroupView({
+      ...api,
+      status: "SENT",
+      items_total: 2,
+      items_provided: 2,
+      items_accepted: 2,
+      ready_for_testing: true,
+      members: [
+        member(FIRST, "ITGC-AC-01", {
+          statuses: [
+            {
+              title: "Policy",
+              status: "ACCEPTED",
+              label: "Accepted",
+              note: "",
+            },
+            { title: "Walkthrough", status: "NONSENSE", label: "?", note: "" },
+          ],
+        }),
+        member(SECOND, "ITGC-AC-03", {
+          statuses: [
+            {
+              title: "Listing",
+              status: "MISSING",
+              label: "Missing",
+              note: "Include the approval dates.",
+            },
+          ],
+        }),
+      ],
+    });
+    assert.ok(sent !== null);
+    assert.deepEqual(
+      sent.members.map((m) => m.statuses.map((s) => s.status)),
+      [["ACCEPTED"], ["MISSING"]],
+    );
+    assert.equal(
+      sent.members[1]?.statuses[0]?.note,
+      "Include the approval dates.",
+    );
+    assert.equal(groupStatusLine(sent), "Ready for testing");
+    assert.equal(groupStatusLine({ ...sent, readyForTesting: false }), "Sent");
+  });
+});
+
+describe("a sent control's progress", () => {
+  it("counts its provided items, and says ready for testing when all are accepted", () => {
+    const base = parseGroupView(api);
+    assert.ok(base !== null);
+    const one = base.members[0];
+    assert.ok(one !== undefined);
+    const item = (status: string) => ({
+      title: status,
+      status,
+      label: status,
+      note: "",
+    });
+    assert.equal(
+      memberProgress({
+        ...one,
+        statuses: [item("ACCEPTED"), item("MISSING")] as never,
+      }),
+      "1 of 2 provided",
+    );
+    assert.equal(
+      memberProgress({
+        ...one,
+        statuses: [item("ACCEPTED"), item("ACCEPTED")] as never,
+      }),
+      "Ready for testing",
+    );
+    assert.equal(memberProgress({ ...one, statuses: [] }), one.stageLabel);
   });
 });

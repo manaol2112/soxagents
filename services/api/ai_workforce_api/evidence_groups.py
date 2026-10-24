@@ -54,6 +54,7 @@ from ai_workforce_api.authorization import (
     authorize,
 )
 from ai_workforce_api.db import transaction
+from ai_workforce_api.evidence_status import ItemStatus, item_statuses
 from ai_workforce_api.followups import REMINDABLE, FollowUpState, FollowUpTimer, schedule
 from ai_workforce_api.mailbox import open_mailbox
 from ai_workforce_api.pbc import _COLUMNS as _PBC_COLUMNS
@@ -684,22 +685,26 @@ _STAGE_ORDER = (
     "PARTIALLY_RECEIVED",
     "EVIDENCE_RECEIVED",
     "UNDER_REVIEW",
+    "READY_FOR_TESTING",
     "COMPLETED",
 )
-_RECEIVED_STAGES = frozenset({"PARTIALLY_RECEIVED", "EVIDENCE_RECEIVED", "UNDER_REVIEW"})
-_ENDED_STAGES = frozenset({"COMPLETED", "CANCELLED", "REJECTED"})
+_RECEIVED_STAGES = frozenset(
+    {"PARTIALLY_RECEIVED", "EVIDENCE_RECEIVED", "UNDER_REVIEW", "READY_FOR_TESTING"}
+)
+_ENDED_STAGES = frozenset({"READY_FOR_TESTING", "COMPLETED", "CANCELLED", "REJECTED"})
 
 
 def aggregate_stage(stages: list[str]) -> str:
-    """A sent group's stage from its requests': a question first; done when every one is;
-    partly received when some evidence came and some is awaited; else the earliest."""
+    """A sent group's stage from its requests': a question first; ready for testing when
+    every one is accepted (or closed); partly received when some evidence came and some is
+    awaited; else the earliest."""
     if "CLARIFICATION_NEEDED" in stages:
         return "CLARIFICATION_NEEDED"
     live = [s for s in stages if s not in ("CANCELLED", "REJECTED")]
     if not live:
         return "CANCELLED"
     if all(s in _ENDED_STAGES for s in live):
-        return "COMPLETED"
+        return "READY_FOR_TESTING" if "READY_FOR_TESTING" in live else "COMPLETED"
     if any(s in _RECEIVED_STAGES or s == "COMPLETED" for s in live) and any(
         s == "AWAITING_EVIDENCE" for s in live
     ):
@@ -790,6 +795,9 @@ def collapse(
             agent_label="Ready for review" if stage == "READY_FOR_REVIEW" else "",
             drafted_by="AGENT",
             files=sum(b.files for b in bodies),
+            items_total=sum(b.items_total for b in bodies),
+            items_provided=sum(b.items_provided for b in bodies),
+            items_accepted=sum(b.items_accepted for b in bodies),
             version=sum(b.version for b in bodies),
             approval_decision=None if status == "PROPOSED" else "APPROVED",
             approval_decided_by=approver or None,
@@ -800,6 +808,70 @@ def collapse(
         )
         result.append(_Row(body=body, owner_user_id=members[0].owner_user_id, drafting=False))
     return result
+
+
+@dataclass(frozen=True)
+class BulkTarget:
+    """A group as the list showed it, for a change to many requests at once."""
+
+    status: str
+    reference: str
+    title: str
+    # Its requests and their versions, as the list showed them.
+    members: tuple[tuple[UUID, int], ...]
+
+    @property
+    def version(self) -> int:
+        # The row's version in the list (collapse): the sum of its requests' versions.
+        return sum(version for _, version in self.members)
+
+
+def bulk_targets(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+) -> dict[UUID, BulkTarget]:
+    """Every group the list shows, by its id: proposals and approved or sent groups."""
+    rows = _center_rows(connection, principal, organization_id, project_id)
+    versions = {row.body.id: row.body.version for row in rows}
+    found: dict[UUID, BulkTarget] = {}
+    for group in stored(connection, project_id):
+        members = tuple((m, versions.get(m, 0)) for m in group.members)
+        found[group.id] = BulkTarget(
+            group.status, reference_of(group.id), f"Evidence for {len(members)} controls",
+            members,
+        )  # fmt: skip
+    for proposal in proposals_for(connection, organization_id, project_id, _row_ready(rows)):
+        members = tuple((c.id, versions.get(c.id, c.version)) for c in proposal.members)
+        found[proposal.id] = BulkTarget(
+            "PROPOSED", reference_of(proposal.id), f"Evidence for {len(members)} controls",
+            members,
+        )  # fmt: skip
+    return found
+
+
+def bulk_problem(
+    connection: psycopg.Connection[Any],
+    settings: Settings,
+    organization_id: UUID,
+    project_id: UUID,
+    target: BulkTarget,
+) -> str | None:
+    """Why a proposed group is not fully ready to approve and send, or None: the first
+    request in it that is not, with its control."""
+    refs = {
+        UUID(str(row[0])): str(row[1])
+        for row in connection.execute(
+            "SELECT id, control_ref FROM pbc_requests WHERE id = ANY(%s)",
+            ([m for m, _ in target.members],),
+        ).fetchall()
+    }
+    for member, _ in target.members:
+        problem = _problem(connection, settings, organization_id, project_id, member)
+        if problem is not None:
+            return f"{refs.get(member, '')}: {problem}"
+    return None
 
 
 # The review side panel
@@ -823,6 +895,8 @@ class MemberView(BaseModel):
     version: int
     # What stops it being approved, in words; None when it is ready.
     problem: str | None = None
+    # Once sent: each item with its status (Missing, Provided, Verified, Accepted).
+    statuses: list[ItemStatus] = Field(default_factory=list)
 
 
 class GroupView(BaseModel):
@@ -852,6 +926,11 @@ class GroupView(BaseModel):
     lead_request_id: UUID
     can_approve: bool
     notice: str = ""
+    # Once sent: the client's progress (items provided) and a person's acceptance.
+    items_total: int = 0
+    items_provided: int = 0
+    items_accepted: int = 0
+    ready_for_testing: bool = False
 
 
 class SeenMember(BaseModel):
@@ -882,6 +961,7 @@ def _member_view(
     pbc: PbcBody,
     due: datetime,
     problem: str | None,
+    statuses: list[ItemStatus] | None = None,
 ) -> MemberView:
     from ai_workforce_api.evidence_center import STAGE_LABELS
 
@@ -904,6 +984,7 @@ def _member_view(
         stage_label=STAGE_LABELS.get(stage, stage),
         version=pbc.version,
         problem=problem,
+        statuses=statuses or [],
     )
 
 
@@ -1012,6 +1093,10 @@ def review(
         except ValueError:
             body = ""
         outbound = _by_approval(connection, organization_id, project_id, group.lead_approval_id)
+        # Once sent, each item with its status; before, nothing has been asked yet.
+        statuses = (
+            item_statuses(connection, [p.id for p in members]) if group.status == "SENT" else {}
+        )
         personal = _personal(connection, project_id, group.id)
         return GroupView(
             id=group.id,
@@ -1027,7 +1112,18 @@ def review(
             due_at=due,
             item_count=sum(len(_heading(section_of(p))[1]) for p in members),
             personal_data=personal,
-            members=[_member_view(by_id.get(p.id), p, due, None) for p in members],
+            members=[
+                _member_view(by_id.get(p.id), p, due, None, statuses.get(p.id)) for p in members
+            ],
+            items_total=sum(len(items) for items in statuses.values()),
+            items_provided=sum(
+                1 for items in statuses.values() for i in items if i.status != "MISSING"
+            ),
+            items_accepted=sum(
+                1 for items in statuses.values() for i in items if i.status == "ACCEPTED"
+            ),
+            ready_for_testing=bool(statuses)
+            and all(i.status == "ACCEPTED" for items in statuses.values() for i in items),
             subject=str(record[0]) if record is not None else "",
             body=body,
             ready=group.status == "APPROVED",

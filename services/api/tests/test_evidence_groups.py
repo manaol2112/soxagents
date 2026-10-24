@@ -195,10 +195,11 @@ def test_the_list_shows_one_request_per_person_and_phase(migrated: Database) -> 
         assert group["stage"] == "READY_FOR_REVIEW"
         assert group["title"] == f"Evidence for {len(members)} controls"
     assert {row["id"] for row in grouped if not row["group"]} == set(by_id) - set(covered)
-    # A group is reviewed and sent from its own panel, never selected for bulk changes.
+    # A group is selected like any request (R2b-3): bulk changes treat it as one request,
+    # at the version the list showed (the sum of its requests').
     listed = owner.get(f"{_project(team)}/evidence-requests", params={"grouped": 1, "size": 200})
-    matching = {item["id"] for item in listed.json()["matching"]}
-    assert not matching & {g["id"] for g in groups}
+    matching = {item["id"]: item["version"] for item in listed.json()["matching"]}
+    assert all(matching[g["id"]] == g["version"] for g in groups)
     # Personal data travels on its own (R2a's reviewed sensitivity).
     standard, personal = _personal_split(owner, team)
     assert _review(owner, team, standard["id"]).json()["personal_data"] is False
@@ -762,3 +763,82 @@ def test_a_reply_in_the_groups_thread_goes_to_a_person(migrated: Database) -> No
     # Several controls share the thread: which one it answers is for a person to decide.
     assert (reply.json()["match_status"], reply.json()["pbc_request_id"]) == ("UNMATCHED", None)
     assert reply.json()["unmatched_reason"] == "ambiguous_reference"
+
+
+# Statuses and bulk (Release 2b-3)
+
+
+def _bulk(client: Any, team: dict[str, Any], rows: list[dict[str, Any]], **body: Any) -> Any:
+    return client.post(
+        f"{_project(team)}/evidence-requests/bulk",
+        json={"items": [{"id": r["id"], "version": r["version"]} for r in rows], **body},
+    )
+
+
+def test_bulk_approve_and_send_sends_only_fully_ready_requests(migrated: Database) -> None:
+    team = _ready(migrated, "eg-bulk")
+    owner = team["owner"]
+    design = [g for g in _groups(owner, team) if g["phase"] == "DESIGN"]
+    ready = next(g for g in design if "ITGC-CM-01" in g["control_title"])
+    blocked = next(g for g in design if "ITGC-OP-01" in g["control_title"])
+    # One request in the second is not ready: its due date has passed.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE pbc_requests SET due_at = clock_timestamp() - interval '2 days', "
+            "version = version + 1 WHERE id = %s",
+            (blocked["member_ids"][0],),
+        )
+    rows = {g["id"]: g for g in _groups(owner, team)}
+    ready, blocked = rows[ready["id"]], rows[blocked["id"]]
+    preview = _bulk(owner, team, [ready, blocked], action="APPROVE_SEND", preview=True).json()
+    said = {o["id"]: o for o in preview["outcomes"]}
+    assert said[ready["id"]]["ok"] and said[ready["id"]]["detail"] == "Ready to approve and send."
+    assert not said[blocked["id"]]["ok"]
+    assert said[blocked["id"]]["detail"].endswith("The due date has passed. Set a new due date.")
+    # A stale view, and approving without sending, are refused for a group.
+    stale = {**ready, "version": ready["version"] - 1}
+    assert (
+        _bulk(owner, team, [stale], action="APPROVE_SEND")
+        .json()["outcomes"][0]["detail"]
+        .startswith("The request changed")
+    )
+    assert (
+        "Approve and send"
+        in _bulk(owner, team, [ready], action="APPROVE").json()["outcomes"][0]["detail"]
+    )
+    applied = _bulk(owner, team, [ready, blocked], action="APPROVE_SEND").json()
+    assert (applied["done"], applied["refused"]) == (1, 1), applied
+    with connect(migrated.url) as connection:
+        assert _one(connection, "SELECT count(*) FROM outbound_messages WHERE project_id = %s",
+                    team["project"]) == 1  # fmt: skip
+        assert _one(
+            connection,
+            "SELECT count(*) FROM pbc_requests WHERE id = ANY(%s::uuid[]) AND status = 'DRAFT'",
+            blocked["member_ids"],
+        ) == len(blocked["member_ids"])
+    # Once sent, each item has its status; nothing is provided yet, so not ready for testing.
+    view = _review(owner, team, ready["id"]).json()
+    assert view["status"] == "SENT"
+    assert all(m["statuses"] for m in view["members"])
+    assert {s["status"] for m in view["members"] for s in m["statuses"]} == {"MISSING"}
+    assert (view["items_provided"], view["ready_for_testing"]) == (0, False)
+    assert view["items_total"] == sum(len(m["statuses"]) for m in view["members"])
+    # Routing applies to every request in a group not yet approved, all or nothing: the
+    # blocked group's past due date refuses the change and none of its requests changes.
+    before = {row["id"]: row for row in _all(owner, team)}
+    current = {g["id"]: g for g in _groups(owner, team)}
+    other = next(
+        g for g in current.values()
+        if g["group_status"] == "PROPOSED" and g["id"] != blocked["id"]
+    )  # fmt: skip
+    moved = _bulk(owner, team, [other, current[blocked["id"]]], action="PRIORITY",
+                  priority="HIGH").json()  # fmt: skip
+    outcome = {o["id"]: o for o in moved["outcomes"]}
+    assert outcome[other["id"]]["detail"] == "Changed."
+    assert outcome[blocked["id"]]["detail"] == "The due date cannot be in the past."
+    after = {row["id"]: row for row in _all(owner, team)}
+    assert {after[m]["priority"] for m in other["member_ids"]} == {"HIGH"}
+    assert all(
+        (after[m]["priority"], after[m]["version"]) == (before[m]["priority"], before[m]["version"])
+        for m in blocked["member_ids"]
+    )
