@@ -39,6 +39,7 @@ import { formatDate } from "./format";
 import type { EvidenceCenterState } from "./load-evidence-center";
 import { RecordDialog } from "./record-dialog";
 import type { Contact } from "./request-details-model";
+import { GroupPanel } from "./request-group";
 import { ContactSearch, NewContact, RequestReview } from "./request-review";
 import { reviewProblem } from "./request-review-model";
 import { UiIcon } from "./ui-icon";
@@ -83,6 +84,7 @@ export function EvidenceCenter({
   setupHref,
   coordinatorMissing,
   delivery = null,
+  groupDelivery = null,
 }: {
   ids: Ids;
   state: EvidenceCenterState;
@@ -90,6 +92,8 @@ export function EvidenceCenter({
   coordinatorMissing: boolean;
   /** The open request's delivery and reminders, rendered by the page. */
   delivery?: ReactNode;
+  /** The open group's reminders once it is sent, rendered by the page. */
+  groupDelivery?: ReactNode;
 }) {
   const { list, query } = state;
   const router = useRouter();
@@ -188,6 +192,31 @@ export function EvidenceCenter({
           canApprove={list.canApprove}
           delivery={delivery}
         />
+      ) : null}
+      {query.group !== null ? (
+        state.group !== null ? (
+          <GroupPanel
+            key={`${state.group.id}-${state.group.status}`}
+            ids={ids}
+            view={state.group}
+            closeHref={centerHref(ids, query, { group: null })}
+            memberHref={(requestId) =>
+              centerHref(ids, query, { request: requestId, group: null })
+            }
+            side={groupDelivery}
+          />
+        ) : (
+          <RecordDialog
+            eyebrow="Evidence request"
+            title="The request could not be loaded"
+            closeHref={centerHref(ids, query, { group: null })}
+          >
+            <p className="banner banner-warning" role="status">
+              It changed since the list loaded. Close this and open it again
+              from the list.
+            </p>
+          </RecordDialog>
+        )
       ) : null}
       {query.creating ? (
         <NewRequest
@@ -605,7 +634,8 @@ function RequestTable({
       </div>
     );
   }
-  const page = list.rows;
+  // A group is reviewed and sent from its own panel, never changed in bulk.
+  const page = list.rows.filter((row) => !row.group);
   const allOnPage =
     page.length > 0 && page.every((row) => selected.has(row.id));
   const all =
@@ -633,19 +663,21 @@ function RequestTable({
         <thead>
           <tr>
             <th scope="col" className="ec-check">
-              <input
-                type="checkbox"
-                aria-label="Select every request on this page"
-                checked={allOnPage}
-                onChange={(event) => {
-                  const next = new Map(selected);
-                  for (const row of page) {
-                    if (event.target.checked) next.set(row.id, row.version);
-                    else next.delete(row.id);
-                  }
-                  setSelected(next);
-                }}
-              />
+              {page.length > 0 ? (
+                <input
+                  type="checkbox"
+                  aria-label="Select every request on this page"
+                  checked={allOnPage}
+                  onChange={(event) => {
+                    const next = new Map(selected);
+                    for (const row of page) {
+                      if (event.target.checked) next.set(row.id, row.version);
+                      else next.delete(row.id);
+                    }
+                    setSelected(next);
+                  }}
+                />
+              ) : null}
             </th>
             {COLUMNS.map((column) => {
               const sorted = query.sort === column.key;
@@ -688,7 +720,7 @@ function RequestTable({
           </tr>
         </thead>
         <tbody>
-          {page.map((row) => (
+          {list.rows.map((row) => (
             <Row
               key={row.id}
               ids={ids}
@@ -731,19 +763,23 @@ function Row({
   onCheck: (checked: boolean) => void;
   refresh: () => void;
 }) {
-  const href = centerHref(ids, query, { request: row.id, creating: false });
-  const opened = query.request === row.id;
+  const href = row.group
+    ? centerHref(ids, query, { group: row.id, request: null, creating: false })
+    : centerHref(ids, query, { request: row.id, group: null, creating: false });
+  const opened = row.group ? query.group === row.id : query.request === row.id;
   return (
     <tr
       className={`${checked ? "is-selected" : ""}${opened ? " is-open" : ""}`}
     >
       <td className="ec-check">
-        <input
-          type="checkbox"
-          aria-label={`Select ${row.reference}`}
-          checked={checked}
-          onChange={(event) => onCheck(event.target.checked)}
-        />
+        {row.group ? null : (
+          <input
+            type="checkbox"
+            aria-label={`Select ${row.reference}`}
+            checked={checked}
+            onChange={(event) => onCheck(event.target.checked)}
+          />
+        )}
       </td>
       <td className="ec-request">
         <a href={href} className="ec-title" title={row.title}>
@@ -798,7 +834,7 @@ function Row({
           ids={ids}
           row={row}
           contacts={contacts}
-          canAct={canAct}
+          canAct={canAct && !row.group}
           refresh={refresh}
         />
       </td>

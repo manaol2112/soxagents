@@ -142,6 +142,11 @@ export type CenterRow = {
   approvalDecidedBy: string | null;
   viewerCanDecide: boolean;
   kickoff: boolean;
+  /** One request to one person for several controls: it opens its own review. */
+  group: boolean;
+  /** PROPOSED until approved, then APPROVED, SENT. */
+  groupStatus: string;
+  memberIds: string[];
 };
 
 export type Facet = { key: string; label: string; count: number };
@@ -264,6 +269,9 @@ function parseRow(value: Record<string, unknown>): CenterRow | null {
         : null,
     viewerCanDecide: value.viewer_can_decide === true,
     kickoff: value.kickoff === true,
+    group: value.group === true,
+    groupStatus: str(value.group_status),
+    memberIds: strings(value.member_ids).filter((item) => UUID.test(item)),
   };
 }
 
@@ -348,6 +356,8 @@ export type CenterQuery = {
   size: number;
   /** The request open in the side panel. */
   request: string | null;
+  /** The request to one person for several controls open in the side panel. */
+  group: string | null;
   /** The new request panel is open. */
   creating: boolean;
 };
@@ -366,6 +376,7 @@ export const DEFAULT_QUERY: CenterQuery = {
   page: 1,
   size: 50,
   request: null,
+  group: null,
   creating: false,
 };
 
@@ -386,6 +397,7 @@ export function parseCenterQuery(
   const page = Number(get("rpage"));
   const view = get("rview") ?? "";
   const request = get("request");
+  const group = get("group");
   return {
     q: (get("rq") ?? "").trim().slice(0, 200),
     stage: list(get("rstage")),
@@ -400,6 +412,12 @@ export function parseCenterQuery(
     page: Number.isInteger(page) && page >= 1 && page <= 10_000 ? page : 1,
     size: PAGE_SIZES.includes(size as (typeof PAGE_SIZES)[number]) ? size : 50,
     request: request !== null && UUID.test(request) ? request : null,
+    group:
+      group !== null &&
+      UUID.test(group) &&
+      !(request !== null && UUID.test(request))
+        ? group
+        : null,
     creating: get("rnew") === "1",
   };
 }
@@ -430,7 +448,9 @@ export function centerHref(
   const next = { ...query, ...patch };
   const filtering = Object.keys(patch).some(
     (key) =>
-      !["page", "size", "request", "creating", "sort", "dir"].includes(key),
+      !["page", "size", "request", "group", "creating", "sort", "dir"].includes(
+        key,
+      ),
   );
   if (filtering && patch.page === undefined) {
     next.page = 1;
@@ -457,6 +477,7 @@ export function centerHref(
   if (next.page !== 1) params.set("rpage", String(next.page));
   if (next.size !== 50) params.set("rsize", String(next.size));
   if (next.request !== null) params.set("request", next.request);
+  else if (next.group !== null) params.set("group", next.group);
   if (next.creating) params.set("rnew", "1");
   return `/?${params.toString()}`;
 }
@@ -518,7 +539,9 @@ export type CenterIntent =
   | "view-save"
   | "view-remove"
   | "create"
-  | "request-planned";
+  | "request-planned"
+  | "group-approve-send"
+  | "group-send";
 
 export type CenterWrite =
   | { error: "invalid" }
@@ -645,6 +668,34 @@ export function centerWrite(fields: Fields): CenterWrite {
         ? {
             intent,
             path: `${project}/evidence-views/${viewId}/remove`,
+            body: {},
+          }
+        : { error: "invalid" };
+    }
+    case "group-approve-send": {
+      // The requests the person reviewed, at the versions they saw.
+      const groupId = text(fields, "group_id");
+      const members = items(fields.members);
+      const reason = text(fields, "reason") || "Reviewed and approved.";
+      return UUID.test(groupId) &&
+        members !== null &&
+        members.length >= 2 &&
+        members.length <= 60 &&
+        reason.length <= 500 &&
+        !SECRET.test(reason)
+        ? {
+            intent,
+            path: `${project}/evidence-groups/${groupId}/approve-send`,
+            body: { members, reason },
+          }
+        : { error: "invalid" };
+    }
+    case "group-send": {
+      const groupId = text(fields, "group_id");
+      return UUID.test(groupId)
+        ? {
+            intent,
+            path: `${project}/evidence-groups/${groupId}/send`,
             body: {},
           }
         : { error: "invalid" };

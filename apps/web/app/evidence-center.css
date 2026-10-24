@@ -835,3 +835,155 @@
 .ec-owner-pop .rr-contact {
   margin: 0;
 }
+
+/* One request to one person for several controls (Release 2b): its controls, each with
+   its items, and the email, in the record dialog. */
+.gp-members {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gp-member {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+  padding: 0.7rem 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.gp-member:first-child {
+  border-top: 0;
+  padding-top: 0.2rem;
+}
+
+.gp-member-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.6rem;
+  min-width: 0;
+}
+
+.gp-ref {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.gp-name {
+  flex: 1 1 12rem;
+  min-width: 0;
+  color: var(--text-strong);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+a.gp-name {
+  text-decoration: none;
+  transition: color 120ms ease;
+}
+
+a.gp-name:hover,
+a.gp-name:focus-visible {
+  color: var(--accent, var(--text-strong));
+  text-decoration: underline;
+}
+
+.gp-stage {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.gp-sub {
+  display: block;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.gp-items {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0;
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  list-style: none;
+}
+
+.gp-include {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.6rem;
+  cursor: pointer;
+}
+
+.gp-include input {
+  align-self: center;
+}
+
+.gp-email summary {
+  width: fit-content;
+  color: var(--text-strong);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.gp-subject {
+  margin: 0.6rem 0 0.4rem;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.gp-body {
+  max-height: 22rem;
+  margin: 0;
+  padding: 0.75rem 0.85rem;
+  overflow: auto;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+}
+
+.gp-status {
+  justify-self: start;
+}
+
+.gp-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.35rem 0.75rem;
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.gp-facts dt {
+  color: var(--text-tertiary);
+}
+
+.gp-facts dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  a.gp-name {
+    transition: none;
+  }
+}

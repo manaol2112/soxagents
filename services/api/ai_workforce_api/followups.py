@@ -195,8 +195,18 @@ def advance(
     request_id: UUID,
     now: datetime | None = None,
 ) -> int:
-    """Apply one follow-up step. Returns seconds until the next check, or DONE."""
+    """Apply one follow-up step. Returns seconds until the next check, or DONE.
+
+    A request sent in a group (evidence_groups) is reminded only through the group's
+    lead, which reminds while any request in the group is open."""
+    from ai_workforce_api.evidence_groups import lead_scope
+
     with transaction(connection) as cursor:
+        scope = lead_scope(cursor, request_id)
+        if scope is not None and scope[0] != request_id:
+            cancel_open(cursor, organization_id, project_id, None, request_id)
+            return DONE
+        members = [request_id] if scope is None else scope[1]
         row = cursor.execute(
             """
             SELECT r.status, p.status::text, r.follow_ups_ended_at IS NOT NULL,
@@ -212,11 +222,16 @@ def advance(
         if row is None:
             return DONE
         status = str(row[0])
+        if scope is not None and status not in REMINDABLE:
+            status = next((s for s in _statuses(cursor, members) if s in REMINDABLE), status)
         moment = now if now is not None else row[6]
         if status not in REMINDABLE:
             cancel_open(cursor, organization_id, project_id, None, request_id)
             return DONE
-        last_reply = _last_reply(cursor, project_id, request_id)
+        last_reply = max(
+            (r for r in (_last_reply(cursor, project_id, m) for m in members) if r is not None),
+            default=None,
+        )
         _settle_open(cursor, organization_id, project_id, request_id, last_reply)
         step = plan(
             request_status=status,
@@ -244,7 +259,9 @@ def advance(
                 _audit(cursor, organization_id, project_id, None, _body(created), "follow_up.due")
             return HOLD_SECONDS
         if step.kind == "escalate":
-            _escalate(cursor, organization_id, project_id, request_id, status)
+            for member, member_status in zip(members, _statuses(cursor, members), strict=True):
+                if member_status in REMINDABLE:
+                    _escalate(cursor, organization_id, project_id, member, member_status)
             return DONE
         if step.kind == "stop":
             return DONE
@@ -272,7 +289,12 @@ def follow_up_now(
         ).fetchone()
         if row is None:
             raise NotVisible()
-        if str(row[0]) not in REMINDABLE:
+        from ai_workforce_api.evidence_groups import lead_scope
+
+        # A group's lead reminds while any request in the group is with the recipient.
+        scope = lead_scope(cursor, request_id)
+        members = [request_id] if scope is None else scope[1]
+        if not any(status in REMINDABLE for status in _statuses(cursor, members)):
             raise FollowUpState("the request is not with the recipient")
         found = cursor.execute(
             f"SELECT {_COLUMNS} FROM pbc_follow_ups WHERE pbc_request_id = %s "
@@ -305,22 +327,47 @@ def follow_up_now(
         return body
 
 
+def _statuses(cursor: psycopg.Cursor[Any], request_ids: list[UUID]) -> list[str]:
+    found = {
+        UUID(str(row[0])): str(row[1])
+        for row in cursor.execute(
+            "SELECT id, status FROM pbc_requests WHERE id = ANY(%s)", (request_ids,)
+        ).fetchall()
+    }
+    return [found.get(request_id, "") for request_id in request_ids]
+
+
 def remindable_requests(
     connection: psycopg.Connection[Any],
     organization_id: UUID | None = None,
     project_id: UUID | None = None,
 ) -> list[tuple[UUID, UUID, UUID]]:
+    # A sent group's lead keeps its timer while any request in the group is open.
     rows = connection.execute(
         """
         SELECT organization_id, project_id, id
-        FROM pbc_requests
-        WHERE status = ANY(%s) AND follow_ups_ended_at IS NULL
+        FROM pbc_requests r
+        WHERE ((status = ANY(%s) AND follow_ups_ended_at IS NULL)
+               OR EXISTS (
+                   SELECT 1 FROM evidence_request_groups g
+                   JOIN evidence_request_group_members m
+                     ON m.group_id = g.id AND m.released_at IS NULL
+                   JOIN pbc_requests x ON x.id = m.pbc_request_id
+                   WHERE g.lead_request_id = r.id AND g.status = 'SENT'
+                     AND x.status = ANY(%s) AND x.follow_ups_ended_at IS NULL))
           AND (%s::uuid IS NULL OR organization_id = %s)
           AND (%s::uuid IS NULL OR project_id = %s)
         ORDER BY created_at
         LIMIT 5000
         """,
-        (sorted(REMINDABLE), organization_id, organization_id, project_id, project_id),
+        (
+            sorted(REMINDABLE),
+            sorted(REMINDABLE),
+            organization_id,
+            organization_id,
+            project_id,
+            project_id,
+        ),
     ).fetchall()
     return [(row[0], row[1], row[2]) for row in rows]
 

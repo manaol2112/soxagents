@@ -1803,6 +1803,18 @@ function EvidenceMain({
                 />
               )
             }
+            groupDelivery={
+              center.group === null || center.group.status !== "SENT" ? null : (
+                // A sent group is reminded through its lead request, in its thread.
+                <RequestDelivery
+                  model={model}
+                  workflow={workflow}
+                  requestId={center.group.leadRequestId}
+                  requestStatus="SENT"
+                  now={now}
+                />
+              )
+            }
             setupHref={portalHref}
             coordinatorMissing={
               workflow.evidenceContacts !== null &&

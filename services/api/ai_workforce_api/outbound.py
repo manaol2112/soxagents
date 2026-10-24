@@ -39,7 +39,6 @@ from ai_workforce_api.authorization import (
 from ai_workforce_api.db import transaction
 from ai_workforce_api.evidence_portal import LINK_PLACEHOLDER, link_url, mint_link
 from ai_workforce_api.followups import (
-    REMINDABLE,
     FollowUpBody,
     FollowUpState,
     FollowUpTimer,
@@ -144,6 +143,8 @@ PBC_REMINDER = MessageTemplate(
     ),
 )
 TEMPLATES: tuple[MessageTemplate, ...] = (PBC_REQUEST, PBC_REMINDER)
+# A grouped request's reminder (evidence_groups) is a reminder too.
+_REMINDER_TEMPLATES = frozenset({PBC_REMINDER.template_id, "pbc-group-reminder"})
 
 
 @dataclass(frozen=True)
@@ -337,13 +338,14 @@ def register_outbound(
                 organization_id=organization_id,
                 project_id=project_id,
             )
-            follow_up = follow_up_now(
-                connection, organization_id, project_id, request_id, principal.id
-            )
+            from ai_workforce_api.evidence_groups import reminder_target
+
+            target = reminder_target(connection, request_id)
+            follow_up = follow_up_now(connection, organization_id, project_id, target, principal.id)
             if follow_up.status == "APPROVAL_PENDING":
                 raise OutboundState("a reminder already awaits approval")
             return remind_now(
-                connection, settings, principal, organization_id, project_id, request_id,
+                connection, settings, principal, organization_id, project_id, target,
                 follow_up.id, timer, mailbox,
             )  # fmt: skip
 
@@ -951,13 +953,17 @@ def submit_reminder(
         project_id=project_id,
     )
     pbc = _read_pbc(connection, organization_id, project_id, request_id)
-    if pbc.status not in REMINDABLE:
+    if not _remindable(connection, pbc):
         raise OutboundState("request is not open")
     follow_up = read_follow_up(connection, organization_id, project_id, request_id, follow_up_id)
     if follow_up.status != "DUE":
         raise OutboundState("reminder is not due")
-    message = render_reminder(
-        pbc, _engagement(connection, organization_id, project_id), follow_up.id, follow_up.sequence
+    message = _reminder(
+        connection,
+        pbc,
+        _engagement(connection, organization_id, project_id),
+        follow_up.id,
+        follow_up.sequence,
     )
     if not recipients_allowed(settings, message):
         raise OutboundState("recipient is not allowed")
@@ -1274,14 +1280,15 @@ def _record_reminder(
     try:
         with transaction(connection) as cursor:
             pbc = _lock_pbc(cursor, organization_id, project_id, request_id)
-            if pbc.status not in REMINDABLE:
+            if not _remindable(connection, pbc):
                 raise OutboundState("request is not open")
             follow_up = lock_follow_up(
                 cursor, organization_id, project_id, request_id, follow_up_id
             )
             if follow_up.status != "APPROVAL_PENDING" or follow_up.approval_id != approval_id:
                 raise OutboundState("reminder is not awaiting approval")
-            message = render_reminder(
+            message = _reminder(
+                connection,
                 pbc,
                 _engagement(connection, organization_id, project_id),
                 follow_up.id,
@@ -1319,6 +1326,10 @@ def _record(
             pbc = _lock_pbc(cursor, organization_id, project_id, request_id)
             if pbc.status != "APPROVAL_PENDING":
                 raise OutboundState("request is not awaiting approval")
+            from ai_workforce_api.evidence_groups import in_live_group
+
+            if in_live_group(connection, request_id):
+                raise OutboundState("this request is sent with the request it was approved in")
             message = render(pbc, _engagement(connection, organization_id, project_id))
             if not recipients_allowed(settings, message):
                 raise OutboundState("recipient is not allowed")
@@ -1554,6 +1565,18 @@ def _finish(
                 outbound.follow_up_id,
                 outbound.id,
             )
+        elif outbound.template_id == "pbc-group":
+            from ai_workforce_api.evidence_groups import mark_sent as group_sent
+
+            group_sent(
+                cursor,
+                organization_id,
+                project_id,
+                principal.id,
+                updated,
+                str(message.provider_message_id),
+                str(message.thread_id),
+            )
         else:
             row = cursor.execute(
                 """
@@ -1595,6 +1618,10 @@ def _fail(
         updated = _update(cursor, outbound, "FAILED", code, outbound.attempt_count, None, None)
         reason = "live_email_disabled" if code == "live_email_disabled" else "not_available"
         _settle(cursor, organization_id, project_id, principal.id, updated, "REFUSED", reason)
+        if outbound.template_id == "pbc-group":
+            from ai_workforce_api.evidence_groups import mark_failed
+
+            mark_failed(cursor, organization_id, project_id, principal.id, updated)
         if outbound.follow_up_id is not None:
             if code == "request_resolved":
                 close_open(
@@ -1677,13 +1704,36 @@ def _settle(
     status: str,
     reason: str | None,
 ) -> None:
+    settle_approval(
+        cursor,
+        organization_id,
+        project_id,
+        actor_id,
+        outbound.approval_id,
+        status,
+        reason,
+        outbound.provider_message_id if status == "SUCCEEDED" else None,
+    )
+
+
+def settle_approval(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    actor_id: UUID,
+    approval_id: UUID,
+    status: str,
+    reason: str | None,
+    result_ref: str | None,
+) -> None:
+    """Record what became of an approved action: executed, or refused. Once only."""
     cursor.execute(
         """
         UPDATE approvals
         SET execution_status = %s, version = version + 1
         WHERE id = %s AND decision = 'APPROVED' AND execution_status = 'NOT_STARTED'
         """,
-        (status, outbound.approval_id),
+        (status, approval_id),
     )
     cursor.execute(
         """
@@ -1701,9 +1751,9 @@ def _settle(
             project_id,
             actor_id,
             status,
-            outbound.provider_message_id if status == "SUCCEEDED" else None,
+            result_ref,
             reason,
-            outbound.approval_id,
+            approval_id,
         ),
     )
 
@@ -1768,14 +1818,40 @@ def _message_for(
     project_id: UUID,
     outbound: OutboundBody,
 ) -> RenderedMessage:
+    from ai_workforce_api.evidence_groups import message_for
+
     pbc = _read_pbc(connection, organization_id, project_id, outbound.pbc_request_id)
     engagement = _engagement(connection, organization_id, project_id)
     if outbound.follow_up_id is None:
+        if outbound.template_id == "pbc-group":
+            return message_for(connection, organization_id, project_id, outbound)  # type: ignore[no-any-return]
         return render(pbc, engagement)
     follow_up = read_follow_up(
         connection, organization_id, project_id, outbound.pbc_request_id, outbound.follow_up_id
     )
-    return render_reminder(pbc, engagement, follow_up.id, follow_up.sequence)
+    return _reminder(connection, pbc, engagement, follow_up.id, follow_up.sequence)
+
+
+def _reminder(
+    connection: psycopg.Connection[Any],
+    pbc: PbcBody,
+    engagement: str,
+    follow_up_id: UUID,
+    sequence: int,
+) -> RenderedMessage:
+    """A request's reminder; for a request sent in a group, the group's (its lead's)."""
+    from ai_workforce_api.evidence_groups import reminder_for
+
+    grouped = reminder_for(connection, pbc, engagement, follow_up_id, sequence)
+    if grouped is not None:
+        return grouped  # type: ignore[no-any-return]
+    return render_reminder(pbc, engagement, follow_up_id, sequence)
+
+
+def _remindable(connection: psycopg.Connection[Any], pbc: PbcBody) -> bool:
+    from ai_workforce_api.evidence_groups import remindable
+
+    return remindable(connection, pbc)
 
 
 def _verified(
@@ -1790,7 +1866,7 @@ def _verified(
         follow_up = read_follow_up(
             connection, organization_id, project_id, outbound.pbc_request_id, outbound.follow_up_id
         )
-        if pbc.status not in REMINDABLE or follow_up.status != "APPROVAL_PENDING":
+        if not _remindable(connection, pbc) or follow_up.status != "APPROVAL_PENDING":
             return None, "request_resolved"
     try:
         message = _message_for(connection, organization_id, project_id, outbound)
@@ -1935,7 +2011,7 @@ def _outbound(row: tuple[Any, ...]) -> OutboundBody:
         id=row[0],
         pbc_request_id=row[1],
         approval_id=row[2],
-        kind="reminder" if row[3] == PBC_REMINDER.template_id else "request",
+        kind="reminder" if row[3] in _REMINDER_TEMPLATES else "request",
         follow_up_id=UUID(follow_up) if isinstance(follow_up, str) else None,
         template_id=str(row[3]),
         template_version=int(row[4]),

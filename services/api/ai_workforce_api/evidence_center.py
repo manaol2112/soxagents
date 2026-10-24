@@ -263,6 +263,12 @@ class RowBody(BaseModel):
     kickoff: bool = False
     # The approved attributes of the test plan its items evidence (internal), by code.
     supports: list[str] = []
+    # One request the person receives for several controls (evidence_groups, Release 2b):
+    # PROPOSED until approved, then APPROVED, SENT. Its id opens the group's review.
+    group: bool = False
+    group_status: str = ""
+    member_ids: list[UUID] = []
+    member_controls: list[UUID] = []
 
 
 class KpiBody(BaseModel):
@@ -446,11 +452,14 @@ def register_evidence_center(
 
     @app.get(f"{base}/evidence-requests")
     def list_requests(organization_id: UUID, project_id: UUID, request: Request) -> ListBody:
+        """Every request, filtered, sorted, and paged. With grouped=1, as the person sees
+        them: the requests travelling together to one person are one row."""
         filters, sort, direction, page, size = filters_of(request)
+        grouped = request.query_params.get("grouped", "") == "1"
         return run(
             request,
             lambda c, p: listing(
-                c, p, organization_id, project_id, filters, sort, direction, page, size
+                c, p, organization_id, project_id, filters, sort, direction, page, size, grouped
             ),
         )
 
@@ -871,7 +880,11 @@ def _matches(
         return False
     if filters.system and not (set(body.systems or ["NONE"]) & set(filters.system)):
         return False
-    if filters.control is not None and body.control_id != filters.control:
+    if (
+        filters.control is not None
+        and body.control_id != filters.control
+        and filters.control not in body.member_controls
+    ):
         return False
     if filters.q:
         haystack = " ".join(
@@ -938,12 +951,18 @@ def _filtered(
     filters: Filters,
     sort: str,
     direction: str,
+    grouped: bool = False,
 ) -> tuple[list[_Row], list[_Row], bool, bool]:
     can_act, can_approve = _rights(connection, principal, organization_id, project_id)
     if filters.view not in BUILT_IN:
         saved = _saved(connection, principal, project_id, filters.view)
         filters = Filters(**{**saved.model_dump(), "q": filters.q or saved.q, "view": "all"})
     rows = _rows(connection, principal, organization_id, project_id, can_approve)
+    if grouped:
+        # As the person sees them: a group's requests are one request.
+        from ai_workforce_api.evidence_groups import collapse
+
+        rows = collapse(connection, organization_id, project_id, rows)
     chosen = [row for row in rows if _matches(row, filters, principal, can_act, can_approve)]
     chosen.sort(key=lambda row: _sort_key(row.body, sort), reverse=direction == "desc")
     return rows, chosen, can_act, can_approve
@@ -959,17 +978,23 @@ def listing(
     direction: str,
     page: int,
     size: int,
+    grouped: bool = False,
 ) -> ListBody:
     from ai_workforce_api.evidence_plans import unplanned_controls, unrequested_controls
 
     rows, chosen, can_act, can_approve = _filtered(
-        connection, principal, organization_id, project_id, filters, sort, direction
+        connection, principal, organization_id, project_id, filters, sort, direction, grouped
     )
     bodies = [row.body for row in rows]
     start = (page - 1) * size
     return ListBody(
         rows=[row.body for row in chosen[start : start + size]],
-        matching=[MatchBody(id=row.body.id, version=row.body.version) for row in chosen],
+        # A group is reviewed and sent from its own panel, not changed in bulk.
+        matching=[
+            MatchBody(id=row.body.id, version=row.body.version)
+            for row in chosen
+            if not row.body.group
+        ],
         total=len(chosen),
         page=page,
         size=size,
