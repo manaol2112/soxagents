@@ -130,6 +130,13 @@ def main() -> None:
         f"standard workforce: {result.roster_workers} workers, {result.installed} installed, "
         f"{result.updated} updated, {result.retired} retired, {result.staffed} staffed"
     )
+    # The latest library version always applies (decided by the product owner): controls
+    # copied from an earlier one adopt it, and no person is asked.
+    from ai_workforce_api.library_definitions import adopt_latest
+
+    with psycopg.connect(settings.database_url, connect_timeout=3) as connection:
+        latest = adopt_latest(connection)
+    print(f"library versions: {latest.adopted} controls adopted the latest, {latest.kept} kept")
     # Library attributes are settled by the rules, never left for a person to tidy
     # (milestone L3e): plans that do not yet follow their standard's attributes catch up.
     from ai_workforce_api.master_plans import settle_library_attributes

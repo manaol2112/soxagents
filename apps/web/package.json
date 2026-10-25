@@ -13,7 +13,7 @@
     "start": "next start --hostname 127.0.0.1 --port 3000"
   },
   "dependencies": {
-    "next": "16.4.0",
+    "next": "16.4.3",
     "pdfjs-dist": "6.3.289",
     "react": "19.3.0",
     "react-dom": "19.3.0"

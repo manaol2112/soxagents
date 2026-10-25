@@ -5,6 +5,7 @@ import type { Design } from "./control-context-model";
 import { DesignPanel } from "./control-context-view";
 import { FilePicker } from "./file-picker";
 import { formatDate } from "./format";
+import { areaSelected } from "./new-engagement-model";
 import {
   CONTROL_CATEGORIES,
   type ControlCategory,
@@ -43,7 +44,7 @@ import {
 } from "./onboarding-model";
 import { ProcessesCard, ReportsCard } from "./process-view";
 import { RecordDialog } from "./record-dialog";
-import { canonicalQuery } from "./routes";
+import { canonicalQuery, placeSetup } from "./routes";
 import { SetupForm } from "./setup-form";
 import type { ShellModel } from "./shell-model";
 import { SystemsScoping } from "./systems-view";
@@ -55,6 +56,8 @@ import { Banner, CardHeader, EmptyState } from "./workspace-view";
 type Ready = Extract<ShellModel, { status: "ready" }>;
 
 export const NOTICES: Record<SetupNotice, string> = {
+  "setup-created":
+    "The engagement is created. Setup continues with what the planner has drafted.",
   "setup-saved": "Saved.",
   "setup-drafting":
     "The planner is preparing suggestions. They appear here in a moment.",
@@ -166,12 +169,18 @@ export function setupHref(
   step: SetupStep,
   extra: Record<string, string> = {},
 ): string {
+  // In Controls, the systems, controls, and templates set up there keep their links
+  // there; everything else is setup's.
+  const inControls =
+    model.section === "controls" &&
+    (step === "controls" || step === "workpapers");
   const params = new URLSearchParams({
     organization: model.organization.id,
-    section: "setup",
+    section: inControls ? "controls" : "setup",
     step,
   });
   canonicalQuery(params);
+  placeSetup(params, model.selectedProject?.status ?? null);
   if (model.selectedProject !== null) {
     params.set("project", model.selectedProject.id);
   }
@@ -248,62 +257,11 @@ export function RcmStep({
           editable={editable}
           selected={system}
         />
-        <div className="rcm-options">
-          <section className="card rcm-option">
-            <div className="setup-hero-body">
-              <span className="agent-mark agent-mark-lg" aria-hidden="true">
-                <UiIcon name="shield" size={22} />
-              </span>
-              <div>
-                <h2>Start from the standard library</h2>
-                <p>
-                  {onboarding.library.reduce(
-                    (sum, area) => sum + area.controls,
-                    0,
-                  )}{" "}
-                  reviewed controls: IT general controls, application controls
-                  and key reports, and starter controls for each business cycle,
-                  each with its risk, test attributes, suggested evidence, and
-                  workpaper templates. Choose the areas in scope.
-                </p>
-              </div>
-            </div>
-            {editable && onboarding.applications.length > 0 ? (
-              <LibraryPicker model={model} onboarding={onboarding} />
-            ) : editable ? (
-              <p className="card-footer library-locked">
-                <UiIcon name="info" size={14} />
-                Add at least one in-scope system above first. Each control is
-                set up once per system it runs on.
-              </p>
-            ) : null}
-          </section>
-          <section className="card rcm-option">
-            <div className="setup-hero-body">
-              <span className="agent-mark agent-mark-lg" aria-hidden="true">
-                <UiIcon name="table" size={22} />
-              </span>
-              <div>
-                <h2>Upload the client's RCM</h2>
-                <p>
-                  Use the client's own matrix, in their format and terms. Match
-                  their columns to ours; every other column is kept under the
-                  client's heading.
-                </p>
-                <ul className="chips">
-                  <li className="pill">Excel .xlsx</li>
-                  <li className="pill">CSV</li>
-                  <li className="pill">Any column names</li>
-                </ul>
-              </div>
-            </div>
-            {editable ? (
-              <div className="card-footer">
-                <RcmUploadForm model={model} onboarding={onboarding} />
-              </div>
-            ) : null}
-          </section>
-        </div>
+        <ControlOptions
+          model={model}
+          onboarding={onboarding}
+          editable={editable}
+        />
       </>
     );
   }
@@ -438,6 +396,74 @@ export function RcmStep({
   );
 }
 
+/** The two ways to set up the controls: the firm's standard library (once a system is in
+ * scope) or the client's RCM. */
+export function ControlOptions({
+  model,
+  onboarding,
+  editable,
+}: {
+  model: Ready;
+  onboarding: Onboarding;
+  editable: boolean;
+}) {
+  return (
+    <div className="rcm-options">
+      <section className="card rcm-option">
+        <div className="setup-hero-body">
+          <span className="agent-mark agent-mark-lg" aria-hidden="true">
+            <UiIcon name="shield" size={22} />
+          </span>
+          <div>
+            <h2>Start from the standard library</h2>
+            <p>
+              {onboarding.library.reduce((sum, area) => sum + area.controls, 0)}{" "}
+              reviewed controls: IT general controls, application controls and
+              key reports, and starter controls for each business cycle, each
+              with its risk, test attributes, suggested evidence, and workpaper
+              templates. Choose the areas in scope.
+            </p>
+          </div>
+        </div>
+        {editable && onboarding.applications.length > 0 ? (
+          <LibraryPicker model={model} onboarding={onboarding} />
+        ) : editable ? (
+          <p className="card-footer library-locked">
+            <UiIcon name="info" size={14} />
+            Add at least one in-scope system first. Each control is set up once
+            per system it runs on.
+          </p>
+        ) : null}
+      </section>
+      <section className="card rcm-option">
+        <div className="setup-hero-body">
+          <span className="agent-mark agent-mark-lg" aria-hidden="true">
+            <UiIcon name="table" size={22} />
+          </span>
+          <div>
+            <h2>Upload the client's RCM</h2>
+            <p>
+              Use the client's own matrix, in their format and terms. Match
+              their columns to ours; every other column is kept under the
+              client's heading.
+            </p>
+            <ul className="chips">
+              <li className="pill">Excel .xlsx</li>
+              <li className="pill">CSV</li>
+              <li className="pill">Any column names</li>
+            </ul>
+          </div>
+        </div>
+        {editable ? (
+          <div className="card-footer">
+            <RcmUploadForm model={model} onboarding={onboarding} />
+          </div>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
 /** A label in a sentence: lower case, except an acronym such as "IT". */
 function lowerLabel(label: string): string {
   const [first = "", ...rest] = label.split(" ");
@@ -446,7 +472,7 @@ function lowerLabel(label: string): string {
 }
 
 /** The systems the controls run on. They come first: each control is one per system. */
-function SystemsCard({
+export function SystemsCard({
   model,
   onboarding,
   editable,
@@ -473,7 +499,7 @@ function SystemsCard({
 /** The SOC 1 reports to address: each system the agent found relies on a service
  * organization, or could not decide, or that has a report uploaded. A list for the client to
  * consider; nothing here is tracked or decided. */
-function SocReportsCard({ onboarding }: { onboarding: Onboarding }) {
+export function SocReportsCard({ onboarding }: { onboarding: Onboarding }) {
   const items = socOverview(onboarding);
   if (items.length === 0) {
     return null;
@@ -753,11 +779,10 @@ function LibraryPicker({
                   type="checkbox"
                   name="domains"
                   value={key}
+                  // The frameworks chosen when the engagement was created, else
+                  // the IT general controls.
                   defaultChecked={
-                    !adding &&
-                    (key === "ACCESS" ||
-                      key === "CHANGE" ||
-                      key === "OPERATIONS")
+                    !adding && areaSelected(key, onboarding.frameworks)
                   }
                 />
                 {label}

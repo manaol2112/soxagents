@@ -91,6 +91,8 @@ export async function POST(request: Request) {
     setup.searchParams.set("organization", write.organizationId);
     setup.searchParams.set("project", projectId);
     setup.searchParams.set("step", "overview");
+    // The setup agent greets the new engagement on the first step it opens.
+    setup.searchParams.set("notice", "setup-created");
     return NextResponse.redirect(setup, 303);
   }
   const notice = noticeForStatus(status, detail, fields.intent ?? "");

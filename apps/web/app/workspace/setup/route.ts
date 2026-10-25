@@ -7,6 +7,7 @@ import {
   setupNoticeFor,
   setupWrite,
 } from "../../../src/onboarding-model";
+import { placeSetup, setupReturn } from "../../../src/routes";
 
 export async function POST(request: Request) {
   const form = await request.formData();
@@ -67,6 +68,7 @@ export async function POST(request: Request) {
     fields,
     write.step,
     setupNoticeFor(write.intent, status, detail),
+    write.intent === "launch" && status === 200,
   );
 }
 
@@ -75,13 +77,21 @@ function redirect(
   fields: Record<string, string>,
   step: string,
   notice: string,
+  launched = false,
 ) {
   // A form saved in the background (setup-form.tsx) gets the outcome, not a new page.
   if (request.headers.get("x-setup-fetch") === "1") {
     return NextResponse.json({ notice });
   }
   const destination = browserUrl("/", request);
-  destination.searchParams.set("section", "setup");
+  // A form posted from Controls (its systems, controls, and templates once the
+  // engagement runs) returns there, one from Settings to Settings, and every other to
+  // onboarding.
+  setupReturn(destination.searchParams, request.headers.get("referer"));
+  // A launch leaves onboarding: setup is a Settings tab from then on.
+  if (launched) {
+    placeSetup(destination.searchParams, "ACTIVE");
+  }
   const organizationId = fields.organization_id ?? "";
   const projectId = fields.project_id ?? "";
   if (organizationId !== "") {

@@ -44,6 +44,7 @@ export function ControlStepper({
   activityHref,
   agent,
   trace,
+  simple = false,
 }: {
   journey: ControlJourney | null;
   items: StepperItem[];
@@ -63,6 +64,10 @@ export function ControlStepper({
   agent: Says | null;
   /** The trace rail: the chain of records, and each attribute's row (M1c). */
   trace: { nodes: TraceNode[]; rows: TraceRow[] } | null;
+  /** The Plan step with the test plan open below (decided by the product owner): the
+   * plan itself says what it needs and is edited in place, so the steps and phases stay
+   * and the summary blocks (needs you, the agent, outstanding, trace) do not repeat it. */
+  simple?: boolean;
 }) {
   const done = completion(journey);
   return (
@@ -118,7 +123,7 @@ export function ControlStepper({
           </a>
         </p>
       </nav>
-      {phases.length > 0 ? (
+      {phases.length > 0 && !simple ? (
         <ol className="cw-phases" aria-label="Testing phases">
           {phases.map((phase) => (
             <li
@@ -136,34 +141,36 @@ export function ControlStepper({
           ))}
         </ol>
       ) : null}
-      <section
-        className={`cw-needs${needs.mine ? " is-mine" : ""}`}
-        aria-labelledby="cw-needs-title"
-      >
-        <p className="cw-needs-kicker" id="cw-needs-title">
-          {needs.mine
-            ? "Needs you"
-            : needs.waitsOn !== ""
-              ? `Waits on ${needs.waitsOn}`
-              : `Waits on ${needs.who.toLowerCase()}`}
-        </p>
-        <p className="cw-needs-title">{needs.title}</p>
-        {needs.reason !== "" ? (
-          <p className="cw-needs-reason">{needs.reason}</p>
-        ) : null}
-        {needs.mine && actionHref !== null ? (
-          <div className="cw-needs-actions">
-            <a className="btn" href={actionHref}>
-              Open
-              <UiIcon name="arrow" size={14} />
-            </a>
-          </div>
-        ) : null}
-      </section>
-      {agent !== null ? (
+      {simple ? null : (
+        <section
+          className={`cw-needs${needs.mine ? " is-mine" : ""}`}
+          aria-labelledby="cw-needs-title"
+        >
+          <p className="cw-needs-kicker" id="cw-needs-title">
+            {needs.mine
+              ? "Needs you"
+              : needs.waitsOn !== ""
+                ? `Waits on ${needs.waitsOn}`
+                : `Waits on ${needs.who.toLowerCase()}`}
+          </p>
+          <p className="cw-needs-title">{needs.title}</p>
+          {needs.reason !== "" ? (
+            <p className="cw-needs-reason">{needs.reason}</p>
+          ) : null}
+          {needs.mine && actionHref !== null ? (
+            <div className="cw-needs-actions">
+              <a className="btn" href={actionHref}>
+                Open
+                <UiIcon name="arrow" size={14} />
+              </a>
+            </div>
+          ) : null}
+        </section>
+      )}
+      {agent !== null && !simple ? (
         <AgentSays says={agent} ids={ids} back={hrefs[current]} />
       ) : null}
-      {blockers.length > 0 ? (
+      {blockers.length > 0 && !simple ? (
         <section className="cw-blockers" aria-labelledby="cw-blockers-title">
           <h2 id="cw-blockers-title">Outstanding</h2>
           <ul>
@@ -199,7 +206,7 @@ export function ControlStepper({
           </ul>
         </section>
       ) : null}
-      {trace !== null ? (
+      {trace !== null && !simple ? (
         <TraceRail nodes={trace.nodes} rows={trace.rows} />
       ) : null}
     </div>

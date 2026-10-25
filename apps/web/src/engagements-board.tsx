@@ -2,21 +2,29 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { ENGAGEMENT_STATUSES, statusLabel } from "./engagement-lifecycle";
 import {
-  ENGAGEMENT_STATUSES,
-  type EngagementStatus,
-  statusLabel,
-} from "./engagement-lifecycle";
-import {
+  atRisk,
+  auditPeriod,
   cardEntry,
   cardSignals,
-  inFilter,
+  ENGAGEMENT_SORTS,
+  type EngagementFilter,
+  type EngagementSort,
+  engagementTypeShort,
+  isPastDue,
+  matchesFilter,
+  nameMark,
   openEngagements,
-  sortEngagements,
+  parseEngagementSort,
+  portfolioCounts,
+  riskReason,
+  sortBy,
   updatedLabel,
   workSummary,
 } from "./engagements-model";
-import { formatDate } from "./format";
+import { formatDate, initials } from "./format";
+import { engagementTypeLabel } from "./onboarding-model";
 import {
   byRecent,
   FAVORITES_KEY,
@@ -32,33 +40,48 @@ import {
 import { type Project, workspaceHref } from "./shell-model";
 import { type IconName, UiIcon } from "./ui-icon";
 
-type Filter = "ALL" | EngagementStatus;
+type Filter = EngagementFilter;
 
+// The running work and its risk first, then the other statuses (shown when present).
 const FILTERS: Array<[Filter, string]> = [
   ["ALL", "All"],
-  ...ENGAGEMENT_STATUSES,
+  ["ACTIVE", "Active"],
+  ["AT_RISK", "At risk"],
+  ...ENGAGEMENT_STATUSES.filter(([key]) => key !== "ACTIVE"),
 ];
+const ALWAYS_SHOWN = new Set<Filter>(["ALL", "ACTIVE", "AT_RISK", "COMPLETED"]);
 
 type Layout = "tiles" | "list";
-// Each person's choice, kept in their browser only (Milestone 8.15).
+// Each person's choices, kept in their browser only (Milestone 8.15). The list is the
+// default (decided by the product owner).
 const LAYOUT_KEY = "aw.engagements.layout";
+const SORT_KEY = "aw.engagements.sort";
 
-function storedLayout(): Layout {
+function stored(key: string): string | null {
   try {
-    return window.localStorage.getItem(LAYOUT_KEY) === "list"
-      ? "list"
-      : "tiles";
+    return window.localStorage.getItem(key);
   } catch {
-    return "tiles";
+    return null;
   }
 }
 
-function keepLayout(layout: Layout): void {
+function keepChoice(key: string, value: string): void {
   try {
-    window.localStorage.setItem(LAYOUT_KEY, layout);
+    window.localStorage.setItem(key, value);
   } catch {
     // Storage can be off; the choice then lasts for this page only.
   }
+}
+
+// A few soft tones for the team's avatars, the same for a name every time.
+const AVATAR_TONES = ["accent", "ai", "success", "warning"] as const;
+
+function avatarTone(name: string): string {
+  let sum = 0;
+  for (const char of name) {
+    sum += char.charCodeAt(0);
+  }
+  return AVATAR_TONES[sum % AVATAR_TONES.length] ?? "accent";
 }
 
 type MenuItem = { label: string; href: string; icon: IconName };
@@ -143,7 +166,8 @@ export function EngagementsBoard({
       : "ALL",
   );
   const [query, setQuery] = useState("");
-  const [layout, setLayout] = useState<Layout>("tiles");
+  const [layout, setLayout] = useState<Layout>("list");
+  const [sort, setSort] = useState<EngagementSort>("status");
   // Kept in this browser only: read after the page loads, so the server's page and the
   // browser's first render agree.
   const [view, setView] = useState<View>("all");
@@ -153,7 +177,8 @@ export function EngagementsBoard({
   // the person's.
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs once, on load
   useEffect(() => {
-    setLayout(storedLayout());
+    setLayout(stored(LAYOUT_KEY) === "tiles" ? "tiles" : "list");
+    setSort(parseEngagementSort(stored(SORT_KEY)));
     const seen = storedVisits();
     setVisits(seen);
     setView(
@@ -167,7 +192,11 @@ export function EngagementsBoard({
   }, []);
   const choose = (next: Layout) => {
     setLayout(next);
-    keepLayout(next);
+    keepChoice(LAYOUT_KEY, next);
+  };
+  const chooseSort = (next: EngagementSort) => {
+    setSort(next);
+    keepChoice(SORT_KEY, next);
   };
   const chooseView = (next: View) => setView(next);
   const star = (id: string) => {
@@ -188,38 +217,113 @@ export function EngagementsBoard({
           : projects;
     // Starred holds what the person picked, archived ones included; Recent leaves
     // archived ones out.
-    const inStatus = (status: string) =>
-      view !== "all" && filter === "ALL" ? true : inFilter(status, filter);
-    return byRecent(
-      sortEngagements(
-        pool
-          .filter((project) => inStatus(project.status))
-          .filter(
-            (project) =>
-              needle === "" ||
-              `${project.name} ${project.clientName} ${project.ownerName}`
-                .toLowerCase()
-                .includes(needle),
-          ),
-      ),
-      visits,
-    );
-  }, [projects, filter, query, view, visits, favorites]);
+    const inView = (project: Project) =>
+      view !== "all" && filter === "ALL"
+        ? true
+        : matchesFilter(project, filter);
+    const found = pool
+      .filter(inView)
+      .filter(
+        (project) =>
+          needle === "" ||
+          `${project.name} ${project.clientName} ${project.ownerName} ${project.team.join(" ")}`
+            .toLowerCase()
+            .includes(needle),
+      );
+    // The usual order puts what was opened lately first; a chosen column decides alone.
+    return sort === "status"
+      ? byRecent(sortBy(found, "status"), visits)
+      : sortBy(found, sort);
+  }, [projects, filter, query, view, visits, favorites, sort]);
+  const totals = portfolioCounts(projects);
   const counts = new Map<string, number>();
   for (const project of projects) {
     counts.set(project.status, (counts.get(project.status) ?? 0) + 1);
   }
+  counts.set("ALL", totals.open);
+  counts.set("AT_RISK", totals.atRisk);
+  const pick = (next: Filter) => {
+    chooseView("all");
+    setFilter(next);
+  };
+  const waiting = [
+    totals.draft > 0 ? `${totals.draft} in setup` : "",
+    totals.paused > 0 ? `${totals.paused} paused` : "",
+    totals.archived > 0 ? `${totals.archived} archived` : "",
+  ].filter(Boolean);
+  const tiles: Array<{
+    key: Filter;
+    label: string;
+    value: number;
+    detail: string;
+    icon: IconName;
+    tone: string;
+  }> = [
+    {
+      key: "ALL",
+      label: "Open engagements",
+      value: totals.open,
+      detail: waiting.length > 0 ? waiting.join(" · ") : "None archived",
+      icon: "layers",
+      tone: "accent",
+    },
+    {
+      key: "ACTIVE",
+      label: "Active",
+      value: totals.active,
+      detail: "Fieldwork under way",
+      icon: "activity",
+      tone: "info",
+    },
+    {
+      key: "COMPLETED",
+      label: "Completed",
+      value: totals.completed,
+      detail: "Fieldwork finished",
+      icon: "check",
+      tone: "success",
+    },
+    {
+      key: "AT_RISK",
+      label: "At risk",
+      value: totals.atRisk,
+      detail: "Late evidence or a missed milestone",
+      icon: "risk",
+      tone: totals.atRisk > 0 ? "danger" : "neutral",
+    },
+  ];
   return (
     <section className="eg-board">
+      {/* The headline counts; each one filters the list below to what it counts. */}
+      <div className="eg-kpis">
+        {tiles.map((tile) => {
+          const on = view === "all" && filter === tile.key;
+          return (
+            <button
+              key={tile.key}
+              type="button"
+              className={`eg-kpi tone-${tile.tone}${on ? " is-on" : ""}`}
+              aria-pressed={on}
+              onClick={() => pick(tile.key)}
+            >
+              <span className="eg-kpi-icon" aria-hidden="true">
+                <UiIcon name={tile.icon} size={18} />
+              </span>
+              <span className="eg-kpi-copy">
+                <strong>{tile.value}</strong>
+                <span>{tile.label}</span>
+                <small>{tile.detail}</small>
+              </span>
+            </button>
+          );
+        })}
+      </div>
       <div className="eg-toolbar">
         {/* One set of choices: a status, or the person's starred or recent ones. */}
         <nav className="eg-filters" aria-label="Show">
           {FILTERS.map(([key, label]) => {
-            const count =
-              key === "ALL"
-                ? openEngagements(projects).length
-                : (counts.get(key) ?? 0);
-            if (key !== "ALL" && count === 0) {
+            const count = counts.get(key) ?? 0;
+            if (!ALWAYS_SHOWN.has(key) && count === 0) {
               return null;
             }
             const on = view === "all" && filter === key;
@@ -227,12 +331,16 @@ export function EngagementsBoard({
               <button
                 key={key}
                 type="button"
-                className={on ? "is-on" : undefined}
+                className={
+                  [
+                    on ? "is-on" : "",
+                    key === "AT_RISK" && count > 0 ? "eg-risk" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ") || undefined
+                }
                 aria-pressed={on}
-                onClick={() => {
-                  chooseView("all");
-                  setFilter(key);
-                }}
+                onClick={() => pick(key)}
               >
                 {label}
                 <span>{count}</span>
@@ -264,49 +372,68 @@ export function EngagementsBoard({
             </button>
           ))}
         </nav>
-        <fieldset className="eg-layout-switch">
-          <legend className="sr-only">Layout</legend>
-          {(
-            [
-              ["tiles", "Tiles", "grid"],
-              ["list", "List", "table"],
-            ] as const
-          ).map(([key, label, icon]) => (
-            <button
-              key={key}
-              type="button"
-              className={layout === key ? "is-on" : undefined}
-              aria-pressed={layout === key}
-              onClick={() => choose(key)}
+        {/* Search, sort and layout stay together, on the filters' line or their own. */}
+        <div className="eg-tools">
+          <label className="eg-search">
+            <span className="sr-only">Search engagements</span>
+            <svg
+              aria-hidden="true"
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
             >
-              <UiIcon name={icon} size={14} />
-              {label}
-            </button>
-          ))}
-        </fieldset>
-        <label className="eg-search">
-          <span className="sr-only">Search engagements</span>
-          <svg
-            aria-hidden="true"
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-          >
-            <circle cx="11" cy="11" r="7" />
-            <path d="m20 20-3.5-3.5" />
-          </svg>
-          <input
-            autoComplete="off"
-            type="search"
-            value={query}
-            placeholder="Search client, engagement, or lead"
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </label>
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-3.5-3.5" />
+            </svg>
+            <input
+              autoComplete="off"
+              type="search"
+              value={query}
+              placeholder="Search engagement, client, or team"
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+          <label className="eg-sort">
+            <span>Sort</span>
+            <select
+              value={sort}
+              onChange={(event) =>
+                chooseSort(parseEngagementSort(event.target.value))
+              }
+            >
+              {ENGAGEMENT_SORTS.map(([key, label]) => (
+                <option key={key} value={key}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <fieldset className="eg-layout-switch">
+            <legend className="sr-only">Layout</legend>
+            {(
+              [
+                ["list", "List", "table"],
+                ["tiles", "Tiles", "grid"],
+              ] as const
+            ).map(([key, label, icon]) => (
+              <button
+                key={key}
+                type="button"
+                className={layout === key ? "is-on" : undefined}
+                aria-pressed={layout === key}
+                aria-label={label}
+                title={label}
+                onClick={() => choose(key)}
+              >
+                <UiIcon name={icon} size={15} />
+              </button>
+            ))}
+          </fieldset>
+        </div>
       </div>
       {shown.length === 0 ? (
         <p className="eg-empty">
@@ -322,62 +449,169 @@ export function EngagementsBoard({
                 : "No engagements match."}
         </p>
       ) : layout === "list" ? (
-        <div className="eg-list">
-          <div className="eg-list-head" aria-hidden="true">
-            <span>Client</span>
+        <div className="eg-table">
+          <div className="eg-thead" aria-hidden="true">
             <span>Engagement</span>
             <span>Status</span>
-            <span>Period end</span>
-            <span>Agent work</span>
-            <span>Overdue</span>
-            <span>Findings</span>
+            <span>Audit period</span>
+            <span>Progress</span>
+            <span>Controls</span>
+            <span title="Open findings">Findings</span>
+            <span>Next milestone</span>
+            <span>Team</span>
           </div>
           <ul>
             {shown.map((project) => {
               const work = workSummary(project.progress);
+              const next = project.nextMilestone;
+              const late = next !== null && isPastDue(next.due, now);
+              const client =
+                project.clientName !== "" ? project.clientName : "No client";
               return (
                 <li key={project.id} className="eg-row-item">
                   <a
-                    className={`eg-row is-${project.status.toLowerCase()}`}
+                    className={`eg-trow is-${project.status.toLowerCase()}`}
                     href={openHref(project)}
                     aria-current={
                       project.id === selectedId ? "true" : undefined
                     }
                   >
-                    <span
-                      className={`eg-row-client${project.clientName === "" ? " is-unset" : ""}`}
-                    >
-                      {project.clientName !== ""
-                        ? project.clientName
-                        : "No client"}
-                    </span>
-                    <span className="eg-row-name">{project.name}</span>
-                    <span>
+                    {/* The client leads, as people name an engagement by its client;
+                        the engagement and its type follow. */}
+                    <span className="eg-ident">
+                      <span className="eg-mono" aria-hidden="true">
+                        {nameMark(
+                          project.clientName !== ""
+                            ? project.clientName
+                            : project.name,
+                        )}
+                      </span>
                       <span
-                        className={`eg-status is-${project.status.toLowerCase()}`}
+                        className="eg-ident-text"
+                        title={
+                          project.kind !== ""
+                            ? engagementTypeLabel(project.kind)
+                            : undefined
+                        }
                       >
-                        {statusLabel(project.status)}
+                        <strong>
+                          {project.clientName !== ""
+                            ? project.clientName
+                            : project.name}
+                        </strong>
+                        <small>
+                          {[
+                            project.clientName !== "" ? project.name : client,
+                            project.kind !== ""
+                              ? engagementTypeShort(project.kind)
+                              : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </small>
                       </span>
                     </span>
-                    <span className="eg-row-cell" data-label="Period end">
-                      {project.periodEnd !== null
-                        ? formatDate(project.periodEnd)
-                        : "Not set"}
+                    <span className="eg-cell" data-label="Status">
+                      {atRisk(project) ? (
+                        <span
+                          className="eg-status is-risk"
+                          title={riskReason(project)}
+                        >
+                          At risk
+                        </span>
+                      ) : (
+                        <span
+                          className={`eg-status is-${project.status.toLowerCase()}`}
+                        >
+                          {statusLabel(project.status)}
+                        </span>
+                      )}
                     </span>
-                    <span className="eg-row-cell" data-label="Agent work">
-                      {work.total === 0 ? "None yet" : `${work.percent}% done`}
+                    <span className="eg-cell eg-soft" data-label="Audit period">
+                      {auditPeriod(project.periodEnd)}
                     </span>
                     <span
-                      className={`eg-row-cell eg-num${project.overdueRequests > 0 ? " is-warn" : ""}`}
-                      data-label="Overdue evidence"
+                      className="eg-cell eg-progress-cell"
+                      data-label="Progress"
+                      title={
+                        work.total === 0
+                          ? "No agent work yet"
+                          : `Agent work: ${work.done} of ${work.total} done`
+                      }
                     >
-                      {project.overdueRequests}
+                      <span className="eg-meter" aria-hidden="true">
+                        <span style={{ width: `${work.percent}%` }} />
+                      </span>
+                      <span className="eg-pct">{work.percent}%</span>
+                    </span>
+                    <span className="eg-cell eg-num" data-label="Controls">
+                      {project.controls}
                     </span>
                     <span
-                      className={`eg-row-cell eg-num${project.openDeficiencies > 0 ? " is-warn" : ""}`}
+                      className={`eg-cell eg-num ${project.openDeficiencies > 0 ? "is-warn" : "is-clear"}`}
                       data-label="Open findings"
                     >
                       {project.openDeficiencies}
+                    </span>
+                    <span
+                      className="eg-cell eg-next"
+                      data-label="Next milestone"
+                      title={
+                        next === null
+                          ? undefined
+                          : `${next.name}, ${late ? "missed, due" : "due"} ${formatDate(next.due)}`
+                      }
+                    >
+                      {next === null ? (
+                        <span className="eg-soft">None scheduled</span>
+                      ) : (
+                        <>
+                          <UiIcon name="calendar" size={15} />
+                          <span className="eg-next-text">
+                            <span>{next.name}</span>
+                            <small className={late ? "is-late" : undefined}>
+                              {late
+                                ? `Missed · ${formatDate(next.due)}`
+                                : formatDate(next.due)}
+                            </small>
+                          </span>
+                        </>
+                      )}
+                    </span>
+                    <span
+                      className="eg-cell eg-team"
+                      data-label="Team"
+                      title={project.team.join(", ")}
+                    >
+                      {project.team.length === 0 ? (
+                        <span className="eg-soft">No team</span>
+                      ) : (
+                        <>
+                          {/* Three marks at most: two people and a count when more. */}
+                          {project.team
+                            .slice(0, project.team.length > 3 ? 2 : 3)
+                            .map((name) => (
+                              <span
+                                key={name}
+                                className={`eg-avatar tone-${avatarTone(name)}`}
+                                aria-hidden="true"
+                              >
+                                {initials(name)}
+                              </span>
+                            ))}
+                          {project.team.length > 3 ? (
+                            <span
+                              className="eg-avatar is-more"
+                              aria-hidden="true"
+                            >
+                              +{project.team.length - 2}
+                            </span>
+                          ) : null}
+                          <span className="sr-only">
+                            {project.team.join(", ")}
+                          </span>
+                        </>
+                      )}
                     </span>
                   </a>
                   <FavoriteButton

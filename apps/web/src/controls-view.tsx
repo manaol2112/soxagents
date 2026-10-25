@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { AgentSays } from "./agent-says";
 import { agentSays, reviewForStep, sheetForStep } from "./agent-says-model";
 import { analysisFor, reviewFor } from "./analysis-model";
 import { AnalysisPanel } from "./analysis-view";
@@ -131,7 +132,7 @@ import { HashScroll } from "./hash-scroll";
 import { impactFor } from "./impact-model";
 import { ImpactPanel } from "./impact-panel";
 import { planningHref } from "./planning-model";
-import { PlanReview } from "./planning-view";
+import { PlanReview, type PlanWorkspace } from "./planning-view";
 import { RequestReview } from "./request-review";
 import {
   reviewFor as controlReviewFor,
@@ -142,7 +143,7 @@ import { ReviewTab } from "./review-view";
 import { roundsFor } from "./round-model";
 import { RoundReviews } from "./round-reviews";
 import { TestRounds } from "./round-view";
-import { canonicalQuery } from "./routes";
+import { canonicalQuery, placeSetup } from "./routes";
 import { implementationName } from "./shared-plans-model";
 import { sheetFor } from "./sheet-model";
 import { TestSheetCard } from "./sheet-view";
@@ -189,8 +190,10 @@ function href(model: Ready, extra: Keep = {}, section = "controls") {
     organization: model.organization.id,
     section,
   });
-  // An older section name (deficiencies) lands on its destination directly.
+  // An older section name (deficiencies) lands on its destination directly, and setup
+  // where it lives for the engagement.
   canonicalQuery(params);
+  placeSetup(params, model.selectedProject?.status ?? null);
   if (model.selectedProject !== null) {
     params.set("project", model.selectedProject.id);
   }
@@ -235,9 +238,12 @@ function natureText(control: ControlRow): string {
 export function ControlsMain({
   model,
   engagement,
+  embedded = false,
 }: {
   model: Ready;
   engagement: EngagementState;
+  /** Inside the Systems & Processes page's Controls tab, under that page's header. */
+  embedded?: boolean;
 }) {
   const project = model.selectedProject;
   if (project === null) {
@@ -291,11 +297,43 @@ export function ControlsMain({
       inScope={inScope}
       shown={shown}
       keep={keep}
+      embedded={embedded}
     />
   );
 }
 
 // The register
+
+/** The register's title and actions: a page header of its own, or under the Systems &
+ * Processes page's header a line with the same summary and actions. */
+function RegisterHead({
+  embedded,
+  context,
+  description,
+  actions,
+}: {
+  embedded: boolean;
+  context: string | undefined;
+  description: string;
+  actions: ReactNode;
+}) {
+  if (!embedded) {
+    return (
+      <PageHeader
+        context={context}
+        title="Controls"
+        description={description}
+        actions={actions}
+      />
+    );
+  }
+  return (
+    <div className="cr-embedded-head">
+      <p>{description}</p>
+      {actions}
+    </div>
+  );
+}
 
 function ControlRegister({
   model,
@@ -303,12 +341,14 @@ function ControlRegister({
   inScope,
   shown,
   keep,
+  embedded,
 }: {
   model: Ready;
   engagement: EngagementState;
   inScope: ControlRow[];
   shown: ControlRow[];
   keep: Keep;
+  embedded: boolean;
 }) {
   const filters = engagement.filters;
   const project = model.selectedProject;
@@ -491,15 +531,17 @@ function ControlRegister({
     failed: "Stopped",
   } as const;
   return (
-    <div className="page register-page cr co">
+    <div
+      className={`${embedded ? "" : "page "}register-page cr co${embedded ? " is-embedded" : ""}`}
+    >
       {view.layout === "applications" ? (
         <LayoutMemory
           tableHref={registerHref(base, view, { layout: "table" })}
         />
       ) : null}
-      <PageHeader
+      <RegisterHead
+        embedded={embedded}
         context={project?.name}
-        title="Controls"
         description={meta.join(" · ")}
         actions={
           <div className="cr-head-actions">
@@ -1404,6 +1446,41 @@ function ControlRecord({
             ),
           },
         ];
+  // The test plan in the Plan step holds the control's own editors (decided by the
+  // product owner): each fact once, edited where it is read; no separate cards below.
+  const planHere =
+    engagement.masterPlan != null &&
+    engagement.masterPlan.controlId === control.id;
+  const planWorkspace: PlanWorkspace | null =
+    context === null || !planHere
+      ? null
+      : {
+          statement:
+            context.design !== null ? (
+              <DesignPanel ids={ids} design={context.design} canAct={canAct} />
+            ) : null,
+          attributes: (
+            <AttributesPanel
+              ids={ids}
+              context={context}
+              canAct={canAct}
+              compact
+            />
+          ),
+          basis: (
+            <TestBasisCard ids={ids} basis={engagement.testBasis ?? null} />
+          ),
+          more: definitionParts
+            .filter(
+              (part) => part.key === "process" || part.key === "documents",
+            )
+            .map((part) => part.node),
+          moreOpen: definitionParts.some(
+            (part) =>
+              (part.key === "process" || part.key === "documents") &&
+              part.pending,
+          ),
+        };
   const stageState = (key: string): PhaseState => {
     const found = stages.find((item) => item.key === key)?.status;
     return found === "done"
@@ -1626,6 +1703,7 @@ function ControlRecord({
             activityHref="#activity"
             agent={agent}
             trace={trace}
+            simple={step === "PLAN" && planHere}
           />
         ) : null}
       </section>
@@ -1656,6 +1734,19 @@ function ControlRecord({
                 )}
                 canRelease={engagement.phaseProgress?.viewerCanRelease ?? false}
                 embedded
+                agentNote={
+                  agent !== null ? (
+                    <AgentSays
+                      says={agent}
+                      ids={{
+                        organizationId: ids.organizationId,
+                        projectId: ids.projectId,
+                      }}
+                      back={stepHrefs.PLAN}
+                    />
+                  ) : null
+                }
+                workspace={planWorkspace}
               />
             ) : (
               <TestPlanSummary
@@ -1673,8 +1764,10 @@ function ControlRecord({
                 })}
               />
             )}
-            <TestBasisCard ids={ids} basis={engagement.testBasis ?? null} />
-            {context === null ? (
+            {planWorkspace !== null ? null : (
+              <TestBasisCard ids={ids} basis={engagement.testBasis ?? null} />
+            )}
+            {planWorkspace !== null ? null : context === null ? (
               <p className="form-hint">
                 The control's definition could not be loaded. Refresh to try
                 again.

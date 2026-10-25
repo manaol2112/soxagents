@@ -6,6 +6,7 @@ import {
   rcmUploadNoticeFor,
   rcmUploadTarget,
 } from "../../../../src/onboarding-model";
+import { setupReturn } from "../../../../src/routes";
 
 export async function POST(request: Request) {
   const form = await request.formData();
@@ -52,7 +53,8 @@ function redirect(
   notice: string,
 ) {
   const destination = browserUrl("/", request);
-  destination.searchParams.set("section", "setup");
+  // Back to the page the upload came from: Controls, Settings, or onboarding.
+  setupReturn(destination.searchParams, request.headers.get("referer"));
   const organizationId = fields.organization_id ?? "";
   const projectId = fields.project_id ?? "";
   if (organizationId !== "") {

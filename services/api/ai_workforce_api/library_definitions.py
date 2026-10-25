@@ -9,9 +9,11 @@ proposals for what needs a person's answer, and adoption by controls copied from
   A control whose design must be confirmed gets an open question that holds its testing.
   Run at launch and when a control joins scope. Idempotent: a proposal a person rejected is
   never proposed again, and a settled question is not raised again.
-- library_update / adopt: a control copied from version 2 shows, attribute by attribute,
-  what version 3 keeps, rewords, adds, proposes, and retires (with the reason); a person
-  adopts it. Open and signed-off test sheets keep the attributes they were created with.
+- library_update / adopt: a control copied from an earlier version, attribute by
+  attribute, what the latest keeps, rewords, adds, proposes, and retires (with the reason).
+  The latest version always applies (decided by the product owner): adopt_latest adopts it
+  on every deploy, as the firm's library review decided it, and no person is asked. Open
+  and signed-off test sheets keep the attributes they were created with.
 - sheet_definitions: the definitions behind a test sheet's attributes, for the tester.
 """
 
@@ -428,7 +430,7 @@ def _split_reason(library_key: str, part_ref: str, part_key: str) -> str:
 
 
 def _add_split(
-    cursor: psycopg.Cursor[Any], parent_id: UUID, library_key: str, actor: UUID
+    cursor: psycopg.Cursor[Any], parent_id: UUID, library_key: str, actor: UUID | None
 ) -> UUID | None:
     """Add a control split out of the parent, for the same system or process, in scope
     when the parent is. Nothing is added twice."""
@@ -474,9 +476,10 @@ def adopt(
     organization_id: UUID,
     project_id: UUID,
     control_id: UUID,
-    actor: UUID,
+    actor: UUID | None,
 ) -> UpdateBody:
-    """Adopt version 3 on a control copied from an earlier version, as library_update shows."""
+    """Adopt the latest version on a control copied from an earlier one, as library_update
+    shows. No actor: adopted with the deploy (adopt_latest), as the library decided it."""
     from ai_workforce_api.control_attributes import _write_list
 
     update = library_update(connection, control_id)
@@ -607,6 +610,44 @@ def adopt(
             ),
         )  # fmt: skip
     return library_update(connection, control_id)
+
+
+class Adopted(BaseModel):
+    adopted: int = 0
+    # Controls the latest version could not be adopted on (it would leave none of their
+    # attributes); they keep theirs, and the deploy says how many.
+    kept: int = 0
+
+
+def adopt_latest(connection: psycopg.Connection[Any], project_id: UUID | None = None) -> Adopted:
+    """Every control copied from an earlier library version takes the latest (decided by
+    the product owner: the latest version always applies, and no person is asked). The
+    firm decides its library in its library review, so the adoption is the library's, not
+    a person's. Open and signed-off test sheets keep the attributes they were created with;
+    results signed off under an earlier plan revision are raised for a reviewer by the plan
+    impact check that runs after. A completed or archived engagement is read-only and keeps
+    its versions. Idempotent; one control per transaction; run with every deploy."""
+    adopted = Adopted()
+    for control_id, organization_id, project, key, version in connection.execute(
+        """
+        SELECT c.id, c.organization_id, c.project_id, c.library_key, c.library_version
+        FROM engagement_controls c JOIN projects p ON p.id = c.project_id
+        WHERE c.library_key IS NOT NULL AND p.status NOT IN ('COMPLETED', 'ARCHIVED')
+          AND (%s::uuid IS NULL OR c.project_id = %s)
+        ORDER BY c.project_id, c.control_ref
+        """,
+        (project_id, project_id),
+    ).fetchall():
+        if int(version) >= definition_version(str(key)):
+            continue
+        try:
+            adopt(connection, organization_id, project, UUID(str(control_id)), None)
+            connection.commit()
+            adopted.adopted += 1
+        except ContextState:
+            connection.rollback()
+            adopted.kept += 1
+    return adopted
 
 
 def _key_for(control_ref: str) -> str:

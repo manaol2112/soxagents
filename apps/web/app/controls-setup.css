@@ -1,0 +1,887 @@
+/* ==========================================================================
+   Controls, the first setup (setup-view.tsx ControlsSetup, controls-guide.tsx): a tile
+   for each of the systems, processes, and controls over a tab for each, an empty tab's
+   first step, and the setup agent's strip.
+   ========================================================================== */
+
+.cs-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.cs-tile {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 1.1rem;
+  width: 100%;
+  height: auto;
+  padding: 1.25rem 1.35rem;
+  color: var(--text);
+  text-align: left;
+  white-space: normal;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: none;
+  font-weight: 400;
+  transition:
+    border-color 120ms ease,
+    transform 120ms ease;
+}
+
+.cs-tile:hover {
+  border-color: var(--accent-border);
+}
+
+.cs-tile.is-on {
+  border-color: var(--accent-border);
+}
+
+.cs-tile-icon {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+}
+
+.cs-tile.is-systems .cs-tile-icon {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.cs-tile.is-processes .cs-tile-icon {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.cs-tile.is-controls .cs-tile-icon {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.cs-tile-text {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.cs-tile-label {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.cs-tile-count {
+  color: var(--text-strong);
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.cs-tile-status {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cs-tile-go {
+  align-self: start;
+  margin-top: 0.15rem;
+  color: var(--text-tertiary);
+}
+
+.cs-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.35rem;
+  padding: 0.4rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.cs-tabs > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  width: 100%;
+  height: 52px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  box-shadow: none;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  transition:
+    color 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.cs-tabs > button svg {
+  flex: none;
+}
+
+.cs-tabs > button:hover {
+  color: var(--text-strong);
+}
+
+.cs-tabs > button.is-on {
+  color: var(--text-strong);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: 0 0 22px -8px var(--accent);
+}
+
+.cs-pane[hidden] {
+  display: none;
+}
+
+/* The workflow's four steps, until the scope is finalized. */
+.sp-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sp-step {
+  position: relative;
+  min-width: 0;
+}
+
+/* The arrow from one step to the next. */
+.sp-step + .sp-step::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -0.42rem;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-top: 1.5px solid var(--text-tertiary);
+  border-right: 1.5px solid var(--text-tertiary);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.sp-step-body {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  width: 100%;
+  height: auto;
+  padding: 0.55rem 0.75rem;
+  color: var(--text);
+  text-align: left;
+  white-space: normal;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  box-shadow: none;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+button.sp-step-body:hover {
+  background: var(--surface-muted);
+}
+
+.sp-step.is-now .sp-step-body {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.sp-step-mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  color: var(--text-on-accent);
+  border-radius: 50%;
+  font-size: var(--fs-lg);
+  font-weight: 700;
+}
+
+.sp-step.is-systems .sp-step-mark {
+  background: var(--accent);
+}
+
+.sp-step.is-processes .sp-step-mark {
+  background: var(--ai);
+}
+
+.sp-step.is-controls .sp-step-mark {
+  background: var(--success);
+}
+
+.sp-step.is-finalize .sp-step-mark {
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+}
+
+.sp-step.is-done .sp-step-mark {
+  color: var(--success);
+  background: var(--success-soft);
+  border: 1px solid var(--success);
+}
+
+.sp-step-text {
+  display: grid;
+  min-width: 0;
+}
+
+.sp-step-text strong {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+}
+
+.sp-step-text small {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The systems and the processes as tables (scope-table.tsx). */
+.st {
+  overflow: visible;
+}
+
+.st-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 1.15rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.st-head h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-lg);
+  font-weight: 650;
+}
+
+.st-head h2 span {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.st-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.st-search,
+.st-filter {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-tertiary);
+}
+
+.st-search svg,
+.st-filter svg {
+  position: absolute;
+  left: 0.65rem;
+  pointer-events: none;
+}
+
+.st-search input {
+  width: 15rem;
+  height: 34px;
+  padding-left: 2rem;
+  font-size: var(--fs-sm);
+}
+
+.st-filter select {
+  height: 34px;
+  padding-left: 2rem;
+  font-size: var(--fs-sm);
+}
+
+.st-scroll {
+  overflow-x: auto;
+}
+
+.st-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+
+.st-table th {
+  padding: 0.6rem 1.15rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.st-table td {
+  padding: 0.7rem 1.15rem;
+  color: var(--text);
+  vertical-align: middle;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.st-row {
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.st-row:hover,
+.st-row.is-open {
+  background: var(--surface-muted);
+}
+
+.st-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.st-name strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.st-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 8px;
+}
+
+.st-icon.is-process {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.st-muted {
+  color: var(--text-tertiary);
+}
+
+.st-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.st-chip {
+  padding: 0.1rem 0.5rem;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.st-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.st-status i {
+  width: 6px;
+  height: 6px;
+  background: currentcolor;
+  border-radius: 50%;
+}
+
+.st-status.is-in {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.st-status.is-review {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.st-status.is-working {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.st-open {
+  width: 1%;
+  text-align: right;
+}
+
+.st-open button {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  transition: transform 150ms ease;
+}
+
+.st-row.is-open .st-open button {
+  transform: rotate(90deg);
+}
+
+.st-detail > td {
+  padding: 0;
+  cursor: default;
+  background: var(--surface-muted);
+}
+
+.st-detail .sys-detail {
+  padding: 1rem 1.15rem;
+}
+
+.st-none {
+  margin: 0;
+  padding: 1rem 1.15rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* A process named from the table's header: the form opens under its button. */
+.st-tools .new-process {
+  position: relative;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.st-tools .new-process.is-first > summary {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 0.9rem;
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-radius: var(--radius);
+  list-style: none;
+}
+
+.st-tools .new-process.is-first > summary::-webkit-details-marker {
+  display: none;
+}
+
+.st-tools .new-process[open] > summary {
+  margin-bottom: 0;
+}
+
+.st-tools .new-process[open] > form {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: min(34rem, calc(100vw - 2rem));
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 16px 36px -16px rgb(0 0 0 / 45%);
+}
+
+/* The controls register under the Controls tab: its summary and actions in a line. */
+.cr-embedded-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.cr-embedded-head > p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.register-page.is-embedded {
+  display: grid;
+  gap: 1rem;
+}
+
+/* An empty tab's first step. */
+.cs-hero {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 0.55rem;
+  overflow: hidden;
+  isolation: isolate;
+  padding: 3rem 1.5rem 3.25rem;
+  text-align: center;
+}
+
+.cs-hero-dots {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image: radial-gradient(var(--border) 1px, transparent 1.4px);
+  background-size: 18px 18px;
+  mask-image: radial-gradient(ellipse at center, transparent 28%, #000 90%);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.cs-hero-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 92px;
+  height: 92px;
+  margin-bottom: 0.9rem;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 22px;
+  box-shadow:
+    0 0 0 16px color-mix(in srgb, var(--accent-soft) 45%, transparent),
+    0 0 48px -10px var(--accent);
+}
+
+.cs-hero-plus {
+  position: absolute;
+  right: -8px;
+  bottom: 12px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px var(--surface);
+}
+
+.cs-hero h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 22px;
+  font-weight: 650;
+}
+
+.cs-hero > p {
+  max-width: 38rem;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  line-height: 1.55;
+}
+
+.cs-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.6rem;
+  width: 100%;
+  margin-top: 0.9rem;
+}
+
+.cs-hero-actions > .btn,
+.cs-hero-actions > .btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 44px;
+  padding: 0 1.25rem;
+}
+
+/* The first process: its form opens under a main button. */
+.cs-hero .new-process.is-first {
+  width: min(40rem, 100%);
+  padding-top: 0;
+  border-top: 0;
+  text-align: left;
+}
+
+.cs-hero .new-process.is-first > summary {
+  justify-content: center;
+  height: 44px;
+  margin: 0 auto;
+  padding: 0 1.25rem;
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-radius: var(--radius);
+  list-style: none;
+  transition: background 120ms ease;
+}
+
+.cs-hero .new-process.is-first > summary::-webkit-details-marker {
+  display: none;
+}
+
+.cs-hero .new-process.is-first > summary:hover {
+  background: var(--accent-hover);
+}
+
+.cs-hero .new-process.is-first[open] > summary {
+  margin-bottom: 1rem;
+}
+
+/* The page's Add. */
+.row-menu .row-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.row-menu-caret {
+  display: inline-grid;
+  place-items: center;
+  margin-left: 0.3rem;
+  padding-left: 0.55rem;
+  border-left: 1px solid color-mix(in srgb, var(--text-on-accent) 30%, transparent);
+}
+
+.row-menu-caret svg {
+  transform: rotate(90deg);
+}
+
+.row-menu:has(> .row-menu-trigger) .row-menu-list {
+  min-width: 16rem;
+}
+
+.row-menu:has(> .row-menu-trigger) .row-menu-list svg {
+  flex: none;
+}
+
+.page-actions:has(.row-menu-trigger) {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+/* The setup agent's strip. */
+.cs-assist {
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  padding: 0.9rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.cs-assist-bot {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  filter: drop-shadow(0 8px 18px var(--guide-glow));
+}
+
+.cs-assist-bot svg {
+  width: 100%;
+  height: 100%;
+}
+
+.cs-assist-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.cs-assist-text p {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+
+.cs-assist-text .cs-assist-label {
+  margin-bottom: 0.2rem;
+  color: var(--accent-text);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cs-assist .ap-action {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.5rem;
+  height: 42px;
+  padding: 0 1.1rem;
+  color: var(--text-strong);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: none;
+  font-weight: 600;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.cs-assist .ap-action svg {
+  color: var(--accent-text);
+}
+
+.cs-assist .ap-action:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+@media (max-width: 1100px) {
+  .sp-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sp-step:nth-child(3)::before {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .sp-steps {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.25rem;
+  }
+
+  .sp-step + .sp-step::before {
+    display: none;
+  }
+
+  .st-search,
+  .st-search input {
+    width: 100%;
+  }
+
+  .st-tools {
+    width: 100%;
+  }
+
+  /* A phone reads each row as a card: the cells stack under their headings. */
+  .st-table thead {
+    display: none;
+  }
+
+  .st-table,
+  .st-table tbody,
+  .st-row,
+  .st-row > td {
+    display: block;
+  }
+
+  .st-row {
+    position: relative;
+    padding: 0.6rem 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .st-row > td {
+    padding: 0.2rem 1rem;
+    border-bottom: 0;
+  }
+
+  .st-row > td[data-label]:not(:first-child)::before {
+    content: attr(data-label) ": ";
+    color: var(--text-tertiary);
+  }
+
+  .st-row > .st-open {
+    position: absolute;
+    top: 0.6rem;
+    right: 0.5rem;
+    width: auto;
+  }
+
+  .st-detail,
+  .st-detail > td {
+    display: block;
+  }
+
+  /* A phone keeps the three side by side: the figures, without the icons. */
+  .cs-tiles {
+    gap: 0.5rem;
+  }
+
+  .cs-tile {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0.7rem 0.75rem;
+  }
+
+  .cs-tile-icon,
+  .cs-tile-go {
+    display: none;
+  }
+
+  .cs-tile-label {
+    font-size: var(--fs-sm);
+  }
+
+  .cs-tile-count {
+    font-size: 22px;
+  }
+
+  .cs-tile-status {
+    font-size: var(--fs-xs);
+  }
+
+  .cs-tabs > button {
+    gap: 0.4rem;
+    height: 44px;
+    font-size: var(--fs-sm);
+  }
+
+  .cs-hero {
+    padding: 2.25rem 1rem 2.5rem;
+  }
+
+  .cs-assist {
+    flex-wrap: wrap;
+  }
+
+  .cs-assist-bot {
+    width: 48px;
+    height: 48px;
+  }
+
+  .cs-assist .ap-action {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cs-tile,
+  .st-row,
+  .st-open button,
+  .cs-tabs > button,
+  .cs-assist .ap-action,
+  .cs-hero .new-process.is-first > summary {
+    transition: none;
+  }
+}

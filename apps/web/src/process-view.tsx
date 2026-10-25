@@ -11,6 +11,7 @@ import {
   reportRows,
   type SetupControl,
 } from "./onboarding-model";
+import { ScopeTable } from "./scope-table";
 import { removalNote, ScopedControlTable } from "./scoped-controls";
 import { SetupForm } from "./setup-form";
 import { impactHref } from "./setup-impact-model";
@@ -143,20 +144,104 @@ export function ProcessesCard({
   );
 }
 
-/** Name a process of the client's own, based on the standard cycle it is closest to. */
-function NewProcessForm({
+/** The cycles a process may be based on, by key. */
+const CYCLE_LABEL: Record<string, string> = Object.fromEntries(PROCESS_CYCLES);
+
+/** The business processes in scope (a process of the client's own, or a standard cycle
+ * with controls in scope), counted as the page's tile counts them. */
+export function scopedProcesses(onboarding: Onboarding): ProcessRow[] {
+  return processRows(onboarding).filter(
+    (row) => row.processId !== null || row.inScope.length > 0,
+  );
+}
+
+/**
+ * The business processes as the Systems & Processes page's table (decided by the
+ * product owner): name, the cycle it is based on, and the controls in scope; a row opens
+ * the process's controls in place.
+ */
+export function ProcessesTable({
   model,
   onboarding,
+  editable,
 }: {
   model: Ready;
   onboarding: Onboarding;
+  editable: boolean;
+}) {
+  const rows = scopedProcesses(onboarding);
+  return (
+    <ScopeTable
+      label="Processes"
+      columns={["Process name", "Based on", "Controls"]}
+      kinds={PROCESS_CYCLES.filter(([key]) =>
+        rows.some((row) => row.domain === key),
+      )}
+      kindLabel="Filter by cycle"
+      searchLabel="Search processes"
+      action={
+        editable ? (
+          <NewProcessForm
+            model={model}
+            onboarding={onboarding}
+            label="Add process"
+          />
+        ) : null
+      }
+      rows={rows.map((row) => ({
+        id: row.processId ?? row.domain,
+        kind: row.domain,
+        text: [row.label, CYCLE_LABEL[row.domain] ?? ""].join("\n"),
+        cells: [
+          <span key="name" className="st-name">
+            <span className="st-icon is-process" aria-hidden="true">
+              <UiIcon name="layers" size={15} />
+            </span>
+            <strong>{row.label}</strong>
+          </span>,
+          row.processId === null ? (
+            <span key="cycle" className="st-muted">
+              Standard cycle
+            </span>
+          ) : (
+            (CYCLE_LABEL[row.domain] ?? row.domain)
+          ),
+          <span key="controls" className="num">
+            {row.inScope.length}
+          </span>,
+        ],
+        detail: (
+          <ProcessDetail
+            model={model}
+            onboarding={onboarding}
+            row={row}
+            editable={editable}
+          />
+        ),
+      }))}
+    />
+  );
+}
+
+/** Name a process of the client's own, based on the standard cycle it is closest to.
+ * With a label, it opens from a main button, as the first process. */
+export function NewProcessForm({
+  model,
+  onboarding,
+  label = null,
+}: {
+  model: Ready;
+  onboarding: Onboarding;
+  label?: string | null;
 }) {
   const id = useId();
   return (
-    <details className="sys-more new-process">
+    <details
+      className={`sys-more new-process${label === null ? "" : " is-first"}`}
+    >
       <summary>
         <span>
-          <UiIcon name="plus" size={13} /> Add a process
+          <UiIcon name="plus" size={13} /> {label ?? "Add a process"}
         </span>
       </summary>
       <SetupForm className="new-control-form">

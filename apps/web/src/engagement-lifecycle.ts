@@ -233,7 +233,7 @@ export function closedNotice(status: string): string | null {
 /** What Home says while the engagement is paused, or null when it is not. */
 export function pausedNotice(status: string): string | null {
   return status === "PAUSED"
-    ? "This engagement is paused. Nothing new is added until an owner or admin resumes it under Settings › All engagements."
+    ? "This engagement is paused. Nothing new is added until an owner or admin resumes it under Engagements."
     : null;
 }
 

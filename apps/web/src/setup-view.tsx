@@ -2,6 +2,20 @@ import type { ReactNode } from "react";
 
 import { AutoRefresh } from "./auto-refresh";
 import { ConfirmAction, OnceForm } from "./confirm-action";
+import {
+  ControlsAddMenu,
+  ControlsSetupFrame,
+  ControlsTour,
+  RcmInsteadButton,
+} from "./controls-guide";
+import {
+  ADD_SYSTEM_EVENT,
+  controlsTiles,
+  controlsTourSteps,
+  parseControlsPane,
+  scopeSteps,
+} from "./controls-guide-model";
+import { ControlsMain } from "./controls-view";
 import { DraftingShow } from "./drafting-show";
 import { editEngagementHref } from "./engagement-create";
 import {
@@ -12,6 +26,7 @@ import {
   setupHeadAction,
   setupOpen,
 } from "./engagement-lifecycle";
+import type { EngagementState } from "./engagement-model";
 import { OptionalMark, RequiredMark } from "./field-marks";
 import { agentMonogram, formatDate, initials } from "./format";
 import {
@@ -36,23 +51,35 @@ import {
   WORK_STEPS,
 } from "./onboarding-model";
 import {
+  ControlOptions,
   Identity,
   NOTICES,
   RcmStep,
   ROLE_LABELS,
+  SocReportsCard,
   setupHref,
   WorkpapersStep,
 } from "./onboarding-view";
 import { PeriodDates } from "./period-dates";
+import {
+  NewProcessForm,
+  ProcessesTable,
+  scopedProcesses,
+} from "./process-view";
 import { RecordDialog } from "./record-dialog";
 import { SaveWhenChanged } from "./save-when-changed";
+import { guidedStep, ONBOARDING_STEPS } from "./setup-guide-model";
+import { ControlsAssistant, SetupAgent, SetupCycle } from "./setup-guide-view";
 import { impactHref } from "./setup-impact-model";
 import { canManageProjects, type ShellModel } from "./shell-model";
-import { UiIcon } from "./ui-icon";
+import { SystemWizard } from "./system-wizard";
+import { SystemsTable } from "./systems-view";
+import { type IconName, UiIcon } from "./ui-icon";
 import {
   Banner,
   CardHeader,
   EmptyState,
+  PageHeader,
   StatusPill,
   sectionHref,
 } from "./workspace-view";
@@ -107,9 +134,13 @@ const AGENT_WORK: ReadonlyArray<[string, string]> = [
 export function SetupMain({
   model,
   setup,
+  guided = false,
 }: {
   model: Ready;
   setup: SetupState;
+  /** Onboarding, before launch (decided by the product owner): the cycle across the
+   * top and the setup agent beside each step, in place of the header and the rail. */
+  guided?: boolean;
 }) {
   const project = model.selectedProject;
   if (project === null) {
@@ -147,18 +178,85 @@ export function SetupMain({
   const editable = manages && setupOpen(phase);
   const scopeEditable = manages && scopeOpen(phase);
   const drafting = onboarding.setupDraft?.drafting === true;
+  // Onboarding opens on the first step with something to do, not an overview.
+  const step = guided ? guidedStep(onboarding, setup.step) : setup.step;
+  const content = (
+    <div className="stack setup-content">
+      {/* In onboarding the agent states the outcome and what is left. */}
+      {!guided && step !== "overview" && step !== "launch" ? (
+        <StepBrief onboarding={onboarding} step={step} />
+      ) : null}
+      {step === "overview" ? (
+        <OverviewStep
+          model={model}
+          onboarding={onboarding}
+          editable={editable}
+        />
+      ) : step === "profile" ? (
+        <ProfileStep
+          model={model}
+          onboarding={onboarding}
+          editable={editable}
+          confirmable={scopeEditable}
+          guided={guided}
+        />
+      ) : step === "team" ? (
+        <TeamStep
+          model={model}
+          onboarding={onboarding}
+          editable={scopeEditable}
+        />
+      ) : step === "controls" ? (
+        <ControlsStep
+          model={model}
+          onboarding={onboarding}
+          editable={scopeEditable}
+          setup={setup}
+        />
+      ) : step === "workpapers" ? (
+        <WorkpapersStep
+          model={model}
+          onboarding={onboarding}
+          editable={scopeEditable}
+          setup={setup}
+        />
+      ) : (
+        <LaunchStep
+          model={model}
+          onboarding={onboarding}
+          editable={editable}
+          phase={phase}
+        />
+      )}
+      {step !== "overview" && !(step === "launch" && onboarding.started) ? (
+        <StepFooter
+          model={model}
+          onboarding={onboarding}
+          step={step}
+          phase={phase}
+          guided={guided}
+        />
+      ) : null}
+    </div>
+  );
   return (
-    <div className="page setup-page">
+    <div className={`page setup-page${guided ? " is-guided" : ""}`}>
       {drafting ? <AutoRefresh /> : null}
-      <SetupHeader
-        model={model}
-        onboarding={onboarding}
-        step={setup.step}
-        phase={phase}
-      />
-      {setup.notice === "setup-launched" &&
-      onboarding.started &&
-      onboarding.launch !== null ? (
+      {guided ? (
+        <OnboardingHead model={model} onboarding={onboarding} />
+      ) : (
+        <SetupHeader
+          model={model}
+          onboarding={onboarding}
+          step={step}
+          phase={phase}
+        />
+      )}
+      {/* In onboarding the agent says the engagement is created; no banner repeats it. */}
+      {guided && setup.notice === "setup-created" ? null : setup.notice ===
+          "setup-launched" &&
+        onboarding.started &&
+        onboarding.launch !== null ? (
         <LaunchedDialog model={model} onboarding={onboarding} />
       ) : setup.notice !== null ? (
         <Banner
@@ -195,70 +293,70 @@ export function SetupMain({
           changes.
         </Banner>
       ) : null}
-      <div className="setup-layout">
-        <SetupRail
-          model={model}
-          onboarding={onboarding}
-          current={setup.step}
-          phase={phase}
-        />
-        <div className="stack setup-content">
-          {setup.step !== "overview" && setup.step !== "launch" ? (
-            <StepBrief onboarding={onboarding} step={setup.step} />
-          ) : null}
-          {setup.step === "overview" ? (
-            <OverviewStep
-              model={model}
-              onboarding={onboarding}
-              editable={editable}
-            />
-          ) : setup.step === "profile" ? (
-            <ProfileStep
-              model={model}
-              onboarding={onboarding}
-              editable={editable}
-              confirmable={scopeEditable}
-            />
-          ) : setup.step === "team" ? (
-            <TeamStep
-              model={model}
-              onboarding={onboarding}
-              editable={scopeEditable}
-            />
-          ) : setup.step === "controls" ? (
-            <ControlsStep
-              model={model}
-              onboarding={onboarding}
-              editable={scopeEditable}
-              setup={setup}
-            />
-          ) : setup.step === "workpapers" ? (
-            <WorkpapersStep
-              model={model}
-              onboarding={onboarding}
-              editable={scopeEditable}
-              setup={setup}
-            />
-          ) : (
-            <LaunchStep
-              model={model}
-              onboarding={onboarding}
-              editable={editable}
-              phase={phase}
-            />
-          )}
-          {setup.step !== "overview" &&
-          !(setup.step === "launch" && onboarding.started) ? (
-            <StepFooter
-              model={model}
-              onboarding={onboarding}
-              step={setup.step}
-              phase={phase}
-            />
-          ) : null}
+      {guided ? (
+        <>
+          <SetupCycle model={model} onboarding={onboarding} current={step} />
+          <div className="onb-layout">
+            {content}
+            <div className="onb-agent">
+              <SetupAgent
+                model={model}
+                onboarding={onboarding}
+                step={step}
+                justCreated={setup.notice === "setup-created"}
+              />
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="setup-layout">
+          <SetupRail
+            model={model}
+            onboarding={onboarding}
+            current={step}
+            phase={phase}
+          />
+          {content}
         </div>
-      </div>
+      )}
     </div>
+  );
+}
+
+/** Onboarding's header: the engagement being set up, and the way out until launch. */
+function OnboardingHead({
+  model,
+  onboarding,
+}: {
+  model: Ready;
+  onboarding: Onboarding;
+}) {
+  return (
+    <header className="onb-head">
+      <div>
+        <p className="page-context">Engagement onboarding</p>
+        <div className="page-title">
+          <h1>Set up {onboarding.projectName}</h1>
+          <StatusPill status={onboarding.projectStatus} />
+        </div>
+        <p className="setup-head-meta">
+          {onboarding.clientName !== "" ? (
+            <span>{onboarding.clientName}</span>
+          ) : null}
+          {onboarding.periodEnd !== null ? (
+            <span>
+              {onboarding.periodStart !== null
+                ? `Period ${formatDate(onboarding.periodStart)} to ${formatDate(onboarding.periodEnd)}`
+                : `Period end ${formatDate(onboarding.periodEnd)}`}
+            </span>
+          ) : null}
+          <span>Each step saves as it is completed</span>
+        </p>
+      </div>
+      <a className="btn btn-secondary" href={sectionHref(model, "projects")}>
+        Exit to engagements
+      </a>
+    </header>
   );
 }
 
@@ -496,13 +594,19 @@ function StepFooter({
   onboarding,
   step,
   phase,
+  guided = false,
 }: {
   model: Ready;
   onboarding: Onboarding;
   step: SetupStep;
   phase: EngagementPhase;
+  /** Onboarding has no overview stop: the first step leads nowhere back. */
+  guided?: boolean;
 }) {
-  const order: SetupStep[] = ["overview", ...WORK_STEPS, "launch"];
+  // Onboarding is the client and scope, the team, and launch; no overview stop.
+  const order: SetupStep[] = guided
+    ? [...ONBOARDING_STEPS, "launch"]
+    : ["overview", ...WORK_STEPS, "launch"];
   const index = order.indexOf(step);
   const previous = order[index - 1];
   const next = order[index + 1];
@@ -795,12 +899,17 @@ function ProfileStep({
   onboarding,
   editable,
   confirmable,
+  guided = false,
 }: {
   model: Ready;
   onboarding: Onboarding;
   editable: boolean;
   /** May confirm the period as recorded: before launch and while it runs. */
   confirmable: boolean;
+  /** Onboarding asks only what launch needs (decided by the product owner): the optional
+   * period start, fiscal year, and reporting objectives are left out. Not sent, they keep
+   * whatever is recorded. */
+  guided?: boolean;
 }) {
   const draft = onboarding.setupDraft;
   const pending = pendingSuggestions(onboarding);
@@ -924,6 +1033,7 @@ function ProfileStep({
               end={onboarding.periodEnd}
               disabled={!editable}
               marked={editable}
+              startShown={!guided}
               endHint={
                 editable && pending.periodEnd && draft !== null ? (
                   <span className="form-hint suggestion-hint">
@@ -933,35 +1043,39 @@ function ProfileStep({
                 ) : null
               }
             />
-            <label htmlFor="profile-fiscal">
-              <span>
-                Fiscal year
-                {editable ? <OptionalMark /> : null}
-              </span>
-              <input
-                id="profile-fiscal"
-                name="fiscal_year"
-                maxLength={20}
-                defaultValue={onboarding.fiscalYear}
-                disabled={!editable}
-                placeholder="FY2027"
-              />
-            </label>
-            <label htmlFor="profile-objectives" className="field-wide">
-              <span>
-                Reporting objectives
-                {editable ? <OptionalMark /> : null}
-              </span>
-              <textarea
-                id="profile-objectives"
-                name="reporting_objectives"
-                rows={3}
-                maxLength={2000}
-                defaultValue={onboarding.reportingObjectives}
-                disabled={!editable}
-                placeholder="What the engagement reports on and to whom, such as management's assessment of ITGCs over the ERP for the audit committee."
-              />
-            </label>
+            {guided ? null : (
+              <>
+                <label htmlFor="profile-fiscal">
+                  <span>
+                    Fiscal year
+                    {editable ? <OptionalMark /> : null}
+                  </span>
+                  <input
+                    id="profile-fiscal"
+                    name="fiscal_year"
+                    maxLength={20}
+                    defaultValue={onboarding.fiscalYear}
+                    disabled={!editable}
+                    placeholder="FY2027"
+                  />
+                </label>
+                <label htmlFor="profile-objectives" className="field-wide">
+                  <span>
+                    Reporting objectives
+                    {editable ? <OptionalMark /> : null}
+                  </span>
+                  <textarea
+                    id="profile-objectives"
+                    name="reporting_objectives"
+                    rows={3}
+                    maxLength={2000}
+                    defaultValue={onboarding.reportingObjectives}
+                    disabled={!editable}
+                    placeholder="What the engagement reports on and to whom, such as management's assessment of ITGCs over the ERP for the audit committee."
+                  />
+                </label>
+              </>
+            )}
             <label htmlFor="setup-scope" className="field-wide">
               <span>
                 Scope
@@ -1013,6 +1127,9 @@ function PeriodCheckCard({
     return null;
   }
   const open = openConflicts(period);
+  const nameYear = period.conflicts.find(
+    (conflict) => conflict.kind === "NAME_YEAR" && conflict.blocking,
+  );
   if (open.length === 0) {
     return period.confirmed && period.conflicts.some((c) => c.blocking) ? (
       <p className="form-hint period-confirmed">
@@ -1039,8 +1156,46 @@ function PeriodCheckCard({
         <p className="form-hint">
           {onboarding.started
             ? "The engagement is running on the recorded period. Confirm the period if it is correct. Correcting the period of a running engagement is not yet available; if it is incorrect, contact an owner."
-            : "Correct the name, scope, or dates if any is incorrect, or confirm the period as recorded. Launch is held until one of these is done."}
+            : nameYear !== undefined
+              ? "Correct whichever is wrong, or confirm the period as recorded. Launch is held until one of these is done."
+              : "Correct the scope or the dates below if either is incorrect, or confirm the period as recorded. Launch is held until one of these is done."}
         </p>
+        {/* A name that points at another year is corrected here, either way (decided by
+            the product owner); before launch only, as the period is part of the plan. */}
+        {confirmable && !onboarding.started && nameYear !== undefined ? (
+          <div className="period-fixes">
+            {nameYear.periodEndFix !== null ? (
+              <form autoComplete="off" method="post" action="/workspace/setup">
+                <Identity
+                  model={model}
+                  onboarding={onboarding}
+                  intent="period-align"
+                  step="profile"
+                />
+                <input type="hidden" name="basis" value={period.basis} />
+                <input type="hidden" name="to" value="period_end" />
+                <button type="submit">
+                  Set the period end to {formatDate(nameYear.periodEndFix)}
+                </button>
+              </form>
+            ) : null}
+            {nameYear.nameFix !== null ? (
+              <form autoComplete="off" method="post" action="/workspace/setup">
+                <Identity
+                  model={model}
+                  onboarding={onboarding}
+                  intent="period-align"
+                  step="profile"
+                />
+                <input type="hidden" name="basis" value={period.basis} />
+                <input type="hidden" name="to" value="name" />
+                <button type="submit" className="btn-secondary">
+                  Rename to {nameYear.nameFix}
+                </button>
+              </form>
+            ) : null}
+          </div>
+        ) : null}
         {confirmable ? (
           <form autoComplete="off" method="post" action="/workspace/setup">
             <Identity
@@ -1679,6 +1834,222 @@ function ControlsStep({
   );
 }
 
+/** An empty tab's invitation: what it holds and the one thing to do first. */
+function SetupHero({
+  icon,
+  title,
+  detail,
+  children,
+}: {
+  icon: IconName;
+  title: string;
+  detail: string;
+  children?: ReactNode;
+}) {
+  return (
+    <section className="card cs-hero">
+      <span className="cs-hero-dots" aria-hidden="true" />
+      <span className="cs-hero-mark" aria-hidden="true">
+        <UiIcon name={icon} size={30} />
+        <span className="cs-hero-plus">
+          <UiIcon name="plus" size={12} />
+        </span>
+      </span>
+      <h2>{title}</h2>
+      <p>{detail}</p>
+      {children === undefined ? null : (
+        <div className="cs-hero-actions">{children}</div>
+      )}
+    </section>
+  );
+}
+
+/** Whether the register's address narrows it (a search, a queue, a stage, a layout):
+ * such an address is the Controls tab's. */
+function registerFiltered(engagement: EngagementState): boolean {
+  const filters = engagement.filters;
+  return (
+    filters.category !== null ||
+    filters.query !== "" ||
+    filters.queue !== null ||
+    filters.stage.length > 0 ||
+    filters.application.length > 0 ||
+    filters.area.length > 0 ||
+    filters.owner.length > 0 ||
+    filters.keyOnly ||
+    filters.layout === "table" ||
+    filters.sort !== "control" ||
+    filters.group !== "application"
+  );
+}
+
+/**
+ * Systems & Processes (decided by the product owner, SP1 of the Systems & Processes
+ * workflow): the engagement's scope on one page, its permanent home. The workflow's four
+ * steps until the scope is finalized; a tile and a tab each for the systems, the business
+ * processes, and the controls; the systems and processes as tables that open in place; the
+ * controls register under the Controls tab once there are controls, and the library or
+ * the client's RCM before. An empty tab opens on its first step. Until SP6, each control
+ * set up here gets its walkthrough, evidence request, test, and review at once once the
+ * engagement runs (scope_changes.reconcile_scope).
+ */
+export function ScopePage({
+  model,
+  setup,
+  engagement,
+}: {
+  model: Ready;
+  setup: SetupState;
+  engagement: EngagementState;
+}) {
+  const onboarding = setup.onboarding;
+  if (onboarding === null) {
+    return (
+      <div className="page">
+        <Banner tone="warning">
+          The systems and processes could not be loaded. Refresh to try again.
+        </Banner>
+      </div>
+    );
+  }
+  const phase = phaseOf(onboarding);
+  const editable =
+    canManageProjects(model.organization.role) && scopeOpen(phase);
+  // An uploaded RCM waiting for its columns to be matched takes the page until it is.
+  const importing = setup.rcmImport !== null && editable;
+  const systems = onboarding.applications;
+  const controls = onboarding.controls.filter((control) => control.included);
+  // Until SP6 brings its own record, the scope is final once the engagement runs with
+  // controls: their work has started.
+  const finalized = onboarding.started && controls.length > 0;
+  const empty = systems.length === 0 && controls.length === 0;
+  return (
+    <div className="page setup-page is-controls-setup">
+      <PageHeader
+        context={onboarding.projectName}
+        title="Systems & Processes"
+        description="Define the audit scope: the systems, the business processes, and their controls. The agent helps identify the controls that apply."
+        actions={
+          <>
+            {/* The setup agent's tour: by itself the first time, then on request. */}
+            <ControlsTour steps={controlsTourSteps(onboarding)} />
+            {editable && !importing ? (
+              <ControlsAddMenu controlsSet={controls.length > 0} />
+            ) : null}
+          </>
+        }
+      />
+      {setup.notice !== null && setup.notice !== "setup-created" ? (
+        <Banner
+          tone={
+            setup.notice === "setup-saved" ||
+            setup.notice === "setup-rcm-uploaded" ||
+            setup.notice === "setup-rcm-imported" ||
+            setup.notice === "setup-template-uploaded" ||
+            setup.notice === "setup-template-customized"
+              ? "info"
+              : "warning"
+          }
+        >
+          {NOTICES[setup.notice]}
+        </Banner>
+      ) : null}
+      {importing ? (
+        <RcmStep
+          model={model}
+          onboarding={onboarding}
+          editable={editable}
+          selected={null}
+          category={null}
+          rcmImport={setup.rcmImport}
+        />
+      ) : (
+        <ControlsSetupFrame
+          initial={parseControlsPane(setup.pane, registerFiltered(engagement))}
+          tiles={controlsTiles(onboarding)}
+          steps={finalized ? null : scopeSteps(onboarding, finalized)}
+          panes={{
+            systems:
+              systems.length > 0 ? (
+                <>
+                  <SystemsTable
+                    model={model}
+                    onboarding={onboarding}
+                    editable={editable}
+                    selected={setup.system ?? null}
+                  />
+                  <SocReportsCard onboarding={onboarding} />
+                </>
+              ) : (
+                <SetupHero
+                  icon="server"
+                  title="Start with the first system"
+                  detail="Add the applications and infrastructure that support the engagement's financial reporting. Each system is scoped on its own, with the agent's recommended controls."
+                >
+                  {editable ? (
+                    <>
+                      <SystemWizard
+                        organizationId={model.organization.id}
+                        projectId={onboarding.projectId}
+                        knownSystems={onboarding.knownSystems}
+                        systems={systems}
+                        editable={editable}
+                        label="Add first system"
+                        openEvent={ADD_SYSTEM_EVENT}
+                      />
+                      <RcmInsteadButton />
+                    </>
+                  ) : null}
+                </SetupHero>
+              ),
+            processes:
+              scopedProcesses(onboarding).length > 0 ? (
+                <ProcessesTable
+                  model={model}
+                  onboarding={onboarding}
+                  editable={editable}
+                />
+              ) : (
+                <SetupHero
+                  icon="layers"
+                  title="Name the business processes"
+                  detail="Business process controls are scoped by process: the standard cycles, such as order to cash, and any process of the client's own. An engagement over IT general controls only can leave this tab empty."
+                >
+                  {editable ? (
+                    <NewProcessForm
+                      model={model}
+                      onboarding={onboarding}
+                      label="Add first process"
+                    />
+                  ) : null}
+                </SetupHero>
+              ),
+            controls:
+              controls.length > 0 ? (
+                <ControlsMain model={model} engagement={engagement} embedded />
+              ) : (
+                <>
+                  <ControlOptions
+                    model={model}
+                    onboarding={onboarding}
+                    editable={editable}
+                  />
+                  <WorkpapersStep
+                    model={model}
+                    onboarding={onboarding}
+                    editable={editable}
+                    setup={setup}
+                  />
+                </>
+              ),
+          }}
+        />
+      )}
+      {empty ? <ControlsAssistant onboarding={onboarding} /> : null}
+    </div>
+  );
+}
+
 // Step 4: evidence requests
 
 // Step 5: review and launch
@@ -1752,7 +2123,9 @@ function LaunchAction({
   fingerprint: string | null;
   editable: boolean;
 }) {
-  const ready = onboarding.ready && fingerprint !== null && items.length > 0;
+  // An engagement can launch before its controls (decided by the product owner): they
+  // are set up in Controls once it runs, so a plan with no tasks yet is ready too.
+  const ready = onboarding.ready && fingerprint !== null;
   const missingStep = WORK_STEPS.find(
     (step) => !stepReadiness(onboarding, step).complete,
   );
@@ -1777,7 +2150,9 @@ function LaunchAction({
           </h2>
           <p className="card-desc">
             {ready
-              ? `Launching activates the engagement and hands ${items.length} tasks to the agents in the order the work depends on. Each control's evidence plan is recorded and waits for approval: requests are drafted once a reviewer approves it, with its attributes. Nothing is emailed until an approver confirms each request. Setup locks; the team can still change.`
+              ? items.length === 0
+                ? "Launching activates the engagement. The systems and controls are then set up in Controls, and each control set up there gets its walkthrough, evidence request, test, and review. Nothing is emailed until an approver confirms each request. The team can still change."
+                : `Launching activates the engagement and hands ${items.length} tasks to the agents in the order the work depends on. Each control's evidence plan is recorded and waits for approval: requests are drafted once a reviewer approves it, with its attributes. Nothing is emailed until an approver confirms each request. Setup locks; the team can still change.`
               : missing.trim()}
           </p>
           {report.blocking.length > 0 ? (

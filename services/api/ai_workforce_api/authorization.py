@@ -108,6 +108,8 @@ class ProjectRecord:
     next_milestone_due: date | None = None
     missed_milestones: int = 0
     last_activity_at: datetime | None = None
+    # The engagement team's names, the lead first (engagements page).
+    team: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -220,6 +222,7 @@ class ProjectBody(BaseModel):
     next_milestone: MilestoneDueBody | None = None
     missed_milestones: int = 0
     last_activity_at: datetime | None = None
+    team: list[str] = Field(default_factory=list)
 
 
 class MembershipBody(BaseModel):
@@ -333,7 +336,18 @@ def list_projects(
                (SELECT count(*) FROM engagement_milestones m
                 WHERE m.project_id = p.id AND m.completed_at IS NULL AND m.due_date < %s),
                (SELECT max(e.occurred_at) FROM audit_events e
-                WHERE e.organization_id = p.organization_id AND e.project_id = p.id)
+                WHERE e.organization_id = p.organization_id AND e.project_id = p.id),
+               (SELECT coalesce(json_agg(t.name ORDER BY t.lead DESC, t.name), '[]'::json)
+                FROM (SELECT DISTINCT tu.id,
+                                      coalesce(nullif(tu.display_name, ''), tu.email::text)
+                                      AS name,
+                                      tu.id = p.owner_user_id AS lead
+                      FROM project_memberships AS tm
+                      JOIN users AS tu ON tu.id = tm.user_id
+                      JOIN memberships AS om
+                        ON om.user_id = tm.user_id AND om.organization_id = tm.organization_id
+                      WHERE tm.project_id = p.id AND tm.organization_id = p.organization_id
+                        AND om.status = 'ACTIVE') AS t)
         FROM projects AS p
         LEFT JOIN engagement_settings AS s ON s.project_id = p.id
         LEFT JOIN users AS u ON u.id = p.owner_user_id
@@ -736,8 +750,10 @@ def _project_record(row: tuple[Any, ...]) -> ProjectRecord:
 
 
 def _work_fields(extra: tuple[Any, ...]) -> dict[str, Any]:
-    """Where an engagement's work stands, as list_projects reads it for the card."""
-    tasks, overdue, milestone, missed, last = extra
+    """Where an engagement's work stands, and who is on it, as list_projects reads it for
+    the card."""
+    tasks, overdue, milestone, missed, last, *rest = extra
+    team = rest[0] if rest and isinstance(rest[0], list) else []
     counts = tuple(
         (str(item["status"]), int(item["count"]))
         for item in (tasks if isinstance(tasks, list) else [])
@@ -751,6 +767,7 @@ def _work_fields(extra: tuple[Any, ...]) -> dict[str, Any]:
         "next_milestone_due": date.fromisoformat(due) if isinstance(due, str) else None,
         "missed_milestones": int(missed or 0),
         "last_activity_at": last if isinstance(last, datetime) else None,
+        "team": tuple(str(name) for name in team if isinstance(name, str) and name != ""),
     }
 
 
@@ -797,6 +814,7 @@ def _project_body(record: ProjectRecord) -> ProjectBody:
         ),
         missed_milestones=record.missed_milestones,
         last_activity_at=record.last_activity_at,
+        team=list(record.team),
     )
 
 

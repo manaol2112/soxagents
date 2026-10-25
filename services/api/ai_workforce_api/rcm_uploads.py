@@ -38,6 +38,7 @@ from ai_workforce_api.onboarding import (
     _reset_templates,
     _run,
     _snapshot,
+    authorize_controls_setup,
     pending_reviews,
 )
 from ai_workforce_api.rcm_import import (
@@ -69,6 +70,7 @@ from ai_workforce_api.rcm_systems import (
     basis,
 )
 from ai_workforce_api.rcm_terms import reset_terms
+from ai_workforce_api.scope_changes import reconcile_scope
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.system_review_queue import (
     schedule_system_reviews,
@@ -486,7 +488,7 @@ def _upload(
     file_name: str,
     content: bytes,
 ) -> ImportBody:
-    _authorize_setup(connection, principal, organization_id, project_id)
+    authorize_controls_setup(connection, principal, organization_id, project_id)
     # The name is a label only: no path, nothing that could be read as one.
     label = re.split(r"[\\/]", file_name)[-1].strip()[:200]
     label = re.sub(r"[\x00-\x1f\x7f]", "", label)
@@ -574,7 +576,7 @@ def _layout(
     import_id: UUID,
     body: LayoutUpdate,
 ) -> ImportBody:
-    _authorize_setup(connection, principal, organization_id, project_id)
+    authorize_controls_setup(connection, principal, organization_id, project_id)
     remembered_columns, remembered_values = _remembered(connection, project_id)
     with transaction(connection) as cursor:
         stored = _open(cursor, project_id, import_id, body.version)
@@ -608,7 +610,7 @@ def _mapping(
     import_id: UUID,
     body: MappingUpdate,
 ) -> ImportBody:
-    _authorize_setup(connection, principal, organization_id, project_id)
+    authorize_controls_setup(connection, principal, organization_id, project_id)
     with transaction(connection) as cursor:
         stored = _open(cursor, project_id, import_id, body.version)
         names = headers(stored.rows, stored.header_row)
@@ -643,7 +645,7 @@ def _import(
 ) -> OnboardingBody:
     """Import the mapped rows, all at once or not at all: replacing the engagement's
     controls, or adding to the ones an earlier sheet imported."""
-    _authorize_setup(connection, principal, organization_id, project_id)
+    authorize_controls_setup(connection, principal, organization_id, project_id)
     existing = {app.name.lower(): app.id for app in _applications(connection, project_id)}
     with transaction(connection) as cursor:
         stored = _open(cursor, project_id, import_id, body.version)
@@ -776,6 +778,8 @@ def _import(
                 "systems_source": stored.systems_source if confirmed is not None else None,
             },
         )
+    # After launch, each control imported gets its work, as any control added then does.
+    reconcile_scope(connection, organization_id, project_id, principal.id)
     return _snapshot(connection, organization_id, project_id)
 
 
@@ -786,7 +790,7 @@ def _discard(
     project_id: UUID,
     import_id: UUID,
 ) -> OnboardingBody:
-    _authorize_setup(connection, principal, organization_id, project_id)
+    authorize_controls_setup(connection, principal, organization_id, project_id)
     with transaction(connection) as cursor:
         done = cursor.execute(
             """
@@ -809,7 +813,8 @@ def _owner_emails(
     body: OwnerEmails,
 ) -> OnboardingBody:
     """Client RCMs name owners without emails. Fill the email once per owner name."""
-    _authorize_setup(connection, principal, organization_id, project_id)
+    # Owners are filled on the controls themselves, which stay editable after launch.
+    _authorize_setup(connection, principal, organization_id, project_id, after_start=True)
     entries = [
         (" ".join(item.owner_name.split()), item.owner_email.strip().lower())
         for item in body.entries
@@ -849,7 +854,7 @@ def _systems(
     body: SystemsUpdate,
 ) -> ImportBody:
     """A person confirms the systems: renames, sets the layer, or leaves one out."""
-    _authorize_setup(connection, principal, organization_id, project_id)
+    authorize_controls_setup(connection, principal, organization_id, project_id)
     with transaction(connection) as cursor:
         stored = _load(cursor, project_id, import_id, lock=True)
         if stored.status != "MAPPING":
@@ -901,7 +906,7 @@ def _rescan(
     project_id: UUID,
     import_id: UUID,
 ) -> ImportBody:
-    _authorize_setup(connection, principal, organization_id, project_id)
+    authorize_controls_setup(connection, principal, organization_id, project_id)
     with transaction(connection) as cursor:
         stored = _load(cursor, project_id, import_id, lock=True)
         if stored.status != "MAPPING":
@@ -918,7 +923,7 @@ def _remap(
     import_id: UUID,
 ) -> ImportBody:
     """A person asks the agent to map every term again, replacing the current choices."""
-    _authorize_setup(connection, principal, organization_id, project_id)
+    authorize_controls_setup(connection, principal, organization_id, project_id)
     with transaction(connection) as cursor:
         stored = _load(cursor, project_id, import_id, lock=True)
         if stored.status != "MAPPING":

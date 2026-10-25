@@ -209,7 +209,7 @@ function Shell({
   account?: ReactNode;
 }) {
   return (
-    <div className="pt">
+    <div className="pt theme-light">
       <header className="pt-bar">
         <div className="pt-bar-inner">
           <span className="pt-brand">

@@ -136,6 +136,8 @@ class SettingsBody(BaseModel):
     # The engagement's profile, named at creation (Milestone 8.3c).
     client_name: str = ""
     engagement_type: str = "SOX_ITGC"
+    # The frameworks chosen when it was created (migration 0108); None when none were.
+    frameworks: list[str] | None = None
     period_end: date | None
     period_start: date | None = None
     fiscal_year: str = ""
@@ -453,6 +455,13 @@ class PeriodConfirm(BaseModel):
     basis: str = Field(min_length=8, max_length=64)
 
 
+class PeriodAlign(BaseModel):
+    # What the page showed: the correction is for exactly that.
+    basis: str = Field(min_length=8, max_length=64)
+    # Move the period end to the name's year, or change the name to the period's year.
+    to: Literal["period_end", "name"]
+
+
 class ScopeUpdate(BaseModel):
     scope: str = Field(max_length=4000)
     period_end: date | None
@@ -599,6 +608,12 @@ def register_onboarding(
         organization_id: UUID, project_id: UUID, body: PeriodConfirm, request: Request
     ) -> OnboardingBody:
         return run(request, lambda c, p: _confirm_period(c, p, organization_id, project_id, body))
+
+    @app.post(f"{base}/period/align")
+    def align_period(
+        organization_id: UUID, project_id: UUID, body: PeriodAlign, request: Request
+    ) -> OnboardingBody:
+        return run(request, lambda c, p: _align_period(c, p, organization_id, project_id, body))
 
     @app.patch(f"{base}/scope")
     def scope(
@@ -1097,7 +1112,7 @@ def _settings(connection: psycopg.Connection[Any], project_id: UUID) -> Settings
         SELECT period_end, client_coordinator_name, client_coordinator_email, client_domains,
                pbc_due_days, pbc_follow_up_days, pbc_max_follow_ups, templates_confirmed_at,
                kicked_off_at, version, client_name, engagement_type, period_start,
-               fiscal_year, methodology, reporting_objectives
+               fiscal_year, methodology, reporting_objectives, frameworks
         FROM engagement_settings WHERE project_id = %s
         """,
         (project_id,),
@@ -1121,6 +1136,7 @@ def _settings(connection: psycopg.Connection[Any], project_id: UUID) -> Settings
         fiscal_year=str(row[13]),
         methodology=None if row[14] is None else str(row[14]),
         reporting_objectives=str(row[15]),
+        frameworks=None if row[16] is None else [str(item) for item in row[16]],
     )
 
 
@@ -1621,13 +1637,18 @@ def _readiness(
             "may review, including their own work. Not allowed in production."
         )
     rcm_issues: list[str] = []
-    if not included:
-        rcm_issues.append(
-            "Load the standard library or upload the client's RCM, and keep at least one "
-            "control in scope."
-        )
     # Owners are not assigned on setup: a request without one goes to the PBC coordinator.
     rcm_advisories: list[str] = []
+    # Controls are set up in the Controls section once the engagement runs (decided by the
+    # product owner, 25 October 2026): an engagement launches without them, and each
+    # control added afterwards gets its work then (scope_changes.reconcile_scope).
+    if not included:
+        rcm_advisories.append(
+            "No controls yet: load the standard library or upload the client's RCM."
+            if settings.kicked_off_at is not None
+            else "No controls yet. After launch, set up the systems and controls in "
+            "Controls: load the standard library or upload the client's RCM."
+        )
     # Systems come from the RCM: identified on upload, or added here for the library.
     on_systems = [c for c in included if runs_on_a_system(c.domain)]
     if on_systems and not applications:
@@ -1720,6 +1741,26 @@ def _authorize_setup(
         raise OnboardingState("engagement has started")
 
 
+def authorize_controls_setup(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+) -> None:
+    """Loading the library or importing an RCM replaces the engagement's control set.
+    Before launch that is plain setup. After launch it is allowed only while the
+    engagement has no controls (decided by the product owner: controls are set up in the
+    Controls section once the engagement runs), so nothing with work attached is ever
+    replaced; controls are then changed one at a time."""
+    _authorize_setup(connection, principal, organization_id, project_id, after_start=True)
+    if started(connection, project_id):
+        existing = connection.execute(
+            "SELECT 1 FROM engagement_controls WHERE project_id = %s LIMIT 1", (project_id,)
+        ).fetchone()
+        if existing is not None:
+            raise OnboardingState("controls are already set up")
+
+
 def _update_scope(
     connection: psycopg.Connection[Any],
     principal: Principal,
@@ -1795,6 +1836,71 @@ def _confirm_period(
             {"conflicts": [conflict.kind for conflict in blocking]},
         )  # fmt: skip
     return _snapshot(connection, organization_id, project_id)
+
+
+def _align_period(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    body: PeriodAlign,
+) -> OnboardingBody:
+    """Correct where the engagement's name and its period disagree (decided by the
+    product owner: corrected where the conflict is shown): the period end moves to the
+    year the name points at, with a twelve-month start; or the name's year becomes the
+    period's. Before launch only: the period is part of the launched plan."""
+    _authorize_setup(connection, principal, organization_id, project_id)
+    with transaction(connection) as cursor:
+        cursor.execute(
+            "SELECT 1 FROM engagement_settings WHERE project_id = %s FOR UPDATE", (project_id,)
+        )
+        state = period_state(connection, project_id)
+        if state.basis != body.basis:
+            raise OnboardingState("the period changed")
+        conflict = next((c for c in state.conflicts if c.kind == "NAME_YEAR"), None)
+        if conflict is None:
+            raise OnboardingState("nothing to align")
+        if body.to == "period_end":
+            end = conflict.period_end_fix
+            if end is None:
+                raise OnboardingState("nothing to align")
+            start = _twelve_months_to(end)
+            cursor.execute(
+                """
+                UPDATE engagement_settings
+                SET period_end = %s, period_start = %s, version = version + 1,
+                    updated_at = clock_timestamp()
+                WHERE project_id = %s
+                """,
+                (end, start, project_id),
+            )
+            change: dict[str, Any] = {"period_end": end.isoformat()}
+        else:
+            name = conflict.name_fix
+            if name is None or name.strip() == "":
+                raise OnboardingState("nothing to align")
+            cursor.execute(
+                """
+                UPDATE projects SET name = %s, version = version + 1, updated_at = clock_timestamp()
+                WHERE id = %s
+                """,
+                (name, project_id),
+            )
+            change = {"name": name}
+        _audit(
+            cursor, organization_id, project_id, principal.id, "onboarding.period_aligned",
+            {"to": body.to, **change},
+        )  # fmt: skip
+    return _snapshot(connection, organization_id, project_id)
+
+
+def _twelve_months_to(end: date) -> date:
+    """The first day of the twelve months that end on a date."""
+    try:
+        start = end.replace(year=end.year - 1)
+    except ValueError:  # 29 February
+        start = end.replace(year=end.year - 1, day=28)
+    return start + timedelta(days=1)
 
 
 def _update_profile(
@@ -2541,7 +2647,7 @@ def _load_library(
     project_id: UUID,
     body: LibraryLoad,
 ) -> OnboardingBody:
-    _authorize_setup(connection, principal, organization_id, project_id)
+    authorize_controls_setup(connection, principal, organization_id, project_id)
     if not set(body.domains) <= set(DOMAINS):
         raise ValueError("area is unknown")
     applications = [app.id for app in _applications(connection, project_id)]
@@ -2606,6 +2712,8 @@ def _load_library(
                 "onboarding.rcm",
                 {"library_version": LIBRARY_VERSION, "added": added, "replaced": replaced},
             )
+    # After launch, each control loaded gets its work, as any control added then does.
+    reconcile_scope(connection, organization_id, project_id, principal.id)
     return _snapshot(connection, organization_id, project_id)
 
 

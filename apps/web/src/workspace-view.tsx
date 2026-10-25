@@ -94,7 +94,7 @@ import { PlanningPage } from "./planning-view";
 import type { RecipientLink } from "./portal-model";
 import { RecordDialog } from "./record-dialog";
 import { SetupForm } from "./setup-form";
-import { SetupMain } from "./setup-view";
+import { ScopePage, SetupMain } from "./setup-view";
 import {
   type AgentDetail,
   type AgentNotice,
@@ -124,6 +124,8 @@ import {
 } from "./shell-model";
 import type { TestingView } from "./testing-hub-model";
 import { TestingPage } from "./testing-hub-view";
+import type { Theme } from "./theme";
+import { ThemeSwitch } from "./theme-switch";
 import { type IconName, UiIcon } from "./ui-icon";
 import { VisitRecorder } from "./visit-recorder";
 import {
@@ -184,9 +186,9 @@ const NAV_GROUPS: ReadonlyArray<{ label: string; items: NavItem[] }> = [
       },
       {
         id: "controls",
-        label: "Controls",
-        detail: "The controls register",
-        icon: "shield",
+        label: "Systems & Processes",
+        detail: "The systems, business processes, and controls in scope",
+        icon: "layers",
       },
       {
         id: "testing",
@@ -209,9 +211,26 @@ const NAV_GROUPS: ReadonlyArray<{ label: string; items: NavItem[] }> = [
       {
         id: "settings",
         label: "Settings",
-        detail:
-          "Engagement setup, tasks, library, AI workforce and engagements",
+        detail: "Engagement setup, tasks and AI workforce",
         icon: "layers",
+      },
+    ],
+  },
+  {
+    // The organization's own pages, the same whichever engagement is open.
+    label: "Organization",
+    items: [
+      {
+        id: "projects",
+        label: "Engagements",
+        detail: "Every engagement and client",
+        icon: "briefcase",
+      },
+      {
+        id: "library",
+        label: "Library",
+        detail: "The standard controls library",
+        icon: "database",
       },
     ],
   },
@@ -268,8 +287,11 @@ export function WorkspaceView({
   library = null,
   page = "overview",
   tab = null,
+  theme = "dark",
 }: {
   model: ShellModel;
+  /** The account's theme choice, shown in the account menu. */
+  theme?: Theme;
   /** The page rendered inside the destination, and the destination's tab (M2c). */
   page?: SectionId;
   tab?: string | null;
@@ -388,7 +410,7 @@ export function WorkspaceView({
       <div className="workspace">
         <header className="topbar">
           {model.status === "ready" ? (
-            <WorkspaceControls model={model} />
+            <WorkspaceControls model={model} theme={theme} />
           ) : showsSignInPrompt(model) ? (
             <p className="topbar-title">Sign in to open an engagement</p>
           ) : null}
@@ -475,11 +497,13 @@ function SidebarControls({
   );
 }
 
-function WorkspaceControls({ model }: { model: Ready }) {
+function WorkspaceControls({ model, theme }: { model: Ready; theme: Theme }) {
   const sectionLabel =
     model.section === "console"
       ? "Agent console"
-      : (NAV.find((item) => item.id === model.section)?.label ?? "Home");
+      : model.section === "setup"
+        ? "Onboarding"
+        : (NAV.find((item) => item.id === model.section)?.label ?? "Home");
   // The agent console is out of the menu (Milestone 2c) but always one click away, to
   // ask about anything in the engagement, once it has launched.
   const canAsk =
@@ -567,6 +591,7 @@ function WorkspaceControls({ model }: { model: Ready }) {
                 {roleLabel(model.organization.role)} · {model.organization.name}
               </span>
             </div>
+            <ThemeSwitch initial={theme} />
             <form autoComplete="off" method="post" action="/sign-out">
               <button type="submit" className="btn-secondary btn-block">
                 Sign out
@@ -741,13 +766,19 @@ function WorkspaceMain({
     );
   }
   if (model.section === "setup") {
-    return <SetupMain model={model} setup={setup} />;
+    // Onboarding: setup before launch, guided by the setup agent (setupPlacement).
+    return <SetupMain model={model} setup={setup} guided />;
   }
   if (model.section === "approvals") {
     return <ApprovalsMain model={model} workflow={workflow} now={now} />;
   }
   if (model.section === "controls") {
-    return <ControlsMain model={model} engagement={engagement} />;
+    // Systems & Processes (decided by the product owner): the engagement's scope, with
+    // the controls register under its Controls tab; an open control has its own page.
+    if (engagement.filters.control !== null || model.selectedProject === null) {
+      return <ControlsMain model={model} engagement={engagement} />;
+    }
+    return <ScopePage model={model} setup={setup} engagement={engagement} />;
   }
   if (model.section === "planning") {
     return <PlanningMain model={model} planning={planning} />;
@@ -800,11 +831,9 @@ function WorkspaceMain({
         labels={SETTINGS_TAB_LABELS}
         dividerBefore={SETTINGS_FIRM_FROM}
         title="Settings"
-        description="Set up this engagement and its tasks, and manage your firm's standard library, AI workforce and engagements."
+        description="Set up this engagement and its tasks, and manage your firm's AI workforce."
       >
-        {page === "library" ? (
-          <LibraryPage model={model} library={library} />
-        ) : page === "agents" ? (
+        {page === "agents" ? (
           <AgentsMain
             model={model}
             workflow={workflow}
@@ -814,14 +843,6 @@ function WorkspaceMain({
           />
         ) : page === "tasks" ? (
           <TasksMain model={model} directory={directory} />
-        ) : page === "projects" ? (
-          <ProjectsMain
-            model={model}
-            creating={creatingEngagement}
-            editing={editingEngagement}
-            managing={managingEngagement}
-            view={engagementsView}
-          />
         ) : (
           <SetupMain model={model} setup={setup} />
         )}
@@ -994,6 +1015,11 @@ export function sectionHref(
   taskStatus: string | null = null,
 ): string {
   if (taskStatus === null) {
+    const project = model.selectedProject;
+    // Setup is onboarding until launch, then a Settings tab: linked there directly.
+    if (section === "setup" && project !== null && project.status !== "DRAFT") {
+      return workspaceHref("settings", model.organization.id, project.id);
+    }
     return workspaceHref(
       section,
       model.organization.id,

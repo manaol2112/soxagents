@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { statusActions } from "../apps/web/src/engagement-lifecycle.ts";
 import {
+  placeSetup,
+  setupPlacement,
+  setupReturn,
+} from "../apps/web/src/routes.ts";
+import {
   canManageAgents,
   canManageProjects,
   chosenOrganizationId,
@@ -11,6 +16,7 @@ import {
   lockedBeforeLaunch,
   type Organization,
   type Project,
+  projectIdInList,
   projectLabels,
   resolveRoute,
   showsSignInPrompt,
@@ -51,6 +57,7 @@ const project: Project = {
   nextMilestone: null,
   missedMilestones: 0,
   lastActivityAt: null,
+  team: ["Pat Lee"],
 };
 
 function snapshot(
@@ -342,6 +349,46 @@ describe("projectLabels", () => {
   });
 });
 
+describe("the engagement opened by default", () => {
+  const archived = {
+    ...project,
+    id: "44444444-4444-7444-8444-444444444444",
+    name: "SOX 2025",
+    status: "ARCHIVED",
+  };
+
+  it("opens one still in use, never an archived one while another is open", () => {
+    const model = deriveShell(
+      snapshot({ projects: [archived, project], requestedProjectId: null }),
+    );
+    assert.equal(
+      model.status === "ready" && model.selectedProject?.id,
+      project.id,
+    );
+    assert.equal(projectIdInList([archived, project], null), project.id);
+    // The page's data and the header agree on it.
+    assert.equal(projectIdInList([archived, project], "unknown"), project.id);
+  });
+
+  it("still opens an archived engagement when it is asked for, or when all are", () => {
+    const asked = deriveShell(
+      snapshot({
+        projects: [archived, project],
+        requestedProjectId: archived.id,
+      }),
+    );
+    assert.equal(
+      asked.status === "ready" && asked.selectedProject?.id,
+      archived.id,
+    );
+    assert.equal(
+      projectIdInList([archived, project], archived.id),
+      archived.id,
+    );
+    assert.equal(projectIdInList([archived], null), archived.id);
+  });
+});
+
 describe("switcherProjects", () => {
   const project = (id: string, status: string) => ({ id, status }) as Project;
   const all = [
@@ -498,24 +545,47 @@ describe("the six destinations and the older addresses (M2c)", () => {
       section: "reports",
       view: "deficiencies",
     });
-    // Engagement settings: a setup step; the library's entry on its tab; an agent;
-    // a task.
-    assert.deepEqual(target({ section: "setup", step: "team" }), {
-      organization: org,
-      project,
-      step: "team",
-      section: "settings",
-      view: "engagement",
-    });
+    // Engagement settings: an agent; a task. Setup is no longer moved by its address:
+    // where it lives follows the engagement's status (setupPlacement, below).
+    assert.equal(route({ section: "setup", step: "team" }).redirect, null);
+    // The firm's Engagements and Library left Settings for the menu (decided by the
+    // product owner): their own addresses stand, and an address stored when they were
+    // Settings tabs opens them with its record kept.
+    assert.equal(
+      route({ section: "library", control: "ITGC-AC-01", tab: "attributes" })
+        .redirect,
+      null,
+    );
+    assert.equal(
+      route({ section: "projects", view: "clients" }).redirect,
+      null,
+    );
     assert.deepEqual(
-      target({ section: "library", control: "ITGC-AC-01", tab: "attributes" }),
+      target({
+        section: "settings",
+        view: "library",
+        control: "ITGC-AC-01",
+        tab: "attributes",
+      }),
       {
         organization: org,
         project,
         control: "ITGC-AC-01",
         tab: "attributes",
+        section: "library",
+      },
+    );
+    assert.deepEqual(
+      target({
         section: "settings",
-        view: "library",
+        view: "engagements",
+        manage: "engagement",
+      }),
+      {
+        organization: org,
+        project,
+        manage: "engagement",
+        section: "projects",
       },
     );
     assert.deepEqual(target({ section: "agents", agent: control }), {
@@ -544,6 +614,73 @@ describe("the six destinations and the older addresses (M2c)", () => {
     ]);
   });
 
+  it("keeps setup as onboarding until launch, and in Settings after", () => {
+    const query = {
+      organization: org,
+      project,
+      section: "setup",
+      step: "team",
+    };
+    // A draft: onboarding stands; Settings' setup tab sends it back to onboarding.
+    assert.equal(setupPlacement(route(query), "DRAFT", query), null);
+    const settingsTab = {
+      organization: org,
+      project,
+      section: "settings",
+      view: "engagement",
+      step: "team",
+    };
+    assert.equal(
+      setupPlacement(route(settingsTab), "DRAFT", settingsTab),
+      `/?organization=${org}&project=${project}&step=team&section=setup`,
+    );
+    // Launched: onboarding's address opens Settings' setup tab, the step kept.
+    assert.equal(
+      setupPlacement(route(query), "ACTIVE", query),
+      `/?organization=${org}&project=${project}&step=team&section=settings&view=engagement`,
+    );
+    assert.equal(
+      setupPlacement(route(settingsTab), "ACTIVE", settingsTab),
+      null,
+    );
+    // No engagement open, or another page: nothing moves.
+    assert.equal(setupPlacement(route(query), null, query), null);
+    const home = { organization: org, project, section: "overview" };
+    assert.equal(setupPlacement(route(home), "DRAFT", home), null);
+  });
+
+  it("links to setup where it lives, so no page takes the redirect", () => {
+    // A redirect issued once the page streams is reported as a failed server render.
+    const setup = () =>
+      new URLSearchParams({ organization: org, section: "setup", step: "rcm" });
+    assert.equal(
+      placeSetup(setup(), "ACTIVE").toString(),
+      `organization=${org}&section=settings&step=rcm&view=engagement`,
+    );
+    assert.equal(
+      placeSetup(setup(), "DRAFT").toString(),
+      `organization=${org}&section=setup&step=rcm`,
+    );
+    assert.equal(
+      placeSetup(setup(), null).toString(),
+      `organization=${org}&section=setup&step=rcm`,
+    );
+    const controls = new URLSearchParams({ section: "controls" });
+    assert.equal(placeSetup(controls, "ACTIVE").get("section"), "controls");
+  });
+
+  it("returns a posted setup form to the page it came from", () => {
+    const back = (referer: string | null) =>
+      setupReturn(new URLSearchParams(), referer).toString();
+    const from = (section: string) =>
+      `http://localhost:3000/?organization=${org}&section=${section}`;
+    assert.equal(back(from("controls")), "section=controls");
+    assert.equal(back(from("settings")), "section=settings&view=engagement");
+    assert.equal(back(from("setup")), "section=setup");
+    assert.equal(back(null), "section=setup");
+    assert.equal(back("not a url"), "section=setup");
+  });
+
   it("names the page a destination's tab renders", () => {
     assert.deepEqual(route({ section: "reports" }), {
       section: "reports",
@@ -560,18 +697,17 @@ describe("the six destinations and the older addresses (M2c)", () => {
     assert.equal(route({ section: "reports", view: "x" }).page, "deficiencies");
     assert.equal(route({ section: "settings" }).page, "setup");
     assert.equal(
-      route({ section: "settings", view: "library" }).page,
-      "library",
-    );
-    assert.equal(
       route({ section: "settings", view: "workforce" }).page,
       "agents",
     );
     assert.equal(route({ section: "settings", view: "tasks" }).page, "tasks");
-    assert.equal(
-      route({ section: "settings", view: "engagements" }).page,
-      "projects",
-    );
+    assert.deepEqual(route({ section: "library" }), {
+      section: "library",
+      page: "library",
+      tab: null,
+      redirect: null,
+    });
+    assert.equal(route({ section: "projects" }).page, "projects");
     assert.equal(
       destinationHref("reports", "schedule", org, project),
       `/?organization=${org}&project=${project}&section=reports&view=schedule`,
@@ -583,6 +719,8 @@ describe("the six destinations and the older addresses (M2c)", () => {
       "evidence",
       "reports",
       "settings",
+      "projects",
+      "library",
     ]);
   });
 });

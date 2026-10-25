@@ -1,0 +1,160 @@
+/* ==========================================================================
+   Glass (decided by the product owner): the workspace's panels are translucent over a
+   soft glow, with a light edge; the top bar, the sidebar, menus, and dialogs are frosted,
+   since content passes behind them. Loaded last so it sits over the modules' own
+   surfaces. Colors are the --glass-* and --glow-* tokens (both themes); the client portal
+   and the public pages are not in the workspace shell and stay as they are. Someone who
+   asks for less transparency gets the solid surfaces.
+   ========================================================================== */
+
+/* The glow behind everything: fixed, so panels pass over it as the page scrolls. */
+.shell {
+  background:
+    radial-gradient(64rem 42rem at 92% -10%, var(--glow-a), transparent 64%),
+    radial-gradient(52rem 40rem at 8% 110%, var(--glow-b), transparent 62%),
+    radial-gradient(44rem 32rem at 55% 55%, var(--glow-c), transparent 70%),
+    var(--canvas);
+  background-attachment: fixed;
+}
+
+/* Panels: translucent, with a light edge and a faint shine along the top. */
+.shell :is(
+    .card,
+    .kpis,
+    .state-panel,
+    .steps,
+    .setup-head,
+    .ctl-table-wrap,
+    .eg-list,
+    .eg-table,
+    .eg-kpi,
+    .eg-card,
+    .cw-summary,
+    .cw-plan,
+    .cw-fold,
+    .cw-ai,
+    .cw-roster,
+    .cw-recent,
+    .cw-plain,
+    .cw-potential,
+    .cr-panel,
+    .co-summary,
+    .co-card,
+    .ec-kpis,
+    .ec-table-wrap,
+    .eo-section,
+    .lb-head,
+    .pl-plan-body,
+    .cp-summary,
+    .cs-tile,
+    .cs-tabs,
+    .cs-assist
+  ) {
+  background-color: var(--glass-panel);
+  background-image: var(--glass-sheen);
+  border-color: var(--glass-edge);
+  box-shadow: var(--glass-shine), var(--shadow-sm);
+}
+
+/* A panel inside a panel would stack its tint; it stays clear instead. */
+.shell :is(.card, .cw-plan, .cr-panel, .eo-section) :is(.card, .kpis, .ctl-table-wrap) {
+  background-color: transparent;
+  background-image: none;
+}
+
+/* Frosted chrome: what content scrolls beneath. */
+.shell .topbar {
+  background: var(--glass-chrome);
+  border-bottom-color: var(--glass-line);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+}
+
+.shell .sidebar {
+  background: var(--glass-sidebar);
+  border-right-color: var(--glass-line);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+}
+
+/* Menus, popovers, and dialogs: opaque, with the glass edge and shine, so what is behind
+   never competes with them. (One opened from the frosted top bar cannot blur what lies
+   below the bar, so a translucent one showed the page through it.) */
+:is(
+    .menu-panel,
+    .row-menu-list,
+    .eg-menu-list,
+    .cr-popover,
+    .co-menu-list,
+    .record-dialog,
+    .preview-dialog,
+    .nw-dialog,
+    .confirm-dialog
+  ) {
+  background-color: var(--glass-strong);
+  border: 1px solid var(--glass-edge);
+  box-shadow: var(--glass-shine), var(--shadow-pop);
+  backdrop-filter: blur(calc(var(--glass-blur) * 1.25)) saturate(150%);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .shell {
+    background: var(--canvas);
+  }
+
+  .shell :is(
+      .card,
+      .kpis,
+      .state-panel,
+      .steps,
+      .setup-head,
+      .ctl-table-wrap,
+      .eg-list,
+      .eg-table,
+      .eg-kpi,
+      .eg-card,
+      .cw-summary,
+      .cw-plan,
+      .cw-fold,
+      .cw-ai,
+      .cw-roster,
+      .cw-recent,
+      .cw-plain,
+      .cw-potential,
+      .cr-panel,
+      .co-summary,
+      .co-card,
+      .ec-kpis,
+      .ec-table-wrap,
+      .eo-section,
+      .lb-head,
+      .pl-plan-body,
+      .cp-summary,
+      .cs-tile,
+      .cs-tabs,
+      .cs-assist
+    ),
+  :is(
+      .menu-panel,
+      .row-menu-list,
+      .eg-menu-list,
+      .cr-popover,
+      .co-menu-list,
+      .record-dialog,
+      .preview-dialog,
+      .nw-dialog,
+      .confirm-dialog
+    ) {
+    background-color: var(--surface);
+    background-image: none;
+    backdrop-filter: none;
+  }
+
+  .shell .topbar {
+    background: var(--surface);
+    backdrop-filter: none;
+  }
+
+  .shell .sidebar {
+    background: var(--sidebar);
+    backdrop-filter: none;
+  }
+}

@@ -279,3 +279,189 @@ export function cardEntry(status: string): {
     ? { section: "setup", label: "Continue setup" }
     : { section: "overview", label: "Open the engagement" };
 }
+
+const MONTH = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  timeZone: "UTC",
+});
+
+/**
+ * The audit period, as the year that ends on the period end (the rule the plans use):
+ * "Jan – Dec 2027", or "Jul 2026 – Jun 2027" when it spans two years.
+ */
+export function auditPeriod(periodEnd: string | null): string {
+  const end =
+    periodEnd !== null && /^\d{4}-\d{2}-\d{2}$/.test(periodEnd)
+      ? new Date(`${periodEnd}T00:00:00Z`)
+      : null;
+  if (end === null || Number.isNaN(end.getTime())) {
+    return "Not set";
+  }
+  const start = new Date(end);
+  start.setUTCFullYear(end.getUTCFullYear() - 1);
+  start.setUTCDate(start.getUTCDate() + 1);
+  const from = MONTH.format(start);
+  const to = MONTH.format(end);
+  return start.getUTCFullYear() === end.getUTCFullYear()
+    ? `${from} – ${to} ${end.getUTCFullYear()}`
+    : `${from} ${start.getUTCFullYear()} – ${to} ${end.getUTCFullYear()}`;
+}
+
+type Risked = {
+  status: string;
+  overdueRequests: number;
+  missedMilestones: number;
+};
+
+/** At risk: running work with evidence past due or a milestone missed. */
+export function atRisk(project: Risked): boolean {
+  return (
+    project.status === "ACTIVE" &&
+    (project.overdueRequests > 0 || project.missedMilestones > 0)
+  );
+}
+
+/** Why an engagement is at risk, in words, for its badge; "" when it is not. */
+export function riskReason(project: Risked & Signalled): string {
+  if (!atRisk(project)) {
+    return "";
+  }
+  return cardSignals(project)
+    .filter((signal) => signal.tone === "warn")
+    .map((signal) => signal.text)
+    .join(" · ");
+}
+
+/** A status, or the engagements at risk, as the page filters them. */
+export type EngagementFilter =
+  | "ALL"
+  | "AT_RISK"
+  | "ACTIVE"
+  | "DRAFT"
+  | "PAUSED"
+  | "COMPLETED"
+  | "ARCHIVED";
+
+export function matchesFilter(
+  project: Risked,
+  filter: EngagementFilter,
+): boolean {
+  return filter === "AT_RISK"
+    ? atRisk(project)
+    : inFilter(project.status, filter);
+}
+
+export type PortfolioCounts = {
+  /** Every engagement not archived. */
+  open: number;
+  active: number;
+  completed: number;
+  atRisk: number;
+  draft: number;
+  paused: number;
+  archived: number;
+};
+
+/** The headline counts above the list. */
+export function portfolioCounts(projects: readonly Risked[]): PortfolioCounts {
+  const count = (status: string) =>
+    projects.filter((project) => project.status === status).length;
+  return {
+    open: openEngagements(projects).length,
+    active: count("ACTIVE"),
+    completed: count("COMPLETED"),
+    atRisk: projects.filter(atRisk).length,
+    draft: count("DRAFT"),
+    paused: count("PAUSED"),
+    archived: count("ARCHIVED"),
+  };
+}
+
+export const ENGAGEMENT_SORTS = [
+  ["status", "Status"],
+  ["activity", "Latest activity"],
+  ["milestone", "Next milestone"],
+  ["progress", "Progress"],
+  ["period", "Period end"],
+  ["name", "Name"],
+] as const;
+export type EngagementSort = (typeof ENGAGEMENT_SORTS)[number][0];
+
+export function parseEngagementSort(
+  value: string | null | undefined,
+): EngagementSort {
+  return ENGAGEMENT_SORTS.some(([key]) => key === value)
+    ? (value as EngagementSort)
+    : "status";
+}
+
+type Sortable = Listed & {
+  lastActivityAt: string | null;
+  nextMilestone: { name: string; due: string } | null;
+  progress: ReadonlyArray<{ status: string; count: number }>;
+};
+
+/**
+ * The list in the chosen order. Status keeps the page's usual order (open work first, by
+ * client); the others put the most pressing or most recent first, and what has no value
+ * last.
+ */
+export function sortBy<T extends Sortable>(
+  projects: readonly T[],
+  sort: EngagementSort,
+): T[] {
+  const usual = sortEngagements(projects);
+  if (sort === "status") {
+    return usual;
+  }
+  const rank = new Map(usual.map((project, index) => [project, index]));
+  const tie = (a: T, b: T) => (rank.get(a) ?? 0) - (rank.get(b) ?? 0);
+  const last = "￿";
+  const key: Record<
+    Exclude<EngagementSort, "status">,
+    (a: T, b: T) => number
+  > = {
+    activity: (a, b) =>
+      (b.lastActivityAt ?? "").localeCompare(a.lastActivityAt ?? ""),
+    milestone: (a, b) =>
+      (a.nextMilestone?.due ?? last).localeCompare(
+        b.nextMilestone?.due ?? last,
+      ),
+    progress: (a, b) =>
+      workSummary(b.progress).percent - workSummary(a.progress).percent,
+    period: (a, b) => (b.periodEnd ?? "").localeCompare(a.periodEnd ?? ""),
+    name: (a, b) =>
+      `${a.name} ${a.clientName}`.localeCompare(`${b.name} ${b.clientName}`),
+  };
+  return [...projects].sort((a, b) => key[sort](a, b) || tie(a, b));
+}
+
+/** Whether a milestone's date has passed, against the day the page was made. */
+export function isPastDue(due: string, now: string): boolean {
+  return due < now.slice(0, 10);
+}
+
+const TYPE_SHORT: Record<string, string> = {
+  SOX_FULL: "SOX: ITGC and BP",
+  SOX_ITGC: "SOX: ITGC",
+  IT_AUDIT: "IT audit",
+};
+
+/** The engagement type in a few words, for a list row; the code itself when unknown. */
+export function engagementTypeShort(code: string): string {
+  return TYPE_SHORT[code] ?? code;
+}
+
+/** Two letters for a client or engagement tile: the initials of a longer name, or the
+ * first two letters of a one-word name. */
+export function nameMark(name: string): string {
+  const words = name
+    .trim()
+    .split(/\s+/)
+    .filter((word) => /[A-Za-z]/.test(word));
+  const letters =
+    words.length >= 2
+      ? `${words[0]?.match(/[A-Za-z]/)?.[0] ?? ""}${words[1]?.match(/[A-Za-z]/)?.[0] ?? ""}`
+      : (words[0] ?? "").replace(/[^A-Za-z]/g, "").slice(0, 2);
+  return letters === "" ? "?" : letters.toUpperCase();
+}

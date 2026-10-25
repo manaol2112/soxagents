@@ -82,6 +82,8 @@ export function ClientPicker({
     const proposal =
       earlier?.periodEnd != null ? nextPeriodEnd(earlier.periodEnd) : null;
     input.value = proposal ?? "";
+    // The audit period written beneath the date follows the input's own events.
+    input.dispatchEvent(new Event("input", { bubbles: true }));
     proposed.current = proposal;
     setPeriod(input.value);
   }

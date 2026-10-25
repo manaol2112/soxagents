@@ -3,7 +3,8 @@
    a component never picks its own hex value. Text colors meet WCAG 2.2 AA on --surface
    and --canvas. */
 
-:root {
+:root,
+.theme-light {
   color-scheme: light;
 
   /* Surfaces */
@@ -12,6 +13,34 @@
   --surface-muted: #f8f9fb;
   --surface-sunken: #f1f3f6;
   --surface-hover: #f6f7fa;
+  --surface-glass: rgb(255 255 255 / 88%);
+  /* A quoted passage marked in its source. */
+  --highlight: #fff1b8;
+
+  /* Glass (decided by the product owner; glass.css): translucent panels over a soft
+     glow, frosted where content passes behind them. */
+  --glass-panel: rgb(255 255 255 / 66%);
+  --glass-strong: rgb(255 255 255);
+  --glass-chrome: rgb(255 255 255 / 72%);
+  --glass-sidebar: rgb(14 31 54 / 92%);
+  --glass-edge: rgb(255 255 255 / 75%);
+  --glass-line: rgb(15 23 42 / 8%);
+  --glass-shine: inset 0 1px 0 rgb(255 255 255 / 70%);
+  --glass-sheen: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 55%),
+    rgb(255 255 255 / 10%)
+  );
+  --glass-blur: 18px;
+  --glow-a: rgb(59 91 219 / 16%);
+  --glow-b: rgb(109 79 216 / 12%);
+  --glow-c: rgb(21 128 61 / 7%);
+
+  /* The setup agent's guide: the page dimmed around its spotlight, and the glow. */
+  --guide-dim: rgb(15 23 42 / 42%);
+  --guide-glow: rgb(59 91 219 / 38%);
+  /* The setup agent's eyes, lit against its dark visor in both themes. */
+  --bot-eye: #9db0ff;
   --sidebar: #0e1f36;
 
   /* Text */
@@ -21,6 +50,8 @@
   --text-tertiary: #667085;
   --text-disabled: #a3aab8;
   --text-on-accent: #ffffff;
+  /* Text on a solid status fill (a count, a step mark). */
+  --text-on-status: #ffffff;
 
   /* Lines */
   --border: #e3e7ee;
@@ -34,6 +65,9 @@
   --accent-border: #c9d3fb;
   --ink: var(--accent);
   --ink-hover: var(--accent-strong);
+  /* Accent-colored text, and the primary fill on hover. */
+  --accent-text: var(--accent);
+  --accent-hover: var(--accent-strong);
 
   /* Status: each has a strong tone for text and icons, a soft fill, and a border */
   --success: #15803d;
@@ -100,6 +134,92 @@
   --header-height: 48px;
 }
 
+/* The dark theme (decided by the product owner): the default in the workspace, with a
+   light option in the account menu (aw_theme). Only the values change; every rule reads
+   the same tokens. A page whose root is .theme-light (the client portal, the public
+   pages) stays light whatever the choice.
+   Text tokens meet WCAG 2.2 AA on --surface, --canvas and --surface-hover. */
+:root[data-theme="dark"]:not(:has(.theme-light)) {
+  color-scheme: dark;
+
+  --canvas: #0b1220;
+  --surface: #121b2d;
+  --surface-muted: #0f1828;
+  --surface-sunken: #0d1524;
+  --surface-hover: #19243a;
+  --surface-glass: rgb(11 18 32 / 86%);
+  --highlight: rgb(245 181 68 / 30%);
+
+  --glass-panel: rgb(24 35 58 / 52%);
+  --glass-strong: rgb(19 28 47);
+  --glass-chrome: rgb(11 18 32 / 62%);
+  --glass-sidebar: rgb(9 15 28 / 72%);
+  --glass-edge: rgb(255 255 255 / 11%);
+  --glass-line: rgb(255 255 255 / 8%);
+  --glass-shine: inset 0 1px 0 rgb(255 255 255 / 9%);
+  --glass-sheen: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 5%),
+    rgb(255 255 255 / 0.5%)
+  );
+  --glow-a: rgb(67 97 238 / 32%);
+  --glow-b: rgb(167 139 250 / 22%);
+  --glow-c: rgb(60 207 142 / 10%);
+  --guide-dim: rgb(2 6 16 / 62%);
+  --guide-glow: rgb(99 128 255 / 48%);
+  --bot-eye: #a9bbff;
+  --sidebar: #0a101d;
+
+  --text-strong: #f3f6fb;
+  --text: #dce3ee;
+  --text-secondary: #aab5c6;
+  --text-tertiary: #8794a8;
+  --text-disabled: #566176;
+  --text-on-accent: #ffffff;
+  --text-on-status: #0b1220;
+
+  --border: #24324a;
+  --border-strong: #33435f;
+  --border-subtle: #1b263b;
+
+  /* The fill keeps white text at AA; text in the accent color uses the lighter tone. */
+  --accent: #4361ee;
+  --accent-strong: #a5b4ff;
+  --accent-soft: rgb(99 128 255 / 14%);
+  --accent-border: rgb(99 128 255 / 38%);
+  --accent-text: #8ea2ff;
+  --accent-hover: #3651dc;
+
+  --success: #3ccf8e;
+  --success-soft: rgb(60 207 142 / 13%);
+  --success-border: rgb(60 207 142 / 32%);
+  --warning: #f5b544;
+  --warning-soft: rgb(245 181 68 / 13%);
+  --warning-border: rgb(245 181 68 / 32%);
+  --danger: #f87171;
+  --danger-soft: rgb(248 113 113 / 13%);
+  --danger-border: rgb(248 113 113 / 32%);
+  --neutral: #aab5c6;
+  --neutral-soft: rgb(148 163 184 / 12%);
+  --neutral-border: rgb(148 163 184 / 26%);
+
+  --ai: #b49cff;
+  --ai-soft: rgb(167 139 250 / 14%);
+  --ai-border: rgb(167 139 250 / 34%);
+
+  --navy: #0a101d;
+  --navy-raised: #141d30;
+  --navy-line: rgb(255 255 255 / 7%);
+
+  --shadow-xs: 0 1px 2px rgb(0 0 0 / 30%);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 30%), 0 1px 3px rgb(0 0 0 / 20%);
+  --shadow-lg: 0 1px 2px rgb(0 0 0 / 30%), 0 12px 32px -12px rgb(0 0 0 / 55%);
+  --shadow-pop:
+    0 0 0 1px rgb(255 255 255 / 6%), 0 4px 8px rgb(0 0 0 / 30%),
+    0 16px 32px rgb(0 0 0 / 45%);
+  --ring: 0 0 0 3px rgb(99 128 255 / 40%);
+}
+
 /* Base */
 
 /* Motion is decoration here: people who ask for less get none. */
@@ -145,7 +265,7 @@ p {
 }
 
 a {
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: none;
 }
 
@@ -319,7 +439,7 @@ a:hover {
 }
 
 .sidebar nav a[aria-current="page"] svg {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 /* Engagement sections before launch: shown, dimmed, and they explain themselves. */
@@ -412,7 +532,7 @@ a:hover {
   gap: 1rem;
   height: 56px;
   padding: 0 1.5rem 0 1.75rem;
-  background: rgb(247 247 248 / 88%);
+  background: var(--surface-glass);
   border-bottom: 1px solid var(--border);
   backdrop-filter: saturate(180%) blur(12px);
 }
@@ -424,6 +544,18 @@ a:hover {
 
 /* Every crumb carries the same inner padding as the engagement selector, so the gaps
    around each slash are equal whether the crumb is text or a selector. */
+/* The breadcrumb gives way before the account menu does: a long engagement name is cut
+   short rather than pushing the menu off a narrow screen. */
+.topbar > nav[aria-label="Breadcrumb"] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.crumb-select,
+.crumb-select form {
+  min-width: 0;
+}
+
 .crumbs {
   display: flex;
   min-width: 0;
@@ -465,7 +597,8 @@ a:hover {
 }
 
 .crumb-select select {
-  max-width: 16rem;
+  max-width: min(16rem, 100%);
+  text-overflow: ellipsis;
   height: 30px;
   field-sizing: content;
   padding: 0 1.625rem 0 0.375rem;
@@ -605,6 +738,59 @@ a:hover {
 .menu-heading span {
   color: var(--text-tertiary);
   font-size: 12.5px;
+}
+
+/* The account menu's theme choice: two segments, the chosen one raised. */
+.theme-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.theme-switch legend {
+  float: left;
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.theme-switch-options {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.theme-switch-options button {
+  height: 26px;
+  padding: 0 0.75rem;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.theme-switch-options button:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+.theme-switch-options button[aria-pressed="true"] {
+  color: var(--text-strong);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
 }
 
 /* Content and page structure */
@@ -871,7 +1057,7 @@ a:hover {
 }
 
 .text-link:hover {
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -913,7 +1099,7 @@ button,
 button:hover,
 .btn:hover {
   color: var(--text-on-accent);
-  background: var(--accent-strong);
+  background: var(--accent-hover);
   border-color: var(--accent-strong);
 }
 
@@ -983,7 +1169,7 @@ button.btn-danger,
 
 button.btn-danger:hover,
 .btn.btn-danger:hover {
-  color: var(--text-on-accent);
+  color: var(--text-on-status);
   background: var(--danger);
   border-color: var(--danger);
 }
@@ -1214,7 +1400,7 @@ a.phase-link:hover {
 }
 
 a.phase-link:hover strong {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .phase-bar {
@@ -1260,7 +1446,7 @@ a.phase-link:hover strong {
 }
 
 .phase-current .phase-copy span {
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 500;
 }
 
@@ -1299,7 +1485,7 @@ a.phase-link:hover strong {
 }
 
 .rows a:hover {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .rows time,
@@ -1485,7 +1671,7 @@ a.phase-link:hover strong {
 }
 
 .step-hot .step-index {
-  color: white;
+  color: var(--text-on-status);
   background: var(--warning);
   border-color: var(--warning);
 }
@@ -1563,7 +1749,7 @@ a.phase-link:hover strong {
 }
 
 .cell-primary a:hover {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .cell-primary small,
@@ -1631,8 +1817,8 @@ a.phase-link:hover strong {
 
 .engagement-item[aria-current="true"] .engagement-mark,
 .engagement-mark-lg {
-  color: var(--accent);
-  background: white;
+  color: var(--accent-text);
+  background: var(--surface);
   border-color: var(--accent-border);
 }
 
@@ -2785,7 +2971,7 @@ a.pill:hover {
   height: 36px;
   flex: 0 0 auto;
   place-items: center;
-  color: var(--accent);
+  color: var(--accent-text);
   background: var(--accent-soft);
   border: 1px solid var(--accent-border);
   border-radius: 10px;
@@ -3261,7 +3447,7 @@ a.pill:hover {
   place-items: center;
   width: 26px;
   height: 26px;
-  color: var(--accent);
+  color: var(--accent-text);
   background: var(--accent-soft);
   border-radius: 999px;
 }
@@ -3401,7 +3587,7 @@ label.check {
   max-width: 960px;
   margin: 0 auto;
   color: var(--text);
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--border-strong);
   box-shadow:
     0 1px 0 rgb(15 17 21 / 4%),
@@ -4271,7 +4457,7 @@ button.file-picker-clear:hover {
 .request-details > summary {
   width: fit-content;
   cursor: pointer;
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: 12.5px;
   font-weight: 500;
 }
@@ -4509,7 +4695,7 @@ button.file-picker-clear:hover {
 }
 
 .tone-critical {
-  color: #fff;
+  color: var(--text-on-status);
   background: var(--danger);
   border-color: var(--danger);
 }
@@ -5658,7 +5844,7 @@ button.file-picker-clear:hover {
 }
 
 .control-link:hover .control-title {
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: underline;
 }
 
@@ -6140,7 +6326,7 @@ button.file-picker-clear:hover {
 }
 
 .view-tabs a.is-alert .view-count {
-  color: #ffffff;
+  color: var(--text-on-status);
   background: var(--danger);
 }
 
@@ -6274,7 +6460,7 @@ button.file-picker-clear:hover {
 }
 
 .cell-title a:hover {
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: underline;
 }
 
@@ -6345,7 +6531,7 @@ button.file-picker-clear:hover {
 }
 
 .back-link:hover {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .pager {
@@ -6375,7 +6561,7 @@ button.file-picker-clear:hover {
 }
 
 .pager-button:hover {
-  color: var(--accent);
+  color: var(--accent-text);
   border-color: var(--accent-border);
 }
 
@@ -6852,7 +7038,7 @@ body {
 .topbar {
   height: 48px;
   padding: 0 1.25rem;
-  background: #ffffff;
+  background: var(--surface);
   border-bottom-color: var(--border);
   backdrop-filter: none;
 }
@@ -7258,7 +7444,7 @@ body {
 }
 
 .plan-step.step-done .plan-number {
-  color: #ffffff;
+  color: var(--text-on-status);
   background: var(--success);
 }
 
@@ -7358,7 +7544,7 @@ button.suggestion:hover {
 }
 
 .waiting-list a:hover strong {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .waiting-list strong {
@@ -7486,7 +7672,7 @@ button.suggestion:hover {
   justify-content: space-between;
   gap: 1rem;
   padding: 0.75rem 1.25rem;
-  background: rgb(255 255 255 / 80%);
+  background: var(--surface-glass);
   border-bottom: 1px solid var(--border-subtle);
   backdrop-filter: blur(8px);
 }
@@ -7861,7 +8047,7 @@ button.starter:hover {
   justify-content: space-between;
   gap: 1rem;
   padding: 0.75rem 1rem;
-  background: linear-gradient(180deg, var(--accent-soft), rgb(237 243 253 / 40%));
+  background: linear-gradient(180deg, var(--accent-soft), transparent);
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -7922,12 +8108,12 @@ button.starter:hover {
 }
 
 .step.is-done .step-mark {
-  color: #ffffff;
+  color: var(--text-on-status);
   background: var(--success);
 }
 
 .step.is-failed .step-mark {
-  color: #ffffff;
+  color: var(--text-on-status);
   background: var(--danger);
 }
 
@@ -8251,7 +8437,7 @@ button.msg-tool:disabled {
 }
 
 button.msg-tool.is-on {
-  color: var(--accent);
+  color: var(--accent-text);
   background: var(--accent-soft);
 }
 
@@ -8395,7 +8581,7 @@ button.msg-tool[data-tip]:focus-visible::after {
 }
 
 .page-tabs a.is-alert .view-count {
-  color: #ffffff;
+  color: var(--text-on-status);
   background: var(--warning);
 }
 
@@ -8436,7 +8622,7 @@ button.msg-tool[data-tip]:focus-visible::after {
   width: 42px;
   height: 42px;
   place-items: center;
-  color: var(--accent);
+  color: var(--accent-text);
   background: var(--accent-soft);
   border-radius: 10px;
 }
@@ -8685,19 +8871,19 @@ button.msg-tool[data-tip]:focus-visible::after {
 }
 
 .file-badge.kind-pdf {
-  color: #b42318;
+  color: var(--danger);
   background: var(--danger-soft);
   border-color: var(--danger-border);
 }
 
 .file-badge.kind-img {
-  color: #6c3fc5;
+  color: var(--ai);
   background: var(--ai-soft);
-  border-color: #ddd1f7;
+  border-color: var(--ai-border);
 }
 
 .file-badge.kind-doc {
-  color: var(--accent);
+  color: var(--accent-text);
   background: var(--accent-soft);
   border-color: var(--accent-border);
 }
@@ -9308,7 +9494,7 @@ summary.mark::-webkit-details-marker {
 }
 
 .mark-exception {
-  color: #ffffff;
+  color: var(--text-on-status);
   background: var(--danger);
 }
 
@@ -9889,7 +10075,7 @@ button.cite-chip.is-open {
 .cite-passage mark {
   padding: 0 0.125rem;
   color: var(--text);
-  background: #fff1b8;
+  background: var(--highlight);
   border-radius: 3px;
 }
 
@@ -9976,7 +10162,7 @@ button.cite-chip.is-open {
   margin-right: 0.25rem;
   color: var(--text);
   font-style: italic;
-  background: linear-gradient(transparent 60%, #fff1b8 60%);
+  background: linear-gradient(transparent 60%, var(--highlight) 60%);
 }
 
 /* A long conversation title stops before the New chat button. */
@@ -10630,7 +10816,7 @@ button.cite-chip.is-open {
 }
 
 .track-item.is-current.has-attention .track-node {
-  color: var(--text-on-accent);
+  color: var(--text-on-status);
   background: var(--warning);
   border-color: var(--warning);
   box-shadow: 0 0 0 4px var(--warning-soft);
@@ -12785,7 +12971,7 @@ button.chip-link:hover {
 }
 
 .sp-icon.is-new {
-  color: var(--accent);
+  color: var(--accent-text);
   background: var(--accent-soft);
 }
 
@@ -13009,7 +13195,7 @@ button.chip-link:hover {
 
 .sp button.sp-kind-custom {
   grid-template-columns: 16px minmax(0, 1fr);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .sp button.sp-kind-custom:hover,
@@ -13277,7 +13463,7 @@ button.sys-row-head:focus-visible {
 }
 
 .sys-row.is-open .sys-icon {
-  color: var(--accent);
+  color: var(--accent-text);
   background: var(--accent-soft);
 }
 
@@ -13661,7 +13847,7 @@ button.sys-row-head:focus-visible {
 .sys-source svg {
   flex: none;
   margin-top: 2px;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 /* The review */
@@ -14265,7 +14451,7 @@ button.sys-more-chip span {
 }
 
 button.sys-more-chip[aria-pressed="true"] span {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .sys-more-count {
@@ -14277,7 +14463,7 @@ button.sys-more-chip[aria-pressed="true"] span {
 button.sys-more-clear {
   height: auto;
   padding: 0;
-  color: var(--accent);
+  color: var(--accent-text);
   background: none;
   border: 0;
   box-shadow: none;
@@ -14571,7 +14757,7 @@ button.sys-more-clear:hover {
 
 .drafting-current svg {
   flex: none;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .drafting-meta:empty {
@@ -14879,7 +15065,7 @@ button.sys-more-clear:hover {
 
 .wp-book .wp-sections {
   margin: 0.25rem 1.25rem 1.5rem;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--border-strong);
   box-shadow:
     0 1px 0 rgb(15 17 21 / 4%),
@@ -15457,7 +15643,7 @@ button.sys-more-clear:hover {
 
 .sw-steps .is-current span {
   color: #ffffff;
-  background: var(--accent-strong);
+  background: var(--accent-hover);
   border-color: transparent;
 }
 
@@ -16922,6 +17108,13 @@ html {
   gap: 0.625rem;
 }
 
+/* The corrections a name-and-period conflict offers, beside confirming it. */
+.period-fixes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .period-check h2 {
   display: flex;
   align-items: center;
@@ -17058,7 +17251,7 @@ button.answer-toggle {
 }
 
 button.answer-toggle:hover {
-  color: var(--accent);
+  color: var(--accent-text);
   background: transparent;
   border-color: transparent;
 }
@@ -17185,7 +17378,7 @@ button.answer-pill.is-on svg {
 
 button.answer-pill.is-on:hover {
   color: var(--text-on-accent);
-  background: var(--accent-strong);
+  background: var(--accent-hover);
   border-color: var(--accent-strong);
 }
 
@@ -18159,4 +18352,1228 @@ button.answer-done:hover {
   display: flex;
   gap: 0.4rem;
   margin-top: 0.25rem;
+}
+
+/* ==========================================================================
+   The New engagement page (laid out as the product owner asked): numbered sections,
+   the frameworks with the library's live counts, and a guide beside them.
+   ========================================================================== */
+
+.ne .create-layout {
+  grid-template-columns: minmax(0, 1fr) 19rem;
+}
+
+.ne-single {
+  max-width: 56rem;
+}
+
+.ne-form {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.ne-section {
+  padding: 0;
+}
+
+.ne-section-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.875rem;
+  padding: 1.125rem 1.5rem 0;
+}
+
+.ne-step {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-radius: var(--radius);
+  font-size: var(--fs-md);
+  font-weight: 650;
+}
+
+.ne-section-head h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-lg);
+  font-weight: 620;
+}
+
+.ne-section-head p {
+  margin: 0.15rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+}
+
+.ne-section-body {
+  display: grid;
+  gap: 1.125rem;
+  padding: 1.125rem 1.5rem 1.375rem;
+}
+
+/* The client and the engagement name share a row; starting from an earlier engagement
+   opens beneath them. */
+.ne .client-start {
+  order: 1;
+}
+
+.ne-period {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 550;
+}
+
+/* The frameworks: a card each, chosen or not, with the library's count. */
+.ne-frameworks {
+  display: grid;
+  gap: 0.875rem;
+}
+
+.ne-fw-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.625rem;
+}
+
+.ne .ne-fw {
+  display: grid;
+  align-content: start;
+  gap: 0.2rem;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  padding: 0.75rem 0.8rem 0.85rem;
+  color: var(--text);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: none;
+  font: inherit;
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.ne .ne-fw:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.ne .ne-fw.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.ne .ne-fw:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ne-fw-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.45rem;
+}
+
+.ne-fw-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: var(--radius);
+}
+
+.ne-fw[data-tone="success"] .ne-fw-icon {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.ne-fw[data-tone="info"] .ne-fw-icon {
+  color: var(--info);
+  background: var(--info-soft);
+}
+
+.ne-fw[data-tone="warning"] .ne-fw-icon {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.ne-fw[data-tone="ai"] .ne-fw-icon {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.ne-fw-check {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: var(--text-on-accent);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.ne-fw.is-on .ne-fw-check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.ne-fw strong {
+  color: var(--text-strong);
+  font-size: var(--fs-base);
+  font-weight: 620;
+  line-height: 1.3;
+}
+
+.ne-fw small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.ne-selected {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.875rem 1rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.ne-selected-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: var(--fs-md);
+}
+
+.ne-count {
+  padding: 0.1rem 0.5rem;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.ne-selected ul {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ne-selected li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.ne-selected li svg {
+  flex: none;
+  margin-top: 0.15rem;
+  color: var(--success);
+}
+
+.ne-optional summary {
+  color: var(--text);
+  font-size: var(--fs-base);
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.ne-optional[open] summary {
+  margin-bottom: 0.875rem;
+}
+
+.ne-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.625rem;
+}
+
+.ne-actions button,
+.ne-submit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+/* The agent beside the form stays in view as the form scrolls. */
+.ne-aside {
+  position: sticky;
+  top: 1rem;
+}
+
+@media (max-width: 1240px) {
+  .ne-fw-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 960px) {
+  .ne .create-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ne-aside {
+    position: static;
+  }
+}
+
+@media (max-width: 520px) {
+  .ne-section-head {
+    padding: 1rem 1rem 0;
+  }
+
+  .ne-section-body {
+    padding: 1rem;
+  }
+
+  .ne-fw-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ne-actions {
+    justify-content: stretch;
+  }
+
+  .ne-actions > * {
+    flex: 1;
+    justify-content: center;
+  }
+}
+
+/* ==========================================================================
+   The setup agent's guide on the New engagement page (decided by the product owner):
+   the page dims around a spotlight that moves through the form, and the agent's card
+   says what each part is for. The form stays usable beneath it. Motion is short and
+   stops under reduced motion (the global rule).
+   ========================================================================== */
+
+.ng {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+}
+
+.ng-veil {
+  position: absolute;
+  inset: 0;
+  background: var(--guide-dim);
+  animation: ng-fade 220ms ease-out;
+}
+
+.ng-spot {
+  position: absolute;
+  border-radius: var(--radius-xl);
+  box-shadow:
+    0 0 0 9999px var(--guide-dim),
+    0 0 0 2px var(--accent),
+    0 0 36px 6px var(--guide-glow);
+  transition:
+    top 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    left 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    width 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    height 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: ng-fade 220ms ease-out;
+}
+
+/* A ring that travels the spotlight's edge once each time it settles. */
+.ng-spot::after {
+  position: absolute;
+  inset: -2px;
+  border: 2px solid var(--ai);
+  border-radius: inherit;
+  opacity: 0;
+  content: "";
+  animation: ng-ring 900ms 260ms ease-out;
+}
+
+.ng-card {
+  position: absolute;
+  display: grid;
+  gap: 0.7rem;
+  padding: 1rem 1.1rem 0.95rem;
+  overflow: hidden;
+  color: var(--text);
+  background: var(--glass-strong);
+  border: 1px solid var(--ai-border);
+  border-radius: var(--radius-xl);
+  box-shadow:
+    var(--glass-shine),
+    var(--shadow-pop),
+    0 0 42px -8px var(--guide-glow);
+  pointer-events: auto;
+  outline: none;
+  transition:
+    top 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    left 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    bottom 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: ng-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* A thin line of light along the card's top: the agent's channel. */
+.ng-card::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--ai), var(--accent), transparent);
+  content: "";
+}
+
+.ng-head {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+/* The agent: a violet core inside a ring that breathes while the guide is open. */
+.ng-orb {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  background: var(--ai-soft);
+  border: 1px solid var(--ai-border);
+  border-radius: 50%;
+}
+
+.ng-orb::after {
+  position: absolute;
+  inset: 8px;
+  background: var(--ai);
+  border-radius: 50%;
+  box-shadow: 0 0 12px var(--ai);
+  content: "";
+}
+
+.ng-orb::before {
+  position: absolute;
+  inset: -4px;
+  border: 1px solid var(--ai-border);
+  border-radius: 50%;
+  content: "";
+  animation: ng-breathe 2.4s ease-in-out infinite;
+}
+
+.ng-orb.is-small {
+  width: 16px;
+  height: 16px;
+}
+
+.ng-orb.is-small::after {
+  inset: 4px;
+  box-shadow: 0 0 6px var(--ai);
+}
+
+.ng-orb.is-small::before {
+  inset: -3px;
+}
+
+.ng-who {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.ng-who strong {
+  color: var(--text-strong);
+  font-size: var(--fs-base);
+  font-weight: 620;
+}
+
+.ng-who small {
+  color: var(--ai);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ng-card .ng-close {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  box-shadow: none;
+}
+
+.ng-card .ng-close:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+.ng-title {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-lg);
+  font-weight: 640;
+}
+
+.ng-done {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  color: var(--text-on-status);
+  background: var(--success);
+  border-radius: 50%;
+}
+
+.ng-body {
+  display: grid;
+  gap: 0.4rem;
+  min-height: 4.6em;
+}
+
+.ng-body p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+  line-height: 1.55;
+}
+
+.ng-dots {
+  display: flex;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ng-dots li {
+  width: 6px;
+  height: 6px;
+  background: var(--border-strong);
+  border-radius: 999px;
+  transition:
+    width 200ms ease,
+    background 200ms ease;
+}
+
+.ng-dots li.is-done {
+  background: var(--success);
+}
+
+.ng-dots li.is-now {
+  width: 20px;
+  background: var(--accent);
+}
+
+.ng-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.ng-actions-end {
+  display: inline-flex;
+  gap: 0.4rem;
+}
+
+.ng-actions-end button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.ng-card .ng-skip {
+  height: auto;
+  padding: 0;
+  color: var(--text-tertiary);
+  background: none;
+  border: 0;
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.ng-card .ng-skip:hover {
+  color: var(--text-strong);
+  text-decoration: underline;
+}
+
+.ng-launch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+@keyframes ng-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes ng-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+@keyframes ng-ring {
+  0% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes ng-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+/* ==========================================================================
+   The New engagement page's agent (decided by the product owner): the onboarding cycle
+   across the top, and the setup agent beside the form.
+   ========================================================================== */
+
+.ne-main {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.ne-fw-short {
+  margin-top: 0.3rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+/* The cycle: this page's two stages, then guided setup's, joined by a line. */
+.oc {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.9rem 1rem 0.75rem;
+  background-color: var(--glass-panel);
+  background-image: var(--glass-sheen);
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--glass-shine), var(--shadow-sm);
+}
+
+.oc ol {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.oc-stage {
+  position: relative;
+  min-width: 0;
+}
+
+/* The line to the next stage, from this stage's number. */
+.oc-stage:not(:last-child)::after {
+  position: absolute;
+  top: 1.4rem;
+  right: -0.35rem;
+  left: 2.75rem;
+  height: 2px;
+  background: var(--border);
+  border-radius: 2px;
+  content: "";
+}
+
+.oc-stage.is-done:not(:last-child)::after {
+  background: var(--success);
+}
+
+.oc-stage.is-setup:not(:last-child)::after {
+  background: repeating-linear-gradient(
+    90deg,
+    var(--border-strong) 0 4px,
+    transparent 4px 8px
+  );
+}
+
+.oc .oc-stage button,
+.oc-static {
+  display: grid;
+  align-content: start;
+  gap: 0.45rem;
+  width: 100%;
+  height: auto;
+  padding: 0.45rem 0.4rem;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: var(--radius);
+  box-shadow: none;
+  font: inherit;
+  text-align: left;
+  white-space: normal;
+}
+
+.oc .oc-stage button {
+  cursor: pointer;
+}
+
+.oc .oc-stage button:hover {
+  background: var(--surface-hover);
+}
+
+.oc-num {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  transition:
+    background 200ms ease,
+    box-shadow 200ms ease;
+}
+
+.oc-stage.is-current .oc-num {
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 4px var(--accent-soft),
+    0 0 18px var(--guide-glow);
+}
+
+.oc-stage.is-done .oc-num {
+  color: var(--text-on-status);
+  background: var(--success);
+  border-color: var(--success);
+}
+
+.oc-stage.is-next .oc-num {
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+.oc-text {
+  display: grid;
+  min-width: 0;
+}
+
+.oc-text strong {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 620;
+  line-height: 1.3;
+}
+
+.oc-text small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  line-height: 1.35;
+}
+
+.oc-stage.is-setup .oc-text strong {
+  color: var(--text-secondary);
+}
+
+.oc-stage.is-current .oc-text strong {
+  color: var(--accent-text);
+}
+
+.oc-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.45rem;
+  margin: 0;
+  padding: 0.5rem 0.4rem 0;
+  color: var(--text-tertiary);
+  border-top: 1px solid var(--glass-line);
+  font-size: var(--fs-2xs);
+}
+
+.oc-mark {
+  display: inline-block;
+  width: 14px;
+  height: 2px;
+  border-radius: 2px;
+}
+
+.oc-mark.is-here {
+  background: var(--accent);
+}
+
+.oc-mark.is-setup {
+  margin-left: 0.6rem;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--border-strong) 0 3px,
+    transparent 3px 6px
+  );
+}
+
+/* The agent beside the form: its avatar over the top edge, a greeting, what it sees,
+   what it recommends, and a tip. */
+.ap {
+  position: relative;
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 2.75rem;
+  padding: 3.4rem 1rem 1rem;
+  background-color: var(--glass-panel);
+  background-image: var(--glass-sheen);
+  border: 1px solid var(--ai-border);
+  border-radius: 1.25rem;
+  box-shadow:
+    var(--glass-shine),
+    var(--shadow-lg),
+    0 0 48px -14px var(--guide-glow);
+}
+
+.ap-bot {
+  position: absolute;
+  top: -3rem;
+  left: 50%;
+  display: grid;
+  transform: translateX(-50%);
+  filter: drop-shadow(0 10px 22px var(--guide-glow));
+}
+
+.ap-bubble {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.8rem 0.95rem;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 1rem 1rem 1rem 0.35rem;
+}
+
+.ap-bubble strong {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 640;
+}
+
+.ap-bubble p,
+.ap-line {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.ap-card {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.85rem 0.9rem 0.9rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--radius-lg);
+}
+
+.ap-line {
+  color: var(--text);
+}
+
+.ap-label {
+  margin: 0.25rem 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.ap-checks {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ap-checks li {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.ap-checks li.is-on {
+  color: var(--text);
+}
+
+.ap-box {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  color: var(--text-on-accent);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+}
+
+.ap-checks li.is-on .ap-box {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.ap-count {
+  color: var(--text-tertiary);
+}
+
+.ap-actions {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.3rem;
+}
+
+.ap .ap-action {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  height: auto;
+  padding: 0.55rem 0.7rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  text-align: left;
+  white-space: normal;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.ap .ap-action svg {
+  flex: none;
+  color: var(--accent-text);
+}
+
+.ap .ap-action:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.ap .ap-action:disabled {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.ap .ap-action:disabled svg {
+  color: var(--success);
+}
+
+.ap-tip {
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.8rem 0.9rem;
+  background: var(--ai-soft);
+  border: 1px solid var(--ai-border);
+  border-radius: var(--radius-lg);
+}
+
+.ap-tip-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  color: var(--ai);
+  background: var(--surface);
+  border-radius: 50%;
+}
+
+.ap-tip strong {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+}
+
+.ap-tip p {
+  margin: 0.15rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+/* The agent itself. */
+.ab-halo {
+  fill: var(--ai-soft);
+}
+
+.ab-antenna {
+  stroke: var(--ai-border);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.ab-tip {
+  fill: var(--ai);
+  animation: ab-glow 2.4s ease-in-out infinite;
+}
+
+.ab-ear {
+  fill: var(--accent-soft);
+  stroke: var(--ai-border);
+  stroke-width: 2;
+}
+
+.ab-head {
+  fill: var(--surface-hover);
+  stroke: var(--ai-border);
+  stroke-width: 2;
+}
+
+.ab-visor {
+  fill: var(--navy);
+  stroke: var(--accent-border);
+  stroke-width: 1.5;
+}
+
+.ab-eye {
+  fill: var(--bot-eye);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ab-blink 5s ease-in-out infinite;
+}
+
+.ab-smile {
+  fill: none;
+  stroke: var(--bot-eye);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.ab-body {
+  animation: ab-float 4s ease-in-out infinite;
+}
+
+@keyframes ab-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes ab-blink {
+  0%,
+  94%,
+  100% {
+    transform: scaleY(1);
+  }
+  97% {
+    transform: scaleY(0.12);
+  }
+}
+
+@keyframes ab-glow {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 1240px) {
+  .oc ol {
+    grid-template-columns: repeat(7, minmax(7.5rem, 1fr));
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+}
+
+/* ==========================================================================
+   Onboarding (decided by the product owner): guided setup before launch, on its own
+   page. The engagement and the way out at the top, the cycle beneath it, and each step
+   beside the setup agent.
+   ========================================================================== */
+
+.onb-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.onb-head .page-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.onb-head h1 {
+  margin: 0;
+}
+
+.onb-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 20rem;
+  align-items: start;
+  gap: 1.25rem;
+}
+
+.onb-agent {
+  position: sticky;
+  top: 4.5rem;
+}
+
+/* The agent lists what each step still needs; the step's own list would repeat it. */
+.setup-page.is-guided .setup-issues {
+  display: none;
+}
+
+/* A setup stage in the cycle opens its step. */
+.oc .oc-link {
+  display: grid;
+  align-content: start;
+  gap: 0.45rem;
+  padding: 0.45rem 0.4rem;
+  color: inherit;
+  border-radius: var(--radius);
+  text-decoration: none;
+}
+
+.oc .oc-link:hover {
+  background: var(--surface-hover);
+}
+
+.oc .oc-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.oc-setup .oc-stage:not(:last-child)::after {
+  background: var(--border);
+}
+
+.oc-setup .oc-stage.is-done:not(:last-child)::after {
+  background: var(--success);
+}
+
+.ap-list {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ap-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.ap-list li svg {
+  flex: none;
+  margin-top: 0.15rem;
+  color: var(--accent-text);
+}
+
+.ap-list.is-todo li svg {
+  color: var(--warning);
+}
+
+.ap-ready {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  color: var(--success);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.ap .ap-next {
+  display: inline-flex;
+  justify-content: center;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+@media (max-width: 1100px) {
+  .onb-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .onb-agent {
+    position: static;
+  }
+}
+
+/* The onboarding cycle's three stages: the client and scope, the team, launch. */
+.oc-short ol {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.oc-short .oc-note svg {
+  flex: none;
+  color: var(--accent-text);
+}
+
+.ap-after {
+  color: var(--text-secondary);
 }

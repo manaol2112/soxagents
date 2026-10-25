@@ -686,7 +686,6 @@ def _body(
     derived = derived_classifications(str(row[1]), str(row[2]))
     current = classifications_of(row[0], str(row[1]), str(row[2]))
     readiness = assess(connection, project_id, control_id)
-    update = library_definitions.library_update(connection, control_id)
     return ContextBody(
         control_id=control_id,
         classifications=current,
@@ -700,7 +699,9 @@ def _body(
         understanding=process_understanding.understanding(connection, control_id),
         testing=library_definitions.testing_body(connection, control_id),
         design=control_design.design_for(connection, control_id),
-        library_update=update if update.available else None,
+        # The latest library version always applies (adopt_latest, with every deploy):
+        # nobody is asked to adopt it.
+        library_update=None,
         note=note,
     )
 

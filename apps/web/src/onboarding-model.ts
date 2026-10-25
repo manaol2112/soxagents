@@ -178,7 +178,15 @@ export function methodologyLabel(value: string | null): string {
 /** Where the period disagrees with the engagement's own words, and whether a person
  * confirmed it as recorded. Nothing changes a date on its own. */
 export type PeriodCheck = {
-  conflicts: Array<{ kind: string; message: string; blocking: boolean }>;
+  conflicts: Array<{
+    kind: string;
+    message: string;
+    blocking: boolean;
+    /** For a name that points at another year: the period end in that year, and the name
+     * with the period's year; null where they do not apply. */
+    periodEndFix: string | null;
+    nameFix: string | null;
+  }>;
   /** What a confirmation is for: any change to the name, scope, or dates asks again. */
   basis: string;
   confirmed: boolean;
@@ -420,6 +428,8 @@ export type Onboarding = {
   projectStatus: string;
   clientName: string;
   engagementType: string;
+  /** The frameworks chosen when it was created (migration 0108); null when none were. */
+  frameworks: string[] | null;
   scope: string;
   periodEnd: string | null;
   periodStart: string | null;
@@ -1032,6 +1042,12 @@ export function parsePeriod(value: unknown): PeriodCheck | null {
         kind: str(item.kind),
         message: str(item.message),
         blocking: item.blocking === true,
+        periodEndFix:
+          typeof item.period_end_fix === "string" ? item.period_end_fix : null,
+        nameFix:
+          typeof item.name_fix === "string" && item.name_fix !== ""
+            ? item.name_fix
+            : null,
       })),
     basis: value.basis,
     confirmed: value.confirmed === true,
@@ -1079,6 +1095,9 @@ export function parseOnboarding(value: unknown): Onboarding | null {
     projectStatus: str(value.project_status),
     clientName: str(settings.client_name),
     engagementType: str(settings.engagement_type) || "SOX_ITGC",
+    frameworks: Array.isArray(settings.frameworks)
+      ? strings(settings.frameworks)
+      : null,
     scope: str(value.scope),
     periodEnd:
       typeof settings.period_end === "string" ? settings.period_end : null,
@@ -1641,6 +1660,7 @@ export function pendingSuggestions(onboarding: Onboarding): {
 }
 
 export type SetupNotice =
+  | "setup-created"
   | "setup-saved"
   | "setup-drafting"
   | "setup-accepted"
@@ -1695,6 +1715,7 @@ export type SetupNotice =
   | "live-email-off";
 
 const NOTICES: readonly SetupNotice[] = [
+  "setup-created",
   "welcomes-sent",
   "live-email-off",
   "setup-saved",
@@ -3081,6 +3102,24 @@ export function setupWrite(
       },
     };
   }
+  if (intent === "period-align") {
+    // Correct where the name and the period disagree, from the conflict itself.
+    const basis = fields.basis ?? "";
+    const to = fields.to ?? "";
+    if (
+      !/^[0-9a-f]{32}$/.test(basis) ||
+      (to !== "period_end" && to !== "name")
+    ) {
+      return { error: "invalid" };
+    }
+    return {
+      intent,
+      step: parseStep(fields.step ?? "profile"),
+      method: "POST",
+      path: `${base}/period/align`,
+      body: { basis, to },
+    };
+  }
   if (intent === "period-confirm") {
     const basis = fields.basis ?? "";
     if (!/^[0-9a-f]{32}$/.test(basis)) {
@@ -4004,6 +4043,8 @@ export type SetupState = {
   system?: string | null;
   /** The open control's statement and client values (milestone 8.9). */
   design?: Design | null;
+  /** The tab of the Controls setup an address names. */
+  pane?: string | null;
 };
 
 export const EMPTY_SETUP: SetupState = {

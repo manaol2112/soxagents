@@ -1091,7 +1091,7 @@
 button.lb-link {
   height: auto;
   padding: 0;
-  color: var(--accent);
+  color: var(--accent-text);
   background: none;
   border: 0;
   border-radius: 0;

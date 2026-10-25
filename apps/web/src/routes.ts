@@ -53,11 +53,13 @@ export function parseSection(value: string | null): SectionId {
   return "overview";
 }
 
-// The six destinations (Milestone 2c): Home, Controls, Testing, Evidence, Reports and
-// Settings. Reports and Settings are tabs over the pages that existed before; the older
-// section names redirect to them with the same record open, so stored links keep
-// working. The agent console, the approvals page and the engagements page stay
-// reachable by their addresses, out of the menu, as contextual pages.
+// The destinations: this engagement's Home, Controls, Testing, Evidence, Reports and
+// Settings (Milestone 2c), then the firm's Engagements and Library, each its own page
+// in the menu (decided by the product owner) rather than a tab of Settings. Reports and
+// Settings are tabs over the pages that existed before; the older section names
+// redirect to them with the same record open, so stored links keep working. The agent
+// console and the approvals page stay reachable by their addresses, out of the menu,
+// as contextual pages.
 
 export const DESTINATIONS: readonly SectionId[] = [
   "overview",
@@ -66,6 +68,8 @@ export const DESTINATIONS: readonly SectionId[] = [
   "evidence",
   "reports",
   "settings",
+  "projects",
+  "library",
 ];
 
 export const REPORT_TABS = [
@@ -83,23 +87,15 @@ export const REPORT_TAB_LABELS: Record<ReportTab, string> = {
 };
 
 /** This engagement's settings first, then the firm's (from `SETTINGS_FIRM_FROM` on). */
-export const SETTINGS_TABS = [
-  "engagement",
-  "tasks",
-  "library",
-  "workforce",
-  "engagements",
-] as const;
+export const SETTINGS_TABS = ["engagement", "tasks", "workforce"] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 export const SETTINGS_TAB_LABELS: Record<SettingsTab, string> = {
   engagement: "Engagement setup",
-  library: "Standard library",
   workforce: "AI workforce",
   tasks: "Tasks",
-  engagements: "All engagements",
 };
 /** The first tab that is the firm's rather than this engagement's. */
-export const SETTINGS_FIRM_FROM: SettingsTab = "library";
+export const SETTINGS_FIRM_FROM: SettingsTab = "workforce";
 
 /** The page a destination's tab renders: the section that existed before. */
 const REPORT_PAGES: Record<ReportTab, SectionId> = {
@@ -110,9 +106,12 @@ const REPORT_PAGES: Record<ReportTab, SectionId> = {
 };
 const SETTINGS_PAGES: Record<SettingsTab, SectionId> = {
   engagement: "setup",
-  library: "library",
   workforce: "agents",
   tasks: "tasks",
+};
+/** The Settings tabs that became their own destinations, and the section each opens. */
+const LEFT_SETTINGS: Record<string, SectionId> = {
+  library: "library",
   engagements: "projects",
 };
 
@@ -149,8 +148,6 @@ const MOVED: Record<string, { section: SectionId; tab?: string }> = {
   plan: { section: "reports", tab: "schedule" },
   timeline: { section: "reports", tab: "timeline" },
   deficiencies: { section: "reports", tab: "deficiencies" },
-  setup: { section: "settings", tab: "engagement" },
-  library: { section: "settings", tab: "library" },
   agents: { section: "settings", tab: "workforce" },
   tasks: { section: "settings", tab: "tasks" },
 };
@@ -167,11 +164,20 @@ export function resolveRoute(
         ? value[0]
         : null;
   const requested = first(params.section) ?? "overview";
-  const moved = MOVED[requested];
+  const left =
+    requested === "settings"
+      ? LEFT_SETTINGS[first(params.view) ?? ""]
+      : undefined;
+  const moved: { section: SectionId; tab?: string } | undefined =
+    left !== undefined ? { section: left } : MOVED[requested];
   if (moved !== undefined) {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
-      if (key === "section" || (key === "view" && moved.tab !== undefined)) {
+      // A Settings tab that left drops its `view`, which named the tab.
+      if (
+        key === "section" ||
+        (key === "view" && (moved.tab !== undefined || left !== undefined))
+      ) {
         continue;
       }
       for (const item of Array.isArray(value) ? value : [value]) {
@@ -203,6 +209,90 @@ export function resolveRoute(
     return { section, page: SETTINGS_PAGES[tab], tab, redirect: null };
   }
   return { section, page: section, tab: null, redirect: null };
+}
+
+/**
+ * Where setup lives, which depends on the engagement (decided by the product owner): until
+ * it is launched, setup is onboarding, its own page (`section=setup`), guided by the setup
+ * agent; once launched, it is the Engagement setup tab of Settings. Each address is sent
+ * to the other when it names the wrong one, with every other parameter kept. Null when it
+ * stands, or when no engagement is open.
+ */
+export function setupPlacement(
+  route: Route,
+  projectStatus: string | null,
+  params: Record<string, string | string[] | undefined>,
+): string | null {
+  if (projectStatus === null) {
+    return null;
+  }
+  const draft = projectStatus === "DRAFT";
+  const toOnboarding =
+    route.section === "settings" && route.page === "setup" && draft;
+  const toSettings = route.section === "setup" && !draft;
+  if (!toOnboarding && !toSettings) {
+    return null;
+  }
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (key === "section" || key === "view") {
+      continue;
+    }
+    for (const item of Array.isArray(value) ? value : [value]) {
+      if (typeof item === "string" && item !== "") {
+        query.append(key, item);
+      }
+    }
+  }
+  if (toSettings) {
+    query.set("section", "settings");
+    query.set("view", "engagement");
+  } else {
+    query.set("section", "setup");
+  }
+  return `/?${query.toString()}`;
+}
+
+/** A setup address pointed at where setup lives for this engagement (as setupPlacement
+ * decides), so links never take the redirect: the page has begun to stream by then, and
+ * the browser reports the hop as a failed server render. */
+export function placeSetup(
+  params: URLSearchParams,
+  projectStatus: string | null,
+): URLSearchParams {
+  if (
+    params.get("section") === "setup" &&
+    projectStatus !== null &&
+    projectStatus !== "DRAFT"
+  ) {
+    params.set("section", "settings");
+    params.set("view", "engagement");
+  }
+  return params;
+}
+
+/** Where a posted setup form returns, by the page it came from (its referer): Controls
+ * keeps its own setup, Settings its Engagement setup tab, and onboarding its own page. */
+export function setupReturn(
+  params: URLSearchParams,
+  referer: string | null,
+): URLSearchParams {
+  let from: string | null = null;
+  try {
+    from =
+      referer === null ? null : new URL(referer).searchParams.get("section");
+  } catch {
+    from = null;
+  }
+  if (from === "controls") {
+    params.set("section", "controls");
+  } else if (from === "settings") {
+    params.set("section", "settings");
+    params.set("view", "engagement");
+  } else {
+    params.set("section", "setup");
+  }
+  return params;
 }
 
 /** An address built for an older section, rewritten to the destination that holds the

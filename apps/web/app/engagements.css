@@ -27,6 +27,7 @@
 
 .eg-board {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.875rem;
   min-width: 0;
 }
@@ -77,7 +78,7 @@
 
 .eg .eg-filters button.is-on {
   color: var(--eg-ink);
-  background: #fff;
+  background: var(--surface);
   box-shadow: 0 1px 2px rgb(16 24 40 / 10%);
 }
 
@@ -101,7 +102,7 @@
   height: 34px;
   padding: 0 0.75rem 0 2.1rem;
   color: var(--eg-text);
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--eg-line);
   border-radius: 8px;
   font-size: 13px;
@@ -137,7 +138,7 @@
   height: 100%;
   padding: 1rem 1.1rem;
   color: var(--eg-text);
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--eg-line);
   border-radius: var(--radius-lg);
   box-shadow: var(--eg-shadow);
@@ -206,7 +207,7 @@
 .eg-status.is-active {
   color: var(--eg-green);
   background: var(--eg-green-soft);
-  border-color: #c9eed7;
+  border-color: var(--success-border);
 }
 
 .eg-status.is-active::before {
@@ -226,7 +227,7 @@
 .eg-status.is-paused {
   color: var(--eg-amber);
   background: var(--eg-amber-soft);
-  border-color: #f6dfb4;
+  border-color: var(--warning-border);
 }
 
 .eg-status.is-paused::before {
@@ -545,7 +546,7 @@
 
 .eg-views a[aria-current="page"] {
   color: var(--eg-ink);
-  background: #fff;
+  background: var(--surface);
   box-shadow: 0 1px 2px rgb(16 24 40 / 10%);
 }
 
@@ -932,4 +933,554 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ==========================================================================
+   The portfolio view (decided by the product owner): headline counts that filter the
+   list, and a table of engagements with where each one stands.
+   ========================================================================== */
+
+.eg-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.875rem;
+}
+
+.eg .eg-kpi {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 0.875rem;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  padding: 1rem 1.125rem;
+  color: var(--eg-text);
+  background: var(--surface);
+  border: 1px solid var(--eg-line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--eg-shadow);
+  font: inherit;
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.eg .eg-kpi:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.eg .eg-kpi.is-on {
+  border-color: var(--accent-border);
+  box-shadow: var(--ring);
+}
+
+.eg .eg-kpi:focus-visible {
+  outline: 2px solid var(--eg-accent);
+  outline-offset: 2px;
+}
+
+.eg-kpi-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: var(--radius-lg);
+}
+
+.eg-kpi.tone-info .eg-kpi-icon {
+  color: var(--info);
+  background: var(--info-soft);
+}
+
+.eg-kpi.tone-success .eg-kpi-icon {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.eg-kpi.tone-danger .eg-kpi-icon {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.eg-kpi.tone-neutral .eg-kpi-icon {
+  color: var(--neutral);
+  background: var(--neutral-soft);
+}
+
+.eg-kpi-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.1rem;
+}
+
+.eg-kpi-copy strong {
+  color: var(--eg-ink);
+  font-size: var(--fs-display);
+  font-weight: 650;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.eg-kpi.tone-danger .eg-kpi-copy strong {
+  color: var(--danger);
+}
+
+.eg-kpi-copy > span {
+  color: var(--eg-text);
+  font-size: var(--fs-md);
+  font-weight: 550;
+}
+
+.eg-kpi-copy small {
+  color: var(--eg-faint);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+}
+
+/* The risk filter counts in the danger tone. */
+.eg .eg-filters button.eg-risk span {
+  color: var(--danger);
+}
+
+.eg-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--eg-faint);
+  font-size: var(--fs-sm);
+}
+
+.eg .eg-sort select {
+  height: 34px;
+  padding: 0 1.75rem 0 0.65rem;
+  color: var(--eg-text);
+  background-color: var(--surface);
+  border: 1px solid var(--eg-line);
+  border-radius: var(--radius);
+  font-size: var(--fs-base);
+}
+
+.eg .eg-layout-switch button {
+  justify-content: center;
+  width: 32px;
+  padding: 0;
+}
+
+/* The search, the sort and the layout share the end of the toolbar, or a line of their
+   own when the filters need the room. */
+.eg-tools {
+  display: flex;
+  flex: 1 1 34rem;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.625rem;
+  min-width: 0;
+}
+
+.eg-tools .eg-search {
+  flex: 1 1 14rem;
+}
+
+.eg-tools .eg-layout-switch {
+  margin-left: 0;
+}
+
+.eg-table {
+  container-type: inline-size;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--eg-line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--eg-shadow);
+}
+
+.eg-table ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.eg-thead,
+.eg-trow {
+  display: grid;
+  grid-template-columns:
+    minmax(13rem, 2.8fr) 6.5rem 8.75rem minmax(6rem, 0.9fr) 4.5rem 4.5rem
+    minmax(10.5rem, 2fr) 5.75rem;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 5rem 0.75rem 1.125rem;
+}
+
+.eg-thead {
+  color: var(--eg-faint);
+  background: var(--eg-tint);
+  border-bottom: 1px solid var(--eg-line);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.eg-thead span:nth-child(5),
+.eg-thead span:nth-child(6) {
+  text-align: right;
+}
+
+.eg-trow {
+  min-height: 64px;
+  color: var(--eg-text);
+  font-size: var(--fs-base);
+  text-decoration: none;
+  border-bottom: 1px solid var(--eg-line-soft);
+  transition: background 120ms ease;
+}
+
+.eg-table li:last-child .eg-trow {
+  border-bottom: 0;
+}
+
+.eg-trow:hover {
+  background: var(--surface-hover);
+}
+
+.eg-trow[aria-current="true"] {
+  background: var(--eg-accent-soft);
+  box-shadow: inset 3px 0 0 var(--eg-accent);
+}
+
+.eg-trow:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--eg-accent);
+}
+
+.eg-trow.is-archived {
+  opacity: 0.72;
+}
+
+.eg-ident {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.eg-mono {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  color: var(--eg-ink);
+  background: var(--surface-hover);
+  border: 1px solid var(--eg-line);
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+}
+
+.eg-ident-text {
+  display: grid;
+  min-width: 0;
+}
+
+.eg-ident-text strong,
+.eg-ident-text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eg-ident-text strong {
+  color: var(--eg-ink);
+  font-size: var(--fs-md);
+  font-weight: 620;
+}
+
+.eg-ident-text small {
+  color: var(--eg-faint);
+  font-size: var(--fs-sm);
+}
+
+.eg-cell {
+  min-width: 0;
+}
+
+.eg-soft {
+  overflow: hidden;
+  color: var(--eg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eg-status.is-risk {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+}
+
+.eg-status.is-risk::before {
+  background: var(--danger);
+}
+
+.eg-progress-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.eg-meter {
+  flex: 1;
+  height: 6px;
+  min-width: 2.5rem;
+  overflow: hidden;
+  background: var(--surface-sunken);
+  border-radius: 999px;
+}
+
+.eg-meter > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+}
+
+.eg-pct {
+  flex: none;
+  min-width: 2.6rem;
+  color: var(--eg-ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.eg-trow .eg-num {
+  color: var(--eg-ink);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.eg-trow .eg-num.is-warn {
+  color: var(--warning);
+  font-weight: 650;
+}
+
+.eg-trow .eg-num.is-clear {
+  color: var(--success);
+}
+
+.eg-next {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--eg-faint);
+}
+
+.eg-next > svg {
+  flex: none;
+}
+
+.eg-next-text {
+  display: grid;
+  min-width: 0;
+}
+
+.eg-next-text > span {
+  overflow: hidden;
+  color: var(--eg-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eg-next-text small {
+  overflow: hidden;
+  color: var(--eg-faint);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eg-next-text small.is-late {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.eg-team {
+  display: flex;
+  align-items: center;
+}
+
+.eg-avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  font-size: var(--fs-2xs);
+  font-weight: 650;
+}
+
+.eg-avatar + .eg-avatar {
+  margin-left: -7px;
+}
+
+.eg-avatar.tone-ai {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.eg-avatar.tone-success {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.eg-avatar.tone-warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.eg-avatar.is-more {
+  color: var(--eg-muted);
+  background: var(--surface-sunken);
+}
+
+@media (max-width: 1240px) {
+  .eg-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* On a phone the counts stay a compact two by two, so the list starts on the first
+   screen. */
+@media (max-width: 520px) {
+  .eg-kpis {
+    gap: 0.5rem;
+  }
+
+  .eg .eg-kpi {
+    gap: 0.6rem;
+    padding: 0.7rem 0.75rem;
+  }
+
+  .eg-kpi-icon {
+    width: 30px;
+    height: 30px;
+  }
+
+  .eg-kpi-copy strong {
+    font-size: var(--fs-title);
+  }
+
+  .eg-kpi-copy > span {
+    font-size: var(--fs-base);
+  }
+
+  .eg-kpi-copy small {
+    display: none;
+  }
+
+  .eg-tools {
+    flex-wrap: wrap;
+  }
+
+  .eg-tools .eg-search {
+    flex-basis: 100%;
+    max-width: none;
+  }
+}
+
+/* Narrower lists give up the audit period and the controls count first. */
+@container (max-width: 1040px) {
+  .eg-thead,
+  .eg-trow {
+    grid-template-columns:
+      minmax(11rem, 2fr) 6.5rem 4.25rem 4.5rem minmax(9rem, 1.6fr)
+      5.75rem;
+  }
+
+  .eg-trow .eg-meter {
+    display: none;
+  }
+
+  .eg-thead span:nth-child(3),
+  .eg-thead span:nth-child(5),
+  .eg-trow > :nth-child(3),
+  .eg-trow > :nth-child(5) {
+    display: none;
+  }
+}
+
+/* On a phone, each engagement is a small card: its name, then labelled facts. */
+@container (max-width: 680px) {
+  .eg-thead {
+    display: none;
+  }
+
+  .eg-trow {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 0.6rem 1rem;
+    padding: 0.875rem 1rem;
+  }
+
+  .eg-trow > .eg-ident {
+    grid-column: 1 / -1;
+    padding-right: 4.5rem;
+  }
+
+  .eg-trow > :nth-child(3),
+  .eg-trow > :nth-child(5) {
+    display: block;
+  }
+
+  .eg-trow .eg-meter {
+    display: block;
+  }
+
+  .eg-trow > .eg-cell::before {
+    display: block;
+    margin-bottom: 0.15rem;
+    color: var(--eg-faint);
+    font-size: var(--fs-2xs);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    content: attr(data-label);
+  }
+
+  .eg-trow .eg-num {
+    text-align: left;
+  }
+
+  .eg-progress-cell,
+  .eg-next,
+  .eg-team {
+    flex-wrap: wrap;
+  }
+
+  .eg-progress-cell::before,
+  .eg-next::before,
+  .eg-team::before {
+    flex-basis: 100%;
+  }
+
+  .eg-next-text {
+    flex: 1 1 0;
+  }
+
+  .eg-table .eg-row-item .eg-star,
+  .eg-table .eg-row-item .eg-menu {
+    top: 1.5rem;
+    transform: none;
+  }
 }

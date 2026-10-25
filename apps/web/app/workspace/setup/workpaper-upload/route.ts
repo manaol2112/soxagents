@@ -6,6 +6,7 @@ import {
   templateUploadNoticeFor,
   templateUploadTarget,
 } from "../../../../src/onboarding-model";
+import { setupReturn } from "../../../../src/routes";
 
 /** A firm's workpaper template, uploaded from the Workpaper templates step for one kind
  * of control: a whole workbook, or one of its tabs. */
@@ -54,7 +55,8 @@ function redirect(
   notice: string,
 ) {
   const destination = browserUrl("/", request);
-  destination.searchParams.set("section", "setup");
+  // Back to the page the upload came from: Controls, Settings, or onboarding.
+  setupReturn(destination.searchParams, request.headers.get("referer"));
   const organizationId = fields.organization_id ?? "";
   const projectId = fields.project_id ?? "";
   if (organizationId !== "") {

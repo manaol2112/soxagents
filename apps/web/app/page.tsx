@@ -13,8 +13,10 @@ import { loadOnboarding } from "../src/load-onboarding";
 import { loadPlanning } from "../src/load-planning";
 import { loadWorkflow } from "../src/load-workflow";
 import { loadWorkspace } from "../src/load-workspace";
+import { setupPlacement } from "../src/routes";
 import { resolveRoute } from "../src/shell-model";
 import { parseTestingView } from "../src/testing-hub-model";
+import { parseTheme, THEME_COOKIE } from "../src/theme";
 import { WorkspaceView } from "../src/workspace-view";
 
 export const dynamic = "force-dynamic";
@@ -39,6 +41,17 @@ export default async function Home({ searchParams }: HomeProps) {
     section: route.page,
     notice: firstParam(params.notice),
   });
+  // Setup is onboarding until the engagement is launched, and a Settings tab after.
+  if (loaded.status === "ready") {
+    const placed = setupPlacement(
+      route,
+      loaded.selectedProject?.status ?? null,
+      params,
+    );
+    if (placed !== null) {
+      redirect(placed);
+    }
+  }
   // The loaders read by the page; the shell renders the destination.
   const model =
     loaded.status === "ready" ? { ...loaded, section: route.section } : loaded;
@@ -70,6 +83,7 @@ export default async function Home({ searchParams }: HomeProps) {
       notice: firstParam(params.notice),
       system: firstParam(params.system),
       edit: firstParam(params.edit),
+      pane: firstParam(params.pane),
     }),
     loadEngagement(loaded, {
       category: firstParam(params.category),
@@ -132,6 +146,7 @@ export default async function Home({ searchParams }: HomeProps) {
       testingView={parseTestingView(firstParam(params.view))}
       testingFilter={firstParam(params.filter) ?? null}
       library={library}
+      theme={parseTheme((await cookies()).get(THEME_COOKIE)?.value)}
       evidenceView={parseEvidenceView({
         tab: firstParam(params.tab),
         queue: firstParam(params.queue),

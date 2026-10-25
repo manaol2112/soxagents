@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useMemo, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
-
+import { SYSTEM_SAVED_EVENT } from "./controls-guide-model";
 import {
   APPLICABILITY_LABELS,
   type Applicability,
@@ -40,6 +40,10 @@ type Props = {
   editable: boolean;
   /** Open on an existing system's controls rather than adding a new one. */
   system?: SetupSystem;
+  /** The button's words in place of "Add system", such as the first system's. */
+  label?: string;
+  /** Anything on the page can open the wizard by raising this event. */
+  openEvent?: string;
 };
 
 type Step = 1 | 2 | 3;
@@ -75,14 +79,27 @@ const STATUS_TONE: Record<Applicability, string> = {
  */
 export function SystemWizard(props: Props) {
   const [open, setOpen] = useState(false);
+  const { openEvent } = props;
+  useEffect(() => {
+    if (openEvent === undefined) {
+      return;
+    }
+    const show = () => setOpen(true);
+    document.addEventListener(openEvent, show);
+    return () => document.removeEventListener(openEvent, show);
+  }, [openEvent]);
   if (!props.editable) {
     return null;
   }
   return (
     <>
       {props.system === undefined ? (
-        <button type="button" className="btn-sm" onClick={() => setOpen(true)}>
-          <UiIcon name="plus" size={14} /> Add system
+        <button
+          type="button"
+          className={props.label === undefined ? "btn-sm" : "btn"}
+          onClick={() => setOpen(true)}
+        >
+          <UiIcon name="plus" size={14} /> {props.label ?? "Add system"}
         </button>
       ) : (
         <button
@@ -303,6 +320,7 @@ function Wizard({
       })),
     });
     if (result.ok) {
+      document.dispatchEvent(new Event(SYSTEM_SAVED_EVENT));
       onClose();
     }
   }

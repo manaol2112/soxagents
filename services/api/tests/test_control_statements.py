@@ -7,6 +7,7 @@ say nothing about whether a statement describes the client's control.
 
 import json
 from typing import Any
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 from support import Database
@@ -19,6 +20,7 @@ from ai_workforce_api.control_statements import ASSERTIONS, render
 from ai_workforce_api.controls import LIBRARY, SPLITS, V2_LIBRARY, V4_LIBRARY
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.definition_registry import v2_attributes
+from ai_workforce_api.library_definitions import adopt_latest, library_update
 from ai_workforce_api.statement_registry import STATEMENTS, problems, statement_for
 from ai_workforce_api.testing_engine import ItemContext, ItemFile, design_prompt, prompt_for
 
@@ -189,7 +191,11 @@ def test_a_split_control_brings_its_parts_when_version_3_is_adopted(migrated: Da
             (json.dumps(list(before.test_attributes)), before.title, before.activity,
              before.frequency, before.nature, backup),
         )  # fmt: skip
-    update = _context(client, team, backup)["library_update"]
+    # The latest version always applies (adopt_latest, with every deploy): the control
+    # does not offer it to a person, and what it changes is shown by library_update.
+    assert _context(client, team, backup)["library_update"] is None
+    with connect(migrated.url) as connection:
+        update = library_update(connection, UUID(str(backup))).model_dump(mode="json")
     assert {s["control_ref"] for s in update["splits"]} == {"ITGC-OP-03.1", "ITGC-OP-03.2"}
     restore = next(s for s in update["splits"] if s["control_ref"] == "ITGC-OP-03.2")
     assert "Moved to ITGC-OP-03.2" in restore["reason"]
@@ -199,8 +205,9 @@ def test_a_split_control_brings_its_parts_when_version_3_is_adopted(migrated: Da
     # Only what changes is listed: backups stay daily and automated.
     assert "nature" not in fields and "frequency" not in fields
     assert "activity" in fields
-    adopted = client.post(f"{_base(team)}/controls/{backup}/library-update/adopt")
-    assert adopted.status_code == 200, adopted.text
+    with connect(migrated.url) as connection:
+        assert adopt_latest(connection, team["project"]).adopted == 1
+    adopted = _context(client, team, backup)
     with connect(migrated.url) as connection:
         rows = connection.execute(
             "SELECT control_ref, library_version, engagement_application_id, included FROM "
@@ -212,8 +219,8 @@ def test_a_split_control_brings_its_parts_when_version_3_is_adopted(migrated: Da
             "SELECT title FROM engagement_controls WHERE id = %s", (backup,)
         ).fetchone()
         audit = connection.execute(
-            "SELECT payload FROM audit_events WHERE action = 'control.library_adopted' "
-            "AND target_id = %s",
+            "SELECT payload, actor_user_id FROM audit_events "
+            "WHERE action = 'control.library_adopted' AND target_id = %s",
             (backup,),
         ).fetchone()
     # The parts are added for the same system, in scope as the parent is.
@@ -223,12 +230,15 @@ def test_a_split_control_brings_its_parts_when_version_3_is_adopted(migrated: Da
     assert {row[1] for row in rows} == {4}
     assert len({row[2] for row in rows}) == 1 and all(row[3] for row in rows)
     assert title == ("Backup Configuration and Scheduling",)
-    assert audit is not None and len(audit[0]["added"]) == 2
-    history = {a["text"]: a["note"] for a in adopted.json()["attributes"]["history"]}
+    # Recorded as the library's adoption, not a person's.
+    assert audit is not None and len(audit[0]["added"]) == 2 and audit[1] is None
+    history = {a["text"]: a["note"] for a in adopted["attributes"]["history"]}
     assert history["A restore test succeeded during the period"].startswith(
         "Retired by library v4: Moved to ITGC-OP-03.2"
     )
-    assert client.post(f"{_base(team)}/controls/{backup}/library-update/adopt").status_code == 409
+    # Idempotent: the next deploy adopts nothing again.
+    with connect(migrated.url) as connection:
+        assert adopt_latest(connection, team["project"]).adopted == 0
 
 
 def test_split_parts_already_in_the_engagement_are_not_offered_again(migrated: Database) -> None:
@@ -238,8 +248,9 @@ def test_split_parts_already_in_the_engagement_are_not_offered_again(migrated: D
         cursor.execute(
             "UPDATE engagement_controls SET library_version = 2 WHERE id = %s", (backup,)
         )
-    update = _context(client, team, backup)["library_update"]
-    assert update is not None and update["splits"] == []
+    with connect(migrated.url) as connection:
+        update = library_update(connection, UUID(str(backup)))
+    assert update.available and update.splits == []
 
 
 def test_a_library_copy_follows_the_library_title_and_a_clients_control_keeps_its_own(

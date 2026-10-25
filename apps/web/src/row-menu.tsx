@@ -24,10 +24,13 @@ export type RowMenuItem = {
 export function RowMenu({
   label,
   items,
+  trigger = null,
 }: {
   /** What the menu acts on, for its accessible name. */
   label: string;
   items: RowMenuItem[];
+  /** A labelled button in place of the row's "more" icon, such as a page's Add. */
+  trigger?: { label: string; icon: IconName } | null;
 }) {
   const [open, setOpen] = useState(false);
   // Opens to the left of its button, or to the right where the left has no room.
@@ -70,18 +73,35 @@ export function RowMenu({
   }, [open]);
   return (
     <div className={`row-menu${open ? " is-open" : ""}`} ref={root}>
-      <button
-        ref={button}
-        type="button"
-        className="row-menu-button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={`More for ${label}`}
-        title="More"
-        onClick={() => setOpen((value) => !value)}
-      >
-        <UiIcon name="more" size={16} />
-      </button>
+      {trigger === null ? (
+        <button
+          ref={button}
+          type="button"
+          className="row-menu-button"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={`More for ${label}`}
+          title="More"
+          onClick={() => setOpen((value) => !value)}
+        >
+          <UiIcon name="more" size={16} />
+        </button>
+      ) : (
+        <button
+          ref={button}
+          type="button"
+          className="btn row-menu-trigger"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+        >
+          <UiIcon name={trigger.icon} size={15} />
+          {trigger.label}
+          <span className="row-menu-caret" aria-hidden="true">
+            <UiIcon name="chevron" size={13} />
+          </span>
+        </button>
+      )}
       {open ? (
         <div
           className={`row-menu-list${toRight ? " is-right" : ""}`}

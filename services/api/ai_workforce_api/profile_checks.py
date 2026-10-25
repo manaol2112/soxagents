@@ -21,7 +21,7 @@ from uuid import UUID
 import psycopg
 from pydantic import BaseModel
 
-from ai_workforce_api.setup_suggest import fiscal_year_of
+from ai_workforce_api.setup_suggest import fiscal_year_of, with_fiscal_year
 
 Kind = Literal[
     "NAME_YEAR", "SCOPE_DATE", "SCOPE_YEAR", "FISCAL_YEAR", "PERIOD_ORDER", "PERIOD_LENGTH"
@@ -52,6 +52,11 @@ class PeriodConflict(BaseModel):
     message: str
     # Blocking holds launch until fixed or confirmed; the rest are worth knowing.
     blocking: bool
+    # For a name that points at another year: the period end moved to that year, and the
+    # name with its year changed to the period's (decided by the product owner: the
+    # conflict is corrected where it is shown). None where they do not apply.
+    period_end_fix: date | None = None
+    name_fix: str | None = None
 
 
 def _dates(text: str) -> list[date]:
@@ -74,6 +79,14 @@ def _date(year: int, month: int, day: int) -> list[date]:
 
 def _fiscal_years(text: str) -> list[int]:
     return [int(raw) + (2000 if len(raw) == 2 else 0) for raw in _FISCAL.findall(text)]
+
+
+def _in_year(value: date, year: int) -> date:
+    """The same day of the year in another year; 29 February becomes the 28th."""
+    try:
+        return value.replace(year=year)
+    except ValueError:
+        return value.replace(year=year, day=28)
 
 
 def _long(value: date) -> str:
@@ -100,6 +113,8 @@ def period_conflicts(
                 kind="NAME_YEAR",
                 message=f"The engagement's name points to {named}, but the period ends {ends}.",
                 blocking=True,
+                period_end_fix=_in_year(period_end, named),
+                name_fix=with_fiscal_year(name, period_end.year),
             )
         )
     year_ends = sorted(

@@ -1,6 +1,7 @@
 import { Fragment } from "react";
 import { AutoRefresh } from "./auto-refresh";
 import { ConfirmAction } from "./confirm-action";
+import { ADD_SYSTEM_EVENT, listOf } from "./controls-guide-model";
 import { FilterableOffers } from "./library-offers";
 import {
   categoryOf,
@@ -13,7 +14,8 @@ import {
   systemOffers,
   systemStatus,
 } from "./onboarding-model";
-import { canonicalQuery } from "./routes";
+import { canonicalQuery, placeSetup } from "./routes";
+import { ScopeTable } from "./scope-table";
 import { removalNote, ScopedControlTable } from "./scoped-controls";
 import { SetupForm } from "./setup-form";
 import { impactHref } from "./setup-impact-model";
@@ -139,10 +141,131 @@ export function SystemsScoping({
             knownSystems={onboarding.knownSystems}
             systems={systems}
             editable={editable}
+            openEvent={ADD_SYSTEM_EVENT}
           />
         </div>
       ) : null}
     </section>
+  );
+}
+
+/**
+ * The in-scope systems as the Systems & Processes page's table (decided by the product
+ * owner): name, type, owner, related processes, controls in scope, and where its scoping
+ * stands; a row opens the system's scoping in place.
+ */
+export function SystemsTable({
+  model,
+  onboarding,
+  editable,
+  selected,
+}: {
+  model: Ready;
+  onboarding: Onboarding;
+  editable: boolean;
+  selected: string | null;
+}) {
+  const systems = onboarding.applications;
+  const working = systems.some(
+    (system) => systemStatus(system) === "reviewing",
+  );
+  return (
+    <>
+      {working ? <AutoRefresh /> : null}
+      <ScopeTable
+        label="Systems"
+        columns={[
+          "System name",
+          "Type",
+          "Owner",
+          "Related processes",
+          "Controls",
+          "Status",
+        ]}
+        kinds={LAYERS.filter(([layer]) =>
+          systems.some((system) => system.layer === layer),
+        )}
+        kindLabel="Filter by type"
+        searchLabel="Search systems"
+        initial={
+          systems.some((system) => system.id === selected) ? selected : null
+        }
+        action={
+          editable ? (
+            <SystemWizard
+              organizationId={model.organization.id}
+              projectId={onboarding.projectId}
+              knownSystems={onboarding.knownSystems}
+              systems={systems}
+              editable={editable}
+              openEvent={ADD_SYSTEM_EVENT}
+            />
+          ) : null
+        }
+        rows={systems.map((system) => {
+          const processes = listOf(system.processes);
+          return {
+            id: system.id,
+            kind: system.layer,
+            text: [
+              system.name,
+              LAYER_LABEL[system.layer] ?? "",
+              system.owner,
+              ...processes,
+            ].join("\n"),
+            cells: [
+              <span key="name" className="st-name">
+                <span className="st-icon" aria-hidden="true">
+                  <UiIcon
+                    name={LAYER_ICON[system.layer] ?? "window"}
+                    size={15}
+                  />
+                </span>
+                <strong>{system.name}</strong>
+              </span>,
+              LAYER_LABEL[system.layer] ?? system.layer,
+              system.owner === "" ? (
+                <span key="owner" className="st-muted">
+                  Not set
+                </span>
+              ) : (
+                system.owner
+              ),
+              processes.length === 0 ? (
+                <span key="processes" className="st-muted">
+                  None named
+                </span>
+              ) : (
+                <span key="processes" className="st-chips">
+                  {processes.slice(0, 2).map((name) => (
+                    <span key={name} className="st-chip">
+                      {name}
+                    </span>
+                  ))}
+                  {processes.length > 2 ? (
+                    <span className="st-chip is-more">
+                      +{processes.length - 2}
+                    </span>
+                  ) : null}
+                </span>
+              ),
+              <span key="controls" className="num">
+                {system.controlsInScope}
+              </span>,
+              <ScopeStatus key="status" system={system} />,
+            ],
+            detail: (
+              <SystemDetail
+                model={model}
+                onboarding={onboarding}
+                system={system}
+                editable={editable}
+              />
+            ),
+          };
+        })}
+      />
+    </>
   );
 }
 
@@ -188,6 +311,25 @@ function factsLine(system: SetupSystem): string {
         : "",
   ].filter((part) => part !== "");
   return parts.length > 0 ? parts.join(" · ") : "Not assessed yet";
+}
+
+/** Where a system's scoping stands, in words, for the systems table's Status column. */
+function ScopeStatus({ system }: { system: SetupSystem }) {
+  const status = systemStatus(system);
+  const [tone, words] =
+    status === "reviewing"
+      ? ["is-working", "Reviewing"]
+      : status === "to-decide"
+        ? ["is-review", "To review"]
+        : status === "no-controls"
+          ? ["is-review", "No controls"]
+          : ["is-in", "In scope"];
+  return (
+    <span className={`st-status ${tone}`}>
+      <i aria-hidden="true" />
+      {words}
+    </span>
+  );
 }
 
 function StatusMark({ system }: { system: SetupSystem }) {
@@ -475,13 +617,15 @@ export function controlHref(
 ): string {
   const params = new URLSearchParams({
     organization: model.organization.id,
-    section: "setup",
+    // Controls keeps the controls set up there; elsewhere, setup where it lives.
+    section: model.section === "controls" ? "controls" : "setup",
     step: "controls",
     project: onboarding.projectId,
     category: categoryOf(control.domain),
     control: control.id,
   });
   canonicalQuery(params);
+  placeSetup(params, model.selectedProject?.status ?? null);
   if (system !== null) {
     // Opened from a system, on the IT tab: the page stays on that tab and that system.
     params.set("category", "it");

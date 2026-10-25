@@ -33,7 +33,7 @@ import {
 import { PlanMissingButton } from "./plan-missing";
 import { parseQueueFilter, type Queue } from "./queue-model";
 import { QueuePanel } from "./queue-panel";
-import { canonicalQuery } from "./routes";
+import { canonicalQuery, placeSetup } from "./routes";
 import { canManageProjects, type ShellModel } from "./shell-model";
 import { UiIcon } from "./ui-icon";
 import { canRequestEvidence } from "./workflow-model";
@@ -388,13 +388,16 @@ export function EngagementDashboard({
               ))}
             </ul>
             <a
-              href={`/?${canonicalQuery(
-                new URLSearchParams({
-                  organization: model.organization.id,
-                  project: project.id,
-                  section: "setup",
-                  step: "profile",
-                }),
+              href={`/?${placeSetup(
+                canonicalQuery(
+                  new URLSearchParams({
+                    organization: model.organization.id,
+                    project: project.id,
+                    section: "setup",
+                    step: "profile",
+                  }),
+                ),
+                project.status,
               ).toString()}`}
             >
               Review the period

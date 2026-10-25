@@ -1,9 +1,19 @@
 import { statusAfter } from "./engagement-lifecycle.ts";
+import {
+  engagementTypeFor,
+  parseFrameworksField,
+} from "./new-engagement-model.ts";
 
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const ENGAGEMENT_TYPES = new Set(["SOX_ITGC", "SOX_FULL", "IT_AUDIT"]);
+// The audit methodologies (migration 0074), chosen with the client and the scope.
+const METHODOLOGY_IDS = new Set([
+  "EXTERNAL_ICFR",
+  "MANAGEMENT_404",
+  "INTERNAL_AUDIT",
+]);
 
 /**
  * A slug from the engagement's name, for the form that does not ask for one. With the
@@ -28,7 +38,7 @@ export type ProjectWrite =
       projectId: string | null;
       method: "POST" | "PATCH";
       path: string;
-      body: Record<string, string | number | null>;
+      body: Record<string, string | number | string[] | null>;
     };
 
 /** The engagement's own close-out actions (Milestone 8.14), each its own API action. */
@@ -176,9 +186,20 @@ export function projectWrite(fields: Record<string, string>): ProjectWrite {
     ) {
       return { error: "invalid" };
     }
-    // A new engagement covers IT and business process unless the form says otherwise.
-    const engagementType = fields.engagement_type ?? "SOX_FULL";
+    // The frameworks chosen on the page (migration 0108) imply the type; without them a
+    // new engagement covers IT and business process unless the form says otherwise.
+    const frameworks = parseFrameworksField(fields.frameworks);
+    if (frameworks === "invalid") {
+      return { error: "invalid" };
+    }
+    const engagementType =
+      fields.engagement_type ??
+      (frameworks === null ? "SOX_FULL" : engagementTypeFor(frameworks));
     const periodEnd = optionalDate(fields.period_end ?? "");
+    const methodology = (fields.methodology ?? "").trim();
+    if (methodology !== "" && !METHODOLOGY_IDS.has(methodology)) {
+      return { error: "invalid" };
+    }
     // The identifier is the client and the engagement together, so the same engagement
     // name for another client is not a duplicate.
     const guidedSlug =
@@ -205,6 +226,8 @@ export function projectWrite(fields: Record<string, string>): ProjectWrite {
         rollforward_from: rollforward === "" ? null : rollforward,
         engagement_type: engagementType,
         period_end: periodEnd,
+        frameworks,
+        methodology: methodology === "" ? null : methodology,
       },
     };
   }

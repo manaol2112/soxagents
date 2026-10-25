@@ -88,6 +88,18 @@ def fiscal_year_of(name: str, today: date) -> int | None:
     return year if today.year - 3 <= year <= today.year + 3 else None
 
 
+def with_fiscal_year(name: str, year: int) -> str | None:
+    """The name with the fiscal year it points at replaced by another, in the same style:
+    "SOX FY28" to "SOX FY27", "SOX 2028" to "SOX 2027". None when the name names no year."""
+    found = _FISCAL_YEAR.search(name)
+    if found is None:
+        return None
+    group = 1 if found.group(1) is not None else 2
+    raw = found.group(group)
+    digits = f"{year % 100:02d}" if len(raw) == 2 else str(year)
+    return name[: found.start(group)] + digits + name[found.end(group) :]
+
+
 def suggest_period_end(facts: SetupFacts) -> tuple[date | None, str]:
     if facts.period_end is not None:
         return facts.period_end, "Already set."

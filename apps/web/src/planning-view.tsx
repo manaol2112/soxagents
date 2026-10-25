@@ -1188,6 +1188,8 @@ export function PlanReview({
   phases,
   canRelease,
   embedded = false,
+  agentNote = null,
+  workspace = null,
 }: {
   ids: Ids;
   plan: MasterPlan;
@@ -1198,6 +1200,12 @@ export function PlanReview({
   /** Inside the control's Plan step (M2d): no breadcrumb, pager or repeated title; the
    * state, the decisions and the review actions stay. */
   embedded?: boolean;
+  /** How the agent drafted the plan, folded into one line on request (the control's
+   * Plan step shows no separate agent block). */
+  agentNote?: ReactNode;
+  /** In the control's Plan step (decided by the product owner): the control's own
+   * editors inside the plan, so each fact is shown once and edited where it is read. */
+  workspace?: PlanWorkspace | null;
 }) {
   const [view, setView] = useState<Tab>(initialTab);
   const [selected, setSelected] = useState<string | null>(null);
@@ -1256,7 +1264,7 @@ export function PlanReview({
     basisWords(control),
   ].filter((item) => item !== "");
   return (
-    <div className="page pl-page pl-review">
+    <div className={`page pl-page pl-review${embedded ? " is-embedded" : ""}`}>
       {questions.length > 0 ? (
         <AnswerValuesDialog
           questions={questions}
@@ -1395,6 +1403,12 @@ export function PlanReview({
                 </span>
               )}
             </p>
+            {agentNote !== null ? (
+              <details className="pl-agent-note">
+                <summary>How the agent drafted this</summary>
+                {agentNote}
+              </details>
+            ) : null}
             {plan.filledSinceApproval.length > 0 &&
             !plan.revisedSinceApproval ? (
               <p className="pl-filled">
@@ -1411,6 +1425,14 @@ export function PlanReview({
         <Holding
           ids={ids}
           plan={plan}
+          onOpen={
+            workspace === null
+              ? undefined
+              : (tab) => {
+                  setView(tab);
+                  setSelected(null);
+                }
+          }
           onDescribe={
             describe === undefined ? undefined : () => setDescribing("")
           }
@@ -1498,27 +1520,52 @@ export function PlanReview({
                   onSources={setSources}
                   onAnswer={onAnswer}
                   describe={describe}
+                  workspace={workspace}
                 />
               ) : view === "procedures" ? (
-                <ProceduresTab
-                  ids={ids}
-                  plan={plan}
-                  selected={selected}
-                  trace={trace}
-                  onSelect={select}
-                />
-              ) : view === "attributes" ? (
                 <>
-                  {plan.suggestedStandard !== null && plan.viewerCanAnswer ? (
-                    <StandardSuggestion ids={ids} plan={plan} />
+                  {workspace !== null ? (
+                    <details className="pl-fold pl-basis">
+                      <summary>Test basis</summary>
+                      {workspace.basis}
+                    </details>
                   ) : null}
-                  <AttributesTab
+                  <ProceduresTab
                     ids={ids}
                     plan={plan}
                     selected={selected}
                     trace={trace}
                     onSelect={select}
                   />
+                </>
+              ) : view === "attributes" ? (
+                <>
+                  {plan.suggestedStandard !== null && plan.viewerCanAnswer ? (
+                    <StandardSuggestion ids={ids} plan={plan} />
+                  ) : null}
+                  {workspace !== null ? (
+                    <>
+                      {workspace.attributes}
+                      <details className="pl-fold">
+                        <summary>How each attribute is tested</summary>
+                        <AttributesTab
+                          ids={ids}
+                          plan={plan}
+                          selected={selected}
+                          trace={trace}
+                          onSelect={select}
+                        />
+                      </details>
+                    </>
+                  ) : (
+                    <AttributesTab
+                      ids={ids}
+                      plan={plan}
+                      selected={selected}
+                      trace={trace}
+                      onSelect={select}
+                    />
+                  )}
                 </>
               ) : (
                 <EvidenceTab
@@ -2103,17 +2150,29 @@ function StandardSuggestion({ ids, plan }: { ids: Ids; plan: MasterPlan }) {
   );
 }
 
+/** Where each resolution is done when the plan holds the control's own editors. */
+const IN_PLAN: Partial<Record<string, Tab>> = {
+  ATTRIBUTES: "attributes",
+  CONTROL: "understanding",
+  VALUES: "understanding",
+  PROCESS: "understanding",
+};
+
 function Holding({
   ids,
   plan,
   onDescribe,
   onUnderstanding,
+  onOpen,
 }: {
   ids: Ids;
   plan: MasterPlan;
   /** Opens the Describe dialog; absent for a viewer who cannot state facts. */
   onDescribe?: (() => void) | undefined;
   onUnderstanding: () => void;
+  /** In the control's Plan step: opens the tab where it is resolved, which shows the
+   * question in full, so it is not repeated here. */
+  onOpen?: ((tab: Tab) => void) | undefined;
 }) {
   const groups = holdGroups(plan.blockers);
   if (groups.length === 0) {
@@ -2122,7 +2181,11 @@ function Holding({
   const holds = groups.filter((group) => group.blocks);
   const later = groups.filter((group) => !group.blocks);
   const row = (group: HoldGroup) => {
-    const href = holdHref(ids, plan.controlId, group.resolve, group.target);
+    const inPlan = onOpen === undefined ? undefined : IN_PLAN[group.resolve];
+    const href =
+      inPlan !== undefined
+        ? null
+        : holdHref(ids, plan.controlId, group.resolve, group.target);
     return (
       <li key={`${group.resolve}-${group.blocks}`} className="pl-hold">
         <span className="pl-hold-icon" aria-hidden="true">
@@ -2139,13 +2202,24 @@ function Holding({
         </span>
         <div className="pl-hold-text">
           <strong>{group.title}</strong>
-          <ul>
-            {group.items.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
+          {inPlan === undefined ? (
+            <ul>
+              {group.items.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          ) : null}
         </div>
-        {href !== null ? (
+        {inPlan !== undefined && onOpen !== undefined ? (
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => onOpen(inPlan)}
+          >
+            {group.action}
+            <UiIcon name="arrow" size={13} />
+          </button>
+        ) : href !== null ? (
           <a className="btn btn-secondary btn-sm" href={href}>
             {group.action}
             <UiIcon name="arrow" size={13} />
@@ -2190,7 +2264,7 @@ function Holding({
         </>
       ) : null}
       {later.length > 0 ? (
-        <details className="pl-holding-later" open={holds.length === 0}>
+        <details className="pl-holding-later">
           <summary>
             {later.length === 1
               ? "1 thing to settle when it can be"
@@ -2473,6 +2547,7 @@ function UnderstandingTab({
   onSources,
   onAnswer,
   describe,
+  workspace = null,
 }: {
   plan: MasterPlan;
   sources: boolean;
@@ -2481,6 +2556,9 @@ function UnderstandingTab({
   onAnswer?: ((key: string) => void) | undefined;
   /** The facts the team states for a client's own control, and opening the dialog. */
   describe?: Describing | undefined;
+  /** In the control's Plan step: the control statement, edited in place, stands for its
+   * description; process and documents sit under More about this control. */
+  workspace?: PlanWorkspace | null;
 }) {
   const answer =
     onAnswer === undefined
@@ -2493,7 +2571,11 @@ function UnderstandingTab({
     (item) => item.field === "OBJECTIVE" || item.field === "RISK",
   );
   const narrative = lead.filter(
-    (item) => item.field !== "OBJECTIVE" && item.field !== "RISK",
+    (item) =>
+      item.field !== "OBJECTIVE" &&
+      item.field !== "RISK" &&
+      // The statement, edited in place, is the description.
+      !(item.field === "DESCRIPTION" && workspace?.statement != null),
   );
   const rest = plan.facts.filter((item) => !LEAD_FACTS.includes(item.field));
   const notes = [...plan.assumptions, ...plan.exceptions];
@@ -2512,20 +2594,45 @@ function UnderstandingTab({
             />
           ))}
         </div>
-        {narrative.map((fact) => (
-          <FactLine
-            key={fact.field}
-            fact={fact}
-            sources={false}
-            title={factTitle(fact.field, fact.label)}
-            answer={answer}
-            describe={describe}
-          />
-        ))}
+        {workspace?.statement != null
+          ? null
+          : narrative.map((fact) => (
+              <FactLine
+                key={fact.field}
+                fact={fact}
+                sources={false}
+                title={factTitle(fact.field, fact.label)}
+                answer={answer}
+                describe={describe}
+              />
+            ))}
       </dl>
-      <details className="pl-fold">
+      {workspace?.statement != null ? (
+        <>
+          {/* How the control operates first: the statement, edited in place; then what
+              it relies on. */}
+          <div className="pl-statement">{workspace.statement}</div>
+          <dl className="pl-lead-facts">
+            {narrative.map((fact) => (
+              <FactLine
+                key={fact.field}
+                fact={fact}
+                sources={false}
+                title={factTitle(fact.field, fact.label)}
+                answer={answer}
+                describe={describe}
+              />
+            ))}
+          </dl>
+        </>
+      ) : null}
+      <details
+        className="pl-fold"
+        open={workspace?.moreOpen === true ? true : undefined}
+      >
         <summary>More about this control</summary>
         <div className="pl-more">
+          {workspace !== null ? workspace.more : null}
           <div className="pl-more-bar">
             <h3>Control facts</h3>
             <button
@@ -2564,6 +2671,20 @@ function UnderstandingTab({
     </div>
   );
 }
+
+/** The control's own editors, placed inside the plan in the control's Plan step. */
+export type PlanWorkspace = {
+  /** The control statement with the client's values, edited in place. */
+  statement: ReactNode | null;
+  /** The attributes: the one editable list, with its open questions. */
+  attributes: ReactNode;
+  /** The test basis the plan follows, and changing it. */
+  basis: ReactNode;
+  /** Process understanding and supporting documents. */
+  more: ReactNode;
+  /** Opened when one of them needs a decision. */
+  moreOpen: boolean;
+};
 
 /** The open client values a plan shows, and how to answer one; absent for a viewer who
  * cannot enter them. */

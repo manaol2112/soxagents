@@ -123,7 +123,7 @@
   place-items: center;
   color: #fff;
   background: var(--cv-accent);
-  border: 2px solid #fff;
+  border: 2px solid var(--surface);
   border-radius: 999px;
   font-size: 10px;
   font-weight: 700;
@@ -134,7 +134,7 @@
   padding: 0.6rem 0.85rem;
   color: var(--cv-amber);
   background: var(--cv-amber-soft);
-  border: 1px solid #f6dfb4;
+  border: 1px solid var(--warning-border);
   border-radius: 12px;
   font-size: 13px;
   text-align: left;
@@ -515,7 +515,7 @@
   height: 28px;
   padding: 0 0.6rem 0 0.3rem;
   color: var(--cv-text);
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--cv-line);
   border-radius: 999px;
   box-shadow: none;
@@ -904,7 +904,7 @@
   bottom: 0;
   z-index: 5;
   padding: 1.25rem 1.25rem 0.875rem;
-  background: linear-gradient(180deg, rgb(255 255 255 / 0%), var(--surface) 1.25rem);
+  background: linear-gradient(180deg, transparent, var(--surface) 1.25rem);
 }
 
 .cv-dock-inner {

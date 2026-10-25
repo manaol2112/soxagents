@@ -10,15 +10,24 @@ The workspace (everything behind sign-in) uses one design system. The public lan
 
 A new rule never introduces a hex value. If a color is missing, add a token.
 
+## Themes
+
+The workspace is dark by default, with a light theme chosen in the account menu (decided by the product owner). The choice is kept in the `aw_theme` cookie, so the server renders it on the first paint, and it applies at once without a reload. Both themes read the same tokens: the dark values are the `:root[data-theme="dark"]` block under the light ones in `globals.css`, and `tests/theme.test.ts` fails when a light color has no dark value.
+
+- A page whose root carries `.theme-light` stays light whatever the choice: the client portal (`.pt`), the landing page, and sign-in. Client-facing pages are not themed.
+- A rule never assumes the background is white or the text dark: `--surface` rather than `white`, a status token rather than a dark brown or red.
+- Two things stay white in both themes on purpose: the brand mark and a rendered PDF page, which is the client's document.
+- **Glass** (`apps/web/app/glass.css`, loaded last; decided by the product owner): the workspace's panels are translucent over a soft fixed glow with a light edge and sheen (`--glass-panel`, `--glass-sheen`, `--glass-edge`, `--glow-*`); the top bar and sidebar are frosted (`--glass-chrome`, `--glass-sidebar`); menus, popovers, and dialogs stay opaque (`--glass-strong`) so nothing behind them competes. A new panel class joins the list in `glass.css`. `prefers-reduced-transparency: reduce` returns every surface to solid.
+
 ## Tokens
 
 | Group | Tokens | Use |
 |---|---|---|
-| Surfaces | `--canvas`, `--surface`, `--surface-muted`, `--surface-sunken`, `--surface-hover` | Page background, cards, table headers, wells, row hover |
+| Surfaces | `--canvas`, `--surface`, `--surface-muted`, `--surface-sunken`, `--surface-hover`, `--surface-glass` | Page background, cards, table headers, wells, row hover, translucent bars |
 | Text | `--text-strong`, `--text`, `--text-secondary`, `--text-tertiary`, `--text-disabled` | Headings, body, supporting copy, metadata, disabled. All but disabled meet WCAG 2.2 AA (4.5:1) on `--surface` |
 | Lines | `--border`, `--border-strong`, `--border-subtle` | Card edges, input edges, dividers inside cards |
-| Primary | `--accent`, `--accent-strong`, `--accent-soft`, `--accent-border` | The one primary action per area, links, selection, focus |
-| Status | `--success*`, `--warning*`, `--danger*`, `--info*`, `--neutral*` | Each has a strong tone (text, icons), `-soft` (fill), and `-border` |
+| Primary | `--accent`, `--accent-hover`, `--accent-text`, `--accent-strong`, `--accent-soft`, `--accent-border` | The one primary action per area (`--accent` is the fill, `--accent-hover` its hover), accent-colored text and links (`--accent-text`, `--accent-strong`), selection, focus |
+| Status | `--success*`, `--warning*`, `--danger*`, `--info*`, `--neutral*`, `--text-on-status`, `--highlight` | Each has a strong tone (text, icons), `-soft` (fill), and `-border`; text on a solid status fill uses `--text-on-status`; a quoted passage is marked with `--highlight` |
 | Agent output | `--ai`, `--ai-soft`, `--ai-border` | Something an agent proposed that no person has decided yet |
 | Type | `--fs-2xs` 11px to `--fs-display` 28px | Labels and metadata up to page and record titles |
 | Shape | `--radius-sm` 6, `--radius` 8, `--radius-lg` 10, `--radius-xl` 14 | Badges; buttons and inputs; cards; dialogs and the composer |

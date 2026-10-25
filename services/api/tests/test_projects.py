@@ -254,6 +254,49 @@ def _app(database: Database) -> Any:
     return create_app(Settings(database_url=database.url, session_cookie_secure=False))
 
 
+def test_a_new_engagement_keeps_the_frameworks_it_covers(migrated: Database) -> None:
+    # Chosen on the New engagement page (migration 0108); setup reads them to open its
+    # Controls step with their areas selected.
+    with connect(migrated.url) as connection:
+        seeded = _seed_org(connection, "frameworks", "owner@example.com")
+    client = _client(migrated, seeded["user_id"])
+    base = f"/organizations/{seeded['organization_id']}/projects"
+    fields = {"owner_user_id": str(seeded["user_id"]), "status": "DRAFT"}
+
+    def settings(project_id: str) -> dict[str, Any]:
+        body: dict[str, Any] = client.get(f"{base}/{project_id}/onboarding").json()
+        return body["settings"]
+
+    chosen = client.post(
+        base,
+        json={
+            **fields,
+            "name": "ITGC and reports",
+            "slug": "itgc-and-reports",
+            "frameworks": ["ITGC", "KEY_REPORT", "ITGC"],
+        },
+    )
+    assert chosen.status_code == 201
+    # Each once, in the order chosen.
+    assert settings(chosen.json()["id"])["frameworks"] == ["ITGC", "KEY_REPORT"]
+    # None chosen: setup keeps its usual selection.
+    plain = client.post(base, json={**fields, "name": "Plain", "slug": "plain"})
+    assert plain.status_code == 201
+    assert settings(plain.json()["id"])["frameworks"] is None
+    # Only the library's categories, and at least one when the list is sent.
+    for wrong in (["SOC2"], []):
+        refused = client.post(
+            base, json={**fields, "name": "Wrong", "slug": "wrong", "frameworks": wrong}
+        )
+        assert refused.status_code == 422
+    # The database holds the same line.
+    with connect(migrated.url) as connection, pytest.raises(psycopg.errors.CheckViolation):
+        connection.execute(
+            "UPDATE engagement_settings SET frameworks = ARRAY['SOC2'] WHERE project_id = %s",
+            (plain.json()["id"],),
+        )
+
+
 def _client(database: Database, user_id: UUID) -> TestClient:
     raw = f"session-{user_id}"
     with connect(database.url) as connection:
@@ -380,3 +423,20 @@ def test_each_card_says_where_the_work_stands(migrated: Database) -> None:
     assert card["missed_milestones"] == 1
     # When anything last happened on it: its newest audit event.
     assert datetime.fromisoformat(card["last_activity_at"]) == newest
+    # Who is on it, by name, the lead first.
+    with connect(migrated.url) as connection:
+        lead = connection.execute(
+            "SELECT coalesce(nullif(u.display_name, ''), u.email::text) FROM projects p "
+            "JOIN users u ON u.id = p.owner_user_id WHERE p.id = %s",
+            (team["project"],),
+        ).fetchone()
+        members = connection.execute(
+            "SELECT count(DISTINCT pm.user_id) FROM project_memberships pm "
+            "JOIN memberships m ON m.user_id = pm.user_id "
+            "AND m.organization_id = pm.organization_id "
+            "WHERE pm.project_id = %s AND m.status = 'ACTIVE'",
+            (team["project"],),
+        ).fetchone()
+    assert lead is not None and members is not None
+    assert card["team"][0] == lead[0]
+    assert len(card["team"]) == members[0]

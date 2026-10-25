@@ -623,10 +623,13 @@ export function AttributesPanel({
   ids,
   context,
   canAct,
+  compact = false,
 }: {
   ids: Ids;
   context: ControlContext;
   canAct: boolean;
+  /** Inside the test plan, whose Procedures tab already says how it is tested. */
+  compact?: boolean;
 }) {
   const action = useAction(ids);
   const id = useId();
@@ -913,7 +916,7 @@ export function AttributesPanel({
           </ul>
         </details>
       ) : null}
-      {context.testing !== null ? (
+      {context.testing !== null && !compact ? (
         <TestingProcedures testing={context.testing} />
       ) : null}
     </div>

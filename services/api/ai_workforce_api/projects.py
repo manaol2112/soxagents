@@ -138,6 +138,10 @@ class ProjectFields(BaseModel):
             raise ValueError("ends_on precedes starts_on")
 
 
+# The standard library's categories an engagement can cover (migration 0108).
+Framework = Literal["ITGC", "ITAC", "KEY_REPORT", "BUSINESS", "ENTITY"]
+
+
 class ProjectCreateBody(ProjectFields):
     status: Literal["DRAFT", "ACTIVE"] = "DRAFT"
     # The engagement's profile (Milestone 8.3c), kept on its settings.
@@ -149,6 +153,17 @@ class ProjectCreateBody(ProjectFields):
     client_id: UUID | None = None
     # An earlier engagement of the same client whose setup the new one starts from.
     rollforward_from: UUID | None = None
+    # The frameworks it covers (migration 0108); setup's Controls step opens with their
+    # areas selected. None leaves setup's usual selection.
+    frameworks: list[Framework] | None = Field(default=None, min_length=1, max_length=5)
+    # The audit methodology, chosen with the client and the scope on the New engagement
+    # page (decided by the product owner); None leaves it to the profile.
+    methodology: Literal["EXTERNAL_ICFR", "MANAGEMENT_404", "INTERNAL_AUDIT"] | None = None
+
+    @field_validator("frameworks")
+    @classmethod
+    def each_once(cls, value: list[Framework] | None) -> list[Framework] | None:
+        return None if value is None else list(dict.fromkeys(value))
 
 
 class ProjectUpdateBody(ProjectFields):
@@ -474,11 +489,18 @@ def create_project(
         cursor.execute(
             """
             UPDATE engagement_settings
-            SET engagement_type = %s, period_end = %s,
+            SET engagement_type = %s, period_end = %s, frameworks = %s,
+                methodology = coalesce(%s, methodology),
                 version = version + 1, updated_at = clock_timestamp()
             WHERE project_id = %s
             """,
-            (body.engagement_type, body.period_end, project_id),
+            (
+                body.engagement_type,
+                body.period_end,
+                body.frameworks,
+                body.methodology,
+                project_id,
+            ),
         )
         client_id = assign_client(
             cursor, organization_id, project_id, principal.id,

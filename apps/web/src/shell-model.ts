@@ -36,6 +36,8 @@ export type Project = {
   nextMilestone: { name: string; due: string } | null;
   missedMilestones: number;
   lastActivityAt: string | null;
+  /** The engagement team's names, the lead first. */
+  team: string[];
 };
 
 export type AssignableMember = {
@@ -330,8 +332,11 @@ export function deriveShell(snapshot: WorkspaceSnapshot): ShellModel {
   if (!isOk(snapshot.projectsStatus) || projects === null) {
     return { status: "error" };
   }
+  // The engagement asked for; otherwise one still in use (never an archived one while
+  // another is open), the same choice projectIdInList makes for the page's data.
   const selectedProject =
     projects.find((item) => item.id === snapshot.requestedProjectId) ??
+    projects.find((item) => item.status !== "ARCHIVED") ??
     projects[0] ??
     null;
   const requested = parseSection(snapshot.requestedSection);
@@ -468,6 +473,20 @@ export const LAUNCHED_SECTIONS: readonly SectionId[] = [
   "approvals",
   "reports",
 ];
+
+/** A launched engagement with no controls yet: Controls is where they are set up
+ * (decided by the product owner), with the setup's own steps. */
+export function controlsToSetUp(
+  project: { status: string; controls: number } | null,
+): boolean {
+  return (
+    project !== null &&
+    project.status !== "DRAFT" &&
+    project.status !== "ARCHIVED" &&
+    project.status !== "COMPLETED" &&
+    project.controls === 0
+  );
+}
 
 /** A draft engagement has not launched: its controls, evidence, plan, and approvals wait. */
 export function lockedBeforeLaunch(
@@ -680,6 +699,12 @@ function parseProjects(value: unknown): Project[] | null {
         typeof item.last_activity_at === "string"
           ? item.last_activity_at
           : null,
+      team: Array.isArray(item.team)
+        ? item.team.filter(
+            (entry): entry is string =>
+              typeof entry === "string" && entry !== "",
+          )
+        : [],
     });
   }
   return projects;
@@ -1056,7 +1081,12 @@ export function projectIdInList(
       }
     }
   }
-  const first = value[0];
+  // None asked for (or not in the list): the first still in use, so an archived
+  // engagement never opens by default; the first only when every one is archived.
+  const open = value.find(
+    (item) => isRecord(item) && item.status !== "ARCHIVED",
+  );
+  const first = open ?? value[0];
   if (isRecord(first) && typeof first.id === "string") {
     return first.id;
   }

@@ -476,6 +476,90 @@ def test_the_database_allows_exactly_the_standard_areas(migrated: Database) -> N
 # Helpers
 
 
+def test_an_engagement_launches_before_its_controls_and_sets_them_up_in_controls(
+    migrated: Database,
+) -> None:
+    # Onboarding finishes with the team and launches (decided by the product owner, 25
+    # October 2026); the systems and controls are set up afterwards, in Controls.
+    team = _new_engagement(migrated, "controls-later")
+    owner, org, project = team["owner"], team["org"], team["project"]
+    base = _base(org, project)
+    assert (
+        owner.patch(
+            f"{base}/scope",
+            json={"scope": "ITGCs over SAP ERP for FY2027", "period_end": "2027-12-31"},
+        ).status_code
+        == 200
+    )
+    for user_id, role in ((team["owner_id"], "LEAD"), (team["reviewer_id"], "REVIEWER")):
+        added = owner.post(f"{base}/team", json={"user_id": str(user_id), "engagement_role": role})
+        assert added.status_code == 200, added.text
+    _choose_methodology(owner, base)
+    ready = owner.get(base).json()
+    rcm = next(item for item in ready["readiness"] if item["step"] == "rcm")
+    # No controls is a note for later, not a gap that holds launch.
+    assert rcm["complete"] is True and rcm["issues"] == []
+    assert rcm["advisories"][0].startswith("No controls yet.")
+    assert ready["ready"] is True
+    preview = ready["plan_preview"]
+    assert preview is not None and preview["items"] == []
+    launched = owner.post(f"{base}/plan/launch", json={"fingerprint": preview["fingerprint"]})
+    assert launched.status_code == 200, launched.text
+    assert launched.json()["started"] is True
+    assert launched.json()["plan"]["created_tasks"] == 0
+    # After launch, with no controls yet, the systems and the standard library go in.
+    assert owner.post(f"{base}/applications", json={"name": "SAP ERP"}).status_code == 200
+    loaded = owner.post(f"{base}/controls/load-library", json={"domains": ["ACCESS"]})
+    assert loaded.status_code == 200, loaded.text
+    controls = [c for c in loaded.json()["controls"] if c["included"]]
+    assert controls
+    # Each control loaded gets the work the kickoff gives every control.
+    with connect(migrated.url) as connection:
+        planned = connection.execute(
+            "SELECT count(DISTINCT engagement_control_id) FROM tasks "
+            "WHERE project_id = %s AND engagement_control_id IS NOT NULL",
+            (project,),
+        ).fetchone()
+    assert planned is not None and planned[0] == len(controls)
+    # Once the engagement has controls, the set is not replaced wholesale: neither the
+    # library nor an RCM upload, since work is attached; controls change one at a time.
+    again = owner.post(f"{base}/controls/load-library", json={"domains": ["CHANGE"]})
+    assert again.status_code == 409
+    assert again.json()["detail"] == "controls are already set up"
+
+
+def test_the_methodology_can_be_chosen_when_the_engagement_is_created(
+    migrated: Database,
+) -> None:
+    team = _new_engagement(migrated, "methodology")
+    owner, org = team["owner"], team["org"]
+    created = owner.post(
+        f"/organizations/{org}/projects",
+        json={
+            "name": "SOX 2028",
+            "slug": f"sox-2028-{uuid4().hex[:6]}",
+            "scope": "ITGCs over the ERP",
+            "owner_user_id": str(team["owner_id"]),
+            "status": "DRAFT",
+            "methodology": "MANAGEMENT_404",
+        },
+    )
+    assert created.status_code == 201, created.text
+    settings = owner.get(_base(org, UUID(created.json()["id"]))).json()["settings"]
+    assert settings["methodology"] == "MANAGEMENT_404"
+    refused = owner.post(
+        f"/organizations/{org}/projects",
+        json={
+            "name": "SOX 2029",
+            "slug": f"sox-2029-{uuid4().hex[:6]}",
+            "owner_user_id": str(team["owner_id"]),
+            "status": "DRAFT",
+            "methodology": "SOC2",
+        },
+    )
+    assert refused.status_code == 422
+
+
 def _new_engagement(database: Database, slug: str) -> dict[str, Any]:
     with connect(database.url) as connection:
         sync_standard_workforce(connection)

@@ -130,7 +130,7 @@
   height: 28px;
   place-items: center;
   color: var(--cx-text);
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--cx-line);
   border-radius: 7px;
   box-shadow: var(--cx-shadow);
@@ -220,7 +220,7 @@
   gap: 0.75rem;
   padding: 0.85rem 1rem;
   background: var(--cx-amber-soft);
-  border: 1px solid #f6dfb4;
+  border: 1px solid var(--warning-border);
   border-radius: 10px;
 }
 
@@ -307,7 +307,7 @@ button.cite-open {
   height: 26px;
   padding: 0 0.6rem;
   color: #fff;
-  background: var(--accent-strong);
+  background: var(--accent-hover);
   border: 0;
   border-radius: 6px;
   box-shadow: none;
@@ -583,7 +583,7 @@ button.cite-open:hover {
   max-height: min(92vh, 900px);
   overflow: hidden;
   color: var(--text);
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   box-shadow: 0 24px 64px rgb(15 23 42 / 0.3);
@@ -690,7 +690,7 @@ button.cite-open:hover {
   white-space: normal;
   line-height: 1.4;
   color: var(--text);
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
   font: inherit;
@@ -792,7 +792,7 @@ button.cite-open:hover {
   min-height: 18rem;
   padding: 0.875rem 1rem;
   color: var(--text);
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
   font: inherit;
@@ -847,7 +847,7 @@ button.cite-open:hover {
   gap: 0.5rem;
   margin: 0 0 0.75rem;
   padding: 0.625rem 0.75rem;
-  color: #92400e;
+  color: var(--warning);
   background: var(--warning-soft);
   border: 1px solid var(--warning-border);
   border-radius: 8px;
@@ -1440,7 +1440,7 @@ button.cite-open:hover {
 
 .cc-segment button.is-on {
   color: var(--text-strong);
-  background: #fff;
+  background: var(--surface);
   box-shadow: 0 1px 2px rgb(16 24 40 / 10%);
 }
 
@@ -1497,12 +1497,12 @@ button.cite-open:hover {
   0%,
   100% {
     box-shadow:
-      0 0 0 6px rgb(255 255 255 / 70%),
+      0 0 0 6px color-mix(in srgb, var(--surface) 70%, transparent),
       0 12px 32px -10px rgb(91 108 240 / 70%);
   }
   50% {
     box-shadow:
-      0 0 0 10px rgb(255 255 255 / 45%),
+      0 0 0 10px color-mix(in srgb, var(--surface) 45%, transparent),
       0 14px 40px -8px rgb(124 77 219 / 75%);
   }
 }
@@ -1705,7 +1705,7 @@ button.cite-open:hover {
 }
 
 .ep-item.is-review {
-  background: #fffcf5;
+  background: var(--warning-soft);
 }
 
 .ep-dot {
@@ -2042,7 +2042,7 @@ button.cite-open:hover {
   padding: 0.75rem;
   border: 1px solid var(--accent-border);
   border-radius: 10px;
-  background: #f7f9ff;
+  background: var(--accent-soft);
 }
 
 .cc-update-head {
@@ -2067,7 +2067,7 @@ button.cite-open:hover {
 }
 
 .cc-update .cc-list {
-  background: #ffffff;
+  background: var(--surface);
 }
 
 @media (max-width: 560px) {

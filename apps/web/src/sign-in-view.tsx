@@ -26,7 +26,7 @@ export function SignInPage({
     providers === null ? "unavailable" : notice;
   const nothing = providers !== null && !google && !microsoft && !preview;
   return (
-    <div className="si">
+    <div className="si theme-light">
       <div className="si-glow" aria-hidden="true" />
       <main className="si-card">
         <a className="si-brand" href="/welcome">

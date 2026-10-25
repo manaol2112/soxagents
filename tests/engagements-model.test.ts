@@ -3,14 +3,24 @@ import { describe, it } from "node:test";
 
 import type { Client } from "../apps/web/src/client-model.ts";
 import {
+  atRisk,
+  auditPeriod,
   cardEntry,
   cardSignals,
   clientRows,
+  engagementTypeShort,
   foldActivity,
   inFilter,
+  isPastDue,
+  matchesFilter,
+  nameMark,
   openEngagements,
+  parseEngagementSort,
   parseEngagementsView,
+  portfolioCounts,
   portfolioLine,
+  riskReason,
+  sortBy,
   sortEngagements,
   updatedLabel,
   workSummary,
@@ -332,5 +342,132 @@ describe("an engagement card", () => {
         label: "Open the engagement",
       });
     }
+  });
+});
+
+describe("the engagements list (portfolio view)", () => {
+  const row = (
+    name: string,
+    status: string,
+    extra: Partial<{
+      overdueRequests: number;
+      missedMilestones: number;
+      periodEnd: string | null;
+      lastActivityAt: string | null;
+      nextMilestone: { name: string; due: string } | null;
+      progress: Array<{ status: string; count: number }>;
+    }> = {},
+  ) => ({
+    name,
+    status,
+    clientName: "",
+    periodEnd: "2027-12-31",
+    overdueRequests: 0,
+    missedMilestones: 0,
+    lastActivityAt: null,
+    nextMilestone: null,
+    progress: [],
+    ...extra,
+  });
+
+  it("names the audit period as the year that ends on the period end", () => {
+    assert.equal(auditPeriod("2027-12-31"), "Jan – Dec 2027");
+    assert.equal(auditPeriod("2027-06-30"), "Jul 2026 – Jun 2027");
+    assert.equal(auditPeriod(null), "Not set");
+    assert.equal(auditPeriod("soon"), "Not set");
+  });
+
+  it("calls running work at risk when evidence is late or a milestone was missed", () => {
+    assert.equal(atRisk(row("A", "ACTIVE")), false);
+    assert.equal(atRisk(row("A", "ACTIVE", { overdueRequests: 2 })), true);
+    assert.equal(atRisk(row("A", "ACTIVE", { missedMilestones: 1 })), true);
+    // Paused, completed or draft work is not flagged: nothing is expected of it now.
+    assert.equal(atRisk(row("A", "PAUSED", { overdueRequests: 2 })), false);
+    assert.equal(atRisk(row("A", "COMPLETED", { missedMilestones: 1 })), false);
+    assert.equal(
+      riskReason(
+        row("A", "ACTIVE", { overdueRequests: 2, missedMilestones: 1 }),
+      ),
+      "2 evidence requests overdue · 1 milestone missed",
+    );
+    assert.equal(riskReason(row("A", "ACTIVE")), "");
+  });
+
+  it("counts the headline numbers and filters by them", () => {
+    const projects = [
+      row("A", "ACTIVE", { overdueRequests: 1 }),
+      row("B", "ACTIVE"),
+      row("C", "COMPLETED"),
+      row("D", "DRAFT"),
+      row("E", "ARCHIVED"),
+    ];
+    assert.deepEqual(portfolioCounts(projects), {
+      open: 4,
+      active: 2,
+      completed: 1,
+      atRisk: 1,
+      draft: 1,
+      paused: 0,
+      archived: 1,
+    });
+    assert.deepEqual(
+      projects.filter((p) => matchesFilter(p, "AT_RISK")).map((p) => p.name),
+      ["A"],
+    );
+    assert.deepEqual(
+      projects.filter((p) => matchesFilter(p, "ALL")).map((p) => p.name),
+      ["A", "B", "C", "D"],
+    );
+  });
+
+  it("sorts by the chosen column, with what has no value last", () => {
+    const projects = [
+      row("Old", "ACTIVE", {
+        lastActivityAt: "2026-10-01T00:00:00Z",
+        nextMilestone: { name: "x", due: "2026-12-01" },
+        progress: [
+          { status: "SUCCEEDED", count: 1 },
+          { status: "READY", count: 3 },
+        ],
+      }),
+      row("New", "ACTIVE", {
+        lastActivityAt: "2026-10-20T00:00:00Z",
+        nextMilestone: { name: "y", due: "2026-11-01" },
+        progress: [
+          { status: "SUCCEEDED", count: 3 },
+          { status: "READY", count: 1 },
+        ],
+      }),
+      row("Quiet", "ACTIVE"),
+    ];
+    const names = (sort: Parameters<typeof sortBy>[1]) =>
+      sortBy(projects, sort).map((project) => project.name);
+    assert.deepEqual(names("activity"), ["New", "Old", "Quiet"]);
+    assert.deepEqual(names("milestone"), ["New", "Old", "Quiet"]);
+    assert.deepEqual(names("progress"), ["New", "Old", "Quiet"]);
+    assert.deepEqual(names("name"), ["New", "Old", "Quiet"]);
+    assert.equal(parseEngagementSort("progress"), "progress");
+    assert.equal(parseEngagementSort("nope"), "status");
+  });
+
+  it("knows a milestone date has passed", () => {
+    assert.equal(isPastDue("2026-10-23", "2026-10-24T09:00:00Z"), true);
+    assert.equal(isPastDue("2026-10-24", "2026-10-24T09:00:00Z"), false);
+  });
+});
+
+describe("a list row's labels", () => {
+  it("names the engagement type in a few words", () => {
+    assert.equal(engagementTypeShort("SOX_ITGC"), "SOX: ITGC");
+    assert.equal(engagementTypeShort("SOX_FULL"), "SOX: ITGC and BP");
+    assert.equal(engagementTypeShort("IT_AUDIT"), "IT audit");
+    assert.equal(engagementTypeShort("OTHER"), "OTHER");
+  });
+
+  it("marks a client or engagement with two letters", () => {
+    assert.equal(nameMark("Contoso Ltd"), "CL");
+    assert.equal(nameMark("Litware"), "LI");
+    assert.equal(nameMark("SOX 2027"), "SO");
+    assert.equal(nameMark("  "), "?");
   });
 });

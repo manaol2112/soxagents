@@ -32,6 +32,8 @@ from ai_workforce_api.definition_registry import (
     v2_attributes,
 )
 from ai_workforce_api.library_definitions import (
+    adopt_latest,
+    library_update,
     link_definitions,
     retire_dropped_design_questions,
 )
@@ -341,7 +343,11 @@ def test_a_control_copied_from_version_2_adopts_version_3_when_a_person_chooses(
     context = _context(client, team, control)
     assert [a["text"] for a in context["attributes"]["approved"]] == list(before)
     assert context["testing"] is None
-    update = context["library_update"]
+    # The latest version always applies (adopt_latest, with every deploy): the control
+    # does not offer it to a person, and what it changes is shown by library_update.
+    assert context["library_update"] is None
+    with connect(migrated.url) as connection:
+        update = library_update(connection, UUID(str(control))).model_dump(mode="json")
     # The leaver control's definition is version 4 (steps and an evidence suite).
     assert update["library_version"] == 2 and update["current_version"] == 4
     changes = {item["change"] for item in update["items"]}
@@ -349,10 +355,10 @@ def test_a_control_copied_from_version_2_adopts_version_3_when_a_person_chooses(
     retiring = next(item for item in update["items"] if item["change"] == "RETIRE")
     assert retiring["was"] == "The account shows no activity after the termination date"
     assert retiring["reason"]
-    # A person adopts it.
-    adopted = client.post(f"{_base(team)}/controls/{control}/library-update/adopt")
-    assert adopted.status_code == 200, adopted.text
-    body = adopted.json()
+    # The deploy adopts it; no person is asked.
+    with connect(migrated.url) as connection:
+        assert adopt_latest(connection, team["project"]).adopted == 1
+    body = _context(client, team, control)
     assert body["library_update"] is None and body["testing"] is not None
     definition = definition_for("access-termination")
     assert definition is not None
@@ -367,15 +373,15 @@ def test_a_control_copied_from_version_2_adopts_version_3_when_a_person_chooses(
     assert body["attributes"]["proposed"] == []
     history = {a["text"]: a["note"] for a in body["attributes"]["history"]}
     assert history[retiring["was"]].startswith("Retired by library v4:")
-    again = client.post(f"{_base(team)}/controls/{control}/library-update/adopt")
-    assert again.status_code == 409
     with connect(migrated.url) as connection:
+        assert adopt_latest(connection, team["project"]).adopted == 0
         row = connection.execute(
-            "SELECT count(*) FROM audit_events WHERE action = 'control.library_adopted' "
-            "AND target_id = %s",
+            "SELECT count(*), count(actor_user_id) FROM audit_events "
+            "WHERE action = 'control.library_adopted' AND target_id = %s",
             (control,),
         ).fetchone()
-    assert row == (1,)
+    # Adopted once, as the library's adoption, not a person's.
+    assert row == (1, 0)
 
 
 def test_migration_0085_approves_open_library_proposals_into_the_attribute_list(
@@ -541,3 +547,24 @@ def test_a_result_needing_human_review_holds_sign_off_until_a_person_decides(
     )
     assert decided.status_code == 200, decided.text
     assert decided.json()["proposed_conclusion"] == "NOT_EFFECTIVE"
+
+
+def test_the_latest_library_version_applies_except_where_the_engagement_is_closed(
+    migrated: Database,
+) -> None:
+    """The deploy adopts the latest library version on every open engagement; nobody is
+    asked. An archived engagement is read-only and keeps the versions it closed with."""
+    team, client, _scheduler = _engagement(migrated, "defs-latest")
+    control = _control_id(migrated, team, "ITGC-AC-02")
+    with connect(migrated.url) as connection, transaction(connection) as cursor:
+        cursor.execute(
+            "UPDATE engagement_controls SET library_version = 2 WHERE id = %s", (control,)
+        )
+        cursor.execute("UPDATE projects SET status = 'ARCHIVED' WHERE id = %s", (team["project"],))
+    with connect(migrated.url) as connection:
+        assert adopt_latest(connection, team["project"]).adopted == 0
+        version = connection.execute(
+            "SELECT library_version FROM engagement_controls WHERE id = %s", (control,)
+        ).fetchone()
+    assert version == (2,)
+    assert _context(client, team, control)["library_update"] is None

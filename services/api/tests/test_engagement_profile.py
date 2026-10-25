@@ -59,6 +59,24 @@ def test_a_name_and_scope_that_name_another_year_disagree_with_the_period() -> N
     assert "31 December 2026" in conflicts[0].message
 
 
+def test_a_name_that_points_at_another_year_offers_both_corrections() -> None:
+    # Corrected where the conflict is shown (decided by the product owner): move the
+    # period end to the name's year, or change the name's year to the period's.
+    conflicts = period_conflicts("SOX FY2028", "", None, date(2027, 12, 31), "", TODAY)
+    name_year = next(c for c in conflicts if c.kind == "NAME_YEAR")
+    assert name_year.period_end_fix == date(2028, 12, 31)
+    assert name_year.name_fix == "SOX FY2027"
+    # The name keeps its own style: two digits stay two digits.
+    short = period_conflicts("SOX FY28", "", None, date(2027, 6, 30), "", TODAY)
+    fixes = next(c for c in short if c.kind == "NAME_YEAR")
+    assert (fixes.name_fix, fixes.period_end_fix) == ("SOX FY27", date(2028, 6, 30))
+    # Other conflicts carry no correction of this kind.
+    scope_only = period_conflicts(
+        "SOX audit", "Testing through December 31, 2028.", None, date(2027, 12, 31), "", TODAY
+    )
+    assert all(c.period_end_fix is None and c.name_fix is None for c in scope_only)
+
+
 def test_an_interim_date_or_an_agreeing_period_is_not_flagged() -> None:
     assert (
         period_conflicts(
@@ -368,6 +386,59 @@ def test_independence_cannot_be_switched_off_in_production(migrated: Database) -
 
 
 # After launch
+
+
+def test_a_name_and_period_conflict_is_corrected_either_way(migrated: Database) -> None:
+    team = _new_engagement(migrated, "period-align")
+    owner, base = team["owner"], _base(team["org"], team["project"])
+    _complete_setup(owner, team)
+    # The name says 2027; set a 2026 year end to disagree with it.
+    owner.patch(f"{base}/scope", json={"scope": "ITGCs over SAP ERP", "period_end": "2026-12-31"})
+    state = owner.get(base).json()
+    assert state["ready"] is False
+    conflict = next(c for c in state["period"]["conflicts"] if c["kind"] == "NAME_YEAR")
+    assert conflict["period_end_fix"] == "2027-12-31"
+    assert conflict["name_fix"] == "SOX 2026"
+    # What the page showed must still hold.
+    stale = owner.post(f"{base}/period/align", json={"basis": "0" * 32, "to": "period_end"})
+    assert stale.status_code == 409
+    # Move the period to the name's year: the end, and the twelve months before it.
+    moved = owner.post(
+        f"{base}/period/align", json={"basis": state["period"]["basis"], "to": "period_end"}
+    )
+    assert moved.status_code == 200, moved.text
+    body = moved.json()
+    assert body["settings"]["period_end"] == "2027-12-31"
+    assert body["settings"]["period_start"] == "2027-01-01"
+    assert body["period"]["conflicts"] == [] and body["ready"] is True
+    # Nothing left to align.
+    again = owner.post(
+        f"{base}/period/align", json={"basis": body["period"]["basis"], "to": "name"}
+    )
+    assert again.status_code == 409
+    # Or the other way: the name takes the period's year. (Back to a 2026 period, start
+    # and end together, as the database keeps the start before the end.)
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE engagement_settings SET period_start = NULL, period_end = '2026-12-31' "
+            "WHERE project_id = %s",
+            (team["project"],),
+        )
+        connection.commit()
+    state = owner.get(base).json()
+    renamed = owner.post(
+        f"{base}/period/align", json={"basis": state["period"]["basis"], "to": "name"}
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["project_name"] == "SOX 2026"
+    assert renamed.json()["period"]["conflicts"] == []
+    with connect(migrated.url) as connection:
+        aligned = connection.execute(
+            "SELECT count(*) FROM audit_events WHERE project_id = %s "
+            "AND action = 'onboarding.period_aligned'",
+            (team["project"],),
+        ).fetchone()
+    assert aligned is not None and aligned[0] == 2
 
 
 def test_a_running_engagement_with_a_conflicting_period_is_flagged_and_confirmed(

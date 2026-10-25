@@ -110,7 +110,7 @@ export function WelcomePage({
   library: LibrarySummary | null;
 }) {
   return (
-    <div className="lp">
+    <div className="lp theme-light">
       <WelcomeReveal />
       <a className="skip" href="#product">
         Skip to content

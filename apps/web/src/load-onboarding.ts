@@ -1,5 +1,4 @@
 import { cookies } from "next/headers";
-
 import { parseContext } from "./control-context-model";
 import { apiGet, sessionToken } from "./load-workspace";
 import {
@@ -27,15 +26,21 @@ export async function loadOnboarding(
     notice: string | null;
     system?: string | null;
     edit?: string | null;
+    pane?: string | null;
   },
 ): Promise<SetupState> {
   if (
     model.status !== "ready" ||
     model.selectedProject === null ||
-    (model.section !== "setup" && model.section !== "overview")
+    (model.section !== "setup" &&
+      model.section !== "overview" &&
+      !(model.section === "controls" && query.control === null))
   ) {
     return EMPTY_SETUP;
   }
+  // Setup's own page, or Systems & Processes (the controls section with no control
+  // open): both open an uploaded RCM's matching and say how the last action went.
+  const setupPage = model.section === "setup" || model.section === "controls";
   const session = sessionToken((await cookies()).get("aw_session")?.value);
   const base = `/organizations/${model.organization.id}/projects/${model.selectedProject.id}/onboarding`;
   const control =
@@ -65,7 +70,7 @@ export async function loadOnboarding(
   const step = landingStep(query.step, onboarding?.started === true);
   const importId = onboarding?.openImportId ?? null;
   const opened =
-    model.section === "setup" && step === "controls" && importId !== null
+    setupPage && step === "controls" && importId !== null
       ? await apiGet(`${base}/rcm/uploads/${importId}`, session)
       : null;
   return {
@@ -83,7 +88,7 @@ export async function loadOnboarding(
       opened !== null && opened.status === 200
         ? parseImport(opened.body)
         : null,
-    notice: model.section === "setup" ? parseSetupNotice(query.notice) : null,
+    notice: setupPage ? parseSetupNotice(query.notice) : null,
     design:
       context !== null && context.status === 200
         ? (parseContext(context.body)?.design ?? null)
@@ -98,5 +103,6 @@ export async function loadOnboarding(
       UUID.test(query.system)
         ? query.system
         : null,
+    pane: query.pane ?? null,
   };
 }

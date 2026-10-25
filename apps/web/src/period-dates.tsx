@@ -12,6 +12,7 @@ export function PeriodDates({
   disabled,
   endHint,
   marked = false,
+  startShown = true,
 }: {
   start: string | null;
   end: string | null;
@@ -19,6 +20,9 @@ export function PeriodDates({
   endHint?: ReactNode;
   /** Says which date the launch needs: the end; the start defaults from it. */
   marked?: boolean;
+  /** Onboarding asks only for the end (decided by the product owner): the start still
+   * goes with the form, the twelve months to the end unless one was recorded. */
+  startShown?: boolean;
 }) {
   const suggested = end !== null && end !== "" ? periodStartFor(end) : null;
   const [endValue, setEndValue] = useState(end ?? "");
@@ -48,26 +52,32 @@ export function PeriodDates({
 
   return (
     <>
-      <label htmlFor="profile-period-start">
-        <span>
-          Period start
-          {marked ? <OptionalMark /> : null}
-        </span>
-        <input
-          id="profile-period-start"
-          name="period_start"
-          type="date"
-          value={disabled ? (start ?? "") : startValue}
-          disabled={disabled}
-          onChange={(event) => changeStart(event.target.value)}
-        />
-        {showHint ? (
-          <span className="form-hint">
-            The twelve months ending on the period end. Change it for a short or
-            transition period.
+      {!startShown ? (
+        disabled ? null : (
+          <input type="hidden" name="period_start" value={startValue} />
+        )
+      ) : (
+        <label htmlFor="profile-period-start">
+          <span>
+            Period start
+            {marked ? <OptionalMark /> : null}
           </span>
-        ) : null}
-      </label>
+          <input
+            id="profile-period-start"
+            name="period_start"
+            type="date"
+            value={disabled ? (start ?? "") : startValue}
+            disabled={disabled}
+            onChange={(event) => changeStart(event.target.value)}
+          />
+          {showHint ? (
+            <span className="form-hint">
+              The twelve months ending on the period end. Change it for a short
+              or transition period.
+            </span>
+          ) : null}
+        </label>
+      )}
       <label htmlFor="profile-period">
         <span>
           Period end
