@@ -45,6 +45,31 @@ describe("the landing page's demo request", () => {
     );
   });
 
+  it("leads the message with the primary focus, and only a listed one", () => {
+    const write = demoWrite({
+      name: "Dana",
+      email: "dana@firm.example",
+      focus: "IT SOX / ITGC",
+    });
+    assert.ok(!("error" in write));
+    assert.equal(write.body.message, "Primary focus: IT SOX / ITGC");
+    const both = demoWrite({
+      name: "Dana",
+      email: "dana@firm.example",
+      focus: "Internal audit",
+      message: "Forty engagements.",
+    });
+    assert.ok(!("error" in both));
+    assert.equal(
+      both.body.message,
+      "Primary focus: Internal audit\n\nForty engagements.",
+    );
+    assert.deepEqual(
+      demoWrite({ name: "Dana", email: "dana@firm.example", focus: "Taxes" }),
+      { error: "invalid" },
+    );
+  });
+
   it("maps the API's answer to what the page says", () => {
     assert.equal(welcomeNoticeFor(201), "sent");
     assert.equal(welcomeNoticeFor(422), "invalid");

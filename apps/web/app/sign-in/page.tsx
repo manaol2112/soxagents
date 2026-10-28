@@ -12,7 +12,7 @@ import "../sign-in.css";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "Sign in — AI Workforce",
+  title: "Sign in — Audit Workforce",
 };
 
 type SignInProps = {
