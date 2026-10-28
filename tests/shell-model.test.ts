@@ -19,6 +19,7 @@ import {
   projectIdInList,
   projectLabels,
   resolveRoute,
+  shownInMenu,
   showsSignInPrompt,
   switcherProjects,
   taskStatusChoices,
@@ -769,5 +770,41 @@ describe("Controls on a page of its own (26 October 2026)", () => {
     assert.equal(params.get("section"), "controls");
     assert.equal(params.get("pane"), "references");
     assert.equal(params.get("view"), null);
+  });
+});
+
+describe("the menu before the first engagement (27 October 2026)", () => {
+  const engagementPages = [
+    "controls",
+    "register",
+    "planning",
+    "evidence",
+    "testing",
+    "review",
+    "reports",
+    "settings",
+  ] as const;
+
+  it("keeps Home and the firm's pages with no engagement open", () => {
+    for (const section of ["overview", "projects", "library"] as const) {
+      assert.equal(shownInMenu(section, false), true, section);
+    }
+  });
+
+  it("hides the engagement's own pages until there is one", () => {
+    for (const section of engagementPages) {
+      assert.equal(shownInMenu(section, false), false, section);
+    }
+  });
+
+  it("lists every page once an engagement is open", () => {
+    for (const section of [
+      ...engagementPages,
+      "overview",
+      "projects",
+      "library",
+    ] as const) {
+      assert.equal(shownInMenu(section, true), true, section);
+    }
   });
 });

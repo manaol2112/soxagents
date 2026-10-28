@@ -74,6 +74,10 @@ import {
 } from "./evidence-model";
 import { EvidenceFiles } from "./evidence-view";
 import {
+  FIRST_ENGAGEMENT_STEPS,
+  firstEngagementCopy,
+} from "./first-engagement-model";
+import {
   agentMonogram,
   formatBytes,
   formatDate,
@@ -114,6 +118,7 @@ import {
   SETTINGS_TABS,
   type SectionId,
   type ShellModel,
+  shownInMenu,
   showsSignInPrompt,
   switcherProjects,
   type TaskDetail,
@@ -376,46 +381,50 @@ export function WorkspaceView({
               <div key={group.label} className="nav-group">
                 <p className="nav-label">{group.label}</p>
                 <ul>
-                  {group.items.map((item) => {
-                    const locked = lockedBeforeLaunch(
-                      item.id,
-                      model.selectedProject,
-                    );
-                    return (
-                      <li key={item.id}>
-                        <a
-                          href={workspaceHref(
-                            item.id,
-                            model.organization.id,
-                            model.selectedProject?.id ?? null,
-                          )}
-                          title={
-                            locked
-                              ? "Opens once the engagement is launched"
-                              : item.detail
-                          }
-                          className={locked ? "nav-locked" : undefined}
-                          aria-current={
-                            current === item.id ? "page" : undefined
-                          }
-                        >
-                          <UiIcon name={item.icon} size={16} />
-                          <span>{item.label}</span>
-                          {item.id === "overview" &&
-                          waiting !== null &&
-                          waiting > 0 ? (
-                            <span
-                              className="nav-badge"
-                              role="status"
-                              aria-label={`${waiting} waiting`}
-                            >
-                              {waiting}
-                            </span>
-                          ) : null}
-                        </a>
-                      </li>
-                    );
-                  })}
+                  {group.items
+                    .filter((item) =>
+                      shownInMenu(item.id, model.selectedProject !== null),
+                    )
+                    .map((item) => {
+                      const locked = lockedBeforeLaunch(
+                        item.id,
+                        model.selectedProject,
+                      );
+                      return (
+                        <li key={item.id}>
+                          <a
+                            href={workspaceHref(
+                              item.id,
+                              model.organization.id,
+                              model.selectedProject?.id ?? null,
+                            )}
+                            title={
+                              locked
+                                ? "Opens once the engagement is launched"
+                                : item.detail
+                            }
+                            className={locked ? "nav-locked" : undefined}
+                            aria-current={
+                              current === item.id ? "page" : undefined
+                            }
+                          >
+                            <UiIcon name={item.icon} size={16} />
+                            <span>{item.label}</span>
+                            {item.id === "overview" &&
+                            waiting !== null &&
+                            waiting > 0 ? (
+                              <span
+                                className="nav-badge"
+                                role="status"
+                                aria-label={`${waiting} waiting`}
+                              >
+                                {waiting}
+                              </span>
+                            ) : null}
+                          </a>
+                        </li>
+                      );
+                    })}
                 </ul>
               </div>
             ))}
@@ -1081,20 +1090,49 @@ export function sectionHref(
 }
 
 /** Home before any engagement exists: the one thing to do is create one. */
+/** Home before the firm's first engagement: one way to start, and what follows. */
 function FirstEngagement({ model }: { model: Ready }) {
+  // The role decides the offer (model.canManageProjects is read only on Engagements);
+  // the API still refuses a create from any other role.
+  const copy = firstEngagementCopy(canManageProjects(model.organization.role));
   return (
-    <div className="page">
-      <PageHeader
-        context="Home"
-        title={model.organization.name}
-        description="Start by creating an engagement. Its scope, work, evidence, and decisions all live in one place."
-        actions={
-          <a className="btn" href={createEngagementHref(model)}>
-            Create an engagement
-            <UiIcon name="arrow" size={15} />
-          </a>
-        }
-      />
+    <div className="page first-run">
+      <section className="first-run-hero" aria-labelledby="first-run-title">
+        <span className="first-run-ready" role="status">
+          <span className="first-run-dot" aria-hidden="true" />
+          Your workspace is ready
+        </span>
+        <p className="first-run-eyebrow">Getting started</p>
+        <h1 id="first-run-title">{copy.title}</h1>
+        <p className="first-run-lead">{copy.lead}</p>
+        {copy.action !== null ? (
+          <>
+            <a className="btn first-run-cta" href={createEngagementHref(model)}>
+              {copy.action.label}
+              <UiIcon name="arrow" size={18} />
+            </a>
+            <p className="first-run-notes">
+              {copy.action.notes.map((note) => (
+                <span key={note}>{note}</span>
+              ))}
+            </p>
+          </>
+        ) : (
+          <p className="first-run-notes">{copy.waiting}</p>
+        )}
+      </section>
+      <ol className="first-run-steps" aria-label="How an engagement starts">
+        {FIRST_ENGAGEMENT_STEPS.map((step) => (
+          <li key={step.number} className="first-run-step">
+            <span className="first-run-number">{step.number}</span>
+            <span className="first-run-icon">
+              <UiIcon name={step.icon} size={26} />
+            </span>
+            <h2>{step.title}</h2>
+            <p>{step.detail}</p>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }

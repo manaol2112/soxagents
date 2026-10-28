@@ -57,6 +57,11 @@ class PeriodConflict(BaseModel):
     # conflict is corrected where it is shown). None where they do not apply.
     period_end_fix: date | None = None
     name_fix: str | None = None
+    # For a scope or fiscal year label that names another year: the same words with that
+    # year changed to the period's (decided by the product owner on 27 October 2026: the
+    # conflict is corrected, with confirming as recorded the exception).
+    scope_fix: str | None = None
+    fiscal_year_fix: str | None = None
 
 
 def _dates(text: str) -> list[date]:
@@ -89,6 +94,51 @@ def _in_year(value: date, year: int) -> date:
         return value.replace(year=year, day=28)
 
 
+def _with_year(match: re.Match[str], group: int, year: str) -> str:
+    """The matched words with one group, the year, written as another."""
+    start, end = match.span(group)
+    offset = match.start()
+    whole = match.group(0)
+    return whole[: start - offset] + year + whole[end - offset :]
+
+
+def _fiscal_in_year(text: str, year: int) -> str:
+    """Each fiscal year named in the words moved to a year, written as it was (FY26 stays
+    two digits)."""
+
+    def moved(match: re.Match[str]) -> str:
+        raw = match.group(1)
+        return _with_year(match, 1, str(year) if len(raw) == 4 else f"{year % 100:02d}")
+
+    return _FISCAL.sub(moved, text)
+
+
+def _scope_in_year(scope: str, period_end: date) -> str:
+    """The scope with each year end on the period end's day in another year, and each
+    fiscal year it names, moved to the period's year; the rest as written."""
+    year = str(period_end.year)
+
+    def dated(year_group: int, month_of: Any, day_of: Any) -> Any:
+        def moved(match: re.Match[str]) -> str:
+            month, day = month_of(match), day_of(match)
+            if (month, day) == (period_end.month, period_end.day):
+                return _with_year(match, year_group, year)
+            return match.group(0)
+
+        return moved
+
+    text = _ISO.sub(dated(1, lambda m: int(m.group(2)), lambda m: int(m.group(3))), scope)
+    text = _MONTH_FIRST.sub(
+        dated(3, lambda m: _MONTHS[m.group(1).lower().rstrip(".")], lambda m: int(m.group(2))),
+        text,
+    )
+    text = _DAY_FIRST.sub(
+        dated(3, lambda m: _MONTHS[m.group(2).lower().rstrip(".")], lambda m: int(m.group(1))),
+        text,
+    )
+    return _fiscal_in_year(text, period_end.year)
+
+
 def _long(value: date) -> str:
     return f"{value.day} {value.strftime('%B %Y')}"
 
@@ -106,6 +156,8 @@ def period_conflicts(
     if period_end is None:
         return conflicts
     ends = _long(period_end)
+    corrected = _scope_in_year(scope, period_end)
+    scope_fix = corrected if corrected != scope else None
     named = fiscal_year_of(name, today)
     if named is not None and named != period_end.year:
         conflicts.append(
@@ -132,6 +184,7 @@ def period_conflicts(
                 message=f"The scope says the period ends {_long(year_ends[0])}, but the "
                 f"period end is {ends}.",
                 blocking=True,
+                scope_fix=scope_fix,
             )
         )
     scope_years = sorted({year for year in _fiscal_years(scope) if year != period_end.year})
@@ -142,17 +195,23 @@ def period_conflicts(
                 message=f"The scope names fiscal year {scope_years[0]}, but the period ends "
                 f"{ends}.",
                 blocking=True,
+                scope_fix=scope_fix,
             )
         )
     labelled = _fiscal_years(fiscal_year) or [
         int(match) for match in re.findall(r"\b(20\d{2})\b", fiscal_year)
     ]
     if labelled and labelled[0] != period_end.year:
+        label = fiscal_year.strip()
+        fixed = _fiscal_in_year(label, period_end.year)
+        if fixed == label:
+            fixed = re.sub(r"\b20\d{2}\b", str(period_end.year), label, count=1)
         conflicts.append(
             PeriodConflict(
                 kind="FISCAL_YEAR",
-                message=f"The fiscal year is {fiscal_year.strip()}, but the period ends {ends}.",
+                message=f"The fiscal year is {label}, but the period ends {ends}.",
                 blocking=True,
+                fiscal_year_fix=fixed if fixed != label else None,
             )
         )
     if period_start is not None:

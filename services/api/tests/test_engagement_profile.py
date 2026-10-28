@@ -441,6 +441,81 @@ def test_a_name_and_period_conflict_is_corrected_either_way(migrated: Database) 
     assert aligned is not None and aligned[0] == 2
 
 
+def test_a_scope_or_label_that_names_another_year_offers_its_correction() -> None:
+    """The scope and the fiscal year label follow the recorded period, written as they
+    were; an interim date is not a period end and stays (27 October 2026)."""
+    today = date(2026, 10, 27)
+    scope = (
+        "ITGCs for the period ending 31 December 2026 (FY26), with interim testing through "
+        "30 September 2026; year end December 31, 2026 and 2026-12-31."
+    )
+    found = period_conflicts("SOX audit", scope, date(2027, 1, 1), date(2027, 12, 31), "", today)
+    dated = next(c for c in found if c.kind == "SCOPE_DATE")
+    assert dated.scope_fix == (
+        "ITGCs for the period ending 31 December 2027 (FY27), with interim testing through "
+        "30 September 2026; year end December 31, 2027 and 2027-12-31."
+    )
+    named = period_conflicts(
+        "SOX audit", "Fiscal year 2026 ITGCs.", None, date(2027, 12, 31), "", today
+    )
+    assert [(c.kind, c.scope_fix) for c in named] == [("SCOPE_YEAR", "Fiscal year 2027 ITGCs.")]
+    labelled = period_conflicts("SOX audit", "", None, date(2027, 12, 31), "FY2026", today)
+    assert [(c.kind, c.fiscal_year_fix) for c in labelled] == [("FISCAL_YEAR", "FY2027")]
+    plain = period_conflicts("SOX audit", "", None, date(2027, 12, 31), "Year 2026", today)
+    assert plain[0].fiscal_year_fix == "Year 2027"
+    # A name is corrected its own way, never through the scope.
+    assert (
+        period_conflicts("SOX FY26", "", None, date(2027, 12, 31), "", today)[0].scope_fix is None
+    )
+
+
+def test_a_scope_naming_another_year_end_is_corrected_not_only_confirmed(
+    migrated: Database,
+) -> None:
+    team = _new_engagement(migrated, "scope-align")
+    owner, base = team["owner"], _base(team["org"], team["project"])
+    _complete_setup(owner, team)
+    # The name says 2027 and so does the period; the scope still names 2026's year end.
+    scoped = owner.patch(
+        f"{base}/scope",
+        json={
+            "scope": "ITGCs over SAP ERP for the period ending 31 December 2026.",
+            "period_end": "2027-12-31",
+        },
+    )
+    assert scoped.status_code == 200, scoped.text
+    state = owner.get(base).json()
+    conflict = next(c for c in state["period"]["conflicts"] if c["kind"] == "SCOPE_DATE")
+    assert conflict["scope_fix"] == "ITGCs over SAP ERP for the period ending 31 December 2027."
+    assert state["ready"] is False
+    stale = owner.post(f"{base}/period/align", json={"basis": "0" * 32, "to": "scope"})
+    assert stale.status_code == 409
+    fixed = owner.post(
+        f"{base}/period/align", json={"basis": state["period"]["basis"], "to": "scope"}
+    )
+    assert fixed.status_code == 200, fixed.text
+    body = fixed.json()
+    assert body["scope"] == "ITGCs over SAP ERP for the period ending 31 December 2027."
+    assert body["settings"]["period_end"] == "2027-12-31"
+    assert body["period"]["conflicts"] == [] and body["ready"] is True
+    assert body["period"]["confirmed"] is False
+    nothing = owner.post(
+        f"{base}/period/align", json={"basis": body["period"]["basis"], "to": "fiscal_year"}
+    )
+    assert nothing.status_code == 409
+    with connect(migrated.url) as connection:
+        actions = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT action FROM audit_events WHERE project_id = %s "
+                "AND action IN ('onboarding.period_aligned', 'onboarding.scope') "
+                "ORDER BY occurred_at",
+                (team["project"],),
+            ).fetchall()
+        ]
+    assert actions[-2:] == ["onboarding.scope", "onboarding.period_aligned"]
+
+
 def test_a_running_engagement_with_a_conflicting_period_is_flagged_and_confirmed(
     migrated: Database,
 ) -> None:

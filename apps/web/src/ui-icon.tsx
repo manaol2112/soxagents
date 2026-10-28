@@ -44,6 +44,11 @@ export type IconName =
   | "tag"
   | "upload"
   | "user"
+  | "userPlus"
+  | "chart"
+  | "book"
+  | "flow"
+  | "list"
   | "wand"
   | "window"
   | "wrench"
@@ -91,6 +96,33 @@ const PATHS: Record<IconName, ReactNode> = {
     <>
       <circle cx="12" cy="8" r="4" />
       <path d="M4.5 20.5a7.5 7.5 0 0 1 15 0" />
+    </>
+  ),
+  userPlus: (
+    <>
+      <circle cx="10" cy="8" r="4" />
+      <path d="M3 20.5a7 7 0 0 1 14 0M19 8v6m-3-3h6" />
+    </>
+  ),
+  book: (
+    <>
+      <path d="M12 6.5C10.3 5.2 7.9 4.5 4 4.5v14c3.9 0 6.3.7 8 2 1.7-1.3 4.1-2 8-2v-14c-3.9 0-6.3.7-8 2z" />
+      <path d="M12 6.5v14" />
+    </>
+  ),
+  flow: (
+    <>
+      <circle cx="12" cy="5" r="2.5" />
+      <circle cx="5.5" cy="18.5" r="2.5" />
+      <circle cx="18.5" cy="18.5" r="2.5" />
+      <path d="M12 7.5v4M5.5 16v-2.5h13V16" />
+    </>
+  ),
+  list: <path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01" />,
+  chart: (
+    <>
+      <rect x="5" y="11" width="4" height="9" rx="1" />
+      <rect x="14" y="4" width="4" height="16" rx="1" />
     </>
   ),
   arrowDown: <path d="M12 5v14m-6-6 6 6 6-6" />,

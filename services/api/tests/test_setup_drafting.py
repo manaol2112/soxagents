@@ -293,3 +293,47 @@ def test_a_new_engagement_carries_its_profile(migrated: Database) -> None:
         },
     )
     assert refused.status_code == 422
+
+
+def test_a_draft_ending_before_the_period_starts_is_refused_not_failed(
+    migrated: Database,
+) -> None:
+    """A draft made before the period was aligned to the name's year can end before the
+    period now starts; accepting it was a database error (503). It is refused, and the
+    period and the rest of the draft stay usable."""
+    team = _new_engagement(migrated, "setupstale")
+    owner, org, project = team["owner"], team["org"], team["project"]
+    base = _base(org, project)
+    profiled = owner.patch(
+        f"{base}/profile",
+        json={
+            "client_name": "Acme Corp",
+            "engagement_type": "SOX_ITGC",
+            "period_start": "2027-01-01",
+            "period_end": "2027-12-31",
+        },
+    )
+    assert profiled.status_code == 200, profiled.text
+    assert owner.post(f"{base}/suggestions/draft").status_code == 200
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, None, project) == "DONE"
+        # The draft as it stood before the period moved to fiscal 2027.
+        connection.execute(
+            "UPDATE setup_drafts SET period_end = '2026-12-31' WHERE project_id = %s",
+            (project,),
+        )
+        connection.commit()
+    draft = owner.get(base).json()["setup_draft"]
+    refused = owner.post(
+        f"{base}/suggestions/accept",
+        json={"version": draft["version"], "fields": ["scope", "period_end"]},
+    )
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == "the suggested period end is not after the period start"
+    settings = owner.get(base).json()["settings"]
+    assert (settings["period_start"], settings["period_end"]) == ("2027-01-01", "2027-12-31")
+    accepted = owner.post(
+        f"{base}/suggestions/accept", json={"version": draft["version"], "fields": ["scope"]}
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["scope"] == draft["scope_text"]

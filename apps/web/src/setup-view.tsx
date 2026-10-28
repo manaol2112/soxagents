@@ -34,11 +34,15 @@ import {
 import type { EngagementState } from "./engagement-model";
 import { OptionalMark, RequiredMark } from "./field-marks";
 import { agentMonogram, formatDate, initials } from "./format";
+import {
+  FOUNDATION_STATUS_LABEL,
+  type Foundation,
+  launchChecklist,
+} from "./launch-checklist-model";
 import { NewControlForm } from "./new-control-form";
 import {
   inScopeSystems,
   type LaunchNext,
-  type LaunchSummary,
   launchNextSteps,
   launchReport,
   METHODOLOGIES,
@@ -48,6 +52,7 @@ import {
   type PlanItem,
   PROCESS_CYCLES,
   pendingSuggestions,
+  periodCorrections,
   type RcmImport,
   SETUP_STEPS,
   type SetupControl,
@@ -73,6 +78,7 @@ import {
 import { PeriodDates } from "./period-dates";
 import { ProcessesTable, scopedProcesses } from "./process-view";
 import { RecordDialog } from "./record-dialog";
+import type { Policy, PriorYearReference } from "./references-model";
 import { PoliciesPane, ReferencesPane } from "./references-view";
 import { SaveWhenChanged } from "./save-when-changed";
 import {
@@ -102,24 +108,6 @@ import {
 } from "./workspace-view";
 
 type Ready = Extract<ShellModel, { status: "ready" }>;
-
-const AREA_LABEL: Record<string, string> = {
-  ACCESS: "Logical access",
-  CHANGE: "Change management",
-  OPERATIONS: "IT operations",
-  ITAC: "Application controls",
-  IPE: "Key reports and IPE",
-  ENTITY: "Entity-level",
-  ORDER_TO_CASH: "Order to cash",
-  PROCURE_TO_PAY: "Procure to pay",
-  RECORD_TO_REPORT: "Record to report",
-  TREASURY: "Treasury",
-  HIRE_TO_RETIRE: "Hire to retire",
-  INVENTORY: "Inventory",
-  FIXED_ASSETS: "Fixed assets",
-  TAX: "Tax",
-  OTHER_BUSINESS: "Other business process",
-};
 
 const KIND_LABELS: Record<string, string> = {
   walkthrough: "Walkthroughs",
@@ -274,7 +262,12 @@ export function SetupMain({
           "setup-launched" &&
         onboarding.started &&
         onboarding.launch !== null ? (
-        <LaunchedDialog model={model} onboarding={onboarding} />
+        <LaunchedDialog
+          model={model}
+          onboarding={onboarding}
+          policies={setup.policies ?? []}
+          priorYear={setup.priorYear ?? []}
+        />
       ) : setup.notice !== null ? (
         <Banner
           tone={
@@ -1144,9 +1137,12 @@ function PeriodCheckCard({
     return null;
   }
   const open = openConflicts(period);
-  const nameYear = period.conflicts.find(
-    (conflict) => conflict.kind === "NAME_YEAR" && conflict.blocking,
-  );
+  // Corrections come first (decided by the product owner on 27 October 2026); before
+  // launch only, as the period is part of the launched plan.
+  const corrections =
+    confirmable && !onboarding.started
+      ? periodCorrections(period, onboarding.periodEnd)
+      : [];
   if (open.length === 0) {
     return period.confirmed && period.conflicts.some((c) => c.blocking) ? (
       <p className="form-hint period-confirmed">
@@ -1173,16 +1169,19 @@ function PeriodCheckCard({
         <p className="form-hint">
           {onboarding.started
             ? "The engagement is running on the recorded period. Confirm the period if it is correct. Correcting the period of a running engagement is not yet available; if it is incorrect, contact an owner."
-            : nameYear !== undefined
-              ? "Correct whichever is wrong, or confirm the period as recorded. Launch is held until one of these is done."
-              : "Correct the scope or the dates below if either is incorrect, or confirm the period as recorded. Launch is held until one of these is done."}
+            : corrections.length > 0
+              ? "Correct it so they agree. Launch is held until it is corrected."
+              : "Correct the scope or the dates below so they agree. Launch is held until they do."}
         </p>
-        {/* A name that points at another year is corrected here, either way (decided by
-            the product owner); before launch only, as the period is part of the plan. */}
-        {confirmable && !onboarding.started && nameYear !== undefined ? (
+        {corrections.length > 0 ? (
           <div className="period-fixes">
-            {nameYear.periodEndFix !== null ? (
-              <form autoComplete="off" method="post" action="/workspace/setup">
+            {corrections.map((correction, index) => (
+              <form
+                key={correction.to}
+                autoComplete="off"
+                method="post"
+                action="/workspace/setup"
+              >
                 <Identity
                   model={model}
                   onboarding={onboarding}
@@ -1190,29 +1189,19 @@ function PeriodCheckCard({
                   step="profile"
                 />
                 <input type="hidden" name="basis" value={period.basis} />
-                <input type="hidden" name="to" value="period_end" />
-                <button type="submit">
-                  Set the period end to {formatDate(nameYear.periodEndFix)}
+                <input type="hidden" name="to" value={correction.to} />
+                <button
+                  type="submit"
+                  className={index === 0 ? undefined : "btn-secondary"}
+                >
+                  {correction.label}
                 </button>
               </form>
-            ) : null}
-            {nameYear.nameFix !== null ? (
-              <form autoComplete="off" method="post" action="/workspace/setup">
-                <Identity
-                  model={model}
-                  onboarding={onboarding}
-                  intent="period-align"
-                  step="profile"
-                />
-                <input type="hidden" name="basis" value={period.basis} />
-                <input type="hidden" name="to" value="name" />
-                <button type="submit" className="btn-secondary">
-                  Rename to {nameYear.nameFix}
-                </button>
-              </form>
-            ) : null}
+            ))}
           </div>
         ) : null}
+        {/* Confirming the period as recorded stays for words that are right as written
+            (a running engagement has only this); it no longer leads. */}
         {confirmable ? (
           <form autoComplete="off" method="post" action="/workspace/setup">
             <Identity
@@ -1223,9 +1212,15 @@ function PeriodCheckCard({
             />
             <input type="hidden" name="basis" value={period.basis} />
             <ConfirmAction
-              label="Confirm the period as recorded"
+              label={
+                onboarding.started
+                  ? "Confirm the period as recorded"
+                  : "The words are right as written: confirm the period"
+              }
               intent="period-confirm"
-              className="btn-secondary"
+              className={
+                onboarding.started ? "btn-secondary" : "btn-ghost btn-sm"
+              }
               tone="neutral"
               title="Confirm the period as recorded?"
               consequence={`The period ${onboarding.periodStart !== null ? `${formatDate(onboarding.periodStart)} to ` : "ending "}${formatDate(onboarding.periodEnd ?? "")} remains unchanged. Your confirmation is recorded in the audit trail, and any later change to the name, scope, or dates requires confirmation again.`}
@@ -2714,59 +2709,113 @@ function LaunchAction({
 }
 
 /**
- * Said once, right after launch: what launching created and what the team does next,
- * most pressing first (launchNextSteps, counted from the records). Closing it stays on
- * the launched setup; the steps open where each is done.
+ * Said once, right after launch: the five foundations of the scope, each with where it
+ * stands and where it is set up, in the recommended order (the product owner's reference,
+ * 27 October 2026; launchChecklist, read from the records). Closing it stays on the
+ * launched setup.
  */
 function LaunchedDialog({
   model,
   onboarding,
+  policies,
+  priorYear,
 }: {
   model: Ready;
   onboarding: Onboarding;
+  policies: readonly Policy[];
+  priorYear: readonly PriorYearReference[];
 }) {
-  const launch = onboarding.launch as LaunchSummary;
-  const steps = launchNextSteps(launch).slice(0, 3);
-  const [first] = steps;
-  // Drafted and not yet sent: held for their plan, in draft, or awaiting approval.
-  const requests =
-    launch.requestsHeld +
-    launch.requestsDraft +
-    launch.requestsAwaitingApproval;
+  const checklist = launchChecklist(onboarding, { policies, priorYear });
+  const total = checklist.foundations.length;
+  const href = (foundation: Foundation) =>
+    foundation.target.section === "register"
+      ? sectionHref(model, "register")
+      : `${sectionHref(model, "controls")}&pane=${foundation.target.pane}`;
   return (
     <RecordDialog
+      className="lc-dialog"
       eyebrow="Engagement launched"
-      title="What to do next"
-      description={`${launch.controls} control${launch.controls === 1 ? "" : "s"} in scope · ${launch.tasksTotal} agent task${launch.tasksTotal === 1 ? "" : "s"} · ${requests} evidence request${requests === 1 ? "" : "s"} drafted. Nothing is sent to the client until an approver confirms it.`}
+      title="Your engagement is ready. Let\u2019s set up the scope."
+      description={`Complete these ${total === 5 ? "five" : total} foundations to prepare your audit workspace and activate testing.`}
       closeHref={setupHref(model, "launch")}
     >
-      <ol className="launched-next launch-dialog-steps">
-        {steps.map((step) => (
-          <li
-            key={step.key}
-            className={step.tone === "ACTION" ? "is-action" : undefined}
-          >
-            <span className="row-text">
-              <span>{step.title}</span>
-              <small>{step.detail}</small>
+      <div className="lc-progress">
+        <strong>
+          {checklist.done} of {total} completed
+        </strong>
+        <progress
+          value={checklist.done}
+          max={total}
+          aria-label="Setup progress"
+        >
+          {checklist.done} of {total}
+        </progress>
+      </div>
+      <div className="lc-grid">
+        <ol className="lc-list">
+          {checklist.foundations.map((foundation, index) => (
+            <li key={foundation.key}>
+              <a className="lc-item" href={href(foundation)}>
+                <span className="lc-number">{index + 1}</span>
+                <span className="lc-icon">
+                  <UiIcon name={foundation.icon} size={20} />
+                </span>
+                <span className="lc-text">
+                  <strong>{foundation.title}</strong>
+                  <small>{foundation.detail}</small>
+                </span>
+                <span
+                  className={`pill lc-status${foundation.status === "DONE" ? " tone-success" : foundation.status === "IN_PROGRESS" ? " tone-info" : ""}`}
+                >
+                  {FOUNDATION_STATUS_LABEL[foundation.status]}
+                </span>
+                <UiIcon name="chevron" size={16} />
+              </a>
+            </li>
+          ))}
+        </ol>
+        <aside className="lc-aside" aria-labelledby="lc-order-title">
+          <span className="lc-aside-icon">
+            <UiIcon name="list" size={20} />
+          </span>
+          <h3 id="lc-order-title">Recommended setup order</h3>
+          <p>
+            Start with systems, then connect processes and controls. Upload
+            prior-year workpapers and policies to give the agents context for
+            scoping.
+          </p>
+          <p className="lc-aside-note">
+            <UiIcon name="info" size={15} />
+            <span>
+              Each step stays on Systems &amp; Processes, where you can return
+              to it anytime.
             </span>
-            <a
-              className={`btn btn-sm${step === first ? "" : " btn-secondary"}`}
-              href={sectionHref(model, step.target)}
-            >
-              {step.tone === "ACTION" ? "Open" : "View"}
-              <UiIcon name="arrow" size={13} />
+          </p>
+        </aside>
+      </div>
+      <footer className="lc-foot">
+        <p>
+          <UiIcon name="info" size={15} />
+          <span>
+            Nothing is sent to the client until an approver confirms it.
+          </span>
+        </p>
+        <span className="lc-actions">
+          <a className="btn btn-secondary" href={setupHref(model, "launch")}>
+            Do this later
+          </a>
+          {checklist.next !== null ? (
+            <a className="btn" href={href(checklist.next)}>
+              Start with {checklist.next.title.toLowerCase()}
+              <UiIcon name="arrow" size={15} />
             </a>
-          </li>
-        ))}
-      </ol>
-      <footer className="launch-dialog-foot">
-        <a className="text-link" href={setupHref(model, "launch")}>
-          Stay on setup
-        </a>
-        <a className="btn btn-secondary" href={sectionHref(model, "overview")}>
-          Go to Home
-        </a>
+          ) : (
+            <a className="btn" href={sectionHref(model, "overview")}>
+              Go to Home
+              <UiIcon name="arrow" size={15} />
+            </a>
+          )}
+        </span>
       </footer>
     </RecordDialog>
   );
@@ -2780,11 +2829,6 @@ function EngagementMemo({
   model: Ready;
   onboarding: Onboarding;
 }) {
-  const included = onboarding.controls.filter((control) => control.included);
-  const byArea = new Map<string, number>();
-  for (const control of included) {
-    byArea.set(control.domain, (byArea.get(control.domain) ?? 0) + 1);
-  }
   const lead = onboarding.team.find((member) => member.role === "LEAD");
   const reviewer = onboarding.team.find((member) => member.role === "REVIEWER");
   const preparers = onboarding.team.filter(
@@ -2853,32 +2897,9 @@ function EngagementMemo({
             ? `, ${reviewer.name} (independent reviewer)`
             : ", no reviewer"}
         </Row>
-        <Row label="Controls" step="controls">
-          {included.length === 0
-            ? "None in scope"
-            : [...byArea.entries()]
-                .map(
-                  ([domain, count]) =>
-                    `${count} ${AREA_LABEL[domain] ?? domain}`,
-                )
-                .join(", ")}
-          {included.some((control) => control.keyControl)
-            ? ` · ${included.filter((control) => control.keyControl).length} key`
-            : ""}
-        </Row>
-        <Row label="Systems" step="controls">
-          {inScopeSystems(onboarding).length === 0
-            ? "None yet"
-            : inScopeSystems(onboarding)
-                .map((app) => app.name)
-                .join(", ")}
-        </Row>
-        <Row label="Workpapers" step="workpapers">
-          {templateWords(onboarding)}
-        </Row>
-        <Row label="Evidence requests">
-          {`${included.length} drafted at launch, one per control · due in ${onboarding.dueDays} days, reminders every ${onboarding.followUpDays}. Nothing is sent until approved.`}
-        </Row>
+        {/* Controls, systems, workpapers and evidence requests are set up in the steps
+            after this one (decided by the product owner on 27 October 2026), so the memo
+            leaves them to those steps. */}
       </dl>
     </section>
   );

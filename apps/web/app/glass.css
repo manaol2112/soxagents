@@ -62,7 +62,8 @@
     .cs-assist,
     .er-card,
     .er-panel,
-    .er-sheet
+    .er-sheet,
+    .first-run-step
   ) {
   background-color: var(--glass-panel);
   background-image: var(--glass-sheen);
@@ -239,7 +240,8 @@
       .cs-assist,
       .er-card,
       .er-panel,
-      .er-sheet
+      .er-sheet,
+      .first-run-step
     ),
   :is(
       .menu-panel,

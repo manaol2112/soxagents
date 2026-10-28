@@ -25,12 +25,15 @@ export function RecordDialog({
   description,
   closeHref,
   children,
+  className,
 }: {
   eyebrow: string;
   title: string;
   description?: string;
   closeHref: string;
   children: ReactNode;
+  /** A dialog with a layout of its own adds its class (the launch checklist). */
+  className?: string;
 }) {
   const router = useRouter();
   const dialog = useRef<HTMLDivElement>(null);
@@ -87,7 +90,11 @@ export function RecordDialog({
     >
       <div
         ref={dialog}
-        className="record-dialog"
+        className={
+          className === undefined
+            ? "record-dialog"
+            : `record-dialog ${className}`
+        }
         role="dialog"
         aria-modal="true"
         aria-labelledby="record-dialog-title"

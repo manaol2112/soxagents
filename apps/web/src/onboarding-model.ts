@@ -1,5 +1,6 @@
 import type { Design } from "./control-context-model.ts";
 import type { EngagementPhase } from "./engagement-lifecycle.ts";
+import { formatDate } from "./format.ts";
 import type { Policy, PriorYearReference } from "./references-model.ts";
 import type { StandardMatches } from "./standard-matches-model.ts";
 
@@ -188,6 +189,10 @@ export type PeriodCheck = {
      * with the period's year; null where they do not apply. */
     periodEndFix: string | null;
     nameFix: string | null;
+    /** For a scope or fiscal year label naming another year: the same words in the
+     * period's year; null where they do not apply. */
+    scopeFix: string | null;
+    fiscalYearFix: string | null;
   }>;
   /** What a confirmation is for: any change to the name, scope, or dates asks again. */
   basis: string;
@@ -197,6 +202,55 @@ export type PeriodCheck = {
 };
 
 /** The disagreements that hold launch, or that a running engagement should settle. */
+/** One correction the period check offers: what it changes, and its button's words. */
+export type PeriodCorrection = {
+  to: "period_end" | "name" | "scope" | "fiscal_year";
+  label: string;
+};
+
+/** The corrections for the open conflicts, the words before the period: the scope or
+ * fiscal year label follows the recorded period, and a name that points at another year
+ * can move either way (decided by the product owner on 27 October 2026: correct the
+ * conflict; confirming the period as recorded is the exception). */
+export function periodCorrections(
+  period: PeriodCheck | null,
+  periodEnd: string | null,
+): PeriodCorrection[] {
+  if (period === null || period.confirmed) {
+    return [];
+  }
+  const open = period.conflicts.filter((conflict) => conflict.blocking);
+  const corrections: PeriodCorrection[] = [];
+  const scope = open.find((conflict) => conflict.scopeFix !== null);
+  if (scope !== undefined) {
+    corrections.push({
+      to: "scope",
+      label:
+        scope.kind === "SCOPE_YEAR" || periodEnd === null
+          ? `Update the scope to fiscal year ${(periodEnd ?? "").slice(0, 4)}`
+          : `Update the scope to ${formatDate(periodEnd)}`,
+    });
+  }
+  const label = open.find((conflict) => conflict.fiscalYearFix !== null);
+  if (label?.fiscalYearFix != null) {
+    corrections.push({
+      to: "fiscal_year",
+      label: `Set the fiscal year to ${label.fiscalYearFix}`,
+    });
+  }
+  const name = open.find((conflict) => conflict.kind === "NAME_YEAR");
+  if (name?.periodEndFix != null) {
+    corrections.push({
+      to: "period_end",
+      label: `Set the period end to ${formatDate(name.periodEndFix)}`,
+    });
+  }
+  if (name?.nameFix != null) {
+    corrections.push({ to: "name", label: `Rename to ${name.nameFix}` });
+  }
+  return corrections;
+}
+
 export function openConflicts(period: PeriodCheck | null): string[] {
   if (period === null || period.confirmed) {
     return [];
@@ -1052,6 +1106,15 @@ export function parsePeriod(value: unknown): PeriodCheck | null {
           typeof item.name_fix === "string" && item.name_fix !== ""
             ? item.name_fix
             : null,
+        scopeFix:
+          typeof item.scope_fix === "string" && item.scope_fix !== ""
+            ? item.scope_fix
+            : null,
+        fiscalYearFix:
+          typeof item.fiscal_year_fix === "string" &&
+          item.fiscal_year_fix !== ""
+            ? item.fiscal_year_fix
+            : null,
       })),
     basis: value.basis,
     confirmed: value.confirmed === true,
@@ -1675,8 +1738,13 @@ export function pendingSuggestions(onboarding: Onboarding): {
   }
   return {
     scope: draft.scopeText !== "" && draft.scopeText !== onboarding.scope,
+    // A draft made before the dates were set can end before the period now starts;
+    // that is no suggestion to take (the API refuses it too).
     periodEnd:
-      draft.periodEnd !== null && draft.periodEnd !== onboarding.periodEnd,
+      draft.periodEnd !== null &&
+      draft.periodEnd !== onboarding.periodEnd &&
+      (onboarding.periodStart === null ||
+        draft.periodEnd > onboarding.periodStart),
     cadence:
       draft.dueDays !== null &&
       (draft.dueDays !== onboarding.dueDays ||
@@ -1692,6 +1760,7 @@ export type SetupNotice =
   | "setup-accepted"
   | "setup-invalid"
   | "setup-changed"
+  | "setup-period-order"
   | "setup-started"
   | "setup-incomplete"
   | "setup-denied"
@@ -1749,6 +1818,7 @@ const NOTICES: readonly SetupNotice[] = [
   "setup-accepted",
   "setup-invalid",
   "setup-changed",
+  "setup-period-order",
   "setup-started",
   "setup-incomplete",
   "setup-denied",
@@ -3207,6 +3277,12 @@ export function setupNoticeFor(
   if (status === 409 && detail === "setup is not complete") {
     return "setup-incomplete";
   }
+  if (
+    status === 409 &&
+    detail === "the suggested period end is not after the period start"
+  ) {
+    return "setup-period-order";
+  }
   if (status === 409) {
     return "setup-changed";
   }
@@ -3465,12 +3541,13 @@ export function setupWrite(
     };
   }
   if (intent === "period-align") {
-    // Correct where the name and the period disagree, from the conflict itself.
+    // Correct where the period and the engagement's words disagree, from the conflict
+    // itself: the period end, the name, the scope, or the fiscal year label.
     const basis = fields.basis ?? "";
     const to = fields.to ?? "";
     if (
       !/^[0-9a-f]{32}$/.test(basis) ||
-      (to !== "period_end" && to !== "name")
+      !["period_end", "name", "scope", "fiscal_year"].includes(to)
     ) {
       return { error: "invalid" };
     }
@@ -4617,6 +4694,9 @@ export function setupProblem(notice: string): string | null {
   }
   if (notice === "setup-changed") {
     return "This changed since the page loaded. It now shows the latest.";
+  }
+  if (notice === "setup-period-order") {
+    return "The planner's period end falls on or before the period start, so it was not applied. Set the dates in the engagement profile.";
   }
   if (notice === "setup-slow") {
     return "That took longer than expected and may have been saved. Refresh to see the latest.";

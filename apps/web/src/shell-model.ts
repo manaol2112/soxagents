@@ -490,6 +490,23 @@ export function controlsToSetUp(
   );
 }
 
+/** The menu before the firm's first engagement: Home, which starts one, and the firm's
+ * own pages. The engagement's pages have nothing to show yet (decided by the product
+ * owner on 27 October 2026). */
+const BEFORE_FIRST_ENGAGEMENT: readonly SectionId[] = [
+  "overview",
+  "projects",
+  "library",
+];
+
+/** Whether the menu lists a section, given whether an engagement is open. */
+export function shownInMenu(
+  section: SectionId,
+  engagementOpen: boolean,
+): boolean {
+  return engagementOpen || BEFORE_FIRST_ENGAGEMENT.includes(section);
+}
+
 /** A draft engagement has not launched: its controls, evidence, plan, and approvals wait. */
 export function lockedBeforeLaunch(
   section: SectionId,

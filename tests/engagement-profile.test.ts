@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import { parseDashboard } from "../apps/web/src/engagement-model.ts";
@@ -8,6 +9,7 @@ import {
   openConflicts,
   parseOnboarding,
   parsePeriod,
+  periodCorrections,
   setupNoticeFor,
   setupWrite,
 } from "../apps/web/src/onboarding-model.ts";
@@ -404,5 +406,117 @@ describe("engagement profile", () => {
       parseDashboard({ controls: { in_scope: 1 } })?.periodConflicts,
       [],
     );
+  });
+});
+
+describe("correcting the period's words (27 October 2026)", () => {
+  const conflict = (fields: Record<string, unknown>) => ({
+    message: "m",
+    blocking: true,
+    ...fields,
+  });
+
+  it("offers to correct the scope or the fiscal year, scope first", () => {
+    const period = parsePeriod({
+      basis: BASIS,
+      confirmed: false,
+      conflicts: [
+        conflict({
+          kind: "SCOPE_DATE",
+          scope_fix: "For the period ending 31 December 2027.",
+        }),
+        conflict({ kind: "FISCAL_YEAR", fiscal_year_fix: "FY2027" }),
+      ],
+    });
+    assert.equal(
+      period?.conflicts[0]?.scopeFix,
+      "For the period ending 31 December 2027.",
+    );
+    assert.deepEqual(periodCorrections(period, "2027-12-31"), [
+      { to: "scope", label: "Update the scope to Dec 31, 2027" },
+      { to: "fiscal_year", label: "Set the fiscal year to FY2027" },
+    ]);
+  });
+
+  it("words a fiscal year in the scope as one, and keeps the name's two ways", () => {
+    const period = parsePeriod({
+      basis: BASIS,
+      conflicts: [
+        conflict({ kind: "SCOPE_YEAR", scope_fix: "FY2027 ITGCs." }),
+        conflict({
+          kind: "NAME_YEAR",
+          period_end_fix: "2026-12-31",
+          name_fix: "SOX 2027",
+        }),
+      ],
+    });
+    assert.deepEqual(
+      periodCorrections(period, "2027-12-31").map((c) => c.label),
+      [
+        "Update the scope to fiscal year 2027",
+        "Set the period end to Dec 31, 2026",
+        "Rename to SOX 2027",
+      ],
+    );
+  });
+
+  it("offers nothing once the period is confirmed or nothing can be corrected", () => {
+    const confirmed = parsePeriod({
+      basis: BASIS,
+      confirmed: true,
+      conflicts: [conflict({ kind: "SCOPE_DATE", scope_fix: "x" })],
+    });
+    assert.deepEqual(periodCorrections(confirmed, "2027-12-31"), []);
+    const order = parsePeriod({
+      basis: BASIS,
+      conflicts: [conflict({ kind: "PERIOD_ORDER" })],
+    });
+    assert.deepEqual(periodCorrections(order, "2027-12-31"), []);
+  });
+
+  it("sends a correction of the scope or the fiscal year to the align route", () => {
+    for (const to of ["scope", "fiscal_year"]) {
+      assert.deepEqual(
+        setupWrite({ ...ids, intent: "period-align", basis: BASIS, to }),
+        {
+          intent: "period-align",
+          step: "profile",
+          method: "POST",
+          path: `${base}/period/align`,
+          body: { basis: BASIS, to },
+        },
+      );
+    }
+    assert.deepEqual(
+      setupWrite({ ...ids, intent: "period-align", basis: BASIS, to: "dates" }),
+      { error: "invalid" },
+    );
+  });
+});
+
+describe("the engagement memo (27 October 2026)", () => {
+  // Controls, systems, workpapers and evidence requests are set up in the steps after
+  // the memo.
+  const view = readFileSync("apps/web/src/setup-view.tsx", "utf8");
+  const memo = view.slice(
+    view.indexOf("function EngagementMemo("),
+    view.indexOf("function LaunchedView("),
+  );
+
+  it("keeps the profile and the team", () => {
+    for (const label of ["Client", "Methodology", "Period", "Scope", "Team"]) {
+      assert.match(memo, new RegExp(`<Row label="${label}"`));
+    }
+  });
+
+  it("leaves controls, systems, workpapers and evidence requests to their steps", () => {
+    for (const label of [
+      "Controls",
+      "Systems",
+      "Workpapers",
+      "Evidence requests",
+    ]) {
+      assert.doesNotMatch(memo, new RegExp(`<Row label="${label}"`));
+    }
   });
 });

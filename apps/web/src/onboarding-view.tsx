@@ -70,6 +70,8 @@ export const NOTICES: Record<SetupNotice, string> = {
   "setup-incomplete": "Finish every setup step before starting the engagement.",
   "setup-denied": "Your role cannot change this engagement's setup.",
   "setup-unavailable": "That could not be saved. Try again.",
+  "setup-period-order":
+    "The planner's period end falls on or before the period start, so it was not applied. Set the dates in the engagement profile.",
   "setup-launched":
     "Engagement started. The agents have their tasks, and evidence requests are drafted for approval.",
   "setup-rcm-uploaded":

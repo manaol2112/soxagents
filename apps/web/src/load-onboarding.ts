@@ -60,7 +60,10 @@ export async function loadOnboarding(
       : null;
   const project = `/organizations/${model.organization.id}/projects/${model.selectedProject.id}`;
   // Systems & Processes lists the governing policies and procedures.
-  const scopePage = model.section === "controls";
+  // Right after launch, the setup checklist reads them too (launch-checklist-model).
+  const scopePage =
+    model.section === "controls" ||
+    (model.section === "setup" && query.notice === "setup-launched");
   const register = model.section === "register";
   const [loaded, previewed, context, policies, matches, priorYear] =
     await Promise.all([

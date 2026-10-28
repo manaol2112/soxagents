@@ -28,6 +28,7 @@ import {
   scopeCounts,
   setupAttention,
   setupNoticeFor,
+  setupProblem,
   setupProgress,
   setupWrite,
   stepReadiness,
@@ -1723,5 +1724,55 @@ describe("the library's IT controls a person can add for a system", () => {
       "01a13300-0000-7000-8000-000000000002",
     );
     assert.deepEqual(systemOffers({ otherControls: [] }), []);
+  });
+});
+
+describe("a draft that ends before the period starts", () => {
+  // A draft made before the period was aligned to the name's year (27 October 2026):
+  // accepting its period end ran the period backwards and failed as "could not be saved".
+  const parsed = parseOnboarding(
+    onboarding({
+      setup_draft: {
+        status: "IDLE",
+        drafting: false,
+        note: "",
+        source: "RULES",
+        scope_text: "The engagement covers Acme's ITGCs.",
+        period_end: "2026-12-31",
+        reasons: {},
+        drafted_at: "2026-10-27T10:00:00Z",
+        version: 2,
+      },
+    }),
+  );
+
+  it("is not offered as a period end", () => {
+    assert.ok(parsed !== null);
+    const aligned = {
+      ...parsed,
+      periodStart: "2027-01-01",
+      periodEnd: "2027-12-31",
+    };
+    assert.equal(pendingSuggestions(aligned).periodEnd, false);
+    // A later end is still a suggestion to take.
+    const later = {
+      ...aligned,
+      setupDraft:
+        aligned.setupDraft === null
+          ? null
+          : { ...aligned.setupDraft, periodEnd: "2028-03-31" },
+    };
+    assert.equal(pendingSuggestions(later).periodEnd, true);
+  });
+
+  it("names the API's refusal instead of a failed save", () => {
+    const notice = setupNoticeFor(
+      "accept-suggestions",
+      409,
+      "the suggested period end is not after the period start",
+    );
+    assert.equal(notice, "setup-period-order");
+    assert.equal(parseSetupNotice(notice), "setup-period-order");
+    assert.match(setupProblem(notice) ?? "", /period end falls on or before/);
   });
 });

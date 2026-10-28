@@ -483,8 +483,9 @@ class PeriodConfirm(BaseModel):
 class PeriodAlign(BaseModel):
     # What the page showed: the correction is for exactly that.
     basis: str = Field(min_length=8, max_length=64)
-    # Move the period end to the name's year, or change the name to the period's year.
-    to: Literal["period_end", "name"]
+    # Move the period end to the name's year, or change the name, the scope, or the fiscal
+    # year label to the period's year.
+    to: Literal["period_end", "name", "scope", "fiscal_year"]
 
 
 class ScopeUpdate(BaseModel):
@@ -1938,6 +1939,13 @@ def _align_period(
         state = period_state(connection, project_id)
         if state.basis != body.basis:
             raise OnboardingState("the period changed")
+        if body.to in ("scope", "fiscal_year"):
+            words = _align_words(cursor, organization_id, project_id, principal.id, state, body)
+            _audit(
+                cursor, organization_id, project_id, principal.id, "onboarding.period_aligned",
+                {"to": body.to, **words},
+            )  # fmt: skip
+            return _snapshot(connection, organization_id, project_id)
         conflict = next((c for c in state.conflicts if c.kind == "NAME_YEAR"), None)
         if conflict is None:
             raise OnboardingState("nothing to align")
@@ -1973,6 +1981,38 @@ def _align_period(
             {"to": body.to, **change},
         )  # fmt: skip
     return _snapshot(connection, organization_id, project_id)
+
+
+def _align_words(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    actor_id: UUID,
+    state: PeriodState,
+    body: PeriodAlign,
+) -> dict[str, Any]:
+    """The scope or the fiscal year label rewritten to the period's year, as the check
+    offered it; the period itself stays as recorded."""
+    if body.to == "scope":
+        scope = next(
+            (
+                c.scope_fix
+                for c in state.conflicts
+                if c.kind in ("SCOPE_DATE", "SCOPE_YEAR") and c.scope_fix is not None
+            ),
+            None,
+        )
+        if scope is None:
+            raise OnboardingState("nothing to align")
+        _write_scope(cursor, organization_id, project_id, actor_id, scope)
+        return {"scope": "period year"}
+    label = next(
+        (c.fiscal_year_fix for c in state.conflicts if c.fiscal_year_fix is not None), None
+    )
+    if label is None:
+        raise OnboardingState("nothing to align")
+    _touch(cursor, project_id, "fiscal_year = %s", (label,))
+    return {"fiscal_year": label}
 
 
 def _twelve_months_to(end: date) -> date:

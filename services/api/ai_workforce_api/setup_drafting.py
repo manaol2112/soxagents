@@ -390,6 +390,10 @@ def _checked(answer: _Answer, rules: dict[str, Any], facts: SetupFacts) -> dict[
 SuggestionField = Literal["scope", "period_end", "cadence"]
 
 
+# The refusal's detail; the web app names it to the person (onboarding-model.ts).
+PERIOD_BEFORE_START = "the suggested period end is not after the period start"
+
+
 class AcceptBody(BaseModel):
     version: int = Field(ge=1)
     fields: list[SuggestionField] = Field(min_length=1, max_length=3)
@@ -425,6 +429,14 @@ def accept(
             )
             applied.append("scope")
         if "period_end" in body.fields and row[3] is not None:
+            # A draft from before the dates were set can end before the period now starts
+            # (a period aligned to the name's year); the period would run backwards.
+            current = cursor.execute(
+                "SELECT period_start FROM engagement_settings WHERE project_id = %s FOR UPDATE",
+                (project_id,),
+            ).fetchone()
+            if current is not None and current[0] is not None and current[0] >= row[3]:
+                raise OnboardingState(PERIOD_BEFORE_START)
             _touch(cursor, project_id, "period_end = %s", (row[3],))
             applied.append("period_end")
         if "cadence" in body.fields and row[4] is not None:
