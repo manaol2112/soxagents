@@ -1,7 +1,9 @@
 """Demo requests from the public landing page.
 
 The only public write in the API. It stores a name, a work email, a firm, and a short
-message (`demo_requests`, migration 0043) for a person to follow up. Nothing is sent.
+message (`demo_requests`, migration 0043) for a person to follow up, and announces it to
+the firm's support address (support_notifications.py, migration 0123) once the visitor
+has their answer. Nothing is sent to the visitor.
 A request that looks like it carries a secret is refused, and one source cannot leave
 more than a few in an hour.
 """
@@ -12,13 +14,18 @@ from typing import Any
 from uuid import UUID
 
 import psycopg
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.inbound import clean_line, clean_text
 from ai_workforce_api.settings import Settings
+from ai_workforce_api.support_notifications import (
+    deliver_held,
+    demo_request_text,
+    record,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,14 +50,16 @@ class DemoRequestReceipt(BaseModel):
 
 def register_demo_requests(app: FastAPI, settings: Settings) -> None:
     @app.post(PUBLIC_PATH, status_code=201)
-    def leave_request(body: DemoRequestBody, request: Request) -> DemoRequestReceipt:
+    def leave_request(
+        body: DemoRequestBody, request: Request, tasks: BackgroundTasks
+    ) -> DemoRequestReceipt:
         if settings.database_url == "":
             raise HTTPException(status_code=503, detail="demo requests unavailable")
         source = request.client.host if request.client is not None else ""
         agent = request.headers.get("user-agent", "")
         try:
             with connect(settings.database_url) as connection:
-                return save_request(connection, body, source, agent)
+                receipt = save_request(connection, body, source, agent, settings)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
         except TooMany:
@@ -60,6 +69,9 @@ def register_demo_requests(app: FastAPI, settings: Settings) -> None:
         except psycopg.Error:
             logger.warning("demo request could not be saved")
             raise HTTPException(status_code=503, detail="demo requests unavailable") from None
+        # Announced after the answer, so a slow mail server never holds the visitor up.
+        tasks.add_task(deliver_held, settings)
+        return receipt
 
 
 class TooMany(Exception):
@@ -67,7 +79,11 @@ class TooMany(Exception):
 
 
 def save_request(
-    connection: psycopg.Connection[Any], body: DemoRequestBody, source: str, agent: str
+    connection: psycopg.Connection[Any],
+    body: DemoRequestBody,
+    source: str,
+    agent: str,
+    settings: Settings | None = None,
 ) -> DemoRequestReceipt:
     if body.website.strip():
         # A filled honeypot is a bot: answer as if it worked, store nothing.
@@ -101,7 +117,18 @@ def save_request(
             """,
             (name, email, firm, message, source[:64], agent[:300]),
         ).fetchone()
-    assert row is not None
+        assert row is not None
+        if settings is not None:
+            subject, text = demo_request_text(name=name, email=email, firm=firm, message=message)
+            record(
+                cursor,
+                settings,
+                kind="DEMO_REQUEST",
+                subject_id=UUID(str(row[0])),
+                subject=subject,
+                body=text,
+                reply_to=email,
+            )
     return DemoRequestReceipt(id=UUID(str(row[0])))
 
 

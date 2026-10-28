@@ -36,7 +36,7 @@ export function LoadingScreen() {
             />
           </svg>
         </div>
-        <p className="boot-name">AI Workforce</p>
+        <p className="boot-name">Audit Workforce</p>
         <div className="boot-steps" aria-hidden="true">
           {STEPS.map((step) => (
             <span key={step}>{step}</span>

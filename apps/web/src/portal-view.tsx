@@ -216,7 +216,7 @@ function Shell({
             <span className="pt-brand-mark" aria-hidden="true">
               <UiIcon name="logo" size={15} />
             </span>
-            <span className="pt-brand-name">AI Workforce</span>
+            <span className="pt-brand-name">Audit Workforce</span>
             <span className="pt-brand-product">Evidence Portal</span>
           </span>
           {context !== undefined ? (

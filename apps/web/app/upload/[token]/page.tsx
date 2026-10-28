@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 
 // The link's token is in this page's address: it is never sent on to another site.
 export const metadata: Metadata = {
-  title: "Evidence requests — AI Workforce",
+  title: "Evidence requests — Audit Workforce",
   referrer: "no-referrer",
   robots: { index: false, follow: false },
 };

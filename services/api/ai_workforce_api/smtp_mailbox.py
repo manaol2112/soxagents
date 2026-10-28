@@ -105,10 +105,13 @@ def build(
     cc: tuple[str, ...],
     subject: str,
     body: str,
+    reply_to: str = "",
 ) -> EmailMessage:
     if _HEADER_UNSAFE.search(subject) or any(
-        _HEADER_UNSAFE.search(item) for item in (recipient, *cc)
+        _HEADER_UNSAFE.search(item) for item in (recipient, *cc, reply_to)
     ):
+        raise MailboxState("mailbox fields are invalid")
+    if reply_to.strip() and _EMAIL.fullmatch(reply_to.strip()) is None:
         raise MailboxState("mailbox fields are invalid")
     message = EmailMessage()
     message["From"] = settings.email_from.strip()
@@ -118,6 +121,8 @@ def build(
     message["Subject"] = subject
     message["Date"] = formatdate(localtime=False, usegmt=True)
     message["Message-ID"] = message_id(settings, idempotency_key)
+    if reply_to.strip():
+        message["Reply-To"] = reply_to.strip()
     # The approved text, word for word, and the same words laid out for a mail client.
     message.set_content(body)
     message.add_alternative(to_html(subject, body), subtype="html")
@@ -213,6 +218,7 @@ def send_direct(
     recipient: str,
     subject: str,
     body: str,
+    reply_to: str = "",
     sender: Sender | None = None,
 ) -> None:
     """Send one email that belongs to no engagement (a welcome email), under the same
@@ -230,5 +236,6 @@ def send_direct(
             cc=(),
             subject=subject,
             body=body,
+            reply_to=reply_to,
         ),
     )

@@ -361,7 +361,7 @@ export function WorkspaceView({
             <UiIcon name="logo" size={16} />
           </span>
           <span className="brand-text">
-            <strong>AI Workforce</strong>
+            <strong>Audit Workforce</strong>
             <small>
               {model.status === "ready"
                 ? model.organization.name

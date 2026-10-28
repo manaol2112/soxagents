@@ -19,7 +19,14 @@ def workflow_address_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EMAIL_ALLOWED_RECIPIENT_DOMAINS", "")
     # A developer's live email settings never reach a test: nothing is sent from tests.
     monkeypatch.setenv("EMAIL_LIVE_SEND_ENABLED", "false")
-    for name in ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "EMAIL_FROM", "PUBLIC_BASE_URL"):
+    for name in (
+        "SMTP_HOST",
+        "SMTP_USER",
+        "SMTP_PASSWORD",
+        "EMAIL_FROM",
+        "PUBLIC_BASE_URL",
+        "SUPPORT_NOTIFY_EMAIL",
+    ):
         monkeypatch.setenv(name, "")
     monkeypatch.setenv("MODEL_PROVIDER", "")
     monkeypatch.setenv("MODEL_API_KEY", "")

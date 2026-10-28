@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     smtp_user: str = Field(default="", repr=False)
     smtp_password: str = Field(default="", repr=False)
     email_from: str = ""
+    # Where demo requests and new sign-ups are announced (support_notifications.py);
+    # empty sends none. Its domain must be among the allowed recipient domains.
+    support_notify_email: str = ""
     app_base_url: str = ""
     # Where links that leave the app point (the secure upload link and the welcome email's
     # sign-in link), when that differs from app_base_url: for example the machine's address

@@ -13,6 +13,15 @@ export type DemoWrite =
     };
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+/** What a team mainly audits, chosen on the demo form; optional. */
+export const DEMO_FOCUS = [
+  "IT SOX / ITGC",
+  "Business process controls",
+  "Internal audit",
+  "External audit",
+  "Other",
+] as const;
 const CREDENTIAL =
   /(?:password|passwd|secret|api[_ -]?key|token)\s*[:=]\s*\S|-----BEGIN [A-Z ]*PRIVATE KEY-----|\bAKIA[0-9A-Z]{16}\b/i;
 
@@ -21,8 +30,19 @@ export function demoWrite(fields: Record<string, string>): DemoWrite {
   const name = (fields.name ?? "").trim();
   const email = (fields.email ?? "").trim();
   const firm = (fields.firm ?? "").trim();
-  const message = (fields.message ?? "").trim();
+  const typed = (fields.message ?? "").trim();
+  const focus = (fields.focus ?? "").trim();
   const website = (fields.website ?? "").trim();
+  if (focus !== "" && !(DEMO_FOCUS as readonly string[]).includes(focus)) {
+    return { error: "invalid" };
+  }
+  // The API keeps one message; the focus leads it, so whoever follows up reads it first.
+  const message =
+    focus === ""
+      ? typed
+      : typed === ""
+        ? `Primary focus: ${focus}`
+        : `Primary focus: ${focus}\n\n${typed}`;
   if (
     name === "" ||
     name.length > 200 ||

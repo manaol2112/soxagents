@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from uuid import UUID
 
 import psycopg
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from psycopg.types.json import Json
 from pydantic import BaseModel
@@ -18,6 +18,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.identity import Identity, IdentityError, IdentityProvider, Issuer
 from ai_workforce_api.settings import Settings
+from ai_workforce_api.support_notifications import deliver_held, record, sign_up_text
 
 SESSION_COOKIE = "aw_session"
 PUBLIC_PATHS = frozenset(
@@ -137,16 +138,16 @@ def register_auth(
         return _begin_login(settings, provider, "entra", settings.oidc_redirect_url)
 
     @app.get("/auth/callback")
-    def callback(request: Request) -> Response:
-        return _finish_login(settings, provider, "entra", request)
+    def callback(request: Request, tasks: BackgroundTasks) -> Response:
+        return _finish_login(settings, provider, "entra", request, tasks)
 
     @app.get("/auth/google/login")
     def google_login() -> RedirectResponse:
         return _begin_login(settings, google_provider, "google", settings.google_redirect_url)
 
     @app.get("/auth/google/callback")
-    def google_callback(request: Request) -> Response:
-        return _finish_login(settings, google_provider, "google", request)
+    def google_callback(request: Request, tasks: BackgroundTasks) -> Response:
+        return _finish_login(settings, google_provider, "google", request, tasks)
 
     @app.get("/auth/preview")
     def preview(request: Request) -> Response:
@@ -220,7 +221,11 @@ def _begin_login(
 
 
 def _finish_login(
-    settings: Settings, provider: IdentityProvider | None, issuer: Issuer, request: Request
+    settings: Settings,
+    provider: IdentityProvider | None,
+    issuer: Issuer,
+    request: Request,
+    tasks: BackgroundTasks | None = None,
 ) -> Response:
     if provider is None:
         raise HTTPException(status_code=503, detail="authentication is not configured")
@@ -249,6 +254,9 @@ def _finish_login(
         raise HTTPException(status_code=503, detail="authentication unavailable") from None
     if raw_token is None:
         return _login_failed(settings, "disabled")
+    if tasks is not None:
+        # A new sign-up is announced to support once the person is on their way in.
+        tasks.add_task(deliver_held, settings)
     if settings.app_base_url != "":
         response: Response = RedirectResponse(settings.app_base_url, status_code=303)
     else:
@@ -329,7 +337,23 @@ def _open_session(settings: Settings, identity: Identity) -> str | None:
             user_id = _link_user(cursor, identity)
             if user_id is None:
                 return None
-            _ensure_workspace(cursor, user_id, identity)
+            workspace = _ensure_workspace(cursor, user_id, identity)
+            if workspace is not None:
+                subject, text = sign_up_text(
+                    name=identity.display_name or "",
+                    email=identity.email,
+                    workspace=workspace,
+                    provider=PROVIDER_WORDS.get(identity.issuer, identity.issuer),
+                )
+                record(
+                    cursor,
+                    settings,
+                    kind="SIGN_UP",
+                    subject_id=user_id,
+                    subject=subject,
+                    body=text,
+                    reply_to=identity.email,
+                )
             cursor.execute(
                 """
                 INSERT INTO auth_sessions (user_id, token_hash, expires_at)
@@ -392,11 +416,15 @@ def _link_user(cursor: psycopg.Cursor[Any], identity: Identity) -> UUID | None:
     return user_id
 
 
-def _ensure_workspace(cursor: psycopg.Cursor[Any], user_id: UUID, identity: Identity) -> None:
-    """Give a person who belongs to no organization one of their own, as its owner."""
+PROVIDER_WORDS = {"google": "Google", "entra": "Microsoft"}
+
+
+def _ensure_workspace(cursor: psycopg.Cursor[Any], user_id: UUID, identity: Identity) -> str | None:
+    """Give a person who belongs to no organization one of their own, as its owner.
+    Returns the new workspace's name, or None when they already belonged to one."""
     cursor.execute("SELECT 1 FROM memberships WHERE user_id = %s LIMIT 1", (user_id,))
     if cursor.fetchone() is not None:
-        return
+        return None
     name = workspace_name(identity.email, identity.display_name)
     organization_id: UUID | None = None
     base = workspace_slug(name)
@@ -458,6 +486,7 @@ def _ensure_workspace(cursor: psycopg.Cursor[Any], user_id: UUID, identity: Iden
             Json({"role": "OWNER", "status": "ACTIVE"}),
         ),
     )
+    return name
 
 
 def workspace_name(email: str, display_name: str | None) -> str:

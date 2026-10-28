@@ -33,7 +33,7 @@ export function SignInPage({
           <span className="si-logo" aria-hidden="true">
             <UiIcon name="logo" size={18} />
           </span>
-          AI Workforce
+          Audit Workforce
         </a>
         <h1>Sign in</h1>
         <p className="si-lead">
