@@ -6,7 +6,7 @@
 
 .cs-tiles {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
   gap: 1rem;
 }
 
@@ -62,6 +62,16 @@
   background: var(--success-soft);
 }
 
+.cs-tile.is-policies .cs-tile-icon {
+  color: var(--warning, #b45309);
+  background: var(--warning-soft);
+}
+
+.cs-tile.is-prior-year .cs-tile-icon {
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+}
+
 .cs-tile-text {
   display: grid;
   gap: 0.15rem;
@@ -95,7 +105,7 @@
 
 .cs-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
   gap: 0.35rem;
   padding: 0.4rem;
   background: var(--surface);
@@ -530,6 +540,1253 @@ button.sp-step-body:hover {
   gap: 1rem;
 }
 
+/* The wizards and drawers (add-system-wizard.tsx, add-process-wizard.tsx,
+   scope-actions.tsx): a frosted dialog in the middle of the page (glass.css). */
+.as-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgb(4 8 20 / 38%);
+  backdrop-filter: blur(3px);
+  animation: as-fade 200ms ease;
+}
+
+.as {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(940px, 100%);
+  height: min(720px, 100%);
+  overflow: hidden;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: 0 30px 80px -24px rgb(0 0 0 / 60%);
+  animation: as-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.as-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.as-head h2 {
+  flex: 1;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-lg);
+  font-weight: 650;
+}
+
+.as-head-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 8px;
+}
+
+.as-close {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.as-close:hover {
+  color: var(--text-strong);
+  background: var(--surface-muted);
+}
+
+.as-main {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.as-steps {
+  display: grid;
+  align-content: start;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 1.1rem 0.9rem;
+  list-style: none;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.as-steps li {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.6rem;
+  color: var(--text-secondary);
+  border-radius: 10px;
+  font-size: var(--fs-sm);
+  font-weight: 550;
+}
+
+.as-steps li.is-now {
+  color: var(--text-strong);
+  background: var(--accent-soft);
+}
+
+.as-step-mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+}
+
+.as-steps li.is-now .as-step-mark {
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.as-steps li.is-done .as-step-mark {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: var(--success);
+}
+
+.as-body {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  min-height: 0;
+  padding: 1.25rem 1.5rem 1.5rem;
+  overflow-y: auto;
+}
+
+.as-body h3 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 650;
+}
+
+.as-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem 1rem;
+}
+
+.as-grid label,
+.as-other {
+  position: relative;
+  display: grid;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.as-grid label > span b {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.as-grid .span-2 {
+  grid-column: span 2;
+}
+
+.as-count {
+  justify-self: end;
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+}
+
+.as-pick {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.as-pick legend {
+  margin-bottom: 0.4rem;
+  padding: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.as-pick legend small,
+.as-hint {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+}
+
+.as-hint {
+  margin: 0;
+}
+
+.as-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.as-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.7rem;
+  color: var(--text);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.as-chip:has(input:checked) {
+  color: var(--text-strong);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.as-chip input {
+  margin: 0;
+}
+
+.as-lead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* What the agent suggested: always marked as the agent's, never as approved. */
+.as-ai,
+.as-tag.is-ai {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.12rem 0.5rem;
+  color: var(--ai);
+  background: var(--ai-soft);
+  border: 1px solid var(--ai-border);
+  border-radius: 999px;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.as-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.as-areas {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.as-areas label {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.8rem;
+  padding: 0.85rem 1rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color 120ms ease;
+}
+
+.as-areas li.is-on label {
+  border-color: var(--accent-border);
+}
+
+.as-areas input {
+  margin: 0.2rem 0 0;
+}
+
+.as-area-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+}
+
+.as-areas .is-itgc .as-area-icon {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.as-areas .is-itac .as-area-icon {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.as-areas .is-ipe .as-area-icon {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.as-areas .is-business .as-area-icon {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.as-area-text {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.as-area-text strong {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+}
+
+.as-area-text small {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.as-area-text em {
+  margin-top: 0.3rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-style: normal;
+  line-height: 1.45;
+}
+
+.as-area-side {
+  display: grid;
+  justify-items: end;
+  gap: 0.3rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.as-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.12rem 0.5rem;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.as-tag.is-approved {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+}
+
+.as-link {
+  justify-self: start;
+  height: auto;
+  padding: 0;
+  color: var(--accent-text);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.as-link:hover {
+  text-decoration: underline;
+}
+
+.as-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  color: var(--text-secondary);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 10px;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.as-note svg {
+  flex: none;
+  margin-top: 0.1rem;
+  color: var(--accent-text);
+}
+
+.as-review {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem 1rem;
+  margin: 0;
+}
+
+.as-review .span-2 {
+  grid-column: span 2;
+}
+
+.as-review dt {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.as-review dd {
+  margin: 0.15rem 0 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+}
+
+.as-decision {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.9rem 1rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.as-decision h4 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+}
+
+.as-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.as-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1.25rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.as-foot-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.as-foot-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* Closing a wizard with something entered asks first. */
+.as-confirm {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.as-foot .as-discard {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+.as-problem {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+
+/* A field that is not a label (the system picker's), laid out like the others. */
+.as-field {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.as-field > span b {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* The agent's draft of a system's details (add-system-wizard.tsx): a small AI button by
+   the field, and a note under each field it filled, until a person changes it. */
+.as-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.as-field-head label {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.as-ai-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 26px;
+  padding: 0 0.65rem;
+  color: var(--ai);
+  background: var(--ai-soft);
+  border: 1px solid var(--ai-border);
+  border-radius: 999px;
+  box-shadow: none;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  transition:
+    background 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.as-ai-btn:hover:not(:disabled) {
+  box-shadow: 0 0 16px -4px var(--ai);
+}
+
+.as-ai-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.as-field-foot {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.as-drafted {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--ai);
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+}
+
+textarea.is-drafted,
+input.is-drafted {
+  border-color: var(--ai-border);
+  box-shadow: 0 0 0 1px var(--ai-soft);
+}
+
+.as-draft-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+/* The system picker (system-name-field.tsx). */
+.snf {
+  position: relative;
+}
+
+.snf-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  height: 36px;
+  padding: 0 0.75rem;
+  color: var(--text-strong);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.snf-trigger:hover,
+.snf.is-open .snf-trigger {
+  border-color: var(--accent-border);
+}
+
+.snf-trigger > svg {
+  flex: none;
+  color: var(--text-tertiary);
+  transform: rotate(90deg);
+  transition: transform 150ms ease;
+}
+
+.snf.is-open .snf-trigger > svg {
+  transform: rotate(-90deg);
+}
+
+.snf-placeholder {
+  color: var(--text-tertiary);
+}
+
+.snf-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snf-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  display: grid;
+  width: min(30rem, calc(100vw - 2rem));
+  padding: 0.9rem 0.6rem 0.6rem;
+  background: var(--glass-strong);
+  border: 1px solid var(--glass-edge);
+  border-radius: 16px;
+  box-shadow: var(--glass-shine), 0 24px 60px -20px rgb(0 0 0 / 55%);
+  animation: as-fade 150ms ease;
+}
+
+.snf-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0 0.5rem 0.6rem;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 650;
+}
+
+.snf-title span {
+  padding: 0.1rem 0.6rem;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border-radius: 999px;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+}
+
+.snf .snf-search {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0.5rem 0.4rem;
+  padding: 0 0.15rem 0.55rem;
+  color: var(--text-tertiary);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.snf .snf-search input {
+  flex: 1;
+  height: 34px;
+  padding: 0;
+  color: var(--text-strong);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  font-size: var(--fs-md);
+}
+
+.snf .snf-search input:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.snf-list {
+  display: grid;
+  gap: 0.15rem;
+  max-height: 20rem;
+  overflow-y: auto;
+  padding: 0.15rem;
+}
+
+.snf-list [role="option"] {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.55rem 0.6rem;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 100ms ease;
+}
+
+.snf-list [role="option"].is-active {
+  background: var(--surface-muted);
+}
+
+.snf-list [role="option"][aria-selected="true"] .snf-go {
+  color: var(--accent-text);
+}
+
+.snf-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+}
+
+.snf-icon.is-small {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+.snf-icon.is-blue {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.snf-icon.is-orange {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.snf-icon.is-purple {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.snf-icon.is-green {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.snf-icon.is-plain {
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border: 1px dashed var(--border-strong);
+}
+
+.snf-text {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.snf-text strong {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snf-text small {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.snf-go {
+  color: var(--text-tertiary);
+}
+
+.snf-none {
+  margin: 0.5rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* A drawer with no step list. */
+.as.is-single .as-main {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.as-head-icon.is-process {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.as-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  color: var(--text-tertiary);
+}
+
+.as-search svg {
+  position: absolute;
+  left: 0.65rem;
+  pointer-events: none;
+}
+
+.as-search input {
+  width: 100%;
+  height: 36px;
+  padding-left: 2rem;
+  font-size: var(--fs-sm);
+}
+
+/* The Add process wizard's systems: chosen, one primary. */
+.as-systems {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.as-systems li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.8rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.as-systems li.is-on {
+  border-color: var(--accent-border);
+}
+
+.as-systems label {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.as-systems strong {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+}
+
+.as-systems small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.as-tag.is-primary,
+.st-chip.is-primary {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+/* Select controls (scope-actions.tsx). */
+.sc-filters {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  padding: 1.1rem 0.9rem;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.sc-target {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.sc-filters fieldset {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.sc-filters legend {
+  margin-bottom: 0.4rem;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.sc-category {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.45rem;
+  color: var(--text);
+  border-radius: 8px;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.sc-category:hover {
+  background: var(--surface-muted);
+}
+
+.sc-category small {
+  padding: 0 0.45rem;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border-radius: 999px;
+  font-size: var(--fs-2xs);
+}
+
+.sc-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.sc-tools .as-search {
+  flex: 1;
+}
+
+.sc-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+.sc-table td {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+.sc-table tr.is-in td {
+  color: var(--text-secondary);
+}
+
+.sc-count {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cs-pane-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* The client's RCM (SP5): the drop zone and where the upload stands. */
+.rcm-drop {
+  display: grid;
+  justify-items: center;
+  gap: 0.45rem;
+  padding: 2.5rem 1.5rem;
+  color: var(--text-secondary);
+  text-align: center;
+  background: var(--surface-muted);
+  border: 1.5px dashed var(--accent-border);
+  border-radius: 14px;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.rcm-drop.is-over,
+.rcm-drop:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.rcm-drop strong {
+  color: var(--text-strong);
+}
+
+.rcm-drop small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.rcm-drop-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 14px;
+}
+
+.rcm-progress {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.9rem 1.15rem;
+}
+
+.rcm-progress .rcm-steps {
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  padding: 0;
+  border: 0;
+}
+
+.rcm-progress p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* Review and finalize (SP6). */
+.fz-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.75rem;
+}
+
+.fz-totals article {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.85rem 1rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.fz-totals strong {
+  color: var(--text-strong);
+  font-size: 26px;
+  font-weight: 700;
+}
+
+.fz-totals span {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.fz-list {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fz-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: var(--fs-sm);
+}
+
+.fz-list small {
+  color: var(--text-secondary);
+}
+
+.fz-notes h4 {
+  margin: 0 0 0.4rem;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+}
+
+.fz-notes ul {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fz-notes li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  color: var(--warning);
+  font-size: var(--fs-sm);
+}
+
+.fz-notes svg {
+  flex: none;
+  margin-top: 0.15rem;
+}
+
+.fz-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+@media (max-width: 760px) {
+  .sc-filters {
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .rcm-progress .rcm-steps {
+    grid-auto-flow: row;
+  }
+
+  /* A phone keeps the control and its choice; the category is the filter's. */
+  .sc-table th:nth-child(n + 4),
+  .sc-table td:nth-child(n + 4) {
+    display: none;
+  }
+
+  .fz-totals {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* A system's decided areas, above its scoping in the systems table. */
+.as-decided {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.85rem 1.15rem 0;
+}
+
+.as-decided p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.as-decided strong {
+  margin-right: 0.2rem;
+  color: var(--text-strong);
+}
+
+@keyframes as-in {
+  from {
+    transform: translateY(12px) scale(0.98);
+    opacity: 0;
+  }
+}
+
+@keyframes as-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  /* A phone gives the dialog the whole screen. */
+  .as-backdrop {
+    padding: 0;
+  }
+
+  .as {
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+  }
+
+  .as-main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .as-steps {
+    grid-auto-flow: column;
+    grid-auto-columns: auto;
+    gap: 0.25rem;
+    padding: 0.6rem 0.75rem;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .as-steps li {
+    padding: 0.35rem 0.5rem;
+    white-space: nowrap;
+  }
+
+  .as-steps li:not(.is-now) {
+    font-size: 0;
+    gap: 0;
+  }
+
+  .as-grid,
+  .as-review {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .as-grid .span-2,
+  .as-review .span-2 {
+    grid-column: auto;
+  }
+
+  .as-body {
+    padding: 1rem;
+  }
+
+  .as-areas label {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .as-area-icon {
+    display: none;
+  }
+
+  .as-area-side {
+    grid-column: 2;
+    justify-items: start;
+  }
+
+  .as-foot {
+    flex-wrap: wrap;
+  }
+
+  .as-foot-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .as-backdrop,
+  .as {
+    animation: none;
+  }
+
+  .as-areas label {
+    transition: none;
+  }
+}
+
 /* An empty tab's first step. */
 .cs-hero {
   position: relative;
@@ -825,6 +2082,7 @@ button.sp-step-body:hover {
 
   /* A phone keeps the three side by side: the figures, without the icons. */
   .cs-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.5rem;
   }
 
@@ -881,7 +2139,842 @@ button.sp-step-body:hover {
   .st-open button,
   .cs-tabs > button,
   .cs-assist .ap-action,
-  .cs-hero .new-process.is-first > summary {
+  .cs-hero .new-process.is-first > summary,
+  .snf-trigger > svg,
+  .snf-list [role="option"] {
     transition: none;
   }
+
+  .snf-panel {
+    animation: none;
+  }
+}
+
+/* Policies and procedures, and prior-year references (decided by the product owner on
+   25 October 2026; references-view.tsx). */
+.ry-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.ry-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: end;
+  gap: 1rem;
+}
+
+.ry-kind {
+  display: inline-flex;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0.2rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.ry-kind legend,
+.ry-pick legend {
+  margin-bottom: 0.35rem;
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.ry-kind label {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.35rem 0.8rem;
+  color: var(--text-secondary);
+  border-radius: 8px;
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.ry-kind label.is-on {
+  color: var(--text-strong);
+  background: var(--accent-soft);
+}
+
+.ry-kind input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ry-kind label:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ry-sub {
+  margin: 0.25rem 0 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md, 1rem);
+  font-weight: 650;
+}
+
+.ry-governs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.ry-pick {
+  min-width: 0;
+  margin: 0;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.ry-pick ul {
+  display: grid;
+  gap: 0.15rem;
+  max-height: 14rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.ry-pick label {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.35rem 0.25rem;
+  color: var(--text);
+  border-radius: 6px;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.ry-pick label:hover {
+  background: var(--surface-muted);
+}
+
+.ry-muted {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.ry-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 auto 0 0;
+  color: var(--success);
+  font-size: var(--fs-sm);
+}
+
+.ry-doc {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ry-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.5rem;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ry-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.ry-chip {
+  padding: 0.1rem 0.5rem;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.ry-detail {
+  display: grid;
+  justify-items: start;
+  gap: 0.6rem;
+}
+
+.ry-excerpt {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  white-space: pre-line;
+}
+
+.ry-pane {
+  display: grid;
+  gap: 1rem;
+}
+
+.ry-pane > .cs-pane-actions {
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.ry-card,
+.ry-review,
+.ry-control-card {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1.1rem 1.2rem;
+}
+
+.ry-card-head,
+.ry-review-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.75rem;
+}
+
+.ry-card-head h3,
+.ry-review-head h3 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md, 1rem);
+  font-weight: 650;
+}
+
+.ry-card-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 10px;
+}
+
+.ry-card-icon.is-ai {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.ry-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.6rem;
+  color: var(--success);
+  background: var(--success-soft);
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ry-state.is-working {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.ry-state.is-failed {
+  color: var(--danger);
+  background: var(--danger-soft, var(--surface-muted));
+}
+
+.ry-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.ry-note svg {
+  flex: none;
+  margin-top: 0.2rem;
+  color: var(--ai);
+}
+
+.ry-counts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.ry-counts div {
+  padding: 0.55rem 0.75rem;
+  background: var(--surface-muted);
+  border-radius: 10px;
+}
+
+.ry-counts dt {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.ry-counts dd {
+  margin: 0.1rem 0 0;
+  color: var(--text-strong);
+  font-size: var(--fs-lg);
+  font-weight: 650;
+}
+
+.ry-group {
+  display: grid;
+  gap: 0.6rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+.ry-group h4 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+}
+
+.ry-group h4 span {
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.ry-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.ry-matches,
+.ry-proposals {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ry-matches > li,
+.ry-proposals > li {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.ry-proposals > li.is-accepted {
+  opacity: 0.75;
+}
+
+.ry-match {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.ry-match > svg {
+  color: var(--text-tertiary);
+}
+
+.ry-prior {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.ry-now,
+.ry-control {
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+button.ry-link {
+  justify-self: start;
+  min-height: 0;
+  height: auto;
+  padding: 0.25rem 0.1rem;
+  color: var(--accent-text);
+  background: none;
+  border: 0;
+  box-shadow: none;
+  font-size: var(--fs-xs);
+  font-weight: 550;
+  cursor: pointer;
+}
+
+button.ry-link:hover {
+  background: none;
+  text-decoration: underline;
+}
+
+.ry-quote {
+  display: flex;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border-left: 2px solid var(--border-strong, var(--border));
+  border-radius: 6px;
+  font-size: var(--fs-xs);
+  white-space: pre-line;
+}
+
+.ry-quote svg {
+  flex: none;
+  margin-top: 0.15rem;
+  color: var(--text-tertiary);
+}
+
+.ry-proposal-text {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.ry-actions,
+.ry-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ry-actions select {
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 16rem;
+}
+
+.ry-unmatched p {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+@media (max-width: 760px) {
+  .ry-row,
+  .ry-governs {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ry-counts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ry-card-head,
+  .ry-review-head {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .ry-card-head > .ry-state,
+  .ry-review-head > .btn {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ry-kind label {
+    transition: none;
+  }
+}
+
+.ry-proposals > li > .ry-tag {
+  justify-self: start;
+}
+
+.ry-accepted summary {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.ry-accepted[open] summary {
+  margin-bottom: 0.6rem;
+}
+
+/* Removing a document (0113): a quiet button that turns red on hover, and its question. */
+.btn-secondary.ry-danger:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.ry-confirm {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+
+.ry-card-foot {
+  justify-content: flex-end;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+.as.is-compact {
+  width: min(560px, 100%);
+  height: auto;
+}
+
+/* Review and finalize (25 October 2026): each part of the scope with its Edit, then the
+   hand-off to Planning. */
+.fz-rows {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fz-rows li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.fz-row-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.fz-row-icon.is-processes {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.fz-row-icon.is-policies {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.fz-row-icon.is-controls {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.fz-row-text {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.fz-row-text strong {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+}
+
+.fz-row-text small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.fz-ready {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.85rem;
+  padding: 1rem;
+  border: 1px solid var(--success-border, var(--border));
+  border-radius: 12px;
+  background: var(--success-soft);
+}
+
+.fz-ready-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  color: var(--success);
+  border: 2px solid var(--success);
+  border-radius: 999px;
+}
+
+.fz-ready h3 {
+  margin: 0 0 0.2rem;
+  color: var(--text-strong);
+  font-size: var(--fs-md, 1rem);
+}
+
+.fz-ready p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.sc-scope {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.6rem;
+  color: var(--success);
+  background: var(--success-soft);
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sc-control {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.sc-control strong {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+/* The client's controls that match a firm standard (standard-matches.tsx). */
+.sm-card {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1.1rem 1.2rem;
+}
+
+/* Systems taken out of scope (0114): listed apart, with why and the way back. */
+.oos {
+  padding: 0;
+}
+
+.oos summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.9rem 1.15rem;
+  color: var(--text-strong);
+  font-weight: 650;
+  cursor: pointer;
+  list-style: none;
+}
+
+.oos summary::-webkit-details-marker {
+  display: none;
+}
+
+.oos summary svg {
+  color: var(--text-tertiary);
+  transition: transform 150ms ease;
+}
+
+.oos[open] summary svg {
+  transform: rotate(90deg);
+}
+
+.oos summary span {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.oos summary small {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+}
+
+.oos ul {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0 0 0.4rem;
+  list-style: none;
+}
+
+.oos li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 1.15rem;
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+.oos-text {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.oos-text strong {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.oos-text small,
+.oos-reason {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oos summary svg {
+    transition: none;
+  }
+}
+
+/* One place for controls (26 October 2026): a system's or process's controls in brief,
+   and the Controls tab's filter to one of them. */
+.ss {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.ss-counts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.ss-counts div {
+  padding: 0.55rem 0.75rem;
+  background: var(--surface-muted);
+  border-radius: 10px;
+}
+
+.ss-counts dt {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.ss-counts dd {
+  margin: 0.1rem 0 0;
+  color: var(--text-strong);
+  font-size: var(--fs-lg);
+  font-weight: 650;
+}
+
+.ss-areas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0;
+}
+
+.ss-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.sc-register {
+  display: grid;
+  gap: 1rem;
+}
+
+.sc-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 0.9rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--accent-soft);
+  border-radius: 12px;
+  background: var(--accent-soft);
+}
+
+.sc-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.3rem 0.2rem 0.6rem;
+  color: var(--text-strong);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--fs-sm);
+}
+
+.sc-filter-chip button {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  padding: 0;
+  color: var(--text-secondary);
+  background: none;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.sc-filter-chip button:hover {
+  color: var(--text-strong);
+  background: var(--surface-muted);
+}
+
+.sc-filter-count {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.sc-filter-clear {
+  padding: 0;
+  color: var(--accent-text);
+  background: none;
+  border: 0;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.sc-filter-select {
+  margin-left: auto;
+}
+
+.sc-write {
+  padding: 0.9rem 1.15rem;
+}
+
+@media (max-width: 760px) {
+  .ss-counts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sc-filter-select {
+    margin-left: 0;
+  }
+}
+
+/* The References tab (26 October 2026): narratives and diagrams, then the prior year. */
+.ry-section {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.ry-section-title {
+  margin: 0.4rem 0 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md, 1rem);
+  font-weight: 650;
 }

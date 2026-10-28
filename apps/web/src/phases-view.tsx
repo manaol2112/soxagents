@@ -100,14 +100,6 @@ export function ViewSwitch({
       >
         Each plan
       </a>
-      {ids.section === "testing" ? null : (
-        <a
-          href={link("phases")}
-          aria-current={view === "phases" ? "page" : undefined}
-        >
-          Phases
-        </a>
-      )}
     </nav>
   );
 }

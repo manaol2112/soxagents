@@ -10,7 +10,16 @@ import {
   useTransition,
 } from "react";
 import { createPortal } from "react-dom";
-
+import {
+  ClientWalkthrough,
+  WALK_ASK_EVENT,
+  WALK_POINTS_EVENT,
+} from "./client-walkthrough";
+import {
+  type WalkDocument,
+  walkPoints,
+  walkSettled,
+} from "./client-walkthrough-model";
 import {
   type Attribute,
   type AttributeDefinition,
@@ -30,13 +39,20 @@ import {
   PROCEDURE_PHASES,
   type ProcessStep,
   type Readiness,
+  SECTION_HEADINGS,
   SOURCE_LABELS,
   STATE_TONES,
   type Testing,
   TYPE_LABELS,
+  type Understanding,
 } from "./control-context-model";
+import {
+  type NarrativeAttribute,
+  NarrativeSources,
+  NarrativeUses,
+  ProcessNarrative,
+} from "./process-narrative";
 import { UiIcon } from "./ui-icon";
-import { SuggestedAnswer } from "./value-options";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
 
@@ -438,28 +454,73 @@ function TestingProcedures({ testing }: { testing: Testing }) {
 const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 /** The control's statement: what the control is, as its design documentation states it,
- * with the client's values in place and a form to fill the ones still missing. */
+ * with the client's values in place and a form to fill the ones still missing. In the
+ * Plan step the process narrative stands in for the design narrative, which is not shown
+ * there (product owner, 26 October 2026). */
 export function DesignPanel({
   ids,
   design,
   canAct,
+  narrative = true,
+  walkthrough = null,
 }: {
   ids: Ids;
   design: Design;
   canAct: boolean;
+  /** The narrative above the questions; the Plan step shows it in the control's
+   * understanding instead. */
+  narrative?: boolean;
+  /** The walkthrough's surroundings: the control's documents, where they are read, who is
+   * answering, where a question goes, and the process narrative drafted from the answers. */
+  walkthrough?: {
+    documents: WalkDocument[];
+    policiesHref: string;
+    askHref: string;
+    viewer: string;
+    understanding: Understanding | null;
+    attributes: NarrativeAttribute[];
+    /** The control's issues: the questions the narrative's agents raised among them. */
+    issues: ContextIssue[];
+    /** The system and the control, under the narrative's title. */
+    subtitle?: string;
+  } | null;
 }) {
   const action = useAction(ids);
-  const id = useId();
   const fillable = design.slots.filter((slot) => !slot.automatic);
-  const [values, setValues] = useState<Record<string, string>>(() =>
-    Object.fromEntries(fillable.map((slot) => [slot.key, slot.value])),
-  );
   const [everywhere, setEverywhere] = useState(true);
-  const changed = Object.fromEntries(
-    fillable
-      .filter((slot) => (values[slot.key] ?? "").trim() !== slot.value)
-      .map((slot) => [slot.key, (values[slot.key] ?? "").trim()]),
+  const questionOf = (slot: (typeof fillable)[number]) =>
+    slot.question || sentence(slot.label);
+  const waiting = walkPoints(walkthrough?.issues ?? [], SECTION_HEADINGS);
+  // Once the narrative is approved and nothing waits, the conversation folds to one line
+  // and the narrative leads (product owner, 27 October 2026); the answers stay on record.
+  const standing = walkSettled(
+    fillable.map((slot) => ({
+      question: questionOf(slot),
+      value: slot.value,
+      filledAt: slot.filledAt,
+    })),
+    walkthrough?.understanding ?? { status: "NONE", confirmedAt: "" },
+    waiting.length,
   );
+  const [showAnswers, setShowAnswers] = useState(false);
+  const folded = walkthrough !== null && standing.settled && !showAnswers;
+  const walkRef = useRef<HTMLDivElement>(null);
+  // An answer opened from the narrative's sources, or the points it sends back, open the
+  // conversation again.
+  useEffect(() => {
+    const open = () => {
+      setShowAnswers(true);
+      window.setTimeout(() => {
+        walkRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+      }, 50);
+    };
+    document.addEventListener(WALK_ASK_EVENT, open);
+    document.addEventListener(WALK_POINTS_EVENT, open);
+    return () => {
+      document.removeEventListener(WALK_ASK_EVENT, open);
+      document.removeEventListener(WALK_POINTS_EVENT, open);
+    };
+  }, []);
   const facts: Array<[string, string]> = [
     ["Risk", design.risk],
     ["IT risk", design.itRisk],
@@ -489,8 +550,8 @@ export function DesignPanel({
   ];
   return (
     <section className="cc-design" aria-busy={action.pending}>
-      <p className="cc-statement">{design.text}</p>
-      {design.missing.length > 0 ? (
+      {narrative ? <p className="cc-statement">{design.text}</p> : null}
+      {narrative && design.missing.length > 0 ? (
         <p className="cc-design-missing">
           <UiIcon name="risk" size={13} />
           <span>
@@ -500,119 +561,155 @@ export function DesignPanel({
           </span>
         </p>
       ) : null}
-      <details className="cc-def">
-        <summary>How the control is designed</summary>
-        <dl>
-          {facts
-            .filter(([, text]) => text.trim() !== "")
-            .map(([label, text]) => (
-              <Rule key={label} label={label} text={text} />
-            ))}
-          {design.information.length > 0 ? (
-            <>
-              <dt>Information used</dt>
-              <dd>
-                <ul className="cc-info">
-                  {design.information.map((item) => (
-                    <li key={item.name}>
-                      {item.name}
-                      {item.ipe !== "" ? <Badge>{item.ipe}</Badge> : null}
-                      <span className="cc-by">
-                        {" "}
-                        · {item.elements.join(", ")}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </dd>
-            </>
-          ) : null}
-        </dl>
-      </details>
       {fillable.length > 0 ? (
-        <form
-          autoComplete="off"
-          className="cc-values"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            await action.run("values", {
-              intent: "values-set",
-              values: changed,
-              everywhere,
-            });
-          }}
-        >
-          <h4>
-            Client values{" "}
-            <span className="num">
-              {
-                fillable.filter(
-                  (slot) => (values[slot.key] ?? "").trim() !== "",
-                ).length
-              }
-              /{fillable.length}
-            </span>
-          </h4>
-          <p className="form-hint">
-            What only the client knows. Each one fills the statement and, where
-            the control's attributes leave it in brackets, their wording too.
-          </p>
-          <div className="cc-value-grid">
-            {fillable.map((slot) => (
-              <div key={slot.key} className="cc-value">
-                <label className="cc-value-label" htmlFor={`${id}-${slot.key}`}>
-                  {slot.question || sentence(slot.label)}
-                  {(values[slot.key] ?? "").trim() !== "" ? (
-                    <span className="cc-value-done">
-                      <UiIcon name="check" size={11} />
-                      Answered
-                    </span>
-                  ) : slot.blocks ? (
-                    <Badge tone="is-question">Testing waits</Badge>
-                  ) : null}
-                </label>
-                {slot.hint !== "" ? <small>{slot.hint}</small> : null}
-                <SuggestedAnswer
-                  id={`${id}-${slot.key}`}
-                  options={slot.options}
-                  value={values[slot.key] ?? ""}
-                  placeholder={
-                    canAct && slot.options.length > 0
-                      ? "Type the client's answer"
-                      : slot.example !== ""
-                        ? `For example: ${slot.example}`
-                        : ""
-                  }
-                  disabled={!canAct}
-                  onChange={(text) =>
-                    setValues({ ...values, [slot.key]: text })
-                  }
-                />
+        <div className="cc-values cc-walk">
+          {/* The client's answers as a conversation, and the process narrative drafted
+              from them beside it (decided by the product owner on 26 October 2026). */}
+          <div className="cc-walk-main">
+            {walkthrough !== null && standing.settled ? (
+              <div className="wt-settled">
+                <span className="wt-settled-icon" aria-hidden="true">
+                  <UiIcon name="check" size={16} />
+                </span>
+                <div>
+                  <h4>Client-specific information</h4>
+                  <p>
+                    {standing.answered}{" "}
+                    {standing.answered === 1 ? "answer" : "answers"} confirmed.
+                    The approved narrative and the test plan use them.
+                    {standing.changed.length > 0 ? (
+                      <span className="wt-settled-changed">
+                        {" "}
+                        {standing.changed.length === 1
+                          ? "1 answer changed"
+                          : `${standing.changed.length} answers changed`}{" "}
+                        since the narrative was approved.
+                      </span>
+                    ) : null}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary btn-sm"
+                  aria-expanded={showAnswers}
+                  onClick={() => setShowAnswers(!showAnswers)}
+                >
+                  {showAnswers ? "Hide answers" : "View or change answers"}
+                </button>
               </div>
-            ))}
+            ) : null}
+            <div ref={walkRef} className="cc-walk-body" hidden={folded}>
+              <ClientWalkthrough
+                ids={ids}
+                slots={fillable.map((slot) => ({
+                  key: slot.key,
+                  question: questionOf(slot),
+                  hint: slot.hint,
+                  example: slot.example,
+                  options: slot.options,
+                  blocks: slot.blocks,
+                  value: slot.value,
+                  filledBy: slot.filledBy,
+                }))}
+                // The facts the narrative's agents still need, as points to confirm together
+                // (decided by the product owner on 26 October 2026).
+                points={waiting}
+                onConfirmPoints={(items) =>
+                  action.run("points", { intent: "process-points", items })
+                }
+                canAct={canAct}
+                documents={walkthrough?.documents ?? []}
+                policiesHref={walkthrough?.policiesHref ?? "/"}
+                askHref={walkthrough?.askHref ?? "/"}
+                viewer={walkthrough?.viewer ?? ""}
+                everywhere={everywhere}
+                onEverywhere={setEverywhere}
+                onSave={(key, value) =>
+                  action.run("values", {
+                    intent: "values-set",
+                    values: { [key]: value },
+                    everywhere,
+                  })
+                }
+                onComplete={() => {
+                  // Every question answered: the narrative is drafted and reviewed in the
+                  // background.
+                  if (canAct) {
+                    void action.run("narrate", { intent: "process-narrate" });
+                  }
+                }}
+                problem={action.busy === "process" ? null : action.problem}
+                busy={action.pending}
+              />
+            </div>
+            <details className="cc-def wt-design">
+              <summary>How the control is designed</summary>
+              <dl>
+                {facts
+                  .filter(([, text]) => text.trim() !== "")
+                  .map(([label, text]) => (
+                    <Rule key={label} label={label} text={text} />
+                  ))}
+                {design.information.length > 0 ? (
+                  <>
+                    <dt>Information used</dt>
+                    <dd>
+                      <ul className="cc-info">
+                        {design.information.map((item) => (
+                          <li key={item.name}>
+                            {item.name}
+                            {item.ipe !== "" ? <Badge>{item.ipe}</Badge> : null}
+                            <span className="cc-by">
+                              {" "}
+                              · {item.elements.join(", ")}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </dd>
+                  </>
+                ) : null}
+              </dl>
+            </details>
           </div>
-          {canAct ? (
-            <div className="cc-values-foot">
-              <label className="cc-check-label">
-                <input
-                  type="checkbox"
-                  checked={everywhere}
-                  onChange={(event) => setEverywhere(event.target.checked)}
-                />
-                Also use these for other controls that ask for them and have
-                none yet
-              </label>
-              <button
-                type="submit"
-                className="btn-sm"
-                disabled={action.pending || Object.keys(changed).length === 0}
-              >
-                {action.busy === "values" ? "Saving…" : "Save values"}
-              </button>
+          {walkthrough !== null ? (
+            <div className="cc-walk-side">
+              <ProcessNarrative
+                ids={ids}
+                subtitle={walkthrough.subtitle ?? ""}
+                understanding={walkthrough.understanding}
+                attributes={walkthrough.attributes}
+                canAct={canAct}
+                busy={action.pending}
+                problem={action.busy === "" ? action.problem : null}
+                run={action.run}
+                points={waiting.length > 0}
+                changed={standing.changed}
+              />
+              <NarrativeSources
+                sources={[
+                  ...fillable
+                    .filter((slot) => slot.value.trim() !== "")
+                    .map((slot) => ({
+                      key: `answer-${slot.key}`,
+                      kind: "answer" as const,
+                      title: slot.value,
+                      detail: `Client-specific answer · ${slot.question || sentence(slot.label)}`,
+                      slotKey: slot.key,
+                    })),
+                  ...walkthrough.documents.map((item) => ({
+                    key: `document-${item.id}`,
+                    kind: "document" as const,
+                    title: item.title,
+                    detail: item.detail,
+                    href: walkthrough.policiesHref,
+                  })),
+                ]}
+              />
+              <NarrativeUses />
             </div>
           ) : null}
-          <Problem text={action.problem} />
-        </form>
+        </div>
       ) : null}
     </section>
   );
@@ -628,7 +725,9 @@ export function AttributesPanel({
   ids: Ids;
   context: ControlContext;
   canAct: boolean;
-  /** Inside the test plan, whose Procedures tab already says how it is tested. */
+  /** Inside the test plan, whose attribute table is the one list of the attributes (and
+   * whose Procedures tab already says how each is tested): only what waits on a decision,
+   * the agent's proposals and the history are shown here. */
   compact?: boolean;
 }) {
   const action = useAction(ids);
@@ -651,100 +750,127 @@ export function AttributesPanel({
           canAct={canAct}
         />
       ) : null}
-      <ol className="cc-list">
-        {context.approved.map((attribute, index) => (
-          <li key={attribute.id} className="cc-item">
-            <span className="cc-index">{String.fromCharCode(65 + index)}</span>
-            <div className="cc-item-body">
-              {editing?.id === attribute.id ? (
-                <form
-                  autoComplete="off"
-                  className="cc-inline"
-                  onSubmit={async (event) => {
-                    event.preventDefault();
-                    if (
-                      await action.run("edit", {
-                        intent: "attribute-edit",
-                        attribute_id: attribute.id,
-                        text: editing.text,
-                        version: attribute.version,
-                      })
-                    ) {
-                      setEditing(null);
-                    }
-                  }}
-                >
-                  <label className="sr-only" htmlFor={`${id}-edit`}>
-                    Attribute
-                  </label>
-                  <input
-                    id={`${id}-edit`}
-                    value={editing.text}
-                    maxLength={300}
-                    onChange={(event) =>
-                      setEditing({ id: attribute.id, text: event.target.value })
-                    }
-                  />
-                  <button
-                    type="submit"
-                    className="btn-sm"
-                    disabled={action.pending}
+      {compact ? null : (
+        <ol className="cc-list">
+          {context.approved.map((attribute, index) => (
+            <li key={attribute.id} className="cc-item">
+              <span className="cc-index">
+                {String.fromCharCode(65 + index)}
+              </span>
+              <div className="cc-item-body">
+                {editing?.id === attribute.id ? (
+                  <form
+                    autoComplete="off"
+                    className="cc-inline"
+                    onSubmit={async (event) => {
+                      event.preventDefault();
+                      if (
+                        await action.run("edit", {
+                          intent: "attribute-edit",
+                          attribute_id: attribute.id,
+                          text: editing.text,
+                          version: attribute.version,
+                        })
+                      ) {
+                        setEditing(null);
+                      }
+                    }}
                   >
-                    Save
+                    <label className="sr-only" htmlFor={`${id}-edit`}>
+                      Attribute
+                    </label>
+                    <input
+                      id={`${id}-edit`}
+                      value={editing.text}
+                      maxLength={300}
+                      onChange={(event) =>
+                        setEditing({
+                          id: attribute.id,
+                          text: event.target.value,
+                        })
+                      }
+                    />
+                    <button
+                      type="submit"
+                      className="btn-sm"
+                      disabled={action.pending}
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => setEditing(null)}
+                    >
+                      Cancel
+                    </button>
+                  </form>
+                ) : (
+                  <p className="cc-text">{attribute.text}</p>
+                )}
+                <SourceLine attribute={attribute} />
+                <DefinitionDetails definition={attribute.definition} />
+              </div>
+              {canAct && editing?.id !== attribute.id ? (
+                <span className="cc-actions">
+                  <button
+                    type="button"
+                    className="btn-ghost btn-sm"
+                    onClick={() =>
+                      setEditing({ id: attribute.id, text: attribute.text })
+                    }
+                  >
+                    Edit
                   </button>
                   <button
                     type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => setEditing(null)}
+                    className="btn-ghost btn-sm"
+                    disabled={action.pending || context.approved.length <= 1}
+                    title={
+                      context.approved.length <= 1
+                        ? "A control keeps at least one attribute."
+                        : undefined
+                    }
+                    onClick={() =>
+                      action.run("retire", {
+                        intent: "attribute-retire",
+                        attribute_id: attribute.id,
+                        version: attribute.version,
+                      })
+                    }
                   >
-                    Cancel
+                    Retire
                   </button>
-                </form>
-              ) : (
-                <p className="cc-text">{attribute.text}</p>
-              )}
-              <SourceLine attribute={attribute} />
-              <DefinitionDetails definition={attribute.definition} />
-            </div>
-            {canAct && editing?.id !== attribute.id ? (
-              <span className="cc-actions">
-                <button
-                  type="button"
-                  className="btn-ghost btn-sm"
-                  onClick={() =>
-                    setEditing({ id: attribute.id, text: attribute.text })
-                  }
-                >
-                  Edit
-                </button>
-                <button
-                  type="button"
-                  className="btn-ghost btn-sm"
-                  disabled={action.pending || context.approved.length <= 1}
-                  title={
-                    context.approved.length <= 1
-                      ? "A control keeps at least one attribute."
-                      : undefined
-                  }
-                  onClick={() =>
-                    action.run("retire", {
-                      intent: "attribute-retire",
-                      attribute_id: attribute.id,
-                      version: attribute.version,
-                    })
-                  }
-                >
-                  Retire
-                </button>
-              </span>
-            ) : null}
-          </li>
-        ))}
-        {context.approved.length === 0 ? (
-          <li className="cc-empty">No approved attributes yet.</li>
-        ) : null}
-      </ol>
-      {canAct ? (
+                </span>
+              ) : null}
+            </li>
+          ))}
+          {context.approved.length === 0 ? (
+            <li className="cc-empty">No approved attributes yet.</li>
+          ) : null}
+        </ol>
+      )}
+      {canAct && compact ? (
+        <p className="cc-propose">
+          <span>
+            The agent can read the sources and the approved narrative and
+            propose attributes to add, change or retire.
+          </span>
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            disabled={action.pending}
+            onClick={() =>
+              action.run("generate", { intent: "attributes-generate" })
+            }
+          >
+            <UiIcon name="sparkles" size={13} />{" "}
+            {action.busy === "generate"
+              ? "Reading the sources…"
+              : "Propose with the agent"}
+          </button>
+        </p>
+      ) : canAct ? (
         <form
           autoComplete="off"
           className="cc-add"
@@ -1300,6 +1426,7 @@ export function ProcessPanel({
                   source: "",
                   sourceTitle: "",
                   quote: "",
+                  attributes: [],
                 },
               ]);
             }}
@@ -1347,7 +1474,8 @@ export function ProcessPanel({
   );
 }
 
-function Classifications({
+/** How the control is classified, and changing it. */
+export function Classifications({
   ids,
   context,
   canAct,
@@ -1532,6 +1660,69 @@ export function DocumentsPanel({
             </button>
           ) : null}
         </div>
+      ) : null}
+      {action.note !== "" && action.problem === null ? (
+        <p className="cc-note">{action.note}</p>
+      ) : null}
+      <Problem text={action.problem} />
+      {open ? (
+        <DocumentDialog
+          ids={ids}
+          controls={controls}
+          onClose={() => setOpen(false)}
+          onAdded={async () => {
+            setOpen(false);
+            await action.run("review", { intent: "review" });
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** The control's documents' own actions, for the assistant's documents card in the Plan
+ * step (product owner, 26 October 2026): add documentation, and have the agent review the
+ * control against the documents not yet reviewed. */
+export function DocumentActions({
+  ids,
+  context,
+  canAct,
+  controls,
+}: {
+  ids: Ids;
+  context: ControlContext;
+  canAct: boolean;
+  controls: ControlChoice[];
+}) {
+  const action = useAction(ids);
+  const [open, setOpen] = useState(false);
+  const unreviewed = context.documents.filter(
+    (document) => !document.reviewed,
+  ).length;
+  if (!canAct) {
+    return null;
+  }
+  return (
+    <div className="cw-docs-actions" aria-busy={action.pending}>
+      <button
+        type="button"
+        className="btn btn-secondary btn-sm"
+        onClick={() => setOpen(true)}
+      >
+        <UiIcon name="plus" size={13} /> Add
+      </button>
+      {unreviewed > 0 ? (
+        <button
+          type="button"
+          className="btn-sm"
+          disabled={action.pending}
+          onClick={() => action.run("review", { intent: "review" })}
+        >
+          <UiIcon name="sparkles" size={13} />{" "}
+          {action.busy === "review"
+            ? "Reviewing…"
+            : `Review ${unreviewed} new document${unreviewed === 1 ? "" : "s"}`}
+        </button>
       ) : null}
       {action.note !== "" && action.problem === null ? (
         <p className="cc-note">{action.note}</p>

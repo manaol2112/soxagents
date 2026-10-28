@@ -1,5 +1,7 @@
 import type { Design } from "./control-context-model.ts";
 import type { EngagementPhase } from "./engagement-lifecycle.ts";
+import type { Policy, PriorYearReference } from "./references-model.ts";
+import type { StandardMatches } from "./standard-matches-model.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -446,11 +448,13 @@ export type Onboarding = {
   maxFollowUps: number;
   templatesConfirmed: boolean;
   started: boolean;
+  /** When a person reviewed and finalized the scope (SP6): the work starts then. */
+  scopeFinalizedAt: string | null;
   applications: SetupSystem[];
   /** Business processes the team named, beside the standard cycles. */
   processes: SetupProcess[];
   /** Common systems not yet in scope, to pick instead of typing. */
-  knownSystems: Array<{ name: string; layer: string }>;
+  knownSystems: Array<{ name: string; layer: string; category: string }>;
   team: Array<{
     userId: string;
     name: string;
@@ -1125,6 +1129,10 @@ export function parseOnboarding(value: unknown): Onboarding | null {
     maxFollowUps: Number(settings.pbc_max_follow_ups ?? 2),
     templatesConfirmed: typeof settings.templates_confirmed_at === "string",
     started: value.started === true,
+    scopeFinalizedAt:
+      typeof settings.scope_finalized_at === "string"
+        ? settings.scope_finalized_at
+        : null,
     drafting: {
       total: Number((isRecord(value.drafting) ? value.drafting.total : 0) ?? 0),
       pending: Number(
@@ -1151,12 +1159,30 @@ export function parseOnboarding(value: unknown): Onboarding | null {
         domainLabel: str(item.domain_label),
         version: Number(item.version ?? 1),
         controlsInScope: Number(item.controls_in_scope ?? 0),
+        systemIds: strings(item.system_ids),
+        primarySystemId:
+          typeof item.primary_system_id === "string"
+            ? item.primary_system_id
+            : null,
+        description: str(item.description),
+        owner: str(item.owner),
+        controlAreas: Array.isArray(item.control_areas)
+          ? item.control_areas.filter(isArea)
+          : null,
+        controlAreasSuggested: parseAreaSuggestions(
+          item.control_areas_suggested,
+        ),
+        controlAreasDecidedAt:
+          typeof item.control_areas_decided_at === "string"
+            ? item.control_areas_decided_at
+            : null,
       })),
     knownSystems: records(value.known_systems)
       .filter((item) => typeof item.name === "string")
       .map((item) => ({
         name: str(item.name),
         layer: str(item.layer) || "APPLICATION",
+        category: str(item.category),
       })),
     team: records(value.team).map((item) => ({
       userId: str(item.user_id),
@@ -1802,7 +1828,23 @@ export type SetupProcess = {
   domainLabel: string;
   version: number;
   controlsInScope: number;
+  /** The systems it runs on (migration 0109), the primary one first. */
+  systemIds: string[];
+  primarySystemId: string | null;
+  /** SP3 (migration 0110): what it is and who owns it, and its control areas. */
+  description: string;
+  owner: string;
+  controlAreas: ControlArea[] | null;
+  controlAreasSuggested: AreaSuggestions | null;
+  controlAreasDecidedAt: string | null;
 };
+
+/** The systems in scope: one taken out of scope is kept on record, listed apart. */
+export function inScopeSystems(onboarding: Onboarding): SetupSystem[] {
+  return onboarding.applications.filter(
+    (system) => (system.outOfScope ?? null) === null,
+  );
+}
 
 /** The standard business cycles a named process can be based on. */
 export const PROCESS_CYCLES: ReadonlyArray<readonly [string, string]> =
@@ -1854,7 +1896,94 @@ export type SetupSystem = {
   assessment: SystemAssessment | null;
   /** SOC reports uploaded for the system, with the CUECs read from them. */
   socReports: SocReport[];
+  /** The Systems & Processes workflow (SP2, migration 0109). */
+  environment: string | null;
+  integrationIds: string[];
+  processIds: string[];
+  /** The control areas a person approved; null until one decides. */
+  controlAreas: ControlArea[] | null;
+  /** The agent's suggestion as it was shown when the areas were decided. */
+  controlAreasSuggested: AreaSuggestions | null;
+  controlAreasDecidedAt: string | null;
+  /** Taken out of scope after launch (migration 0114), kept on record; null in scope. */
+  outOfScope?: { at: string; reason: string } | null;
 };
+
+export type ControlArea = "ITGC" | "ITAC" | "IPE" | "BUSINESS";
+
+/** The control areas a system's controls fall in, in the library's order. */
+export const CONTROL_AREAS: ReadonlyArray<{
+  id: ControlArea;
+  label: string;
+  detail: string;
+}> = [
+  {
+    id: "ITGC",
+    label: "IT general controls",
+    detail: "Access, change, and operations controls",
+  },
+  {
+    id: "ITAC",
+    label: "Application controls",
+    detail: "Automated controls within the application",
+  },
+  {
+    id: "IPE",
+    label: "Key reports (IPE)",
+    detail: "Financial and operational reports",
+  },
+  {
+    id: "BUSINESS",
+    label: "Business process controls",
+    detail: "Manual and IT-dependent controls",
+  },
+];
+
+export type AreaSuggestion = {
+  area: ControlArea;
+  suggested: boolean;
+  /** How many of the firm's library controls the area holds for the system. */
+  controls: number;
+  reason: string;
+};
+
+/** The setup agent's suggested areas: its rules over the documented facts and the
+ * firm's standard library (source RULES); no model is called. */
+export type AreaSuggestions = {
+  source: string;
+  libraryVersion: number;
+  areas: AreaSuggestion[];
+};
+
+export const ENVIRONMENTS: ReadonlyArray<[string, string]> = [
+  ["PRODUCTION", "Production"],
+  ["NON_PRODUCTION", "Non-production"],
+  ["BOTH", "Production and non-production"],
+];
+
+function isArea(value: unknown): value is ControlArea {
+  return CONTROL_AREAS.some((area) => area.id === value);
+}
+
+/** The agent's suggested areas as the API answers them; null when it does not. */
+export function parseAreaSuggestions(value: unknown): AreaSuggestions | null {
+  if (!isRecord(value) || !Array.isArray(value.areas)) {
+    return null;
+  }
+  const areas = records(value.areas)
+    .filter((item) => isArea(item.area))
+    .map((item) => ({
+      area: item.area as ControlArea,
+      suggested: item.suggested === true,
+      controls: Number(item.controls ?? 0),
+      reason: str(item.reason),
+    }));
+  return {
+    source: str(value.source) || "RULES",
+    libraryVersion: Number(value.library_version ?? 0),
+    areas,
+  };
+}
 
 export type Applicability =
   | "RECOMMENDED"
@@ -2144,7 +2273,7 @@ export function needsReason(
 export type WizardWrite =
   | { error: "invalid" }
   | {
-      method: "POST" | "PATCH" | "PUT";
+      method: "GET" | "POST" | "PATCH" | "PUT";
       path: string;
       body: unknown;
       /** How long to wait for the API, in ms, when longer than usual. */
@@ -2158,6 +2287,122 @@ const DETAIL_LIMITS: Record<string, number> = {
   owner: 200,
 };
 
+const HOSTINGS = ["SAAS", "VENDOR_HOSTED", "ON_PREMISES"];
+
+/** A system as the Add system wizard documents it, checked; null when anything is off. */
+export function systemDraftBody(
+  fields: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const name = str(fields.name).trim();
+  const layer = str(fields.layer);
+  if (
+    name === "" ||
+    name.length > 120 ||
+    SECRET.test(name) ||
+    !LAYERS.some(([key]) => key === layer)
+  ) {
+    return null;
+  }
+  const body: Record<string, unknown> = { name, layer };
+  for (const [key, limit] of Object.entries(DETAIL_LIMITS)) {
+    const value = str(fields[key]).trim();
+    if (value.length > limit || SECRET.test(value)) {
+      return null;
+    }
+    body[key] = value;
+  }
+  const environment = str(fields.environment);
+  if (environment !== "") {
+    if (!ENVIRONMENTS.some(([key]) => key === environment)) {
+      return null;
+    }
+    body.environment = environment;
+  }
+  const hosting = str(fields.hosting);
+  if (hosting !== "") {
+    if (!HOSTINGS.includes(hosting)) {
+      return null;
+    }
+    body.hosting = hosting;
+  }
+  for (const key of ["integration_ids", "process_ids"]) {
+    const ids = fields[key] ?? [];
+    if (
+      !Array.isArray(ids) ||
+      ids.length > 50 ||
+      !ids.every((id) => typeof id === "string" && UUID.test(id))
+    ) {
+      return null;
+    }
+    body[key] = ids;
+  }
+  return body;
+}
+
+const LIBRARY_KEY = /^[a-z][a-z0-9-]{0,60}$/;
+
+/** The system or the process controls are selected for, as the API's query. */
+function scopeTarget(
+  fields: Record<string, unknown>,
+): { system_id: string } | { process_id: string } | null {
+  const system = str(fields.system_id);
+  const process = str(fields.target_process_id);
+  if ((system === "") === (process === "")) {
+    return null;
+  }
+  if (system !== "") {
+    return UUID.test(system) ? { system_id: system } : null;
+  }
+  return UUID.test(process) ? { process_id: process } : null;
+}
+
+/** A business process as the Add process wizard documents it, checked; null when
+ * anything is off. */
+export function processDraftBody(
+  fields: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const name = str(fields.name).trim();
+  const domain = str(fields.domain);
+  if (
+    name === "" ||
+    name.length > 120 ||
+    SECRET.test(name) ||
+    !PROCESS_CYCLES.some(([key]) => key === domain)
+  ) {
+    return null;
+  }
+  const description = str(fields.description).trim();
+  const owner = str(fields.owner).trim();
+  if (
+    description.length > 500 ||
+    owner.length > 200 ||
+    SECRET.test(description) ||
+    SECRET.test(owner)
+  ) {
+    return null;
+  }
+  const ids = fields.system_ids ?? [];
+  if (
+    !Array.isArray(ids) ||
+    ids.length > 50 ||
+    !ids.every((id) => typeof id === "string" && UUID.test(id))
+  ) {
+    return null;
+  }
+  const primary = str(fields.primary_system_id);
+  if (primary !== "" && !ids.includes(primary)) {
+    return null;
+  }
+  return {
+    name,
+    domain,
+    description,
+    owner,
+    system_ids: ids,
+    ...(primary === "" ? {} : { primary_system_id: primary }),
+  };
+}
+
 /** The API call for one step of the system wizard, checked before it is sent. */
 export function wizardWrite(fields: Record<string, unknown>): WizardWrite {
   const organizationId = str(fields.organization_id);
@@ -2168,6 +2413,102 @@ export function wizardWrite(fields: Record<string, unknown>): WizardWrite {
     return { error: "invalid" };
   }
   const base = `/organizations/${organizationId}/projects/${projectId}/onboarding`;
+  // The Add business process wizard (SP3): the same, for a process.
+  if (intent === "process-areas" || intent === "process-add") {
+    const body = processDraftBody(fields);
+    if (body === null) {
+      return { error: "invalid" };
+    }
+    if (intent === "process-areas") {
+      return { method: "POST", path: `${base}/processes/areas`, body };
+    }
+    const approved = fields.approved_areas;
+    if (
+      !Array.isArray(approved) ||
+      approved.length > CONTROL_AREAS.length ||
+      !approved.every(isArea)
+    ) {
+      return { error: "invalid" };
+    }
+    return {
+      method: "POST",
+      path: `${base}/processes/setup`,
+      body: { ...body, approved_areas: [...new Set(approved)] },
+    };
+  }
+  // Selecting controls (SP4): what can be selected for a system or a process, then the
+  // selection; and Review and finalize (SP6) with the counts the person reviewed.
+  if (intent === "scope-options" || intent === "scope-select") {
+    const target = scopeTarget(fields);
+    if (target === null) {
+      return { error: "invalid" };
+    }
+    if (intent === "scope-options") {
+      return {
+        method: "GET",
+        path: `${base}/scope/options?${new URLSearchParams(target).toString()}`,
+        body: null,
+      };
+    }
+    const keys = fields.library_keys;
+    if (
+      !Array.isArray(keys) ||
+      keys.length === 0 ||
+      keys.length > 150 ||
+      !keys.every((key) => typeof key === "string" && LIBRARY_KEY.test(key))
+    ) {
+      return { error: "invalid" };
+    }
+    return {
+      method: "POST",
+      path: `${base}/scope/select`,
+      body: { ...target, library_keys: [...new Set(keys)] },
+    };
+  }
+  if (intent === "scope-finalize") {
+    const counts = ["systems", "processes", "controls"].map((key) =>
+      Number(fields[key]),
+    );
+    if (
+      !counts.every((count) => Number.isInteger(count) && count >= 0) ||
+      (counts[2] ?? 0) < 1
+    ) {
+      return { error: "invalid" };
+    }
+    return {
+      method: "POST",
+      path: `${base}/scope/finalize`,
+      body: {
+        systems: counts[0],
+        processes: counts[1],
+        controls: counts[2],
+      },
+    };
+  }
+  // The Add system wizard (SP2): the agent's suggested areas, then the system added in
+  // one call with the areas a person approved.
+  if (intent === "areas" || intent === "add") {
+    const body = systemDraftBody(fields);
+    if (body === null) {
+      return { error: "invalid" };
+    }
+    if (intent === "areas") {
+      return { method: "POST", path: `${base}/systems/areas`, body };
+    }
+    const approved = fields.approved_areas;
+    if (
+      !Array.isArray(approved) ||
+      approved.length > CONTROL_AREAS.length ||
+      !approved.every(isArea)
+    ) {
+      return { error: "invalid" };
+    }
+    return {
+      method: "POST",
+      path: `${base}/systems`,
+      body: { ...body, approved_areas: [...new Set(approved)] },
+    };
+  }
   if (intent === "create") {
     const name = str(fields.name).trim();
     const layer = str(fields.layer);
@@ -2541,6 +2882,27 @@ function parseSystem(item: Record<string, unknown>): SetupSystem {
     refCode: str(item.ref_code),
     assessment: parseAssessment(item.assessment),
     socReports: records(item.soc_reports).map(parseSocReport),
+    environment: typeof item.environment === "string" ? item.environment : null,
+    integrationIds: strings(item.integration_ids),
+    processIds: strings(item.process_ids),
+    controlAreas: Array.isArray(item.control_areas)
+      ? item.control_areas.filter(isArea)
+      : null,
+    controlAreasSuggested: parseAreaSuggestions(item.control_areas_suggested),
+    controlAreasDecidedAt:
+      typeof item.control_areas_decided_at === "string"
+        ? item.control_areas_decided_at
+        : null,
+    outOfScope:
+      typeof item.out_of_scope_at === "string"
+        ? {
+            at: item.out_of_scope_at,
+            reason:
+              typeof item.out_of_scope_reason === "string"
+                ? item.out_of_scope_reason
+                : "",
+          }
+        : null,
     recommendations: records(item.recommendations)
       .filter((rec) => KINDS.some((kind) => kind === rec.kind))
       .map((rec) => ({
@@ -3252,6 +3614,19 @@ export function setupWrite(
       method: "POST",
       path: `${base}/applications/known`,
       body: { names, custom },
+    };
+  }
+  if (intent === "restore-application") {
+    const id = fields.application_id ?? "";
+    if (!UUID.test(id)) {
+      return { error: "invalid" };
+    }
+    return {
+      intent,
+      step: "controls",
+      method: "POST",
+      path: `${base}/applications/${id}/restore`,
+      body: {},
     };
   }
   if (intent === "remove-application") {
@@ -4045,6 +4420,14 @@ export type SetupState = {
   design?: Design | null;
   /** The tab of the Controls setup an address names. */
   pane?: string | null;
+  /** The Controls tab's filter to one system or process (`for=system:<id>`). */
+  controlsFor?: string | null;
+  /** Policies, procedures, narratives and diagrams (0112), for Systems & Processes. */
+  policies?: Policy[];
+  /** The prior-year references, on Systems & Processes' References tab. */
+  priorYear?: PriorYearReference[];
+  /** The client's controls that match a firm standard, for one grouped decision. */
+  standardMatches?: StandardMatches | null;
 };
 
 export const EMPTY_SETUP: SetupState = {

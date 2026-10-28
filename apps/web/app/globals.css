@@ -19,9 +19,10 @@
 
   /* Glass (decided by the product owner; glass.css): translucent panels over a soft
      glow, frosted where content passes behind them. */
-  --glass-panel: rgb(255 255 255 / 66%);
+  --glass-panel: rgb(255 255 255 / 44%);
   --glass-strong: rgb(255 255 255);
-  --glass-chrome: rgb(255 255 255 / 72%);
+  --glass-dialog: rgb(255 255 255 / 72%);
+  --glass-chrome: rgb(255 255 255 / 58%);
   --glass-sidebar: rgb(14 31 54 / 92%);
   --glass-edge: rgb(255 255 255 / 75%);
   --glass-line: rgb(15 23 42 / 8%);
@@ -150,21 +151,22 @@
   --surface-glass: rgb(11 18 32 / 86%);
   --highlight: rgb(245 181 68 / 30%);
 
-  --glass-panel: rgb(24 35 58 / 52%);
+  --glass-panel: rgb(30 44 74 / 24%);
   --glass-strong: rgb(19 28 47);
-  --glass-chrome: rgb(11 18 32 / 62%);
-  --glass-sidebar: rgb(9 15 28 / 72%);
-  --glass-edge: rgb(255 255 255 / 11%);
-  --glass-line: rgb(255 255 255 / 8%);
-  --glass-shine: inset 0 1px 0 rgb(255 255 255 / 9%);
+  --glass-dialog: rgb(18 28 50 / 58%);
+  --glass-chrome: rgb(11 18 32 / 40%);
+  --glass-sidebar: rgb(9 15 28 / 46%);
+  --glass-edge: rgb(255 255 255 / 15%);
+  --glass-line: rgb(255 255 255 / 9%);
+  --glass-shine: inset 0 1px 0 rgb(255 255 255 / 14%);
   --glass-sheen: linear-gradient(
     180deg,
-    rgb(255 255 255 / 5%),
-    rgb(255 255 255 / 0.5%)
+    rgb(255 255 255 / 7%),
+    rgb(255 255 255 / 1%)
   );
-  --glow-a: rgb(67 97 238 / 32%);
-  --glow-b: rgb(167 139 250 / 22%);
-  --glow-c: rgb(60 207 142 / 10%);
+  --glow-a: rgb(67 97 238 / 40%);
+  --glow-b: rgb(167 139 250 / 28%);
+  --glow-c: rgb(60 207 142 / 13%);
   --guide-dim: rgb(2 6 16 / 62%);
   --guide-glow: rgb(99 128 255 / 48%);
   --bot-eye: #a9bbff;
@@ -218,6 +220,48 @@
     0 0 0 1px rgb(255 255 255 / 6%), 0 4px 8px rgb(0 0 0 / 30%),
     0 16px 32px rgb(0 0 0 / 45%);
   --ring: 0 0 0 3px rgb(99 128 255 / 40%);
+}
+
+/* The light theme in the workspace (product owner, 26 October 2026: "the same premium
+   feel" as dark): a pearl canvas under a visible aurora, frosted white panels with a crisp
+   hairline and a lit top edge, and layered soft shadows that lift them off the page. The
+   sidebar is frosted glass over the same glow (glass.css). Only the workspace changes; the
+   client portal and the public pages (.theme-light) keep the shared light tokens.
+   Text tokens meet WCAG 2.2 AA on --surface, --canvas and --surface-hover. */
+:root[data-theme="light"]:not(:has(.theme-light)) {
+  --canvas: #f1f3f8;
+  --surface-hover: #f3f5fa;
+  --sidebar: #f7f8fb;
+
+  --glass-panel: rgb(255 255 255 / 72%);
+  --glass-strong: rgb(255 255 255);
+  --glass-dialog: rgb(255 255 255 / 92%);
+  --glass-chrome: rgb(246 248 252 / 72%);
+  --glass-sidebar: rgb(255 255 255 / 50%);
+  --glass-edge: rgb(15 23 42 / 8%);
+  --glass-line: rgb(15 23 42 / 7%);
+  --glass-shine: inset 0 1px 0 rgb(255 255 255 / 100%);
+  --glass-sheen: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 80%),
+    rgb(255 255 255 / 25%)
+  );
+  --glow-a: rgb(76 110 245 / 30%);
+  --glow-b: rgb(139 92 246 / 22%);
+  --glow-c: rgb(16 185 129 / 12%);
+
+  --text-secondary: #485266;
+  --text-tertiary: #5d6779;
+
+  --shadow-xs: 0 1px 2px rgb(15 23 42 / 5%);
+  --shadow-sm:
+    0 1px 2px rgb(15 23 42 / 4%), 0 2px 6px -1px rgb(30 41 82 / 5%),
+    0 12px 28px -14px rgb(30 41 82 / 14%);
+  --shadow-lg:
+    0 1px 2px rgb(15 23 42 / 5%), 0 20px 44px -18px rgb(30 41 82 / 24%);
+  --shadow-pop:
+    0 0 0 1px rgb(15 23 42 / 6%), 0 6px 12px -2px rgb(30 41 82 / 8%),
+    0 24px 48px -14px rgb(30 41 82 / 24%);
 }
 
 /* Base */

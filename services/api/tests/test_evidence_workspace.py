@@ -611,10 +611,12 @@ def test_a_person_links_a_file_to_another_phase_and_it_is_not_requested_again(
     roll = _phase(reapproved.json(), "ROLLFORWARD")
     mine = next(r for r in roll["requirements"] if r["id"] == target["id"])
     assert mine["request_id"] is None and mine["state"] == "ACCEPTED"
-    others = [
-        r for r in _open(roll) if r["id"] != target["id"] and r["state"] != "AWAITING_DEPENDENCY"
-    ]
-    assert others and all(r["request_id"] is not None for r in others)
+    # Lean (27 October 2026): the roll-forward's list is the item linked here; its selected
+    # samples wait for the list. Anything else the phase holds is requested.
+    others = [r for r in _open(roll) if r["id"] != target["id"]]
+    assert others and all(
+        r["state"] == "AWAITING_DEPENDENCY" or r["request_id"] is not None for r in others
+    )
     # Unlinking says why; the judgment that rested on it alone goes back to not reviewed.
     link = mine["files"][0]
     unlinked = client.post(

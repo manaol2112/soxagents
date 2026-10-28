@@ -46,7 +46,7 @@ describe("the workspace theme", () => {
     const light = tokens(":root,\n.theme-light");
     const dark = tokens(':root[data-theme="dark"]:not(:has(.theme-light))');
     // Colors that read the same on both: they derive from another token, or sit on
-    // the navy sidebar, which is dark in both themes.
+    // navy, which is dark in both themes.
     const shared = new Set(["--navy-text", "--navy-muted"]);
     const missing = [...light]
       .filter(([, value]) => /^(#|rgb)/.test(value))
@@ -58,6 +58,72 @@ describe("the workspace theme", () => {
       [...dark.keys()].filter((name) => !light.has(name)),
       [],
     );
+  });
+
+  it("refines the light workspace only, with tokens the shared light set names", () => {
+    const light = tokens(":root,\n.theme-light");
+    const workspace = tokens(
+      ':root[data-theme="light"]:not(:has(.theme-light))',
+    );
+    assert.ok(workspace.size > 0);
+    assert.deepEqual(
+      [...workspace.keys()].filter((name) => !light.has(name)),
+      [],
+    );
+    // Every light-only rule in the glass layer is scoped to the workspace shell or its
+    // panes, so the portal and the public pages never pick it up.
+    const glass = readFileSync(
+      new URL("../apps/web/app/glass.css", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+    const scoped = [
+      ...glass.matchAll(/^\s*(:root\[data-theme="light"\][^{,]*)/gm),
+    ].map((match) => (match[1] ?? "").trim());
+    assert.ok(scoped.length > 0);
+    for (const selector of scoped) {
+      assert.match(selector, /^:root\[data-theme="light"\] (\.shell\b|\.as\b)/);
+    }
+  });
+
+  it("keeps the light workspace's text at AA on its page and its surfaces", () => {
+    const light = tokens(":root,\n.theme-light");
+    const workspace = tokens(
+      ':root[data-theme="light"]:not(:has(.theme-light))',
+    );
+    const value = (name: string) =>
+      workspace.get(name) ?? light.get(name) ?? "";
+    const luminance = (hex: string) => {
+      const [r, g, b] = [1, 3, 5].map((at) => {
+        const channel = Number.parseInt(hex.slice(at, at + 2), 16) / 255;
+        return channel <= 0.03928
+          ? channel / 12.92
+          : ((channel + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * (r ?? 0) + 0.7152 * (g ?? 0) + 0.0722 * (b ?? 0);
+    };
+    const contrast = (a: string, b: string) => {
+      const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+      return ((high ?? 0) + 0.05) / ((low ?? 0) + 0.05);
+    };
+    const short = [];
+    for (const ground of ["--canvas", "--surface", "--surface-hover"]) {
+      for (const text of [
+        "--text-strong",
+        "--text",
+        "--text-secondary",
+        "--text-tertiary",
+        "--accent",
+        "--success",
+        "--warning",
+        "--danger",
+        "--ai",
+      ]) {
+        const ratio = contrast(value(ground), value(text));
+        if (ratio < 4.5)
+          short.push(`${text} on ${ground}: ${ratio.toFixed(2)}`);
+      }
+    }
+    assert.deepEqual(short, []);
   });
 
   it("keeps the client portal and the public pages light", () => {

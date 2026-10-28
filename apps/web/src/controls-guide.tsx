@@ -9,13 +9,19 @@ import {
 } from "react";
 
 import {
+  ADD_PROCESS_EVENT,
   ADD_SYSTEM_EVENT,
   CONTROLS_GUIDE_SEEN_KEY,
   CONTROLS_PANES,
   type ControlsPane,
   type ControlsTile,
+  FINALIZE_EVENT,
   OPEN_CONTROLS_GUIDE_EVENT,
+  PANE_COUNT_EVENT,
+  PROCESS_SAVED_EVENT,
+  RCM_UPLOAD_EVENT,
   type ScopeStep,
+  SELECT_CONTROLS_EVENT,
   SHOW_PANE_EVENT,
   SYSTEM_SAVED_EVENT,
 } from "./controls-guide-model";
@@ -27,11 +33,9 @@ import { type IconName, UiIcon } from "./ui-icon";
 const PANE_ICON: Record<ControlsPane, IconName> = {
   systems: "server",
   processes: "layers",
-  controls: "shield",
+  policies: "file",
+  references: "clock",
 };
-
-const LIBRARY_OPTION = ".rcm-options > .rcm-option:nth-child(1)";
-const RCM_OPTION = ".rcm-options > .rcm-option:nth-child(2)";
 
 function isPane(value: unknown): value is ControlsPane {
   return (CONTROLS_PANES as readonly unknown[]).includes(value);
@@ -43,17 +47,6 @@ function showPane(pane: ControlsPane, then?: () => void): void {
   if (then !== undefined) {
     requestAnimationFrame(() => requestAnimationFrame(then));
   }
-}
-
-function reveal(selector: string): HTMLElement | null {
-  const element = document.querySelector<HTMLElement>(selector);
-  element?.scrollIntoView({
-    block: "center",
-    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      ? "auto"
-      : "smooth",
-  });
-  return element;
 }
 
 /** The setup agent's tour of the Controls setup: by itself the first time, then from
@@ -100,14 +93,45 @@ export function ControlsSetupFrame({
   tiles,
   panes,
   steps = null,
+  controlsHref = null,
 }: {
   initial: ControlsPane;
   tiles: readonly ControlsTile[];
   panes: Record<ControlsPane, ReactNode>;
+  /** The Controls page, where the controls selected for each system and process are. */
+  controlsHref?: string | null;
   /** The workflow's four steps, shown until the scope is finalized. */
   steps?: readonly ScopeStep[] | null;
 }) {
   const [pane, setPane] = useState<ControlsPane>(initial);
+  // Counts a pane reported after a change in the page, over the server's.
+  const [counted, setCounted] = useState<
+    Partial<Record<ControlsPane, { count: number; status: string }>>
+  >({});
+  useEffect(() => {
+    const count = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail as {
+        pane?: unknown;
+        count?: unknown;
+        status?: unknown;
+      } | null;
+      if (
+        detail !== null &&
+        isPane(detail.pane) &&
+        typeof detail.count === "number" &&
+        typeof detail.status === "string"
+      ) {
+        const { pane: which, count: value, status } = detail;
+        setCounted((now) => ({ ...now, [which]: { count: value, status } }));
+      }
+    };
+    document.addEventListener(PANE_COUNT_EVENT, count);
+    return () => document.removeEventListener(PANE_COUNT_EVENT, count);
+  }, []);
+  const shown = tiles.map((tile) => ({
+    ...tile,
+    ...(counted[tile.pane] ?? {}),
+  }));
   const choose = useCallback((next: ControlsPane) => {
     setPane(next);
     const url = new URL(window.location.href);
@@ -123,13 +147,20 @@ export function ControlsSetupFrame({
         choose(next);
       }
     };
-    // A system just saved shows on the Systems tab, wherever its wizard was opened.
-    const saved = () => choose("systems");
+    // What was just saved shows on its tab, wherever its wizard was opened.
+    const saved: Array<[string, () => void]> = [
+      [SYSTEM_SAVED_EVENT, () => choose("systems")],
+      [PROCESS_SAVED_EVENT, () => choose("processes")],
+    ];
     document.addEventListener(SHOW_PANE_EVENT, show);
-    document.addEventListener(SYSTEM_SAVED_EVENT, saved);
+    for (const [name, handler] of saved) {
+      document.addEventListener(name, handler);
+    }
     return () => {
       document.removeEventListener(SHOW_PANE_EVENT, show);
-      document.removeEventListener(SYSTEM_SAVED_EVENT, saved);
+      for (const [name, handler] of saved) {
+        document.removeEventListener(name, handler);
+      }
     };
   }, [choose]);
   // The tabs follow the arrow keys, as a tab list does.
@@ -176,8 +207,20 @@ export function ControlsSetupFrame({
                 className={`sp-step is-${step.key} is-${step.state}`}
                 aria-current={step.state === "now" ? "step" : undefined}
               >
-                {stepPane === null ? (
-                  <span className="sp-step-body">{body}</span>
+                {step.key === "controls" && controlsHref !== null ? (
+                  <a className="sp-step-body" href={controlsHref}>
+                    {body}
+                  </a>
+                ) : stepPane === null ? (
+                  <button
+                    type="button"
+                    className="sp-step-body"
+                    onClick={() =>
+                      document.dispatchEvent(new Event(FINALIZE_EVENT))
+                    }
+                  >
+                    {body}
+                  </button>
                 ) : (
                   <button
                     type="button"
@@ -200,7 +243,7 @@ export function ControlsSetupFrame({
         </ol>
       )}
       <section className="cs-tiles" aria-label="Setup summary">
-        {tiles.map((tile) => (
+        {shown.map((tile) => (
           <button
             key={tile.pane}
             type="button"
@@ -228,7 +271,7 @@ export function ControlsSetupFrame({
         aria-label="Controls setup"
         onKeyDown={onKey}
       >
-        {tiles.map((tile) => (
+        {shown.map((tile) => (
           <button
             key={tile.pane}
             id={`cs-tab-${tile.pane}`}
@@ -261,13 +304,18 @@ export function ControlsSetupFrame({
   );
 }
 
-/** The page's Add: a system (its wizard opens over the tab in view, and a saved system
- * shows on the Systems tab), a business process, or controls from the library or the
- * client's RCM while none are set up. */
-export function ControlsAddMenu({ controlsSet }: { controlsSet: boolean }) {
-  const later = controlsSet
-    ? "The controls are set up; add more from a system or a process."
-    : null;
+/** The page's Add: a system or a business process (each wizard opens over the tab in
+ * view, and what it saved shows on its tab), controls from the library, the client's RCM
+ * while no control is set up, and, until the scope is final, Review and finalize. */
+export function ControlsAddMenu({
+  controlsSet,
+  finalized,
+}: {
+  controlsSet: boolean;
+  finalized: boolean;
+}) {
+  const raise = (event: string) => () =>
+    document.dispatchEvent(new Event(event));
   return (
     <RowMenu
       label="Add to the engagement's scope"
@@ -276,37 +324,35 @@ export function ControlsAddMenu({ controlsSet }: { controlsSet: boolean }) {
         {
           label: "Add a system",
           icon: "server",
-          onSelect: () => document.dispatchEvent(new Event(ADD_SYSTEM_EVENT)),
+          onSelect: raise(ADD_SYSTEM_EVENT),
         },
         {
           label: "Add a business process",
           icon: "layers",
-          onSelect: () =>
-            showPane("processes", () => {
-              const form = document.querySelector<HTMLDetailsElement>(
-                "#cs-pane-processes details.new-process",
-              );
-              if (form !== null) {
-                form.open = true;
-                reveal("#cs-pane-processes details.new-process");
-                form
-                  .querySelector<HTMLInputElement>('input[name="name"]')
-                  ?.focus();
-              }
-            }),
+          onSelect: raise(ADD_PROCESS_EVENT),
         },
         {
-          label: "Load from the standard library",
+          label: "Select controls from the library",
           icon: "shield",
-          unavailable: later,
-          onSelect: () => showPane("controls", () => reveal(LIBRARY_OPTION)),
+          onSelect: raise(SELECT_CONTROLS_EVENT),
         },
         {
           label: "Upload the client's RCM",
           icon: "upload",
-          unavailable: later,
-          onSelect: () => showPane("controls", () => reveal(RCM_OPTION)),
+          unavailable: controlsSet
+            ? "The controls are set up; select more from the library."
+            : null,
+          onSelect: raise(RCM_UPLOAD_EVENT),
         },
+        ...(finalized
+          ? []
+          : [
+              {
+                label: "Review and finalize",
+                icon: "check" as const,
+                onSelect: raise(FINALIZE_EVENT),
+              },
+            ]),
       ]}
     />
   );
@@ -318,7 +364,7 @@ export function RcmInsteadButton() {
     <button
       type="button"
       className="btn-secondary"
-      onClick={() => showPane("controls", () => reveal(RCM_OPTION))}
+      onClick={() => document.dispatchEvent(new Event(RCM_UPLOAD_EVENT))}
     >
       <UiIcon name="upload" size={14} />
       Upload the client's RCM instead

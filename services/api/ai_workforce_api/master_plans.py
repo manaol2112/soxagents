@@ -350,7 +350,9 @@ def _load(
         f"""
         SELECT engagement_control_id, id, code, text, status, basis, source_kind,
                source_quote, definition_key, objective, condition, pass_criteria,
-               fail_criteria, judgment_required, automatable, phases, version, criteria_origin
+               fail_criteria, judgment_required, automatable, phases, version, criteria_origin,
+               criteria_accepted_at,
+               (SELECT display_name FROM users WHERE users.id = criteria_accepted_by)
         FROM control_attributes WHERE {scope} AND status IN ('APPROVED', 'PROPOSED')
         ORDER BY position, created_at
         """,
@@ -372,6 +374,8 @@ def _load(
                 "judgment_required": row[13], "automatable": row[14],
                 "phases": [str(item) for item in row[15]], "version": int(row[16]),
                 "criteria_origin": None if row[17] is None else str(row[17]),
+                "criteria_accepted_at": row[18],
+                "criteria_accepted_by": str(row[19] or ""),
             }
         )  # fmt: skip
     for row in connection.execute(
@@ -1079,6 +1083,10 @@ class AttributeItem(BaseModel):
     pass_criteria: str
     fail_criteria: str
     criteria_source: Literal["PLAN", "AGENT", "LIBRARY", "NONE"]
+    # A person who accepted the agent's criteria as they read (migration 0122); not part
+    # of the plan's content, so accepting never revises a plan.
+    criteria_accepted_by: str = ""
+    criteria_accepted_at: datetime | None = None
     judgment_required: bool | None
     automatable: bool | None
     phases: list[Phase]
@@ -1333,6 +1341,10 @@ def body_of(
                 source=item["source"],
                 quote=item["quote"],
                 **_criteria(plan, item),
+                criteria_accepted_by=item["criteria_accepted_by"]
+                if item["criteria_accepted_at"] is not None
+                else "",
+                criteria_accepted_at=item["criteria_accepted_at"],
                 judgment_required=item["judgment_required"],
                 automatable=item["automatable"],
                 phases=item["phases"],
@@ -2279,6 +2291,15 @@ class CriteriaBody(BaseModel):
     phases: list[Phase] = Field(default_factory=list, max_length=3)
 
 
+class AcceptedAttribute(BaseModel):
+    id: UUID
+    version: int = Field(ge=1)
+
+
+class AcceptCriteriaBody(BaseModel):
+    attributes: list[AcceptedAttribute] = Field(min_length=1, max_length=50)
+
+
 _SECRETISH = re.compile(r"(?i)\b(password|passwd|secret|api[_ -]?key|token)\s*[:=]")
 
 
@@ -2638,6 +2659,51 @@ def set_criteria(
             cursor, organization_id, project_id, actor, "control_attribute.criteria_set",
             "control_attribute", attribute_id, {},
         )  # fmt: skip
+
+
+def accept_criteria(
+    connection: psycopg.Connection[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID,
+    body: AcceptCriteriaBody,
+) -> None:
+    """A person accepts the planner agent's criteria as they read, for one attribute or
+    several at once (migration 0122). All or none: each must be an approved attribute of
+    this control whose criteria are still the agent's, at the version the person saw. The
+    words do not change, so the plan is not revised."""
+    if len({item.id for item in body.attributes}) != len(body.attributes):
+        raise PlanState("an attribute is named twice")
+    with transaction(connection) as cursor:
+        _plan_id(cursor, project_id, control_id)
+        for item in body.attributes:
+            row = cursor.execute(
+                "SELECT version, status, criteria_origin, code FROM control_attributes "
+                "WHERE id = %s AND engagement_control_id = %s FOR UPDATE",
+                (item.id, control_id),
+            ).fetchone()
+            if row is None:
+                raise NotVisible()
+            if int(row[0]) != item.version:
+                raise PlanState("the attribute changed")
+            if row[1] != "APPROVED":
+                raise PlanState("decide the attribute first")
+            if row[2] != "AGENT":
+                raise PlanState("the criteria are not the agent's")
+            cursor.execute(
+                """
+                UPDATE control_attributes
+                SET criteria_accepted_by = %s, criteria_accepted_at = now(),
+                    version = version + 1
+                WHERE id = %s
+                """,
+                (actor, item.id),
+            )
+            _audit(
+                cursor, organization_id, project_id, actor, "control_attribute.criteria_accepted",
+                "control_attribute", item.id, {"code": str(row[3] or "")},
+            )  # fmt: skip
 
 
 # Routes
@@ -3048,6 +3114,18 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
         def work(c: psycopg.Connection[Any], p: Principal) -> MasterPlanBody:
             allowed(c, p, organization_id, project_id, control_id, Action.TASK_UPDATE)
             set_criteria(c, organization_id, project_id, control_id, attribute_id, p.id, body)
+            return read(c, p, organization_id, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/master-plan/criteria/accept")
+    def criteria_accept(
+        organization_id: UUID, project_id: UUID, control_id: UUID,
+        body: AcceptCriteriaBody, request: Request,
+    ) -> MasterPlanBody:  # fmt: skip
+        def work(c: psycopg.Connection[Any], p: Principal) -> MasterPlanBody:
+            allowed(c, p, organization_id, project_id, control_id, Action.TASK_UPDATE)
+            accept_criteria(c, organization_id, project_id, control_id, p.id, body)
             return read(c, p, organization_id, project_id, control_id)
 
         return run(request, work)

@@ -148,6 +148,20 @@ def test_migrations_apply_once_on_an_empty_database(empty_database: Database) ->
         "0106_evidence_specification_plan_revision",
         "0107_evidence_request_groups",
         "0108_engagement_frameworks",
+        "0109_system_setup",
+        "0110_process_setup",
+        "0111_scope_finalization",
+        "0112_policies_and_prior_year",
+        "0113_document_removal",
+        "0114_system_out_of_scope",
+        "0115_system_out_of_scope_backfill",
+        "0116_process_narrative_versions",
+        "0117_narrative_review",
+        "0118_narrative_points",
+        "0119_evidence_removed_by",
+        "0120_narrative_plan_update",
+        "0121_point_basis",
+        "0122_criteria_accepted",
     ]
     assert second == []
     with connect(empty_database.url) as connection:
@@ -273,6 +287,20 @@ def test_migrations_upgrade_through_each_file(empty_database: Database, tmp_path
         ["0106_evidence_specification_plan_revision"],
         ["0107_evidence_request_groups"],
         ["0108_engagement_frameworks"],
+        ["0109_system_setup"],
+        ["0110_process_setup"],
+        ["0111_scope_finalization"],
+        ["0112_policies_and_prior_year"],
+        ["0113_document_removal"],
+        ["0114_system_out_of_scope"],
+        ["0115_system_out_of_scope_backfill"],
+        ["0116_process_narrative_versions"],
+        ["0117_narrative_review"],
+        ["0118_narrative_points"],
+        ["0119_evidence_removed_by"],
+        ["0120_narrative_plan_update"],
+        ["0121_point_basis"],
+        ["0122_criteria_accepted"],
     ]
     with connect(empty_database.url) as connection:
         organizations = connection.execute("SELECT to_regclass('public.organizations')").fetchone()

@@ -19,8 +19,11 @@ from ai_workforce_api import (
     control_attributes,
     control_design,
     library_definitions,
+    prior_year,
+    process_narrative,
     process_understanding,
 )
+from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -33,16 +36,19 @@ from ai_workforce_api.authorization import (
 from ai_workforce_api.control_context import (
     CLASSIFICATIONS,
     MAX_UPLOAD,
+    NARRATIVE_SOURCE,
     Classification,
     ContextState,
     DocumentBody,
     DocumentKind,
     IssueBody,
+    Source,
     classifications_of,
     context_package,
     derived_classifications,
     documents,
     frequency_conflicts,
+    governs,
     issues_for,
     line,
     link_document,
@@ -93,6 +99,19 @@ class IssueDecision(BaseModel):
 
 class AdoptBody(BaseModel):
     version: int = Field(ge=1)
+
+
+class PointAnswer(BaseModel):
+    """One point the client confirmed as stated, or corrected: the answer is the statement
+    kept on the record."""
+
+    issue_id: UUID
+    version: int = Field(ge=1)
+    answer: str = Field(min_length=1, max_length=1000)
+
+
+class PointsConfirm(BaseModel):
+    items: list[PointAnswer] = Field(min_length=1, max_length=12)
 
 
 class DocumentWrite(BaseModel):
@@ -163,6 +182,16 @@ def register_control_context(
         # The background worker drafts them; with no worker they resume at the next start.
         drafts = scheduler if isinstance(scheduler, DraftScheduler) else None
         schedule(drafts, released)
+        # An attribute approved after the plan was made gets its evidence now, by the planner
+        # agent in the background. Only when a worker can run it and a model is configured:
+        # a plan waiting for a run nobody starts could not be approved.
+        plans = getattr(scheduler, "schedule_plan_runs", None)
+        if plans is not None and model() is not None:
+            from ai_workforce_api.evidence_plans import replan_for_new_attributes
+
+            planned = replan_for_new_attributes(connection, control_id)
+            if planned is not None:
+                plans([planned])
 
     @app.get(f"{control}/context")
     def read(
@@ -328,6 +357,25 @@ def register_control_context(
 
         return run(request, work)
 
+    # Prior-year proposals (prior_year.py): accepted or dismissed by a person, several at
+    # once. An accepted answer fills the control's question, as a value set here does.
+
+    @app.post(f"{base}/prior-year/proposals")
+    def decide_prior_year(
+        organization_id: UUID,
+        project_id: UUID,
+        body: prior_year.ProposalDecision,
+        request: Request,
+    ) -> ManyValuesResult:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ManyValuesResult:
+            _project(c, p, organization_id, project_id)
+            changed_ids = prior_year.decide_proposals(c, organization_id, project_id, p.id, body)
+            for changed_id in changed_ids:
+                changed(c, project_id, changed_id, p.id)
+            return ManyValuesResult(controls=len(changed_ids))
+
+        return run(request, work)
+
     # Library version 3 for a control copied from an earlier version
 
     @app.get(f"{control}/library-update")
@@ -362,6 +410,8 @@ def register_control_context(
         body: process_understanding.UnderstandingSave,
         request: Request,
     ) -> ContextBody:
+        planning: list[bool] = []
+
         def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
             _allowed(c, p, organization_id, project_id, control_id)
             context = load_context(c, project_id, control_id)
@@ -369,10 +419,22 @@ def register_control_context(
                 c, organization_id, project_id, control_id, p.id, body,
                 sources_for(c, project_id, control_id, context),
             )  # fmt: skip
+            if body.confirm:
+                # The approved narrative updates the test plan, in the background: the
+                # attributes and evidence follow how the control operates (decided by the
+                # product owner on 26 October 2026).
+                planning.append(
+                    process_narrative.request(
+                        c, organization_id, project_id, control_id, p.id, "PLAN"
+                    )
+                )
             changed(c, project_id, control_id, p.id)
             return _body(c, project_id, control_id)
 
-        return run(request, work)
+        body_out = run(request, work)
+        if any(planning):
+            process_narrative.schedule(scheduler, [control_id])
+        return body_out
 
     @app.post(f"{control}/process/build")
     def build_process(
@@ -382,6 +444,119 @@ def register_control_context(
             _allowed(c, p, organization_id, project_id, control_id)
             note = _build(c, model(), organization_id, project_id, control_id, p.id)
             return _body(c, project_id, control_id, note)
+
+        return run(request, work)
+
+    def _narrate(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        request: Request,
+        mode: process_narrative.Mode,
+    ) -> ContextBody:
+        asked: list[bool] = []
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            asked.append(
+                process_narrative.request(c, organization_id, project_id, control_id, p.id, mode)
+            )
+            return _body(c, project_id, control_id)
+
+        body = run(request, work)
+        # Scheduled only once the run is committed: a worker started inside the transaction
+        # would find no waiting run and skip it.
+        if any(asked):
+            process_narrative.schedule(scheduler, [control_id])
+        return body
+
+    @app.post(f"{control}/process/narrate")
+    def narrate(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> ContextBody:
+        """Draft the narrative from the client's answers and review it, in the background."""
+        return _narrate(organization_id, project_id, control_id, request, "DRAFT")
+
+    @app.post(f"{control}/process/review-narrative")
+    def review_narrative(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> ContextBody:
+        """Review the narrative as it stands again, and fix it, in the background."""
+        return _narrate(organization_id, project_id, control_id, request, "REVIEW")
+
+    @app.post(f"{control}/process/update-plan")
+    def update_plan(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> ContextBody:
+        """Update the test plan from the approved narrative again, in the background."""
+        return _narrate(organization_id, project_id, control_id, request, "PLAN")
+
+    @app.post(f"{control}/process/points")
+    def confirm_points(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: PointsConfirm,
+        request: Request,
+    ) -> ContextBody:
+        """Confirm or correct a round of the narrative's points as one decision (decided by
+        the product owner on 26 October 2026). When none is left open, the narrative is
+        drafted again from the answers, in the background."""
+        asked: list[bool] = []
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            with transaction(c) as cursor:
+                for item in body.items:
+                    answer = line(item.answer, 1000)
+                    if not answer or contains_secret({"answer": answer}):
+                        raise ValueError("an answer must be plain text")
+                    row = cursor.execute(
+                        """
+                        UPDATE control_context_issues
+                        SET status = 'RESOLVED', resolution_note = %s, resolved_by = %s,
+                            resolved_at = clock_timestamp(), version = version + 1,
+                            updated_at = clock_timestamp()
+                        WHERE id = %s AND engagement_control_id = %s AND status = 'OPEN'
+                          AND version = %s AND origin = 'PROCESS' AND question <> ''
+                        RETURNING proposal
+                        """,
+                        (answer, p.id, item.issue_id, control_id, item.version),
+                    ).fetchone()
+                    if row is None:
+                        raise ContextState("a point changed")
+                    _audit(cursor, organization_id, project_id, p.id, "context.issue_resolved",
+                           item.issue_id, {"status": "RESOLVED", "point": True,
+                                           "as_proposed": answer == str(row[0])})  # fmt: skip
+                waiting = cursor.execute(
+                    "SELECT count(*) FROM control_context_issues "
+                    "WHERE engagement_control_id = %s AND origin = 'PROCESS' "
+                    "AND status = 'OPEN' AND question <> ''",
+                    (control_id,),
+                ).fetchone()
+            if waiting is not None and int(waiting[0]) == 0:
+                asked.append(
+                    process_narrative.request(
+                        c, organization_id, project_id, control_id, p.id, "DRAFT"
+                    )
+                )
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        result = run(request, work)
+        if any(asked):
+            process_narrative.schedule(scheduler, [control_id])
+        return result
+
+    @app.get(f"{control}/process/versions")
+    def process_versions(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> list[process_understanding.VersionBody]:
+        def work(
+            c: psycopg.Connection[Any], p: Principal
+        ) -> list[process_understanding.VersionBody]:
+            _allowed(c, p, organization_id, project_id, control_id, Action.TASK_READ)
+            return process_understanding.versions(c, control_id)
 
         return run(request, work)
 
@@ -562,6 +737,20 @@ def register_control_context(
                     "AND engagement_control_id = %s AND project_id = %s",
                     (document_id, body.control_id, project_id),
                 )
+                # A policy or procedure that governs the control's system or process is
+                # taken off this one control (0112).
+                if governs(cursor, document_id, body.control_id):
+                    cursor.execute(
+                        """
+                        INSERT INTO source_document_exclusions (
+                            document_id, engagement_control_id, project_id, excluded_by
+                        )
+                        SELECT %s, id, project_id, %s FROM engagement_controls
+                        WHERE id = %s AND project_id = %s
+                        ON CONFLICT DO NOTHING
+                        """,
+                        (document_id, p.id, body.control_id, project_id),
+                    )
                 _audit(cursor, organization_id, project_id, p.id, "document.unlinked",
                        document_id, {"control": str(body.control_id)})  # fmt: skip
             found = next(d for d in documents(c, project_id) if d.id == document_id)
@@ -584,6 +773,13 @@ def _generate(
     context = load_context(connection, project_id, control_id)
     found = _classes(connection, control_id, context)
     sources = sources_for(connection, project_id, control_id, context)
+    # The approved process narrative is a source the attributes can quote: they test the
+    # control as it operates here (product owner, 26 October 2026).
+    narrative = process_understanding.confirmed_summary(connection, control_id)
+    if narrative:
+        sources.append(
+            Source(NARRATIVE_SOURCE, "Approved process narrative", "NARRATIVE", narrative)
+        )
     package = context_package(connection, project_id, control_id, context, found)
     kept, note = control_attributes.generate(
         connection, provider, organization_id, project_id, control_id, actor, package, sources
@@ -747,7 +943,7 @@ def _allowed(
 
 def _document(connection: psycopg.Connection[Any], project_id: UUID, document_id: UUID) -> None:
     found = connection.execute(
-        "SELECT 1 FROM source_documents WHERE id = %s AND project_id = %s",
+        "SELECT 1 FROM source_documents WHERE id = %s AND project_id = %s AND removed_at IS NULL",
         (document_id, project_id),
     ).fetchone()
     if found is None:

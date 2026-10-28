@@ -1729,7 +1729,8 @@ def plan_evidence(
             {
                 "evidence": str(title)[:200],
                 "necessity": str(necessity),
-                "what_counts": " ".join(str(description or "").split())[:500],
+                # A lean item lists every detail a sample must show (27 October 2026).
+                "what_counts": " ".join(str(description or "").split())[:1500],
             }
             for title, necessity, named, description in found
             if isinstance(named, list) and attribute in named

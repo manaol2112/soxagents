@@ -1,6 +1,7 @@
 "use client";
 
 import { type ReactNode, useEffect, useState } from "react";
+import type { ActivityItem } from "./control-workspace-model";
 import { FileChanges } from "./evidence-change";
 import { RequestUpload } from "./evidence-intake";
 import type { RequirementFile } from "./evidence-plan-model";
@@ -20,6 +21,7 @@ import {
   usePlanAction,
 } from "./evidence-plan-view";
 import { PreviewButton } from "./evidence-preview";
+import { EvidenceRequests } from "./evidence-requests-view";
 import {
   EVIDENCE_VIEWS,
   type EvidenceSummary,
@@ -36,7 +38,7 @@ import {
   requestsByPhase,
   requirementGroups,
 } from "./evidence-workspace-model";
-import { planningHref } from "./planning-model";
+import { type MasterPlan, planningHref } from "./planning-model";
 import { UiIcon } from "./ui-icon";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
@@ -62,9 +64,17 @@ export function EvidenceWorkspace({
   focus,
   applications = [],
   system = null,
+  requestList,
 }: {
   ids: Ids;
   plan: EvidencePlan | null;
+  /** The test plan's codes and links, the control's activity, and its reference, for the
+   * Request step's list of requests; without it the evidence shows by phase. */
+  requestList?: {
+    master: MasterPlan | null;
+    activity: ActivityItem[] | null;
+    controlRef: string;
+  };
   canAct: boolean;
   summary: EvidenceSummary;
   proposals: Proposal[];
@@ -182,6 +192,74 @@ export function EvidenceWorkspace({
     focus.request === null
       ? null
       : (requests.rows.find((row) => row.id === focus.request)?.phase ?? null);
+  // The Request step as the list of requests (product owner, 27 October 2026), once the
+  // control's evidence is planned.
+  if (
+    requestList !== undefined &&
+    plan !== null &&
+    plan.status !== "NOT_PLANNED"
+  ) {
+    return (
+      <div className="ew">
+        <ReaderProposals
+          ids={ids}
+          canAct={canAct}
+          proposals={proposals}
+          onReview={(id) =>
+            document
+              .getElementById(`req-${id}`)
+              ?.scrollIntoView({ behavior: "smooth", block: "center" })
+          }
+        />
+        {requests.head}
+        {planAwaitsApproval(plan) ? (
+          <div className="ew-proposed">
+            <div>
+              <strong>
+                {plan.status === "CHANGES_PROPOSED"
+                  ? "Changes to the evidence plan await a decision"
+                  : plan.status === "CHANGES_REQUESTED"
+                    ? "The reviewer asked for changes to the plan"
+                    : "The evidence plan awaits approval"}
+              </strong>
+              <p>
+                Nothing is requested until the test plan is approved; the
+                requests below are drafted then.
+              </p>
+            </div>
+            <a
+              className="btn btn-secondary"
+              href={planningHref(ids.organizationId, ids.projectId, {
+                control: ids.controlId,
+                tab: "evidence",
+              })}
+            >
+              Review the test plan
+              <UiIcon name="arrow" size={14} />
+            </a>
+          </div>
+        ) : null}
+        <EvidenceRequests
+          ids={ids}
+          plan={plan}
+          master={requestList.master}
+          rows={requests.rows}
+          canAct={canAct}
+          files={files}
+          applications={applications}
+          system={system}
+          activity={requestList.activity}
+          sentRequests={requests.all}
+          controlRef={requestList.controlRef}
+          focusRequest={focus.request}
+        />
+        <section className="ew-card" aria-label="Files and planning basis">
+          {filesRow}
+          {basis}
+        </section>
+      </div>
+    );
+  }
   return (
     <div className="ew">
       <ReaderProposals
@@ -375,7 +453,7 @@ function ReaderProposals({
  * whose application is not known says so, and that opens the choice. A file serving two
  * items carries the same actions on each.
  */
-function fileLine(
+export function fileLine(
   ids: Ids,
   file: RequirementFile,
   held: HeldFile | undefined,
@@ -499,7 +577,7 @@ function fileLine(
 }
 
 /** An item takes no more evidence once accepted, set aside, or its request cancelled. */
-const NO_UPLOAD: readonly string[] = [
+export const NO_UPLOAD: readonly string[] = [
   "ACCEPTED",
   "CANCELLED",
   "NOT_APPLICABLE",

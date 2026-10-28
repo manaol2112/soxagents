@@ -30,6 +30,7 @@ export function ScopeTable({
   searchLabel,
   action = null,
   initial = null,
+  empty = null,
 }: {
   label: string;
   columns: string[];
@@ -41,6 +42,8 @@ export function ScopeTable({
   action?: ReactNode;
   /** The row open when the page loads, such as the one a link names. */
   initial?: string | null;
+  /** What an empty table says when it holds no rows at all (a search says its own). */
+  empty?: string | null;
 }) {
   const id = useId();
   const [typed, setTyped] = useState("");
@@ -153,8 +156,14 @@ export function ScopeTable({
       </div>
       {shown.length === 0 ? (
         <p className="st-none">
-          Nothing matches the search
-          {kind === "" ? "" : " and the filter"}.
+          {rows.length === 0 && empty !== null ? (
+            empty
+          ) : (
+            <>
+              Nothing matches the search
+              {kind === "" ? "" : " and the filter"}.
+            </>
+          )}
         </p>
       ) : null}
     </section>

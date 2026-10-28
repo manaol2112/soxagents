@@ -167,3 +167,87 @@ def _count_tasks(database: Database, project: UUID) -> int:
             (project,),
         ).fetchone()
     return int(row[0]) if row else 0
+
+
+def test_a_system_taken_out_of_scope_is_marked_and_can_come_back(migrated: Database) -> None:
+    # Decided by the product owner on 25 October 2026 (migration 0114): the system stays
+    # on record, marked out of scope with who, when and why, and a person brings it back.
+    owner, org, project = _launch(migrated, "scope-system-back")
+    base = _base(org, project)
+    added = owner.post(f"{base}/applications", json={"name": "Workday", "description": ""})
+    assert added.status_code == 200, added.text
+    workday = next(a for a in added.json()["applications"] if a["name"] == "Workday")
+    assert workday["out_of_scope_at"] is None
+    dropped = owner.post(
+        f"{base}/applications/{workday['id']}/remove",
+        json={"reason": "Retired before the period started."},
+    )
+    assert dropped.status_code == 200, dropped.text
+    marked = next(a for a in dropped.json()["applications"] if a["id"] == workday["id"])
+    assert marked["out_of_scope_at"] is not None
+    assert marked["out_of_scope_reason"] == "Retired before the period started."
+    # Controls are not selected for a system out of scope.
+    refused = owner.get(f"{base}/scope/options", params={"system_id": workday["id"]})
+    assert refused.status_code == 409
+    back = owner.post(f"{base}/applications/{workday['id']}/restore")
+    assert back.status_code == 200, back.text
+    restored = next(a for a in back.json()["applications"] if a["id"] == workday["id"])
+    assert restored["out_of_scope_at"] is None and restored["out_of_scope_reason"] == ""
+    # Its controls stay out of scope until a person selects them again.
+    assert all(
+        not c["included"] for c in back.json()["controls"] if c["application_id"] == workday["id"]
+    )
+    assert (
+        owner.get(f"{base}/scope/options", params={"system_id": workday["id"]}).status_code == 200
+    )
+    assert owner.post(f"{base}/applications/{workday['id']}/restore").status_code == 409
+    with connect(migrated.url) as connection:
+        actions = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT action FROM audit_events WHERE project_id = %s AND action LIKE "
+                "'onboarding.application_%%' ORDER BY occurred_at",
+                (project,),
+            ).fetchall()
+        ]
+    assert actions[-2:] == [
+        "onboarding.application_out_of_scope",
+        "onboarding.application_back_in_scope",
+    ]
+
+
+def test_a_system_taken_out_before_0114_is_marked_from_the_audit_trail(
+    migrated: Database,
+) -> None:
+    from pathlib import Path
+
+    owner, org, project = _launch(migrated, "scope-system-backfill")
+    base = _base(org, project)
+    added = owner.post(f"{base}/applications", json={"name": "Workday", "description": ""})
+    workday = next(a for a in added.json()["applications"] if a["name"] == "Workday")
+    owner.post(f"{base}/applications/{workday['id']}/remove", json={"reason": "Retired."})
+    sql = (
+        Path(__file__).resolve().parents[3] / "migrations" / "0115_system_out_of_scope_backfill.sql"
+    ).read_text(encoding="utf-8")
+    with connect(migrated.url) as connection:
+        # As it was before 0114 marked it: out of scope only by its controls.
+        connection.execute(
+            "UPDATE engagement_applications SET out_of_scope_at = NULL, out_of_scope_by = NULL, "
+            "out_of_scope_reason = '' WHERE id = %s",
+            (workday["id"],),
+        )
+        connection.execute(sql)
+        row = connection.execute(
+            "SELECT out_of_scope_at IS NOT NULL, out_of_scope_reason FROM engagement_applications "
+            "WHERE id = %s",
+            (workday["id"],),
+        ).fetchone()
+        in_scope = connection.execute(
+            "SELECT count(*) FROM engagement_applications WHERE project_id = %s "
+            "AND out_of_scope_at IS NOT NULL",
+            (project,),
+        ).fetchone()
+        connection.commit()
+    assert row == (True, "Retired.")
+    # Only the system taken out is marked.
+    assert in_scope == (1,)

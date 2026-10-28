@@ -33,7 +33,8 @@ export async function POST(request: Request) {
     const response = await fetch(`${apiBaseUrl()}${write.path}`, {
       method: write.method,
       headers,
-      body: JSON.stringify(write.body),
+      // What can be selected (SP4) is read; everything else is written.
+      ...(write.method === "GET" ? {} : { body: JSON.stringify(write.body) }),
       cache: "no-store",
       signal: AbortSignal.timeout(write.timeout ?? 30000),
     });

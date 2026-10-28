@@ -317,6 +317,84 @@ def test_the_agents_criteria_never_replace_a_persons(migrated: Database) -> None
     assert library["condition"]
 
 
+def test_a_person_accepts_the_agents_criteria_as_they_read(migrated: Database) -> None:
+    """Migration 0122: the agent's criteria are accepted without retyping them, for one
+    attribute or several at once; the acceptance is recorded and audited, never revises the
+    plan, keeps a later run from replacing them, and goes with any change to the words."""
+    team = _launched(migrated, "grounding-accept")
+    owner = team["owner"]
+    control = _control(team, "ITGC-AC-01")["id"]
+    base = f"{_project(team)}/controls/{control}"
+    own = "The access granted matches the request"
+    assert owner.post(f"{base}/attributes", json={"text": own}).status_code == 200
+    org, project = UUID(str(team["org"])), UUID(str(team["project"]))
+    with connect(migrated.url) as connection:
+        facts = load_facts(connection, project, UUID(control))
+        output = rules_plan(facts).model_dump(mode="json", exclude_none=True)
+        output["criteria"] = [
+            {
+                "attribute": own,
+                "condition": "The roles granted are the roles named on the approved request.",
+                "pass_criteria": "Every role granted is named on the approved request.",
+                "fail_criteria": "A role was granted that the approved request does not name.",
+            }
+        ]
+        generate(connection, _Planner(output), org, project, UUID(control), team["owner_id"])
+    before = _master(team, control)
+    mine = next(a for a in before["attributes"] if a["text"] == own)
+    assert mine["criteria_source"] == "AGENT"
+    assert mine["criteria_accepted_by"] == "" and mine["criteria_accepted_at"] is None
+    accept = f"{base}/master-plan/criteria/accept"
+    # The version the person saw, or nothing is accepted.
+    stale = owner.post(accept, json={"attributes": [{"id": mine["id"], "version": 99}]})
+    assert stale.status_code == 409 and stale.json()["detail"] == "the attribute changed"
+    # Library criteria are not the agent's to accept; the whole request is refused.
+    library = next(a for a in before["attributes"] if a["criteria_source"] == "LIBRARY")
+    mixed = owner.post(
+        accept,
+        json={
+            "attributes": [
+                {"id": mine["id"], "version": mine["version"]},
+                {"id": library["id"], "version": library["version"]},
+            ]
+        },
+    )
+    assert mixed.status_code == 409, mixed.text
+    assert mixed.json()["detail"] == "the criteria are not the agent's"
+    accepted = owner.post(
+        accept, json={"attributes": [{"id": mine["id"], "version": mine["version"]}]}
+    )
+    assert accepted.status_code == 200, accepted.text
+    after = next(a for a in accepted.json()["attributes"] if a["text"] == own)
+    assert after["criteria_source"] == "AGENT" and after["criteria_accepted_by"]
+    assert after["criteria_accepted_at"] is not None
+    assert after["condition"] == mine["condition"]
+    # The words did not change: the plan is the same plan, not revised.
+    assert accepted.json()["revision"] == before["revision"]
+    assert accepted.json()["content_hash"] == before["content_hash"]
+    assert _rows(
+        migrated,
+        "SELECT count(*) FROM audit_events WHERE project_id = %s "
+        "AND action = 'control_attribute.criteria_accepted'",
+        team["project"],
+    ) == [(1,)]
+    # A later run with other words does not replace what a person accepted.
+    output["criteria"][0]["condition"] = "A different condition the agent drafted later."
+    with connect(migrated.url) as connection:
+        generate(connection, _Planner(output), org, project, UUID(control), team["owner_id"])
+    kept = next(a for a in _master(team, control)["attributes"] if a["text"] == own)
+    assert kept["condition"] == mine["condition"] and kept["criteria_accepted_by"]
+    # Any change to the words takes the acceptance with it.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE control_attributes SET pass_criteria = 'Changed.' WHERE id = %s",
+            (mine["id"],),
+        )
+        connection.commit()
+    changed = next(a for a in _master(team, control)["attributes"] if a["text"] == own)
+    assert changed["criteria_accepted_by"] == "" and changed["criteria_accepted_at"] is None
+
+
 def _client_control(migrated: Database, team: dict[str, Any], ref: str) -> str:
     """One of the engagement's controls as a client's own (as one the team adds), with no test
     attribute stated: the placeholder an import writes, and no standard followed."""

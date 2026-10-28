@@ -1,7 +1,9 @@
-import { useId } from "react";
+import { Fragment, useId } from "react";
+import { AddProcessButton } from "./add-process-wizard";
 import { ConfirmAction } from "./confirm-action";
 import { NewControlForm } from "./new-control-form";
 import {
+  CONTROL_AREAS,
   type Onboarding,
   PROCESS_CYCLES,
   type ProcessRow,
@@ -11,11 +13,12 @@ import {
   reportRows,
   type SetupControl,
 } from "./onboarding-model";
+import { ScopeSummary } from "./scope-summary";
 import { ScopeTable } from "./scope-table";
 import { removalNote, ScopedControlTable } from "./scoped-controls";
 import { SetupForm } from "./setup-form";
 import { impactHref } from "./setup-impact-model";
-import type { ShellModel } from "./shell-model";
+import { type ShellModel, workspaceHref } from "./shell-model";
 import { SystemRows } from "./system-rows";
 import { controlHref } from "./systems-view";
 import { UiIcon } from "./ui-icon";
@@ -173,7 +176,13 @@ export function ProcessesTable({
   return (
     <ScopeTable
       label="Processes"
-      columns={["Process name", "Based on", "Controls"]}
+      columns={[
+        "Process name",
+        "Owner",
+        "Related systems",
+        "Based on",
+        "Controls",
+      ]}
       kinds={PROCESS_CYCLES.filter(([key]) =>
         rows.some((row) => row.domain === key),
       )}
@@ -181,45 +190,181 @@ export function ProcessesTable({
       searchLabel="Search processes"
       action={
         editable ? (
-          <NewProcessForm
-            model={model}
-            onboarding={onboarding}
+          <AddProcessButton
             label="Add process"
+            primary
+            organizationId={model.organization.id}
+            projectId={onboarding.projectId}
+            systems={onboarding.applications}
+            processes={onboarding.processes}
           />
         ) : null
       }
-      rows={rows.map((row) => ({
-        id: row.processId ?? row.domain,
-        kind: row.domain,
-        text: [row.label, CYCLE_LABEL[row.domain] ?? ""].join("\n"),
-        cells: [
-          <span key="name" className="st-name">
-            <span className="st-icon is-process" aria-hidden="true">
-              <UiIcon name="layers" size={15} />
-            </span>
-            <strong>{row.label}</strong>
-          </span>,
-          row.processId === null ? (
-            <span key="cycle" className="st-muted">
-              Standard cycle
-            </span>
-          ) : (
-            (CYCLE_LABEL[row.domain] ?? row.domain)
+      rows={rows.map((row) => {
+        const named = onboarding.processes.find(
+          (process) => process.id === row.processId,
+        );
+        const systems = (named?.systemIds ?? [])
+          .map(
+            (id) =>
+              onboarding.applications.find((system) => system.id === id)?.name,
+          )
+          .filter((name): name is string => name !== undefined);
+        return {
+          id: row.processId ?? row.domain,
+          kind: row.domain,
+          text: [
+            row.label,
+            CYCLE_LABEL[row.domain] ?? "",
+            named?.owner ?? "",
+            ...systems,
+          ].join("\n"),
+          cells: [
+            <span key="name" className="st-name">
+              <span className="st-icon is-process" aria-hidden="true">
+                <UiIcon name="layers" size={15} />
+              </span>
+              <strong>{row.label}</strong>
+            </span>,
+            named === undefined || named.owner === "" ? (
+              <span key="owner" className="st-muted">
+                Not set
+              </span>
+            ) : (
+              named.owner
+            ),
+            systems.length === 0 ? (
+              <span key="systems" className="st-muted">
+                None linked
+              </span>
+            ) : (
+              <span key="systems" className="st-chips">
+                {systems.slice(0, 2).map((name, at) => (
+                  <span
+                    key={name}
+                    className={`st-chip${at === 0 && named?.primarySystemId !== null ? " is-primary" : ""}`}
+                  >
+                    {name}
+                  </span>
+                ))}
+                {systems.length > 2 ? (
+                  <span className="st-chip is-more">+{systems.length - 2}</span>
+                ) : null}
+              </span>
+            ),
+            row.processId === null ? (
+              <span key="cycle" className="st-muted">
+                Standard cycle
+              </span>
+            ) : (
+              (CYCLE_LABEL[row.domain] ?? row.domain)
+            ),
+            <span key="controls" className="num">
+              {row.inScope.length}
+            </span>,
+          ],
+          detail: (
+            <ProcessSummary
+              model={model}
+              onboarding={onboarding}
+              row={row}
+              editable={editable}
+            />
           ),
-          <span key="controls" className="num">
-            {row.inScope.length}
-          </span>,
-        ],
-        detail: (
-          <ProcessDetail
+        };
+      })}
+    />
+  );
+}
+
+/**
+ * A process opened on Systems & Processes (decided by the product owner on 26 October
+ * 2026): what it is, its controls in brief, and the way to them on the Controls tab. Its
+ * controls are managed there, or chosen in the guided selection; a process with none can
+ * still be removed here.
+ */
+function ProcessSummary({
+  model,
+  onboarding,
+  row,
+  editable,
+}: {
+  model: Ready;
+  onboarding: Onboarding;
+  row: ProcessRow;
+  editable: boolean;
+}) {
+  const named = onboarding.processes.find(
+    (process) => process.id === row.processId,
+  );
+  const systems = (named?.systemIds ?? [])
+    .map(
+      (id) =>
+        onboarding.applications.find((system) => system.id === id)?.name ?? "",
+    )
+    .filter(Boolean);
+  const about: Array<[string, string]> = [
+    ["Description", named?.description ?? ""],
+    ["Owner", named?.owner ?? ""],
+    ["Based on", CYCLE_LABEL[row.domain] ?? row.domain],
+    ["Related systems", systems.join(", ")],
+  ];
+  return (
+    <article className="sys-detail" aria-label={`${row.label} in brief`}>
+      <ScopeSummary
+        kind="process"
+        id={row.processId ?? row.domain}
+        name={row.label}
+        controls={row.inScope.length}
+        approved={CONTROL_AREAS.filter((area) =>
+          (named?.controlAreas ?? []).includes(area.id),
+        ).map((area) => area.label)}
+        suggested={[]}
+        linked={systems.length}
+        linkedLabel="Linked systems"
+        editable={editable}
+        selectable={row.processId !== null}
+        controlsHref={workspaceHref(
+          "register",
+          model.organization.id,
+          onboarding.projectId,
+        )}
+      />
+      {about.some(([, value]) => value !== "") ? (
+        <section className="sys-block" aria-label={`About ${row.label}`}>
+          <h4>About {row.label}</h4>
+          <dl className="cc-def-list">
+            {about
+              .filter(([, value]) => value !== "")
+              .map(([label, value]) => (
+                <Fragment key={label}>
+                  <dt>{label}</dt>
+                  <dd>{value}</dd>
+                </Fragment>
+              ))}
+          </dl>
+        </section>
+      ) : null}
+      {editable &&
+      row.processId !== null &&
+      row.inScope.length + row.outOfScope.length === 0 ? (
+        <SetupForm className="sys-rec-actions">
+          <Fields
             model={model}
             onboarding={onboarding}
-            row={row}
-            editable={editable}
+            intent="process-remove"
+            values={{ process_id: row.processId }}
           />
-        ),
-      }))}
-    />
+          <button type="submit" className="btn-ghost btn-sm">
+            Remove process
+          </button>
+          <span className="form-hint">
+            A process with controls stays; take its controls out of scope on the
+            Controls tab instead.
+          </span>
+        </SetupForm>
+      ) : null}
+    </article>
   );
 }
 

@@ -1251,6 +1251,7 @@ function RcmImportView({
                     <th scope="col">Frequency</th>
                     <th scope="col">Nature</th>
                     <th scope="col">Owner</th>
+                    <th scope="col">Match</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1295,6 +1296,12 @@ function RcmImportView({
                           <small className="cell-sub">
                             {control.ownerEmail || "No email"}
                           </small>
+                        </span>
+                      </td>
+                      <td>
+                        <span className="st-status is-in">
+                          <i aria-hidden="true" />
+                          Matched
                         </span>
                       </td>
                     </tr>

@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
-import { contextWrite } from "../../../src/control-context-model";
+import { contextWrite, versionsPath } from "../../../src/control-context-model";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 
 /** The control record's context actions: attributes, process understanding, documents,
@@ -48,4 +48,38 @@ export async function POST(request: Request) {
     status = status === 0 ? 0 : status;
   }
   return NextResponse.json({ status, detail, context });
+}
+
+/** A control's process narrative versions (0116), read when the Versions tab opens. The API
+ * decides who may read them. */
+export async function GET(request: Request) {
+  const query = new URL(request.url).searchParams;
+  const path = versionsPath({
+    organization_id: query.get("organization_id") ?? "",
+    project_id: query.get("project_id") ?? "",
+    control_id: query.get("control_id") ?? "",
+  });
+  if (path === null || query.get("intent") !== "process-versions") {
+    return NextResponse.json({ status: 422, detail: "", versions: null });
+  }
+  const session = sessionToken((await cookies()).get("aw_session")?.value);
+  try {
+    const headers = new Headers();
+    if (session !== undefined) {
+      headers.set("cookie", `aw_session=${session}`);
+    }
+    const response = await fetch(`${apiBaseUrl()}${path}`, {
+      headers,
+      cache: "no-store",
+      signal: AbortSignal.timeout(15000),
+    });
+    const body = (await response.json().catch(() => null)) as unknown;
+    return NextResponse.json({
+      status: response.status,
+      detail: "",
+      versions: response.status === 200 ? body : null,
+    });
+  } catch {
+    return NextResponse.json({ status: 0, detail: "", versions: null });
+  }
 }

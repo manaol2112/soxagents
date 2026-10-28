@@ -64,9 +64,10 @@ export async function loadPlanning(
   ) {
     return null;
   }
+  // Testing and Review read nothing here; nor does Planning's Prior year tab.
   if (
-    model.section === "testing" &&
-    (query.view === "results" || query.view === "review") &&
+    (model.section === "testing" ||
+      (model.section === "planning" && query.view === "prior-year")) &&
     query.control === null
   ) {
     return null;

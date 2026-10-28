@@ -9,7 +9,9 @@ testing and is judged on its own. This module holds what those share:
   area and nature, and overridable by the team when a control spans categories;
 - supporting documents (narratives, policies, procedures, flowcharts, walkthrough notes,
   system documentation, prior-year workpapers), stored once per engagement as text and
-  linked to any number of controls. A document is untrusted data;
+  linked to any number of controls. A policy or procedure may instead govern systems and
+  processes (migration 0112): it then applies to every control under them, unless a
+  person takes it off one. A document is untrusted data;
 - the sources a control's context can cite: its own RCM record ("control") and each linked
   document, with quotes checked against their text;
 - issues: what is missing, ambiguous, or contradictory, why it matters, and what would
@@ -67,6 +69,8 @@ MAX_UPLOAD = 5 * 1024 * 1024
 # How much of each source the agents read.
 SOURCE_EXCERPT = 12_000
 CONTROL_SOURCE = "control"
+# The approved process narrative, quoted by the attribute agent as a source (26 October 2026).
+NARRATIVE_SOURCE = "process-narrative"
 
 BUSINESS_CYCLES = tuple(
     domain for domain in DOMAIN_LABELS if domain not in SYSTEM_DOMAINS and domain != "ENTITY"
@@ -161,20 +165,60 @@ def control_text(context: Any) -> str:
     return "\n".join(part for part in parts if part.split(": ", 1)[-1].strip())
 
 
+def applies_to(control: str) -> str:
+    """SQL: the document `d` applies to the control `control` (a column or a parameter):
+    linked to it, or governing its system or process and not taken off it (0112). A
+    removed document applies to none (0113)."""
+    return f"""
+        d.removed_at IS NULL AND
+        (EXISTS (SELECT 1 FROM source_document_controls al
+                 WHERE al.document_id = d.id AND al.engagement_control_id = {control})
+         OR (NOT EXISTS (SELECT 1 FROM source_document_exclusions ax
+                         WHERE ax.document_id = d.id AND ax.engagement_control_id = {control})
+             AND EXISTS (
+                 SELECT 1 FROM engagement_controls ac
+                 WHERE ac.id = {control}
+                   AND (EXISTS (SELECT 1 FROM source_document_systems asy
+                                WHERE asy.document_id = d.id
+                                  AND asy.engagement_application_id
+                                      = ac.engagement_application_id)
+                        OR EXISTS (SELECT 1 FROM source_document_processes apr
+                                   WHERE apr.document_id = d.id
+                                     AND apr.process_id = ac.process_id)))))
+    """
+
+
+def governs(cursor: psycopg.Cursor[Any], document_id: UUID, control_id: UUID) -> bool:
+    """The document governs the control's system or process (0112)."""
+    row = cursor.execute(
+        """
+        SELECT EXISTS (SELECT 1 FROM source_document_systems s
+                       WHERE s.document_id = %s
+                         AND s.engagement_application_id = c.engagement_application_id)
+            OR EXISTS (SELECT 1 FROM source_document_processes s
+                       WHERE s.document_id = %s AND s.process_id = c.process_id)
+        FROM engagement_controls c WHERE c.id = %s
+        """,
+        (document_id, document_id, control_id),
+    ).fetchone()
+    return row is not None and bool(row[0])
+
+
 def linked_documents(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
 ) -> list[Source]:
+    """The documents that apply to the control: linked to it, or governing its system or
+    process."""
     return [
         Source(key=str(row[0]), title=str(row[1]), kind=str(row[2]), text=str(row[3]))
         for row in connection.execute(
-            """
+            f"""
             SELECT d.id, d.title, d.kind, d.text
-            FROM source_document_controls l
-            JOIN source_documents d ON d.id = l.document_id
-            WHERE l.engagement_control_id = %s AND d.project_id = %s
+            FROM source_documents d
+            WHERE d.project_id = %s AND {applies_to("%s")}
             ORDER BY d.created_at
             """,
-            (control_id, project_id),
+            (project_id, control_id, control_id, control_id),
         ).fetchall()
     ]
 
@@ -223,6 +267,21 @@ class IssueBody(BaseModel):
     status: Literal["OPEN", "RESOLVED", "DISMISSED", "SUPERSEDED"]
     resolution_note: str
     version: int
+    # A question the narrative's agents need the client to answer, and the answers the
+    # records suggest (0117); empty for any other issue.
+    question: str = ""
+    suggestions: list[str] = []
+    # A point to confirm (0118): the agents' statement of the fact (empty when the question
+    # is asked open), the narrative section and attribute codes it serves, its round, and
+    # whether it is a missing fact or a contradiction.
+    proposal: str = ""
+    section: str = ""
+    attributes: list[str] = []
+    round: int = 0
+    point_kind: str = ""
+    # Where the statement comes from (0121): SOURCES, the client's records and answers;
+    # TYPICAL, the usual practice for a control of its kind; "" when asked open.
+    proposal_basis: str = ""
 
 
 @dataclass(frozen=True)
@@ -324,11 +383,24 @@ def issues_for(connection: psycopg.Connection[Any], control_id: UUID) -> list[Is
             status=row[9],
             resolution_note=str(row[10]),
             version=int(row[11]),
+            question=str(row[12]),
+            suggestions=[str(item) for item in row[13] if isinstance(item, str)]
+            if isinstance(row[13], list)
+            else [],
+            proposal=str(row[14]),
+            section=str(row[15]),
+            attributes=[str(item) for item in row[16] if isinstance(item, str)]
+            if isinstance(row[16], list)
+            else [],
+            round=int(row[17]),
+            point_kind=str(row[18]),
+            proposal_basis=str(row[19]),
         )
         for row in connection.execute(
             """
             SELECT id, origin, kind, topic, detail, why, resolve, quotes, raised_by, status,
-                   resolution_note, version
+                   resolution_note, version, question, suggestions, proposal,
+                   narrative_section, attribute_codes, point_round, point_kind, proposal_basis
             FROM control_context_issues
             WHERE engagement_control_id = %s AND status <> 'SUPERSEDED'
             ORDER BY CASE status WHEN 'OPEN' THEN 0 ELSE 1 END, created_at
@@ -416,6 +488,14 @@ class DocumentBody(BaseModel):
     control_ids: list[UUID]
     # For the control the list was asked for: when the agent last reviewed it there.
     reviewed: bool = False
+    # What a governing policy or procedure applies to (0112), and the controls a person
+    # took it off.
+    system_ids: list[UUID] = []
+    process_ids: list[UUID] = []
+    excluded_control_ids: list[UUID] = []
+    # For the control the list was asked for: it applies through the control's system or
+    # process, not a link of its own.
+    inherited: bool = False
 
 
 @dataclass(frozen=True)
@@ -502,7 +582,8 @@ def link_document(
     control_ids: list[UUID],
     actor: UUID,
 ) -> list[UUID]:
-    """Link a document to controls of the same engagement. Returns those newly linked."""
+    """Link a document to controls of the same engagement. Returns those newly linked. A
+    control a person took a governing document off has it again."""
     linked: list[UUID] = []
     for control_id in dict.fromkeys(control_ids):
         found = cursor.execute(
@@ -511,6 +592,11 @@ def link_document(
         ).fetchone()
         if found is None:
             raise ValueError("control is not in this engagement")
+        cursor.execute(
+            "DELETE FROM source_document_exclusions WHERE document_id = %s "
+            "AND engagement_control_id = %s",
+            (document_id, control_id),
+        )
         row = cursor.execute(
             """
             INSERT INTO source_document_controls (
@@ -531,23 +617,33 @@ def documents(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID | None = None
 ) -> list[DocumentBody]:
     rows = connection.execute(
-        """
+        f"""
         SELECT d.id, d.kind, d.title, d.file_name, d.origin, char_length(d.text),
                left(d.text, 400), u.display_name, d.created_at,
                ARRAY(SELECT l.engagement_control_id FROM source_document_controls l
                      WHERE l.document_id = d.id ORDER BY l.linked_at),
                (SELECT l.reviewed_at IS NOT NULL FROM source_document_controls l
-                WHERE l.document_id = d.id AND l.engagement_control_id = %s)
+                WHERE l.document_id = d.id AND l.engagement_control_id = %s),
+               ARRAY(SELECT s.engagement_application_id FROM source_document_systems s
+                     WHERE s.document_id = d.id ORDER BY s.linked_at),
+               ARRAY(SELECT s.process_id FROM source_document_processes s
+                     WHERE s.document_id = d.id ORDER BY s.linked_at),
+               ARRAY(SELECT x.engagement_control_id FROM source_document_exclusions x
+                     WHERE x.document_id = d.id ORDER BY x.excluded_at),
+               %s::uuid IS NOT NULL AND NOT EXISTS (
+                   SELECT 1 FROM source_document_controls l
+                   WHERE l.document_id = d.id AND l.engagement_control_id = %s)
         FROM source_documents d
         LEFT JOIN users u ON u.id = d.created_by
-        WHERE d.project_id = %s
-          AND (%s::uuid IS NULL OR EXISTS (
-              SELECT 1 FROM source_document_controls l
-              WHERE l.document_id = d.id AND l.engagement_control_id = %s))
+        WHERE d.project_id = %s AND d.removed_at IS NULL
+          AND (%s::uuid IS NULL OR {applies_to("%s")})
         ORDER BY d.created_at
         """,
-        (control_id, project_id, control_id, control_id),
-    ).fetchall()
+        (
+            control_id, control_id, control_id, project_id, control_id, control_id,
+            control_id, control_id,
+        ),
+    ).fetchall()  # fmt: skip
     return [
         DocumentBody(
             id=row[0],
@@ -561,6 +657,10 @@ def documents(
             created_at=row[8],
             control_ids=[UUID(str(item)) for item in row[9]],
             reviewed=bool(row[10]),
+            system_ids=[UUID(str(item)) for item in row[11]],
+            process_ids=[UUID(str(item)) for item in row[12]],
+            excluded_control_ids=[UUID(str(item)) for item in row[13]],
+            inherited=bool(row[14]),
         )
         for row in rows
     ]
@@ -578,9 +678,14 @@ def context_package(
 ) -> dict[str, Any]:
     """What is known about the control, from the records, for the agents to reason over.
     Source texts go with it separately, as data to quote."""
+    from ai_workforce_api.control_design import design_for
+    from ai_workforce_api.prior_year import prior_year_points
+
+    design = design_for(connection, control_id)
+
     attributes = connection.execute(
         """
-        SELECT id, text, basis, source_kind, status, proposal
+        SELECT id, text, basis, source_kind, status, proposal, code
         FROM control_attributes
         WHERE engagement_control_id = %s AND status IN ('APPROVED', 'PROPOSED')
         ORDER BY status, position, created_at
@@ -627,7 +732,13 @@ def context_package(
             "client_fields": [{"label": k, "value": v} for k, v in context.custom_fields],
         },
         "approved_attributes": [
-            {"id": str(row[0]), "text": str(row[1]), "basis": str(row[2]), "source": str(row[3])}
+            {
+                "id": str(row[0]),
+                "code": str(row[6] or ""),
+                "text": str(row[1]),
+                "basis": str(row[2]),
+                "source": str(row[3]),
+            }
             for row in attributes
             if row[4] == "APPROVED"
         ],
@@ -650,7 +761,35 @@ def context_package(
             "files_read": 0 if evidence is None else int(evidence[0] or 0),
             "kinds": [] if evidence is None or evidence[1] is None else list(evidence[1]),
         },
+        # Accepted by a person from the prior year (0112): exceptions to address and how
+        # the control was tested. A reference for planning, never evidence of operation.
+        "prior_year": prior_year_points(connection, control_id),
+        # The control statement with the client's answers in it, and the answers given in
+        # the client-specific walkthrough (decided by the product owner on 26 October 2026).
+        "statement": "" if design is None else design.text,
+        "client_answers": []
+        if design is None
+        else [
+            {"question": slot.question or slot.label, "answer": slot.value}
+            for slot in design.slots
+            if not slot.automatic and slot.value.strip()
+        ],
+        # How the control operates here, as a person approved it: the attributes and the
+        # evidence follow it (product owner, 26 October 2026). Absent until approved.
+        **(
+            {"approved_process_narrative": narrative}
+            if (narrative := approved_narrative(connection, control_id)) is not None
+            else {}
+        ),
     }
+
+
+def approved_narrative(
+    connection: psycopg.Connection[Any], control_id: UUID
+) -> dict[str, Any] | None:
+    from ai_workforce_api.process_understanding import approved_narrative as narrative
+
+    return narrative(connection, control_id)
 
 
 def source_blocks(sources: list[Source]) -> str:

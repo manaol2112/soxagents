@@ -1,0 +1,461 @@
+/* The control's test procedures (the product owner's reference, 27 October 2026): a
+   header, a coverage panel with one tile per phase, then the phase's procedures as
+   numbered cards. */
+.pb {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.pb-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.pb-head h3 {
+  margin: 0;
+  font-size: var(--fs-lg);
+  color: var(--text-strong);
+}
+
+.pb-head p {
+  margin: 0.25rem 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.pb-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+/* A link in the header looks like the buttons beside it. */
+.pb-head-actions a.btn-secondary {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+  height: 28px;
+  padding: 0 0.625rem;
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  color: var(--text);
+  text-decoration: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color 120ms ease;
+}
+
+.pb-head-actions a.btn-secondary:hover {
+  border-color: var(--accent-border);
+}
+
+.pb-source {
+  padding: 0.2rem 0.6rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 999px;
+}
+
+.pb-coverage {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem 1rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+}
+
+.pb-coverage-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pb-coverage-head h4 {
+  margin: 0;
+  font-size: var(--fs-md);
+  color: var(--text-strong);
+}
+
+.pb-ready {
+  padding: 0.2rem 0.65rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+}
+
+.pb-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+button.pb-tile {
+  display: grid;
+  gap: 0.2rem;
+  align-content: start;
+  justify-content: stretch;
+  justify-items: start;
+  width: 100%;
+  height: auto;
+  padding: 0.75rem 0.9rem;
+  color: var(--text);
+  text-align: left;
+  white-space: normal;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  box-shadow: none;
+  font-weight: 400;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+button.pb-tile:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+  border-color: var(--accent-border);
+}
+
+button.pb-tile.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+button.pb-tile.is-na {
+  opacity: 0.7;
+}
+
+.pb-tile-label {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.pb-tile strong {
+  font-size: var(--fs-xl);
+  line-height: 1.1;
+  color: var(--text-strong);
+}
+
+.pb-tile small {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+.pb-phase {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.pb-phase-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pb-phase-head h4 {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0;
+  font-size: var(--fs-md);
+  color: var(--text-strong);
+}
+
+.pb-count {
+  display: grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 0.35rem;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+}
+
+.pb-views {
+  display: inline-flex;
+  gap: 0.15rem;
+  margin: 0;
+  padding: 0.15rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+}
+
+.pb-views > button {
+  height: 26px;
+  padding: 0 0.75rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  box-shadow: none;
+}
+
+.pb-views > button:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+.pb-views > button.is-on {
+  color: var(--text-strong);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+
+.pb-purpose {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.pb-cards {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pb-card {
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease;
+}
+
+.pb-card.is-open {
+  background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface));
+  border-color: var(--accent-border);
+}
+
+.pb-card.is-related {
+  border-color: var(--accent);
+}
+
+button.pb-card-head {
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+  width: 100%;
+  height: auto;
+  padding: 0.75rem 0.9rem;
+  color: var(--text-strong);
+  text-align: left;
+  white-space: normal;
+  background: transparent;
+  border: 0;
+  border-radius: 12px;
+  box-shadow: none;
+  font-weight: 400;
+}
+
+button.pb-card-head:hover {
+  color: var(--text-strong);
+  background: transparent;
+}
+
+.pb-num {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-strong);
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+}
+
+.pb-card.is-open .pb-num {
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.pb-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+.pb-card-head > svg {
+  flex: none;
+  color: var(--text-secondary);
+  transform: rotate(90deg);
+  transition: transform 180ms ease;
+}
+
+.pb-card.is-open .pb-card-head > svg {
+  transform: rotate(-90deg);
+}
+
+.pb-card-body {
+  display: grid;
+  gap: 0.7rem;
+  margin: 0 0.9rem;
+  padding: 0.75rem 0 0.9rem;
+  border-top: 1px solid var(--border-subtle);
+  animation: pb-open 200ms ease;
+}
+
+.pb-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  margin: 0;
+}
+
+.pb-overview {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.8rem 0.9rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+
+.pb-overview h5 {
+  margin: 0;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent-text);
+  text-transform: uppercase;
+}
+
+.pb-overview p {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.pb-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.pb-actions > button {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.pb-actions > .pb-trace {
+  margin-left: auto;
+}
+
+/* The evidence board (27 October 2026) shares the board: an item's code in its tile, its
+   need and where its request stands on the closed card, and the compact table's filters. */
+.pb-num.is-code {
+  width: auto;
+  min-width: 34px;
+  padding: 0 0.4rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.pb-optional {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+.pb-card-head > .pp-status {
+  flex: none;
+}
+
+.pb-tile-flag {
+  font-weight: 600;
+  color: var(--warning);
+}
+
+.pb-overview p.pb-overview-line {
+  color: var(--text-secondary);
+}
+
+.pb-overview-line > strong {
+  margin-right: 0.3rem;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.pb-card .pp-status.is-info {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.pb-card .pp-status.is-idle {
+  color: var(--text);
+  background: var(--neutral-soft);
+}
+
+.pb-table {
+  display: grid;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.pb-detail {
+  display: grid;
+  gap: 0.7rem;
+}
+
+@keyframes pb-open {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+@media (max-width: 640px) {
+  .pb-tiles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pb-card,
+  .pb-head-actions a.btn-secondary,
+  button.pb-tile,
+  .pb-card-head > svg {
+    transition: none;
+  }
+
+  .pb-card-body {
+    animation: none;
+  }
+}

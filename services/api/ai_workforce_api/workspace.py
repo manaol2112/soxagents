@@ -402,6 +402,8 @@ class ControlRow(BaseModel):
     # The instance's application (Milestone 8.5), and the name pages show.
     application_id: UUID | None = None
     application_name: str = ""
+    # Where its system runs (migration 0109), for the control's context; "" when unstated.
+    application_environment: str = ""
     # The units it operates in, when split by them (Release 1).
     units: str = ""
     label: str = ""
@@ -1286,6 +1288,14 @@ def _controls(
     readiness = readiness_states(connection, project_id)
     population_pending = population_waiting_controls(connection, project_id)
     per_app = _application_states(connection, project_id)
+    environments = {
+        UUID(str(row[0])): str(row[1])
+        for row in connection.execute(
+            "SELECT id, environment FROM engagement_applications "
+            "WHERE project_id = %s AND environment IS NOT NULL",
+            (project_id,),
+        ).fetchall()
+    }
     runs = agent_runs(connection, project_id)
     findings: dict[UUID, list[str]] = {}
     for control_id, severity in connection.execute(
@@ -1364,6 +1374,9 @@ def _controls(
                 systems=list(row[15]),
                 application_id=row[20],
                 application_name="" if row[21] is None else str(row[21]),
+                application_environment=(
+                    "" if row[20] is None else environments.get(UUID(str(row[20])), "")
+                ),
                 units="" if row[24] is None else str(row[24]),
                 label=control_label(
                     str(row[1]),

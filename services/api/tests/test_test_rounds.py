@@ -159,17 +159,13 @@ def test_effective_interim_testing_rolls_forward_to_period_end(migrated: Databas
     assert roll["applicability"] == "APPLICABLE"
     assert roll["period_start"] == f"{year}-03-11"
     on_request = {r["key"] for r in roll["requirements"] if r["request_id"] == rolled["request_id"]}
-    # The standard's suite (library version 4): the population, its support, the note of
-    # changes since interim, and the engagement's own changes question.
-    assert on_request == {
-        "rollforward-changes",
-        "rollforward-ac01-e3",
-        "rollforward-ac01-e4",
-        "rollforward-ac01-e10",
-    }
+    # The standard's suite (library version 4), lean (27 October 2026): one item carries
+    # the population, how it was produced, and what changed since interim.
+    assert on_request == {"rollforward-ac01-e3"}
     assert "Changes since the interim period" in text
+    assert "Record count" in text
     assert f"11 March {year} to 31 December {year}" in text
-    waiting = next(r for r in roll["requirements"] if r["key"] == "rollforward-ac01-e5")
+    waiting = next(r for r in roll["requirements"] if r["key"] == "rollforward-ac01-e8")
     assert waiting["state"] == "AWAITING_DEPENDENCY"
     assert _task(migrated, rolled["task_id"]) == ("READY", "rollforward", "ROLLFORWARD")
 

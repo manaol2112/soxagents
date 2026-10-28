@@ -678,16 +678,27 @@ def _import(
             if created is not None:
                 existing[name.lower()] = created[0]
         every_app = list(dict.fromkeys(existing.values()))
+        # A control replaced here takes the matches to the standards proposed for it.
         if body.mode == "ADD":
             # Library controls still give way to the upload; same control IDs are replaced.
+            replaced_refs = [control.control_ref.upper() for control in result.controls]
+            cursor.execute(
+                """
+                DELETE FROM library_match_runs WHERE project_id = %s AND engagement_control_id IN (
+                    SELECT id FROM engagement_controls
+                    WHERE project_id = %s AND (source <> 'UPLOAD' OR upper(control_ref) = ANY(%s)))
+                """,
+                (project_id, project_id, replaced_refs),
+            )
             cursor.execute(
                 """
                 DELETE FROM engagement_controls
                 WHERE project_id = %s AND (source <> 'UPLOAD' OR upper(control_ref) = ANY(%s))
                 """,
-                (project_id, [control.control_ref.upper() for control in result.controls]),
+                (project_id, replaced_refs),
             )
         else:
+            cursor.execute("DELETE FROM library_match_runs WHERE project_id = %s", (project_id,))
             cursor.execute("DELETE FROM engagement_controls WHERE project_id = %s", (project_id,))
         for control in result.controls:
             apps = [
@@ -778,6 +789,11 @@ def _import(
                 "systems_source": stored.systems_source if confirmed is not None else None,
             },
         )
+    # The imported controls are matched to the firm's standards at once, for a person to
+    # confirm the strong matches together (standard_adoption.py).
+    from ai_workforce_api.standard_adoption import match_after_import
+
+    match_after_import(connection, project_id, principal.id)
     # After launch, each control imported gets its work, as any control added then does.
     reconcile_scope(connection, organization_id, project_id, principal.id)
     return _snapshot(connection, organization_id, project_id)

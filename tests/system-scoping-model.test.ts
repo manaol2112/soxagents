@@ -89,6 +89,12 @@ function system(overrides: Partial<SetupSystem> = {}): SetupSystem {
     assessment: null,
     socReports: [],
     refCode: "",
+    environment: null,
+    integrationIds: [],
+    processIds: [],
+    controlAreas: null,
+    controlAreasSuggested: null,
+    controlAreasDecidedAt: null,
     ...overrides,
   };
 }

@@ -45,6 +45,8 @@ export function ControlStepper({
   agent,
   trace,
   simple = false,
+  summary = true,
+  planPending = false,
 }: {
   journey: ControlJourney | null;
   items: StepperItem[];
@@ -68,6 +70,11 @@ export function ControlStepper({
    * plan itself says what it needs and is edited in place, so the steps and phases stay
    * and the summary blocks (needs you, the agent, outstanding, trace) do not repeat it. */
   simple?: boolean;
+  /** The summary blocks (needs you, the agent, outstanding, trace); off where the step's
+   * own work says the same (the Request step). The steps, phases and sign-offs stay. */
+  summary?: boolean;
+  /** The test plan waits for a person's approval: the Plan step reads In review. */
+  planPending?: boolean;
 }) {
   const done = completion(journey);
   return (
@@ -98,30 +105,41 @@ export function ControlStepper({
                   )}
                 </span>
                 <span className="cw-step-copy">
-                  <strong>{item.label}</strong>
-                  {item.note !== "" ? <small>{item.note}</small> : null}
+                  <span className="cw-step-name">
+                    <strong>{item.label}</strong>
+                    <span className={`cw-step-state is-${item.status}`}>
+                      {stepState(item, planPending)}
+                    </span>
+                  </span>
+                  <small>{STEP_DETAIL[item.step]}</small>
+                  {item.note !== "" ? (
+                    <span className="sr-only">: {item.note}</span>
+                  ) : null}
                 </span>
               </a>
             </li>
           ))}
         </ol>
-        <p className="cw-completion">
-          <span className={done.testing ? "is-done" : ""}>
-            <UiIcon name={done.testing ? "check" : "clock"} size={12} /> Testing
-            {done.testing ? " complete" : " open"}
-          </span>
-          <span className={done.review ? "is-done" : ""}>
-            <UiIcon name={done.review ? "check" : "clock"} size={12} /> Review
-            {done.review ? " complete" : " pending"}
-          </span>
-          <span className={done.final ? "is-done is-final" : ""}>
-            <UiIcon name={done.final ? "check" : "clock"} size={12} />
-            {done.final ? " Final conclusion" : " Not final"}
-          </span>
-          <a className="cw-classic" href={activityHref}>
-            Activity
-          </a>
-        </p>
+        {simple ? null : (
+          <p className="cw-completion">
+            <span className={done.testing ? "is-done" : ""}>
+              <UiIcon name={done.testing ? "check" : "clock"} size={12} />{" "}
+              Testing
+              {done.testing ? " complete" : " open"}
+            </span>
+            <span className={done.review ? "is-done" : ""}>
+              <UiIcon name={done.review ? "check" : "clock"} size={12} /> Review
+              {done.review ? " complete" : " pending"}
+            </span>
+            <span className={done.final ? "is-done is-final" : ""}>
+              <UiIcon name={done.final ? "check" : "clock"} size={12} />
+              {done.final ? " Final conclusion" : " Not final"}
+            </span>
+            <a className="cw-classic" href={activityHref}>
+              Activity
+            </a>
+          </p>
+        )}
       </nav>
       {phases.length > 0 && !simple ? (
         <ol className="cw-phases" aria-label="Testing phases">
@@ -141,7 +159,7 @@ export function ControlStepper({
           ))}
         </ol>
       ) : null}
-      {simple ? null : (
+      {simple || !summary ? null : (
         <section
           className={`cw-needs${needs.mine ? " is-mine" : ""}`}
           aria-labelledby="cw-needs-title"
@@ -167,10 +185,10 @@ export function ControlStepper({
           ) : null}
         </section>
       )}
-      {agent !== null && !simple ? (
+      {agent !== null && !simple && summary ? (
         <AgentSays says={agent} ids={ids} back={hrefs[current]} />
       ) : null}
-      {blockers.length > 0 && !simple ? (
+      {blockers.length > 0 && !simple && summary ? (
         <section className="cw-blockers" aria-labelledby="cw-blockers-title">
           <h2 id="cw-blockers-title">Outstanding</h2>
           <ul>
@@ -206,12 +224,36 @@ export function ControlStepper({
           </ul>
         </section>
       ) : null}
-      {trace !== null && !simple ? (
+      {trace !== null && !simple && summary ? (
         <TraceRail nodes={trace.nodes} rows={trace.rows} />
       ) : null}
     </div>
   );
 }
+
+/** A step's state in a word, under its name: the plan waiting for approval reads In
+ * review; a step behind the control's with work still open, In progress. */
+function stepState(item: StepperItem, planPending: boolean): string {
+  if (item.status === "done") {
+    return "Complete";
+  }
+  if (item.status === "working") {
+    return "In progress";
+  }
+  if (item.status === "current") {
+    return item.step === "PLAN" && planPending ? "In review" : "In progress";
+  }
+  return "Not started";
+}
+
+/** What each step is for, under its name (decided by the product owner). */
+const STEP_DETAIL: Record<Step, string> = {
+  PLAN: "Define and approve the test plan",
+  REQUEST: "Draft and send evidence requests",
+  TEST: "Perform testing and evaluate",
+  CONCLUDE: "Document the conclusion",
+  REVIEW: "Independent review",
+};
 
 const STEP_WORDS: Record<Step, string> = {
   PLAN: "Plan",

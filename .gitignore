@@ -38,6 +38,7 @@ yarn.lock
 dist/
 build/
 .next/
+.next-review/
 out/
 .turbo/
 *.tsbuildinfo

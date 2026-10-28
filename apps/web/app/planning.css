@@ -339,11 +339,6 @@
   border-radius: 50%;
 }
 
-.pl-holding-later .pl-hold-icon {
-  color: var(--text-secondary);
-  background: var(--surface-sunken);
-}
-
 .pl-hold-text {
   display: grid;
   gap: 0.2rem;
@@ -378,47 +373,6 @@
   color: var(--text-tertiary);
   font-size: var(--fs-sm);
   white-space: nowrap;
-}
-
-.pl-holding-later {
-  margin: 0;
-}
-
-.pl-holding.has-blockers .pl-holding-later {
-  padding-top: 0.6rem;
-  border-top: 1px solid var(--border-subtle);
-}
-
-.pl-holding-later > summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  align-items: center;
-  width: fit-content;
-  color: var(--text-strong);
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  cursor: pointer;
-  list-style: none;
-}
-
-.pl-holding-later > summary::-webkit-details-marker {
-  display: none;
-}
-
-.pl-holding-later > summary > span {
-  color: var(--text-tertiary);
-  font-weight: 400;
-}
-
-.pl-holding-later > summary > svg {
-  color: var(--text-tertiary);
-  transform: rotate(90deg);
-  transition: transform 120ms ease;
-}
-
-.pl-holding-later[open] > summary > svg {
-  transform: rotate(-90deg);
 }
 
 @media (max-width: 640px) {
@@ -3716,22 +3670,6 @@ button.cp-add-unit:focus-visible {
   .cp-summary p {
     transition: none;
   }
-}
-
-/* How the agent drafted the plan, on request, in the control's Plan step. */
-.pl-agent-note {
-  margin-top: 0.5rem;
-  font-size: var(--fs-sm);
-}
-
-.pl-agent-note > summary {
-  width: fit-content;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.pl-agent-note[open] > summary {
-  margin-bottom: 0.5rem;
 }
 
 /* The control's own editors inside the plan, in the control's Plan step. */

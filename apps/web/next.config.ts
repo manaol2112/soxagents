@@ -12,6 +12,9 @@ function devOrigins(): string[] {
 }
 
 const config: NextConfig = {
+  // A second build (a review server beside `make web`) writes to its own folder, so it
+  // never replaces the files the running dev server compiled (27 October 2026).
+  distDir: process.env.NEXT_DIST_DIR?.trim() || ".next",
   reactStrictMode: true,
   poweredByHeader: false,
   allowedDevOrigins: devOrigins(),

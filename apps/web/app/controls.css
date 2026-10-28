@@ -2335,3 +2335,21 @@ button.cite-open:hover {
   border: 1px solid var(--success-border);
   border-radius: 999px;
 }
+
+/* Inside the test plan: the agent's proposals offered in one line (27 October 2026). */
+.cc-propose {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.cc-propose > button {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+}

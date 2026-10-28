@@ -2,6 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import {
+  type CSSProperties,
+  Fragment,
   type ReactNode,
   useEffect,
   useId,
@@ -12,26 +14,43 @@ import {
 } from "react";
 
 import { AnswerProgress } from "./answer-progress";
+import type { Confidence } from "./control-context-model";
+import { useAction as useContextAction } from "./control-context-view";
+import { PLAN_TAB_EVENT, PLAN_VIEW_EVENT } from "./control-rail-model";
 import { DescribeDialog } from "./describe-dialog";
 import { formatDate } from "./format";
 import type { PlanningPageState } from "./load-planning";
 import { CONTROL_CATEGORIES } from "./onboarding-model";
 import { PhaseStrip, PhasesView, ViewSwitch } from "./phases-view";
 import {
+  ADDABLE_TYPES,
   type Attribute,
+  type AttributeRow,
   activeFilters,
   answeredValues,
   answerPlaceholder,
   approvalHeldBy,
+  approvalHolds,
+  attributeReadiness,
+  attributeRows,
   BASIS_LABELS,
   basisWords,
   type ControlPhases,
   CRITERIA_LABELS,
   changesSummary,
+  criteriaToAccept,
   decisionLine,
   decisionWords,
   describeQuestions,
+  EVIDENCE_PURPOSE,
+  EVIDENCE_STATUS_LABELS,
+  EVIDENCE_TYPE_LABELS,
   type Evidence,
+  type EvidenceRow,
+  type EvidenceStatus,
+  evidenceCoverage,
+  evidenceRows,
+  evidenceSummary,
   type Fact,
   FILTER_LABELS,
   type Finding,
@@ -45,7 +64,6 @@ import {
   findingsByCode,
   groupChanges,
   type HoldGroup,
-  holdGroups,
   holdHref,
   isAgentWork,
   type MasterPlan,
@@ -60,13 +78,19 @@ import {
   originLabel,
   otherSystems,
   PHASE_LABELS,
+  PHASE_PURPOSE,
   PHASES,
   type Phase,
   type PlanningState,
   type Procedure,
+  type ProcedureRow,
   planningHref,
   planningProblem,
   planQuestions,
+  planVersions,
+  procedureCoverage,
+  procedureReadiness,
+  procedureRows,
   QUEUE_FIGURES,
   QUEUE_FILTERS,
   type Queue,
@@ -91,7 +115,8 @@ import {
 } from "./planning-model";
 import { implementationName } from "./shared-plans-model";
 import { ControlsView } from "./shared-plans-view";
-import { UiIcon } from "./ui-icon";
+import { controlStepHref } from "./testing-hub-model";
+import { type IconName, UiIcon } from "./ui-icon";
 import { SuggestedAnswer } from "./value-options";
 import { joinAnswers } from "./value-suggestions";
 
@@ -1188,8 +1213,9 @@ export function PlanReview({
   phases,
   canRelease,
   embedded = false,
-  agentNote = null,
   workspace = null,
+  clientQuestions = null,
+  confidence = null,
 }: {
   ids: Ids;
   plan: MasterPlan;
@@ -1200,14 +1226,41 @@ export function PlanReview({
   /** Inside the control's Plan step (M2d): no breadcrumb, pager or repeated title; the
    * state, the decisions and the review actions stay. */
   embedded?: boolean;
-  /** How the agent drafted the plan, folded into one line on request (the control's
-   * Plan step shows no separate agent block). */
-  agentNote?: ReactNode;
   /** In the control's Plan step (decided by the product owner): the control's own
    * editors inside the plan, so each fact is shown once and edited where it is read. */
   workspace?: PlanWorkspace | null;
+  /** The client-specific questions the plan asks, and how many testing waits on: the
+   * planning agent's banner in the control's Plan step (decided by the product owner). */
+  clientQuestions?: { total: number; attention: number; open: number } | null;
+  /** The lowest confidence among the attribute definitions the plan tests against, for
+   * the Plan review's figures; null where none is stated. */
+  confidence?: Confidence | null;
 }) {
-  const [view, setView] = useState<Tab>(initialTab);
+  const [view, setView] = useState<Tab | "history">(initialTab);
+  // The control's assistant opens a section of the plan (its suggested next actions).
+  useEffect(() => {
+    const open = (event: Event) => {
+      const tab = (event as CustomEvent<string>).detail;
+      if (tab === "history" || TABS.includes(tab as Tab)) {
+        setView(tab as Tab | "history");
+        setSelected(null);
+        requestAnimationFrame(() =>
+          document
+            .getElementById("pl-plan-tabs")
+            ?.scrollIntoView({ block: "start", behavior: "smooth" }),
+        );
+      }
+    };
+    document.addEventListener(PLAN_TAB_EVENT, open);
+    return () => document.removeEventListener(PLAN_TAB_EVENT, open);
+  }, []);
+  useEffect(() => {
+    if (embedded) {
+      document.dispatchEvent(
+        new CustomEvent(PLAN_VIEW_EVENT, { detail: view }),
+      );
+    }
+  }, [embedded, view]);
   const [selected, setSelected] = useState<string | null>(null);
   const [sources, setSources] = useState(false);
   // A client value answered from where the plan shows it missing (its key), in the same
@@ -1364,61 +1417,81 @@ export function PlanReview({
             </span>
           </div>
         )}
-        <header className="pl-shell-head">
-          <div className="pl-id">
-            {embedded ? null : (
-              <p className="pl-kicker">
-                <span className="pl-control-ref">{control.controlRef}</span>
-                {control.application !== "" || control.units !== "" ? (
-                  <span>
-                    {implementationName(control.application, control.units)}
-                  </span>
-                ) : null}
-              </p>
-            )}
-            <div className="pl-title-row">
-              {embedded ? (
-                <h2 className="pl-embedded-title">Test plan</h2>
-              ) : (
-                <h1>{control.title}</h1>
+        {clientQuestions !== null ? (
+          <PlanSummary
+            ids={ids}
+            plan={plan}
+            questions={clientQuestions}
+            confidence={confidence}
+            view={view}
+            activityToday={workspace?.activityToday ?? null}
+            onOpen={(tab) => {
+              setView(tab);
+              setSelected(null);
+            }}
+            onQuestions={() => {
+              setView("understanding");
+              setSelected(null);
+              // The questions are in the Understanding tab, once it is drawn.
+              requestAnimationFrame(() =>
+                document.getElementById("client-info")?.scrollIntoView({
+                  block: "start",
+                  behavior: "smooth",
+                }),
+              );
+            }}
+          />
+        ) : (
+          <header className="pl-shell-head">
+            <div className="pl-id">
+              {embedded ? null : (
+                <p className="pl-kicker">
+                  <span className="pl-control-ref">{control.controlRef}</span>
+                  {control.application !== "" || control.units !== "" ? (
+                    <span>
+                      {implementationName(control.application, control.units)}
+                    </span>
+                  ) : null}
+                </p>
               )}
-              <StatePill state={plan.state} />
-            </div>
-            <p className="pl-meta">
-              {meta.map((item) => (
-                <span key={item}>{item}</span>
-              ))}
-              <span>
-                Revision {plan.revision}
-                {plan.approvedRevision !== null && plan.revisedSinceApproval
-                  ? `, approved ${plan.approvedRevision}`
-                  : ""}
-              </span>
-              {plan.decisions[0] === undefined ? (
-                <span>No decision yet</span>
-              ) : (
+              <div className="pl-title-row">
+                {embedded ? (
+                  <h2 className="pl-embedded-title">Test plan</h2>
+                ) : (
+                  <h1>{control.title}</h1>
+                )}
+                <StatePill state={plan.state} />
+              </div>
+              <p className="pl-meta">
+                {meta.map((item) => (
+                  <span key={item}>{item}</span>
+                ))}
                 <span>
-                  {decisionLine(plan.decisions[0])} ·{" "}
-                  {formatDate(plan.decisions[0].decidedAt)}
+                  Revision {plan.revision}
+                  {plan.approvedRevision !== null && plan.revisedSinceApproval
+                    ? `, approved ${plan.approvedRevision}`
+                    : ""}
                 </span>
-              )}
-            </p>
-            {agentNote !== null ? (
-              <details className="pl-agent-note">
-                <summary>How the agent drafted this</summary>
-                {agentNote}
-              </details>
-            ) : null}
-            {plan.filledSinceApproval.length > 0 &&
-            !plan.revisedSinceApproval ? (
-              <p className="pl-filled">
-                <UiIcon name="info" size={13} />
-                {filledLine(plan.filledSinceApproval)}
+                {plan.decisions[0] === undefined ? (
+                  <span>No decision yet</span>
+                ) : (
+                  <span>
+                    {decisionLine(plan.decisions[0])} ·{" "}
+                    {formatDate(plan.decisions[0].decidedAt)}
+                  </span>
+                )}
               </p>
-            ) : null}
-          </div>
-          <ReviewActions ids={ids} plan={plan} />
-        </header>
+              {plan.filledSinceApproval.length > 0 &&
+              !plan.revisedSinceApproval ? (
+                <p className="pl-filled">
+                  <UiIcon name="info" size={13} />
+                  {filledLine(plan.filledSinceApproval)}
+                </p>
+              ) : null}
+            </div>
+            <ReviewActions ids={ids} plan={plan} />
+          </header>
+        )}
         {plan.revisedSinceApproval && plan.approvedRevision !== null ? (
           <SinceApproval plan={plan} onSelect={select} />
         ) : null}
@@ -1447,6 +1520,7 @@ export function PlanReview({
         <div className="pl-plan-body">
           <div
             className="pl-tabs"
+            id="pl-plan-tabs"
             role="tablist"
             aria-label="The plan's sections"
           >
@@ -1476,9 +1550,25 @@ export function PlanReview({
                 ) : null}
               </button>
             ))}
+            {embedded ? (
+              // In the control's Plan step the plan's decisions are a section of it.
+              <button
+                type="button"
+                role="tab"
+                id="pl-tab-history"
+                aria-selected={view === "history"}
+                aria-controls="pl-panel-history"
+                className={view === "history" ? "is-active" : undefined}
+                onClick={() => setView("history")}
+              >
+                <span className="pl-tab-name">History</span>
+              </button>
+            ) : null}
           </div>
           <div className="pl-plan-content">
-            {selected !== null && view !== "understanding" ? (
+            {selected !== null &&
+            view !== "understanding" &&
+            view !== "history" ? (
               <section className="pl-trace" aria-label="Traceability">
                 <span>
                   Tracing <strong>{selected}</strong>:
@@ -1512,8 +1602,26 @@ export function PlanReview({
               id={`pl-panel-${view}`}
               aria-labelledby={`pl-tab-${view}`}
             >
-              <h2 className="sr-only">{TAB_LABELS[view]}</h2>
-              {view === "understanding" ? (
+              <h2 className="sr-only">
+                {view === "history" ? "History" : TAB_LABELS[view]}
+              </h2>
+              {view === "history" ? (
+                workspace?.history != null ? (
+                  <>
+                    {workspace.history}
+                    <section
+                      className="ph-decisions"
+                      id="ph-decisions"
+                      aria-label="The plan's decisions"
+                    >
+                      <h3>The plan's decisions</h3>
+                      <History plan={plan} inline />
+                    </section>
+                  </>
+                ) : (
+                  <History plan={plan} inline />
+                )
+              ) : view === "understanding" ? (
                 <UnderstandingTab
                   plan={plan}
                   sources={sources}
@@ -1523,13 +1631,17 @@ export function PlanReview({
                   workspace={workspace}
                 />
               ) : view === "procedures" ? (
-                <>
-                  {workspace !== null ? (
-                    <details className="pl-fold pl-basis">
-                      <summary>Test basis</summary>
-                      {workspace.basis}
-                    </details>
-                  ) : null}
+                workspace !== null ? (
+                  <ProceduresTab
+                    ids={ids}
+                    plan={plan}
+                    selected={selected}
+                    trace={trace}
+                    onSelect={select}
+                    table
+                    guidance={workspace.basis}
+                  />
+                ) : (
                   <ProceduresTab
                     ids={ids}
                     plan={plan}
@@ -1537,26 +1649,27 @@ export function PlanReview({
                     trace={trace}
                     onSelect={select}
                   />
-                </>
+                )
               ) : view === "attributes" ? (
                 <>
                   {plan.suggestedStandard !== null && plan.viewerCanAnswer ? (
                     <StandardSuggestion ids={ids} plan={plan} />
                   ) : null}
                   {workspace !== null ? (
-                    <>
-                      {workspace.attributes}
-                      <details className="pl-fold">
-                        <summary>How each attribute is tested</summary>
-                        <AttributesTab
-                          ids={ids}
-                          plan={plan}
-                          selected={selected}
-                          trace={trace}
-                          onSelect={select}
-                        />
-                      </details>
-                    </>
+                    <AttributesTable
+                      ids={ids}
+                      plan={plan}
+                      selected={selected}
+                      trace={trace}
+                      onSelect={select}
+                      guidance={workspace.basis}
+                      editor={workspace.attributes}
+                      editorOpen={workspace.attributesOpen === true}
+                      editorLabel={
+                        workspace.attributesLabel ??
+                        "Agent proposals and attribute history"
+                      }
+                    />
                   ) : (
                     <AttributesTab
                       ids={ids}
@@ -1567,6 +1680,14 @@ export function PlanReview({
                     />
                   )}
                 </>
+              ) : workspace !== null ? (
+                <EvidenceBoard
+                  ids={ids}
+                  plan={plan}
+                  selected={selected}
+                  trace={trace}
+                  onSelect={select}
+                />
               ) : (
                 <EvidenceTab
                   ids={ids}
@@ -1580,8 +1701,316 @@ export function PlanReview({
           </div>
         </div>
       </article>
-      <History plan={plan} />
+      {embedded ? null : <History plan={plan} />}
     </div>
+  );
+}
+
+const CONFIDENCE_WORD: Record<Confidence, string> = {
+  HIGH: "High",
+  MODERATE: "Moderate",
+  LOW: "Low",
+  NOT_ESTABLISHED: "Not established",
+};
+const CONFIDENCE_FILL: Record<Confidence, number> = {
+  HIGH: 100,
+  MODERATE: 66,
+  LOW: 33,
+  NOT_ESTABLISHED: 0,
+};
+
+/**
+ * The control's Plan review (decided by the product owner on 26 October 2026): what the
+ * planning agent prepared, the decision, and the plan in figures, each opening its section;
+ * how the agent drafted it folds away below. Every figure is a count of the plan's own
+ * records; the confidence is the lowest its attribute definitions state.
+ */
+function PlanSummary({
+  ids,
+  plan,
+  questions,
+  confidence,
+  view,
+  activityToday,
+  onOpen,
+  onQuestions,
+}: {
+  ids: Ids;
+  plan: MasterPlan;
+  questions: { total: number; attention: number; open: number };
+  confidence: Confidence | null;
+  /** The section open below: on the other tabs, the figures are four cards. */
+  view: Tab | "history";
+  /** The control's activities today, for the History figures. */
+  activityToday: number | null;
+  onOpen: (tab: Tab) => void;
+  onQuestions: () => void;
+}) {
+  const counts = tabCounts(plan);
+  // The reference shows the Overview's figures in one panel and the other tabs' as
+  // four cards, the last one the tab's own readiness.
+  const tabView = view !== "understanding";
+  const drafted = plan.state === "APPROVED" ? "Approved" : "Drafted by agent";
+  const procedures = procedureReadiness(plan);
+  const attributes = attributeReadiness(plan);
+  const evidence = evidenceSummary(plan);
+  const requested =
+    evidence.REQUESTED + evidence.IN_PROGRESS + evidence.ACCEPTED;
+  const versions = planVersions(plan).length;
+  const today = activityToday ?? 0;
+  const plural = (count: number, one: string, many: string) =>
+    count === 1 ? one : many;
+  const readiness: {
+    good: string;
+    zero: boolean;
+    warn: string;
+    label: string;
+  } =
+    view === "procedures"
+      ? {
+          good: `${procedures.ready} ready`,
+          zero: procedures.ready === 0,
+          // The same pair on every tab, as the reference shows, zero included.
+          warn: `${procedures.review} need review`,
+          label: "Procedure readiness",
+        }
+      : view === "attributes"
+        ? {
+            good: `${attributes.confirmed} confirmed`,
+            zero: attributes.confirmed === 0,
+            warn: `${attributes.review} ${plural(attributes.review, "needs review", "need review")}`,
+            label: "Attribute readiness",
+          }
+        : view === "evidence"
+          ? {
+              good: `${requested} requested`,
+              zero: requested === 0,
+              warn: `${evidence.NEEDS_REVIEW} pending review`,
+              label: "Evidence readiness",
+            }
+          : {
+              good: `${today} ${plural(today, "activity", "activities")} today`,
+              zero: today === 0,
+              warn: `${versions} plan ${plural(versions, "version", "versions")}`,
+              label: "Recent activity",
+            };
+  const figures: Array<{
+    key: string;
+    icon: IconName;
+    tone: string;
+    value: string;
+    label: string;
+    note: string;
+    attention: boolean;
+    open: () => void;
+  }> = [
+    {
+      key: "questions",
+      icon: "help",
+      tone: "is-orange",
+      value: String(questions.total),
+      label: questions.total === 1 ? "Client question" : "Client questions",
+      note:
+        questions.total === 0
+          ? "None asked"
+          : questions.open > 0
+            ? "Need your review"
+            : "All answered",
+      attention: questions.attention > 0 || questions.open > 0,
+      open: onQuestions,
+    },
+    {
+      key: "procedures",
+      icon: "layers",
+      tone: "is-purple",
+      value: String(counts.procedures.items),
+      label: counts.procedures.items === 1 ? "Procedure" : "Procedures",
+      note: drafted,
+      attention: counts.procedures.attention > 0,
+      open: () => onOpen("procedures"),
+    },
+    {
+      key: "attributes",
+      icon: "message",
+      tone: "is-green",
+      value: String(counts.attributes.items),
+      label: counts.attributes.items === 1 ? "Attribute" : "Attributes",
+      note: drafted,
+      attention: counts.attributes.attention > 0,
+      open: () => onOpen("attributes"),
+    },
+    {
+      key: "evidence",
+      icon: "file",
+      tone: "is-blue",
+      value: String(counts.evidence.items),
+      label: counts.evidence.items === 1 ? "Evidence item" : "Evidence items",
+      note: drafted,
+      attention: counts.evidence.attention > 0,
+      open: () => onOpen("evidence"),
+    },
+  ];
+  const cards: Array<{
+    key: Tab;
+    icon: IconName;
+    tone: string;
+    value: number;
+    label: string;
+  }> = [
+    {
+      key: "procedures",
+      icon: "file",
+      tone: "is-blue",
+      value: counts.procedures.items,
+      label: plural(counts.procedures.items, "Procedure", "Procedures"),
+    },
+    {
+      key: "attributes",
+      icon: "tag",
+      tone: "is-purple",
+      value: counts.attributes.items,
+      label: plural(counts.attributes.items, "Attribute", "Attributes"),
+    },
+    {
+      key: "evidence",
+      icon: "database",
+      tone: "is-green",
+      value: counts.evidence.items,
+      label: plural(counts.evidence.items, "Evidence item", "Evidence items"),
+    },
+  ];
+  const meta = [
+    `Revision ${plan.revision}${
+      plan.approvedRevision !== null && plan.revisedSinceApproval
+        ? `, approved ${plan.approvedRevision}`
+        : ""
+    }`,
+    plan.decisions[0] === undefined
+      ? "No decision yet"
+      : `${decisionLine(plan.decisions[0])} · ${formatDate(plan.decisions[0].decidedAt)}`,
+  ];
+  return (
+    <>
+      <header className={`pl-shell-head pr-head${tabView ? " is-tab" : ""}`}>
+        <div className="pl-id">
+          <div className="pl-title-row">
+            <h2 className="pl-embedded-title">Plan review</h2>
+            <StatePill state={plan.state} />
+          </div>
+          <p className="pr-lead">
+            {tabView
+              ? "The planning agent has prepared the control understanding, procedures, attributes, and evidence based on the control context and relevant guidance. Review and approve to proceed."
+              : "The planning agent has prepared the control understanding, procedures, attributes, and evidence based on the system and process context."}
+          </p>
+          {tabView ? null : <p className="pr-meta">{meta.join(" · ")}</p>}
+          {plan.filledSinceApproval.length > 0 && !plan.revisedSinceApproval ? (
+            <p className="pl-filled">
+              <UiIcon name="info" size={13} />
+              {filledLine(plan.filledSinceApproval)}
+            </p>
+          ) : null}
+        </div>
+        <ReviewActions ids={ids} plan={plan} />
+      </header>
+      {tabView ? (
+        <div className="pr-box is-cards">
+          <ul className="pr-cards" aria-label="The plan in figures">
+            {cards.map((card) => (
+              <li key={card.key}>
+                <button type="button" onClick={() => onOpen(card.key)}>
+                  <span className={`pr-tile ${card.tone}`} aria-hidden="true">
+                    <UiIcon name={card.icon} size={22} />
+                  </span>
+                  <span className="pr-text">
+                    <strong>{card.value}</strong>
+                    <span>{card.label}</span>
+                  </span>
+                </button>
+              </li>
+            ))}
+            <li className="pr-ready-card">
+              <span className="pr-tile is-amber" aria-hidden="true">
+                <UiIcon name="check" size={22} />
+              </span>
+              <span className="pr-text">
+                <strong>
+                  <span
+                    className={`pr-ready${readiness.zero ? " is-none" : ""}`}
+                  >
+                    {readiness.good}
+                  </span>
+                  {" / "}
+                  <span className="pr-review">{readiness.warn}</span>
+                </strong>
+                <span>{readiness.label}</span>
+              </span>
+            </li>
+          </ul>
+        </div>
+      ) : (
+        <div className="pr-box">
+          <ul
+            className="pr-figures"
+            aria-label="The plan in figures"
+            style={
+              {
+                "--pr-count": figures.length + (confidence !== null ? 1 : 0),
+              } as CSSProperties
+            }
+          >
+            {figures.map((item) => (
+              <li key={item.key}>
+                <button type="button" onClick={item.open}>
+                  <span className={`pr-icon ${item.tone}`} aria-hidden="true">
+                    <UiIcon name={item.icon} size={18} />
+                  </span>
+                  <span className="pr-text">
+                    <strong>{item.value}</strong>
+                    <span>{item.label}</span>
+                    <small
+                      className={item.attention ? "is-attention" : undefined}
+                    >
+                      {item.note}
+                    </small>
+                  </span>
+                </button>
+              </li>
+            ))}
+            {confidence !== null ? (
+              <li className="pr-confidence">
+                <span className="pr-icon is-teal" aria-hidden="true">
+                  <UiIcon name="shield" size={18} />
+                </span>
+                <span className="pr-text">
+                  <strong>{CONFIDENCE_WORD[confidence]}</strong>
+                  <span>
+                    Agent confidence{" "}
+                    <span
+                      className="pr-info"
+                      title="The lowest confidence stated among the attribute definitions the plan tests against."
+                    >
+                      <UiIcon name="info" size={12} />
+                      <span className="sr-only">
+                        The lowest confidence stated among the attribute
+                        definitions the plan tests against.
+                      </span>
+                    </span>
+                  </span>
+                  <span
+                    className={`pr-meter is-${confidence.toLowerCase()}`}
+                    aria-hidden="true"
+                  >
+                    <span
+                      style={{ width: `${CONFIDENCE_FILL[confidence]}%` }}
+                    />
+                  </span>
+                </span>
+              </li>
+            ) : null}
+          </ul>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -2174,12 +2603,10 @@ function Holding({
    * question in full, so it is not repeated here. */
   onOpen?: ((tab: Tab) => void) | undefined;
 }) {
-  const groups = holdGroups(plan.blockers);
-  if (groups.length === 0) {
+  const holds = approvalHolds(plan.blockers);
+  if (holds.length === 0) {
     return null;
   }
-  const holds = groups.filter((group) => group.blocks);
-  const later = groups.filter((group) => !group.blocks);
   const row = (group: HoldGroup) => {
     const inPlan = onOpen === undefined ? undefined : IN_PLAN[group.resolve];
     const href =
@@ -2249,32 +2676,13 @@ function Holding({
     );
   };
   return (
-    <aside
-      className={`pl-holding ${holds.length > 0 ? "has-blockers" : ""}`}
-      aria-label="Before approval"
-    >
-      {holds.length > 0 ? (
-        <>
-          <p className="pl-holding-title">
-            {holds.length === 1
-              ? "1 thing to resolve before approval"
-              : `${holds.length} things to resolve before approval`}
-          </p>
-          <ul className="pl-holds">{holds.map(row)}</ul>
-        </>
-      ) : null}
-      {later.length > 0 ? (
-        <details className="pl-holding-later">
-          <summary>
-            {later.length === 1
-              ? "1 thing to settle when it can be"
-              : `${later.length} things to settle when they can be`}
-            <span>Does not prevent approval</span>
-            <UiIcon name="chevron" size={13} />
-          </summary>
-          <ul className="pl-holds">{later.map(row)}</ul>
-        </details>
-      ) : null}
+    <aside className="pl-holding has-blockers" aria-label="Before approval">
+      <p className="pl-holding-title">
+        {holds.length === 1
+          ? "1 thing to resolve before approval"
+          : `${holds.length} things to resolve before approval`}
+      </p>
+      <ul className="pl-holds">{holds.map(row)}</ul>
     </aside>
   );
 }
@@ -2579,6 +2987,103 @@ function UnderstandingTab({
   );
   const rest = plan.facts.filter((item) => !LEAD_FACTS.includes(item.field));
   const notes = [...plan.assumptions, ...plan.exceptions];
+  if (workspace?.statement != null) {
+    // The control's Plan step (decided by the product owner on 26 October 2026): the
+    // control understanding in one card (objective, risk, the design elements the plan
+    // tests, the narrative), then the client-specific information.
+    const elements = plan.attributes.map((item) => item.text).filter(Boolean);
+    const icons: Record<string, { icon: IconName; tone: string }> = {
+      OBJECTIVE: { icon: "shield", tone: "is-blue" },
+      RISK: { icon: "risk", tone: "is-red" },
+    };
+    return (
+      <div className="pl-understanding">
+        <section className="pu-card" aria-labelledby="pu-title">
+          <header className="pu-head">
+            <h3 id="pu-title">Control understanding</h3>
+            {describe !== undefined ? (
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                onClick={() => describe.open("")}
+              >
+                <UiIcon name="compose" size={13} />
+                Edit
+              </button>
+            ) : null}
+          </header>
+          <div className="pu-grid">
+            {paired.map((fact) => (
+              <div key={fact.field} className="pu-item">
+                <span
+                  className={`pu-icon ${icons[fact.field]?.tone ?? ""}`}
+                  aria-hidden="true"
+                >
+                  <UiIcon name={icons[fact.field]?.icon ?? "info"} size={15} />
+                </span>
+                <dl className="pl-lead-facts">
+                  <FactLine
+                    fact={fact}
+                    sources={false}
+                    title={factTitle(fact.field, fact.label)}
+                    answer={answer}
+                    describe={describe}
+                  />
+                </dl>
+              </div>
+            ))}
+            <div className="pu-item is-wide">
+              <span className="pu-icon is-indigo" aria-hidden="true">
+                <UiIcon name="table" size={15} />
+              </span>
+              <div>
+                <h4>Key design elements</h4>
+                {elements.length === 0 ? (
+                  <p className="pu-none">The plan states none yet.</p>
+                ) : (
+                  <ul className="pu-elements">
+                    {elements.slice(0, 5).map((text) => (
+                      <li key={text}>{text}</li>
+                    ))}
+                    {elements.length > 5 ? (
+                      <li className="pu-more">
+                        and {elements.length - 5} more in Attributes
+                      </li>
+                    ) : null}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>
+          {narrative.length > 0 ? (
+            <dl className="pl-lead-facts pu-rest">
+              {narrative.map((fact) => (
+                <FactLine
+                  key={fact.field}
+                  fact={fact}
+                  sources={false}
+                  title={factTitle(fact.field, fact.label)}
+                  answer={answer}
+                  describe={describe}
+                />
+              ))}
+            </dl>
+          ) : null}
+        </section>
+        <div className="pl-statement">{workspace.statement}</div>
+        <MoreAbout
+          plan={plan}
+          rest={rest}
+          notes={notes}
+          sources={sources}
+          onSources={onSources}
+          answer={answer}
+          describe={describe}
+          workspace={workspace}
+        />
+      </div>
+    );
+  }
   return (
     <div className="pl-understanding">
       <dl className="pl-lead-facts">
@@ -2626,49 +3131,80 @@ function UnderstandingTab({
           </dl>
         </>
       ) : null}
-      <details
-        className="pl-fold"
-        open={workspace?.moreOpen === true ? true : undefined}
-      >
-        <summary>More about this control</summary>
-        <div className="pl-more">
-          {workspace !== null ? workspace.more : null}
-          <div className="pl-more-bar">
-            <h3>Control facts</h3>
-            <button
-              type="button"
-              className="pl-sources-toggle"
-              aria-pressed={sources}
-              onClick={() => onSources(!sources)}
-            >
-              {sources ? "Hide sources" : "Show sources"}
-            </button>
-          </div>
-          <dl className="pl-fact-grid">
-            {rest.map((fact) => (
-              <FactLine
-                key={fact.field}
-                fact={fact}
-                sources={sources}
-                title={factTitle(fact.field, fact.label)}
-                answer={answer}
-                describe={describe}
-              />
-            ))}
-          </dl>
-          {notes.length > 0 ? (
-            <div className="pl-assumptions">
-              <h3>Assumptions</h3>
-              <ul className="pl-notes">
-                {notes.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-        </div>
-      </details>
+      <MoreAbout
+        plan={plan}
+        rest={rest}
+        notes={notes}
+        sources={sources}
+        onSources={onSources}
+        answer={answer}
+        describe={describe}
+        workspace={workspace}
+      />
     </div>
+  );
+}
+
+/** The control's other facts, its process, documents and assumptions, folded away. */
+function MoreAbout({
+  plan: _plan,
+  rest,
+  notes,
+  sources,
+  onSources,
+  answer,
+  describe,
+  workspace,
+}: {
+  plan: MasterPlan;
+  rest: Fact[];
+  notes: string[];
+  sources: boolean;
+  onSources: (value: boolean) => void;
+  answer: Answering | undefined;
+  describe: Describing | undefined;
+  workspace: PlanWorkspace | null;
+}) {
+  return (
+    <details className="pl-fold">
+      <summary>More about this control</summary>
+      <div className="pl-more">
+        <div className="pl-more-bar">
+          <h3>Control facts</h3>
+          <button
+            type="button"
+            className="pl-sources-toggle"
+            aria-pressed={sources}
+            onClick={() => onSources(!sources)}
+          >
+            {sources ? "Hide sources" : "Show sources"}
+          </button>
+        </div>
+        <dl className="pl-fact-grid">
+          {rest.map((fact) => (
+            <FactLine
+              key={fact.field}
+              fact={fact}
+              sources={sources}
+              title={factTitle(fact.field, fact.label)}
+              answer={answer}
+              describe={describe}
+            />
+          ))}
+        </dl>
+        {workspace?.classification ?? null}
+        {notes.length > 0 ? (
+          <div className="pl-assumptions">
+            <h3>Assumptions</h3>
+            <ul className="pl-notes">
+              {notes.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+    </details>
   );
 }
 
@@ -2678,12 +3214,20 @@ export type PlanWorkspace = {
   statement: ReactNode | null;
   /** The attributes: the one editable list, with its open questions. */
   attributes: ReactNode;
+  /** Opened when the control's attributes wait on a decision. */
+  attributesOpen?: boolean;
+  /** What the fold under the attribute table holds, as its heading. */
+  attributesLabel?: string;
+  /** The control's history, by day, for the plan's History tab. */
+  history?: ReactNode;
+  /** How many of the control's activities happened today. */
+  activityToday?: number;
   /** The test basis the plan follows, and changing it. */
   basis: ReactNode;
-  /** Process understanding and supporting documents. */
-  more: ReactNode;
-  /** Opened when one of them needs a decision. */
-  moreOpen: boolean;
+  /** How the control is classified, edited under its facts. The process understanding
+   * and the supporting documents are not repeated here: the process narrative and the
+   * assistant's documents card hold them (product owner, 26 October 2026). */
+  classification?: ReactNode;
 };
 
 /** The open client values a plan shows, and how to answer one; absent for a viewer who
@@ -2814,8 +3358,33 @@ type TabProps = {
   onSelect: (code: string) => void;
 };
 
-function ProceduresTab({ ids, plan, selected, trace, onSelect }: TabProps) {
+function ProceduresTab({
+  ids,
+  plan,
+  selected,
+  trace,
+  onSelect,
+  table = false,
+  guidance = null,
+}: TabProps & {
+  /** The control's Plan step: one table (decided by the product owner). */
+  table?: boolean;
+  /** The test basis the procedures follow, opened by Procedure guidance. */
+  guidance?: ReactNode;
+}) {
   const flagged = findingsByCode(plan);
+  if (table) {
+    return (
+      <ProcedureBoard
+        ids={ids}
+        plan={plan}
+        selected={selected}
+        trace={trace}
+        onSelect={onSelect}
+        guidance={guidance}
+      />
+    );
+  }
   // Every phase on one page; a phase that does not apply is one line.
   return (
     <div className="pl-sections">
@@ -2873,21 +3442,8 @@ function ProcedureItem({
   findings: Finding[] | undefined;
   onSelect: (code: string) => void;
 }) {
-  const action = useAction(ids);
-  const [mode, setMode] = useState<"none" | "edit" | "links" | "remove">(
-    "none",
-  );
-  const [text, setText] = useState(item.text);
-  const [method, setMethod] = useState(item.method ?? "");
-  const [reason, setReason] = useState("");
-  const [links, setLinks] = useState<Set<string>>(new Set(item.attributeIds));
-  const fields = { control_id: plan.controlId, procedure_id: item.id };
+  const [mode, setMode] = useState<ProcedureMode>("none");
   const lead = procedureLead(item.text);
-  const done = (result: { ok: boolean }) => {
-    if (result.ok) {
-      setMode("none");
-    }
-  };
   return (
     <li id={`pl-item-${item.code}`} className={className}>
       <details
@@ -2961,119 +3517,13 @@ function ProcedureItem({
               Remove
             </button>
           </span>
-          {mode === "edit" ? (
-            <div className="pl-edit" aria-busy={action.pending}>
-              <label>
-                What is done
-                <textarea
-                  rows={3}
-                  maxLength={1000}
-                  value={text}
-                  onChange={(event) => setText(event.target.value)}
-                />
-              </label>
-              <label>
-                Method
-                <select
-                  value={method}
-                  onChange={(event) => setMethod(event.target.value)}
-                >
-                  <option value="">Not stated</option>
-                  {METHODS.map((value) => (
-                    <option key={value} value={value}>
-                      {METHOD_LABELS[value]}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <EditButtons
-                busy={action.pending}
-                disabled={text.trim().length < 10}
-                save="Save procedure"
-                onCancel={() => setMode("none")}
-                onSave={async () =>
-                  done(
-                    await action.run("edit", {
-                      intent: "procedure-edit",
-                      ...fields,
-                      version: item.version,
-                      text,
-                      method,
-                    }),
-                  )
-                }
-              />
-            </div>
-          ) : null}
-          {mode === "links" ? (
-            <div className="pl-edit" aria-busy={action.pending}>
-              <fieldset>
-                <legend>Attributes this procedure tests</legend>
-                {plan.attributes.map((attribute) => (
-                  <label key={attribute.id} className="pl-check">
-                    <input
-                      type="checkbox"
-                      checked={links.has(attribute.id)}
-                      onChange={(event) => {
-                        const next = new Set(links);
-                        if (event.target.checked) {
-                          next.add(attribute.id);
-                        } else {
-                          next.delete(attribute.id);
-                        }
-                        setLinks(next);
-                      }}
-                    />
-                    <span className="pl-ref">{attribute.code}</span>{" "}
-                    {attribute.text}
-                  </label>
-                ))}
-              </fieldset>
-              <EditButtons
-                busy={action.pending}
-                save="Save links"
-                onCancel={() => setMode("none")}
-                onSave={async () =>
-                  done(
-                    await action.run("links", {
-                      intent: "procedure-links",
-                      ...fields,
-                      attribute_ids: [...links],
-                    }),
-                  )
-                }
-              />
-            </div>
-          ) : null}
-          {mode === "remove" ? (
-            <div className="pl-edit" aria-busy={action.pending}>
-              <label>
-                Why it is removed
-                <textarea
-                  rows={2}
-                  maxLength={500}
-                  value={reason}
-                  onChange={(event) => setReason(event.target.value)}
-                />
-              </label>
-              <EditButtons
-                busy={action.pending}
-                disabled={reason.trim().length < 10}
-                save="Remove procedure"
-                onCancel={() => setMode("none")}
-                onSave={async () =>
-                  done(
-                    await action.run("remove", {
-                      intent: "procedure-remove",
-                      ...fields,
-                      version: item.version,
-                      reason,
-                    }),
-                  )
-                }
-              />
-            </div>
-          ) : null}
+          <ProcedureForms
+            ids={ids}
+            plan={plan}
+            item={item}
+            mode={mode}
+            onDone={() => setMode("none")}
+          />
         </div>
       </details>
       <Flags
@@ -3082,22 +3532,950 @@ function ProcedureItem({
         findings={findings}
         onLinks={() => setMode("links")}
       />
-      <Problem text={action.problem} />
     </li>
+  );
+}
+
+type ProcedureMode = "none" | "edit" | "links" | "remove";
+
+/** A procedure's edit, attribute links and removal (with its reason), in the list and
+ * in the table alike. */
+function ProcedureForms({
+  ids,
+  plan,
+  item,
+  mode,
+  onDone,
+}: {
+  ids: Ids;
+  plan: MasterPlan;
+  item: Procedure;
+  mode: ProcedureMode;
+  onDone: () => void;
+}) {
+  const action = useAction(ids);
+  const [text, setText] = useState(item.text);
+  const [method, setMethod] = useState(item.method ?? "");
+  const [reason, setReason] = useState("");
+  const [links, setLinks] = useState<Set<string>>(new Set(item.attributeIds));
+  const fields = { control_id: plan.controlId, procedure_id: item.id };
+  const setMode = (next: ProcedureMode) => {
+    if (next === "none") {
+      onDone();
+    }
+  };
+  const done = (result: { ok: boolean }) => {
+    if (result.ok) {
+      onDone();
+    }
+  };
+  return (
+    <>
+      {mode === "edit" ? (
+        <div className="pl-edit" aria-busy={action.pending}>
+          <label>
+            What is done
+            <textarea
+              rows={3}
+              maxLength={1000}
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+            />
+          </label>
+          <label>
+            Method
+            <select
+              value={method}
+              onChange={(event) => setMethod(event.target.value)}
+            >
+              <option value="">Not stated</option>
+              {METHODS.map((value) => (
+                <option key={value} value={value}>
+                  {METHOD_LABELS[value]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <EditButtons
+            busy={action.pending}
+            disabled={text.trim().length < 10}
+            save="Save procedure"
+            onCancel={() => setMode("none")}
+            onSave={async () =>
+              done(
+                await action.run("edit", {
+                  intent: "procedure-edit",
+                  ...fields,
+                  version: item.version,
+                  text,
+                  method,
+                }),
+              )
+            }
+          />
+        </div>
+      ) : null}
+      {mode === "links" ? (
+        <div className="pl-edit" aria-busy={action.pending}>
+          <fieldset>
+            <legend>Attributes this procedure tests</legend>
+            {plan.attributes.map((attribute) => (
+              <label key={attribute.id} className="pl-check">
+                <input
+                  type="checkbox"
+                  checked={links.has(attribute.id)}
+                  onChange={(event) => {
+                    const next = new Set(links);
+                    if (event.target.checked) {
+                      next.add(attribute.id);
+                    } else {
+                      next.delete(attribute.id);
+                    }
+                    setLinks(next);
+                  }}
+                />
+                <span className="pl-ref">{attribute.code}</span>{" "}
+                {attribute.text}
+              </label>
+            ))}
+          </fieldset>
+          <EditButtons
+            busy={action.pending}
+            save="Save links"
+            onCancel={() => setMode("none")}
+            onSave={async () =>
+              done(
+                await action.run("links", {
+                  intent: "procedure-links",
+                  ...fields,
+                  attribute_ids: [...links],
+                }),
+              )
+            }
+          />
+        </div>
+      ) : null}
+      {mode === "remove" ? (
+        <div className="pl-edit" aria-busy={action.pending}>
+          <label>
+            Why it is removed
+            <textarea
+              rows={2}
+              maxLength={500}
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          </label>
+          <EditButtons
+            busy={action.pending}
+            disabled={reason.trim().length < 10}
+            save="Remove procedure"
+            onCancel={() => setMode("none")}
+            onSave={async () =>
+              done(
+                await action.run("remove", {
+                  intent: "procedure-remove",
+                  ...fields,
+                  version: item.version,
+                  reason,
+                }),
+              )
+            }
+          />
+        </div>
+      ) : null}
+      <Problem text={action.problem} />
+    </>
+  );
+}
+
+/**
+ * The procedures as one table (decided by the product owner on 26 October 2026, from the
+ * control workspace reference): each with its method, phase, what it tests and needs,
+ * where it came from and whether a finding waits on it; Review opens it in place with its
+ * findings and its edit, links and removal.
+ */
+function ProceduresTable({
+  ids,
+  plan,
+  selected,
+  trace,
+  onSelect,
+  guidance,
+  phase,
+  bare = false,
+}: TabProps & {
+  guidance: ReactNode;
+  /** One phase's procedures, numbered within it (the board's Compact view). */
+  phase?: Phase;
+  /** The table alone, without the card's header and footer. */
+  bare?: boolean;
+}) {
+  const flagged = findingsByCode(plan);
+  const rows = procedureRows(plan)
+    .filter(
+      (row) =>
+        phase === undefined ||
+        plan.procedures.find((item) => item.id === row.id)?.phase === phase,
+    )
+    .map((row, index) =>
+      phase === undefined ? row : { ...row, number: index + 1 },
+    );
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [modes, setModes] = useState<Record<string, ProcedureMode>>({});
+  const [showGuidance, setShowGuidance] = useState(false);
+  const all = rows.length > 0 && rows.every((row) => open.has(row.id));
+  const toggle = (id: string, value?: boolean) =>
+    setOpen((now) => {
+      const next = new Set(now);
+      if (value ?? !next.has(id)) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  const mode = (id: string) => modes[id] ?? "none";
+  const setMode = (id: string, next: ProcedureMode) => {
+    setModes((now) => ({ ...now, [id]: next }));
+    if (next !== "none") {
+      toggle(id, true);
+    }
+  };
+  const applicable = PHASES.filter(
+    (phase) =>
+      plan.phases.find((item) => item.phase === phase)?.applicability !==
+      "NOT_APPLICABLE",
+  );
+  const notApplicable = PHASES.filter((phase) => !applicable.includes(phase));
+  const tableView =
+    rows.length === 0 ? (
+      <p className="pl-quiet">The plan has no procedure yet.</p>
+    ) : (
+      <div className="pp-scroll">
+        <table className="pp-table">
+          <thead>
+            <tr>
+              <th scope="col">#</th>
+              <th scope="col">Procedure</th>
+              <th scope="col">Type</th>
+              <th scope="col">Phase</th>
+              <th scope="col">Attributes</th>
+              <th scope="col">Evidence</th>
+              <th scope="col">Source</th>
+              <th scope="col">Status</th>
+              <th scope="col">
+                <span className="sr-only">Actions</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const item = plan.procedures.find((entry) => entry.id === row.id);
+              if (item === undefined) {
+                return null;
+              }
+              const isOpen = open.has(row.id);
+              return (
+                <Fragment key={row.id}>
+                  <tr
+                    id={`pl-item-${row.code}`}
+                    className={`pp-row${selected === row.code ? " is-selected" : ""}${trace.has(row.code) ? " is-related" : ""}${isOpen ? " is-open" : ""}`}
+                  >
+                    <td className="pp-num">{row.number}</td>
+                    <td className="pp-text">
+                      <strong>{row.title}</strong>
+                      {row.body !== "" ? <small>{row.body}</small> : null}
+                    </td>
+                    <td>
+                      {row.method !== "" ? (
+                        <span
+                          className={`pp-pill is-${row.method.toLowerCase()}`}
+                        >
+                          {row.method}
+                        </span>
+                      ) : (
+                        <span className="pl-quiet">—</span>
+                      )}
+                    </td>
+                    <td>
+                      <span
+                        className={`pp-pill is-phase is-${item.phase.toLowerCase()}`}
+                      >
+                        {row.phase}
+                      </span>
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="pp-count"
+                        title={`Attributes it tests: ${item.attributeCodes.join(", ") || "none"}`}
+                        onClick={() => setMode(row.id, "links")}
+                        disabled={item.phase === "DESIGN"}
+                      >
+                        <UiIcon name="file" size={13} />
+                        {row.attributes}
+                      </button>
+                    </td>
+                    <td>
+                      <span
+                        className="pp-count"
+                        title={`Evidence it needs: ${item.evidenceCodes.join(", ") || "none"}`}
+                      >
+                        <UiIcon name="table" size={13} />
+                        {row.evidence}
+                      </span>
+                    </td>
+                    <td className="pp-source">{row.source}</td>
+                    <td>
+                      <span
+                        className={`pp-status ${row.status === "READY" ? "is-ready" : "is-review"}`}
+                      >
+                        {row.status === "READY" ? "Ready" : "Needs review"}
+                      </span>
+                    </td>
+                    <td className="pp-actions">
+                      <button
+                        type="button"
+                        className="btn-secondary btn-sm"
+                        aria-expanded={isOpen}
+                        onClick={() => toggle(row.id)}
+                      >
+                        {isOpen ? "Close" : "Review"}
+                      </button>
+                      <ProcedureMenu
+                        label={`More for procedure ${row.number}`}
+                        items={[
+                          {
+                            text: "Edit",
+                            run: () => setMode(row.id, "edit"),
+                          },
+                          ...(item.phase === "DESIGN"
+                            ? []
+                            : [
+                                {
+                                  text: "Link attributes",
+                                  run: () => setMode(row.id, "links"),
+                                },
+                              ]),
+                          {
+                            text: "Trace in the plan",
+                            run: () => onSelect(row.code),
+                          },
+                          {
+                            text: "Remove",
+                            run: () => setMode(row.id, "remove"),
+                          },
+                        ]}
+                      />
+                    </td>
+                  </tr>
+                  {isOpen ? (
+                    <tr className="pp-detail">
+                      <td />
+                      <td colSpan={8}>
+                        <div className="pp-detail-body">
+                          <p className="pl-row-meta">
+                            <span className="pl-ref">{row.code}</span>
+                            <Mark
+                              origin={item.origin}
+                              personEdited={item.personEdited}
+                            />
+                            {item.standardKey !== "" &&
+                            plan.control.libraryKey !== "" ? (
+                              <a
+                                className="pl-standard-steps"
+                                href={standardStepsHref(
+                                  ids.organizationId,
+                                  ids.projectId,
+                                  plan.control.libraryKey,
+                                  item.standardKey,
+                                )}
+                              >
+                                View the standard's steps
+                              </a>
+                            ) : null}
+                          </p>
+                          <p className="pl-row-links">
+                            {item.phase === "DESIGN" ? null : (
+                              <Chips
+                                optional
+                                label="Tests"
+                                codes={item.attributeCodes}
+                                onSelect={onSelect}
+                              />
+                            )}
+                            <Chips
+                              optional
+                              label="Evidence"
+                              codes={item.evidenceCodes}
+                              onSelect={onSelect}
+                            />
+                          </p>
+                          <Flags
+                            ids={ids}
+                            plan={plan}
+                            findings={flagged.get(row.code)}
+                            onLinks={() => setMode(row.id, "links")}
+                          />
+                          <span className="pl-item-actions">
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              onClick={() =>
+                                setMode(
+                                  row.id,
+                                  mode(row.id) === "edit" ? "none" : "edit",
+                                )
+                              }
+                            >
+                              Edit
+                            </button>
+                            {item.phase === "DESIGN" ? null : (
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                onClick={() =>
+                                  setMode(
+                                    row.id,
+                                    mode(row.id) === "links" ? "none" : "links",
+                                  )
+                                }
+                              >
+                                Attributes
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              onClick={() =>
+                                setMode(
+                                  row.id,
+                                  mode(row.id) === "remove" ? "none" : "remove",
+                                )
+                              }
+                            >
+                              Remove
+                            </button>
+                          </span>
+                          <ProcedureForms
+                            ids={ids}
+                            plan={plan}
+                            item={item}
+                            mode={mode(row.id)}
+                            onDone={() => setMode(row.id, "none")}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  if (bare) {
+    return tableView;
+  }
+  return (
+    <section className="pp-card" aria-labelledby="pp-title">
+      <header className="pp-head">
+        <div>
+          <h3 id="pp-title">
+            Procedures <span>({rows.length})</span>
+          </h3>
+          <p>
+            Audit procedures to test the design and operating effectiveness of
+            this control.
+          </p>
+        </div>
+        <div className="pp-head-actions">
+          {guidance !== null ? (
+            <button
+              type="button"
+              className="btn-secondary"
+              aria-expanded={showGuidance}
+              onClick={() => setShowGuidance(!showGuidance)}
+            >
+              <UiIcon name="file" size={14} />
+              Procedure guidance
+            </button>
+          ) : null}
+          {rows.length > 0 ? (
+            <button
+              type="button"
+              className="btn"
+              onClick={() =>
+                setOpen(all ? new Set() : new Set(rows.map((row) => row.id)))
+              }
+            >
+              <UiIcon name="file" size={14} />
+              {all ? "Close all procedures" : "Review all procedures"}
+            </button>
+          ) : null}
+        </div>
+      </header>
+      {showGuidance && guidance !== null ? (
+        <div className="pp-guidance">{guidance}</div>
+      ) : null}
+      {tableView}
+      <footer className="pp-foot">
+        {notApplicable.length > 0 ? (
+          <p className="pl-quiet">
+            Not applicable:{" "}
+            {notApplicable.map((phase) => PHASE_LABELS[phase]).join(", ")}.
+          </p>
+        ) : null}
+        {applicable.length > 0 ? (
+          <AddProcedure ids={ids} plan={plan} phases={applicable} />
+        ) : null}
+      </footer>
+    </section>
+  );
+}
+
+/**
+ * The control's procedures as the product owner's reference shows them (27 October
+ * 2026): a header with where they came from, a coverage panel with one tile per phase,
+ * then the chosen phase's procedures as numbered cards that open to their overview and
+ * actions, or as the compact table.
+ */
+function ProcedureBoard({
+  ids,
+  plan,
+  selected,
+  trace,
+  onSelect,
+  guidance,
+}: TabProps & { guidance: ReactNode }) {
+  const coverage = procedureCoverage(plan);
+  const flagged = findingsByCode(plan);
+  const rows = procedureRows(plan);
+  const [phase, setPhase] = useState<Phase>(coverage.first);
+  const [view, setView] = useState<"cards" | "compact">("cards");
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [modes, setModes] = useState<Record<string, ProcedureMode>>({});
+  const [showGuidance, setShowGuidance] = useState(false);
+  const mine = plan.procedures.filter((item) => item.phase === phase);
+  const all = mine.length > 0 && mine.every((item) => open.has(item.id));
+  const toggle = (id: string, value?: boolean) =>
+    setOpen((now) => {
+      const next = new Set(now);
+      if (value ?? !next.has(id)) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  const mode = (id: string) => modes[id] ?? "none";
+  const setMode = (id: string, next: ProcedureMode) => {
+    setModes((now) => ({ ...now, [id]: next }));
+    if (next !== "none") {
+      toggle(id, true);
+    }
+  };
+  // A procedure traced from elsewhere in the plan opens in its phase.
+  useEffect(() => {
+    const traced = plan.procedures.find((item) => item.code === selected);
+    if (traced !== undefined) {
+      setPhase(traced.phase);
+      setOpen((now) => new Set(now).add(traced.id));
+    }
+  }, [selected, plan.procedures]);
+  const current = coverage.phases.find((item) => item.phase === phase);
+  return (
+    <section className="pb" aria-labelledby="pb-title">
+      <header className="pb-head">
+        <div>
+          <h3 id="pb-title">Test procedures</h3>
+          <p>
+            {coverage.total} {coverage.total === 1 ? "procedure" : "procedures"}{" "}
+            across {coverage.phasesUsed}{" "}
+            {coverage.phasesUsed === 1 ? "testing phase" : "testing phases"}
+          </p>
+        </div>
+        <div className="pb-head-actions">
+          {coverage.source !== "" ? (
+            <span className="pb-source">{coverage.source}</span>
+          ) : null}
+          {guidance !== null ? (
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              aria-expanded={showGuidance}
+              onClick={() => setShowGuidance(!showGuidance)}
+            >
+              <UiIcon name="file" size={13} />
+              Procedure guidance
+            </button>
+          ) : null}
+          {mine.length > 0 ? (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => {
+                setView("cards");
+                setOpen(all ? new Set() : new Set(mine.map((item) => item.id)));
+              }}
+            >
+              {all ? "Close procedures" : "Review procedures"}
+            </button>
+          ) : null}
+        </div>
+      </header>
+      {showGuidance && guidance !== null ? (
+        <div className="pp-guidance">{guidance}</div>
+      ) : null}
+      <div className="pb-coverage">
+        <div className="pb-coverage-head">
+          <h4>Procedure coverage</h4>
+          <span className="pb-ready">
+            {coverage.review > 0
+              ? `${coverage.ready} ready · ${coverage.review} to review`
+              : `${coverage.ready} ready for review`}
+          </span>
+        </div>
+        <div className="pb-tiles" role="tablist" aria-label="Testing phases">
+          {coverage.phases.map((item) => (
+            <button
+              key={item.phase}
+              type="button"
+              role="tab"
+              aria-selected={item.phase === phase}
+              className={`pb-tile${item.phase === phase ? " is-on" : ""}${item.applies ? "" : " is-na"}`}
+              onClick={() => setPhase(item.phase)}
+            >
+              <span className="pb-tile-label">{item.short}</span>
+              <strong>{item.applies ? item.count : "—"}</strong>
+              <small>
+                {item.applies
+                  ? item.count === 1
+                    ? "procedure"
+                    : "procedures"
+                  : "Not applicable"}
+              </small>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="pb-phase" role="tabpanel">
+        <div className="pb-phase-head">
+          <h4>
+            <UiIcon name="layers" size={18} />
+            {PHASE_LABELS[phase]}
+            <span className="pb-count">{mine.length}</span>
+          </h4>
+          {mine.length > 0 ? (
+            <fieldset className="pb-views">
+              <legend className="sr-only">View</legend>
+              {(["cards", "compact"] as const).map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  aria-pressed={view === key}
+                  className={view === key ? "is-on" : undefined}
+                  onClick={() => setView(key)}
+                >
+                  {key === "cards" ? "Cards" : "Compact"}
+                </button>
+              ))}
+            </fieldset>
+          ) : null}
+        </div>
+        <p className="pb-purpose">
+          {current?.applies === false
+            ? "This phase does not apply to the control."
+            : PHASE_PURPOSE[phase]}
+        </p>
+        {mine.length === 0 ? (
+          current?.applies === false ? null : (
+            <p className="pl-quiet">No procedure in this phase yet.</p>
+          )
+        ) : view === "compact" ? (
+          <ProceduresTable
+            ids={ids}
+            plan={plan}
+            selected={selected}
+            trace={trace}
+            onSelect={onSelect}
+            guidance={null}
+            phase={phase}
+            bare
+          />
+        ) : (
+          <ol className="pb-cards">
+            {mine.map((item, index) => {
+              const row = rows.find((entry) => entry.id === item.id);
+              if (row === undefined) {
+                return null;
+              }
+              return (
+                <ProcedureCard
+                  key={item.id}
+                  ids={ids}
+                  plan={plan}
+                  item={item}
+                  row={row}
+                  number={index + 1}
+                  open={open.has(item.id)}
+                  related={selected === row.code || trace.has(row.code)}
+                  onToggle={() => toggle(item.id)}
+                  mode={mode(item.id)}
+                  onMode={(next) => setMode(item.id, next)}
+                  findings={flagged.get(row.code)}
+                  onSelect={onSelect}
+                />
+              );
+            })}
+          </ol>
+        )}
+        {current?.applies === false ? null : (
+          <AddProcedure ids={ids} plan={plan} phase={phase} key={phase} />
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** One procedure as a card: its number and title, opening to its phase, status and
+ * source, its overview with the attributes it tests and the evidence it needs, its
+ * findings, and its actions. */
+function ProcedureCard({
+  ids,
+  plan,
+  item,
+  row,
+  number,
+  open,
+  related,
+  onToggle,
+  mode,
+  onMode,
+  findings,
+  onSelect,
+}: {
+  ids: Ids;
+  plan: MasterPlan;
+  item: Procedure;
+  row: ProcedureRow;
+  number: number;
+  open: boolean;
+  related: boolean;
+  onToggle: () => void;
+  mode: ProcedureMode;
+  onMode: (next: ProcedureMode) => void;
+  findings: Finding[] | undefined;
+  onSelect: (code: string) => void;
+}) {
+  const flip = (next: ProcedureMode) => onMode(mode === next ? "none" : next);
+  return (
+    <li
+      id={`pl-item-${row.code}`}
+      className={`pb-card${open ? " is-open" : ""}${related ? " is-related" : ""}`}
+    >
+      <button
+        type="button"
+        className="pb-card-head"
+        aria-expanded={open}
+        onClick={onToggle}
+      >
+        <span className="pb-num">{String(number).padStart(2, "0")}</span>
+        <span className="pb-card-title">{row.title}</span>
+        {row.status === "NEEDS_REVIEW" && !open ? (
+          <span className="pp-status is-review">Needs review</span>
+        ) : null}
+        <UiIcon name="chevron" size={15} />
+      </button>
+      {open ? (
+        <div className="pb-card-body">
+          <p className="pb-pills">
+            <span className={`pp-pill is-phase is-${item.phase.toLowerCase()}`}>
+              {row.phase}
+            </span>
+            <span
+              className={`pp-status ${row.status === "READY" ? "is-ready" : "is-review"}`}
+            >
+              {row.status === "READY" ? "Ready for review" : "Needs review"}
+            </span>
+            <Mark origin={item.origin} personEdited={item.personEdited} />
+            {row.method !== "" ? (
+              <span className={`pp-pill is-${row.method.toLowerCase()}`}>
+                {row.method}
+              </span>
+            ) : null}
+          </p>
+          {row.body !== "" ||
+          item.evidenceCodes.length > 0 ||
+          (item.phase !== "DESIGN" && item.attributeCodes.length > 0) ||
+          (item.standardKey !== "" && plan.control.libraryKey !== "") ? (
+            <div className="pb-overview">
+              <h5>Procedure overview</h5>
+              {row.body !== "" ? <p>{row.body}</p> : null}
+              <p className="pl-row-links">
+                {item.phase === "DESIGN" ? null : (
+                  <Chips
+                    optional
+                    label="Tests"
+                    codes={item.attributeCodes}
+                    onSelect={onSelect}
+                  />
+                )}
+                <Chips
+                  optional
+                  label="Evidence"
+                  codes={item.evidenceCodes}
+                  onSelect={onSelect}
+                />
+              </p>
+              {item.standardKey !== "" && plan.control.libraryKey !== "" ? (
+                <a
+                  className="pl-standard-steps"
+                  href={standardStepsHref(
+                    ids.organizationId,
+                    ids.projectId,
+                    plan.control.libraryKey,
+                    item.standardKey,
+                  )}
+                >
+                  View the standard's steps
+                </a>
+              ) : null}
+            </div>
+          ) : null}
+          <Flags
+            ids={ids}
+            plan={plan}
+            findings={findings}
+            onLinks={() => onMode("links")}
+          />
+          <span className="pb-actions">
+            <button
+              type="button"
+              className="btn-ghost btn-sm"
+              onClick={() => flip("edit")}
+            >
+              <UiIcon name="compose" size={13} />
+              Edit
+            </button>
+            {item.phase === "DESIGN" ? null : (
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={() => flip("links")}
+              >
+                Link attributes
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn-ghost btn-sm"
+              onClick={() => flip("remove")}
+            >
+              Remove
+            </button>
+            <button
+              type="button"
+              className="btn-secondary btn-sm pb-trace"
+              onClick={() => onSelect(row.code)}
+            >
+              Trace in the plan
+              <UiIcon name="arrow" size={13} />
+            </button>
+          </span>
+          <ProcedureForms
+            ids={ids}
+            plan={plan}
+            item={item}
+            mode={mode}
+            onDone={() => onMode("none")}
+          />
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+/** A procedure's other actions, in a small menu beside Review. */
+function ProcedureMenu({
+  label,
+  items,
+}: {
+  label: string;
+  items: Array<{ text: string; run: () => void }>;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const close = (event: Event) => {
+      if (
+        event instanceof KeyboardEvent
+          ? event.key === "Escape"
+          : !root.current?.contains(event.target as Node)
+      ) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [open]);
+  return (
+    <span className="pp-menu" ref={root}>
+      <button
+        type="button"
+        className="pp-menu-button"
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        <UiIcon name="more" size={15} />
+      </button>
+      {open ? (
+        <span className="pp-menu-panel" role="menu">
+          {items.map((item) => (
+            <button
+              key={item.text}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                item.run();
+              }}
+            >
+              {item.text}
+            </button>
+          ))}
+        </span>
+      ) : null}
+    </span>
   );
 }
 
 function AddProcedure({
   ids,
   plan,
-  phase,
+  phase: only,
+  phases,
 }: {
   ids: Ids;
   plan: MasterPlan;
-  phase: Phase;
+  phase?: Phase;
+  /** In the table: the phases a procedure can be added to, chosen in the form. */
+  phases?: readonly Phase[];
 }) {
   const action = useAction(ids);
   const [open, setOpen] = useState(false);
+  const [phase, setPhase] = useState<Phase>(only ?? phases?.[0] ?? "INTERIM");
   const [text, setText] = useState("");
   const [method, setMethod] = useState("");
   if (!open) {
@@ -3123,6 +4501,21 @@ function AddProcedure({
           onChange={(event) => setText(event.target.value)}
         />
       </label>
+      {only === undefined && (phases?.length ?? 0) > 1 ? (
+        <label>
+          Phase
+          <select
+            value={phase}
+            onChange={(event) => setPhase(event.target.value as Phase)}
+          >
+            {(phases ?? []).map((value) => (
+              <option key={value} value={value}>
+                {PHASE_LABELS[value]}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
       <label>
         Method
         <select
@@ -3162,18 +4555,146 @@ function AddProcedure({
   );
 }
 
+/** A person's own evidence item for the plan: what the client provides, and what it shows
+ * (product owner, 26 October 2026). */
+export function AddEvidence({
+  ids,
+  plan,
+  phase: shown,
+  onDone,
+}: {
+  ids: Ids;
+  plan: MasterPlan;
+  /** The phase the board shows, chosen first when the plan has evidence there. */
+  phase?: Phase;
+  onDone: () => void;
+}) {
+  const action = useAction(ids);
+  const phases = PHASES.filter((value) =>
+    plan.evidence.some((item) => item.phase === value),
+  );
+  const [phase, setPhase] = useState<string>(
+    shown !== undefined && phases.includes(shown)
+      ? shown
+      : (phases[0] ?? "INTERIM"),
+  );
+  const [type, setType] = useState<string>("CONTROL_EXECUTION");
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [shows, setShows] = useState("");
+  const [required, setRequired] = useState(true);
+  const ready =
+    title.trim().length >= 3 &&
+    description.trim().length >= 10 &&
+    shows.trim().length >= 10;
+  return (
+    <div className="pl-edit pe-add" aria-busy={action.pending}>
+      <div className="pe-add-row">
+        <label>
+          Phase
+          <select
+            value={phase}
+            onChange={(event) => setPhase(event.target.value)}
+          >
+            {(phases.length > 0 ? phases : PHASES).map((value) => (
+              <option key={value} value={value}>
+                {PHASE_LABELS[value]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Type
+          <select
+            value={type}
+            onChange={(event) => setType(event.target.value)}
+          >
+            {ADDABLE_TYPES.map((value) => (
+              <option key={value} value={value}>
+                {EVIDENCE_TYPE_LABELS[value] ?? value}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="pe-add-check">
+          <input
+            type="checkbox"
+            checked={required}
+            onChange={(event) => setRequired(event.target.checked)}
+          />
+          Required
+        </label>
+      </div>
+      <label>
+        Evidence item
+        <input
+          type="text"
+          maxLength={200}
+          value={title}
+          placeholder="For example: Approved access request for each sampled user"
+          onChange={(event) => setTitle(event.target.value)}
+        />
+      </label>
+      <label>
+        What the client provides
+        <textarea
+          rows={3}
+          maxLength={1500}
+          value={description}
+          onChange={(event) => setDescription(event.target.value)}
+        />
+      </label>
+      <label>
+        What it shows
+        <textarea
+          rows={2}
+          maxLength={500}
+          value={shows}
+          placeholder="For example: The access was approved before it was granted."
+          onChange={(event) => setShows(event.target.value)}
+        />
+      </label>
+      <EditButtons
+        busy={action.pending}
+        disabled={!ready}
+        save="Add evidence"
+        onCancel={onDone}
+        onSave={async () => {
+          const result = await action.run("add", {
+            intent: "evidence-add",
+            control_id: plan.controlId,
+            phase,
+            category: type,
+            title,
+            description,
+            objective: shows,
+            necessity: required ? "REQUIRED" : "OPTIONAL",
+          });
+          if (result.ok) {
+            onDone();
+          }
+        }}
+      />
+      <Problem text={action.problem} />
+    </div>
+  );
+}
+
 function EditButtons({
   busy,
   disabled = false,
   save,
   onSave,
   onCancel,
+  note = "Saving revises the plan; an approved plan goes back for review.",
 }: {
   busy: boolean;
   disabled?: boolean;
   save: string;
   onSave: () => void;
   onCancel: () => void;
+  /** What saving does to the plan; null where it changes nothing in it. */
+  note?: string | null;
 }) {
   return (
     <div className="pl-edit-buttons">
@@ -3188,9 +4709,7 @@ function EditButtons({
       <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>
         Cancel
       </button>
-      <span className="pl-sub">
-        Saving revises the plan; an approved plan goes back for review.
-      </span>
+      {note === null ? null : <span className="pl-sub">{note}</span>}
     </div>
   );
 }
@@ -3240,20 +4759,7 @@ function AttributeItem({
   findings: Finding[] | undefined;
   onSelect: (code: string) => void;
 }) {
-  const action = useAction(ids);
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({
-    objective: item.objective,
-    condition: item.condition,
-    pass_criteria: item.passCriteria,
-    fail_criteria: item.failCriteria,
-  });
-  const [judgment, setJudgment] = useState<boolean | null>(
-    item.judgmentRequired,
-  );
-  const [automatable, setAutomatable] = useState<boolean | null>(
-    item.automatable,
-  );
   return (
     <li id={`pl-item-${item.code}`} className={className}>
       <details
@@ -3287,173 +4793,13 @@ function AttributeItem({
           }
         />
         <div className="pl-row-body">
-          {item.criteriaSource === "NONE" &&
-          item.judgmentRequired === null &&
-          item.automatable === null ? (
-            <p className="pl-sub pl-nocriteria">
-              No criteria stated yet.
-              {item.objective ? ` Addresses: ${item.objective}` : ""}
-            </p>
-          ) : null}
-          <dl className="pl-criteria">
-            <div>
-              <dt>Passes when</dt>
-              <dd>
-                {item.passCriteria || (
-                  <span className="pl-none">Not stated</span>
-                )}
-              </dd>
-            </div>
-            <div>
-              <dt>Fails when</dt>
-              <dd>
-                {item.failCriteria || (
-                  <span className="pl-none">Not stated</span>
-                )}
-              </dd>
-            </div>
-            {item.objective ? (
-              <div className="pl-criteria-wide">
-                <dt>Addresses</dt>
-                <dd>{item.objective}</dd>
-              </div>
-            ) : null}
-            <div>
-              <dt>Condition tested</dt>
-              <dd>
-                {item.condition || <span className="pl-none">Not stated</span>}
-              </dd>
-            </div>
-            <div>
-              <dt>Judgment</dt>
-              <dd>
-                {yesNo(
-                  item.judgmentRequired,
-                  "Professional judgment required",
-                  "Objectively testable",
-                )}
-              </dd>
-            </div>
-            <div>
-              <dt>Automated testing</dt>
-              <dd>{yesNo(item.automatable, "Suitable", "Not suitable")}</dd>
-            </div>
-            <div>
-              <dt>Criteria</dt>
-              <dd>
-                <span
-                  className={
-                    item.criteriaSource === "AGENT"
-                      ? "ai-mark"
-                      : item.criteriaSource === "PLAN"
-                        ? "pl-person"
-                        : "pl-sub"
-                  }
-                >
-                  {item.criteriaSource === "AGENT" ? (
-                    <UiIcon name="sparkles" size={11} />
-                  ) : null}
-                  {CRITERIA_LABELS[item.criteriaSource]}
-                </span>
-              </dd>
-            </div>
-          </dl>
-          <span className="pl-item-actions">
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={() => setEditing(!editing)}
-            >
-              Edit criteria
-            </button>
-          </span>
-          {editing ? (
-            <div className="pl-edit" aria-busy={action.pending}>
-              {(
-                [
-                  [
-                    "objective",
-                    "The control objective or risk it addresses",
-                    500,
-                  ],
-                  ["condition", "The exact condition tested", 1000],
-                  ["pass_criteria", "Passes when", 1000],
-                  ["fail_criteria", "Fails when", 1000],
-                ] as const
-              ).map(([name, label, limit]) => (
-                <label key={name}>
-                  {label}
-                  <textarea
-                    rows={2}
-                    maxLength={limit}
-                    value={form[name]}
-                    onChange={(event) =>
-                      setForm({ ...form, [name]: event.target.value })
-                    }
-                  />
-                </label>
-              ))}
-              <div className="pl-edit-row">
-                <label>
-                  Judgment
-                  <select
-                    value={judgment === null ? "" : judgment ? "yes" : "no"}
-                    onChange={(event) =>
-                      setJudgment(
-                        event.target.value === ""
-                          ? null
-                          : event.target.value === "yes",
-                      )
-                    }
-                  >
-                    <option value="">Not determined</option>
-                    <option value="no">Objectively testable</option>
-                    <option value="yes">Professional judgment required</option>
-                  </select>
-                </label>
-                <label>
-                  Automated testing
-                  <select
-                    value={
-                      automatable === null ? "" : automatable ? "yes" : "no"
-                    }
-                    onChange={(event) =>
-                      setAutomatable(
-                        event.target.value === ""
-                          ? null
-                          : event.target.value === "yes",
-                      )
-                    }
-                  >
-                    <option value="">Not determined</option>
-                    <option value="yes">Suitable</option>
-                    <option value="no">Not suitable</option>
-                  </select>
-                </label>
-              </div>
-              <EditButtons
-                busy={action.pending}
-                save="Save criteria"
-                onCancel={() => setEditing(false)}
-                onSave={async () => {
-                  const result = await action.run("criteria", {
-                    intent: "criteria",
-                    control_id: plan.controlId,
-                    attribute_id: item.id,
-                    version: item.version,
-                    ...form,
-                    judgment_required: judgment,
-                    automatable,
-                    phases: item.phases,
-                  });
-                  if (result.ok) {
-                    setEditing(false);
-                  }
-                }}
-              />
-              <Problem text={action.problem} />
-            </div>
-          ) : null}
+          <AttributeCriteria
+            ids={ids}
+            plan={plan}
+            item={item}
+            editing={editing}
+            onEditing={setEditing}
+          />
         </div>
       </details>
       <Flags
@@ -3464,6 +4810,728 @@ function AttributeItem({
         onSelect={onSelect}
       />
     </li>
+  );
+}
+
+/** An attribute's criteria (passes, fails, what it addresses, the condition, judgment,
+ * automation, where the criteria came from) and their edit, in the list and the table. */
+function AttributeCriteria({
+  ids,
+  plan,
+  item,
+  editing,
+  onEditing,
+}: {
+  ids: Ids;
+  plan: MasterPlan;
+  item: Attribute;
+  editing: boolean;
+  onEditing: (value: boolean) => void;
+}) {
+  const action = useAction(ids);
+  const setEditing = onEditing;
+  // The agent's criteria are accepted as they read (0122) until the plan is approved,
+  // which confirms them with it.
+  const acceptable = criteriaToAccept(plan).includes(item);
+  const [form, setForm] = useState({
+    objective: item.objective,
+    condition: item.condition,
+    pass_criteria: item.passCriteria,
+    fail_criteria: item.failCriteria,
+  });
+  const [judgment, setJudgment] = useState<boolean | null>(
+    item.judgmentRequired,
+  );
+  const [automatable, setAutomatable] = useState<boolean | null>(
+    item.automatable,
+  );
+  return (
+    <>
+      {item.criteriaSource === "NONE" &&
+      item.judgmentRequired === null &&
+      item.automatable === null ? (
+        <p className="pl-sub pl-nocriteria">
+          No criteria stated yet.
+          {item.objective ? ` Addresses: ${item.objective}` : ""}
+        </p>
+      ) : null}
+      <dl className="pl-criteria">
+        <div>
+          <dt>Passes when</dt>
+          <dd>
+            {item.passCriteria || <span className="pl-none">Not stated</span>}
+          </dd>
+        </div>
+        <div>
+          <dt>Fails when</dt>
+          <dd>
+            {item.failCriteria || <span className="pl-none">Not stated</span>}
+          </dd>
+        </div>
+        {item.objective ? (
+          <div className="pl-criteria-wide">
+            <dt>Addresses</dt>
+            <dd>{item.objective}</dd>
+          </div>
+        ) : null}
+        <div>
+          <dt>Condition tested</dt>
+          <dd>
+            {item.condition || <span className="pl-none">Not stated</span>}
+          </dd>
+        </div>
+        <div>
+          <dt>Judgment</dt>
+          <dd>
+            {yesNo(
+              item.judgmentRequired,
+              "Professional judgment required",
+              "Objectively testable",
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>Automated testing</dt>
+          <dd>{yesNo(item.automatable, "Suitable", "Not suitable")}</dd>
+        </div>
+        <div>
+          <dt>Criteria</dt>
+          <dd>
+            <span
+              className={
+                item.criteriaSource === "AGENT"
+                  ? "ai-mark"
+                  : item.criteriaSource === "PLAN"
+                    ? "pl-person"
+                    : "pl-sub"
+              }
+            >
+              {item.criteriaSource === "AGENT" ? (
+                <UiIcon name="sparkles" size={11} />
+              ) : null}
+              {CRITERIA_LABELS[item.criteriaSource]}
+            </span>
+            {item.criteriaAcceptedAt !== "" ? (
+              <span className="pl-accepted">
+                <UiIcon name="check" size={11} />
+                Accepted by {item.criteriaAcceptedBy || "a person"} on{" "}
+                {formatDate(item.criteriaAcceptedAt)}
+              </span>
+            ) : null}
+          </dd>
+        </div>
+      </dl>
+      <span className="pl-item-actions">
+        {acceptable ? (
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            disabled={action.pending || editing}
+            onClick={() =>
+              void action.run("accept", {
+                intent: "criteria-accept",
+                control_id: plan.controlId,
+                attributes: [{ id: item.id, version: item.version }],
+              })
+            }
+          >
+            <UiIcon name="check" size={13} />
+            {action.busy === "accept" ? "Accepting…" : "Accept criteria"}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={() => setEditing(!editing)}
+        >
+          Edit criteria
+        </button>
+      </span>
+      {!editing && action.busy === "" ? (
+        <Problem text={action.problem} />
+      ) : null}
+      {editing ? (
+        <div className="pl-edit" aria-busy={action.pending}>
+          {(
+            [
+              ["objective", "The control objective or risk it addresses", 500],
+              ["condition", "The exact condition tested", 1000],
+              ["pass_criteria", "Passes when", 1000],
+              ["fail_criteria", "Fails when", 1000],
+            ] as const
+          ).map(([name, label, limit]) => (
+            <label key={name}>
+              {label}
+              <textarea
+                rows={2}
+                maxLength={limit}
+                value={form[name]}
+                onChange={(event) =>
+                  setForm({ ...form, [name]: event.target.value })
+                }
+              />
+            </label>
+          ))}
+          <div className="pl-edit-row">
+            <label>
+              Judgment
+              <select
+                value={judgment === null ? "" : judgment ? "yes" : "no"}
+                onChange={(event) =>
+                  setJudgment(
+                    event.target.value === ""
+                      ? null
+                      : event.target.value === "yes",
+                  )
+                }
+              >
+                <option value="">Not determined</option>
+                <option value="no">Objectively testable</option>
+                <option value="yes">Professional judgment required</option>
+              </select>
+            </label>
+            <label>
+              Automated testing
+              <select
+                value={automatable === null ? "" : automatable ? "yes" : "no"}
+                onChange={(event) =>
+                  setAutomatable(
+                    event.target.value === ""
+                      ? null
+                      : event.target.value === "yes",
+                  )
+                }
+              >
+                <option value="">Not determined</option>
+                <option value="yes">Suitable</option>
+                <option value="no">Not suitable</option>
+              </select>
+            </label>
+          </div>
+          <EditButtons
+            busy={action.pending}
+            save="Save criteria"
+            onCancel={() => setEditing(false)}
+            onSave={async () => {
+              const result = await action.run("criteria", {
+                intent: "criteria",
+                control_id: plan.controlId,
+                attribute_id: item.id,
+                version: item.version,
+                ...form,
+                judgment_required: judgment,
+                automatable,
+                phases: item.phases,
+              });
+              if (result.ok) {
+                setEditing(false);
+              }
+            }}
+          />
+          <Problem text={action.problem} />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+const ATTRIBUTE_STATUS: Record<
+  AttributeRow["status"],
+  { label: string; tone: string; title: string }
+> = {
+  CONFIRMED: {
+    label: "Confirmed",
+    tone: "is-ready",
+    title:
+      "Its criteria are the firm's library definition or a person's, or a person accepted or approved the planner agent's.",
+  },
+  NEEDS_REVIEW: {
+    label: "Needs review",
+    tone: "is-review",
+    title:
+      "A finding is raised on it, the planner agent proposed criteria no one has accepted yet, or its basis is inferred.",
+  },
+  NOT_STARTED: {
+    label: "Not started",
+    tone: "is-idle",
+    title: "No criteria are stated for it yet.",
+  },
+};
+
+/** Codes as chips that trace them in the plan, the first few with the rest counted. */
+function CodeList({
+  codes,
+  onSelect,
+  limit = 3,
+}: {
+  codes: string[];
+  onSelect: (code: string) => void;
+  limit?: number;
+}) {
+  if (codes.length === 0) {
+    return <span className="pl-quiet">—</span>;
+  }
+  return (
+    <span className="pa-codes">
+      {codes.slice(0, limit).map((code) => (
+        <button
+          key={code}
+          type="button"
+          className="pa-code"
+          title={`Trace ${code} in the plan`}
+          onClick={() => onSelect(code)}
+        >
+          {code}
+        </button>
+      ))}
+      {codes.length > limit ? (
+        <span className="pa-more" title={codes.slice(limit).join(", ")}>
+          +{codes.length - limit}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * The attributes as one table (decided by the product owner on 26 October 2026, from the
+ * control workspace reference): what each requires, the result expected, the procedures
+ * and evidence that test it, where it came from and where its criteria stand; Review opens
+ * its criteria and findings in place. The control's own attributes are edited below it.
+ */
+function AttributesTable({
+  ids,
+  plan,
+  selected,
+  trace,
+  onSelect,
+  guidance,
+  editor,
+  editorOpen,
+  editorLabel,
+}: TabProps & {
+  guidance: ReactNode;
+  editor: ReactNode;
+  editorOpen: boolean;
+  editorLabel: string;
+}) {
+  const flagged = findingsByCode(plan);
+  const rows = attributeRows(plan);
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [editing, setEditing] = useState<Set<string>>(new Set());
+  // Users add, reword and remove the control's attributes here (product owner, 26 October
+  // 2026), through the control's own attribute record.
+  const change = useContextAction({
+    organizationId: ids.organizationId,
+    projectId: ids.projectId,
+    controlId: plan.controlId,
+  });
+  const [adding, setAdding] = useState<string | null>(null);
+  const [wording, setWording] = useState<{ id: string; text: string } | null>(
+    null,
+  );
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [showGuidance, setShowGuidance] = useState(false);
+  // The agent's criteria still to confirm are named under the title and accepted together,
+  // after they are opened to read (decided by the product owner, 27 October 2026); the
+  // result is the server's. The title's line keeps its own actions.
+  const toAccept = criteriaToAccept(plan);
+  const accepting = useAction(ids);
+  const [confirming, setConfirming] = useState(false);
+  const [accepted, setAccepted] = useState<string[]>([]);
+  const codesOf = (codes: string[]) =>
+    codes.length === 1
+      ? codes[0]
+      : `${codes.slice(0, -1).join(", ")} and ${codes[codes.length - 1]}`;
+  const all = rows.length > 0 && rows.every((row) => open.has(row.id));
+  const flip = (
+    set: (update: (now: Set<string>) => Set<string>) => void,
+    id: string,
+    value?: boolean,
+  ) =>
+    set((now) => {
+      const next = new Set(now);
+      if (value ?? !next.has(id)) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  const edit = (id: string, value: boolean) => {
+    flip(setEditing, id, value);
+    if (value) {
+      flip(setOpen, id, true);
+    }
+  };
+  return (
+    <section className="pp-card" aria-labelledby="pa-title">
+      <header className="pp-head">
+        <div>
+          <h3 id="pa-title">
+            Attributes <span>({rows.length})</span>
+          </h3>
+          <p>
+            Control attributes and the results expected for this control to
+            operate effectively.
+          </p>
+        </div>
+        <div className="pp-head-actions">
+          <button
+            type="button"
+            className="btn-secondary"
+            aria-expanded={adding !== null}
+            onClick={() => setAdding(adding === null ? "" : null)}
+          >
+            <UiIcon name="plus" size={14} />
+            Add attribute
+          </button>
+          {guidance !== null ? (
+            <button
+              type="button"
+              className="btn-secondary"
+              aria-expanded={showGuidance}
+              onClick={() => setShowGuidance(!showGuidance)}
+            >
+              <UiIcon name="file" size={14} />
+              Attribute guidance
+            </button>
+          ) : null}
+          {rows.length > 0 ? (
+            <button
+              type="button"
+              className="btn"
+              onClick={() =>
+                setOpen(all ? new Set() : new Set(rows.map((row) => row.id)))
+              }
+            >
+              <UiIcon name="file" size={14} />
+              {all ? "Close all attributes" : "Review all attributes"}
+            </button>
+          ) : null}
+        </div>
+      </header>
+      {showGuidance && guidance !== null ? (
+        <div className="pp-guidance">{guidance}</div>
+      ) : null}
+      {toAccept.length > 0 && !confirming ? (
+        <div className="pa-accept is-notice">
+          <p>
+            <UiIcon name="sparkles" size={13} />
+            The planner agent proposed the criteria for{" "}
+            {codesOf(toAccept.map((item) => item.code))}; no one has accepted
+            them yet.
+          </p>
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            onClick={() => {
+              setAccepted([]);
+              setConfirming(true);
+              setOpen(
+                (now) => new Set([...now, ...toAccept.map((item) => item.id)]),
+              );
+            }}
+          >
+            Review and accept
+          </button>
+        </div>
+      ) : null}
+      {confirming && toAccept.length > 0 ? (
+        <div className="pl-edit pa-add pa-accept" aria-busy={accepting.pending}>
+          <p>
+            The planner agent's criteria for{" "}
+            {codesOf(toAccept.map((item) => item.code))} are open below.
+            Accepting them records your name and the time; the wording does not
+            change and the plan is not revised.
+          </p>
+          <EditButtons
+            busy={accepting.pending}
+            save={
+              accepting.busy === "accept-all"
+                ? "Accepting…"
+                : `Accept ${toAccept.length === 1 ? "the criteria" : `all ${toAccept.length}`}`
+            }
+            note={null}
+            onCancel={() => setConfirming(false)}
+            onSave={async () => {
+              const codes = toAccept.map((item) => item.code);
+              const result = await accepting.run("accept-all", {
+                intent: "criteria-accept",
+                control_id: plan.controlId,
+                attributes: toAccept.map((item) => ({
+                  id: item.id,
+                  version: item.version,
+                })),
+              });
+              if (result.ok) {
+                setConfirming(false);
+                setAccepted(codes);
+              }
+            }}
+          />
+          <Problem text={accepting.problem} />
+        </div>
+      ) : null}
+      {accepted.length > 0 && !accepting.pending ? (
+        <p className="pa-accepted" role="status">
+          <UiIcon name="check" size={13} />
+          Criteria accepted for {codesOf(accepted)}.
+        </p>
+      ) : null}
+      {adding !== null ? (
+        <div className="pl-edit pa-add" aria-busy={change.pending}>
+          <label>
+            The condition the tester checks for each sample
+            <textarea
+              rows={2}
+              maxLength={300}
+              value={adding}
+              placeholder="For example: The access was approved by the user's manager before it was granted."
+              onChange={(event) => setAdding(event.target.value)}
+            />
+          </label>
+          <EditButtons
+            busy={change.pending}
+            disabled={adding.trim().length < 3}
+            save="Add attribute"
+            onCancel={() => setAdding(null)}
+            onSave={async () => {
+              if (
+                await change.run("add", {
+                  intent: "attribute-add",
+                  text: adding.trim(),
+                })
+              ) {
+                setAdding(null);
+              }
+            }}
+          />
+        </div>
+      ) : null}
+      {removing !== null ? (
+        <p className="pe-removed" role="alertdialog">
+          <span>
+            Remove attribute{" "}
+            {rows.find((row) => row.id === removing)?.number ?? ""} from the
+            plan? It is kept on record as retired.
+          </span>
+          <span className="pa-confirm">
+            <button
+              type="button"
+              className="btn-ghost btn-sm"
+              onClick={() => setRemoving(null)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn-sm"
+              disabled={change.pending}
+              onClick={async () => {
+                const item = plan.attributes.find(
+                  (entry) => entry.id === removing,
+                );
+                if (
+                  item !== undefined &&
+                  (await change.run("retire", {
+                    intent: "attribute-retire",
+                    attribute_id: item.id,
+                    version: item.version,
+                  }))
+                ) {
+                  setRemoving(null);
+                }
+              }}
+            >
+              Remove
+            </button>
+          </span>
+        </p>
+      ) : null}
+      {change.problem !== null ? (
+        <p className="form-error" role="alert">
+          {change.problem}
+        </p>
+      ) : null}
+      {rows.length === 0 ? (
+        <p className="pl-quiet">The control has no approved attributes yet.</p>
+      ) : (
+        <div className="pp-scroll">
+          <table className="pp-table pa-table">
+            <thead>
+              <tr>
+                <th scope="col">#</th>
+                <th scope="col">Attribute</th>
+                <th scope="col">Expected result / description</th>
+                <th scope="col">Linked procedures</th>
+                <th scope="col">Required evidence</th>
+                <th scope="col">Source</th>
+                <th scope="col">Status</th>
+                <th scope="col">
+                  <span className="sr-only">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => {
+                const item = plan.attributes.find(
+                  (entry) => entry.id === row.id,
+                );
+                if (item === undefined) {
+                  return null;
+                }
+                const isOpen = open.has(row.id);
+                const status = ATTRIBUTE_STATUS[row.status];
+                return (
+                  <Fragment key={row.id}>
+                    <tr
+                      id={`pl-item-${row.code}`}
+                      className={`pp-row${selected === row.code ? " is-selected" : ""}${trace.has(row.code) ? " is-related" : ""}${isOpen ? " is-open" : ""}`}
+                    >
+                      <td className="pp-num">{row.number}</td>
+                      <td className="pp-text pa-statement">
+                        <strong>{row.statement}</strong>
+                      </td>
+                      <td className="pp-text pa-expected">
+                        <small>{row.expected || "Not stated"}</small>
+                      </td>
+                      <td>
+                        <CodeList codes={row.procedures} onSelect={onSelect} />
+                      </td>
+                      <td>
+                        <CodeList codes={row.evidence} onSelect={onSelect} />
+                      </td>
+                      <td className="pp-source">{row.source}</td>
+                      <td>
+                        <span
+                          className={`pp-status ${status.tone}`}
+                          title={status.title}
+                        >
+                          {status.label}
+                        </span>
+                      </td>
+                      <td className="pp-actions">
+                        <button
+                          type="button"
+                          className="btn-secondary btn-sm"
+                          aria-expanded={isOpen}
+                          onClick={() => flip(setOpen, row.id)}
+                        >
+                          {isOpen ? "Close" : "Review"}
+                        </button>
+                        <ProcedureMenu
+                          label={`More for attribute ${row.number}`}
+                          items={[
+                            {
+                              text: "Edit wording",
+                              run: () =>
+                                setWording({ id: row.id, text: item.text }),
+                            },
+                            {
+                              text: "Edit criteria",
+                              run: () => edit(row.id, true),
+                            },
+                            {
+                              text: "Trace in the plan",
+                              run: () => onSelect(row.code),
+                            },
+                            {
+                              text: "Remove from the plan",
+                              run: () => setRemoving(row.id),
+                            },
+                          ]}
+                        />
+                      </td>
+                    </tr>
+                    {wording !== null && wording.id === row.id ? (
+                      <tr className="pp-detail">
+                        <td />
+                        <td colSpan={7}>
+                          <div className="pl-edit" aria-busy={change.pending}>
+                            <label>
+                              Wording of attribute {row.number}
+                              <textarea
+                                rows={2}
+                                maxLength={300}
+                                value={wording.text}
+                                onChange={(event) =>
+                                  setWording({
+                                    id: row.id,
+                                    text: event.target.value,
+                                  })
+                                }
+                              />
+                            </label>
+                            <EditButtons
+                              busy={change.pending}
+                              disabled={
+                                wording.text.trim().length < 3 ||
+                                wording.text.trim() === item.text
+                              }
+                              save="Save wording"
+                              onCancel={() => setWording(null)}
+                              onSave={async () => {
+                                if (
+                                  await change.run("edit", {
+                                    intent: "attribute-edit",
+                                    attribute_id: item.id,
+                                    text: wording.text.trim(),
+                                    version: item.version,
+                                  })
+                                ) {
+                                  setWording(null);
+                                }
+                              }}
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
+                    {isOpen ? (
+                      <tr className="pp-detail">
+                        <td />
+                        <td colSpan={7}>
+                          <div className="pp-detail-body">
+                            <p className="pl-row-meta">
+                              <span className="pl-ref">{row.code}</span>
+                              {item.basis !== "" &&
+                              item.basis !== "DOCUMENTED" ? (
+                                <span className="pill tone-warning">
+                                  Inferred
+                                </span>
+                              ) : null}
+                            </p>
+                            <AttributeCriteria
+                              ids={ids}
+                              plan={plan}
+                              item={item}
+                              editing={editing.has(row.id)}
+                              onEditing={(value) => edit(row.id, value)}
+                            />
+                            <Flags
+                              ids={ids}
+                              plan={plan}
+                              findings={flagged.get(row.code)}
+                              onCriteria={() => edit(row.id, true)}
+                              onSelect={onSelect}
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <details className="pl-fold pa-editor" open={editorOpen || undefined}>
+        <summary>{editorLabel}</summary>
+        {editor}
+      </details>
+    </section>
   );
 }
 
@@ -3519,25 +5587,7 @@ function EvidenceItem({
   findings: Finding[] | undefined;
   onSelect: (code: string) => void;
 }) {
-  const action = useAction(ids);
-  const [mode, setMode] = useState<"none" | "edit" | "links">("none");
-  const [title, setTitle] = useState(item.title);
-  const [description, setDescription] = useState(item.description);
-  const [attributes, setAttributes] = useState<Set<string>>(
-    new Set(item.attributeIds),
-  );
-  const [procedures, setProcedures] = useState<Set<string>>(
-    new Set(item.procedureIds),
-  );
-  const toggle = (set: Set<string>, id: string, on: boolean) => {
-    const next = new Set(set);
-    if (on) {
-      next.add(id);
-    } else {
-      next.delete(id);
-    }
-    return next;
-  };
+  const [mode, setMode] = useState<EvidenceMode>("none");
   return (
     <li id={`pl-item-${item.code}`} className={className}>
       <details
@@ -3604,117 +5654,13 @@ function EvidenceItem({
               Links
             </button>
           </span>
-          {mode === "edit" ? (
-            <div className="pl-edit" aria-busy={action.pending}>
-              <label>
-                What to request
-                <input
-                  maxLength={200}
-                  value={title}
-                  onChange={(event) => setTitle(event.target.value)}
-                />
-              </label>
-              <label>
-                What it must show
-                <textarea
-                  rows={4}
-                  maxLength={1500}
-                  value={description}
-                  onChange={(event) => setDescription(event.target.value)}
-                />
-              </label>
-              <EditButtons
-                busy={action.pending}
-                disabled={
-                  title.trim().length < 3 || description.trim().length < 10
-                }
-                save="Save evidence"
-                onCancel={() => setMode("none")}
-                onSave={async () => {
-                  const result = await action.run("edit", {
-                    intent: "evidence-edit",
-                    control_id: plan.controlId,
-                    requirement_id: item.id,
-                    version: item.version,
-                    title,
-                    description,
-                  });
-                  if (result.ok) {
-                    setMode("none");
-                  }
-                }}
-              />
-              <Problem text={action.problem} />
-            </div>
-          ) : null}
-          {mode === "links" ? (
-            <div className="pl-edit" aria-busy={action.pending}>
-              <fieldset>
-                <legend>Attributes it supports</legend>
-                {plan.attributes.map((attribute) => (
-                  <label key={attribute.id} className="pl-check">
-                    <input
-                      type="checkbox"
-                      checked={attributes.has(attribute.id)}
-                      onChange={(event) =>
-                        setAttributes(
-                          toggle(
-                            attributes,
-                            attribute.id,
-                            event.target.checked,
-                          ),
-                        )
-                      }
-                    />
-                    <span className="pl-ref">{attribute.code}</span>{" "}
-                    {attribute.text}
-                  </label>
-                ))}
-              </fieldset>
-              <fieldset>
-                <legend>Procedures it serves</legend>
-                {plan.procedures
-                  .filter((procedure) => procedure.phase === item.phase)
-                  .map((procedure) => (
-                    <label key={procedure.id} className="pl-check">
-                      <input
-                        type="checkbox"
-                        checked={procedures.has(procedure.id)}
-                        onChange={(event) =>
-                          setProcedures(
-                            toggle(
-                              procedures,
-                              procedure.id,
-                              event.target.checked,
-                            ),
-                          )
-                        }
-                      />
-                      <span className="pl-ref">{procedure.code}</span>{" "}
-                      {procedure.text}
-                    </label>
-                  ))}
-              </fieldset>
-              <EditButtons
-                busy={action.pending}
-                save="Save links"
-                onCancel={() => setMode("none")}
-                onSave={async () => {
-                  const result = await action.run("links", {
-                    intent: "evidence-links",
-                    control_id: plan.controlId,
-                    requirement_id: item.id,
-                    attribute_ids: [...attributes],
-                    procedure_ids: [...procedures],
-                  });
-                  if (result.ok) {
-                    setMode("none");
-                  }
-                }}
-              />
-              <Problem text={action.problem} />
-            </div>
-          ) : null}
+          <EvidenceForms
+            ids={ids}
+            plan={plan}
+            item={item}
+            mode={mode}
+            onDone={() => setMode("none")}
+          />
         </div>
       </details>
       <Flags
@@ -3727,14 +5673,908 @@ function EvidenceItem({
   );
 }
 
+type EvidenceMode = "none" | "edit" | "links";
+
+/** An evidence item's edit and its links to attributes and procedures, in the list and
+ * the table alike. */
+function EvidenceForms({
+  ids,
+  plan,
+  item,
+  mode,
+  onDone,
+}: {
+  ids: Ids;
+  plan: MasterPlan;
+  item: Evidence;
+  mode: EvidenceMode;
+  onDone: () => void;
+}) {
+  const action = useAction(ids);
+  const [title, setTitle] = useState(item.title);
+  const [description, setDescription] = useState(item.description);
+  const [attributes, setAttributes] = useState<Set<string>>(
+    new Set(item.attributeIds),
+  );
+  const [procedures, setProcedures] = useState<Set<string>>(
+    new Set(item.procedureIds),
+  );
+  const toggle = (set: Set<string>, id: string, on: boolean) => {
+    const next = new Set(set);
+    if (on) {
+      next.add(id);
+    } else {
+      next.delete(id);
+    }
+    return next;
+  };
+  const setMode = (next: EvidenceMode) => {
+    if (next === "none") {
+      onDone();
+    }
+  };
+  return (
+    <>
+      {mode === "edit" ? (
+        <div className="pl-edit" aria-busy={action.pending}>
+          <label>
+            What to request
+            <input
+              maxLength={200}
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+            />
+          </label>
+          <label>
+            What it must show
+            <textarea
+              rows={4}
+              maxLength={3000}
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+            />
+          </label>
+          <EditButtons
+            busy={action.pending}
+            disabled={title.trim().length < 3 || description.trim().length < 10}
+            save="Save evidence"
+            onCancel={() => setMode("none")}
+            onSave={async () => {
+              const result = await action.run("edit", {
+                intent: "evidence-edit",
+                control_id: plan.controlId,
+                requirement_id: item.id,
+                version: item.version,
+                title,
+                description,
+              });
+              if (result.ok) {
+                setMode("none");
+              }
+            }}
+          />
+          <Problem text={action.problem} />
+        </div>
+      ) : null}
+      {mode === "links" ? (
+        <div className="pl-edit" aria-busy={action.pending}>
+          <fieldset>
+            <legend>Attributes it supports</legend>
+            {plan.attributes.map((attribute) => (
+              <label key={attribute.id} className="pl-check">
+                <input
+                  type="checkbox"
+                  checked={attributes.has(attribute.id)}
+                  onChange={(event) =>
+                    setAttributes(
+                      toggle(attributes, attribute.id, event.target.checked),
+                    )
+                  }
+                />
+                <span className="pl-ref">{attribute.code}</span>{" "}
+                {attribute.text}
+              </label>
+            ))}
+          </fieldset>
+          <fieldset>
+            <legend>Procedures it serves</legend>
+            {plan.procedures
+              .filter((procedure) => procedure.phase === item.phase)
+              .map((procedure) => (
+                <label key={procedure.id} className="pl-check">
+                  <input
+                    type="checkbox"
+                    checked={procedures.has(procedure.id)}
+                    onChange={(event) =>
+                      setProcedures(
+                        toggle(procedures, procedure.id, event.target.checked),
+                      )
+                    }
+                  />
+                  <span className="pl-ref">{procedure.code}</span>{" "}
+                  {procedure.text}
+                </label>
+              ))}
+          </fieldset>
+          <EditButtons
+            busy={action.pending}
+            save="Save links"
+            onCancel={() => setMode("none")}
+            onSave={async () => {
+              const result = await action.run("links", {
+                intent: "evidence-links",
+                control_id: plan.controlId,
+                requirement_id: item.id,
+                attribute_ids: [...attributes],
+                procedure_ids: [...procedures],
+              });
+              if (result.ok) {
+                setMode("none");
+              }
+            }}
+          />
+          <Problem text={action.problem} />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+const EVIDENCE_TONE: Record<EvidenceStatus, string> = {
+  NOT_REQUESTED: "is-idle",
+  REQUESTED: "is-info",
+  IN_PROGRESS: "is-info",
+  NEEDS_REVIEW: "is-review",
+  ACCEPTED: "is-ready",
+  NOT_APPLICABLE: "is-idle",
+};
+
+const REQUIREMENT_WORDS: Record<string, string> = {
+  PLANNED: "Planned; requested once the plan is approved",
+  AWAITING_DEPENDENCY: "Waits for an earlier item",
+  NOT_GENERATED: "Not requested yet",
+  DRAFT: "Being drafted",
+  READY_FOR_REVIEW: "Drafted, ready for review",
+  APPROVAL_PENDING: "Awaiting approval to send",
+  SENT: "Sent, waiting for the owner",
+  OVERDUE: "Overdue",
+  PARTIALLY_RECEIVED: "Partly received",
+  RECEIVED: "Received, not yet reviewed",
+  UNDER_REVIEW: "Under review",
+  ACCEPTED: "Accepted",
+  INSUFFICIENT: "Insufficient",
+  FOLLOW_UP_REQUIRED: "Follow-up required",
+  WAIVED: "Not applicable",
+};
+
+/** Removing an item from the plan (product owner, 26 October 2026), undone right after it. */
+function useEvidenceRemoval(ids: Ids, plan: MasterPlan) {
+  const action = useAction(ids);
+  const [removed, setRemoved] = useState<{
+    id: string;
+    code: string;
+    version: number;
+  } | null>(null);
+  const remove = async (item: Evidence) => {
+    const result = await action.run("remove", {
+      intent: "evidence-remove",
+      control_id: plan.controlId,
+      requirement_id: item.id,
+      version: item.version,
+    });
+    if (result.ok) {
+      setRemoved({ id: item.id, code: item.code, version: item.version + 1 });
+    }
+  };
+  const undo = async () => {
+    if (removed === null) {
+      return;
+    }
+    const result = await action.run("restore", {
+      intent: "evidence-restore",
+      control_id: plan.controlId,
+      requirement_id: removed.id,
+      version: removed.version,
+    });
+    if (result.ok) {
+      setRemoved(null);
+    }
+  };
+  return { action, removed, remove, undo };
+}
+
+type EvidenceRemoval = ReturnType<typeof useEvidenceRemoval>;
+
+/**
+ * The evidence as the procedures show theirs (the product owner, 27 October 2026): a
+ * header with where the items came from, a coverage panel with one tile per phase and
+ * where the requests stand, then the chosen phase's items as cards that open to their
+ * overview and actions, or as the compact table with its filters. Requests are grouped
+ * and sent on the control's Request step.
+ */
+function EvidenceBoard({ ids, plan, selected, trace, onSelect }: TabProps) {
+  const coverage = evidenceCoverage(plan);
+  const flagged = findingsByCode(plan);
+  const rows = evidenceRows(plan);
+  const removal = useEvidenceRemoval(ids, plan);
+  const [phase, setPhase] = useState<Phase>(coverage.first);
+  const [view, setView] = useState<"cards" | "compact">("cards");
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [modes, setModes] = useState<Record<string, EvidenceMode>>({});
+  const [adding, setAdding] = useState(false);
+  const mine = rows.filter((row) => row.phase === phase);
+  const all = mine.length > 0 && mine.every((row) => open.has(row.id));
+  const toggle = (id: string, value?: boolean) =>
+    setOpen((now) => {
+      const next = new Set(now);
+      if (value ?? !next.has(id)) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  const mode = (id: string) => modes[id] ?? "none";
+  const setMode = (id: string, next: EvidenceMode) => {
+    setModes((now) => ({ ...now, [id]: next }));
+    if (next !== "none") {
+      toggle(id, true);
+    }
+  };
+  // An item traced from elsewhere in the plan opens in its phase.
+  useEffect(() => {
+    const traced = plan.evidence.find((item) => item.code === selected);
+    if (traced !== undefined) {
+      setPhase(traced.phase);
+      setOpen((now) => new Set(now).add(traced.id));
+    }
+  }, [selected, plan.evidence]);
+  const current = coverage.phases.find((item) => item.phase === phase);
+  return (
+    <section className="pb" aria-labelledby="eb-title">
+      <header className="pb-head">
+        <div>
+          <h3 id="eb-title">Evidence</h3>
+          <p>
+            {coverage.total} {coverage.total === 1 ? "item" : "items"} across{" "}
+            {coverage.phasesUsed}{" "}
+            {coverage.phasesUsed === 1 ? "testing phase" : "testing phases"}
+            {coverage.optional > 0 ? ` · ${coverage.optional} optional` : ""}
+          </p>
+        </div>
+        <div className="pb-head-actions">
+          {coverage.source !== "" ? (
+            <span className="pb-source">{coverage.source}</span>
+          ) : null}
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            aria-expanded={adding}
+            onClick={() => setAdding(!adding)}
+          >
+            <UiIcon name="plus" size={13} />
+            Add evidence
+          </button>
+          <a
+            className="btn-secondary btn-sm"
+            href={controlStepHref(
+              ids.organizationId,
+              ids.projectId,
+              plan.controlId,
+              "request",
+            )}
+            title="Requests are grouped and sent on the control's Request step, once the plan is approved."
+          >
+            <UiIcon name="layers" size={13} />
+            Group in requests
+          </a>
+          {mine.length > 0 ? (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => {
+                setView("cards");
+                setOpen(all ? new Set() : new Set(mine.map((row) => row.id)));
+              }}
+            >
+              {all ? "Close evidence" : "Review evidence"}
+            </button>
+          ) : null}
+        </div>
+      </header>
+      {adding ? (
+        <AddEvidence
+          ids={ids}
+          plan={plan}
+          phase={phase}
+          onDone={() => setAdding(false)}
+        />
+      ) : null}
+      <RemovedNotice removal={removal} />
+      <div className="pb-coverage">
+        <div className="pb-coverage-head">
+          <h4>Evidence coverage</h4>
+          {coverage.standing !== "" ? (
+            <span className="pb-ready">{coverage.standing}</span>
+          ) : null}
+        </div>
+        <div className="pb-tiles" role="tablist" aria-label="Testing phases">
+          {coverage.phases.map((item) => (
+            <button
+              key={item.phase}
+              type="button"
+              role="tab"
+              aria-selected={item.phase === phase}
+              className={`pb-tile${item.phase === phase ? " is-on" : ""}${item.applies ? "" : " is-na"}`}
+              onClick={() => setPhase(item.phase)}
+            >
+              <span className="pb-tile-label">{item.short}</span>
+              <strong>{item.applies ? item.count : "—"}</strong>
+              <small>
+                {item.applies
+                  ? item.count === 1
+                    ? "item"
+                    : "items"
+                  : "Not applicable"}
+                {item.review > 0 ? (
+                  <span className="pb-tile-flag">
+                    {" "}
+                    · {item.review} to review
+                  </span>
+                ) : null}
+              </small>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="pb-phase" role="tabpanel">
+        <div className="pb-phase-head">
+          <h4>
+            <UiIcon name="file" size={18} />
+            {PHASE_LABELS[phase]}
+            <span className="pb-count">{mine.length}</span>
+          </h4>
+          {mine.length > 0 ? (
+            <fieldset className="pb-views">
+              <legend className="sr-only">View</legend>
+              {(["cards", "compact"] as const).map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  aria-pressed={view === key}
+                  className={view === key ? "is-on" : undefined}
+                  onClick={() => setView(key)}
+                >
+                  {key === "cards" ? "Cards" : "Compact"}
+                </button>
+              ))}
+            </fieldset>
+          ) : null}
+        </div>
+        <p className="pb-purpose">
+          {current?.applies === false
+            ? "This phase does not apply to the control."
+            : EVIDENCE_PURPOSE[phase]}
+        </p>
+        {mine.length === 0 ? (
+          current?.applies === false ? null : (
+            <p className="pl-quiet">No evidence in this phase yet.</p>
+          )
+        ) : view === "compact" ? (
+          <EvidenceTable
+            key={phase}
+            ids={ids}
+            plan={plan}
+            selected={selected}
+            trace={trace}
+            onSelect={onSelect}
+            phase={phase}
+            removal={removal}
+          />
+        ) : (
+          <ol className="pb-cards">
+            {mine.map((row) => {
+              const item = plan.evidence.find((entry) => entry.id === row.id);
+              if (item === undefined) {
+                return null;
+              }
+              const isOpen = open.has(row.id);
+              return (
+                <li
+                  key={row.id}
+                  id={`pl-item-${row.code}`}
+                  className={`pb-card${isOpen ? " is-open" : ""}${selected === row.code || trace.has(row.code) ? " is-related" : ""}`}
+                >
+                  <button
+                    type="button"
+                    className="pb-card-head"
+                    aria-expanded={isOpen}
+                    onClick={() => toggle(row.id)}
+                  >
+                    <span className="pb-num is-code">{row.code}</span>
+                    <span className="pb-card-title">{row.title}</span>
+                    {isOpen ? null : (
+                      <>
+                        {row.required ? null : (
+                          <span className="pb-optional">Optional</span>
+                        )}
+                        {row.status === "NOT_REQUESTED" ? null : (
+                          <span
+                            className={`pp-status ${EVIDENCE_TONE[row.status]}`}
+                          >
+                            {EVIDENCE_STATUS_LABELS[row.status]}
+                          </span>
+                        )}
+                      </>
+                    )}
+                    <UiIcon name="chevron" size={15} />
+                  </button>
+                  {isOpen ? (
+                    <div className="pb-card-body">
+                      <EvidenceBody
+                        ids={ids}
+                        plan={plan}
+                        item={item}
+                        row={row}
+                        findings={flagged.get(row.code)}
+                        mode={mode(row.id)}
+                        onMode={(next) => setMode(row.id, next)}
+                        removal={removal}
+                        onSelect={onSelect}
+                      />
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ol>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** The line that says an item was removed, with its undo. */
+function RemovedNotice({ removal }: { removal: EvidenceRemoval }) {
+  return (
+    <>
+      {removal.removed !== null ? (
+        <p className="pe-removed" role="status">
+          <span>
+            {removal.removed.code} was removed from the plan. It stays on
+            record.
+          </span>
+          <button
+            type="button"
+            className="btn-ghost btn-sm"
+            disabled={removal.action.pending}
+            onClick={() => void removal.undo()}
+          >
+            Undo
+          </button>
+        </p>
+      ) : null}
+      <Problem text={removal.action.problem} />
+    </>
+  );
+}
+
+/** One evidence item opened, in a card or the compact table alike: its phase, type,
+ * where its request stands and its source, its overview with what it must show and what
+ * it supports, its findings, and its actions. */
+function EvidenceBody({
+  ids,
+  plan,
+  item,
+  row,
+  findings,
+  mode,
+  onMode,
+  removal,
+  onSelect,
+}: {
+  ids: Ids;
+  plan: MasterPlan;
+  item: Evidence;
+  row: EvidenceRow;
+  findings: Finding[] | undefined;
+  mode: EvidenceMode;
+  onMode: (next: EvidenceMode) => void;
+  removal: EvidenceRemoval;
+  onSelect: (code: string) => void;
+}) {
+  const flip = (next: EvidenceMode) => onMode(mode === next ? "none" : next);
+  return (
+    <>
+      <p className="pb-pills">
+        <span className={`pp-pill is-phase is-${item.phase.toLowerCase()}`}>
+          {row.phaseLabel}
+        </span>
+        <span className="pp-pill">{row.typeLabel}</span>
+        <span
+          className={`pp-status ${EVIDENCE_TONE[row.status]}`}
+          title={REQUIREMENT_WORDS[row.state] ?? row.state}
+        >
+          {EVIDENCE_STATUS_LABELS[row.status]}
+        </span>
+        <span className="pp-pill is-phase">
+          {row.required ? "Required" : "Optional"}
+        </span>
+        <Mark origin={item.origin} personEdited={item.personEdited} />
+      </p>
+      <div className="pb-overview">
+        <h5>Evidence overview</h5>
+        {item.description !== "" ? <p>{item.description}</p> : null}
+        {item.objective !== "" ? (
+          <p className="pb-overview-line">
+            <strong>Shows</strong> {item.objective}
+          </p>
+        ) : null}
+        <p className="pb-overview-line">
+          <strong>Request</strong>{" "}
+          {[REQUIREMENT_WORDS[row.state] ?? "", item.periodLabel]
+            .filter((part) => part !== "")
+            .join(" · ")}
+        </p>
+        <p className="pl-row-links">
+          <Chips
+            optional
+            label="Supports"
+            codes={item.attributeCodes}
+            onSelect={onSelect}
+          />
+          <Chips
+            optional
+            label="Procedures"
+            codes={item.procedureCodes}
+            onSelect={onSelect}
+          />
+        </p>
+      </div>
+      <Flags
+        ids={ids}
+        plan={plan}
+        findings={findings}
+        onLinks={() => onMode("links")}
+      />
+      <span className="pb-actions">
+        <button
+          type="button"
+          className="btn-ghost btn-sm"
+          onClick={() => flip("edit")}
+        >
+          <UiIcon name="compose" size={13} />
+          Edit
+        </button>
+        <button
+          type="button"
+          className="btn-ghost btn-sm"
+          onClick={() => flip("links")}
+        >
+          Link attributes and procedures
+        </button>
+        <button
+          type="button"
+          className="btn-ghost btn-sm"
+          disabled={removal.action.pending}
+          onClick={() => void removal.remove(item)}
+        >
+          Remove
+        </button>
+        <button
+          type="button"
+          className="btn-secondary btn-sm pb-trace"
+          onClick={() => onSelect(row.code)}
+        >
+          Trace in the plan
+          <UiIcon name="arrow" size={13} />
+        </button>
+      </span>
+      <EvidenceForms
+        ids={ids}
+        plan={plan}
+        item={item}
+        mode={mode}
+        onDone={() => onMode("none")}
+      />
+    </>
+  );
+}
+
+/**
+ * One phase's evidence as a table, the board's Compact view (the table decided by the
+ * product owner on 26 October 2026): filtered by type, status or words; each item with
+ * the procedures it serves, its type, source and where its request stands; it opens in
+ * place as its card does.
+ */
+function EvidenceTable({
+  ids,
+  plan,
+  selected,
+  trace,
+  onSelect,
+  phase,
+  removal,
+}: TabProps & { phase: Phase; removal: EvidenceRemoval }) {
+  const flagged = findingsByCode(plan);
+  const rows = evidenceRows(plan).filter((row) => row.phase === phase);
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [modes, setModes] = useState<Record<string, EvidenceMode>>({});
+  const [type, setType] = useState("");
+  const [status, setStatus] = useState("");
+  const [query, setQuery] = useState("");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const words = query.trim().toLowerCase();
+  const shown = rows.filter(
+    (row) =>
+      (type === "" || row.type === type) &&
+      (status === "" || row.status === status) &&
+      (words === "" ||
+        `${row.code} ${row.title} ${row.procedures.join(" ")}`
+          .toLowerCase()
+          .includes(words)),
+  );
+  const types = [...new Map(rows.map((row) => [row.type, row.typeLabel]))];
+  const statuses = [...new Set(rows.map((row) => row.status))];
+  const toggle = (id: string, value?: boolean) =>
+    setOpen((now) => {
+      const next = new Set(now);
+      if (value ?? !next.has(id)) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  const pickedShown = shown.filter((row) => picked.has(row.id));
+  const allPicked = shown.length > 0 && pickedShown.length === shown.length;
+  const pick = (id: string) =>
+    setPicked((now) => {
+      const next = new Set(now);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  const mode = (id: string) => modes[id] ?? "none";
+  const setMode = (id: string, next: EvidenceMode) => {
+    setModes((now) => ({ ...now, [id]: next }));
+    if (next !== "none") {
+      toggle(id, true);
+    }
+  };
+  return (
+    <div className="pb-table">
+      <div className="pe-filters">
+        {types.length > 1 ? (
+          <label>
+            <span className="sr-only">Evidence type</span>
+            <select
+              value={type}
+              onChange={(event) => setType(event.target.value)}
+            >
+              <option value="">All evidence types</option>
+              {types.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        {statuses.length > 1 ? (
+          <label>
+            <span className="sr-only">Status</span>
+            <select
+              value={status}
+              onChange={(event) => setStatus(event.target.value)}
+            >
+              <option value="">All statuses</option>
+              {statuses.map((value) => (
+                <option key={value} value={value}>
+                  {EVIDENCE_STATUS_LABELS[value]}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        <label className="pe-search">
+          <UiIcon name="search" size={14} />
+          <input
+            type="search"
+            value={query}
+            placeholder="Search evidence…"
+            aria-label="Search evidence"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
+        {pickedShown.length > 0 ? (
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setOpen(new Set(pickedShown.map((row) => row.id)))}
+          >
+            Review {pickedShown.length} selected
+          </button>
+        ) : null}
+      </div>
+      {shown.length === 0 ? (
+        <p className="pl-quiet">No evidence matches these filters.</p>
+      ) : (
+        <div className="pp-scroll">
+          <table className="pp-table pe-table">
+            <thead>
+              <tr>
+                <th scope="col" className="pe-pick">
+                  <input
+                    type="checkbox"
+                    aria-label="Select the evidence shown"
+                    checked={allPicked}
+                    onChange={() =>
+                      setPicked(
+                        allPicked
+                          ? new Set()
+                          : new Set(shown.map((row) => row.id)),
+                      )
+                    }
+                  />
+                </th>
+                <th scope="col">ID</th>
+                <th scope="col">Evidence item</th>
+                <th scope="col">Linked procedure(s)</th>
+                <th scope="col">Type</th>
+                <th scope="col">Source</th>
+                <th scope="col">Status</th>
+                <th scope="col">
+                  <span className="sr-only">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((row) => {
+                const item = plan.evidence.find((entry) => entry.id === row.id);
+                if (item === undefined) {
+                  return null;
+                }
+                const isOpen = open.has(row.id);
+                return (
+                  <Fragment key={row.id}>
+                    <tr
+                      id={`pl-item-${row.code}`}
+                      className={`pp-row${selected === row.code ? " is-selected" : ""}${trace.has(row.code) ? " is-related" : ""}${isOpen ? " is-open" : ""}`}
+                    >
+                      <td className="pe-pick">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${row.code}`}
+                          checked={picked.has(row.id)}
+                          onChange={() => pick(row.id)}
+                        />
+                      </td>
+                      <td className="pe-code">{row.code}</td>
+                      <td className="pp-text pe-title">
+                        <button
+                          type="button"
+                          className="pe-open"
+                          aria-expanded={isOpen}
+                          onClick={() => toggle(row.id)}
+                        >
+                          {row.title}
+                        </button>
+                        {row.required ? null : <small>Optional</small>}
+                      </td>
+                      <td className="pe-links">
+                        {row.procedures.length === 0 ? (
+                          <span className="pl-quiet">—</span>
+                        ) : (
+                          row.procedures.map((code, index) => (
+                            <Fragment key={code}>
+                              {index > 0 ? ", " : null}
+                              <button
+                                type="button"
+                                className="pe-link"
+                                title={`Trace ${code} in the plan`}
+                                onClick={() => onSelect(code)}
+                              >
+                                {code}
+                              </button>
+                            </Fragment>
+                          ))
+                        )}
+                      </td>
+                      <td className="pe-type">{row.typeLabel}</td>
+                      <td className="pp-source">{row.source}</td>
+                      <td>
+                        <span
+                          className={`pp-status ${EVIDENCE_TONE[row.status]}`}
+                          title={REQUIREMENT_WORDS[row.state] ?? row.state}
+                        >
+                          {EVIDENCE_STATUS_LABELS[row.status]}
+                        </span>
+                      </td>
+                      <td className="pp-actions">
+                        <ProcedureMenu
+                          label={`More for evidence ${row.code}`}
+                          items={[
+                            {
+                              text: isOpen
+                                ? "Close the details"
+                                : "Open the details",
+                              run: () => toggle(row.id),
+                            },
+                            {
+                              text: "Edit",
+                              run: () => setMode(row.id, "edit"),
+                            },
+                            {
+                              text: "Link attributes and procedures",
+                              run: () => setMode(row.id, "links"),
+                            },
+                            {
+                              text: "Trace in the plan",
+                              run: () => onSelect(row.code),
+                            },
+                            {
+                              text: "Remove from the plan",
+                              run: () => void removal.remove(item),
+                            },
+                          ]}
+                        />
+                      </td>
+                    </tr>
+                    {isOpen ? (
+                      <tr className="pp-detail">
+                        <td colSpan={2} />
+                        <td colSpan={6}>
+                          <div className="pp-detail-body pb-detail">
+                            <EvidenceBody
+                              ids={ids}
+                              plan={plan}
+                              item={item}
+                              row={row}
+                              findings={flagged.get(row.code)}
+                              mode={mode(row.id)}
+                              onMode={(next) => setMode(row.id, next)}
+                              removal={removal}
+                              onSelect={onSelect}
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // History
 
-function History({ plan }: { plan: MasterPlan }) {
+function History({
+  plan,
+  inline = false,
+}: {
+  plan: MasterPlan;
+  /** As the History tab of the control's Plan step: open, and saying so when empty. */
+  inline?: boolean;
+}) {
   if (plan.decisions.length === 0) {
-    return null;
+    return inline ? (
+      <p className="pl-quiet">
+        No decision on this plan yet. Each approval or request for changes is
+        recorded here with the version it was made on.
+      </p>
+    ) : null;
   }
   return (
-    <details className="card pl-history">
+    <details className="card pl-history" open={inline || undefined}>
       <summary>
         Decision history <span className="pl-sub">{plan.decisions.length}</span>
       </summary>

@@ -26,6 +26,13 @@ _NAMED = {
     "Manager relationship for each selected user": ("hr ", "manager of record", "org chart"),
     "Business owners and IT approvers by system": ("owners by system", "owner register"),
 }
+# The detail each conflicting requirement asks of every selected sample (the library's
+# wording), as the one lean sample item carries it.
+_DETAIL = {
+    "Application owner list": "Designated owner",
+    "Manager relationship for each selected user": "Manager of record",
+    "Business owners and IT approvers by system": "IT approver or board",
+}
 
 
 def test_the_plan_evaluation_changes_only_the_conflicting_cells(tmp_path: Path) -> None:
@@ -74,22 +81,25 @@ def test_the_conflicts_are_the_approved_plans_required_evidence_not_in_the_sampl
                 connection, UUID(sheet["id"]), UUID(str(control[0])), attributes
             )
     controls = {c.control_ref: c for c in manifest.controls}
+    # Lean (27 October 2026): a selected sample's evidence is one REQUIRED item listing every
+    # detail it must show; each conflicting requirement is a detail of it, still required
+    # for the attribute, and still in none of the samples' files.
     for conflict in CONFLICTS:
-        required = {
-            item["evidence"]
+        required = " ".join(
+            item["what_counts"]
             for item in plans[conflict.control_ref][conflict.attribute]
             if item["necessity"] == "REQUIRED"
-        }
+        )
         names = [Path(f.path).name.lower() for s in controls[conflict.control_ref].samples
                  for f in s.files]  # fmt: skip
         for title in conflict.required:
-            assert title in required, (conflict, required)
+            assert _DETAIL[title] in required, (conflict, required)
             assert not any(kind in name for kind in _NAMED[title] for name in names), title
     # The system record of the grant is REQUIRED for AC-01 C, D and E: the population the
     # plan defines as the system's own records is what each sample's row comes from.
     for attribute in (2, 3, 4):
-        titles = {
-            item["evidence"] for item in plans[AC][attribute] if item["necessity"] == "REQUIRED"
-        }
-        assert "System record of the grant for each selected item" in titles
+        counts = " ".join(
+            item["what_counts"] for item in plans[AC][attribute] if item["necessity"] == "REQUIRED"
+        )
+        assert "Grant date and time" in counts
     assert controls[AC].population.path.endswith("population listing.csv")

@@ -32,7 +32,7 @@ import {
   planAwaitsApproval,
 } from "./evidence-plan-model";
 import { liveRequirements } from "./evidence-workspace-model";
-import { UiIcon } from "./ui-icon";
+import { type IconName, UiIcon } from "./ui-icon";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
 
@@ -825,5 +825,148 @@ export function ActivityTimeline({
         </a>
       ) : null}
     </div>
+  );
+}
+
+const HISTORY_ICON: Record<ActivityCategory, IconName> = {
+  design: "layers",
+  planning: "file",
+  evidence: "inbox",
+  testing: "check",
+  review: "agents",
+  findings: "risk",
+  approval: "check",
+  workflow: "plus",
+  error: "risk",
+};
+
+/**
+ * The control's history in its Plan step (decided by the product owner on 26 October
+ * 2026, from the control workspace reference): each change to the plan, the client's
+ * answers, the evidence and the approvals, by day, with who made it. One filter narrows it
+ * by kind or by who; the audit trail below the steps holds the same record.
+ */
+export function ControlHistory({
+  items,
+  viewer = "",
+}: {
+  items: ActivityItem[] | null;
+  /** The person viewing, by email: their own changes read You. */
+  viewer?: string;
+}) {
+  const who = (item: ActivityItem) =>
+    item.by === "agent"
+      ? "AI Agent"
+      : item.by === "workspace"
+        ? "System"
+        : viewer !== "" && item.actor.toLowerCase() === viewer.toLowerCase()
+          ? "You"
+          : item.actor || "A person";
+  const [filter, setFilter] = useState("all");
+  if (items === null) {
+    return (
+      <p className="cw-hint">
+        The history could not be loaded. Refresh to try again.
+      </p>
+    );
+  }
+  const [kind, value] = filter.split(":");
+  const shown = items.filter((item) =>
+    kind === "by"
+      ? item.by === value
+      : kind === "category"
+        ? item.category === value
+        : true,
+  );
+  const present = Array.from(new Set(items.map((item) => item.category)));
+  const days: Array<[string, ActivityItem[]]> = [];
+  for (const item of shown) {
+    const day = DAY.format(new Date(item.at));
+    const last = days[days.length - 1];
+    if (last !== undefined && last[0] === day) {
+      last[1].push(item);
+    } else {
+      days.push([day, [item]]);
+    }
+  }
+  return (
+    <section className="ph-card" aria-labelledby="ph-title">
+      <header className="pp-head">
+        <div>
+          <h3 id="ph-title">History</h3>
+          <p>
+            Track changes to the plan, client answers, evidence requirements,
+            and approvals for this control.
+          </p>
+        </div>
+        <label className="ph-filter">
+          <span className="sr-only">Show</span>
+          <select
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+          >
+            <option value="all">All activities</option>
+            <optgroup label="By kind">
+              {present.map((key) => (
+                <option key={key} value={`category:${key}`}>
+                  {ACTIVITY_CATEGORY_LABELS[key]}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="By who">
+              <option value="by:agent">Agents</option>
+              <option value="by:person">People</option>
+              <option value="by:workspace">Workspace</option>
+            </optgroup>
+          </select>
+        </label>
+      </header>
+      {shown.length === 0 ? (
+        <p className="cw-hint">
+          {items.length === 0
+            ? "Nothing has happened on this control yet."
+            : "Nothing matches this filter."}
+        </p>
+      ) : (
+        days.map(([day, list]) => (
+          <section key={day} className="ph-day">
+            <h4>{day}</h4>
+            <ol>
+              {list.map((item) => (
+                <li key={item.id} className={`is-${item.by}`}>
+                  <span className="ph-dot" aria-hidden="true" />
+                  <span
+                    className={`ph-icon is-${item.by === "agent" ? "agent" : item.category}`}
+                    aria-hidden="true"
+                  >
+                    <UiIcon
+                      name={
+                        item.by === "agent"
+                          ? "sparkles"
+                          : HISTORY_ICON[item.category]
+                      }
+                      size={15}
+                    />
+                  </span>
+                  <div className="ph-text">
+                    <p>
+                      <strong>{item.title}</strong>
+                      <span className={`ph-who is-${item.by}`}>
+                        {who(item)}
+                      </span>
+                    </p>
+                    {item.detail !== "" ? <small>{item.detail}</small> : null}
+                  </div>
+                  <time dateTime={item.at}>
+                    {TIME.format(new Date(item.at))}
+                  </time>
+                </li>
+              ))}
+            </ol>
+          </section>
+        ))
+      )}
+      <p className="ph-note">Times are in UTC.</p>
+    </section>
   );
 }

@@ -2,10 +2,18 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  clock,
   contextProblem,
   contextWrite,
   documentUploadTarget,
+  type NarrativeReview,
+  type NarrativeRun,
+  narrativeProgress,
   parseContext,
+  planOutcomeLine,
+  REVIEW_ACTION_LABELS,
+  reviewActions,
+  reviewHeadline,
   showsReadiness,
 } from "../apps/web/src/control-context-model.ts";
 
@@ -169,6 +177,9 @@ describe("control context", () => {
           description: " Billing raises it. ",
           controlPoint: true,
           basis: "DOCUMENTED",
+          // The attributes evaluated at the step (26 October 2026): a code is kept only
+          // when it is well formed.
+          attributes: ["A1", "not a code!", 7],
         },
         { description: "   " },
       ],
@@ -178,6 +189,8 @@ describe("control context", () => {
     assert.ok(!("error" in saved));
     assert.deepEqual(saved.body, {
       summary: "Short.",
+      // The narrative's sections (0117): none given here.
+      sections: [],
       steps: [
         {
           description: "Billing raises it.",
@@ -187,6 +200,7 @@ describe("control context", () => {
           basis: "DOCUMENTED",
           source: "",
           quote: "",
+          attributes: ["A1"],
         },
       ],
       version: 0,
@@ -521,5 +535,479 @@ describe("test plan approval in readiness", () => {
     assert.equal(context.readiness.state, "PLAN_NOT_APPROVED");
     assert.equal(context.readiness.label, "Test plan awaiting approval");
     assert.equal(context.readiness.checks[0]?.key, "plan");
+  });
+});
+
+// The process narrative drafted and reviewed in the background (26 October 2026): its
+// fixed sections, its run, its review, and the questions the agents raise.
+describe("the reviewed process narrative", () => {
+  it("parses the sections in order, the run, the review and the raised questions", () => {
+    const context = parseContext({
+      control_id: CONTROL,
+      issues: [
+        {
+          id: ITEM,
+          origin: "PROCESS",
+          kind: "MISSING",
+          topic: "Exception route",
+          detail: "What happens to a rejected request?",
+          status: "OPEN",
+          version: 1,
+          question: "What happens to a rejected request?",
+          suggestions: ["Returned to the requester", 3],
+        },
+      ],
+      understanding: {
+        status: "DRAFT",
+        summary: "Purpose and scope. The control.",
+        sections: [
+          {
+            key: "PURPOSE",
+            heading: "Purpose and scope",
+            text: "The control.",
+            attributes: ["A1", 2],
+          },
+          { key: "NOPE", text: "Dropped." },
+          {
+            key: "APPROVAL",
+            text: "The manager approves.",
+            attributes: ["A1"],
+          },
+        ],
+        steps: [],
+        built_by: "AGENT",
+        version: 3,
+        run: {
+          status: "WORKING",
+          mode: "DRAFT",
+          stage: "REVIEWING",
+          round: 2,
+          note: "",
+          started_at: "2026-10-26T18:00:00Z",
+          stage_at: "2026-10-26T18:00:40Z",
+          progress: { answers: 12, documents: 2, attributes: 5, points: "x" },
+        },
+        review: {
+          passed: false,
+          reviewer: "AGENT",
+          rounds: 1,
+          coverage: [{ code: "A1", sections: ["PURPOSE"], steps: [2, "x"] }],
+          findings: ["A2 is not explained in any section.", 4],
+          fixes: ["Removed an oversight claim no answer supports.", null],
+          questions: 2,
+          incomplete: true,
+          version: 3,
+        },
+      },
+    });
+    assert.ok(context !== null);
+    const narrative = context.understanding;
+    assert.deepEqual(
+      narrative.sections.map((item) => [
+        item.key,
+        item.heading,
+        item.attributes,
+      ]),
+      [
+        ["PURPOSE", "Purpose and scope", ["A1"]],
+        ["APPROVAL", "Review and approval", ["A1"]],
+      ],
+    );
+    assert.deepEqual(narrative.run, {
+      status: "WORKING",
+      mode: "DRAFT",
+      stage: "REVIEWING",
+      round: 2,
+      note: "",
+      startedAt: "2026-10-26T18:00:00Z",
+      stageAt: "2026-10-26T18:00:40Z",
+      progress: { answers: 12, documents: 2, attributes: 5, points: 0 },
+      planOutcome: null,
+    });
+    assert.deepEqual(narrative.review?.coverage, [
+      { code: "A1", sections: ["PURPOSE"], steps: [2] },
+    ]);
+    assert.deepEqual(narrative.review?.findings, [
+      "A2 is not explained in any section.",
+    ]);
+    assert.equal(narrative.review?.passed, false);
+    assert.deepEqual(narrative.review?.fixes, [
+      "Removed an oversight claim no answer supports.",
+    ]);
+    assert.equal(narrative.review?.questions, 2);
+    assert.equal(narrative.review?.incomplete, true);
+    assert.deepEqual(context.issues[0]?.suggestions, [
+      "Returned to the requester",
+    ]);
+    assert.equal(
+      context.issues[0]?.question,
+      "What happens to a rejected request?",
+    );
+  });
+
+  it("says what holds the review, never listing passed checks as problems", () => {
+    const review: NarrativeReview = {
+      passed: false,
+      reviewer: "AGENT",
+      rounds: 2,
+      coverage: [],
+      findings: [],
+      fixes: ["Removed an oversight claim no answer supports."],
+      questions: 1,
+      incomplete: false,
+      version: 4,
+    };
+    // Held only for the client's facts: the questions are in the walkthrough.
+    assert.equal(
+      reviewHeadline(review, 4),
+      "Waiting on 1 point for the client to confirm in the walkthrough. The narrative is drafted again once they are confirmed.",
+    );
+    assert.equal(
+      reviewHeadline(
+        { ...review, findings: ["A2 is unexplained."], questions: 3 },
+        4,
+      ),
+      "1 issue to resolve, and 3 points for the client to confirm in the walkthrough.",
+    );
+    assert.equal(
+      reviewHeadline(
+        { ...review, questions: 0, findings: ["A2 is unexplained."] },
+        4,
+      ),
+      "The review found issues to resolve before approval.",
+    );
+    assert.equal(
+      reviewHeadline({ ...review, passed: true, questions: 0 }, 4),
+      "Reviewed: every attribute covered after 2 rounds of fixes.",
+    );
+    assert.equal(
+      reviewHeadline({ ...review, reviewer: "RULES" }, 4),
+      "Checked by the rules only: no model reviewed it.",
+    );
+    // An edit after the review makes it stale, whatever it found.
+    assert.equal(
+      reviewHeadline({ ...review, passed: true }, 5),
+      "Changed since the review. Review it again before approving.",
+    );
+    // A review the agent did not finish is said as such, not counted as a point.
+    assert.equal(
+      reviewHeadline({ ...review, incomplete: true, questions: 6 }, 4),
+      "The reviewer agent did not finish its review. Run it again; 6 points also wait for the client's confirmation.",
+    );
+  });
+
+  it("says a review of the draft beside the narrative is that draft's", () => {
+    const review: NarrativeReview = {
+      passed: true,
+      reviewer: "AGENT",
+      rounds: 1,
+      coverage: [],
+      findings: [],
+      fixes: [],
+      questions: 0,
+      incomplete: false,
+      version: -1,
+    };
+    // Never "changed since the review": the way forward is Use the newer draft.
+    assert.equal(
+      reviewHeadline(review, 9),
+      "The newer draft beside this one passed its review. Use the newer draft to take it with its review.",
+    );
+    assert.deepEqual(reviewActions(review, 9), []);
+  });
+
+  it("always offers a way forward from a held review", () => {
+    const review: NarrativeReview = {
+      passed: false,
+      reviewer: "AGENT",
+      rounds: 1,
+      coverage: [],
+      findings: [],
+      fixes: [],
+      questions: 6,
+      incomplete: true,
+      version: 4,
+    };
+    // The case reported on 26 October 2026: the review did not finish, facts awaited.
+    assert.deepEqual(reviewActions(review, 4), ["review", "answer"]);
+    assert.deepEqual(reviewActions({ ...review, incomplete: false }, 4), [
+      "answer",
+    ]);
+    assert.deepEqual(
+      reviewActions(
+        { ...review, incomplete: false, questions: 0, findings: ["A2."] },
+        4,
+      ),
+      ["redraft"],
+    );
+    assert.deepEqual(reviewActions({ ...review, passed: true }, 4), []);
+    assert.deepEqual(reviewActions(review, 5), ["review"]);
+    // Without a model, running the rules again changes nothing.
+    assert.deepEqual(
+      reviewActions(
+        { ...review, reviewer: "RULES", incomplete: false, questions: 0 },
+        4,
+      ),
+      [],
+    );
+    assert.equal(REVIEW_ACTION_LABELS.review, "Run the review again");
+  });
+
+  it("asks for a draft or a review, and saves sections with an optional note", () => {
+    const narrate = contextWrite({ ...IDS, intent: "process-narrate" });
+    assert.ok(!("error" in narrate));
+    assert.equal(narrate.path, `${BASE}/controls/${CONTROL}/process/narrate`);
+    const review = contextWrite({ ...IDS, intent: "process-review" });
+    assert.ok(!("error" in review));
+    assert.equal(
+      review.path,
+      `${BASE}/controls/${CONTROL}/process/review-narrative`,
+    );
+    const saved = contextWrite({
+      ...IDS,
+      intent: "process-save",
+      sections: [
+        {
+          key: "PURPOSE",
+          text: " The control. ",
+          attributes: ["A1", "bad code"],
+        },
+        { key: "NOPE", text: "Dropped." },
+        { key: "MONITORING", text: "   " },
+      ],
+      steps: [],
+      version: 4,
+      confirm: true,
+      override_reason: "Walked through with the owner.",
+    });
+    assert.ok(!("error" in saved));
+    assert.deepEqual(saved.body.sections, [
+      { key: "PURPOSE", text: "The control.", attributes: ["A1"] },
+    ]);
+    assert.equal(saved.body.override_reason, "Walked through with the owner.");
+    const plain = contextWrite({
+      ...IDS,
+      intent: "process-save",
+      steps: [],
+      version: 4,
+    });
+    assert.ok(!("error" in plain) && !("override_reason" in plain.body));
+  });
+});
+
+// The narrative's progress and its points (decided by the product owner on 26 October
+// 2026): a real status while the agents work, and a round of points confirmed as one
+// decision.
+describe("the narrative's progress and points", () => {
+  const run: NarrativeRun = {
+    status: "WORKING",
+    mode: "DRAFT",
+    stage: "REVIEWING",
+    round: 1,
+    note: "",
+    startedAt: "2026-10-26T18:00:00Z",
+    stageAt: "2026-10-26T18:00:40Z",
+    progress: { answers: 12, documents: 2, attributes: 5, points: 0 },
+    planOutcome: null,
+  };
+  const at = Date.parse("2026-10-26T18:01:15Z");
+
+  it("shows each step, the one under way and for how long", () => {
+    const { steps, seconds } = narrativeProgress(run, at);
+    assert.deepEqual(
+      steps.map((step) => [step.label, step.state]),
+      [
+        ["Gathering the facts", "done"],
+        ["Drafting the narrative", "done"],
+        ["Independent review", "active"],
+        ["Final checks", "pending"],
+      ],
+    );
+    assert.equal(steps[0]?.detail, "12 answers, 2 documents and 5 attributes");
+    assert.equal(steps[2]?.seconds, 35);
+    assert.equal(seconds, 75);
+    assert.equal(clock(seconds), "1:15");
+  });
+
+  it("adds the second review only when it happens, and waits before the start", () => {
+    const second = narrativeProgress({ ...run, round: 2 }, at).steps;
+    assert.deepEqual(
+      second.map((step) => step.state),
+      ["done", "done", "done", "active", "pending"],
+    );
+    assert.equal(second[3]?.label, "Second review");
+    const waiting = narrativeProgress(
+      { ...run, status: "PENDING", stage: "" },
+      at,
+    );
+    assert.equal(waiting.steps[0]?.state, "active");
+    assert.equal(waiting.seconds, 0);
+    // Reviewing alone reads the narrative instead of drafting it.
+    assert.equal(
+      narrativeProgress({ ...run, mode: "REVIEW" }, at).steps[1]?.label,
+      "Reading the narrative",
+    );
+  });
+
+  it("sends a round of points as one request, each with its answer", () => {
+    const id = "01a13300-0000-7000-8000-0000000000aa";
+    const sent = contextWrite({
+      ...IDS,
+      intent: "process-points",
+      items: [{ issue_id: id, version: 2, answer: " Signed in ServiceNow. " }],
+    });
+    assert.ok(!("error" in sent));
+    assert.equal(sent.path, `${BASE}/controls/${CONTROL}/process/points`);
+    assert.deepEqual(sent.body, {
+      items: [{ issue_id: id, version: 2, answer: "Signed in ServiceNow." }],
+    });
+    for (const items of [
+      [],
+      [{ issue_id: id, version: 2, answer: "" }],
+      [{ issue_id: "x", version: 2, answer: "Yes" }],
+      [{ issue_id: id, version: 0, answer: "Yes" }],
+    ]) {
+      assert.ok(
+        "error" in contextWrite({ ...IDS, intent: "process-points", items }),
+      );
+    }
+  });
+
+  it("reads a point's statement, section, codes, round and kind", () => {
+    const context = parseContext({
+      control_id: CONTROL,
+      design: null,
+      issues: [
+        {
+          id: "i1",
+          origin: "PROCESS",
+          kind: "MISSING",
+          topic: "Evidence of the check",
+          detail: "",
+          why: "A1 needs evidence.",
+          resolve: "",
+          quotes: [],
+          raised_by: "AGENT",
+          status: "OPEN",
+          resolution_note: "",
+          version: 1,
+          question: "Where is the check recorded?",
+          suggestions: [],
+          proposal: "Role owners sign the listing in ServiceNow.",
+          section: "RECORDING",
+          attributes: ["A1", 3],
+          round: 1,
+          point_kind: "MISSING",
+        },
+      ],
+    });
+    const issue = context?.issues[0];
+    assert.equal(
+      issue?.proposal,
+      "Role owners sign the listing in ServiceNow.",
+    );
+    assert.equal(issue?.section, "RECORDING");
+    assert.deepEqual(issue?.attributes, ["A1"]);
+    assert.equal(issue?.round, 1);
+    assert.equal(issue?.pointKind, "MISSING");
+  });
+});
+
+// The test plan follows the approved narrative (product owner, 26 October 2026).
+describe("updating the test plan from the approved narrative", () => {
+  const run: NarrativeRun = {
+    status: "WORKING",
+    mode: "PLAN",
+    stage: "EVIDENCE",
+    round: 0,
+    note: "",
+    startedAt: "2026-10-26T18:00:00Z",
+    stageAt: "2026-10-26T18:00:50Z",
+    progress: { answers: 0, documents: 0, attributes: 0, points: 0 },
+    planOutcome: null,
+  };
+
+  it("shows the plan update's own steps", () => {
+    const { steps } = narrativeProgress(
+      run,
+      Date.parse("2026-10-26T18:01:00Z"),
+    );
+    assert.deepEqual(
+      steps.map((step) => [step.label, step.state]),
+      [
+        ["Reading the approved narrative", "done"],
+        ["Attributes", "done"],
+        ["Evidence", "active"],
+      ],
+    );
+    assert.equal(steps[2]?.seconds, 10);
+  });
+
+  it("says what changed and where it is decided", () => {
+    assert.equal(
+      planOutcomeLine({
+        attributes: 2,
+        evidence: 0,
+        evidenceProposed: 1,
+        note: "",
+      }),
+      "The test plan was updated from the approved narrative: 2 attribute changes to decide on the Attributes tab; 1 evidence change to accept on the Evidence tab.",
+    );
+    assert.equal(
+      planOutcomeLine({
+        attributes: 0,
+        evidence: 0,
+        evidenceProposed: 0,
+        note: "",
+      }),
+      "The test plan was checked against the approved narrative: it already matches how the control operates.",
+    );
+  });
+
+  it("says when the evidence planner fell back, never that the plan matches", () => {
+    assert.equal(
+      planOutcomeLine({
+        attributes: 1,
+        evidence: 0,
+        evidenceProposed: 0,
+        evidenceFallback: true,
+        note: "",
+      }),
+      "The evidence planner did not finish, so the evidence was not updated from the approved narrative (1 attribute change to decide on the Attributes tab). Update the plan again.",
+    );
+  });
+
+  it("reads the plan update's mode and outcome", () => {
+    const context = parseContext({
+      control_id: CONTROL,
+      design: null,
+      understanding: {
+        status: "CONFIRMED",
+        summary: "",
+        steps: [],
+        version: 4,
+        run: {
+          status: "IDLE",
+          mode: "PLAN",
+          stage: "",
+          round: 0,
+          note: "",
+          plan_outcome: {
+            attributes: 2,
+            evidence: 3,
+            evidence_proposed: 1,
+            note: "Done.",
+          },
+        },
+      },
+    });
+    assert.equal(context?.understanding?.run?.mode, "PLAN");
+    assert.deepEqual(context?.understanding?.run?.planOutcome, {
+      attributes: 2,
+      evidence: 3,
+      evidenceProposed: 1,
+      evidenceFallback: false,
+      note: "Done.",
+    });
   });
 });

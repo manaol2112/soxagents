@@ -472,7 +472,9 @@ describe("the six destinations and the older addresses (M2c)", () => {
     for (const section of [
       "overview",
       "controls",
+      "planning",
       "testing",
+      "review",
       "evidence",
       "reports",
       "settings",
@@ -489,15 +491,11 @@ describe("the six destinations and the older addresses (M2c)", () => {
   });
 
   it("redirects every moved section with its record kept", () => {
-    // Test plans: the queue, a control's plan on its tab, the phases view.
-    assert.deepEqual(target({ section: "planning" }), {
-      organization: org,
-      project,
-      section: "testing",
-    });
+    // Testing's plans and reviews (until 25 October 2026): a control's plan on its
+    // tab, the phases view, and the reviews open Planning and Review.
     assert.deepEqual(
       target({
-        section: "planning",
+        section: "testing",
         control,
         tab: "evidence",
         filter: "APPROVED",
@@ -508,15 +506,31 @@ describe("the six destinations and the older addresses (M2c)", () => {
         control,
         tab: "evidence",
         filter: "APPROVED",
-        section: "testing",
+        section: "planning",
       },
     );
-    assert.deepEqual(target({ section: "planning", view: "phases" }), {
+    assert.deepEqual(target({ section: "testing", view: "phases" }), {
       organization: org,
       project,
       view: "phases",
-      section: "testing",
+      section: "planning",
     });
+    assert.deepEqual(target({ section: "testing", view: "plans" }), {
+      organization: org,
+      project,
+      section: "planning",
+    });
+    assert.deepEqual(
+      target({ section: "testing", view: "review", filter: "mine" }),
+      {
+        organization: org,
+        project,
+        filter: "mine",
+        section: "review",
+      },
+    );
+    // Testing itself stands, on its results.
+    assert.equal(route({ section: "testing", view: "results" }).redirect, null);
     // Project plan and Timeline: Reports' schedule tabs.
     assert.deepEqual(target({ section: "plan" }), {
       organization: org,
@@ -715,12 +729,45 @@ describe("the six destinations and the older addresses (M2c)", () => {
     assert.deepEqual(DESTINATIONS, [
       "overview",
       "controls",
-      "testing",
+      "register",
+      "planning",
       "evidence",
+      "testing",
+      "review",
       "reports",
       "settings",
       "projects",
       "library",
     ]);
+  });
+});
+
+describe("Controls on a page of its own (26 October 2026)", () => {
+  const route = (params: Record<string, string>) => resolveRoute(params);
+  it("sends the Controls tab's address to Controls, with its filter", () => {
+    const found = route({
+      section: "controls",
+      pane: "controls",
+      for: "system:abc",
+    });
+    assert.ok(found.redirect !== null);
+    const params = new URLSearchParams(found.redirect.slice(2));
+    assert.equal(params.get("section"), "register");
+    assert.equal(params.get("for"), "system:abc");
+    assert.equal(params.get("pane"), null);
+    // A control's own page stays where it is.
+    assert.equal(
+      route({ section: "controls", pane: "controls", control: "c1" }).redirect,
+      null,
+    );
+  });
+
+  it("sends Planning's prior year back to Systems & Processes' References", () => {
+    const found = route({ section: "planning", view: "prior-year" });
+    assert.ok(found.redirect !== null);
+    const params = new URLSearchParams(found.redirect.slice(2));
+    assert.equal(params.get("section"), "controls");
+    assert.equal(params.get("pane"), "references");
+    assert.equal(params.get("view"), null);
   });
 });

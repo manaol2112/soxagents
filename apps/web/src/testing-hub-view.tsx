@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import type { EngagementState } from "./engagement-model";
 import type { PlanningPageState } from "./load-planning";
 import { PlanningPage } from "./planning-view";
@@ -8,9 +8,13 @@ import {
   filterResults,
   filterReviews,
   nextWords,
+  PLANNING_TAB_LABELS,
+  PLANNING_TABS,
+  type PlanningTab,
   parseResultFilter,
   parseReviewFilter,
   phaseWords,
+  planningTabHref,
   RESULT_FILTER_LABELS,
   RESULT_FILTERS,
   REVIEW_FILTER_LABELS,
@@ -22,33 +26,104 @@ import {
   resultCounts,
   resultRows,
   reviewRows,
-  TESTING_VIEWS,
-  type TestingView,
-  testingCounts,
   testingHref,
-  VIEW_LABELS,
   VIEW_NOTES,
 } from "./testing-hub-model";
 import { UiIcon } from "./ui-icon";
 
 type Ids = { organizationId: string; projectId: string };
 
-/** The Testing destination (M2b): Plans, Phases, Results and Review across every
- * control, each opening the guided control workspace for the detail. */
+/** A destination's header: the engagement, its title, what it is for, and its tabs. */
+function DestinationHeader({
+  projectName,
+  title,
+  note,
+  tabs = null,
+}: {
+  projectName: string;
+  title: string;
+  note: string;
+  tabs?: ReactNode;
+}) {
+  return (
+    <>
+      <header className="page-header">
+        <div>
+          <p className="page-context">{projectName}</p>
+          <div className="page-title">
+            <h1>{title}</h1>
+          </div>
+          <p className="page-desc">{note}</p>
+        </div>
+      </header>
+      {tabs}
+    </>
+  );
+}
+
+/**
+ * Planning (decided by the product owner on 25 October 2026, the audit's third step): each
+ * control's test plan prepared by the agent and approved by a person, and the release by
+ * phase.
+ */
+export function PlanningDestination({
+  ids,
+  projectName,
+  tab,
+  planning,
+}: {
+  ids: Ids;
+  projectName: string;
+  tab: PlanningTab;
+  planning: PlanningPageState | null;
+}) {
+  const header = (
+    <DestinationHeader
+      projectName={projectName}
+      title="Planning"
+      note={PLANNING_NOTES[tab]}
+      tabs={
+        <nav className="tv-tabs" aria-label="Planning views">
+          {PLANNING_TABS.map((item) => (
+            <a
+              key={item}
+              href={planningTabHref(ids.organizationId, ids.projectId, item)}
+              aria-current={item === tab ? "page" : undefined}
+            >
+              {PLANNING_TAB_LABELS[item]}
+            </a>
+          ))}
+        </nav>
+      }
+    />
+  );
+  return (
+    <PlanningPage
+      ids={{ ...ids, section: "planning" }}
+      projectName={projectName}
+      state={planning}
+      header={header}
+    />
+  );
+}
+
+const PLANNING_NOTES: Record<PlanningTab, string> = {
+  plans: VIEW_NOTES.plans,
+  phases: VIEW_NOTES.phases,
+};
+
+/** Testing (the audit's fifth step): where each control's testing stands, with its
+ * result and the step that moves it. */
 export function TestingPage({
   ids,
   projectName,
-  view,
-  planning,
   engagement,
   filter,
 }: {
   ids: Ids;
   projectName: string;
-  view: TestingView;
-  planning: PlanningPageState | null;
   engagement: EngagementState;
-  /** The results or review filter from the address (?filter=). */
+  /** The results filter from the address (?filter=). */
   filter: string | null;
 }) {
   const results = useMemo(
@@ -63,6 +138,37 @@ export function TestingPage({
       }),
     [engagement, ids.organizationId, ids.projectId],
   );
+  return (
+    <div className="page pl-page">
+      <DestinationHeader
+        projectName={projectName}
+        title="Testing"
+        note={VIEW_NOTES.results}
+      />
+      <ResultsView
+        ids={ids}
+        rows={results}
+        loaded={engagement.controls !== null}
+        filter={parseResultFilter(filter)}
+      />
+    </div>
+  );
+}
+
+/** Review (the audit's last step): the independent reviews, their notes,
+ * re-performance and sign-off. */
+export function ReviewPage({
+  ids,
+  projectName,
+  engagement,
+  filter,
+}: {
+  ids: Ids;
+  projectName: string;
+  engagement: EngagementState;
+  /** The review filter from the address (?filter=). */
+  filter: string | null;
+}) {
   const reviews = useMemo(
     () =>
       reviewRows({
@@ -73,64 +179,19 @@ export function TestingPage({
       }),
     [engagement, ids.organizationId, ids.projectId],
   );
-  const counts = testingCounts({ results, reviews });
-  const header = (
-    <>
-      <header className="page-header">
-        <div>
-          <p className="page-context">{projectName}</p>
-          <div className="page-title">
-            <h1>Testing</h1>
-          </div>
-          <p className="page-desc">{VIEW_NOTES[view]}</p>
-        </div>
-      </header>
-      <nav className="tv-tabs" aria-label="Testing views">
-        {TESTING_VIEWS.map((item) => (
-          <a
-            key={item}
-            href={testingHref(ids.organizationId, ids.projectId, item)}
-            aria-current={item === view ? "page" : undefined}
-          >
-            {VIEW_LABELS[item]}
-            {item === "results" && engagement.controls !== null ? (
-              <small>{counts.results}</small>
-            ) : item === "review" && engagement.reviews !== null ? (
-              <small>{counts.review}</small>
-            ) : null}
-          </a>
-        ))}
-      </nav>
-    </>
-  );
-  if (view === "plans" || view === "phases") {
-    return (
-      <PlanningPage
-        ids={{ ...ids, section: "testing" }}
-        projectName={projectName}
-        state={planning}
-        header={header}
-      />
-    );
-  }
   return (
     <div className="page pl-page">
-      {header}
-      {view === "results" ? (
-        <ResultsView
-          ids={ids}
-          rows={results}
-          loaded={engagement.controls !== null}
-          filter={parseResultFilter(filter)}
-        />
-      ) : (
-        <ReviewView
-          ids={ids}
-          rows={reviews}
-          loaded={engagement.reviews !== null}
-          filter={parseReviewFilter(filter)}
-        />
-      )}
+      <DestinationHeader
+        projectName={projectName}
+        title="Review"
+        note={VIEW_NOTES.review}
+      />
+      <ReviewView
+        ids={ids}
+        rows={reviews}
+        loaded={engagement.reviews !== null}
+        filter={parseReviewFilter(filter)}
+      />
     </div>
   );
 }

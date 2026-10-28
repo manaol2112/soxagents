@@ -15,7 +15,7 @@ import { loadWorkflow } from "../src/load-workflow";
 import { loadWorkspace } from "../src/load-workspace";
 import { setupPlacement } from "../src/routes";
 import { resolveRoute } from "../src/shell-model";
-import { parseTestingView } from "../src/testing-hub-model";
+import { parsePlanningTab } from "../src/testing-hub-model";
 import { parseTheme, THEME_COOKIE } from "../src/theme";
 import { WorkspaceView } from "../src/workspace-view";
 
@@ -84,6 +84,7 @@ export default async function Home({ searchParams }: HomeProps) {
       system: firstParam(params.system),
       edit: firstParam(params.edit),
       pane: firstParam(params.pane),
+      controlsFor: firstParam(params.for),
     }),
     loadEngagement(loaded, {
       category: firstParam(params.category),
@@ -143,7 +144,7 @@ export default async function Home({ searchParams }: HomeProps) {
       consoleState={consoleState}
       evidenceCenter={evidenceCenter}
       planning={planning}
-      testingView={parseTestingView(firstParam(params.view))}
+      planningTab={parsePlanningTab(firstParam(params.view))}
       testingFilter={firstParam(params.filter) ?? null}
       library={library}
       theme={parseTheme((await cookies()).get(THEME_COOKIE)?.value)}

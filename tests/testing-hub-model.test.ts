@@ -11,8 +11,10 @@ import {
   filterResults,
   filterReviews,
   nextWords,
+  parsePlanningTab,
   parseResultFilter,
   parseTestingView,
+  planningTabHref,
   resultCounts,
   resultRows,
   reviewRows,
@@ -141,13 +143,29 @@ describe("the Testing destination", () => {
     assert.equal(parseTestingView("review"), "review");
     assert.equal(parseTestingView("elsewhere"), "plans");
     assert.equal(parseTestingView(null), "plans");
+    // Each view is its destination's (25 October 2026).
     assert.equal(
       testingHref(ORG, PROJECT, "plans"),
-      "/?organization=org-1&project=proj-1&section=testing",
+      "/?organization=org-1&project=proj-1&section=planning",
+    );
+    assert.equal(
+      testingHref(ORG, PROJECT, "phases"),
+      "/?organization=org-1&project=proj-1&section=planning&view=phases",
     );
     assert.equal(
       testingHref(ORG, PROJECT, "results", { filter: "mine" }),
-      "/?organization=org-1&project=proj-1&section=testing&view=results&filter=mine",
+      "/?organization=org-1&project=proj-1&section=testing&filter=mine",
+    );
+    assert.equal(
+      testingHref(ORG, PROJECT, "review"),
+      "/?organization=org-1&project=proj-1&section=review",
+    );
+    // The prior year is with the scope on Systems & Processes (26 October 2026).
+    assert.equal(parsePlanningTab("prior-year"), "plans");
+    assert.equal(parsePlanningTab("each"), "plans");
+    assert.equal(
+      planningTabHref(ORG, PROJECT, "phases"),
+      "/?organization=org-1&project=proj-1&section=planning&view=phases",
     );
     assert.equal(
       controlStepHref(ORG, PROJECT, "c1", "test"),

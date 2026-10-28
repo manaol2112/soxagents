@@ -129,7 +129,7 @@ describe("Home's work (docs/home-plan.md)", () => {
     );
     const top = headerAction(plans, org, project);
     assert.equal(top?.label, "Approve the test plan (3)");
-    assert.equal(query(top?.href ?? "").get("section"), "testing");
+    assert.equal(query(top?.href ?? "").get("section"), "planning");
   });
 
   it("does a repeated plan approval on the Test plans page, and nothing else there", () => {
@@ -148,7 +148,7 @@ describe("Home's work (docs/home-plan.md)", () => {
     const params = query(action?.href ?? "");
     assert.equal(params.get("organization"), org);
     assert.equal(params.get("project"), project);
-    assert.equal(params.get("section"), "testing");
+    assert.equal(params.get("section"), "planning");
     assert.equal(params.get("view"), null);
     assert.deepEqual(params.get("filter")?.split(",").sort(), [
       "CHANGES_REQUESTED",
@@ -232,18 +232,18 @@ describe("Home's work (docs/home-plan.md)", () => {
     );
     assert.equal(
       query(stageHref("PLANS", org, project)).get("section"),
-      "testing",
+      "planning",
     );
     assert.equal(
       query(stageHref("EVIDENCE", org, project)).get("section"),
       "evidence",
     );
     assert.equal(
-      query(stageHref("TESTING", org, project)).get("view"),
-      "results",
+      query(stageHref("TESTING", org, project)).get("section"),
+      "testing",
     );
     assert.equal(
-      query(stageHref("REVIEW", org, project)).get("view"),
+      query(stageHref("REVIEW", org, project)).get("section"),
       "review",
     );
     assert.equal(

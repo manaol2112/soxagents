@@ -93,8 +93,10 @@ def test_kickoff_plans_every_phase_of_every_control(migrated: Database) -> None:
         for requirement in phase["requirements"]:
             assert requirement["rationale"] and requirement["categories"]
             assert requirement["objective"] and requirement["phase"] == phase["phase"]
-    # Sample evidence waits for the population and the sample the team selects.
-    sample = _requirement(plan, "INTERIM", "interim-ac01-e5")
+    # Sample evidence waits for the population and the sample the team selects. Lean (27
+    # October 2026): the one sample item takes the key of the personal-data item it holds
+    # (the manager relationship from HR), so it still travels as personal data.
+    sample = _requirement(plan, "INTERIM", "interim-ac01-e8")
     assert sample["state"] == "AWAITING_DEPENDENCY"
     assert sample["depends_on_title"] == _requirement(plan, "INTERIM", "interim-ac01-e3")["title"]
     assert "POPULATION" in _requirement(plan, "INTERIM", "interim-ac01-e3")["categories"]
@@ -282,7 +284,8 @@ def test_samples_wait_for_a_population_a_person_accepted(migrated: Database) -> 
         json={"sufficiency": "INSUFFICIENT", "version": received["version"]},
     )
     assert insufficient.status_code == 422
-    for key in ("interim-ac01-e3", "interim-ac01-e4"):
+    # Lean (27 October 2026): one population item carries how the list was produced.
+    for key in ("interim-ac01-e3",):
         item = _requirement(_plan(client, team, control_id), "INTERIM", key)
         accepted = client.post(
             f"{base}/evidence-requirements/{item['id']}/sufficiency",
@@ -295,7 +298,7 @@ def test_samples_wait_for_a_population_a_person_accepted(migrated: Database) -> 
     assert approved.status_code == 200, approved.text
     sample_request = approved.json()["sample_request_id"]
     plan = _plan(client, team, control_id)
-    sample = _requirement(plan, "INTERIM", "interim-ac01-e5")
+    sample = _requirement(plan, "INTERIM", "interim-ac01-e8")
     assert sample["status"] == "REQUESTED"
     assert sample["request_id"] == sample_request
     with connect(migrated.url) as connection:
@@ -304,8 +307,10 @@ def test_samples_wait_for_a_population_a_person_accepted(migrated: Database) -> 
             (sample_request,),
         ).fetchone()
     assert phase is not None and phase[0] == "INTERIM"
-    # The ask is worded from the standard's evidence suite (library version 4).
-    assert "Access request for each selected grant" in str(phase[1])
+    # The ask is worded from the standard's evidence suite (library version 4): one item for
+    # each selected grant, keeping every detail the suite's sample items listed.
+    assert "Evidence for each selected grant" in str(phase[1])
+    assert "Approval date and time" in str(phase[1]) and "Granted by" in str(phase[1])
     # Accepted evidence is not completed testing: the sample request is drafted, and
     # nothing has gone to the owner for it yet.
     assert _phase(plan, "INTERIM")["state"] == "NOT_SENT"
@@ -471,7 +476,38 @@ def test_the_agent_plans_when_its_plan_passes_the_checks(migrated: Database) -> 
     # recorded as the rules' work). Before M3a this read "RULES".
     assert body.source == "FALLBACK"
     assert "rejected" in body.note and "select samples" in body.note
-    assert calls == (2,)
+    # Rewritten on 26 October 2026 (product owner: "agent should be smart enough to work on
+    # this"): a rejected plan goes back to the planner with what was wrong, twice, before
+    # the rules stand in. Old: 2 calls (the good plan, the rejected one). New: 4 (the good
+    # plan, the rejected one and its two corrections, all still rejected here).
+    assert calls == (4,)
+
+
+def test_a_rejected_plan_is_corrected_by_the_planner(migrated: Database) -> None:
+    """Regression (26 October 2026): a plan over one of its limits was thrown away for the
+    rules'. The planner now gets it back with what was wrong and corrects it; the corrected
+    plan passes every check."""
+    team, _client, _scheduler = _engagement(migrated, "plan-correct")
+    control_id = UUID(_control(migrated, team, "ITGC-AC-03"))
+    org, project = UUID(str(team["org"])), UUID(str(team["project"]))
+    with connect(migrated.url) as connection:
+        facts = load_facts(connection, project, control_id)
+        good = rules_plan(facts).model_dump(mode="json", exclude_none=True)
+        good["understanding"]["summary"] = "The agent's corrected reading of the review."
+        over = rules_plan(facts).model_dump(mode="json", exclude_none=True)
+        over["understanding"]["summary"] = "x" * 1600
+        planner = _Planner(over)
+        answers = iter([over, good])
+        planner.complete = lambda request, config: (  # type: ignore[method-assign]
+            planner.requests.append(request) or ModelRaw(next(answers), (), 100, 100)
+        )
+        generate(connection, planner, org, project, control_id, team["owner_id"])
+        body = plan_body(connection, project, control_id)
+    assert body.source == "MODEL"
+    assert len(planner.requests) == 2
+    correction = planner.requests[1].prompt
+    assert "<your_previous_plan>" in correction
+    assert "understanding.summary" in correction and "That plan was rejected" in correction
 
 
 def test_reading_a_plan_needs_project_access(migrated: Database) -> None:
@@ -485,3 +521,137 @@ def test_reading_a_plan_needs_project_access(migrated: Database) -> None:
     # A control from another engagement is not visible through this one.
     foreign = _control(migrated, other, "ITGC-AC-01")
     assert client.get(f"{_base(team)}/controls/{foreign}/evidence-plan").status_code == 404
+
+
+def test_a_person_adds_and_removes_evidence_and_no_run_brings_it_back(
+    migrated: Database,
+) -> None:
+    """Decided by the product owner on 26 October 2026: users add, change and remove the
+    evidence a plan lists. A removal keeps the item on record, by whom, and can be undone;
+    what the client was already asked for is waived instead; a later run never brings back
+    what a person removed."""
+    team, client, _scheduler = _engagement(migrated, "plan-remove")
+    control_id = _control(migrated, team, "ITGC-AC-01")
+    base = f"{_base(team)}/controls/{control_id}"
+    plan = _plan(client, team, control_id)
+    items = [r for phase in plan["phases"] for r in phase["requirements"]]
+    requested = next(r for r in items if r["status"] == "REQUESTED")
+    refused = client.post(
+        f"{base}/evidence-requirements/{requested['id']}/remove",
+        json={"version": requested["version"]},
+    )
+    assert (refused.status_code, refused.json()["detail"]) == (
+        409,
+        "it has already been requested from the client; waive it instead",
+    )
+    # A planned item the agents proposed comes off the plan, kept on record.
+    removed = None
+    for item in [r for r in items if r["status"] in ("PLANNED", "AWAITING_DEPENDENCY")]:
+        tried = client.post(
+            f"{base}/evidence-requirements/{item['id']}/remove",
+            json={"version": item["version"]},
+        )
+        if tried.status_code == 200:
+            removed = item
+            break
+        assert "depends on it" in tried.json()["detail"], tried.text
+    assert removed is not None, "the plan has a planned item nothing depends on"
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            "SELECT status, removed_by, removed_at IS NOT NULL, version "
+            "FROM evidence_requirements WHERE id = %s",
+            (removed["id"],),
+        ).fetchone()
+        audit = connection.execute(
+            "SELECT count(*) FROM audit_events WHERE action = 'evidence_requirement.removed' "
+            "AND target_id = %s",
+            (removed["id"],),
+        ).fetchone()
+    assert row is not None and (row[0], str(row[1]), row[2]) == (
+        "REMOVED", str(team["owner_id"]), True,
+    )  # fmt: skip
+    assert audit == (1,)
+    # A later run of the rules plans the control again and leaves it removed.
+    org, project = UUID(str(team["org"])), UUID(str(team["project"]))
+    with connect(migrated.url) as connection:
+        generate(connection, None, org, project, UUID(control_id), team["owner_id"])
+        still = connection.execute(
+            "SELECT status FROM evidence_requirements WHERE id = %s", (removed["id"],)
+        ).fetchone()
+        version = connection.execute(
+            "SELECT version FROM evidence_requirements WHERE id = %s", (removed["id"],)
+        ).fetchone()
+    assert still == ("REMOVED",)
+    assert version is not None
+    # Undo brings it back.
+    restored = client.post(
+        f"{base}/evidence-requirements/{removed['id']}/restore",
+        json={"version": int(version[0])},
+    )
+    assert restored.status_code == 200, restored.text
+    with connect(migrated.url) as connection:
+        back = connection.execute(
+            "SELECT status, removed_by FROM evidence_requirements WHERE id = %s",
+            (removed["id"],),
+        ).fetchone()
+    assert back is not None and back[0] in ("PLANNED", "AWAITING_DEPENDENCY", "REQUESTED")
+    assert back[1] is None
+    # A person's own item is added, and removed again while it is still only planned.
+    added = client.post(
+        f"{base}/evidence-requirements",
+        json={
+            "phase": "ROLLFORWARD",
+            "title": "Quarterly access review sign-off",
+            "description": "The signed quarterly review of access for the period.",
+            "categories": ["CONTROL_EXECUTION"],
+            "objective": "Access was reviewed and signed off each quarter.",
+            "rationale": "Access was reviewed and signed off each quarter.",
+            "necessity": "REQUIRED",
+        },
+    )
+    assert added.status_code == 200, added.text
+    mine = next(
+        r
+        for phase in added.json()["phases"]
+        for r in phase["requirements"]
+        if r["title"] == "Quarterly access review sign-off"
+    )
+    assert mine["status"] in ("PLANNED", "AWAITING_DEPENDENCY")
+    gone = client.post(
+        f"{base}/evidence-requirements/{mine['id']}/remove",
+        json={"version": mine["version"]},
+    )
+    assert gone.status_code == 200, gone.text
+    [after] = [
+        r for phase in gone.json()["phases"] for r in phase["requirements"] if r["id"] == mine["id"]
+    ]
+    assert after["status"] == "REMOVED"
+
+
+def test_a_plan_that_misses_the_shape_check_is_judged_by_the_plan_checks(
+    migrated: Database,
+) -> None:
+    """Regression (26 October 2026): an answer with one field the generic shape check does
+    not expect threw the whole plan away for the rules'. The plan's own checks now decide:
+    a plan that keeps every rule is the agent's; one that breaks a rule is still rejected."""
+    team, _client, _scheduler = _engagement(migrated, "plan-shape")
+    control_id = UUID(_control(migrated, team, "ITGC-AC-03"))
+    org, project = UUID(str(team["org"])), UUID(str(team["project"]))
+    with connect(migrated.url) as connection:
+        facts = load_facts(connection, project, control_id)
+        loose = rules_plan(facts).model_dump(mode="json", exclude_none=True)
+        loose["commentary"] = "A field the schema does not list."
+        generate(connection, _Planner(loose), org, project, control_id, team["owner_id"])
+        status = connection.execute(
+            "SELECT status FROM model_calls WHERE prompt_version LIKE 'engagement-planner/%%' "
+            "AND project_id = %s ORDER BY created_at DESC LIMIT 1",
+            (project,),
+        ).fetchone()
+        assert status == ("MALFORMED",)
+        assert plan_body(connection, project, control_id).source == "MODEL"
+        broken = rules_plan(facts).model_dump(mode="json", exclude_none=True)
+        broken["commentary"] = "A field the schema does not list."
+        broken["understanding"]["summary"] = "You select the samples from the review list."
+        generate(connection, _Planner(broken), org, project, control_id, team["owner_id"])
+        rejected = plan_body(connection, project, control_id)
+        assert rejected.source == "FALLBACK" and "select samples" in rejected.note

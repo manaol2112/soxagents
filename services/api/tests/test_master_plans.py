@@ -599,8 +599,10 @@ def test_the_planner_never_extends_an_approved_plan(migrated: Database) -> None:
         output = rules_plan(facts).model_dump(mode="json", exclude_none=True)
         design = next(p for p in output["phases"] if p["phase"] == "DESIGN")
         extra = dict(design["requirements"][0])
+        # An item of its own (a recorded change keeps one; lean planning, 27 October 2026,
+        # merges any other new design item into the two the phase has).
         extra.update(
-            key="design-access-matrix",
+            key="design-change-9",
             title="Access approval matrix",
             description="The current matrix of who may approve access to SAP ERP.",
         )
@@ -609,7 +611,7 @@ def test_the_planner_never_extends_an_approved_plan(migrated: Database) -> None:
     proposed = _rows(
         migrated,
         "SELECT id, version, status, pending_change, pbc_request_id FROM evidence_requirements "
-        "WHERE engagement_control_id = %s AND requirement_key = 'design-access-matrix'",
+        "WHERE engagement_control_id = %s AND requirement_key = 'design-change-9'",
         UUID(control),
     )
     assert len(proposed) == 1
@@ -791,8 +793,10 @@ def test_evidence_for_an_attribute_the_control_does_not_test_is_not_planned(
 ) -> None:
     team = _launched(migrated, "master-stray")
     control = _control(team, "ITGC-AC-02")["id"]
-    mapping = "Account-to-person mapping for the system"
-    assert any(e["title"] == mapping for e in _master(team, control)["evidence"])
+    # Lean (27 October 2026): the suite's account-to-person mapping is asked for within the
+    # one item for the selected samples; what serves in its place is its own wording.
+    mapping = "The user master with the employee ID field populated"
+    assert any(mapping in e["description"] for e in _master(team, control)["evidence"])
     # A person retires the one attribute that evidence supports; the plan follows.
     with connect(migrated.url) as connection, transaction(connection) as cursor:
         cursor.execute(
@@ -808,7 +812,7 @@ def test_evidence_for_an_attribute_the_control_does_not_test_is_not_planned(
             UUID(str(team["owner_id"])),
         )  # fmt: skip
     plan = _master(team, control)
-    assert not any(e["title"] == mapping for e in plan["evidence"])
+    assert not any(mapping in e["description"] for e in plan["evidence"])
     assert "EVIDENCE_WITHOUT_ATTRIBUTE" not in {f["kind"] for f in plan["findings"]}
 
 

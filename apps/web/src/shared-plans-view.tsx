@@ -248,16 +248,6 @@ function PlansSwitch({ ids }: { ids: Ids }) {
       >
         Each plan
       </a>
-      {ids.section === "testing" ? null : (
-        <a
-          href={planningHref(ids.organizationId, ids.projectId, {
-            section: ids.section,
-            view: "phases",
-          })}
-        >
-          Phases
-        </a>
-      )}
     </nav>
   );
 }

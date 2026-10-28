@@ -27,7 +27,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal
 from uuid import UUID
@@ -191,19 +191,22 @@ def load_facts(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
 ) -> PlanFacts:
     """Everything the planner reads about one control, from the records."""
-    from ai_workforce_api.control_context import classifications_of, needs_process_understanding
+    from ai_workforce_api.control_context import (
+        applies_to,
+        classifications_of,
+        needs_process_understanding,
+    )
     from ai_workforce_api.pbc_drafting import load_context
 
     context = load_context(connection, project_id, control_id)
     row = connection.execute(
-        """
+        f"""
         SELECT c.classifications,
                (SELECT p.status FROM process_understandings p
                 WHERE p.engagement_control_id = c.id),
                ARRAY(
-                   SELECT DISTINCT d.kind FROM source_document_controls l
-                   JOIN source_documents d ON d.id = l.document_id
-                   WHERE l.engagement_control_id = c.id
+                   SELECT DISTINCT d.kind FROM source_documents d
+                   WHERE d.project_id = c.project_id AND {applies_to("c.id")}
                ),
                s.status, s.conclusion,
                (SELECT t.covered_to FROM control_tests t
@@ -274,7 +277,32 @@ def load_facts(
         basis_decided=library is not None and library[2] is not None,
         attribute_keys=keyed,
         statement=statement_fields(connection, control_id),
+        **narrative_facts(connection, control_id),
     )
+
+
+def narrative_facts(connection: psycopg.Connection[Any], control_id: UUID) -> dict[str, Any]:
+    """The approved process narrative, for the planner: its sections and its steps, each
+    step as one line with who, where, whether the control operates there, and the attributes
+    evaluated at it."""
+    from ai_workforce_api.process_understanding import approved_narrative
+
+    found = approved_narrative(connection, control_id)
+    if found is None:
+        return {}
+    steps = []
+    for index, step in enumerate(found["steps"], start=1):
+        where = ", ".join(part for part in (step["actor"], step["system"]) if part)
+        line = f"{index}. {step['description']}" + (f" ({where})" if where else "")
+        if step["control_point"]:
+            line += " [the control operates here]"
+        if step["attributes"]:
+            line += " Evaluates " + ", ".join(step["attributes"]) + "."
+        steps.append(line)
+    return {
+        "narrative": tuple((item["heading"], item["text"]) for item in found["sections"]),
+        "narrative_steps": tuple(steps),
+    }
 
 
 def statement_fields(
@@ -322,7 +350,25 @@ class Planned:
 
 
 # The planner's prompt version, recorded on every call (Milestone 3a).
-PLANNER_PROMPT_VERSION = "engagement-planner/1"
+PLANNER_PROMPT_VERSION = "engagement-planner/4"
+# Room for a whole plan: three phases, their procedures and evidence. At the provider's
+# default of 4,096 a plan built on an approved narrative was cut off and the rules stood in
+# (26 October 2026).
+PLANNER_TOKENS, PLANNER_SECONDS = 16000, 300
+# A rejected plan is sent back to the planner with what was wrong this many times.
+PLAN_CORRECTIONS = 2
+
+
+def _correction(facts: PlanFacts, previous: Any, problem: str) -> str:
+    """The planner's prompt again, with its rejected plan and why it was rejected."""
+    return (
+        f"{prompt_for(facts)}\n\n<your_previous_plan>\n"
+        f"{json.dumps(previous, ensure_ascii=False, default=str)}\n</your_previous_plan>\n\n"
+        f"That plan was rejected: {problem}. Return the whole plan again with every problem "
+        "fixed and everything else kept. Keep within every length and count limit: at most "
+        "14 evidence items, 10 procedures and 8 objectives in a phase. Sample evidence must "
+        "depend on the population evidence it is drawn from."
+    )
 
 
 def plan_for(
@@ -354,16 +400,18 @@ def plan_for(
             agent_instance_id=agent_actor(connection, project_id, "engagement-planner"),
         ),
     )
+    request = ModelRequest(
+        operation="generate",
+        prompt=prompt_for(facts),
+        output_schema=PLAN_SCHEMA,
+        allowed_tool_ids=(),
+        timeout_seconds=PLANNER_SECONDS,
+        cancelled=False,
+        system=SYSTEM_PROMPT,
+        max_tokens=PLANNER_TOKENS,
+    )
     call = caller.generate(
-        ModelRequest(
-            operation="generate",
-            prompt=prompt_for(facts),
-            output_schema=PLAN_SCHEMA,
-            allowed_tool_ids=(),
-            timeout_seconds=120,
-            cancelled=False,
-            system=SYSTEM_PROMPT,
-        ),
+        request,
         PLANNER_PROMPT_VERSION,
         {
             "control": None if control_id is None else str(control_id),
@@ -371,16 +419,36 @@ def plan_for(
         },
     )
     call_id = call.call_id
-    if call.status == "SUCCEEDED" and call.raw.output is not None:
+    # An answer that missed the generic shape check is still read: the plan's own checks
+    # (its strict schema and every planning rule) decide, and reject what breaks a rule. A
+    # rejected plan goes back to the planner with what was wrong, up to PLAN_CORRECTIONS
+    # times, before the rules stand in; every check still applies to the corrected plan
+    # (product owner, 26 October 2026: "agent should be smart enough to work on this").
+    problem = ""
+    for attempt in range(PLAN_CORRECTIONS + 1):
+        if call.status not in ("SUCCEEDED", "MALFORMED") or call.raw.output is None:
+            note = fallback_note(call.status, "the reviewed rules planned the evidence instead")
+            break
         try:
-            return Planned(check_plan(call.raw.output, facts), "MODEL", "", call_id)
+            return Planned(check_plan(call.raw.output, facts), "MODEL", "", call.call_id)
         except ValueError as error:
+            problem = str(error)
             note = (
-                f"The agent's plan was rejected ({error}). The model did not produce this "
+                f"The agent's plan was rejected ({problem}). The model did not produce this "
                 "plan; the reviewed rules planned the evidence instead."
             )
-    else:
-        note = fallback_note(call.status, "the reviewed rules planned the evidence instead")
+        if attempt == PLAN_CORRECTIONS:
+            break
+        call = caller.generate(
+            replace(request, prompt=_correction(facts, call.raw.output, problem)),
+            PLANNER_PROMPT_VERSION,
+            {
+                "control": None if control_id is None else str(control_id),
+                "control_ref": facts.control_ref,
+                "correction": attempt + 1,
+            },
+        )
+        call_id = call.call_id
     # The rules' plan stands in for the model's: FALLBACK, with the failed call linked.
     return Planned(rules, "FALLBACK", note[:500], call_id)
 
@@ -700,6 +768,7 @@ def _criteria_differ(cursor: psycopg.Cursor[Any], plan_id: UUID, proposed: dict[
               ON p.engagement_control_id = a.engagement_control_id
             WHERE p.id = %s AND a.status = 'APPROVED' AND a.definition_key IS NULL
               AND a.criteria_origin IS DISTINCT FROM 'PERSON'
+              AND a.criteria_accepted_at IS NULL
             """,
             (plan_id,),
         ).fetchall()
@@ -872,7 +941,7 @@ def _write_criteria(
     cursor: psycopg.Cursor[Any], control_id: UUID, criteria: list[dict[str, Any]]
 ) -> None:
     """The planner's criteria, only for an attribute the library does not define and no
-    person has stated criteria for. Marked as the agent's."""
+    person has stated or accepted criteria for (migration 0122). Marked as the agent's."""
     for item in criteria:
         cursor.execute(
             """
@@ -883,6 +952,7 @@ def _write_criteria(
             WHERE engagement_control_id = %s AND status = 'APPROVED'
               AND definition_key IS NULL
               AND criteria_origin IS DISTINCT FROM 'PERSON'
+              AND criteria_accepted_at IS NULL
               AND lower(regexp_replace(btrim(text), '\\s+', ' ', 'g')) = %s
               AND (condition, pass_criteria, fail_criteria, judgment_required, automatable)
                   IS DISTINCT FROM (%s, %s, %s, %s, %s)
@@ -1208,6 +1278,13 @@ def _merge_requirements(
             ):
                 material = True
             locked = status == "REQUESTED" and request_status not in ("DRAFT", "CANCELLED")
+            if status == "REMOVED" and cursor.execute(
+                "SELECT removed_by IS NOT NULL FROM evidence_requirements WHERE id = %s",
+                (requirement_id,),
+            ).fetchone() == (True,):
+                # A person removed it: no run brings it back or proposes it again (product
+                # owner, 26 October 2026). A person restores it.
+                continue
             if status == "REMOVED" and approved:
                 # Planned again on a plan a person approved: proposed to them.
                 cursor.execute(
@@ -1245,7 +1322,7 @@ def _merge_requirements(
                     attributes = %s, risk = %s, rationale = %s, necessity = %s,
                     period_label = %s, period_start = %s, period_end = %s, as_of = %s,
                     population_kind = %s, sample_selection = %s, depends_on = %s,
-                    status = CASE WHEN status = 'REMOVED'
+                    status = CASE WHEN status = 'REMOVED' AND removed_by IS NULL
                                   THEN CASE WHEN %s::text IS NULL THEN 'PLANNED'
                                             ELSE 'AWAITING_DEPENDENCY' END
                                   ELSE status END,
@@ -1919,7 +1996,38 @@ def plan_and_issue(
 # The planner agent's run on a launched control (migration 0077)
 
 PLAN_RUN_ATTEMPTS = 3
-PLAN_LEASE_MINUTES = 5
+# Long enough for the planner and its corrections (three calls of up to 300 s each).
+PLAN_LEASE_MINUTES = 20
+
+
+def replan_for_new_attributes(connection: psycopg.Connection[Any], control_id: UUID) -> UUID | None:
+    """An attribute approved after the plan was made has no evidence: approving it sent
+    the plan back for approval (revise_evidence_plan), and the planner agent now plans it
+    again in the background, so the attribute has its evidence and criteria before a person
+    reviews the plan (product owner, 27 October 2026). Not asked twice while a run waits.
+    Returns the plan to run."""
+    with transaction(connection) as cursor:
+        row = cursor.execute(
+            """
+            UPDATE evidence_plans p
+            SET run_status = 'PENDING', run_attempts = 0, run_lease_until = NULL,
+                run_note = ''
+            WHERE p.engagement_control_id = %s AND p.status = 'PROPOSED'
+              AND p.run_status NOT IN ('PENDING', 'WORKING')
+              AND EXISTS (
+                  SELECT 1 FROM control_attributes a
+                  WHERE a.engagement_control_id = p.engagement_control_id
+                    AND a.status = 'APPROVED'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM evidence_requirement_attributes ra
+                        JOIN evidence_requirements q ON q.id = ra.requirement_id
+                        WHERE ra.attribute_id = a.id AND q.plan_id = p.id
+                          AND q.status <> 'REMOVED'))
+            RETURNING p.id
+            """,
+            (control_id,),
+        ).fetchone()
+    return None if row is None else UUID(str(row[0]))
 
 
 def open_plan_runs(
@@ -3007,7 +3115,7 @@ class VersionBody(BaseModel):
 
 class EditBody(BaseModel):
     title: str = Field(min_length=3, max_length=200)
-    description: str = Field(min_length=10, max_length=1500)
+    description: str = Field(min_length=10, max_length=3000)
     version: int = Field(ge=1)
 
 
@@ -3505,6 +3613,7 @@ def _ensure_requirements(
                     %s, %s, %s, 'RULES')
             ON CONFLICT (engagement_control_id, phase, requirement_key) DO UPDATE
             SET status = CASE WHEN evidence_requirements.status = 'REMOVED'
+                                   AND evidence_requirements.removed_by IS NULL
                               THEN EXCLUDED.status ELSE evidence_requirements.status END
             RETURNING id
             """,
@@ -3892,14 +4001,19 @@ def restore(
         row = _requirement_row(cursor, project_id, control_id, requirement_id)
         if int(row[2]) != body.version:
             raise PlanState("the requirement changed")
-        if row[1] != "WAIVED":
-            raise PlanState("the requirement is not waived")
+        removed = row[1] == "REMOVED" and cursor.execute(
+            "SELECT removed_by IS NOT NULL FROM evidence_requirements WHERE id = %s",
+            (requirement_id,),
+        ).fetchone() == (True,)
+        if row[1] != "WAIVED" and not removed:
+            raise PlanState("the requirement is not waived or removed")
         linked = row[3] is not None and row[4] != "CANCELLED"
         cursor.execute(
             """
             UPDATE evidence_requirements
             SET status = %s, pbc_request_id = CASE WHEN %s THEN pbc_request_id END,
-                waive_reason = '', waived_by = NULL, waived_at = NULL, version = version + 1
+                waive_reason = '', waived_by = NULL, waived_at = NULL,
+                removed_by = NULL, removed_at = NULL, version = version + 1
             WHERE id = %s
             """,
             (
@@ -3916,6 +4030,57 @@ def restore(
         )  # fmt: skip
         issued = issue(cursor, organization_id, project_id, control_id, actor, "evidence_plan")
         return queue_drafts(cursor, organization_id, project_id, actor, control_id, issued.drafts)
+
+
+def remove(
+    connection: psycopg.Connection[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    requirement_id: UUID,
+    actor: UUID,
+    body: VersionBody,
+) -> None:
+    """A person takes evidence off the plan (decided by the product owner on 26 October
+    2026). Only evidence not yet requested: what the client was already asked for is waived
+    instead, with why. The item is kept, marked removed by whom, so the trail stays and it
+    can be restored; no later run brings it back. A plan already approved goes back for
+    approval, as with any change to it."""
+    with transaction(connection) as cursor:
+        row = _requirement_row(cursor, project_id, control_id, requirement_id)
+        if int(row[2]) != body.version:
+            raise PlanState("the requirement changed")
+        if row[1] not in ("PLANNED", "AWAITING_DEPENDENCY"):
+            raise PlanState(
+                "it has already been requested from the client; waive it instead"
+                if row[1] == "REQUESTED"
+                else "the requirement is not open"
+            )
+        key = cursor.execute(
+            "SELECT requirement_key FROM evidence_requirements WHERE id = %s",
+            (requirement_id,),
+        ).fetchone()
+        waiting = cursor.execute(
+            "SELECT code FROM evidence_requirements WHERE plan_id = %s AND depends_on = %s "
+            "AND status NOT IN ('REMOVED', 'WAIVED') LIMIT 1",
+            (row[7], None if key is None else key[0]),
+        ).fetchone()
+        if waiting is not None:
+            raise PlanState(f"{waiting[0]} depends on it; remove that first")
+        cursor.execute(
+            """
+            UPDATE evidence_requirements
+            SET status = 'REMOVED', removed_by = %s, removed_at = clock_timestamp(),
+                pending_change = NULL, version = version + 1
+            WHERE id = %s
+            """,
+            (actor, requirement_id),
+        )
+        _revise(cursor, UUID(str(row[7])))
+        _audit(
+            cursor, organization_id, project_id, actor, "evidence_requirement.removed",
+            "evidence_requirement", requirement_id, {},
+        )  # fmt: skip
 
 
 def edit(
@@ -3988,6 +4153,7 @@ def decide_change(
                                   THEN CASE WHEN depends_on IS NULL THEN 'PLANNED'
                                             ELSE 'AWAITING_DEPENDENCY' END
                                   ELSE status END,
+                    removed_by = NULL, removed_at = NULL,
                     version = version + 1
                 WHERE id = %s
                 RETURNING attributes, origin
@@ -4438,6 +4604,18 @@ def register_evidence_plans(
         def work(c: psycopg.Connection[Any], p: Principal) -> EvidencePlanBody:
             allowed(c, p, organization_id, project_id, control_id)
             drafted(restore(c, organization_id, project_id, control_id, requirement_id, p.id, body))
+            return plan_body(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{requirement}/remove")
+    def remove_requirement(
+        organization_id: UUID, project_id: UUID, control_id: UUID, requirement_id: UUID,
+        body: VersionBody, request: Request,
+    ) -> EvidencePlanBody:  # fmt: skip
+        def work(c: psycopg.Connection[Any], p: Principal) -> EvidencePlanBody:
+            allowed(c, p, organization_id, project_id, control_id)
+            remove(c, organization_id, project_id, control_id, requirement_id, p.id, body)
             return plan_body(c, project_id, control_id)
 
         return run(request, work)

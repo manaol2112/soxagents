@@ -28,6 +28,7 @@ from ai_workforce_api.clients import register_clients
 from ai_workforce_api.console import ConsoleScheduler, console_runner, register_console
 from ai_workforce_api.consolidation import register_consolidation
 from ai_workforce_api.context_routes import register_control_context
+from ai_workforce_api.control_challenges import register_control_challenges
 from ai_workforce_api.control_reviews import register_control_reviews, review_runner
 from ai_workforce_api.control_tests import register_control_tests
 from ai_workforce_api.db import connect
@@ -56,6 +57,7 @@ from ai_workforce_api.execution import register_execution
 from ai_workforce_api.exports import register_exports
 from ai_workforce_api.followups import FollowUpTimer, register_followups
 from ai_workforce_api.google import build_google_provider
+from ai_workforce_api.governing_documents import register_governing_documents
 from ai_workforce_api.handoffs import register_handoffs
 from ai_workforce_api.identity import IdentityProvider
 from ai_workforce_api.inbound import register_inbound
@@ -80,17 +82,21 @@ from ai_workforce_api.pbc_drafting import (
 from ai_workforce_api.phase_release import register_phase_release
 from ai_workforce_api.plan_impact import register_plan_impact
 from ai_workforce_api.policy import register_policy
+from ai_workforce_api.prior_year_routes import register_prior_year
 from ai_workforce_api.projects import register_projects
 from ai_workforce_api.provenance import register_provenance
 from ai_workforce_api.queue import register_queue
 from ai_workforce_api.rcm_systems import SystemScanScheduler, scan_runner
 from ai_workforce_api.rcm_uploads import register_rcm_uploads
 from ai_workforce_api.request_details import register_request_details
+from ai_workforce_api.scope_setup import register_scope_setup
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.setup_drafting import draft_runner as setup_runner
 from ai_workforce_api.setup_drafting import register_setup_drafting
+from ai_workforce_api.standard_adoption import register_standard_adoption
 from ai_workforce_api.system_scoping import register_system_scoping
 from ai_workforce_api.system_scoping import review_runner as scoping_runner
+from ai_workforce_api.system_setup import register_system_setup
 from ai_workforce_api.system_suggestions import register_system_suggestions
 from ai_workforce_api.tasks import register_tasks
 from ai_workforce_api.test_rounds import register_test_rounds
@@ -210,7 +216,13 @@ def create_app(
     register_library_matching(app, resolved)
     register_setup_drafting(app, resolved, drafts)
     register_system_scoping(app, resolved, drafts)
+    register_system_setup(app, resolved)
+    register_scope_setup(app, resolved, drafts)
     register_system_suggestions(app, resolved)
+    register_control_challenges(app, resolved)
+    register_governing_documents(app, resolved)
+    register_standard_adoption(app, resolved)
+    register_prior_year(app, resolved, drafts)
     register_workpaper_templates(app, resolved)
     register_test_rounds(app, resolved)
     register_console(
@@ -279,6 +291,8 @@ def _lifespan(
             return
         from ai_workforce_api.durable import serve
         from ai_workforce_api.evidence_plans import plan_runner
+        from ai_workforce_api.prior_year import prior_year_runner
+        from ai_workforce_api.process_narrative import narrative_runner
 
         async with serve(
             settings.workflow_address,
@@ -293,6 +307,8 @@ def _lifespan(
             review_runner(settings),
             scoping_runner(settings),
             plan_runner(settings),
+            prior_year_runner(settings),
+            narrative_runner(settings),
         ):
             yield
 

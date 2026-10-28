@@ -1,0 +1,2210 @@
+/* ==========================================================================
+   A control's Plan step (decided by the product owner on 26 October 2026, from the
+   control workspace reference): each step's state under the steps, the Plan review with
+   its figures, the control understanding, the client-specific information as a table,
+   and the assistant's findings, next actions, context and governing documents.
+   ========================================================================== */
+
+/* Each step's state, under its name. */
+.cw-step-state {
+  display: inline-block;
+  width: fit-content;
+  margin-top: 0.35rem;
+  padding: 0.1rem 0.5rem;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--neutral-soft);
+  border: 1px solid var(--neutral-border);
+  border-radius: 999px;
+}
+
+.cw-step-state.is-current,
+.cw-step-state.is-working {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.cw-step-state.is-done {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: var(--success-border);
+}
+
+/* The Plan review: what the agent prepared, the decision, and the plan in figures. */
+.pr-head .pl-title-row {
+  align-items: center;
+}
+
+.pr-head .pl-embedded-title {
+  font-size: var(--fs-xl);
+}
+
+.pr-lead {
+  max-width: 62ch;
+  margin: 0.35rem 0 0;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.pr-meta {
+  margin: 0.3rem 0 0;
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+}
+
+.pr-box {
+  margin: 0.9rem 0 0.25rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+
+.pr-figures {
+  display: grid;
+  grid-template-columns: repeat(var(--pr-count, 5), minmax(0, 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pr-figures > li {
+  display: flex;
+  min-width: 0;
+}
+
+.pr-figures > li + li {
+  border-left: 1px solid var(--border-subtle);
+}
+
+.pr-figures button,
+.pr-confidence {
+  display: flex;
+  flex: 1;
+  gap: 0.7rem;
+  align-items: flex-start;
+  width: 100%;
+  height: auto;
+  min-width: 0;
+  padding: 0.85rem 0.9rem;
+  font: inherit;
+  font-weight: inherit;
+  line-height: normal;
+  text-align: left;
+  color: var(--text);
+  white-space: normal;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.pr-figures button:hover {
+  background: var(--surface);
+}
+
+.pr-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+}
+
+.pr-icon.is-orange {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.pr-icon.is-purple {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.pr-icon.is-green,
+.pr-icon.is-teal {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.pr-icon.is-blue {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.pr-text {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.pr-text strong {
+  font-size: var(--fs-xl);
+  line-height: 1.2;
+  color: var(--text-strong);
+}
+
+.pr-text > span {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.pr-text small {
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+}
+
+.pr-text small.is-attention {
+  font-weight: 600;
+  color: var(--warning);
+}
+
+.pr-info {
+  display: inline-flex;
+  vertical-align: -1px;
+  color: var(--text-tertiary);
+}
+
+.pr-meter {
+  display: block;
+  width: 100%;
+  max-width: 88px;
+  height: 5px;
+  margin-top: 0.35rem;
+  overflow: hidden;
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.pr-meter > span {
+  display: block;
+  height: 100%;
+  background: var(--success);
+  border-radius: inherit;
+}
+
+.pr-meter.is-moderate > span {
+  background: var(--warning);
+}
+
+.pr-meter.is-low > span,
+.pr-meter.is-not_established > span {
+  background: var(--danger);
+}
+
+/* The control understanding. */
+.pu-card {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.85rem 1rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+}
+
+.pu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pu-head h3 {
+  margin: 0;
+  font-size: var(--fs-lg);
+  color: var(--text-strong);
+}
+
+.pu-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.pu-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: start;
+  padding: 0.7rem 0.8rem;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+
+.pu-item h4 {
+  margin: 0 0 0.2rem;
+  font-size: var(--fs-sm);
+  color: var(--text-strong);
+}
+
+.pu-item .pl-lead-facts {
+  margin: 0;
+}
+
+.pu-item .pl-lead-facts > div {
+  padding: 0;
+  background: none;
+  border: 0;
+}
+
+.pu-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+
+.pu-icon.is-blue {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.pu-icon.is-red {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.pu-icon.is-indigo {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.pu-elements {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding-left: 1.05rem;
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.pu-more {
+  color: var(--text-secondary);
+  list-style: none;
+}
+
+.pu-none {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.pu-rest {
+  margin: 0;
+}
+
+/* The client-specific information, as a table. */
+.cc-values-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.cc-values-head .form-hint {
+  margin: 0.15rem 0 0;
+}
+
+.cc-values-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-radius: 10px;
+}
+
+.cc-q-scroll {
+  /* Holds its positioned descendants (the hidden column label) inside the scroll. */
+  position: relative;
+  margin-top: 0.75rem;
+  overflow-x: auto;
+}
+
+.cc-q-table {
+  width: 100%;
+  min-width: 860px;
+  font-size: var(--fs-sm);
+  border-collapse: collapse;
+}
+
+.cc-q-table th,
+.cc-q-table td {
+  padding: 0.65rem 0.5rem;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.cc-q-table thead th {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.cc-q-table .cc-q-num {
+  width: 1.5rem;
+  color: var(--text-secondary);
+}
+
+.cc-q-table .cc-q-text {
+  min-width: 220px;
+}
+
+.cc-q-suggest {
+  min-width: 150px;
+}
+
+.cc-q-suggest strong {
+  display: block;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.cc-q-suggest small {
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
+  margin-top: 0.15rem;
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+.cc-q-none {
+  color: var(--text-tertiary);
+}
+
+.cc-q-answer {
+  min-width: 190px;
+}
+
+.cc-q-by {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+.cc-q-actions {
+  white-space: nowrap;
+}
+
+.cc-q-actions > * {
+  vertical-align: middle;
+}
+
+.cc-q-actions > button {
+  margin-right: 0.35rem;
+}
+
+.cc-q-need.is-pending {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+}
+
+/* The assistant's findings, its suggested next actions, and the question to ask. */
+.cw-assist-found {
+  padding: 0.35rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+
+.cw-assist-found > li > button {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+
+.cw-assist-found > li > button > svg {
+  color: var(--text-tertiary);
+  transition: transform 150ms ease;
+}
+
+.cw-assist-found > li.is-open > button > svg {
+  transform: rotate(90deg);
+}
+
+.cw-assist-next h3,
+.cw-assist-ask h3 {
+  margin: 0 0 0.45rem;
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  color: var(--text-strong);
+}
+
+.cw-assist-next ul {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cw-assist-next button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  align-items: center;
+  width: 100%;
+  height: auto;
+  padding: 0.5rem 0.55rem;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: normal;
+  color: var(--text);
+  text-align: left;
+  white-space: normal;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.cw-assist-next button > svg:first-child {
+  color: var(--text-secondary);
+}
+
+.cw-assist-next button:hover {
+  background: var(--surface-muted);
+}
+
+.cw-assist-next button.is-first {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.cw-assist-next button.is-first > svg {
+  color: var(--accent-text);
+}
+
+.cw-card-head {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cw-card-head h2 span {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.cw-card-head > a:not(.btn-secondary) {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--accent-text);
+  text-decoration: none;
+}
+
+.cw-docs-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cw-docs-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.6rem;
+  align-items: center;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+
+.cw-docs-list li > span:last-child {
+  display: grid;
+  min-width: 0;
+}
+
+.cw-docs-list strong {
+  overflow: hidden;
+  font-size: var(--fs-sm);
+  color: var(--text-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cw-docs-list small {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+/* A document the agent has not reviewed the control against yet. */
+.cw-docs-new {
+  justify-self: start;
+  margin-top: 0.2rem;
+  padding: 0.05rem 0.45rem;
+  font-size: var(--fs-2xs);
+  font-style: normal;
+  font-weight: 600;
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-radius: 6px;
+}
+
+.cw-docs-sub {
+  margin: 0.2rem 0 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.cw-docs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.cw-docs-actions > button {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.cw-docs-actions > .cc-note,
+.cw-docs-actions > .form-error {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.cw-yes {
+  display: inline-block;
+  padding: 0.05rem 0.55rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--success);
+  background: var(--success-soft);
+  border: 1px solid var(--success-border);
+  border-radius: 6px;
+}
+
+@media (max-width: 1100px) {
+  .pr-figures {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .pr-figures > li:nth-child(4) {
+    border-left: 0;
+  }
+
+  .pr-figures > li:nth-child(n + 4) {
+    border-top: 1px solid var(--border-subtle);
+  }
+
+}
+
+@media (max-width: 560px) {
+  .cw-step-state {
+    padding: 0.05rem 0.35rem;
+    font-size: 10px;
+    white-space: nowrap;
+  }
+
+  .pr-figures {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pr-figures > li:nth-child(n) {
+    border-left: 0;
+  }
+
+  .pr-figures > li:nth-child(even) {
+    border-left: 1px solid var(--border-subtle);
+  }
+
+  .pr-figures > li:nth-child(n + 3) {
+    border-top: 1px solid var(--border-subtle);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cw-assist-found > li > button > svg {
+    transition: none;
+  }
+}
+
+/* Beside the app's menu the plan is narrower than the reference: the figures drop their
+   icons, and the understanding puts the design elements under the objective and risk. */
+.pr-box,
+.pu-card {
+  container-type: inline-size;
+}
+
+@container (max-width: 860px) {
+  .pr-icon {
+    display: none;
+  }
+
+  .pr-figures button,
+  .pr-confidence {
+    padding: 0.8rem 0.85rem;
+  }
+}
+
+.pu-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.pu-item.is-wide {
+  grid-column: 1 / -1;
+}
+
+.pu-item.is-wide .pu-elements {
+  column-gap: 1.75rem;
+  columns: 2;
+}
+
+.pu-item.is-wide .pu-elements li {
+  margin-bottom: 0.2rem;
+  break-inside: avoid;
+}
+
+/* Wide enough: the short objective and risk stacked on the left, the design elements
+   beside them, so no card stands mostly empty. */
+@container (min-width: 760px) {
+  .pu-grid {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  }
+
+  .pu-item:not(.is-wide) {
+    grid-column: 1;
+  }
+
+  .pu-item.is-wide {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .pu-item.is-wide .pu-elements {
+    columns: 1;
+  }
+}
+
+@container (max-width: 560px) {
+  .pu-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pu-item.is-wide .pu-elements {
+    columns: 1;
+  }
+}
+
+.pu-item .pl-lead-facts dt {
+  margin: 0 0 0.15rem;
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  color: var(--text-strong);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.pu-item .pl-lead-facts dd {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.cw-assist-found .cw-assist-label {
+  white-space: normal;
+}
+
+.cc-q-table {
+  min-width: 600px;
+}
+
+.cc-q-table th,
+.cc-q-table td {
+  padding: 0.6rem 0.4rem;
+}
+
+.cc-q-table .cc-q-text {
+  min-width: 160px;
+}
+
+.cc-q-suggest {
+  min-width: 110px;
+}
+
+.cc-q-answer {
+  min-width: 150px;
+}
+
+.cc-q-status {
+  white-space: nowrap;
+}
+
+.cc-q-status .cc-q-by {
+  display: block;
+  max-width: 120px;
+  margin-top: 0.25rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cc-q-use {
+  display: block;
+  height: auto;
+  margin-top: 0.3rem;
+  padding: 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: normal;
+  color: var(--accent-text);
+  background: none;
+  border: 0;
+  box-shadow: none;
+}
+
+/* One card: the review's header above, its figures and how the agent drafted it below. */
+.pr-head {
+  padding-bottom: 0.85rem;
+  border-bottom: 0;
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.pr-box {
+  margin: 0;
+  padding: 0 1.35rem 1.15rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.pr-figures {
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px 12px 0 0;
+}
+
+.pr-box > .pr-figures:last-child {
+  border-radius: 12px;
+}
+
+.pu-rest dt {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+.pu-rest dd {
+  margin: 0.2rem 0 0;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.cw-card-head .btn-secondary {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  height: 28px;
+  padding: 0 0.6rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+/* The step's state beside its name. */
+.cw-step-name {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  align-items: center;
+}
+
+.cw-step-name .cw-step-state {
+  margin-top: 0;
+}
+
+/* Procedure readiness among the figures. */
+.pr-ready {
+  color: var(--success);
+}
+
+.pr-review {
+  color: var(--warning);
+}
+
+/* The procedures, as one table (control-plan: the Procedures tab). */
+.pp-card {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.pp-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.pp-head h3 {
+  margin: 0;
+  font-size: var(--fs-lg);
+  color: var(--text-strong);
+}
+
+.pp-head h3 span {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.pp-head p {
+  margin: 0.2rem 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.pp-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.pp-guidance {
+  padding: 0.75rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+
+.pp-scroll {
+  /* Holds its positioned descendants (the hidden label, the menus) inside the scroll. */
+  position: relative;
+  overflow-x: auto;
+}
+
+.pp-table {
+  width: 100%;
+  min-width: 720px;
+  font-size: var(--fs-sm);
+  border-collapse: collapse;
+}
+
+.pp-table th,
+.pp-table td {
+  padding: 0.6rem 0.4rem;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.pp-table thead th {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  background: var(--surface-muted);
+}
+
+.pp-num {
+  width: 1.5rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.pp-text {
+  min-width: 200px;
+}
+
+.pp-text strong {
+  display: block;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.pp-text small {
+  display: -webkit-box;
+  margin-top: 0.15rem;
+  overflow: hidden;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--text-secondary);
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.pp-row.is-open > td {
+  background: var(--accent-soft);
+}
+
+.pp-row.is-selected > td,
+.pp-row.is-related > td {
+  background: var(--ai-soft);
+}
+
+.pp-pill {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+}
+
+.pp-pill.is-inspection,
+.pp-pill.is-observation {
+  color: var(--ai);
+  background: var(--ai-soft);
+  border-color: var(--ai-border);
+}
+
+.pp-pill.is-reperformance,
+.pp-pill.is-recalculation {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: var(--success-border);
+}
+
+.pp-pill.is-phase {
+  color: var(--text);
+  background: var(--neutral-soft);
+  border-color: var(--neutral-border);
+}
+
+.pp-count {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  width: auto;
+  height: auto;
+  padding: 0;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: normal;
+  color: var(--text);
+  background: none;
+  border: 0;
+  box-shadow: none;
+}
+
+.pp-count svg {
+  color: var(--text-tertiary);
+}
+
+button.pp-count:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.pp-source {
+  max-width: 120px;
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+.pp-status {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  padding: 0.12rem 0.5rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  border-radius: 6px;
+}
+
+.pp-status::before {
+  width: 6px;
+  height: 6px;
+  content: "";
+  background: currentcolor;
+  border-radius: 999px;
+}
+
+.pp-status.is-ready {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.pp-status.is-review {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.pp-actions {
+  white-space: nowrap;
+}
+
+.pp-actions > * {
+  vertical-align: middle;
+}
+
+.pp-actions > button {
+  margin-right: 0.3rem;
+}
+
+.pp-menu {
+  position: relative;
+  display: inline-block;
+}
+
+.pp-menu-button {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+.pp-menu-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  min-width: 170px;
+  padding: 0.3rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md, var(--shadow-sm));
+}
+
+.pp-menu-panel button {
+  justify-content: flex-start;
+  width: 100%;
+  height: auto;
+  padding: 0.45rem 0.6rem;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+.pp-menu-panel button:hover,
+.pp-menu-panel button:focus-visible {
+  background: var(--surface-muted);
+}
+
+.pp-detail > td {
+  padding-top: 0;
+  background: var(--accent-soft);
+}
+
+.pp-detail-body {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.25rem 0 0.5rem;
+}
+
+.pp-detail-body p {
+  margin: 0;
+}
+
+.pp-foot {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+}
+
+.pp-foot p {
+  margin: 0;
+}
+
+/* The assistant's procedure actions. */
+.cw-assist-actions > li > button {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+/* The procedures table fits beside the menu and the assistant: titles and details
+   in two lines each, the rest narrow. */
+.pp-table {
+  min-width: 640px;
+}
+
+.pp-text {
+  min-width: 150px;
+}
+
+.pp-text strong {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.pp-row.is-open .pp-text strong,
+.pp-row.is-open .pp-text small {
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+.pp-source {
+  max-width: 88px;
+}
+
+.pp-table .pp-actions .btn-sm {
+  padding: 0 0.55rem;
+}
+
+.pp-table th,
+.pp-table td {
+  padding-right: 0.3rem;
+  padding-left: 0.3rem;
+}
+
+.pp-text {
+  min-width: 140px;
+}
+
+.pp-source {
+  max-width: 80px;
+}
+
+/* The attributes table (control-plan: the Attributes tab). */
+.pa-table .pa-statement {
+  min-width: 140px;
+}
+
+.pa-table .pa-expected {
+  min-width: 140px;
+}
+
+.pa-table .pa-expected small {
+  font-size: var(--fs-xs);
+  color: var(--text);
+}
+
+.pa-codes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  max-width: 120px;
+}
+
+.pa-code {
+  display: inline-grid;
+  place-items: center;
+  min-width: 28px;
+  height: 22px;
+  padding: 0 0.35rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  line-height: normal;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 5px;
+  box-shadow: none;
+}
+
+.pa-code:hover {
+  border-color: var(--accent);
+}
+
+.pa-more {
+  align-self: center;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.pp-status.is-idle {
+  color: var(--neutral);
+  background: var(--neutral-soft);
+}
+
+.pa-editor {
+  margin-top: 0.25rem;
+}
+
+/* Nothing inside the table's card widens the column: the editor below scrolls in place. */
+.pp-card > * {
+  min-width: 0;
+}
+
+.pa-editor {
+  overflow-x: auto;
+}
+
+.pa-table thead th {
+  white-space: normal;
+}
+
+.pa-table .pa-statement,
+.pa-table .pa-expected {
+  min-width: 120px;
+}
+
+.pa-codes {
+  max-width: 98px;
+}
+
+.pa-code {
+  min-width: 26px;
+  padding: 0 0.25rem;
+}
+
+/* Two codes to a line, the rest counted. */
+.pa-codes {
+  min-width: 56px;
+  max-width: 60px;
+}
+
+.pa-table .pa-statement,
+.pa-table .pa-expected {
+  min-width: 108px;
+}
+
+/* The control's attribute editor takes the column's width, never its content's. */
+.pa-editor .cc-attributes {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.pa-editor .cc-attributes > *,
+.pa-editor .cc-list {
+  min-width: 0;
+}
+
+.pa-editor .cc-issues {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.pa-editor .cc-issues > *,
+.pa-editor .cc-issues li {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+/* The open questions' list and each question are one column, as wide as the editor. */
+.pa-editor .cc-issues ul,
+.pa-editor .cc-issues ol,
+.pa-editor .cc-issue {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.pa-editor .cc-issue > * {
+  min-width: 0;
+}
+
+/* The evidence table (control-plan: the Evidence tab). */
+.pe-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* A person's own evidence item or attribute, and the line that undoes or confirms a
+   removal. */
+.pe-add,
+.pa-add {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+
+.pe-add label,
+.pa-add label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.pa-confirm {
+  display: inline-flex;
+  gap: 0.4rem;
+}
+
+/* Accepting the planner agent's criteria as they read (0122): the confirmation, the
+   confirmed result, and who accepted them under the criteria's source. */
+.pa-accept p {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.pa-accept.is-notice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 0.85rem;
+  background: var(--ai-soft);
+  border: 1px solid var(--ai-border);
+  border-radius: 10px;
+}
+
+.pa-accept.is-notice p {
+  display: flex;
+  flex: 1 1 260px;
+  gap: 0.4rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.pa-accept.is-notice p > svg {
+  flex: none;
+  color: var(--ai);
+}
+
+.pa-accepted {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  color: var(--success);
+}
+
+.pl-accepted {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  margin-top: 0.2rem;
+  font-size: var(--fs-xs);
+  color: var(--success);
+}
+
+.pe-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.pe-add-row select {
+  width: auto;
+}
+
+.pe-add label.pe-add-check {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding-bottom: 0.4rem;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.pe-removed {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border-radius: 8px;
+}
+
+.pe-filters select {
+  width: auto;
+  min-width: 9rem;
+  height: 32px;
+  font-size: var(--fs-sm);
+}
+
+.pe-search {
+  display: flex;
+  flex: 1 1 180px;
+  gap: 0.4rem;
+  align-items: center;
+  height: 32px;
+  padding: 0 0.6rem;
+  color: var(--text-tertiary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.pe-search input {
+  flex: 1;
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: none;
+  border: 0;
+  outline: none;
+  box-shadow: none;
+}
+
+.pe-search:focus-within {
+  border-color: var(--accent);
+}
+
+.pe-table .pe-code {
+  width: 2.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.pe-table .pe-title {
+  min-width: 170px;
+}
+
+.pe-open {
+  display: block;
+  width: auto;
+  height: auto;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-strong);
+  text-align: left;
+  white-space: normal;
+  background: none;
+  border: 0;
+  box-shadow: none;
+}
+
+.pe-open:hover {
+  color: var(--accent-text);
+}
+
+.pe-table .pe-type {
+  max-width: 110px;
+  font-size: var(--fs-xs);
+}
+
+.pp-status.is-info {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+/* Where the evidence requests stand, beside the Evidence tab. */
+.cw-evsum-total {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.cw-evsum-total strong {
+  font-size: var(--fs-display);
+  color: var(--text-strong);
+}
+
+.cw-evsum ul {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cw-evsum li {
+  display: grid;
+  grid-template-columns: 1.6rem auto minmax(0, 1fr) 40%;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.cw-evsum-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+}
+
+.cw-evsum-bar {
+  height: 7px;
+  overflow: hidden;
+  background: var(--surface-muted);
+  border-radius: 999px;
+}
+
+.cw-evsum-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.cw-evsum .is-blue {
+  background: var(--accent);
+}
+
+.cw-evsum .is-orange {
+  background: var(--warning);
+}
+
+.cw-evsum .is-green {
+  background: var(--success);
+}
+
+.cw-evsum .is-grey {
+  background: var(--neutral-border);
+}
+
+.pp-head-actions a.btn-secondary {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+  height: 32px;
+  padding: 0 0.8rem;
+  font-size: var(--fs-base);
+  font-weight: 550;
+  color: var(--text);
+  text-decoration: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.pp-head-actions a.btn-secondary:hover {
+  border-color: var(--accent-border);
+}
+
+.pe-table .pe-title {
+  min-width: 150px;
+}
+
+.pr-ready.is-none {
+  color: var(--text-strong);
+}
+
+/* The control's history (control-plan: the History tab). */
+.ph-card {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.ph-filter select {
+  width: auto;
+  min-width: 11rem;
+  height: 32px;
+  font-size: var(--fs-sm);
+}
+
+.ph-day h4 {
+  margin: 0.25rem 0 0.35rem;
+  font-size: var(--fs-sm);
+  color: var(--text-strong);
+}
+
+.ph-day ol {
+  position: relative;
+  display: grid;
+  margin: 0;
+  padding: 0 0 0 0.5rem;
+  list-style: none;
+}
+
+/* The line the day's events hang from. */
+.ph-day ol::before {
+  position: absolute;
+  top: 0.75rem;
+  bottom: 0.75rem;
+  left: calc(0.5rem + 17px);
+  width: 2px;
+  content: "";
+  background: var(--border);
+}
+
+.ph-day li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.ph-icon {
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-radius: 10px;
+}
+
+.ph-icon.is-agent {
+  background: var(--ai);
+}
+
+.ph-icon.is-findings,
+.ph-icon.is-error {
+  background: var(--danger);
+}
+
+.ph-icon.is-approval,
+.ph-icon.is-testing {
+  background: var(--success);
+}
+
+.ph-icon.is-workflow {
+  color: var(--text);
+  background: var(--neutral-soft);
+  border: 1px solid var(--neutral-border);
+}
+
+.ph-text {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.ph-text p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.6rem;
+  align-items: center;
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-strong);
+}
+
+.ph-text small {
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.ph-who {
+  display: inline-block;
+  padding: 0.05rem 0.5rem;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--neutral-soft);
+  border: 1px solid var(--neutral-border);
+  border-radius: 999px;
+}
+
+.ph-who.is-agent {
+  color: var(--ai);
+  background: var(--ai-soft);
+  border-color: var(--ai-border);
+}
+
+.ph-who.is-person {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.ph-day time {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.ph-note {
+  margin: 0;
+  font-size: var(--fs-2xs);
+  color: var(--text-tertiary);
+}
+
+.ph-decisions {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.ph-decisions h3 {
+  margin: 0;
+  font-size: var(--fs-md);
+  color: var(--text-strong);
+}
+
+/* The plan's versions beside the History tab. */
+.cw-versions ol {
+  position: relative;
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cw-versions li {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.cw-versions-dot {
+  width: 10px;
+  height: 10px;
+  background: var(--neutral-border);
+  border-radius: 999px;
+}
+
+.cw-versions li.is-current .cw-versions-dot {
+  background: var(--accent);
+}
+
+.cw-versions-text {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.cw-versions-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  font-size: var(--fs-sm);
+  color: var(--text-strong);
+}
+
+.cw-versions-text small {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+.cw-versions-tag {
+  padding: 0.02rem 0.45rem;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+
+.cw-versions-tag.is-draft {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.cw-versions-tag.is-approved {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: var(--success-border);
+}
+
+.cw-versions-tag.is-changes {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+}
+
+.cw-versions-all {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  width: fit-content;
+  height: auto;
+  padding: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: normal;
+  color: var(--accent-text);
+  background: none;
+  border: 0;
+  box-shadow: none;
+}
+
+/* A figure in two parts (ready / to review) reads one size smaller. */
+.pr-confidence .pr-text strong:has(.pr-ready) {
+  font-size: var(--fs-md);
+  line-height: 1.35;
+}
+
+/* ---------------------------------------------------------------------------------
+   Strictly as the references (26 October 2026): the tabs' four figure cards, the
+   Overview's icons, the section headers' actions on the title's line, the evidence
+   table's selection and pills, the history's dots, the versions' v-numbers.
+   --------------------------------------------------------------------------------- */
+
+/* The other tabs' figures: four cards, each with its tile. */
+.pr-box.is-cards {
+  padding-top: 0.25rem;
+}
+
+.pr-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pr-cards > li {
+  display: flex;
+  min-width: 0;
+}
+
+.pr-cards button,
+.pr-ready-card {
+  display: flex;
+  flex: 1;
+  gap: 0.75rem;
+  align-items: center;
+  width: 100%;
+  height: auto;
+  min-width: 0;
+  padding: 0.8rem 0.85rem;
+  font: inherit;
+  font-weight: inherit;
+  line-height: normal;
+  color: var(--text);
+  text-align: left;
+  white-space: normal;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+.pr-cards button:hover {
+  border-color: var(--accent-border);
+}
+
+.pr-tile {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+}
+
+.pr-tile.is-blue {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.pr-tile.is-purple {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.pr-tile.is-green {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.pr-tile.is-amber {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.pr-cards .pr-text strong {
+  font-size: var(--fs-xl);
+}
+
+.pr-ready-card .pr-text strong {
+  font-size: var(--fs-md);
+  line-height: 1.35;
+}
+
+/* On the tabs the review's header carries only the decision. */
+.pr-head.is-tab .pl-approve-note {
+  display: none;
+}
+
+/* The Overview's figures keep their icons, as the reference shows. */
+.pr-box:not(.is-cards) .pr-figures .pr-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+}
+
+.pr-box:not(.is-cards) .pr-figures button,
+.pr-box:not(.is-cards) .pr-confidence {
+  gap: 0.55rem;
+  padding: 0.8rem 0.65rem;
+}
+
+/* A section's actions stay on its title's line, and go under it only where the title's
+   words would otherwise be squeezed to a narrow column. */
+.pp-head {
+  flex-wrap: wrap;
+}
+
+.pp-head > div:first-child {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.pp-head-actions {
+  flex: none;
+  flex-wrap: nowrap;
+}
+
+/* The phase pill takes its phase's tone. */
+.pp-pill.is-phase.is-interim {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.pp-pill.is-phase.is-rollforward {
+  color: var(--ai);
+  background: var(--ai-soft);
+  border-color: var(--ai-border);
+}
+
+/* The evidence filters on one line; rows with a checkbox; procedures as text. */
+.pe-filters {
+  flex-wrap: nowrap;
+}
+
+.pe-filters select {
+  min-width: 0;
+}
+
+.pe-filters > label:not(.pe-search) {
+  flex: none;
+}
+
+.pe-table .pe-pick {
+  width: 1%;
+  padding-right: 0;
+}
+
+.pe-link {
+  display: inline;
+  width: auto;
+  height: auto;
+  padding: 0;
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: normal;
+  color: var(--text);
+  background: none;
+  border: 0;
+  box-shadow: none;
+}
+
+.pe-link:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+.pe-links {
+  white-space: nowrap;
+}
+
+.pe-table .pp-status {
+  border: 1px solid transparent;
+}
+
+.pe-table .pp-status::before {
+  display: none;
+}
+
+.pe-table .pp-status.is-info {
+  color: var(--text-on-accent);
+  background: var(--accent);
+}
+
+.pe-table .pp-status.is-review {
+  border-color: var(--warning-border);
+}
+
+.pe-table .pp-status.is-review::before {
+  display: block;
+}
+
+.pe-table .pp-status.is-idle {
+  color: var(--text);
+  background: var(--neutral-soft);
+  border-color: var(--neutral-border);
+}
+
+/* The history: a dot for each change on the day's line, then its tile. */
+.ph-day li {
+  grid-template-columns: 12px 36px minmax(0, 1fr) auto;
+}
+
+.ph-dot {
+  z-index: 1;
+  width: 11px;
+  height: 11px;
+  background: var(--accent);
+  border: 2px solid var(--surface);
+  border-radius: 999px;
+}
+
+.ph-day ol::before {
+  left: calc(0.5rem + 5px);
+}
+
+/* The versions' numbers and the assistant's Beta mark. */
+.cw-versions-v {
+  padding: 0.02rem 0.4rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--text-strong);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+.cw-beta {
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.4rem;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  vertical-align: 2px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 5px;
+}
+
+@media (max-width: 700px) {
+  .pp-head,
+  .pe-filters {
+    flex-wrap: wrap;
+  }
+
+  .pr-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* The review's header and figures are one card: the shell's gap does not part them. */
+.pl-review-shell > .pr-head + .pr-box {
+  margin-top: -1rem;
+}
+
+.pr-head,
+.pr-box {
+  box-shadow: none;
+}
+
+/* The assistant's actions read as the reference's list, not as buttons. */
+.cw-assist-actions > li > button,
+.cw-assist-found > li > button {
+  font-weight: 450;
+}
+
+.pe-open {
+  font-weight: 500;
+}
+
+.cw-versions-head {
+  flex-wrap: nowrap;
+}
+
+@media (max-width: 700px) {
+  .pp-head-actions {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 700px) {
+  .pp-head-actions {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+}
+
+/* The codes as the reference fills them. */
+.pa-code {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* ---------------------------------------------------------------------------------
+   Surfaces and weights as the references (26 October 2026). The review wrapper was a
+   glass panel holding the tab area, itself a glass panel: the two tints stacked and
+   the tab area read lighter than the cards around it. In the control's Plan step the
+   wrapper is clear and the tab area is one solid card, as the review's header is.
+   --------------------------------------------------------------------------------- */
+.shell .cw .pl-review.is-embedded .pl-review-shell {
+  background: none;
+  border-color: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.shell .cw .pl-review.is-embedded .pl-plan-body {
+  background-color: var(--surface);
+  background-image: none;
+  border: 1px solid var(--border);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+/* The references' text is lighter: regular for the rows, medium for labels. */
+.cw .pp-table thead th,
+.cw .cc-q-table thead th {
+  font-weight: 500;
+}
+
+.cw .pp-num,
+.cw .pp-pill,
+.cw .pp-status,
+.cw .pa-code,
+.cw .cw-step-state {
+  font-weight: 500;
+}
+
+.cw .pe-open,
+.cw .cw-assist-actions .cw-assist-label,
+.cw .cw-assist-found .cw-assist-label,
+.cw .cw-assist-next button,
+.cw .cw-context dd {
+  font-weight: 400;
+}
+
+.cw .pl-tabs button:not(.is-active) {
+  font-weight: 400;
+}
+
+.cw .pl-tabs button.is-active {
+  font-weight: 600;
+}
+
+.cw .pr-cards .pr-text strong,
+.cw .pr-figures .pr-text strong {
+  font-weight: 600;
+}
+
+.cw .cw-sidenav a {
+  font-weight: 450;
+}

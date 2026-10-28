@@ -17,6 +17,17 @@
   background-attachment: fixed;
 }
 
+/* In the light theme the brightest glow sits further into the corner, under the frosted
+   top bar, so the text on the open page keeps AA contrast. */
+:root[data-theme="light"] .shell {
+  background:
+    radial-gradient(72rem 44rem at 104% -22%, var(--glow-a), transparent 66%),
+    radial-gradient(56rem 42rem at 4% 112%, var(--glow-b), transparent 62%),
+    radial-gradient(48rem 34rem at 58% 58%, var(--glow-c), transparent 70%),
+    var(--canvas);
+  background-attachment: fixed;
+}
+
 /* Panels: translucent, with a light edge and a faint shine along the top. */
 .shell :is(
     .card,
@@ -48,12 +59,31 @@
     .cp-summary,
     .cs-tile,
     .cs-tabs,
-    .cs-assist
+    .cs-assist,
+    .er-card,
+    .er-panel,
+    .er-sheet
   ) {
   background-color: var(--glass-panel);
   background-image: var(--glass-sheen);
   border-color: var(--glass-edge);
   box-shadow: var(--glass-shine), var(--shadow-sm);
+  /* Frosted: the glow behind shows through, blurred, so the text stays readable. */
+  backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+}
+
+/* The wizards and drawers (controls-setup.css .as): a frosted pane over the page. */
+.as {
+  background-color: var(--glass-dialog);
+  background-image: var(--glass-sheen);
+  border: 1px solid var(--glass-edge);
+  box-shadow: var(--glass-shine), 0 30px 80px -24px rgb(0 0 0 / 60%);
+  backdrop-filter: blur(calc(var(--glass-blur) * 1.6)) saturate(160%);
+}
+
+/* On the light page a soft cool shadow lifts the pane; a black one would muddy it. */
+:root[data-theme="light"] .as {
+  box-shadow: var(--glass-shine), 0 30px 80px -28px rgb(30 41 82 / 32%);
 }
 
 /* A panel inside a panel would stack its tint; it stays clear instead. */
@@ -73,6 +103,81 @@
   background: var(--glass-sidebar);
   border-right-color: var(--glass-line);
   backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+}
+
+/* The light sidebar: frosted white over the glow, like the rest of the page, in place of
+   the navy panel; the current section is a raised white tab with the accent bar. */
+:root[data-theme="light"] .shell .sidebar {
+  color: var(--text-secondary);
+  box-shadow: inset -1px 0 0 rgb(255 255 255 / 70%);
+}
+
+:root[data-theme="light"] .shell .sidebar :is(.brand, .sidebar-foot, .sidebar-foot .pill) {
+  border-color: var(--glass-line);
+}
+
+:root[data-theme="light"] .shell .sidebar .brand-mark {
+  color: #ffffff;
+  background: linear-gradient(160deg, #24407a, var(--navy));
+  box-shadow: 0 2px 6px -2px rgb(14 31 54 / 45%);
+}
+
+:root[data-theme="light"] .shell .sidebar .brand-text strong {
+  color: var(--text-strong);
+}
+
+:root[data-theme="light"] .shell .sidebar :is(.brand-text small, .nav-label, .sidebar-note) {
+  color: var(--text-tertiary);
+}
+
+:root[data-theme="light"] .shell .sidebar nav a {
+  color: var(--text-secondary);
+}
+
+:root[data-theme="light"] .shell .sidebar nav a svg {
+  color: var(--text-tertiary);
+}
+
+:root[data-theme="light"] .shell .sidebar nav a:hover {
+  color: var(--text-strong);
+  background: rgb(255 255 255 / 70%);
+}
+
+:root[data-theme="light"] .shell .sidebar nav a[aria-current="page"] {
+  color: var(--text-strong);
+  background: #ffffff;
+  box-shadow:
+    inset 3px 0 0 var(--accent),
+    0 1px 2px rgb(15 23 42 / 6%),
+    0 4px 12px -6px rgb(30 41 82 / 18%);
+}
+
+:root[data-theme="light"] .shell .sidebar nav a[aria-current="page"] svg {
+  color: var(--accent);
+}
+
+:root[data-theme="light"] .shell .sidebar nav a.nav-locked,
+:root[data-theme="light"] .shell .sidebar nav a.nav-locked svg {
+  color: var(--text-tertiary);
+}
+
+:root[data-theme="light"] .shell .sidebar nav a.nav-locked:hover,
+:root[data-theme="light"] .shell .sidebar nav a.nav-locked[aria-current="page"] {
+  color: var(--text-secondary);
+}
+
+:root[data-theme="light"] .shell .sidebar .sidebar-foot {
+  background: rgb(255 255 255 / 55%);
+  box-shadow: var(--glass-shine), var(--shadow-xs);
+}
+
+:root[data-theme="light"] .shell .sidebar :is(.sidebar-foot p, .guard-row) {
+  color: var(--text-tertiary);
+}
+
+:root[data-theme="light"] .shell .sidebar .sidebar-foot .pill {
+  color: var(--text-secondary);
+  background: #ffffff;
 }
 
 /* Menus, popovers, and dialogs: opaque, with the glass edge and shine, so what is behind
@@ -96,7 +201,8 @@
 }
 
 @media (prefers-reduced-transparency: reduce) {
-  .shell {
+  .shell,
+  :root[data-theme="light"] .shell {
     background: var(--canvas);
   }
 
@@ -130,7 +236,10 @@
       .cp-summary,
       .cs-tile,
       .cs-tabs,
-      .cs-assist
+      .cs-assist,
+      .er-card,
+      .er-panel,
+      .er-sheet
     ),
   :is(
       .menu-panel,
@@ -142,7 +251,8 @@
       .preview-dialog,
       .nw-dialog,
       .confirm-dialog
-    ) {
+    ),
+  .as {
     background-color: var(--surface);
     background-image: none;
     backdrop-filter: none;

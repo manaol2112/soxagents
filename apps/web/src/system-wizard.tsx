@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useMemo, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
+import { AddSystemWizard } from "./add-system-wizard";
 import { SYSTEM_SAVED_EVENT } from "./controls-guide-model";
 import {
   APPLICABILITY_LABELS,
@@ -34,7 +35,7 @@ type Props = {
   organizationId: string;
   projectId: string;
   /** Common systems not yet in scope, to pick a name from. */
-  knownSystems: Array<{ name: string; layer: string }>;
+  knownSystems: Array<{ name: string; layer: string; category: string }>;
   /** Every system in scope now, as the page last loaded it. */
   systems: SetupSystem[];
   editable: boolean;
@@ -110,7 +111,17 @@ export function SystemWizard(props: Props) {
           <UiIcon name="wand" size={13} /> Review controls
         </button>
       )}
-      {open ? <Wizard {...props} onClose={() => setOpen(false)} /> : null}
+      {open && props.system === undefined ? (
+        <AddSystemWizard
+          organizationId={props.organizationId}
+          projectId={props.projectId}
+          knownSystems={props.knownSystems}
+          systems={props.systems}
+          onClose={() => setOpen(false)}
+        />
+      ) : open ? (
+        <Wizard {...props} onClose={() => setOpen(false)} />
+      ) : null}
     </>
   );
 }
@@ -805,7 +816,7 @@ function DetailsStep({
   systemId: string | null;
   details: Details;
   setDetails: (value: Details) => void;
-  knownSystems: Array<{ name: string; layer: string }>;
+  knownSystems: Array<{ name: string; layer: string; category: string }>;
   existingNames: string[];
   naming: boolean;
   busy: string;

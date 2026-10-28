@@ -319,6 +319,60 @@ class SystemReviewWorkflow:
         return str(result)
 
 
+class PriorYearRequest(TypedDict):
+    document_id: str
+
+
+@workflow.defn(name="prior_year_run")
+class PriorYearWorkflow:
+    """The agent matches and analyses one prior-year reference, with retries."""
+
+    @workflow.run
+    async def run(self, payload: PriorYearRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "run_prior_year",
+                args=[payload["document_id"]],
+                start_to_close_timeout=timedelta(minutes=30),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_prior_year_run",
+                args=[payload["document_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
+class NarrativeRequest(TypedDict):
+    control_id: str
+
+
+@workflow.defn(name="process_narrative_run")
+class NarrativeWorkflow:
+    """The agents draft and review one control's process narrative, with retries."""
+
+    @workflow.run
+    async def run(self, payload: NarrativeRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "run_narrative",
+                args=[payload["control_id"]],
+                start_to_close_timeout=timedelta(minutes=30),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_narrative_run",
+                args=[payload["control_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
 @workflow.defn(name="setup_draft")
 class SetupDraftWorkflow:
     """The planner drafts an engagement's setup, with retries."""

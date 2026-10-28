@@ -15,8 +15,10 @@ export const SECTIONS = [
   "approvals",
   "setup",
   "controls",
+  "register",
   "planning",
   "testing",
+  "review",
   "plan",
   "timeline",
   "deficiencies",
@@ -36,8 +38,10 @@ export function parseSection(value: string | null): SectionId {
     value === "approvals" ||
     value === "setup" ||
     value === "controls" ||
+    value === "register" ||
     value === "planning" ||
     value === "testing" ||
+    value === "review" ||
     value === "plan" ||
     value === "timeline" ||
     value === "deficiencies" ||
@@ -61,11 +65,17 @@ export function parseSection(value: string | null): SectionId {
 // console and the approvals page stay reachable by their addresses, out of the menu,
 // as contextual pages.
 
+// The audit's journey (decided by the product owner on 25 October 2026): scope in Systems
+// & Processes, then Planning, Evidence, Testing (with Conclude), and Review, each its own
+// destination.
 export const DESTINATIONS: readonly SectionId[] = [
   "overview",
   "controls",
-  "testing",
+  "register",
+  "planning",
   "evidence",
+  "testing",
+  "review",
   "reports",
   "settings",
   "projects",
@@ -144,7 +154,6 @@ export type Route = {
  * record-bearing parameters travel unchanged; Test plans' `view=phases` stays `view`
  * on Testing, which has no other tab. */
 const MOVED: Record<string, { section: SectionId; tab?: string }> = {
-  planning: { section: "testing" },
   plan: { section: "reports", tab: "schedule" },
   timeline: { section: "reports", tab: "timeline" },
   deficiencies: { section: "reports", tab: "deficiencies" },
@@ -164,6 +173,82 @@ export function resolveRoute(
         ? value[0]
         : null;
   const requested = first(params.section) ?? "overview";
+  // Controls left Systems & Processes for a page of its own, and the prior year came
+  // back to Systems & Processes (26 October 2026): their older addresses follow.
+  const fromTab =
+    requested === "controls" &&
+    first(params.pane) === "controls" &&
+    first(params.control) === null;
+  const fromPlanning =
+    requested === "planning" && first(params.view) === "prior-year";
+  if (fromTab || fromPlanning) {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (
+        key === "section" ||
+        key === "pane" ||
+        (fromPlanning && key === "view")
+      ) {
+        continue;
+      }
+      for (const item of Array.isArray(value) ? value : [value]) {
+        if (typeof item === "string" && item !== "") {
+          query.append(key, item);
+        }
+      }
+    }
+    const target: SectionId = fromTab ? "register" : "controls";
+    query.set("section", target);
+    if (fromPlanning) {
+      query.set("pane", "references");
+    }
+    return {
+      section: target,
+      page: target,
+      tab: null,
+      redirect: `/?${query.toString()}`,
+    };
+  }
+  // Testing held the plans and the reviews until the journey split them (25 October
+  // 2026): an address for those views, or for one control's plan, opens Planning or
+  // Review with its record kept.
+  if (requested === "testing") {
+    const view = first(params.view);
+    const planning =
+      view === "plans" ||
+      view === "phases" ||
+      view === "each" ||
+      (view === null &&
+        (first(params.control) !== null || first(params.tab) !== null));
+    const target: SectionId | null = planning
+      ? "planning"
+      : view === "review"
+        ? "review"
+        : null;
+    if (target !== null) {
+      const query = new URLSearchParams();
+      for (const [key, value] of Object.entries(params)) {
+        if (
+          key === "section" ||
+          (key === "view" && view !== "phases" && view !== "each")
+        ) {
+          continue;
+        }
+        for (const item of Array.isArray(value) ? value : [value]) {
+          if (typeof item === "string" && item !== "") {
+            query.append(key, item);
+          }
+        }
+      }
+      query.set("section", target);
+      return {
+        section: target,
+        page: target,
+        tab: null,
+        redirect: `/?${query.toString()}`,
+      };
+    }
+  }
   const left =
     requested === "settings"
       ? LEFT_SETTINGS[first(params.view) ?? ""]

@@ -328,6 +328,9 @@ export type Attribute = {
   passCriteria: string;
   failCriteria: string;
   criteriaSource: "PLAN" | "AGENT" | "LIBRARY" | "NONE";
+  /** Who accepted the agent's criteria as they read, and when (0122); "" if no one. */
+  criteriaAcceptedBy: string;
+  criteriaAcceptedAt: string;
   judgmentRequired: boolean | null;
   automatable: boolean | null;
   phases: Phase[];
@@ -920,6 +923,8 @@ export function parseMasterPlan(value: unknown): MasterPlan | null {
         ["PLAN", "AGENT", "LIBRARY", "NONE"] as const,
         "NONE",
       ),
+      criteriaAcceptedBy: str(item.criteria_accepted_by),
+      criteriaAcceptedAt: str(item.criteria_accepted_at),
       judgmentRequired: bool(item.judgment_required),
       automatable: bool(item.automatable),
       phases: phasesOf(item.phases),
@@ -1544,7 +1549,7 @@ export function planningHref(
   const params = new URLSearchParams({
     organization: organizationId,
     project: projectId,
-    section: options.section ?? "testing",
+    section: "planning",
   });
   if (options.control) {
     params.set("control", options.control);
@@ -1582,8 +1587,12 @@ export type PlanningIntent =
   | "procedure-remove"
   | "procedure-links"
   | "evidence-edit"
+  | "evidence-add"
+  | "evidence-remove"
+  | "evidence-restore"
   | "evidence-links"
   | "criteria"
+  | "criteria-accept"
   | "batch-approve"
   | "replan"
   | "replan-control"
@@ -1928,12 +1937,48 @@ export function planningWrite(fields: Fields): PlanningWrite {
       return UUID.test(requirementId) &&
         at !== null &&
         clean(title, 3, 200) &&
-        clean(description, 10, 1500)
+        clean(description, 10, 3000)
         ? ok(`${control}/evidence-requirements/${requirementId}/edit`, {
             version: at,
             title,
             description,
           })
+        : { error: "invalid" };
+    }
+    case "evidence-add": {
+      // A person adds evidence the plan did not have (product owner, 26 October 2026).
+      const phase = text(fields, "phase");
+      const title = text(fields, "title");
+      const description = text(fields, "description");
+      const shows = text(fields, "objective");
+      const category = text(fields, "category");
+      const necessity = text(fields, "necessity") || "REQUIRED";
+      return (PHASES as readonly string[]).includes(phase) &&
+        ADDABLE_TYPES.includes(category) &&
+        (necessity === "REQUIRED" || necessity === "OPTIONAL") &&
+        clean(title, 3, 200) &&
+        clean(description, 10, 1500) &&
+        clean(shows, 10, 500)
+        ? ok(`${control}/evidence-requirements`, {
+            phase,
+            title,
+            description,
+            categories: [category],
+            // What it shows is why the plan needs it: one field, not a second reason.
+            objective: shows,
+            rationale: shows,
+            necessity,
+          })
+        : { error: "invalid" };
+    }
+    case "evidence-remove":
+    case "evidence-restore": {
+      const requirementId = text(fields, "requirement_id");
+      return UUID.test(requirementId) && at !== null
+        ? ok(
+            `${control}/evidence-requirements/${requirementId}/${intent === "evidence-remove" ? "remove" : "restore"}`,
+            { version: at },
+          )
         : { error: "invalid" };
     }
     case "evidence-links": {
@@ -1987,6 +2032,29 @@ export function planningWrite(fields: Fields): PlanningWrite {
           })
         : { error: "invalid" };
     }
+    case "criteria-accept": {
+      // The attributes whose criteria are accepted as they read, each at the version shown.
+      const listed = Array.isArray(fields.attributes) ? fields.attributes : [];
+      const checked = listed.filter(
+        (item): item is { id: string; version: number } =>
+          isRecord(item) &&
+          typeof item.id === "string" &&
+          UUID.test(item.id) &&
+          Number.isInteger(item.version) &&
+          Number(item.version) >= 1,
+      );
+      return checked.length > 0 &&
+        checked.length === listed.length &&
+        checked.length <= 50 &&
+        new Set(checked.map((item) => item.id)).size === checked.length
+        ? ok(`${control}/master-plan/criteria/accept`, {
+            attributes: checked.map((item) => ({
+              id: item.id,
+              version: item.version,
+            })),
+          })
+        : { error: "invalid" };
+    }
     default:
       return { error: "invalid" };
   }
@@ -2006,10 +2074,17 @@ export function planningProblem(status: number, detail = ""): string | null {
         "The procedure changed since this page loaded. Refresh and try again.",
       "the requirement changed":
         "This evidence item changed since the page loaded. Refresh and try again.",
+      "it has already been requested from the client; waive it instead":
+        "This item was already requested from the client, so it cannot be removed. Waive it on the Request step instead.",
+      "the requirement is not open": "This item is no longer open.",
+      "sample evidence is requested with the samples the team selects":
+        "Sample evidence is requested with the samples the team selects, on the Test step.",
       "the request carrying it has gone for approval":
         "This item is already on a request that has gone for approval, so its wording is locked.",
       "the attribute changed":
         "The attribute changed since this page loaded. Refresh and try again.",
+      "the criteria are not the agent's":
+        "These criteria are no longer the planner agent's. Refresh to see who stated them.",
       "settle the control's attributes first":
         "Decide the proposed attributes and settle any open question about them first.",
       "changes are already requested":
@@ -2027,6 +2102,10 @@ export function planningProblem(status: number, detail = ""): string | null {
     };
     if (known[detail] !== undefined) {
       return known[detail];
+    }
+    const depends = /^(\S+) depends on it; remove that first$/.exec(detail);
+    if (depends !== null) {
+      return `${depends[1]} depends on this item. Remove ${depends[1]} first.`;
     }
     return /^[A-Z0-9].*\.$/.test(detail)
       ? detail
@@ -2281,6 +2360,14 @@ export function holdGroups(blockers: readonly Blocker[]): HoldGroup[] {
 }
 
 /**
+ * What the plan lists before approval: only what holds it (product owner, 27 October
+ * 2026). What does not prevent approval is settled where it is asked.
+ */
+export function approvalHolds(blockers: readonly Blocker[]): HoldGroup[] {
+  return holdGroups(blockers).filter((group) => group.blocks);
+}
+
+/**
  * Where a hold is resolved, on the control's record: the part of its Test plan tab that
  * holds the decision, or its evidence. Null for what is done on the review itself (the
  * revision, the understanding) or waits on the planner.
@@ -2474,4 +2561,495 @@ export function nextStepOf(row: QueueRow): NextStep {
     "ready",
     row.revisedSinceApproval ? "Re-approve the changes" : "Ready to approve",
   );
+}
+
+/** A procedure as the control's Plan step lists it (decided by the product owner on 26
+ * October 2026): what it does, how, in which phase, what it tests and needs, where it
+ * came from, and whether a finding waits on it. */
+export type ProcedureRow = {
+  id: string;
+  code: string;
+  number: number;
+  title: string;
+  body: string;
+  method: string;
+  phase: string;
+  attributes: number;
+  evidence: number;
+  source: string;
+  status: "READY" | "NEEDS_REVIEW";
+  findings: number;
+};
+
+function procedureSource(origin: string, personEdited: boolean): string {
+  if (origin === "PERSON") {
+    return "Added by a person";
+  }
+  const base =
+    origin === "LIBRARY"
+      ? "Standard library"
+      : origin === "AGENT"
+        ? "Drafted by agent"
+        : "Standard rules";
+  return personEdited ? `${base}, adapted` : base;
+}
+
+/** The plan's procedures in phase order, numbered, with their status: one a finding is
+ * raised on needs review; the rest are ready. */
+export function procedureRows(plan: MasterPlan): ProcedureRow[] {
+  const flagged = findingsByCode(plan);
+  return PHASES.flatMap((phase) =>
+    plan.procedures.filter((item) => item.phase === phase),
+  ).map((item, index) => {
+    const text = item.text.replace(/\s+/g, " ").trim();
+    // The first sentence is the title; without one, the first clause.
+    const sentence = text.indexOf(". ");
+    const clause = text.indexOf("; ");
+    const mark =
+      sentence > 24 && sentence < 180
+        ? sentence
+        : clause > 24 && clause < 180
+          ? clause
+          : -1;
+    const split = mark > 0;
+    const rest = split ? text.slice(mark + 2) : "";
+    const findings = flagged.get(item.code)?.length ?? 0;
+    return {
+      id: item.id,
+      code: item.code,
+      number: index + 1,
+      title: split
+        ? `${text.slice(0, mark)}${text[mark] === "." ? "." : ""}`
+        : text,
+      body: rest.charAt(0).toUpperCase() + rest.slice(1),
+      method: item.method === null ? "" : METHOD_LABELS[item.method],
+      phase: PHASE_SHORT[item.phase],
+      attributes: item.attributeCodes.length,
+      evidence: item.evidenceCodes.length,
+      source: procedureSource(item.origin, item.personEdited),
+      status: findings > 0 ? "NEEDS_REVIEW" : "READY",
+      findings,
+    };
+  });
+}
+
+/** What each phase's procedures set out to do, under its heading (27 October 2026). */
+export const PHASE_PURPOSE: Record<Phase, string> = {
+  DESIGN: "Understand the control's design and confirm it is implemented.",
+  INTERIM:
+    "Test that the control operated effectively through the interim period.",
+  ROLLFORWARD:
+    "Confirm the control kept operating from the interim date to the period end.",
+};
+
+export type PhaseCoverage = {
+  phase: Phase;
+  short: string;
+  count: number;
+  applies: boolean;
+};
+
+/** The procedures at a glance (the product owner's reference, 27 October 2026): how
+ * many each phase has, how many phases hold any, how many are ready and how many need
+ * review, and where they came from, as one label when they share a source. */
+export function procedureCoverage(plan: MasterPlan): {
+  phases: PhaseCoverage[];
+  total: number;
+  phasesUsed: number;
+  ready: number;
+  review: number;
+  source: string;
+  /** The phase shown first: the first that applies and holds procedures. */
+  first: Phase;
+} {
+  const phases = PHASES.map((phase) => ({
+    phase,
+    short: PHASE_SHORT[phase],
+    count: plan.procedures.filter((item) => item.phase === phase).length,
+    applies:
+      plan.phases.find((item) => item.phase === phase)?.applicability !==
+      "NOT_APPLICABLE",
+  }));
+  const { ready, review } = procedureReadiness(plan);
+  const sources = [
+    ...new Set(
+      plan.procedures.map((item) =>
+        procedureSource(item.origin, item.personEdited),
+      ),
+    ),
+  ];
+  return {
+    phases,
+    total: plan.procedures.length,
+    phasesUsed: phases.filter((item) => item.count > 0).length,
+    ready,
+    review,
+    source:
+      sources.length === 1
+        ? (sources[0] ?? "")
+        : sources.length > 1
+          ? "Mixed sources"
+          : "",
+    first:
+      phases.find((item) => item.applies && item.count > 0)?.phase ??
+      phases.find((item) => item.applies)?.phase ??
+      "DESIGN",
+  };
+}
+
+/** How many procedures are ready and how many need review. */
+export function procedureReadiness(plan: MasterPlan): {
+  ready: number;
+  review: number;
+} {
+  const rows = procedureRows(plan);
+  const review = rows.filter((row) => row.status === "NEEDS_REVIEW").length;
+  return { ready: rows.length - review, review };
+}
+
+/** An attribute as the control's Plan step lists it (decided by the product owner on 26
+ * October 2026): what it requires, the result expected, the procedures and evidence that
+ * test it, where it came from, and where its criteria stand. */
+export type AttributeRow = {
+  id: string;
+  code: string;
+  number: number;
+  statement: string;
+  expected: string;
+  procedures: string[];
+  evidence: string[];
+  source: string;
+  status: "CONFIRMED" | "NEEDS_REVIEW" | "NOT_STARTED";
+};
+
+// The attribute's source_kind as the database holds it (migration 0061).
+const ATTRIBUTE_SOURCE: Record<string, string> = {
+  LIBRARY: "Standard library",
+  AGENT: "Drafted by agent",
+  MANUAL: "Added by a person",
+  DOCUMENT: "From a document",
+  RCM: "Client RCM",
+};
+
+/** The attributes whose criteria the planner agent proposed and no one has confirmed yet:
+ * not accepted by a person (0122), and not in a plan a person approved, since approving
+ * the plan confirms its criteria together (decided by the product owner, 27 October 2026). */
+export function criteriaToAccept(plan: MasterPlan): Attribute[] {
+  return plan.state === "APPROVED"
+    ? []
+    : plan.attributes.filter(
+        (item) =>
+          item.criteriaSource === "AGENT" && item.criteriaAcceptedAt === "",
+      );
+}
+
+/** The plan's attributes, numbered, with their status: one with a finding, criteria the
+ * planner agent proposed that no one has confirmed, or an inferred basis needs review; one
+ * with no criteria is not started; one whose criteria are the library's or a person's, or
+ * were confirmed by a person, is confirmed. */
+export function attributeRows(plan: MasterPlan): AttributeRow[] {
+  const flagged = findingsByCode(plan);
+  const unconfirmed = new Set(criteriaToAccept(plan));
+  return plan.attributes.map((item, index) => ({
+    id: item.id,
+    code: item.code,
+    number: index + 1,
+    statement: item.text,
+    expected: item.condition || item.passCriteria,
+    procedures: item.procedureCodes,
+    evidence: item.evidenceCodes,
+    source: ATTRIBUTE_SOURCE[item.source] ?? "Standard rules",
+    status:
+      flagged.has(item.code) ||
+      unconfirmed.has(item) ||
+      (item.basis !== "" && item.basis !== "DOCUMENTED")
+        ? "NEEDS_REVIEW"
+        : item.criteriaSource === "NONE"
+          ? "NOT_STARTED"
+          : "CONFIRMED",
+  }));
+}
+
+/** How many attributes are confirmed, need review, or are not started. */
+export function attributeReadiness(plan: MasterPlan): {
+  confirmed: number;
+  review: number;
+  notStarted: number;
+} {
+  const rows = attributeRows(plan);
+  const count = (status: AttributeRow["status"]) =>
+    rows.filter((row) => row.status === status).length;
+  return {
+    confirmed: count("CONFIRMED"),
+    review: count("NEEDS_REVIEW"),
+    notStarted: count("NOT_STARTED"),
+  };
+}
+
+/** Where an evidence item's request stands, grouped as the control's Plan step shows it
+ * (decided by the product owner on 26 October 2026), from the evidence plan's own state. */
+export type EvidenceStatus =
+  | "NOT_REQUESTED"
+  | "REQUESTED"
+  | "IN_PROGRESS"
+  | "NEEDS_REVIEW"
+  | "ACCEPTED"
+  | "NOT_APPLICABLE";
+
+export const EVIDENCE_STATUS_LABELS: Record<EvidenceStatus, string> = {
+  NOT_REQUESTED: "Not requested",
+  REQUESTED: "Requested",
+  IN_PROGRESS: "In progress",
+  NEEDS_REVIEW: "Needs review",
+  ACCEPTED: "Accepted",
+  NOT_APPLICABLE: "Not applicable",
+};
+
+const EVIDENCE_STATUS_OF: Record<string, EvidenceStatus> = {
+  NOT_GENERATED: "NOT_REQUESTED",
+  PLANNED: "NOT_REQUESTED",
+  AWAITING_DEPENDENCY: "NOT_REQUESTED",
+  DRAFT: "NOT_REQUESTED",
+  READY_FOR_REVIEW: "NEEDS_REVIEW",
+  APPROVAL_PENDING: "NEEDS_REVIEW",
+  SENT: "REQUESTED",
+  OVERDUE: "REQUESTED",
+  PARTIALLY_RECEIVED: "REQUESTED",
+  RECEIVED: "IN_PROGRESS",
+  UNDER_REVIEW: "IN_PROGRESS",
+  INSUFFICIENT: "NEEDS_REVIEW",
+  FOLLOW_UP_REQUIRED: "NEEDS_REVIEW",
+  ACCEPTED: "ACCEPTED",
+  WAIVED: "NOT_APPLICABLE",
+  NOT_APPLICABLE: "NOT_APPLICABLE",
+  CANCELLED: "NOT_APPLICABLE",
+  REMOVED: "NOT_APPLICABLE",
+};
+
+export const EVIDENCE_TYPE_LABELS: Record<string, string> = {
+  CONFIGURATION: "Configuration",
+  POPULATION: "Population",
+  SAMPLE: "Sample",
+  PROCESS_DOCUMENTATION: "Process documentation",
+  CONTROL_EXECUTION: "Control execution",
+  REPORT_RELIABILITY: "Report and data reliability",
+  CHANGE_HISTORY: "Change history",
+  OTHER: "Other supporting evidence",
+};
+
+/** The kinds of evidence a person may add: every kind but samples, which are requested
+ * with the samples the team selects. */
+export const ADDABLE_TYPES: readonly string[] = Object.keys(
+  EVIDENCE_TYPE_LABELS,
+).filter((type) => type !== "SAMPLE");
+
+export type EvidenceRow = {
+  id: string;
+  code: string;
+  title: string;
+  procedures: string[];
+  phase: Phase;
+  phaseLabel: string;
+  /** What kind of evidence it is: its category, a sample's what it samples. */
+  type: string;
+  typeLabel: string;
+  source: string;
+  required: boolean;
+  /** The evidence plan's own state, in words, under the grouped status. */
+  state: string;
+  status: EvidenceStatus;
+};
+
+const EVIDENCE_SOURCE: Record<string, string> = {
+  LIBRARY: "Standard library",
+  AGENT: "Drafted by agent",
+  PERSON: "Added by a person",
+  RULES: "Standard rules",
+};
+
+/** The plan's evidence in phase order, each with its request status: a finding raised
+ * on one puts it under review whatever its request state. */
+export function evidenceRows(plan: MasterPlan): EvidenceRow[] {
+  const flagged = findingsByCode(plan);
+  return PHASES.flatMap((phase) =>
+    plan.evidence.filter((item) => item.phase === phase),
+  ).map((item) => {
+    const type =
+      item.categories.find((category) => category !== "SAMPLE") ??
+      item.categories[0] ??
+      "OTHER";
+    const base = EVIDENCE_STATUS_OF[item.status] ?? "NOT_REQUESTED";
+    return {
+      id: item.id,
+      code: item.code,
+      title: item.title,
+      procedures: item.procedureCodes,
+      phase: item.phase,
+      phaseLabel: PHASE_SHORT[item.phase],
+      type,
+      typeLabel: EVIDENCE_TYPE_LABELS[type] ?? type,
+      source:
+        (EVIDENCE_SOURCE[item.origin] ?? "Standard rules") +
+        (item.personEdited && item.origin !== "PERSON" ? ", adapted" : ""),
+      required: item.necessity !== "OPTIONAL",
+      state: item.status,
+      status:
+        flagged.has(item.code) && base !== "NOT_APPLICABLE"
+          ? "NEEDS_REVIEW"
+          : base,
+    };
+  });
+}
+
+/** How many evidence items stand in each status. */
+export function evidenceSummary(
+  plan: MasterPlan,
+): Record<EvidenceStatus, number> & { total: number } {
+  const counts: Record<EvidenceStatus, number> = {
+    NOT_REQUESTED: 0,
+    REQUESTED: 0,
+    IN_PROGRESS: 0,
+    NEEDS_REVIEW: 0,
+    ACCEPTED: 0,
+    NOT_APPLICABLE: 0,
+  };
+  const rows = evidenceRows(plan);
+  for (const row of rows) {
+    counts[row.status] += 1;
+  }
+  return { ...counts, total: rows.length };
+}
+
+/** What each phase's evidence shows, under its heading (27 October 2026). */
+export const EVIDENCE_PURPOSE: Record<Phase, string> = {
+  DESIGN: "Evidence of how the control is designed and that it is in place.",
+  INTERIM:
+    "Evidence that the control operated through the interim period: the population and the samples selected from it.",
+  ROLLFORWARD:
+    "Evidence that the control kept operating from the interim date to the period end.",
+};
+
+/** Where the evidence stands, in the order a person acts on it. */
+const EVIDENCE_STANDING: ReadonlyArray<[EvidenceStatus, string]> = [
+  ["NEEDS_REVIEW", "to review"],
+  ["NOT_REQUESTED", "not requested"],
+  ["REQUESTED", "requested"],
+  ["IN_PROGRESS", "in progress"],
+  ["ACCEPTED", "accepted"],
+  ["NOT_APPLICABLE", "not applicable"],
+];
+
+export type EvidencePhaseCoverage = PhaseCoverage & {
+  /** How many of the phase's items need review. */
+  review: number;
+};
+
+/** The evidence at a glance, as the procedures show theirs (product owner, 27 October
+ * 2026): how many items each phase has and how many of them need review, how many phases
+ * hold any, how many are optional, where the requests stand in one line, and where the
+ * items came from, as one label when they share a source. */
+export function evidenceCoverage(plan: MasterPlan): {
+  phases: EvidencePhaseCoverage[];
+  total: number;
+  phasesUsed: number;
+  optional: number;
+  standing: string;
+  source: string;
+  /** The phase shown first: the first that applies and holds evidence. */
+  first: Phase;
+} {
+  const rows = evidenceRows(plan);
+  const phases = PHASES.map((phase) => {
+    const mine = rows.filter((row) => row.phase === phase);
+    return {
+      phase,
+      short: PHASE_SHORT[phase],
+      count: mine.length,
+      review: mine.filter((row) => row.status === "NEEDS_REVIEW").length,
+      applies:
+        plan.phases.find((item) => item.phase === phase)?.applicability !==
+        "NOT_APPLICABLE",
+    };
+  });
+  const summary = evidenceSummary(plan);
+  const sources = [...new Set(rows.map((row) => row.source))];
+  return {
+    phases,
+    total: rows.length,
+    phasesUsed: phases.filter((item) => item.count > 0).length,
+    optional: rows.filter((row) => !row.required).length,
+    standing: EVIDENCE_STANDING.filter(([status]) => summary[status] > 0)
+      .map(([status, words]) => `${summary[status]} ${words}`)
+      .join(" · "),
+    source:
+      sources.length === 1
+        ? (sources[0] ?? "")
+        : sources.length > 1
+          ? "Mixed sources"
+          : "",
+    first:
+      phases.find((item) => item.applies && item.count > 0)?.phase ??
+      phases.find((item) => item.applies)?.phase ??
+      "DESIGN",
+  };
+}
+
+/** A version of the plan as its History shows it (decided by the product owner on 26
+ * October 2026): the revision open now, then each revision a person decided, newest first. */
+export type PlanVersion = {
+  revision: number;
+  current: boolean;
+  /** Where it stands: the plan's state for the current one, the decision for the rest. */
+  label: string;
+  tone: "draft" | "approved" | "changes";
+  /** When it was decided, for a decided revision; "" for the current one undecided. */
+  at: string;
+  by: string;
+};
+
+export function planVersions(plan: MasterPlan): PlanVersion[] {
+  const decided = new Map<number, Decision>();
+  for (const item of plan.decisions) {
+    const known = decided.get(item.revision);
+    if (known === undefined || item.decidedAt > known.decidedAt) {
+      decided.set(item.revision, item);
+    }
+  }
+  const current = decided.get(plan.revision);
+  const versions: PlanVersion[] = [
+    {
+      revision: plan.revision,
+      current: true,
+      label:
+        plan.state === "APPROVED"
+          ? "Approved"
+          : current?.decision === "CHANGES_REQUESTED"
+            ? "Changes requested"
+            : STATE_LABELS[plan.state],
+      tone:
+        plan.state === "APPROVED"
+          ? "approved"
+          : current?.decision === "CHANGES_REQUESTED"
+            ? "changes"
+            : "draft",
+      at: current?.decidedAt ?? "",
+      by: current?.decidedBy ?? "",
+    },
+  ];
+  for (const [revision, item] of [...decided.entries()].sort(
+    (a, b) => b[0] - a[0],
+  )) {
+    if (revision === plan.revision) {
+      continue;
+    }
+    versions.push({
+      revision,
+      current: false,
+      label: item.decision === "APPROVED" ? "Approved" : "Changes requested",
+      tone: item.decision === "APPROVED" ? "approved" : "changes",
+      at: item.decidedAt,
+      by: item.decidedBy,
+    });
+  }
+  return versions;
 }

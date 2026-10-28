@@ -64,47 +64,37 @@ const withSystem = () =>
   running({ applications: [{ id: appId, name: "SAP ERP", description: "" }] });
 
 describe("the Controls tour", () => {
-  it("walks the systems, the processes, the library or the RCM, and the templates", () => {
+  it("walks the systems, the processes, the selection of controls, and the finalization", () => {
     const steps = controlsTourSteps(running());
     assert.deepEqual(
       steps.map((step) => step.id),
-      [
-        "welcome",
-        "systems",
-        "processes",
-        "library",
-        "rcm",
-        "templates",
-        "done",
-      ],
+      ["welcome", "systems", "processes", "library", "finalize", "done"],
     );
     assert.deepEqual(steps[0]?.targets, [".cs-tiles"]);
     assert.deepEqual(steps[1]?.targets, ["#cs-pane-systems > :first-child"]);
-    assert.deepEqual(steps[5]?.targets, [
-      'section[aria-labelledby="templates-title"]',
-    ]);
+    // The controls are selected on their own page: the tour points at the workflow's
+    // Select controls step, then at Review and finalize (SP6).
+    assert.deepEqual(steps[3]?.targets, [".sp-step.is-controls"]);
+    assert.deepEqual(steps[4]?.targets, [".sp-step.is-finalize"]);
   });
 
   it("opens each stop's tab before pointing at it", () => {
     assert.deepEqual(
       controlsTourSteps(running()).map((step) => step.pane ?? null),
-      [null, "systems", "processes", "controls", "controls", "controls", null],
+      [null, "systems", "processes", "systems", null, null],
     );
   });
 
-  it("starts with the systems, and opens the library once one is in scope", () => {
+  it("starts with the systems, then selects controls for them", () => {
     const empty = controlsTourSteps(running());
     assert.equal(empty[1]?.done, false);
     assert.match(empty[1]?.body[0] ?? "", /^Start with the systems/);
     assert.match(empty[3]?.body[0] ?? "", /20 reviewed controls/);
-    assert.match(
-      empty[3]?.body[1] ?? "",
-      /^It opens once a system is in scope/,
-    );
+    assert.match(empty[3]?.body[1] ?? "", /add one first/);
     const one = controlsTourSteps(withSystem());
     assert.equal(one[1]?.done, true);
     assert.equal(one[1]?.body[0], "1 system in scope: SAP ERP.");
-    assert.doesNotMatch(one[3]?.body[1] ?? "", /^It opens once/);
+    assert.match(one[3]?.body[1] ?? "", /areas approved/);
   });
 
   it("keeps the product's neutral voice", () => {
@@ -153,7 +143,8 @@ describe("the tiles and tabs of the first setup", () => {
       [
         "Systems 0 Not started",
         "Processes 0 Not started",
-        "Controls 0 In scope",
+        "Policies & procedures 0 None added",
+        "References 0 None added",
       ],
     );
     assert.equal(controlsTiles(withSystem())[0]?.status, "In scope");
@@ -175,12 +166,13 @@ describe("the tiles and tabs of the first setup", () => {
 
   // Systems & Processes is the permanent page (decided by the product owner, SP1): it
   // opens on the systems, which come first, unless the address filters the register.
-  it("opens the tab an address names, else the systems, else the filtered register", () => {
+  it("opens the tab an address names, else the systems", () => {
     assert.equal(parseControlsPane("processes"), "processes");
+    assert.equal(parseControlsPane("references"), "references");
     assert.equal(parseControlsPane(null), "systems");
     assert.equal(parseControlsPane("other"), "systems");
-    assert.equal(parseControlsPane(undefined, true), "controls");
-    assert.equal(parseControlsPane("systems", true), "systems");
+    // The Controls tab is a page of its own now; its address redirects there (routes).
+    assert.equal(parseControlsPane("controls"), "systems");
   });
 });
 
@@ -205,7 +197,8 @@ describe("the Systems & Processes workflow", () => {
     ]);
     assert.deepEqual(
       scopeSteps(running(), false).map((step) => step.pane),
-      ["systems", "processes", "controls", null],
+      // Select controls opens the Controls page; finalizing has no tab of its own.
+      ["systems", "processes", null, null],
     );
   });
 
@@ -243,5 +236,30 @@ describe("the Systems & Processes workflow", () => {
     ]);
     assert.deepEqual(listOf(" , ;"), []);
     assert.deepEqual(listOf("Payroll, Payroll"), ["Payroll"]);
+  });
+});
+
+describe("a system taken out of scope (migration 0114)", () => {
+  it("is read as out of scope and left out of the Systems tile", () => {
+    const onboarding = running({
+      applications: [
+        { id: appId, name: "SAP ERP", description: "" },
+        {
+          id: "33333333-3333-7333-8333-333333333333",
+          name: "Workday",
+          description: "",
+          out_of_scope_at: "2026-10-25T10:00:00Z",
+          out_of_scope_reason: "Retired before the period.",
+        },
+      ],
+    });
+    const workday = onboarding.applications.find(
+      (item) => item.name === "Workday",
+    );
+    assert.deepEqual(workday?.outOfScope, {
+      at: "2026-10-25T10:00:00Z",
+      reason: "Retired before the period.",
+    });
+    assert.equal(controlsTiles(onboarding)[0]?.count, 1);
   });
 });

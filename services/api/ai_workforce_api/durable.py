@@ -28,8 +28,12 @@ from ai_workforce_api.durable_workflow import (
     EvidencePlanRunWorkflow,
     FollowUpRequest,
     FollowUpWorkflow,
+    NarrativeRequest,
+    NarrativeWorkflow,
     PbcDraftWorkflow,
     PlanRunRequest,
+    PriorYearRequest,
+    PriorYearWorkflow,
     RcmSystemScanWorkflow,
     ReviewRequest,
     ScanRequest,
@@ -154,6 +158,18 @@ class TemporalAdapter:
         except Exception as error:
             raise DurableUnavailable() from error
 
+    def schedule_prior_year_runs(self, document_ids: list[UUID]) -> None:
+        try:
+            asyncio.run(_schedule_prior_year_runs(self._address, document_ids))
+        except Exception as error:
+            raise DurableUnavailable() from error
+
+    def schedule_narrative_runs(self, control_ids: list[UUID]) -> None:
+        try:
+            asyncio.run(_schedule_narrative_runs(self._address, control_ids))
+        except Exception as error:
+            raise DurableUnavailable() from error
+
 
 @asynccontextmanager
 async def serve(
@@ -169,6 +185,8 @@ async def serve(
     review: Callable[[UUID], str] | None = None,
     scoping: Callable[[UUID], str] | None = None,
     plan: Callable[[UUID], str] | None = None,
+    prior: Callable[[UUID], str] | None = None,
+    narrative: Callable[[UUID], str] | None = None,
 ) -> AsyncIterator[None]:
     client = await Client.connect(address)
     worker = Worker(
@@ -187,6 +205,8 @@ async def serve(
             ControlReviewWorkflow,
             SystemReviewWorkflow,
             EvidencePlanRunWorkflow,
+            PriorYearWorkflow,
+            NarrativeWorkflow,
         ],
         activities=activities_for(
             database_url,
@@ -201,6 +221,8 @@ async def serve(
             review,
             scoping,
             plan,
+            prior,
+            narrative,
         ),
     )
     async with worker:
@@ -215,7 +237,75 @@ async def serve(
         await resume_reviews(client, database_url)
         await resume_scopings(client, database_url)
         await resume_plan_runs(client, database_url)
+        await resume_prior_year_runs(client, database_url)
+        await resume_narrative_runs(client, database_url)
         yield
+
+
+async def resume_narrative_runs(client: Client, database_url: str) -> int:
+    from ai_workforce_api.process_narrative import open_runs
+
+    try:
+        with connect(database_url) as connection:
+            ids = open_runs(connection)
+        for control_id in ids:
+            await start_narrative_run(client, control_id)
+    except Exception:
+        logger.warning("narrative runs could not be resumed")
+        return 0
+    return len(ids)
+
+
+async def start_narrative_run(client: Client, control_id: UUID) -> None:
+    payload: NarrativeRequest = {"control_id": str(control_id)}
+    try:
+        await client.start_workflow(
+            NarrativeWorkflow.run,
+            payload,
+            id=f"process-narrative-run:{control_id}",
+            task_queue=TASK_QUEUE,
+        )
+    except WorkflowAlreadyStartedError:
+        return
+
+
+async def _schedule_narrative_runs(address: str, control_ids: list[UUID]) -> None:
+    client = await Client.connect(address)
+    for control_id in control_ids:
+        await start_narrative_run(client, control_id)
+
+
+async def resume_prior_year_runs(client: Client, database_url: str) -> int:
+    from ai_workforce_api.prior_year import open_runs
+
+    try:
+        with connect(database_url) as connection:
+            ids = open_runs(connection)
+        for document_id in ids:
+            await start_prior_year_run(client, document_id)
+    except Exception:
+        logger.warning("prior-year runs could not be resumed")
+        return 0
+    return len(ids)
+
+
+async def start_prior_year_run(client: Client, document_id: UUID) -> None:
+    payload: PriorYearRequest = {"document_id": str(document_id)}
+    try:
+        await client.start_workflow(
+            PriorYearWorkflow.run,
+            payload,
+            id=f"prior-year-run:{document_id}",
+            task_queue=TASK_QUEUE,
+        )
+    except WorkflowAlreadyStartedError:
+        return
+
+
+async def _schedule_prior_year_runs(address: str, document_ids: list[UUID]) -> None:
+    client = await Client.connect(address)
+    for document_id in document_ids:
+        await start_prior_year_run(client, document_id)
 
 
 async def resume_plan_runs(client: Client, database_url: str) -> int:
@@ -585,6 +675,8 @@ def activities_for(
     review: Callable[[UUID], str] | None = None,
     scoping: Callable[[UUID], str] | None = None,
     plan: Callable[[UUID], str] | None = None,
+    prior: Callable[[UUID], str] | None = None,
+    narrative: Callable[[UUID], str] | None = None,
 ) -> list[Any]:
     @activity.defn(name="record_effect")
     async def record_effect(
@@ -747,6 +839,22 @@ def activities_for(
 
         await asyncio.to_thread(fail)
 
+    @activity.defn(name="run_prior_year")
+    async def run_prior_year(document_id: str) -> str:
+        if prior is None:
+            return "SKIPPED"
+        return await asyncio.to_thread(prior, UUID(document_id))
+
+    @activity.defn(name="fail_prior_year_run")
+    async def fail_prior_year_run(document_id: str) -> None:
+        from ai_workforce_api.prior_year import fail_run
+
+        def fail() -> None:
+            with connect(database_url) as connection:
+                fail_run(connection, UUID(document_id))
+
+        await asyncio.to_thread(fail)
+
     @activity.defn(name="fail_setup_draft")
     async def fail_setup_draft(project_id: str) -> None:
         def fail() -> None:
@@ -812,13 +920,33 @@ def activities_for(
 
         await asyncio.to_thread(fail)
 
+    @activity.defn(name="run_narrative")
+    async def run_narrative(control_id: str) -> str:
+        if narrative is None:
+            return "SKIPPED"
+        return await asyncio.to_thread(narrative, UUID(control_id))
+
+    @activity.defn(name="fail_narrative_run")
+    async def fail_narrative_run(control_id: str) -> None:
+        from ai_workforce_api.process_narrative import fail_run
+
+        def fail() -> None:
+            with connect(database_url) as connection:
+                fail_run(connection, UUID(control_id))
+
+        await asyncio.to_thread(fail)
+
     return [
+        run_narrative,
+        fail_narrative_run,
         draft_workpaper,
         fail_workpaper_draft,
         draft_setup,
         fail_setup_draft,
         run_evidence_plan,
         fail_evidence_plan_run,
+        run_prior_year,
+        fail_prior_year_run,
         review_system,
         fail_system_review,
         test_control,

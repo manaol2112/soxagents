@@ -177,12 +177,14 @@ def test_a_standard_with_an_evidence_suite_plans_its_evidence_from_it() -> None:
     )
     plan = _plan(facts)
     design = {item.key: item for item in plan.phase("DESIGN").requirements}
-    assert "design-ac02-e1" in design and design["design-ac02-e1"].categories == [
-        "PROCESS_DOCUMENTATION"
-    ]
+    # Lean (product owner, 27 October 2026): the governing document and one walkthrough.
+    assert list(design) == ["design-ac02-e1", "design-ac02-e2"]
+    assert design["design-ac02-e1"].categories == ["PROCESS_DOCUMENTATION"]
     interim = {item.key: item for item in plan.phase("INTERIM").requirements}
+    # The full list with how it was produced, then one item for the selected samples.
+    assert list(interim) == ["interim-ac02-e3", "interim-ac02-e5"]
     population = interim["interim-ac02-e3"]
-    assert population.categories == ["POPULATION"]
+    assert population.categories[:2] == ["POPULATION", "REPORT_RELIABILITY"]
     assert population.population_kind == "TRANSACTIONS"
     assert "Not sufficient:" in population.description
     assert "Completeness:" in population.description
@@ -201,14 +203,16 @@ def test_a_standard_with_an_evidence_suite_plans_its_evidence_from_it() -> None:
     assert added.note == "Include each monthly access listing as its own sheet."
     assert suite_wording(suite_description(added)) == added
     sample = interim["interim-ac02-e5"]
-    assert "SAMPLE" in sample.categories
+    assert sample.categories[0] == "SAMPLE"
     assert sample.depends_on == "interim-ac02-e3"
     assert sample.sample_selection.startswith("The audit team selects")
-    assert sample.attributes and all(text in facts.attributes for text in sample.attributes)
-    # The generic requirements are replaced; the roll-forward keeps the changes question.
+    # The one sample item serves every attribute the suite's sample items served.
+    assert set(sample.attributes) == set(facts.attributes)
+    # The generic requirements are replaced; the roll-forward asks what changed in its list.
     assert "interim-population" not in interim
-    roll = {item.key for item in plan.phase("ROLLFORWARD").requirements}
-    assert "rollforward-changes" in roll and "rollforward-ac02-e8" in roll
+    roll = {item.key: item for item in plan.phase("ROLLFORWARD").requirements}
+    assert list(roll) == ["rollforward-ac02-e3", "rollforward-ac02-e5"]
+    assert "CHANGE_HISTORY" in roll["rollforward-ac02-e3"].categories
     # The client's own procedures leave the suite aside.
     client = _plan(replace(facts, test_basis="CLIENT"))
     assert "interim-population" in {i.key for i in client.phase("INTERIM").requirements}
@@ -233,6 +237,48 @@ def test_a_standard_with_an_evidence_suite_plans_its_evidence_from_it() -> None:
         for category in item.categories
     }
     assert "SAMPLE" not in categories and {"CONFIGURATION", "CHANGE_HISTORY"} <= categories
+
+
+def test_a_merged_item_holding_personal_data_still_travels_as_personal_data() -> None:
+    """Lean planning (27 October 2026) merges a standard's sample items into one. Personal
+    data is decided by the library item's key (evidence_catalog), so the merged item takes
+    the key of the HR record it holds: without it, the manager relationship from HR would
+    travel in an ordinary request."""
+    from ai_workforce_api.definition_registry import BY_LIBRARY_KEY
+    from ai_workforce_api.evidence_catalog import RequirementFacts, specification
+
+    provisioning = BY_LIBRARY_KEY["access-provisioning"]
+    facts = _facts(
+        control_ref="ITGC-AC-01",
+        title="User access is approved",
+        activity="Managers approve access before it is granted.",
+        attributes=tuple(item.text for item in provisioning.approved),
+        library_key="access-provisioning",
+        test_basis="STANDARD",
+        basis_decided=True,
+    )
+    for phase in ("INTERIM", "ROLLFORWARD"):
+        population, sample = _plan(facts).phase(phase).requirements
+        prefix = phase.lower()
+        assert sample.key == f"{prefix}-ac01-e8" and sample.depends_on == population.key
+        assert "Manager of record" in sample.description
+        spec = specification(
+            RequirementFacts(
+                requirement_key=sample.key,
+                phase=phase,
+                title=sample.title,
+                categories=tuple(sample.categories),
+                origin="RULES",
+                period_start=None,
+                period_end=None,
+                as_of=None,
+                control_id="c",
+                library_key="access-provisioning",
+                application_id=None,
+                implementation_key="",
+            )
+        )
+        assert spec.sensitivity == "PERSONAL"
 
 
 def test_every_version_4_standard_plans_and_validates() -> None:
@@ -290,10 +336,11 @@ def test_a_configuration_control_is_tested_from_its_setting_not_a_sample() -> No
     facts = _mfa()
     assert traits_of(facts).profile == "CONFIGURATION"
     plan = _plan(facts)
-    design = _categories(plan, "DESIGN")
-    assert {"CONFIGURATION", "OTHER", "CONTROL_EXECUTION"} <= design
-    scope = _requirement(plan, "DESIGN", "design-scope-criteria")
-    assert "privileged" in scope.description
+    # Lean (27 October 2026): the setting with its scope, and who can change it.
+    assert _keys(plan, "DESIGN") == ["design-configuration", "design-change-access"]
+    assert {"CONFIGURATION", "CONTROL_EXECUTION"} <= _categories(plan, "DESIGN")
+    setting = _requirement(plan, "DESIGN", "design-configuration")
+    assert "privileged" in setting.description
     # Interim: the setting at the date and its history over the period, never a sample.
     assert _categories(plan, "INTERIM") == {"CONFIGURATION", "CHANGE_HISTORY"}
     history = _requirement(plan, "INTERIM", "interim-change-history")
@@ -333,18 +380,20 @@ def test_a_model_plan_that_samples_an_automated_control_is_rejected() -> None:
 
 def test_a_quarterly_access_review_separates_reviews_from_the_accounts_reviewed() -> None:
     plan = _plan(_access_review())
-    assert "design-review-criteria" in _keys(plan, "DESIGN")
-    assert "PROCESS_DOCUMENTATION" in _categories(plan, "DESIGN")
+    # Lean (27 October 2026): the review criteria travel in the procedure item.
+    assert _keys(plan, "DESIGN") == ["design-procedure", "design-walkthrough"]
+    assert "review criteria" in _requirement(plan, "DESIGN", "design-procedure").description.lower()
     population = _requirement(plan, "INTERIM", "interim-population")
     assert population.population_kind == "CONTROL_EXECUTIONS"
     # Three quarters fall in the interim period for a December year end.
     assert "(3 expected" in population.description
     assert "the quarter ending 30 September 2026" in population.description
-    listing = _requirement(plan, "INTERIM", "interim-review-listing")
-    assert listing.population_kind == "ITEMS_REVIEWED"
-    assert listing.depends_on == "interim-population"
-    assert "not the population of accounts reviewed" in listing.rationale
+    # The reviews are the population; the listing each review covered is asked for with
+    # every selected review, never as the population of accounts.
+    assert _keys(plan, "INTERIM") == ["interim-population", "interim-sample-evidence"]
     sample = _requirement(plan, "INTERIM", "interim-sample-evidence")
+    assert sample.population_kind == "ITEMS_REVIEWED"
+    assert "not the population of accounts reviewed" in sample.rationale
     assert sample.depends_on == "interim-population"
     assert "selects 2" in sample.sample_selection
     assert "not the control owner" in sample.sample_selection
@@ -366,15 +415,18 @@ def test_a_quarterly_access_review_separates_reviews_from_the_accounts_reviewed(
 
 def test_a_change_approval_control_samples_changes_from_a_validated_population() -> None:
     plan = _plan(_change_approval())
-    assert {"design-approval-workflow", "design-approvers"} <= set(_keys(plan, "DESIGN"))
-    workflow = _requirement(plan, "DESIGN", "design-approval-workflow")
-    assert set(workflow.categories) == {"PROCESS_DOCUMENTATION", "CONFIGURATION"}
+    # Lean (27 October 2026): the approval workflow and the approvers travel in the
+    # procedure item; how the list was produced travels in the population item.
+    assert _keys(plan, "DESIGN") == ["design-procedure", "design-walkthrough"]
+    procedure = _requirement(plan, "DESIGN", "design-procedure")
+    assert {"PROCESS_DOCUMENTATION", "CONFIGURATION"} <= set(procedure.categories)
+    assert "the approval policy and workflow" in procedure.description.lower()
     population = _requirement(plan, "INTERIM", "interim-population")
     assert population.population_kind == "TRANSACTIONS"
+    assert population.categories[:2] == ["POPULATION", "REPORT_RELIABILITY"]
+    assert population.necessity == "REQUIRED"
     assert "production change" in population.description
-    support = _requirement(plan, "INTERIM", "interim-population-support")
-    assert support.necessity == "REQUIRED"
-    assert "deployment or change log" in support.description
+    assert "deployment or change log" in population.description
     sample = _requirement(plan, "INTERIM", "interim-sample-evidence")
     assert sample.depends_on == "interim-population"
     assert sample.attributes == [
@@ -394,8 +446,9 @@ def test_a_management_review_needs_its_precision_and_evidence_of_actual_reviews(
     facts = _management_review()
     assert traits_of(facts).profile == "MANAGEMENT_REVIEW"
     plan = _plan(facts)
-    precision = _requirement(plan, "DESIGN", "design-review-precision")
-    assert "thresholds" in precision.description
+    # Lean (27 October 2026): the review's precision travels in the procedure item.
+    assert _keys(plan, "DESIGN") == ["design-procedure", "design-walkthrough"]
+    assert "thresholds" in _requirement(plan, "DESIGN", "design-procedure").description
     assert {"POPULATION", "SAMPLE"} <= _categories(plan, "INTERIM")
     sample = _requirement(plan, "INTERIM", "interim-sample-evidence")
     assert "investigated and resolved" in sample.description
@@ -425,22 +478,26 @@ def test_a_narrative_alone_never_stands_for_operating_evidence() -> None:
 
 def test_a_report_review_tracks_report_reliability_apart_from_the_review() -> None:
     plan = _plan(_report_review())
-    assert "design-report" in _keys(plan, "DESIGN")
-    reliability = _requirement(plan, "INTERIM", "interim-report-reliability")
+    # Lean (27 October 2026): the report's reliability is asked for with the list it
+    # produces and with each selected review, as its own category on each item, never
+    # dropped: the report is tested apart from the review.
+    assert "REPORT_RELIABILITY" in _requirement(plan, "DESIGN", "design-procedure").categories
+    population = _requirement(plan, "INTERIM", "interim-population")
     review = _requirement(plan, "INTERIM", "interim-sample-evidence")
-    assert reliability.categories == ["REPORT_RELIABILITY"]
-    assert "SAMPLE" in review.categories and "REPORT_RELIABILITY" not in review.categories
-    assert "tracked separately" in reliability.rationale
-    assert "rollforward-report-reliability" in _keys(plan, "ROLLFORWARD")
+    assert population.categories[:2] == ["POPULATION", "REPORT_RELIABILITY"]
+    assert review.categories[0] == "SAMPLE" and "REPORT_RELIABILITY" in review.categories
+    assert "tracked separately" in review.rationale
+    assert "REPORT_RELIABILITY" in _categories(plan, "ROLLFORWARD")
 
 
 def test_a_report_review_without_report_reliability_is_rejected() -> None:
     facts = _report_review()
     data = rules_plan(facts).model_dump()
     interim = next(p for p in data["phases"] if p["phase"] == "INTERIM")
-    interim["requirements"] = [
-        r for r in interim["requirements"] if "REPORT_RELIABILITY" not in r["categories"]
-    ]
+    for requirement in interim["requirements"]:
+        requirement["categories"] = [
+            c for c in requirement["categories"] if c != "REPORT_RELIABILITY"
+        ]
     with pytest.raises(ValueError, match="report the control relies on"):
         check_plan(data, facts)
 
@@ -471,18 +528,25 @@ def test_a_narrative_is_requested_only_when_the_process_is_not_understood() -> N
         process_required=True,
     )
     plan = _plan(unknown)
-    narrative = _requirement(plan, "DESIGN", "design-process-narrative")
-    assert narrative.necessity == "REQUIRED"
-    assert "no confirmed process map or narrative" in narrative.rationale
+    # Lean (27 October 2026): the narrative is asked for in the procedure item.
+    procedure = _requirement(plan, "DESIGN", "design-procedure")
+    assert "how the process runs" in procedure.description.lower()
+    assert procedure.necessity == "REQUIRED"
+    assert "no confirmed process map or narrative" in procedure.rationale
     # Interim testing is planned regardless: the missing narrative blocks nothing else.
     assert plan.phase("INTERIM").applicability == "APPLICABLE"
     assert plan.understanding.process_understanding_needed is True
-    understood = _plan(unknown_with(process_confirmed=True))
-    assert "design-process-narrative" not in _keys(understood, "DESIGN")
-    documented = _plan(unknown_with(documents=("NARRATIVE",)))
-    assert "design-process-narrative" not in _keys(documented, "DESIGN")
+
+    def asks_narrative(plan: PlanOutput) -> bool:
+        return any(
+            "how the process runs" in r.description.lower()
+            for r in plan.phase("DESIGN").requirements
+        )
+
+    assert not asks_narrative(_plan(unknown_with(process_confirmed=True)))
+    assert not asks_narrative(_plan(unknown_with(documents=("NARRATIVE",))))
     # An IT general control is never asked for a process narrative.
-    assert "design-process-narrative" not in _keys(_plan(_change_approval()), "DESIGN")
+    assert not asks_narrative(_plan(_change_approval()))
 
 
 def unknown_with(**overrides: Any) -> PlanFacts:
@@ -610,6 +674,50 @@ def test_the_prompt_carries_the_facts_and_the_decisions_the_records_settle() -> 
     assert '"decided_by_records"' in prompt
     assert '"suggested_control_type": "POPULATION"' in prompt
     assert '"interim": 2' in prompt
+
+
+def test_the_planner_words_each_item_as_a_short_plain_request_from_the_narrative() -> None:
+    # Product owner, 27 October 2026: "evidence request should not be super long. should be
+    # direct but specific. something that the process owner would understand. should be
+    # guided by the process narrative and satisfy the requirements of the attributes."
+    from ai_workforce_api.evidence_planning import PLAN_SCHEMA, SYSTEM_PROMPT
+
+    assert "under 250 characters" in SYSTEM_PROMPT
+    assert "as approved_process_narrative names" in SYSTEM_PROMPT
+    assert "every attribute of the control is listed" in SYSTEM_PROMPT
+    assert "No audit terms in a title or description" in SYSTEM_PROMPT
+    requirement = PLAN_SCHEMA["properties"]["phases"]["items"]["properties"]["requirements"]
+    assert (
+        "under 250 characters" in requirement["items"]["properties"]["description"]["description"]
+    )
+
+
+def test_an_attribute_no_operating_item_asks_for_is_noted_without_rejecting_the_plan() -> None:
+    facts = _change_approval()
+    data = rules_plan(facts).model_dump()
+    for phase in data["phases"]:
+        for requirement in phase["requirements"]:
+            requirement["attributes"] = [
+                text for text in requirement["attributes"] if text != "The change was tested"
+            ]
+    data["missing_information"] = [f"Question {n}" for n in range(8)]
+    checked = check_plan(data, facts)
+    notes = [text for text in checked.missing_information if "The change was tested" in text]
+    assert len(notes) == 2  # interim and roll-forward each lack it
+    assert any(text.startswith("No interim evidence item") for text in notes)
+    assert len(checked.missing_information) == 8  # the planner's own questions make room
+
+
+def test_a_plan_whose_items_serve_every_attribute_has_no_gap_note() -> None:
+    facts = _change_approval()
+    data = rules_plan(facts).model_dump()
+    for phase in data["phases"]:
+        if phase["phase"] != "DESIGN" and phase["requirements"]:
+            phase["requirements"][0]["attributes"] = list(facts.attributes)
+    checked = check_plan(data, facts)
+    assert not [t for t in checked.missing_information if "evidence item asks for" in t]
+    # The reviewed rules' own plan is never given the note.
+    assert not [t for t in _plan(facts).missing_information if "evidence item asks for" in t]
 
 
 # States: nothing is complete because a request exists or a file arrived

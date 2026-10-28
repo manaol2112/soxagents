@@ -95,12 +95,19 @@ export async function loadEngagement(
   const section = model.section;
   // The Testing destination (M2b) reads the controls, sheets, rounds, reviews and the
   // queue the guided workspace reads, for every control.
-  const testing = section === "testing";
+  const testing = section === "testing" || section === "review";
   const wanted = {
     dashboard: section === "overview",
     // Settings › AI workforce shows the engagement's open work by agent (docs/home-plan.md, D5).
     agentWork: section === "agents",
-    controls: section === "controls" || section === "deficiencies" || testing,
+    // Planning's Prior year tab assigns items to the engagement's controls.
+    // Controls shows where each control's plan and testing stand.
+    controls:
+      section === "controls" ||
+      section === "register" ||
+      section === "deficiencies" ||
+      section === "planning" ||
+      testing,
     plan:
       section === "plan" ||
       section === "timeline" ||

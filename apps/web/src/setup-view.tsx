@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-
+import { AddProcessButton } from "./add-process-wizard";
 import { AutoRefresh } from "./auto-refresh";
 import { ConfirmAction, OnceForm } from "./confirm-action";
 import {
@@ -12,10 +12,15 @@ import {
   ADD_SYSTEM_EVENT,
   controlsTiles,
   controlsTourSteps,
+  FINALIZE_EVENT,
   parseControlsPane,
+  RCM_UPLOAD_EVENT,
+  SELECT_CONTROLS_EVENT,
+  scopeReview,
   scopeSteps,
 } from "./controls-guide-model";
-import { ControlsMain } from "./controls-view";
+import { ControlsPage, type ScopeAction } from "./controls-page";
+import { toPageRow } from "./controls-page-model";
 import { DraftingShow } from "./drafting-show";
 import { editEngagementHref } from "./engagement-create";
 import {
@@ -29,7 +34,9 @@ import {
 import type { EngagementState } from "./engagement-model";
 import { OptionalMark, RequiredMark } from "./field-marks";
 import { agentMonogram, formatDate, initials } from "./format";
+import { NewControlForm } from "./new-control-form";
 import {
+  inScopeSystems,
   type LaunchNext,
   type LaunchSummary,
   launchNextSteps,
@@ -39,10 +46,14 @@ import {
   type Onboarding,
   openConflicts,
   type PlanItem,
+  PROCESS_CYCLES,
   pendingSuggestions,
+  type RcmImport,
   SETUP_STEPS,
+  type SetupControl,
   type SetupState,
   type SetupStep,
+  type SetupSystem,
   setupAttention,
   setupProgress,
   stepReadiness,
@@ -51,7 +62,6 @@ import {
   WORK_STEPS,
 } from "./onboarding-model";
 import {
-  ControlOptions,
   Identity,
   NOTICES,
   RcmStep,
@@ -61,19 +71,26 @@ import {
   WorkpapersStep,
 } from "./onboarding-view";
 import { PeriodDates } from "./period-dates";
-import {
-  NewProcessForm,
-  ProcessesTable,
-  scopedProcesses,
-} from "./process-view";
+import { ProcessesTable, scopedProcesses } from "./process-view";
 import { RecordDialog } from "./record-dialog";
+import { PoliciesPane, ReferencesPane } from "./references-view";
 import { SaveWhenChanged } from "./save-when-changed";
+import {
+  FinalizeScope,
+  OpenScopeAction,
+  RcmSteps,
+  RcmUpload,
+  SelectControls,
+} from "./scope-actions";
+import { type ControlsFor, parseControlsFor } from "./scope-controls-model";
+import { removalNote } from "./scoped-controls";
 import { guidedStep, ONBOARDING_STEPS } from "./setup-guide-model";
 import { ControlsAssistant, SetupAgent, SetupCycle } from "./setup-guide-view";
 import { impactHref } from "./setup-impact-model";
 import { canManageProjects, type ShellModel } from "./shell-model";
+import { StandardMatchesCard } from "./standard-matches";
 import { SystemWizard } from "./system-wizard";
-import { SystemsTable } from "./systems-view";
+import { OutOfScopeSystems, SystemsTable } from "./systems-view";
 import { type IconName, UiIcon } from "./ui-icon";
 import {
   Banner,
@@ -726,7 +743,7 @@ function OverviewStep({
     controls:
       included.length === 0
         ? "No controls yet. Load the library or upload the client's RCM."
-        : `${included.length} controls across ${areas.size} area${areas.size === 1 ? "" : "s"}, ${onboarding.applications.length} system${onboarding.applications.length === 1 ? "" : "s"}.`,
+        : `${included.length} controls across ${areas.size} area${areas.size === 1 ? "" : "s"}, ${inScopeSystems(onboarding).length} system${inScopeSystems(onboarding).length === 1 ? "" : "s"}.`,
     workpapers:
       included.length === 0
         ? "Add controls first. Previews use your controls."
@@ -1864,6 +1881,131 @@ function SetupHero({
   );
 }
 
+/**
+ * The Controls tab (decided by the product owner on 25 October 2026): the scope only, each
+ * control with its system or process, where it came from, and its scope status. Its plan,
+ * evidence and testing live in Planning, Evidence and Testing; a row opens the control.
+ */
+function ScopeControls({
+  model,
+  onboarding,
+  notices,
+  engagement,
+  controls,
+  systems,
+  editable,
+  initial,
+}: {
+  model: Ready;
+  onboarding: Onboarding;
+  /** What stands above the tiles: a notice, the standard procedures to confirm. */
+  notices: ReactNode;
+  engagement: EngagementState;
+  controls: SetupControl[];
+  systems: SetupSystem[];
+  editable: boolean;
+  initial: ControlsFor | null;
+}) {
+  const processes = onboarding.processes;
+  const processName = (control: SetupControl) =>
+    processes.find((process) => process.id === control.processId)?.name ?? "";
+  const where = (control: SetupControl) =>
+    [
+      ...onboarding.applications
+        .filter((system) => control.applicationIds.includes(system.id))
+        .map((system) => system.name),
+      processName(control),
+    ]
+      .filter(Boolean)
+      .join(", ") || control.domainLabel;
+  const inScopeSystem = new Set(systems.map((system) => system.id));
+  // A control of a system taken out of scope comes back with its system, not alone.
+  const out = onboarding.controls.filter(
+    (control) =>
+      !control.included &&
+      (control.applicationId === null ||
+        inScopeSystem.has(control.applicationId)),
+  );
+  const work = new Map(
+    (engagement.controls ?? []).map((row) => [row.id, row] as const),
+  );
+  // A system's control leaves scope, or comes back, for that system; any other, by its
+  // own scope.
+  const action = (control: SetupControl): ScopeAction => {
+    const system = control.applicationId;
+    if (control.included) {
+      return {
+        intent: system !== null ? "system-remove-control" : "control-scope",
+        fields:
+          system !== null
+            ? { system_id: system, control_id: control.id }
+            : { control_id: control.id, included: "false" },
+        note: removalNote(control, where(control), onboarding.started),
+        impact: onboarding.started
+          ? impactHref(model.organization.id, onboarding.projectId, {
+              kind: "control",
+              id: control.id,
+            })
+          : undefined,
+      };
+    }
+    return {
+      intent: system !== null ? "system-add-control" : "control-scope",
+      fields:
+        system !== null
+          ? { system_id: system, control_id: control.id }
+          : { control_id: control.id, included: "true" },
+      note: "",
+    };
+  };
+  const all = [...controls, ...out];
+  return (
+    <ControlsPage
+      ids={{
+        organizationId: model.organization.id,
+        projectId: onboarding.projectId,
+      }}
+      rows={all.map((control) =>
+        toPageRow(control, work.get(control.id) ?? null, processName(control)),
+      )}
+      actions={Object.fromEntries(
+        all.map((control) => [control.id, action(control)]),
+      )}
+      systems={systems.map((system) => system.name)}
+      processes={scopedProcesses(onboarding).map((row) => ({
+        key: row.processId ?? row.domain,
+        label: row.label,
+      }))}
+      initial={initial}
+      editable={editable}
+      notices={notices}
+      extra={
+        editable ? (
+          <details className="card sys-more sc-write">
+            <summary>
+              <span>
+                Write a business process control of the client&apos;s own
+              </span>
+            </summary>
+            <NewControlForm
+              model={model}
+              onboarding={onboarding}
+              domains={PROCESS_CYCLES.map(([key]) => key)}
+              processes={onboarding.processes}
+              systems={[]}
+              title="New business process control"
+              example={{
+                controlRef: "BP-01",
+                title: "Credit notes are approved before posting",
+              }}
+            />
+          </details>
+        ) : null
+      }
+    />
+  );
+}
+
 /** Whether the register's address narrows it (a search, a queue, a stage, a layout):
  * such an address is the Controls tab's. */
 function registerFiltered(engagement: EngagementState): boolean {
@@ -1917,24 +2059,39 @@ export function ScopePage({
     canManageProjects(model.organization.role) && scopeOpen(phase);
   // An uploaded RCM waiting for its columns to be matched takes the page until it is.
   const importing = setup.rcmImport !== null && editable;
-  const systems = onboarding.applications;
+  const systems = inScopeSystems(onboarding);
   const controls = onboarding.controls.filter((control) => control.included);
-  // Until SP6 brings its own record, the scope is final once the engagement runs with
-  // controls: their work has started.
-  const finalized = onboarding.started && controls.length > 0;
+  // The work starts when a person reviews and finalizes the scope (SP6).
+  const finalized = onboarding.scopeFinalizedAt !== null;
   const empty = systems.length === 0 && controls.length === 0;
+  // What controls are selected for: each system, and each named process.
+  const targets = [
+    ...systems.map((system) => ({
+      kind: "system" as const,
+      id: system.id,
+      name: system.name,
+    })),
+    ...onboarding.processes.map((process) => ({
+      kind: "process" as const,
+      id: process.id,
+      name: process.name,
+    })),
+  ];
   return (
     <div className="page setup-page is-controls-setup">
       <PageHeader
         context={onboarding.projectName}
         title="Systems & Processes"
-        description="Define the audit scope: the systems, the business processes, and their controls. The agent helps identify the controls that apply."
+        description="Define the audit scope: the systems, the business processes, the policies that govern them, and the references that describe them. The controls selected for each are on Controls."
         actions={
           <>
             {/* The setup agent's tour: by itself the first time, then on request. */}
             <ControlsTour steps={controlsTourSteps(onboarding)} />
             {editable && !importing ? (
-              <ControlsAddMenu controlsSet={controls.length > 0} />
+              <ControlsAddMenu
+                controlsSet={controls.length > 0}
+                finalized={finalized}
+              />
             ) : null}
           </>
         }
@@ -1954,19 +2111,60 @@ export function ScopePage({
           {NOTICES[setup.notice]}
         </Banner>
       ) : null}
-      {importing ? (
-        <RcmStep
-          model={model}
-          onboarding={onboarding}
-          editable={editable}
-          selected={null}
-          category={null}
-          rcmImport={setup.rcmImport}
-        />
+      {!importing && !finalized && onboarding.started && controls.length > 0 ? (
+        <Banner tone="info">
+          <span className="fz-banner">
+            <span>
+              {controls.length} control{controls.length === 1 ? " is" : "s are"}{" "}
+              selected. No work starts until the scope is reviewed and
+              finalized.
+            </span>
+            {editable ? (
+              <OpenScopeAction
+                event={FINALIZE_EVENT}
+                label="Review and finalize"
+                icon="check"
+                className="btn btn-sm"
+              />
+            ) : null}
+          </span>
+        </Banner>
+      ) : null}
+      {!importing && finalized && controls.length > 0 ? (
+        <Banner tone="info">
+          <span className="fz-banner">
+            <span>
+              The scope is final: {controls.length} control
+              {controls.length === 1 ? " is" : "s are"} in scope. Test plans are
+              prepared and approved in Planning.
+            </span>
+            <a className="btn btn-sm" href={sectionHref(model, "planning")}>
+              Go to Planning
+              <UiIcon name="arrow" size={14} />
+            </a>
+          </span>
+        </Banner>
+      ) : null}
+      {importing && setup.rcmImport !== null ? (
+        <>
+          <RcmProgress upload={setup.rcmImport} />
+          <RcmStep
+            model={model}
+            onboarding={onboarding}
+            editable={editable}
+            selected={null}
+            category={null}
+            rcmImport={setup.rcmImport}
+          />
+        </>
       ) : (
         <ControlsSetupFrame
           initial={parseControlsPane(setup.pane, registerFiltered(engagement))}
-          tiles={controlsTiles(onboarding)}
+          tiles={controlsTiles(onboarding, {
+            policies: setup.policies ?? [],
+            priorYear: setup.priorYear ?? [],
+          })}
+          controlsHref={sectionHref(model, "register")}
           steps={finalized ? null : scopeSteps(onboarding, finalized)}
           panes={{
             systems:
@@ -1981,26 +2179,34 @@ export function ScopePage({
                   <SocReportsCard onboarding={onboarding} />
                 </>
               ) : (
-                <SetupHero
-                  icon="server"
-                  title="Start with the first system"
-                  detail="Add the applications and infrastructure that support the engagement's financial reporting. Each system is scoped on its own, with the agent's recommended controls."
-                >
-                  {editable ? (
-                    <>
-                      <SystemWizard
-                        organizationId={model.organization.id}
-                        projectId={onboarding.projectId}
-                        knownSystems={onboarding.knownSystems}
-                        systems={systems}
-                        editable={editable}
-                        label="Add first system"
-                        openEvent={ADD_SYSTEM_EVENT}
-                      />
-                      <RcmInsteadButton />
-                    </>
-                  ) : null}
-                </SetupHero>
+                <>
+                  <SetupHero
+                    icon="server"
+                    title="Start with the first system"
+                    detail="Add the applications and infrastructure that support the engagement's financial reporting. Each system is scoped on its own, with the agent's recommended controls."
+                  >
+                    {editable ? (
+                      <>
+                        <SystemWizard
+                          organizationId={model.organization.id}
+                          projectId={onboarding.projectId}
+                          knownSystems={onboarding.knownSystems}
+                          systems={systems}
+                          editable={editable}
+                          label="Add first system"
+                          openEvent={ADD_SYSTEM_EVENT}
+                        />
+                        <RcmInsteadButton />
+                      </>
+                    ) : null}
+                  </SetupHero>
+                  {/* Those taken out of scope stay listed apart (0114). */}
+                  <OutOfScopeSystems
+                    model={model}
+                    onboarding={onboarding}
+                    editable={editable}
+                  />
+                </>
               ),
             processes:
               scopedProcesses(onboarding).length > 0 ? (
@@ -2016,37 +2222,290 @@ export function ScopePage({
                   detail="Business process controls are scoped by process: the standard cycles, such as order to cash, and any process of the client's own. An engagement over IT general controls only can leave this tab empty."
                 >
                   {editable ? (
-                    <NewProcessForm
-                      model={model}
-                      onboarding={onboarding}
+                    <AddProcessButton
                       label="Add first process"
+                      primary
+                      organizationId={model.organization.id}
+                      projectId={onboarding.projectId}
+                      systems={systems}
+                      processes={onboarding.processes}
                     />
                   ) : null}
                 </SetupHero>
               ),
-            controls:
-              controls.length > 0 ? (
-                <ControlsMain model={model} engagement={engagement} embedded />
-              ) : (
-                <>
-                  <ControlOptions
-                    model={model}
-                    onboarding={onboarding}
-                    editable={editable}
-                  />
-                  <WorkpapersStep
-                    model={model}
-                    onboarding={onboarding}
-                    editable={editable}
-                    setup={setup}
-                  />
-                </>
-              ),
+            policies: (
+              <PoliciesPane
+                ids={{
+                  organizationId: model.organization.id,
+                  projectId: onboarding.projectId,
+                }}
+                initial={setup.policies ?? []}
+                systems={systems.map((item) => ({
+                  id: item.id,
+                  name: item.name,
+                }))}
+                processes={onboarding.processes.map((item) => ({
+                  id: item.id,
+                  name: item.name,
+                }))}
+                editable={editable}
+              />
+            ),
+            references: (
+              <ReferencesPane
+                ids={{
+                  organizationId: model.organization.id,
+                  projectId: onboarding.projectId,
+                }}
+                documents={setup.policies ?? []}
+                systems={systems.map((item) => ({
+                  id: item.id,
+                  name: item.name,
+                }))}
+                processes={onboarding.processes.map((item) => ({
+                  id: item.id,
+                  name: item.name,
+                }))}
+                controls={controls.map((control) => ({
+                  id: control.id,
+                  label: [
+                    `${control.controlRef} ${control.title}`,
+                    ...systems
+                      .filter((item) =>
+                        control.applicationIds.includes(item.id),
+                      )
+                      .map((item) => item.name),
+                  ].join(" · "),
+                }))}
+                editable={editable}
+              />
+            ),
           }}
         />
       )}
       {empty ? <ControlsAssistant onboarding={onboarding} /> : null}
+      {editable ? (
+        <>
+          <SelectControls
+            organizationId={model.organization.id}
+            projectId={onboarding.projectId}
+            targets={targets}
+            finalized={finalized}
+            rcm={controls.length === 0}
+          />
+          {controls.length === 0 ? (
+            <RcmUpload
+              organizationId={model.organization.id}
+              projectId={onboarding.projectId}
+            />
+          ) : null}
+          {finalized ? null : (
+            <FinalizeScope
+              organizationId={model.organization.id}
+              projectId={onboarding.projectId}
+              review={scopeReview(onboarding)}
+              policies={
+                (setup.policies ?? []).filter(
+                  (item) => item.kind === "POLICY" || item.kind === "PROCEDURE",
+                ).length
+              }
+              canFinalize={editable}
+              planningHref={sectionHref(model, "planning")}
+              controlsHref={sectionHref(model, "register")}
+            />
+          )}
+        </>
+      ) : null}
     </div>
+  );
+}
+
+/**
+ * Controls (decided by the product owner on 26 October 2026): the engagement's controls on
+ * a page of their own, driven by what is selected for each system and process. Each opens
+ * with its scope; a system or a process opens it filtered to its own; the client's RCM
+ * can stand in for the selection before any control is in scope.
+ */
+export function RegisterPage({
+  model,
+  setup,
+  engagement,
+}: {
+  model: Ready;
+  setup: SetupState;
+  engagement: EngagementState;
+}) {
+  const onboarding = setup.onboarding;
+  if (onboarding === null) {
+    return (
+      <div className="page">
+        <Banner tone="warning">
+          The controls could not be loaded. Refresh to try again.
+        </Banner>
+      </div>
+    );
+  }
+  const phase = phaseOf(onboarding);
+  const editable =
+    canManageProjects(model.organization.role) && scopeOpen(phase);
+  const importing = setup.rcmImport !== null && editable;
+  const systems = inScopeSystems(onboarding);
+  const controls = onboarding.controls.filter((control) => control.included);
+  const finalized = onboarding.scopeFinalizedAt !== null;
+  const targets = [
+    ...systems.map((system) => ({
+      kind: "system" as const,
+      id: system.id,
+      name: system.name,
+    })),
+    ...onboarding.processes.map((process) => ({
+      kind: "process" as const,
+      id: process.id,
+      name: process.name,
+    })),
+  ];
+  // With controls in scope, the Controls page carries its own header and actions.
+  const listed = !importing && controls.length > 0;
+  const notice =
+    setup.notice !== null && setup.notice !== "setup-created" ? (
+      <Banner
+        tone={
+          setup.notice === "setup-saved" ||
+          setup.notice === "setup-rcm-uploaded" ||
+          setup.notice === "setup-rcm-imported"
+            ? "info"
+            : "warning"
+        }
+      >
+        {NOTICES[setup.notice]}
+      </Banner>
+    ) : null;
+  return (
+    <div className="page setup-page is-controls-setup">
+      {listed ? null : (
+        <PageHeader
+          context={onboarding.projectName}
+          title="Controls"
+          description="The controls selected for each system and process. Each opens with its scope; its plan, evidence and testing follow in Planning, Evidence and Testing."
+        />
+      )}
+      {listed ? null : notice}
+      {importing && setup.rcmImport !== null ? (
+        <>
+          <RcmProgress upload={setup.rcmImport} />
+          <RcmStep
+            model={model}
+            onboarding={onboarding}
+            editable={editable}
+            selected={null}
+            category={null}
+            rcmImport={setup.rcmImport}
+          />
+        </>
+      ) : listed ? (
+        <ScopeControls
+          notices={
+            <>
+              {notice}
+              <StandardMatchesCard
+                ids={{
+                  organizationId: model.organization.id,
+                  projectId: onboarding.projectId,
+                }}
+                initial={setup.standardMatches ?? null}
+                editable={editable}
+              />
+            </>
+          }
+          model={model}
+          onboarding={onboarding}
+          engagement={engagement}
+          controls={controls}
+          systems={systems}
+          editable={editable}
+          initial={parseControlsFor(setup.controlsFor)}
+        />
+      ) : (
+        <>
+          <SetupHero
+            icon="shield"
+            title="Select the controls"
+            detail={
+              systems.length + onboarding.processes.length === 0
+                ? "Controls are selected for each system and process. Add them on Systems & Processes first, or upload the client's RCM, which finds the systems it names."
+                : "Choose controls from the firm's standard library for each system and process, or upload the client's RCM. No work starts until the scope is reviewed and finalized."
+            }
+          >
+            {editable ? (
+              <>
+                {systems.length + onboarding.processes.length > 0 ? (
+                  <OpenScopeAction
+                    event={SELECT_CONTROLS_EVENT}
+                    label="Select controls"
+                    icon="plus"
+                  />
+                ) : (
+                  <a className="btn" href={sectionHref(model, "controls")}>
+                    Go to Systems &amp; Processes
+                  </a>
+                )}
+                <OpenScopeAction
+                  event={RCM_UPLOAD_EVENT}
+                  label="Upload the client's RCM"
+                  icon="upload"
+                  className="btn-secondary"
+                />
+              </>
+            ) : null}
+          </SetupHero>
+          <WorkpapersStep
+            model={model}
+            onboarding={onboarding}
+            editable={editable}
+            setup={setup}
+          />
+        </>
+      )}
+      {editable ? (
+        <>
+          <SelectControls
+            organizationId={model.organization.id}
+            projectId={onboarding.projectId}
+            targets={targets}
+            finalized={finalized}
+            rcm={controls.length === 0}
+          />
+          {controls.length === 0 ? (
+            <RcmUpload
+              organizationId={model.organization.id}
+              projectId={onboarding.projectId}
+            />
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/** Where an uploaded RCM stands in its four steps (SP5): its columns mapped, its matches
+ * reviewed, its controls selected for import, with how many rows matched. */
+function RcmProgress({ upload }: { upload: RcmImport }) {
+  const unmapped = upload.fields.filter(
+    (field) =>
+      field.required &&
+      !upload.columns.some((column) => column.field === field.key),
+  );
+  const review = upload.preview.skippedCount + upload.preview.problems.length;
+  const now = unmapped.length > 0 ? 1 : review > 0 ? 2 : 3;
+  return (
+    <section className="card rcm-progress" aria-label="RCM upload">
+      <RcmSteps now={now} />
+      <p>
+        <strong>{upload.fileName}</strong> · {upload.dataRows} rows ·{" "}
+        {upload.preview.importable} matched · {review} need
+        {review === 1 ? "s" : ""} review
+      </p>
+    </section>
   );
 }
 
@@ -2408,9 +2867,11 @@ function EngagementMemo({
             : ""}
         </Row>
         <Row label="Systems" step="controls">
-          {onboarding.applications.length === 0
+          {inScopeSystems(onboarding).length === 0
             ? "None yet"
-            : onboarding.applications.map((app) => app.name).join(", ")}
+            : inScopeSystems(onboarding)
+                .map((app) => app.name)
+                .join(", ")}
         </Row>
         <Row label="Workpapers" step="workpapers">
           {templateWords(onboarding)}
@@ -2445,7 +2906,7 @@ function LaunchedView({
         : phase === "paused"
           ? "The engagement launched and is paused"
           : "The engagement is running";
-  const systems = onboarding.applications.length;
+  const systems = inScopeSystems(onboarding).length;
   const people = onboarding.team.length;
   const next = launch === null ? [] : launchNextSteps(launch);
   const openSetup = running ? setupAttention(onboarding) : [];

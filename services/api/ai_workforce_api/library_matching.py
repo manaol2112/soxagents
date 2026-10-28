@@ -994,6 +994,7 @@ def decide_basis(
     facts: ControlFacts,
     actor: UUID,
     write: BasisWrite,
+    replan: bool = True,
 ) -> str:
     """A person decides the control's test basis. Following a standard the control does not
     have yet adopts it: the control takes the standard's key, its tested attributes are
@@ -1053,7 +1054,9 @@ def decide_basis(
              "adopted": adopted},
         )  # fmt: skip
     note = f"The control now follows {_basis_words(write.basis)}."
-    if adopted or write.basis != facts.test_basis:
+    # Planned again now, unless the scope is not final yet: its finalization plans it
+    # (standard_adoption.py, the strong matches confirmed together).
+    if replan and (adopted or write.basis != facts.test_basis):
         from ai_workforce_api.evidence_plans import generate
 
         try:

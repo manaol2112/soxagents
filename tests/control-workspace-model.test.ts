@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import type { AssistantBrief } from "../apps/web/src/assistant-model.ts";
@@ -9,6 +10,7 @@ import {
   agentLanes,
   approachOf,
   attentionOf,
+  attributeFoldLabel,
   currentStage,
   definitionWork,
   figuresOf,
@@ -1644,5 +1646,37 @@ describe("the control's definition work", () => {
       } as unknown as Partial<ControlContext>),
     );
     assert.equal(automatic.values, false);
+  });
+
+  // Product owner, 27 October 2026: "why do I get two sets of attributes? It's
+  // confusing". The Plan step's table is the one list; the fold under it holds only what
+  // waits on a decision, and says so.
+  it("heads the fold under the attribute table with what waits in it", () => {
+    assert.equal(
+      attributeFoldLabel(context({})),
+      "Agent proposals and attribute history",
+    );
+    assert.equal(
+      attributeFoldLabel(
+        context({
+          proposed: [{ id: "p1" }, { id: "p2" }],
+          issues: [
+            { status: "OPEN", origin: "ATTRIBUTES" },
+            { status: "OPEN", origin: "PROCESS" },
+            { status: "RESOLVED", origin: "ATTRIBUTES" },
+          ],
+        } as unknown as Partial<ControlContext>),
+      ),
+      "2 proposed changes to decide, 1 open question",
+    );
+    // The approved attributes are not listed again inside the plan.
+    const panel = readFileSync("apps/web/src/control-context-view.tsx", "utf8");
+    assert.ok(panel.includes("{compact ? null : ("));
+    const view = readFileSync("apps/web/src/planning-view.tsx", "utf8");
+    assert.ok(
+      !view.includes(
+        "Proposed attributes to decide, and the agent's suggestions",
+      ),
+    );
   });
 });

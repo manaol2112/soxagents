@@ -7,11 +7,153 @@
  */
 
 import {
+  CONTROL_AREAS,
+  type ControlArea,
+  inScopeSystems,
   type Onboarding,
   processRows,
   systemStatus,
 } from "./onboarding-model.ts";
+import {
+  DESCRIPTION_KINDS,
+  POLICY_KINDS,
+  type Policy,
+  type PriorYearReference,
+  policiesTile,
+  referencesTile,
+} from "./references-model.ts";
 import type { TourStep } from "./tour-model.ts";
+
+/** Opens the Add business process wizard (SP3). */
+export const ADD_PROCESS_EVENT = "aw:add-process";
+/** Raised once the wizard has saved a process. */
+export const PROCESS_SAVED_EVENT = "aw:process-saved";
+/** Opens Select controls (SP4); the detail may name the system or process. */
+export const SELECT_CONTROLS_EVENT = "aw:select-controls";
+/** Raised once controls were selected. */
+export const CONTROLS_SAVED_EVENT = "aw:controls-saved";
+/** Opens the client's RCM upload (SP5). */
+export const RCM_UPLOAD_EVENT = "aw:rcm-upload";
+/** Opens Review and finalize (SP6). */
+export const FINALIZE_EVENT = "aw:finalize-scope";
+
+/** The control area a library domain falls in. */
+export function areaOf(domain: string): ControlArea {
+  if (domain === "ACCESS" || domain === "CHANGE" || domain === "OPERATIONS") {
+    return "ITGC";
+  }
+  if (domain === "ITAC" || domain === "IPE") {
+    return domain;
+  }
+  return "BUSINESS";
+}
+
+/** The category Select controls files a library control under: its area, with the
+ * entity-level controls apart from the other business process controls. */
+export function selectionCategory(domain: string): {
+  key: string;
+  label: string;
+} {
+  if (domain === "ENTITY") {
+    return { key: "ENTITY", label: "Entity-level controls" };
+  }
+  const area = areaOf(domain);
+  return {
+    key: area,
+    label: CONTROL_AREAS.find((item) => item.id === area)?.label ?? area,
+  };
+}
+
+export type ScopeReview = {
+  totals: { systems: number; processes: number; controls: number };
+  byArea: Array<{ area: ControlArea; label: string; controls: number }>;
+  systems: Array<{
+    id: string;
+    name: string;
+    controls: number;
+    /** Areas a person approved with no control selected in them yet. */
+    open: string[];
+  }>;
+  processes: Array<{
+    id: string;
+    name: string;
+    controls: number;
+    systems: number;
+  }>;
+  /** What deserves a look before finalizing; none of it blocks. */
+  notes: string[];
+  /** Why the scope cannot be finalized yet; null when it can. */
+  blocked: string | null;
+};
+
+/**
+ * Review and finalize (decided by the product owner, SP6): the scope as it stands, what
+ * deserves a look, and whether it can be finalized. The counts are the ones the person
+ * confirms; the API refuses them if the scope changed meanwhile.
+ */
+export function scopeReview(onboarding: Onboarding): ScopeReview {
+  const included = onboarding.controls.filter((control) => control.included);
+  const systems = inScopeSystems(onboarding).map((system) => {
+    const mine = included.filter(
+      (control) => control.applicationId === system.id,
+    );
+    const open = (system.controlAreas ?? []).filter(
+      (area) =>
+        area !== "BUSINESS" &&
+        !mine.some((control) => areaOf(control.domain) === area),
+    );
+    return {
+      id: system.id,
+      name: system.name,
+      controls: mine.length,
+      open: open.map(
+        (area) => CONTROL_AREAS.find((item) => item.id === area)?.label ?? area,
+      ),
+    };
+  });
+  const processes = onboarding.processes.map((process) => ({
+    id: process.id,
+    name: process.name,
+    controls: included.filter((control) => control.processId === process.id)
+      .length,
+    systems: process.systemIds.length,
+  }));
+  const notes = [
+    ...systems
+      .filter((system) => system.controls === 0)
+      .map((system) => `${system.name} has no control selected.`),
+    ...systems
+      .filter((system) => system.controls > 0 && system.open.length > 0)
+      .map(
+        (system) =>
+          `${system.name}: no control selected yet in ${system.open.map((label) => label.charAt(0).toLowerCase() + label.slice(1)).join(", ")}.`,
+      ),
+    ...processes
+      .filter((process) => process.systems === 0)
+      .map((process) => `${process.name} is linked to no system.`),
+  ];
+  return {
+    totals: {
+      systems: inScopeSystems(onboarding).length,
+      processes: onboarding.processes.length,
+      controls: included.length,
+    },
+    byArea: CONTROL_AREAS.map((area) => ({
+      area: area.id,
+      label: area.label,
+      controls: included.filter((control) => areaOf(control.domain) === area.id)
+        .length,
+    })),
+    systems,
+    processes,
+    notes,
+    blocked: !onboarding.started
+      ? "Launch the engagement from onboarding first."
+      : included.length === 0
+        ? "Select at least one control first."
+        : null,
+  };
+}
 
 /** The Controls tour opens by itself the first time; afterwards it waits to be asked. */
 export const CONTROLS_GUIDE_SEEN_KEY = "aw.guide.controls-setup";
@@ -19,12 +161,25 @@ export const CONTROLS_GUIDE_SEEN_KEY = "aw.guide.controls-setup";
 export const OPEN_CONTROLS_GUIDE_EVENT = "aw:open-controls-guide";
 /** Shows one of the setup's tabs; the event's detail names it. */
 export const SHOW_PANE_EVENT = "aw:controls-pane";
+/** A tab's count changed in the page (a policy added, a reference analysed): its tile
+ * and tab show it without a reload. The detail is { pane, count, status }. */
+export const PANE_COUNT_EVENT = "aw:pane-count";
+
 /** Opens the wizard that adds a system. */
 export const ADD_SYSTEM_EVENT = "aw:add-system";
 /** Raised once the wizard has saved a system. */
 export const SYSTEM_SAVED_EVENT = "aw:system-saved";
 
-export const CONTROLS_PANES = ["systems", "processes", "controls"] as const;
+// Policies and procedures sit beside what they govern (decided by the product owner on 25
+// October 2026); the prior year's work is Planning's.
+// Controls are a page of their own, driven by what is selected for each system and
+// process; the references describing them sit with the scope (26 October 2026).
+export const CONTROLS_PANES = [
+  "systems",
+  "processes",
+  "policies",
+  "references",
+] as const;
 export type ControlsPane = (typeof CONTROLS_PANES)[number];
 
 /** The tab an address names. Without one, an address with the register's filters (a
@@ -37,7 +192,8 @@ export function parseControlsPane(
   if ((CONTROLS_PANES as readonly string[]).includes(value ?? "")) {
     return value as ControlsPane;
   }
-  return registerFiltered ? "controls" : "systems";
+  void registerFiltered;
+  return "systems";
 }
 
 export type ScopeStep = {
@@ -45,7 +201,8 @@ export type ScopeStep = {
   title: string;
   detail: string;
   state: "done" | "now" | "todo";
-  /** The tab the step is worked in; the last step has none of its own. */
+  /** The tab the step is worked in; the controls are on their own page, and the last
+   * step has none of its own. */
   pane: ControlsPane | null;
 };
 
@@ -101,8 +258,8 @@ export function scopeSteps(
     step(
       "controls",
       "Select controls",
-      "Standard library or the client's RCM",
-      "controls",
+      "For each system and process, on Controls",
+      null,
     ),
     step(
       "finalize",
@@ -117,9 +274,8 @@ const TARGETS = {
   tiles: [".cs-tiles"],
   systems: ["#cs-pane-systems > :first-child"],
   processes: ["#cs-pane-processes > :first-child"],
-  library: [".rcm-options > .rcm-option:nth-child(1)"],
-  rcm: [".rcm-options > .rcm-option:nth-child(2)"],
-  templates: ['section[aria-labelledby="templates-title"]'],
+  library: [".sp-step.is-controls"],
+  finalize: [".sp-step.is-finalize"],
 } as const;
 
 /** The names in a list a person typed: split at commas, semicolons, and new lines. */
@@ -150,8 +306,8 @@ export function controlsSetupState(onboarding: Onboarding): {
   firmTemplates: number;
 } {
   return {
-    systems: onboarding.applications.map((system) => system.name),
-    toReview: onboarding.applications.filter(
+    systems: inScopeSystems(onboarding).map((system) => system.name),
+    toReview: inScopeSystems(onboarding).filter(
       (system) => systemStatus(system) === "to-decide",
     ).length,
     processes: processRows(onboarding).filter(
@@ -188,7 +344,7 @@ export function controlsTourSteps(onboarding: Onboarding): TourStep[] {
       targets: TARGETS.tiles,
       title: "Set up the engagement's controls",
       body: [
-        "Three tabs: the systems in scope, the business processes, and the controls. Each control set up here gets its walkthrough, evidence request, test, and review.",
+        "The systems in scope, the business processes, the policies and procedures that govern them, and the references that describe them. The controls selected for each are listed on the Controls page; each gets its walkthrough, evidence request, test, and review once the scope is finalized.",
         "Nothing is requested from the client until a plan is approved, and nothing is sent until an approver confirms it.",
       ],
       done: true,
@@ -224,51 +380,35 @@ export function controlsTourSteps(onboarding: Onboarding): TourStep[] {
     },
     {
       id: "library",
-      pane: "controls",
+      pane: "systems",
       targets: TARGETS.library,
-      title: "Load the standard library",
+      title: "Select the controls",
       body: [
         state.libraryControls > 0
-          ? `The firm's library holds ${plural(state.libraryControls, "reviewed control")}, each with its risk, test attributes, suggested evidence, and workpaper template. Choose the areas in scope.`
-          : "The firm's library holds reviewed controls, each with its risk, test attributes, suggested evidence, and workpaper template. Choose the areas in scope.",
+          ? `The firm's library holds ${plural(state.libraryControls, "reviewed control")}, each with its risk, test attributes, suggested evidence, and workpaper template. Select them for each system and process, by category.`
+          : "The firm's library holds reviewed controls, each with its risk, test attributes, suggested evidence, and workpaper template. Select them for each system and process, by category.",
         hasSystems
-          ? "A control that runs on a system is set up once for each system."
-          : "It opens once a system is in scope: a control that runs on a system is set up once for each system.",
+          ? "The categories start on the areas approved for the system or process."
+          : "Controls are selected for a system or a process: add one first.",
       ],
       done: state.controls > 0,
     },
     {
-      id: "rcm",
-      pane: "controls",
-      targets: TARGETS.rcm,
-      title: "Or upload the client's RCM",
+      id: "finalize",
+      targets: TARGETS.finalize,
+      title: "Review and finalize",
       body: [
-        "Use the client's own matrix, as Excel or CSV, in its own format and terms. Its columns are matched to the firm's; every other column is kept under the client's heading.",
-        "The systems the RCM names are found and offered for confirmation.",
+        "Nothing starts while the scope is being set up. Review it, then confirm it: each control's walkthrough, evidence request, test, and review are created then.",
+        "Evidence requests are drafted for approval; nothing is sent until an approver confirms it.",
       ],
-      done: state.controls > 0,
-    },
-    {
-      id: "templates",
-      pane: "controls",
-      targets: TARGETS.templates,
-      title: "Check the workpaper templates",
-      body: [
-        state.firmTemplates === 1
-          ? "One of the firm's own templates applies here; the standard ones cover the rest."
-          : state.firmTemplates > 1
-            ? `${state.firmTemplates} of the firm's own templates apply here; the standard ones cover the rest.`
-            : "The standard templates apply unless the firm's own are uploaded or customised.",
-        "Preview a template with one of the engagement's own controls once controls are in place.",
-      ],
-      done: true,
+      done: false,
     },
     {
       id: "done",
       targets: [],
       title: "Then the work starts",
       body: [
-        "Once controls are set up, this page lists them, and their walkthroughs, evidence requests, tests, and reviews begin.",
+        "Once the scope is final, the Controls page lists the controls and where each stands.",
         "This tour can be replayed from this page at any time.",
       ],
       done: true,
@@ -284,7 +424,13 @@ export type ControlsTile = {
 };
 
 /** The tiles above the tabs: how many of each the engagement holds, and where it stands. */
-export function controlsTiles(onboarding: Onboarding): ControlsTile[] {
+export function controlsTiles(
+  onboarding: Onboarding,
+  references: {
+    policies: readonly Policy[];
+    priorYear?: readonly PriorYearReference[];
+  } = { policies: [] },
+): ControlsTile[] {
   const state = controlsSetupState(onboarding);
   return [
     {
@@ -305,10 +451,21 @@ export function controlsTiles(onboarding: Onboarding): ControlsTile[] {
       status: state.processes === 0 ? "Not started" : "In scope",
     },
     {
-      pane: "controls",
-      label: "Controls",
-      count: state.controls,
-      status: "In scope",
+      pane: "policies",
+      label: "Policies & procedures",
+      ...policiesTile(
+        references.policies.filter((item) => POLICY_KINDS.includes(item.kind)),
+      ),
+    },
+    {
+      pane: "references",
+      label: "References",
+      ...referencesTile(
+        references.policies.filter((item) =>
+          DESCRIPTION_KINDS.includes(item.kind),
+        ),
+        references.priorYear ?? [],
+      ),
     },
   ];
 }

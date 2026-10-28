@@ -72,7 +72,7 @@ from ai_workforce_api.mailbox import live_send_enabled
 from ai_workforce_api.model_providers import live_model
 from ai_workforce_api.pbc_drafting import DraftScheduler, queue_kickoff_drafts, schedule
 from ai_workforce_api.profile_checks import PeriodState, period_state
-from ai_workforce_api.rcm_systems import KNOWN_SYSTEMS
+from ai_workforce_api.rcm_systems import KNOWN_CATEGORIES, KNOWN_SYSTEMS
 from ai_workforce_api.schedule import KIND_PHASES
 from ai_workforce_api.scope_changes import (
     OPEN_TASKS,
@@ -152,6 +152,8 @@ class SettingsBody(BaseModel):
     templates_confirmed_at: datetime | None
     kicked_off_at: datetime | None
     version: int
+    # Review and finalize (SP6, migration 0111): the engagement's work starts here.
+    scope_finalized_at: datetime | None = None
 
 
 class CuecBody(BaseModel):
@@ -228,6 +230,19 @@ class ApplicationBody(BaseModel):
     ref_code: str = ""
     assessment: AssessmentBody | None = None
     soc_reports: list[SocReportBody] = []
+    # The Systems & Processes workflow (SP2, migration 0109): where it runs, the systems it
+    # integrates with and the processes it supports (either side may have named the link),
+    # and its control areas: the agent's suggestion as shown, apart from those a person
+    # approved (None until one decides).
+    environment: str | None = None
+    integration_ids: list[UUID] = []
+    process_ids: list[UUID] = []
+    control_areas: list[str] | None = None
+    control_areas_suggested: dict[str, Any] | None = None
+    control_areas_decided_at: datetime | None = None
+    # Taken out of scope after launch (migration 0114): when, and why. Kept on record.
+    out_of_scope_at: datetime | None = None
+    out_of_scope_reason: str = ""
 
 
 class ProcessBody(BaseModel):
@@ -240,6 +255,16 @@ class ProcessBody(BaseModel):
     domain_label: str
     version: int
     controls_in_scope: int = 0
+    # The systems it runs on (migration 0109), the primary one first when there is one.
+    system_ids: list[UUID] = []
+    primary_system_id: UUID | None = None
+    # SP3 (migration 0110): its description and owner, and its control areas: the agent's
+    # suggestion as shown, apart from those a person approved (None until one decides).
+    description: str = ""
+    owner: str = ""
+    control_areas: list[str] | None = None
+    control_areas_suggested: dict[str, Any] | None = None
+    control_areas_decided_at: datetime | None = None
 
 
 class ProcessCreate(BaseModel):
@@ -487,6 +512,8 @@ class KnownSystemsAdd(BaseModel):
 class KnownSystem(BaseModel):
     name: str
     layer: str
+    # What it is, such as ERP or HR (rcm_systems.KNOWN_CATEGORIES); "" when not known.
+    category: str = ""
 
 
 class TeamAdd(BaseModel):
@@ -655,6 +682,15 @@ def register_onboarding(
             lambda c, p: _remove_application(
                 c, p, organization_id, project_id, application_id, reason
             ),
+        )
+
+    @app.post(f"{base}/applications/{{application_id}}/restore")
+    def restore_application(
+        organization_id: UUID, project_id: UUID, application_id: UUID, request: Request
+    ) -> OnboardingBody:
+        return run(
+            request,
+            lambda c, p: _restore_application(c, p, organization_id, project_id, application_id),
         )
 
     @app.get(f"{base}/scope-impact")
@@ -1112,7 +1148,7 @@ def _settings(connection: psycopg.Connection[Any], project_id: UUID) -> Settings
         SELECT period_end, client_coordinator_name, client_coordinator_email, client_domains,
                pbc_due_days, pbc_follow_up_days, pbc_max_follow_ups, templates_confirmed_at,
                kicked_off_at, version, client_name, engagement_type, period_start,
-               fiscal_year, methodology, reporting_objectives, frameworks
+               fiscal_year, methodology, reporting_objectives, frameworks, scope_finalized_at
         FROM engagement_settings WHERE project_id = %s
         """,
         (project_id,),
@@ -1137,6 +1173,7 @@ def _settings(connection: psycopg.Connection[Any], project_id: UUID) -> Settings
         methodology=None if row[14] is None else str(row[14]),
         reporting_objectives=str(row[15]),
         frameworks=None if row[16] is None else [str(item) for item in row[16]],
+        scope_finalized_at=row[17],
     )
 
 
@@ -1218,7 +1255,9 @@ def _applications(connection: psycopg.Connection[Any], project_id: UUID) -> list
         SELECT a.id, a.name, a.description, a.layer, a.hosting, a.soc_expected,
                a.facts_source, a.facts_reason, a.facts_confirmed, a.version,
                r.review_status, r.source, r.basis, r.summary, r.coverage, r.cuecs, r.note,
-               r.reviewed_at, a.purpose, a.processes, a.owner, coalesce(a.ref_code, '')
+               r.reviewed_at, a.purpose, a.processes, a.owner, coalesce(a.ref_code, ''),
+               a.environment, a.control_areas, a.control_areas_suggested,
+               a.control_areas_decided_at, a.out_of_scope_at, a.out_of_scope_reason
         FROM engagement_applications a
         LEFT JOIN system_reviews r ON r.application_id = a.id
         WHERE a.project_id = %s ORDER BY a.name
@@ -1247,6 +1286,22 @@ def _applications(connection: psycopg.Connection[Any], project_id: UUID) -> list
             standards.setdefault(app_id, {})[str(key)] = (
                 control_id, bool(included), str(shown), str(title),
             )  # fmt: skip
+    # Integrations read both ways: the pair is stored once, from the system that named it.
+    integrations: dict[UUID, list[UUID]] = {}
+    for one, other in connection.execute(
+        "SELECT application_id, related_application_id FROM engagement_system_integrations "
+        "WHERE project_id = %s ORDER BY created_at",
+        (project_id,),
+    ).fetchall():
+        integrations.setdefault(one, []).append(other)
+        integrations.setdefault(other, []).append(one)
+    linked: dict[UUID, list[UUID]] = {}
+    for application_id, process_id in connection.execute(
+        "SELECT application_id, process_id FROM engagement_process_systems "
+        "WHERE project_id = %s ORDER BY created_at",
+        (project_id,),
+    ).fetchall():
+        linked.setdefault(application_id, []).append(process_id)
     recommendations: dict[UUID, list[RecommendationBody]] = {}
     for rec in connection.execute(
         """
@@ -1315,6 +1370,14 @@ def _applications(connection: psycopg.Connection[Any], project_id: UUID) -> list
             ref_code=str(row[21]),
             assessment=assessment_body(connection, row[0]),
             soc_reports=report_bodies(connection, row[0]),
+            environment=None if row[22] is None else str(row[22]),
+            integration_ids=integrations.get(row[0], []),
+            process_ids=linked.get(row[0], []),
+            control_areas=None if row[23] is None else [str(area) for area in row[23]],
+            control_areas_suggested=row[24] if isinstance(row[24], dict) else None,
+            control_areas_decided_at=row[25],
+            out_of_scope_at=row[26],
+            out_of_scope_reason=str(row[27]),
         )
         for row in rows
     ]
@@ -1482,6 +1545,16 @@ def _processes(
     for control in controls:
         if control.process_id is not None and control.included:
             counts[control.process_id] = counts.get(control.process_id, 0) + 1
+    systems: dict[UUID, list[UUID]] = {}
+    primary: dict[UUID, UUID] = {}
+    for process_id, application_id, is_primary in connection.execute(
+        "SELECT process_id, application_id, is_primary FROM engagement_process_systems "
+        "WHERE project_id = %s ORDER BY is_primary DESC, created_at",
+        (project_id,),
+    ).fetchall():
+        systems.setdefault(process_id, []).append(application_id)
+        if is_primary:
+            primary[process_id] = application_id
     return [
         ProcessBody(
             id=row[0],
@@ -1490,9 +1563,17 @@ def _processes(
             domain_label=DOMAIN_LABELS.get(str(row[2]), str(row[2])),
             version=int(row[3]),
             controls_in_scope=counts.get(row[0], 0),
+            system_ids=systems.get(row[0], []),
+            primary_system_id=primary.get(row[0]),
+            description=str(row[4]),
+            owner=str(row[5]),
+            control_areas=None if row[6] is None else [str(area) for area in row[6]],
+            control_areas_suggested=row[7] if isinstance(row[7], dict) else None,
+            control_areas_decided_at=row[8],
         )
         for row in connection.execute(
-            "SELECT id, name, domain, version FROM engagement_processes "
+            "SELECT id, name, domain, version, description, owner, control_areas, "
+            "control_areas_suggested, control_areas_decided_at FROM engagement_processes "
             "WHERE project_id = %s ORDER BY name",
             (project_id,),
         ).fetchall()
@@ -2021,7 +2102,7 @@ def _known_systems(applications: list[ApplicationBody]) -> list[KnownSystem]:
     """The catalog, less what is already in scope. Plain "SAP" is left out: pick the product."""
     taken = {app.name.casefold() for app in applications}
     return [
-        KnownSystem(name=name, layer=layer)
+        KnownSystem(name=name, layer=layer, category=KNOWN_CATEGORIES.get(name, ""))
         for name, layer, _patterns in KNOWN_SYSTEMS
         if name != "SAP" and name.casefold() not in taken
     ]
@@ -2122,6 +2203,16 @@ def _remove_application(
                 """,
                 (project_id, application_id),
             )
+            # The system is marked out of scope (0114): listed apart, out of the counts.
+            cursor.execute(
+                """
+                UPDATE engagement_applications
+                SET out_of_scope_at = clock_timestamp(), out_of_scope_by = %s,
+                    out_of_scope_reason = %s, version = version + 1
+                WHERE id = %s AND project_id = %s
+                """,
+                (principal.id, reason.strip()[:1000], application_id, project_id),
+            )
             _audit(
                 cursor, organization_id, project_id, principal.id,
                 "onboarding.application_out_of_scope",
@@ -2141,6 +2232,36 @@ def _remove_application(
         if removed is None:
             raise NotVisible()
         _audit(cursor, organization_id, project_id, principal.id, "onboarding.application", {})
+    return _snapshot(connection, organization_id, project_id)
+
+
+def _restore_application(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    application_id: UUID,
+) -> OnboardingBody:
+    """A system taken out of scope comes back into scope (0114). Its controls stay out of
+    scope: they are selected again, as for any system, so nothing returns unreviewed."""
+    _authorize_setup(connection, principal, organization_id, project_id, after_start=True)
+    with transaction(connection) as cursor:
+        row = cursor.execute(
+            """
+            UPDATE engagement_applications
+            SET out_of_scope_at = NULL, out_of_scope_by = NULL, out_of_scope_reason = '',
+                version = version + 1
+            WHERE id = %s AND project_id = %s AND out_of_scope_at IS NOT NULL
+            RETURNING id
+            """,
+            (application_id, project_id),
+        ).fetchone()
+        if row is None:
+            raise OnboardingState("the system is not out of scope")
+        _audit(
+            cursor, organization_id, project_id, principal.id,
+            "onboarding.application_back_in_scope", {"application_id": str(application_id)},
+        )  # fmt: skip
     return _snapshot(connection, organization_id, project_id)
 
 
@@ -2656,7 +2777,13 @@ def _load_library(
         raise OnboardingState("add an in-scope system first")
     added = 0
     with transaction(connection) as cursor:
-        # The library and an uploaded RCM are alternatives. Loading one replaces the other.
+        # The library and an uploaded RCM are alternatives. Loading one replaces the other,
+        # with the matches to the standards proposed for the upload's controls.
+        cursor.execute(
+            "DELETE FROM library_match_runs WHERE project_id = %s AND engagement_control_id IN "
+            "(SELECT id FROM engagement_controls WHERE project_id = %s AND source = 'UPLOAD')",
+            (project_id, project_id),
+        )
         replaced = cursor.execute(
             "DELETE FROM engagement_controls WHERE project_id = %s AND source = 'UPLOAD'",
             (project_id,),
@@ -3469,6 +3596,18 @@ def approve_plan(
         ).fetchone()
         if claimed is None:
             raise OnboardingState("engagement has started")
+        # Launched with controls in scope, the scope is final now: their work is created
+        # below. Launched without, the work waits for Review and finalize (SP6).
+        cursor.execute(
+            """
+            UPDATE engagement_settings
+            SET scope_finalized_at = kicked_off_at, scope_finalized_by = kicked_off_by
+            WHERE project_id = %s AND EXISTS (
+                SELECT 1 FROM engagement_controls WHERE project_id = %s AND included
+            )
+            """,
+            (project_id, project_id),
+        )
         cursor.execute(
             """
             UPDATE projects SET status = 'ACTIVE', version = version + 1,

@@ -503,6 +503,31 @@ export type DefinitionWork = {
  * on the Test plans page; these decisions are made on the control, and appear there only
  * while they wait.
  */
+/** The heading of the fold under the Plan step's attribute table (product owner, 27
+ * October 2026: "why do I get two sets of attributes? It's confusing"). The table is the
+ * one list of attributes; the fold holds only what waits on a decision, the agent's
+ * proposals and the attributes' history, and says which. */
+export function attributeFoldLabel(context: ControlContext): string {
+  const proposed = context.proposed.length;
+  const questions = context.issues.filter(
+    (item) => item.status === "OPEN" && item.origin !== "PROCESS",
+  ).length;
+  const waiting = [
+    proposed > 0
+      ? `${proposed} proposed ${proposed === 1 ? "change" : "changes"} to decide`
+      : "",
+    context.libraryUpdate !== null ? "a library update to review" : "",
+    questions > 0
+      ? `${questions} open ${questions === 1 ? "question" : "questions"}`
+      : "",
+  ].filter((part) => part !== "");
+  if (waiting.length > 0) {
+    const text = waiting.join(", ");
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  }
+  return "Agent proposals and attribute history";
+}
+
 export function definitionWork(context: ControlContext | null): DefinitionWork {
   if (context === null) {
     return {

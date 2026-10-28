@@ -41,6 +41,7 @@ export type IconName =
   | "star"
   | "stop"
   | "table"
+  | "tag"
   | "upload"
   | "user"
   | "wand"
@@ -192,6 +193,12 @@ const PATHS: Record<IconName, ReactNode> = {
   stop: <rect x="6" y="6" width="12" height="12" rx="2" />,
   cloud: (
     <path d="M7 18h10.5a4 4 0 0 0 .6-7.96A6 6 0 0 0 6.6 9.1 4.5 4.5 0 0 0 7 18Z" />
+  ),
+  tag: (
+    <>
+      <path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z" />
+      <circle cx="7.5" cy="7.5" r="1.5" />
+    </>
   ),
   database: (
     <>

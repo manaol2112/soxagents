@@ -110,6 +110,16 @@ def started(connection: psycopg.Connection[Any], project_id: UUID) -> bool:
     return row is not None and bool(row[0])
 
 
+def scope_finalized(connection: psycopg.Connection[Any], project_id: UUID) -> bool:
+    """Whether a person has reviewed and finalized the engagement's scope (SP6): its work
+    starts then. An engagement launched with controls is final from its launch."""
+    row = connection.execute(
+        "SELECT scope_finalized_at IS NOT NULL FROM engagement_settings WHERE project_id = %s",
+        (project_id,),
+    ).fetchone()
+    return row is not None and bool(row[0])
+
+
 def reconcile_scope(
     connection: psycopg.Connection[Any],
     organization_id: UUID,
@@ -117,8 +127,10 @@ def reconcile_scope(
     actor_id: UUID,
 ) -> list[UUID]:
     """Bring the running engagement's work in line with its scope. Returns the evidence
-    drafts queued for the coordinator, for the caller to schedule once committed."""
-    if not started(connection, project_id):
+    drafts queued for the coordinator, for the caller to schedule once committed. Before
+    the scope is finalized (decided by the product owner, SP6), scope changes create no
+    work: Review and finalize creates it for everything in scope at once."""
+    if not started(connection, project_id) or not scope_finalized(connection, project_id):
         return []
     from ai_workforce_api.evidence_plans import plan_and_issue
     from ai_workforce_api.library_definitions import link_definitions

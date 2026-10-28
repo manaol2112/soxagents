@@ -49,7 +49,8 @@ def test_the_closing_line_is_not_part_of_the_last_item() -> None:
 
 
 def test_the_owner_sees_each_deliverable_and_uploads_for_one(migrated: Database) -> None:
-    sent = _sent(migrated, "items")
+    # Lean (27 October 2026): the design request carries two deliverables.
+    sent = _sent(migrated, "items", "DESIGN")
     public = _public(migrated)
     session = _verify(public, sent["token"], _code(public, sent["token"]))
     body = public.get(_PORTAL, headers=session).json()
@@ -202,7 +203,8 @@ def test_messages_are_records_that_never_change(migrated: Database) -> None:
 
 
 def test_submitting_needs_a_file_and_confirms_missing_items(migrated: Database) -> None:
-    sent = _sent(migrated, "submit")
+    # Lean (27 October 2026): the design request carries two deliverables.
+    sent = _sent(migrated, "submit", "DESIGN")
     public = _public(migrated)
     session = _verify(public, sent["token"], _code(public, sent["token"]))
     url = f"{_PORTAL}/requests/{sent['request_id']}/submit"
@@ -218,7 +220,9 @@ def test_submitting_needs_a_file_and_confirms_missing_items(migrated: Database) 
         headers=session,
     )  # fmt: skip
     assert confirmed.status_code == 200, confirmed.text
-    assert confirmed.json()["missing"] == ["Report parameters and record count for the population"]
+    assert confirmed.json()["missing"] == [
+        "Walkthrough instance: one access request from request to grant"
+    ]
     request = public.get(_PORTAL, headers=session).json()["requests"][0]
     assert request["submitted_at"] is not None
     assert request["owner_status"] in ("SUBMITTED", "UNDER_REVIEW")

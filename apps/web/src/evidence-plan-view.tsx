@@ -357,10 +357,14 @@ export function RequirementRow({
   compact = false,
   fileLine,
   upload = null,
+  bare = false,
 }: {
   item: PlanRequirement;
   canAct: boolean;
   action: Action;
+  /** Inside a card that already names the item and its status (the request list's
+   * item card): only its files, what the reader found, and the actions. */
+  bare?: boolean;
   /** The control's files that do not serve it yet, to link. */
   linkable?: Array<{ id: string; name: string }>;
   /** Its plan waits for approval: the item is part of the proposal. */
@@ -418,7 +422,7 @@ export function RequirementRow({
   // What a person must look at now: evidence arrived and not yet judged, a change the
   // planner proposes, or an item flagged for review.
   const waitsOnYou = waitsOnPerson(item);
-  const fold = compact && !waitsOnYou && asking === null;
+  const fold = compact && !bare && !waitsOnYou && asking === null;
   const ask = (next: Asking, prefill = "") => {
     setAsking(next);
     setWords(prefill);
@@ -701,11 +705,13 @@ export function RequirementRow({
   return (
     <li
       id={`req-${item.id}`}
-      className={`cc-item ep-item${item.needsReview ? " is-review" : ""}${compact ? " is-compact" : ""}`}
+      className={`cc-item ep-item${item.needsReview ? " is-review" : ""}${compact ? " is-compact" : ""}${bare ? " is-bare" : ""}`}
     >
-      <span className={`ep-dot ${shown.tone}`} aria-hidden="true" />
+      {bare ? null : (
+        <span className={`ep-dot ${shown.tone}`} aria-hidden="true" />
+      )}
       <div className="cc-item-body">
-        <p className="ep-title">
+        <p className={`ep-title${bare ? " sr-only" : ""}`}>
           <strong>{item.title}</strong>
           {item.necessity !== "REQUIRED" ? (
             <span className="cc-badge">{NECESSITY_LABELS[item.necessity]}</span>
@@ -747,7 +753,8 @@ export function RequirementRow({
         ) : null}
         {/* The reasoning and the request behind the item open on request, so the plan
             reads as what is needed and where it stands. */}
-        <details className="ep-more">
+        {/* In a request's item card the why and the period are its Guidance. */}
+        <details className="ep-more" hidden={bare || undefined}>
           <summary>{compact ? "Details" : "Why, period, and request"}</summary>
           {compact ? <p className="cc-text">{item.description}</p> : null}
           {fold ? evidence : null}
@@ -974,12 +981,14 @@ export function RequirementRow({
         ) : null}
       </div>
       <div className="ep-side">
-        <span
-          className={`cx-status ${shown.tone}`}
-          title={shown.title || undefined}
-        >
-          {shown.label}
-        </span>
+        {bare ? null : (
+          <span
+            className={`cx-status ${shown.tone}`}
+            title={shown.title || undefined}
+          >
+            {shown.label}
+          </span>
+        )}
         {upload}
         {fold ? null : buttons}
       </div>

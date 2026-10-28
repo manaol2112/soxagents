@@ -1,15 +1,22 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
   answeredValues,
   approvalHeldBy,
+  approvalHolds,
+  attributeReadiness,
+  attributeRows,
   type Blocker,
   basisWords,
   changesSummary,
+  criteriaToAccept,
   decisionWords,
   describeQuestions,
+  evidenceCoverage,
+  evidenceRows,
+  evidenceSummary,
   factTitle,
   filledLine,
   filterOptions,
@@ -38,6 +45,10 @@ import {
   planningProblem,
   planningWrite,
   planQuestions,
+  planVersions,
+  procedureCoverage,
+  procedureReadiness,
+  procedureRows,
   type QueueRow,
   questionsToSave,
   related,
@@ -321,11 +332,11 @@ describe("the planning review queue", () => {
   it("links to the queue and to one control's plan", () => {
     assert.equal(
       planningHref(ORG, PROJECT, { control: CONTROL, tab: "evidence" }),
-      `/?organization=${ORG}&project=${PROJECT}&section=testing&control=${CONTROL}&tab=evidence`,
+      `/?organization=${ORG}&project=${PROJECT}&section=planning&control=${CONTROL}&tab=evidence`,
     );
     assert.equal(
       planningHref(ORG, PROJECT, { filter: "APPROVED" }),
-      `/?organization=${ORG}&project=${PROJECT}&section=testing&filter=APPROVED`,
+      `/?organization=${ORG}&project=${PROJECT}&section=planning&filter=APPROVED`,
     );
   });
 });
@@ -581,11 +592,11 @@ describe("test plan actions", () => {
     }
     assert.equal(
       planningHref(ORG, PROJECT, { view: "each" }),
-      `/?organization=${ORG}&project=${PROJECT}&section=testing&view=each`,
+      `/?organization=${ORG}&project=${PROJECT}&section=planning&view=each`,
     );
     assert.equal(
       planningHref(ORG, PROJECT, { view: "plans" }),
-      `/?organization=${ORG}&project=${PROJECT}&section=testing`,
+      `/?organization=${ORG}&project=${PROJECT}&section=planning`,
     );
   });
 
@@ -698,7 +709,7 @@ describe("phase release", () => {
     );
     assert.equal(
       planningHref(ORG, PROJECT, { view: "phases" }),
-      `/?organization=${ORG}&project=${PROJECT}&section=testing&view=phases`,
+      `/?organization=${ORG}&project=${PROJECT}&section=planning&view=phases`,
     );
   });
 });
@@ -813,6 +824,24 @@ describe("what holds approval, as work", () => {
     assert.equal(groups[0]?.title, "Settle the control's attributes");
     assert.equal(groups[0]?.action, "Open the attributes");
     assert.deepEqual(holdGroups([]), []);
+  });
+
+  it("lists before approval only what holds it", () => {
+    const holds = approvalHolds([
+      blocker("Performed by: who performs it?", false, "VALUES"),
+      blocker("Check what the plan assumes.", false, "UNDERSTANDING"),
+      blocker("1 proposed attribute waits for a decision.", true, "ATTRIBUTES"),
+    ]);
+    assert.deepEqual(
+      holds.map((group) => [group.resolve, group.items]),
+      [["ATTRIBUTES", ["1 proposed attribute waits for a decision."]]],
+    );
+    assert.deepEqual(
+      approvalHolds([
+        blocker("Performed by: who performs it?", false, "VALUES"),
+      ]),
+      [],
+    );
   });
 
   it("opens the place on the control's record where each is resolved", () => {
@@ -1898,5 +1927,556 @@ describe("describing a client's own control", () => {
       note: "",
     });
     assert.match(used.path, /\/test-basis$/);
+  });
+});
+
+// The control's Plan step lists the procedures as one table (decided by the product owner
+// on 26 October 2026): numbered in phase order, with where each came from and whether a
+// finding waits on it.
+describe("the procedures table", () => {
+  const listed = () =>
+    plan({
+      procedures: [
+        {
+          id: ITEM,
+          code: "I1",
+          phase: "INTERIM",
+          text: "Inspect a sample of access requests. Each was approved before access was granted.",
+          attribute_codes: ["A1", "A2"],
+          evidence_codes: ["E2"],
+          method: "INSPECTION",
+          origin: "LIBRARY",
+          person_edited: true,
+        },
+        {
+          id: ITEM,
+          code: "D1",
+          phase: "DESIGN",
+          text: "Walk one through.",
+          attribute_codes: [],
+          evidence_codes: ["E1"],
+          origin: "AGENT",
+        },
+      ],
+      findings: [
+        {
+          kind: "PROCEDURE_WITHOUT_EVIDENCE",
+          code: "I1",
+          detail: "I1 needs a look.",
+        },
+      ],
+    });
+
+  it("numbers the procedures in phase order and splits a title from its detail", () => {
+    const rows = procedureRows(listed());
+    assert.deepEqual(
+      rows.map((row) => [row.number, row.code, row.phase]),
+      [
+        [1, "D1", "D&I"],
+        [2, "I1", "Interim"],
+      ],
+    );
+    assert.equal(rows[1]?.title, "Inspect a sample of access requests.");
+    assert.equal(rows[1]?.body, "Each was approved before access was granted.");
+    assert.equal(rows[1]?.method, "Inspection");
+    assert.equal(rows[0]?.method, "");
+    assert.deepEqual([rows[1]?.attributes, rows[1]?.evidence], [2, 1]);
+  });
+
+  it("says where each came from: the agent, or the standard adapted by a person", () => {
+    const rows = procedureRows(listed());
+    assert.equal(rows[0]?.source, "Drafted by agent");
+    assert.equal(rows[1]?.source, "Standard library, adapted");
+  });
+
+  it("marks a procedure with a finding as needing review, and counts readiness", () => {
+    const rows = procedureRows(listed());
+    assert.deepEqual(
+      rows.map((row) => row.status),
+      ["READY", "NEEDS_REVIEW"],
+    );
+    assert.deepEqual(procedureReadiness(listed()), { ready: 1, review: 1 });
+  });
+
+  // The procedures as the product owner's reference shows them (27 October 2026).
+  it("counts each phase's procedures, the phases used, readiness and the source", () => {
+    const coverage = procedureCoverage(listed());
+    assert.deepEqual(
+      coverage.phases.map((item) => [item.short, item.count]),
+      [
+        ["D&I", 1],
+        ["Interim", 1],
+        ["Roll-forward", 0],
+      ],
+    );
+    assert.deepEqual(
+      [coverage.total, coverage.phasesUsed, coverage.ready, coverage.review],
+      [2, 2, 1, 1],
+    );
+    // Two sources: one label for both would claim too much.
+    assert.equal(coverage.source, "Mixed sources");
+    assert.equal(coverage.first, "DESIGN");
+    const view = readFileSync("apps/web/src/planning-view.tsx", "utf8");
+    for (const words of [
+      "Test procedures",
+      "Procedure coverage",
+      "Procedure overview",
+      '"cards" ? "Cards" : "Compact"',
+    ]) {
+      assert.ok(view.includes(words), words);
+    }
+  });
+});
+
+// The attributes as one table (decided by the product owner on 26 October 2026): where
+// each one's criteria stand, never claimed beyond what the plan records.
+describe("the attributes table", () => {
+  const listed = () =>
+    plan({
+      attributes: [
+        {
+          id: ITEM,
+          code: "A1",
+          text: "Approved",
+          basis: "DOCUMENTED",
+          source: "LIBRARY",
+          condition: "The approver is the manager.",
+          pass_criteria: "The manager approved.",
+          procedure_codes: ["I1"],
+          evidence_codes: ["E2"],
+          criteria_source: "LIBRARY",
+        },
+        {
+          id: ITEM,
+          code: "A2",
+          text: "By an approver",
+          basis: "DOCUMENTED",
+          source: "AGENT",
+          pass_criteria: "Someone approved.",
+          procedure_codes: ["I1"],
+          evidence_codes: [],
+          criteria_source: "AGENT",
+        },
+        {
+          id: ITEM,
+          code: "A3",
+          text: "Dated",
+          basis: "DOCUMENTED",
+          source: "MANUAL",
+          procedure_codes: [],
+          evidence_codes: [],
+          criteria_source: "NONE",
+        },
+        {
+          id: ITEM,
+          code: "A4",
+          text: "Inferred",
+          basis: "INFERRED",
+          source: "LIBRARY",
+          procedure_codes: [],
+          evidence_codes: [],
+          criteria_source: "PLAN",
+        },
+      ],
+      findings: [],
+    });
+
+  it("lists each with the result expected, its links and where it came from", () => {
+    const rows = attributeRows(listed());
+    assert.deepEqual(
+      rows.map((row) => [row.number, row.code, row.expected, row.source]),
+      [
+        [1, "A1", "The approver is the manager.", "Standard library"],
+        [2, "A2", "Someone approved.", "Drafted by agent"],
+        [3, "A3", "", "Added by a person"],
+        [4, "A4", "", "Standard library"],
+      ],
+    );
+    assert.deepEqual(rows[0]?.procedures, ["I1"]);
+  });
+
+  it("confirms only criteria from the library or a person, and counts readiness", () => {
+    assert.deepEqual(
+      attributeRows(listed()).map((row) => row.status),
+      // Agent criteria and an inferred basis need review; no criteria is not started.
+      ["CONFIRMED", "NEEDS_REVIEW", "NOT_STARTED", "NEEDS_REVIEW"],
+    );
+    assert.deepEqual(attributeReadiness(listed()), {
+      confirmed: 1,
+      review: 2,
+      notStarted: 1,
+    });
+  });
+
+  it("confirms the agent's criteria once a person accepts them or approves the plan", () => {
+    const accepted = plan({
+      attributes: [
+        {
+          id: ITEM,
+          code: "A2",
+          text: "By an approver",
+          basis: "DOCUMENTED",
+          source: "AGENT",
+          procedure_codes: [],
+          evidence_codes: [],
+          criteria_source: "AGENT",
+          criteria_accepted_by: "Avery Reviewer",
+          criteria_accepted_at: "2026-10-27T15:00:00Z",
+        },
+      ],
+      findings: [],
+    });
+    assert.equal(attributeRows(accepted)[0]?.status, "CONFIRMED");
+    assert.equal(accepted.attributes[0]?.criteriaAcceptedBy, "Avery Reviewer");
+    assert.deepEqual(criteriaToAccept(accepted), []);
+    // Not accepted: it waits, and is the one offered to accept.
+    assert.deepEqual(
+      criteriaToAccept(listed()).map((item) => item.code),
+      ["A2"],
+    );
+    // Approving the plan confirms its criteria together.
+    const approved = { ...listed(), state: "APPROVED" as const };
+    assert.deepEqual(
+      attributeRows(approved).map((row) => row.status),
+      ["CONFIRMED", "CONFIRMED", "NOT_STARTED", "NEEDS_REVIEW"],
+    );
+    assert.deepEqual(criteriaToAccept(approved), []);
+  });
+
+  it("accepts criteria only for attributes named one by one, each with its version", () => {
+    const write = planningWrite({
+      ...IDS,
+      intent: "criteria-accept",
+      control_id: CONTROL,
+      attributes: [{ id: ITEM, version: 4 }],
+    });
+    assert.ok(!("error" in write));
+    assert.equal(
+      write.path,
+      `/organizations/${IDS.organization_id}/projects/${IDS.project_id}/controls/${CONTROL}/master-plan/criteria/accept`,
+    );
+    assert.deepEqual(write.body, { attributes: [{ id: ITEM, version: 4 }] });
+    for (const attributes of [
+      [],
+      [{ id: ITEM }],
+      [{ id: "not-an-id", version: 1 }],
+      [
+        { id: ITEM, version: 1 },
+        { id: ITEM, version: 1 },
+      ],
+    ]) {
+      assert.deepEqual(
+        planningWrite({
+          ...IDS,
+          intent: "criteria-accept",
+          control_id: CONTROL,
+          attributes,
+        }),
+        { error: "invalid" },
+      );
+    }
+  });
+
+  it("puts an attribute with a finding under review", () => {
+    const flagged = plan({
+      attributes: [
+        {
+          id: ITEM,
+          code: "A1",
+          text: "Approved",
+          basis: "DOCUMENTED",
+          source: "LIBRARY",
+          procedure_codes: [],
+          evidence_codes: [],
+          criteria_source: "LIBRARY",
+        },
+      ],
+      findings: [
+        {
+          kind: "ATTRIBUTE_WITHOUT_EVIDENCE",
+          code: "A1",
+          detail: "No evidence.",
+        },
+      ],
+    });
+    assert.equal(attributeRows(flagged)[0]?.status, "NEEDS_REVIEW");
+  });
+});
+
+// The evidence as one table (decided by the product owner on 26 October 2026): each item's
+// status read from its request's own state, never assumed.
+describe("the evidence table", () => {
+  const item = (code: string, phase: string, status: string, extra = {}) => ({
+    id: ITEM,
+    code,
+    phase,
+    title: `Evidence ${code}`,
+    categories: ["SAMPLE", "CONTROL_EXECUTION"],
+    necessity: "REQUIRED",
+    status,
+    origin: "RULES",
+    attribute_codes: [],
+    procedure_codes: ["I1"],
+    ...extra,
+  });
+  const listed = () =>
+    plan({
+      evidence: [
+        item("E3", "ROLLFORWARD", "AWAITING_DEPENDENCY"),
+        item("E1", "DESIGN", "PLANNED", {
+          categories: ["PROCESS_DOCUMENTATION"],
+          necessity: "OPTIONAL",
+        }),
+        item("E2", "INTERIM", "SENT"),
+        item("E4", "INTERIM", "RECEIVED"),
+        item("E5", "INTERIM", "INSUFFICIENT"),
+        item("E6", "INTERIM", "ACCEPTED"),
+        item("E7", "INTERIM", "WAIVED"),
+        item("E8", "INTERIM", "SENT"),
+      ],
+      findings: [
+        { kind: "EVIDENCE_UNLINKED", code: "E8", detail: "E8 needs a look." },
+      ],
+    });
+
+  it("lists the evidence in phase order with its type, phase and need", () => {
+    const rows = evidenceRows(listed());
+    assert.deepEqual(
+      rows.map((row) => row.code),
+      ["E1", "E2", "E4", "E5", "E6", "E7", "E8", "E3"],
+    );
+    // A sample's type is what it samples.
+    assert.equal(rows[1]?.typeLabel, "Control execution");
+    assert.equal(rows[0]?.typeLabel, "Process documentation");
+    assert.equal(rows[0]?.required, false);
+    assert.equal(rows[0]?.phaseLabel, "D&I");
+    assert.equal(rows[0]?.source, "Standard rules");
+  });
+
+  it("groups each request's state, a finding putting it under review", () => {
+    assert.deepEqual(
+      evidenceRows(listed()).map((row) => [row.code, row.status]),
+      [
+        ["E1", "NOT_REQUESTED"],
+        ["E2", "REQUESTED"],
+        ["E4", "IN_PROGRESS"],
+        ["E5", "NEEDS_REVIEW"],
+        ["E6", "ACCEPTED"],
+        ["E7", "NOT_APPLICABLE"],
+        ["E8", "NEEDS_REVIEW"],
+        ["E3", "NOT_REQUESTED"],
+      ],
+    );
+  });
+
+  it("counts each status for the summary", () => {
+    assert.deepEqual(evidenceSummary(listed()), {
+      NOT_REQUESTED: 2,
+      REQUESTED: 1,
+      IN_PROGRESS: 1,
+      NEEDS_REVIEW: 2,
+      ACCEPTED: 1,
+      NOT_APPLICABLE: 1,
+      total: 8,
+    });
+  });
+
+  // The evidence as the procedures show theirs (product owner, 27 October 2026).
+  it("counts each phase's items and those to review, and where the requests stand", () => {
+    const coverage = evidenceCoverage(listed());
+    assert.deepEqual(
+      coverage.phases.map((item) => [item.short, item.count, item.review]),
+      [
+        ["D&I", 1, 0],
+        ["Interim", 6, 2],
+        ["Roll-forward", 1, 0],
+      ],
+    );
+    assert.deepEqual(
+      [coverage.total, coverage.phasesUsed, coverage.optional],
+      [8, 3, 1],
+    );
+    // What needs a person comes first; a status no item holds is left out.
+    assert.equal(
+      coverage.standing,
+      "2 to review · 2 not requested · 1 requested · 1 in progress · 1 accepted · 1 not applicable",
+    );
+    assert.equal(coverage.source, "Standard rules");
+    assert.equal(coverage.first, "DESIGN");
+    const view = readFileSync("apps/web/src/planning-view.tsx", "utf8");
+    for (const words of [
+      "<EvidenceBoard",
+      "Evidence coverage",
+      "Evidence overview",
+      "EVIDENCE_PURPOSE[phase]",
+      "Group in requests",
+    ]) {
+      assert.ok(view.includes(words), words);
+    }
+  });
+});
+
+// The plan's versions beside its History tab (decided by the product owner on 26 October
+// 2026): the revision open now, then each one a person decided, newest first.
+describe("the plan's versions", () => {
+  it("lists the current revision as a draft when nothing is decided", () => {
+    assert.deepEqual(
+      planVersions(plan()).map((item) => [
+        item.revision,
+        item.current,
+        item.label,
+      ]),
+      [[3, true, "Draft ready"]],
+    );
+  });
+
+  it("adds each decided revision, newest first, with its latest decision", () => {
+    const decided = plan({
+      state: "APPROVED",
+      approved_revision: 3,
+      decisions: [
+        {
+          decision: "CHANGES_REQUESTED",
+          revision: 1,
+          decided_by: "Dana Reviewer",
+          decided_at: "2026-10-01T09:30:00Z",
+          content_hash: "a",
+        },
+        {
+          decision: "APPROVED",
+          revision: 2,
+          decided_by: "Dana Reviewer",
+          decided_at: "2026-10-05T09:30:00Z",
+          content_hash: "b",
+        },
+        {
+          decision: "APPROVED",
+          revision: 3,
+          decided_by: "Dana Reviewer",
+          decided_at: "2026-10-15T10:21:00Z",
+          content_hash: "c",
+        },
+      ],
+    });
+    assert.deepEqual(
+      planVersions(decided).map((item) => [
+        item.revision,
+        item.current,
+        item.label,
+        item.at,
+      ]),
+      [
+        [3, true, "Approved", "2026-10-15T10:21:00Z"],
+        [2, false, "Approved", "2026-10-05T09:30:00Z"],
+        [1, false, "Changes requested", "2026-10-01T09:30:00Z"],
+      ],
+    );
+  });
+});
+
+// Users add, change and remove the evidence a plan lists (product owner, 26 October 2026).
+describe("adding and removing evidence", () => {
+  it("adds a person's evidence item, what it shows standing for why it is needed", () => {
+    const added = planningWrite({
+      ...IDS,
+      intent: "evidence-add",
+      control_id: CONTROL,
+      phase: "INTERIM",
+      category: "CONTROL_EXECUTION",
+      title: "Quarterly access review sign-off",
+      description: "The signed quarterly review of access for the period.",
+      objective: "Access was reviewed and signed off each quarter.",
+      necessity: "OPTIONAL",
+    });
+    assert.ok(!("error" in added));
+    assert.equal(
+      added.path,
+      `${BASE}/controls/${CONTROL}/evidence-requirements`,
+    );
+    assert.deepEqual(added.body, {
+      phase: "INTERIM",
+      title: "Quarterly access review sign-off",
+      description: "The signed quarterly review of access for the period.",
+      categories: ["CONTROL_EXECUTION"],
+      objective: "Access was reviewed and signed off each quarter.",
+      rationale: "Access was reviewed and signed off each quarter.",
+      necessity: "OPTIONAL",
+    });
+    // Samples come with the samples the team selects; a short entry is refused.
+    for (const change of [
+      { category: "SAMPLE" },
+      { phase: "RETEST" },
+      { objective: "Short" },
+    ]) {
+      assert.ok(
+        "error" in
+          planningWrite({
+            ...IDS,
+            intent: "evidence-add",
+            control_id: CONTROL,
+            phase: "INTERIM",
+            category: "CONTROL_EXECUTION",
+            title: "Quarterly access review sign-off",
+            description:
+              "The signed quarterly review of access for the period.",
+            objective: "Access was reviewed and signed off each quarter.",
+            ...change,
+          }),
+      );
+    }
+  });
+
+  it("removes an item and undoes the removal", () => {
+    for (const [intent, verb] of [
+      ["evidence-remove", "remove"],
+      ["evidence-restore", "restore"],
+    ] as const) {
+      const sent = planningWrite({
+        ...IDS,
+        intent,
+        control_id: CONTROL,
+        requirement_id: ITEM,
+        version: 5,
+      });
+      assert.ok(!("error" in sent));
+      assert.equal(
+        sent.path,
+        `${BASE}/controls/${CONTROL}/evidence-requirements/${ITEM}/${verb}`,
+      );
+      assert.deepEqual(sent.body, { version: 5 });
+    }
+  });
+
+  it("says why an item cannot be removed", () => {
+    assert.equal(
+      planningProblem(
+        409,
+        "it has already been requested from the client; waive it instead",
+      ),
+      "This item was already requested from the client, so it cannot be removed. Waive it on the Request step instead.",
+    );
+    assert.equal(
+      planningProblem(409, "E7 depends on it; remove that first"),
+      "E7 depends on this item. Remove E7 first.",
+    );
+  });
+});
+
+// The Attributes tab adds, rewords and removes the control's attributes in place (product
+// owner, 26 October 2026), through the control's own attribute record.
+describe("the Attributes tab's own actions", () => {
+  it("offers add, edit wording and remove, and confirms a removal first", () => {
+    const view = readFileSync("apps/web/src/planning-view.tsx", "utf8");
+    for (const words of [
+      "Add attribute",
+      'text: "Edit wording"',
+      'text: "Remove from the plan"',
+      'intent: "attribute-add"',
+      'intent: "attribute-edit"',
+      'intent: "attribute-retire"',
+      "It is kept on record as retired.",
+    ]) {
+      assert.ok(view.includes(words), words);
+    }
   });
 });

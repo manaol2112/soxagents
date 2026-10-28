@@ -14,6 +14,12 @@ import "./portal.css";
 import "./planning.css";
 import "./library.css";
 import "./controls-setup.css";
+import "./controls-page.css";
+import "./control-plan.css";
+import "./client-walkthrough.css";
+import "./evidence-requests.css";
+import "./process-flow.css";
+import "./procedure-board.css";
 // Last: the glass layer sits over the modules' own surfaces.
 import "./glass.css";
 

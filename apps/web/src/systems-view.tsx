@@ -4,8 +4,10 @@ import { ConfirmAction } from "./confirm-action";
 import { ADD_SYSTEM_EVENT, listOf } from "./controls-guide-model";
 import { FilterableOffers } from "./library-offers";
 import {
+  CONTROL_AREAS,
   categoryOf,
   HOSTING_LABELS,
+  inScopeSystems,
   LAYERS,
   type Onboarding,
   type SetupControl,
@@ -15,11 +17,12 @@ import {
   systemStatus,
 } from "./onboarding-model";
 import { canonicalQuery, placeSetup } from "./routes";
+import { ScopeSummary } from "./scope-summary";
 import { ScopeTable } from "./scope-table";
 import { removalNote, ScopedControlTable } from "./scoped-controls";
 import { SetupForm } from "./setup-form";
 import { impactHref } from "./setup-impact-model";
-import type { ShellModel } from "./shell-model";
+import { type ShellModel, workspaceHref } from "./shell-model";
 import { SocAssessment, SocReports, SocUpload } from "./soc-view";
 import { SystemRows } from "./system-rows";
 import { SystemWizard } from "./system-wizard";
@@ -165,7 +168,7 @@ export function SystemsTable({
   editable: boolean;
   selected: string | null;
 }) {
-  const systems = onboarding.applications;
+  const systems = inScopeSystems(onboarding);
   const working = systems.some(
     (system) => systemStatus(system) === "reviewing",
   );
@@ -203,7 +206,19 @@ export function SystemsTable({
           ) : null
         }
         rows={systems.map((system) => {
-          const processes = listOf(system.processes);
+          // The processes it is linked to (SP2), then any it names in its own words.
+          const processes = [
+            ...new Set([
+              ...system.processIds
+                .map(
+                  (id) =>
+                    onboarding.processes.find((process) => process.id === id)
+                      ?.name,
+                )
+                .filter((name): name is string => name !== undefined),
+              ...listOf(system.processes),
+            ]),
+          ];
           return {
             id: system.id,
             kind: system.layer,
@@ -255,17 +270,136 @@ export function SystemsTable({
               <ScopeStatus key="status" system={system} />,
             ],
             detail: (
-              <SystemDetail
-                model={model}
-                onboarding={onboarding}
-                system={system}
-                editable={editable}
-              />
+              <>
+                <ScopeSummary
+                  kind="system"
+                  id={system.id}
+                  name={system.name}
+                  controls={
+                    systemControls(onboarding.controls, system.id).length
+                  }
+                  approved={CONTROL_AREAS.filter((area) =>
+                    (system.controlAreas ?? []).includes(area.id),
+                  ).map((area) => area.label)}
+                  suggested={(system.controlAreasSuggested?.areas ?? [])
+                    .filter(
+                      (item) =>
+                        item.suggested &&
+                        !(system.controlAreas ?? []).includes(item.area),
+                    )
+                    .map(
+                      (item) =>
+                        CONTROL_AREAS.find((area) => area.id === item.area)
+                          ?.label ?? item.area,
+                    )}
+                  linked={system.processIds.length}
+                  linkedLabel="Linked processes"
+                  editable={editable}
+                  selectable
+                  controlsHref={workspaceHref(
+                    "register",
+                    model.organization.id,
+                    onboarding.projectId,
+                  )}
+                />
+                <SystemDetail
+                  model={model}
+                  onboarding={onboarding}
+                  system={system}
+                  editable={editable}
+                  manage={false}
+                />
+              </>
             ),
           };
         })}
       />
+      <OutOfScopeSystems
+        model={model}
+        onboarding={onboarding}
+        editable={editable}
+      />
     </>
+  );
+}
+
+/**
+ * The systems taken out of scope after launch (decided by the product owner on 25 October
+ * 2026): kept on record for what was tested, listed apart and out of the scope's counts,
+ * each with why and a way back. Brought back, a system's controls are selected again.
+ */
+export function OutOfScopeSystems({
+  model,
+  onboarding,
+  editable,
+}: {
+  model: Ready;
+  onboarding: Onboarding;
+  editable: boolean;
+}) {
+  const systems = onboarding.applications.filter(
+    (system) => (system.outOfScope ?? null) !== null,
+  );
+  if (systems.length === 0) {
+    return null;
+  }
+  return (
+    <details className="card oos">
+      <summary>
+        <UiIcon name="chevron" size={14} />
+        Out of scope <span>({systems.length})</span>
+        <small>Kept on record for the work already done on them.</small>
+      </summary>
+      <ul>
+        {systems.map((system) => (
+          <li key={system.id}>
+            <span className="st-icon" aria-hidden="true">
+              <UiIcon name={LAYER_ICON[system.layer] ?? "window"} size={15} />
+            </span>
+            <span className="oos-text">
+              <strong>{system.name}</strong>
+              <small>
+                {[
+                  LAYER_LABEL[system.layer] ?? system.layer,
+                  system.outOfScope
+                    ? `Taken out of scope ${new Date(system.outOfScope.at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </small>
+              {system.outOfScope?.reason ? (
+                <span className="oos-reason">{system.outOfScope.reason}</span>
+              ) : null}
+            </span>
+            {editable ? (
+              <form autoComplete="off" method="post" action="/workspace/setup">
+                <input
+                  type="hidden"
+                  name="organization_id"
+                  value={model.organization.id}
+                />
+                <input
+                  type="hidden"
+                  name="project_id"
+                  value={onboarding.projectId}
+                />
+                <input type="hidden" name="step" value="controls" />
+                <input type="hidden" name="application_id" value={system.id} />
+                <button
+                  type="submit"
+                  name="intent"
+                  value="restore-application"
+                  className="btn-secondary btn-sm"
+                >
+                  Bring back into scope
+                </button>
+              </form>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 
@@ -322,7 +456,10 @@ function ScopeStatus({ system }: { system: SetupSystem }) {
       : status === "to-decide"
         ? ["is-review", "To review"]
         : status === "no-controls"
-          ? ["is-review", "No controls"]
+          ? // Its areas approved in the wizard, its controls still to select (SP4).
+            system.controlAreas !== null && system.controlAreas.length > 0
+            ? ["is-review", "Select controls"]
+            : ["is-review", "No controls"]
           : ["is-in", "In scope"];
   return (
     <span className={`st-status ${tone}`}>
@@ -387,11 +524,15 @@ function SystemDetail({
   onboarding,
   system,
   editable,
+  manage = true,
 }: {
   model: Ready;
   onboarding: Onboarding;
   system: SetupSystem;
   editable: boolean;
+  /** The system's controls listed and managed here (the onboarding setup); on Systems &
+   * Processes they are managed on the Controls tab, so only its details show. */
+  manage?: boolean;
 }) {
   const assessment = system.assessment;
   const status = systemStatus(system);
@@ -399,10 +540,20 @@ function SystemDetail({
     organizationId: model.organization.id,
     projectId: onboarding.projectId,
   };
+  const named = (
+    ids: readonly string[],
+    list: ReadonlyArray<{ id: string; name: string }>,
+  ) =>
+    ids
+      .map((id) => list.find((item) => item.id === id)?.name ?? "")
+      .filter(Boolean)
+      .join(", ");
   const about: Array<[string, string]> = [
     ["Description", system.description],
     ["Business purpose", system.purpose],
+    ["Related processes", named(system.processIds, onboarding.processes)],
     ["Processes", system.processes],
+    ["Integrates with", named(system.integrationIds, onboarding.applications)],
     ["Owner", system.owner],
   ];
   return (
@@ -522,14 +673,22 @@ function SystemDetail({
         <SocUpload ids={ids} system={system} editable={editable} />
       </section>
 
-      <ScopedControls
-        model={model}
-        onboarding={onboarding}
-        system={system}
-        editable={editable}
-      />
-      {editable ? (
-        <LibraryOffers model={model} onboarding={onboarding} system={system} />
+      {manage ? (
+        <>
+          <ScopedControls
+            model={model}
+            onboarding={onboarding}
+            system={system}
+            editable={editable}
+          />
+          {editable ? (
+            <LibraryOffers
+              model={model}
+              onboarding={onboarding}
+              system={system}
+            />
+          ) : null}
+        </>
       ) : null}
     </article>
   );

@@ -144,7 +144,7 @@ class DraftItem(BaseModel):
     detail: str = Field(default="", max_length=1500)
     period: str = Field(default="", max_length=200)
     format: str = Field(default="", max_length=160)
-    fields: list[str] = Field(default_factory=list, max_length=15)
+    fields: list[str] = Field(default_factory=list, max_length=30)
     parameters: str = Field(default="", max_length=400)
     completeness: str = Field(default="", max_length=500)
     # What may serve instead (a standard's evidence item, evidence_planning.SuiteWording).
@@ -388,7 +388,7 @@ def planned_draft(context: DraftContext) -> DraftContent:
                 title=title,
                 detail=wording.note[:1500],
                 period=wording.period[:200],
-                fields=[text[:200] for text in wording.include[:15]],
+                fields=[text[:200] for text in wording.include[:30]],
                 completeness=wording.completeness[:500],
                 alternatives=[text[:300] for text in wording.alternatives[:6]],
             )
@@ -1014,6 +1014,8 @@ class LocalDraftScheduler:
         review: Callable[[UUID], str] | None = None,
         scoping: Callable[[UUID], str] | None = None,
         plan: Callable[[UUID], str] | None = None,
+        prior: Callable[[UUID], str] | None = None,
+        narrative: Callable[[UUID], str] | None = None,
     ) -> None:
         from ai_workforce_api.console import console_runner
         from ai_workforce_api.evidence_analysis import analysis_runner
@@ -1048,6 +1050,12 @@ class LocalDraftScheduler:
 
         self._scoping = scoping if scoping is not None else scoping_runner(settings)
         self._plan = plan if plan is not None else plan_runner(settings)
+        from ai_workforce_api.prior_year import prior_year_runner
+
+        self._prior = prior if prior is not None else prior_year_runner(settings)
+        from ai_workforce_api.process_narrative import narrative_runner
+
+        self._narrative = narrative if narrative is not None else narrative_runner(settings)
         self._pool = ThreadPoolExecutor(
             max_workers=settings.local_worker_threads, thread_name_prefix="pbc-draft"
         )
@@ -1179,6 +1187,67 @@ class LocalDraftScheduler:
             fail_plan_run(connection, plan_id)
         self._draft_released(plan_id)
 
+    def schedule_prior_year_runs(self, document_ids: list[UUID]) -> None:
+        for document_id in document_ids:
+            self._pool.submit(self._attempt_prior_year, document_id)
+
+    def _attempt_prior_year(self, document_id: UUID) -> None:
+        from ai_workforce_api.prior_year import RUN_ATTEMPTS, fail_run
+
+        for _ in range(RUN_ATTEMPTS):
+            try:
+                self._prior(document_id)
+                return
+            except Exception:
+                logger.warning("a prior-year reference could not be analysed; retrying")
+                try:
+                    with connect(self._settings.database_url) as connection:
+                        connection.execute(
+                            "UPDATE prior_year_runs SET run_status = 'PENDING', "
+                            "run_lease_until = NULL WHERE document_id = %s "
+                            "AND run_status = 'WORKING'",
+                            (document_id,),
+                        )
+                except psycopg.Error:
+                    logger.warning("a prior-year run could not be reset for retry")
+        with connect(self._settings.database_url) as connection:
+            fail_run(connection, document_id)
+
+    def schedule_narrative_runs(self, control_ids: list[UUID]) -> None:
+        for control_id in control_ids:
+            self._pool.submit(self._attempt_narrative, control_id)
+
+    def _attempt_narrative(self, control_id: UUID) -> None:
+        from ai_workforce_api.process_narrative import RUN_ATTEMPTS, fail_run
+
+        for _ in range(RUN_ATTEMPTS):
+            try:
+                if self._narrative(control_id) == "PLANNED":
+                    # The test plan was updated from the approved narrative: draft what
+                    # its evidence plan released, as a plan run does.
+                    with connect(self._settings.database_url) as connection:
+                        plan = connection.execute(
+                            "SELECT id FROM evidence_plans WHERE engagement_control_id = %s",
+                            (control_id,),
+                        ).fetchone()
+                    if plan is not None:
+                        self._draft_released(UUID(str(plan[0])))
+                return
+            except Exception:
+                logger.warning("a process narrative could not be drafted; retrying")
+                try:
+                    with connect(self._settings.database_url) as connection:
+                        connection.execute(
+                            "UPDATE process_narrative_runs SET run_status = 'PENDING', "
+                            "run_lease_until = NULL WHERE engagement_control_id = %s "
+                            "AND run_status = 'WORKING'",
+                            (control_id,),
+                        )
+                except psycopg.Error:
+                    logger.warning("a narrative run could not be reset for retry")
+        with connect(self._settings.database_url) as connection:
+            fail_run(connection, control_id)
+
     def _draft_released(self, plan_id: UUID) -> None:
         """Draft the requests a settled plan released."""
         from ai_workforce_api.evidence_plans import drafts_for_plan
@@ -1285,6 +1354,8 @@ class LocalDraftScheduler:
         from ai_workforce_api.control_reviews import open_reperformances
         from ai_workforce_api.evidence_analysis import open_analyses
         from ai_workforce_api.evidence_plans import open_plan_runs
+        from ai_workforce_api.prior_year import open_runs as open_prior_year
+        from ai_workforce_api.process_narrative import open_runs as open_narratives
         from ai_workforce_api.rcm_systems import open_scans
         from ai_workforce_api.setup_drafting import open_drafts as open_setups
         from ai_workforce_api.system_review_queue import open_reviews as open_scopings
@@ -1302,8 +1373,12 @@ class LocalDraftScheduler:
             reviews = open_reperformances(connection)
             scopings = open_scopings(connection)
             plans = open_plan_runs(connection)
+            priors = open_prior_year(connection)
+            narratives = open_narratives(connection)
         self.schedule_drafts(ids)
         self.schedule_plan_runs(plans)
+        self.schedule_prior_year_runs(priors)
+        self.schedule_narrative_runs(narratives)
         self.schedule_system_reviews(scopings)
         self.schedule_reviews(reviews)
         self.schedule_workpaper_drafts(workpapers)
@@ -1323,6 +1398,8 @@ class LocalDraftScheduler:
             + len(reviews)
             + len(scopings)
             + len(plans)
+            + len(priors)
+            + len(narratives)
         )
 
     def shutdown(self) -> None:

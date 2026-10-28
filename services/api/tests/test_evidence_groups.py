@@ -239,9 +239,14 @@ def test_every_kind_of_control_travels_by_person_phase_and_system(migrated: Data
     assert set(refs[process["id"]]) == {"RTR-01", "RTR-02", "RTR-03"}
     assert any(set(r) >= {"ITAC-03", "ITAC-13"} for r in refs.values())
     assert any("IPE-03" in r for r in refs.values())
-    # Payroll evidence is personal data and travels only with personal data.
-    [payroll] = [g for g in groups if "HTR-02" in refs[g["id"]]]
-    assert _review(client, team, payroll["id"]).json()["personal_data"] is True
+    # Payroll evidence is personal data and travels only with personal data. Lean (27
+    # October 2026): each phase's request now groups with the other personal-data controls'
+    # (an item holding HR records keeps its library key, so it stays personal data).
+    payroll = [g for g in groups if "HTR-02" in refs[g["id"]]]
+    assert {g["phase"] for g in payroll} == {"DESIGN", "INTERIM"}
+    for group in payroll:
+        assert _review(client, team, group["id"]).json()["personal_data"] is True
+        assert set(refs[group["id"]]) <= {"HTR-02", "IPE-05", "ITAC-11"}
     assert _review(client, team, process["id"]).json()["personal_data"] is False
     # Approving the business process and management reviews sends one email for them.
     view = _review(client, team, process["id"]).json()

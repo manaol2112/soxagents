@@ -32,6 +32,37 @@ export const VIEW_NOTES: Record<TestingView, string> = {
   review: "The independent reviews: their notes, re-performance and sign-off.",
 };
 
+/** Planning's own tabs: the plans and their release by phase. The prior year's work is
+ * with the scope on Systems & Processes (decided by the product owner on 26 October). */
+export const PLANNING_TABS = ["plans", "phases"] as const;
+export type PlanningTab = (typeof PLANNING_TABS)[number];
+export const PLANNING_TAB_LABELS: Record<PlanningTab, string> = {
+  plans: "Plans",
+  phases: "Phases",
+};
+
+export function parsePlanningTab(
+  value: string | null | undefined,
+): PlanningTab {
+  return value === "phases" ? value : "plans";
+}
+
+export function planningTabHref(
+  organizationId: string,
+  projectId: string,
+  tab: PlanningTab,
+): string {
+  const params = new URLSearchParams({
+    organization: organizationId,
+    project: projectId,
+    section: "planning",
+  });
+  if (tab !== "plans") {
+    params.set("view", tab);
+  }
+  return `/?${params.toString()}`;
+}
+
 export function parseTestingView(
   value: string | null | undefined,
 ): TestingView {
@@ -50,9 +81,16 @@ export function testingHref(
   const params = new URLSearchParams({
     organization: organizationId,
     project: projectId,
-    section: "testing",
+    // Each view is now its destination's (25 October 2026): the plans and phases are
+    // Planning's, the results Testing's, the reviews Review's.
+    section:
+      view === "plans" || view === "phases"
+        ? "planning"
+        : view === "review"
+          ? "review"
+          : "testing",
   });
-  if (view !== "plans") {
+  if (view === "phases") {
     params.set("view", view);
   }
   for (const [key, value] of Object.entries(extra)) {

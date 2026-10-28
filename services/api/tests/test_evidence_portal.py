@@ -241,13 +241,14 @@ def test_preview_links_exist_only_with_the_mock_mailbox_and_for_the_team(
 # Helpers
 
 
-def _sent(database: Database, slug: str) -> dict[str, Any]:
-    """An active engagement whose ITGC-AC-01 interim request has been approved and sent."""
+def _sent(database: Database, slug: str, phase: str = "INTERIM") -> dict[str, Any]:
+    """An active engagement whose ITGC-AC-01 request for the phase (interim unless said)
+    has been approved and sent."""
     team, _client, _scheduler = _engagement(database, f"portal-{slug}-{uuid4().hex[:4]}")
     client = _session(database, team["owner_id"], email_mock_inbound_enabled=True)
     admin = _session(database, team["reviewer_id"])
     base = f"/organizations/{team['org']}/projects/{team['project']}"
-    request = _request(database, team, "ITGC-AC-01")
+    request = _request(database, team, "ITGC-AC-01", phase)
     submitted = client.post(
         f"{base}/pbc-requests/{request['id']}/submit", json={"version": request["version"]}
     )

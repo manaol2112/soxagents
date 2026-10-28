@@ -402,9 +402,19 @@ def test_the_plan_decides_the_evidence_and_the_consistency_set_scores_a_right_an
         }
         for a in facts["attributes"]
     }
-    assert ("Application owner list", "REQUIRED") in planned[1]
-    assert ("Manager relationship for each selected user", "REQUIRED") in planned[1]
-    assert ("System record of the grant for each selected item", "REQUIRED") in planned[2]
+    # Lean (27 October 2026): each selected sample's evidence is one REQUIRED item listing
+    # every detail it must show; the details the attribute rests on reach the tester whole.
+    required = {
+        a["index"]: " ".join(
+            e["what_counts"]
+            for e in a.get("evidence_required_by_plan", [])
+            if e["necessity"] == "REQUIRED"
+        )
+        for a in facts["attributes"]
+    }
+    assert ("Evidence for each selected grant", "REQUIRED") in planned[1]
+    assert "Designated owner" in required[1] and "Manager of record" in required[1]
+    assert "Grant date and time" in required[2]
     # Each requirement says what counts, as the approved plan words it.
     counts = [e["what_counts"] for a in facts["attributes"] for e in a.get(
         "evidence_required_by_plan", [])]  # fmt: skip

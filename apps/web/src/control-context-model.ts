@@ -213,6 +213,8 @@ export type DesignSlot = {
   value: string;
   automatic: boolean;
   filledBy: string | null;
+  /** When its answer was last saved, as an ISO time, or "". */
+  filledAt: string;
   version: number;
   /** The answers usually given, to choose from (slot_options.py). */
   options: string[];
@@ -285,6 +287,21 @@ export type ContextIssue = {
   status: "OPEN" | "RESOLVED" | "DISMISSED";
   resolutionNote: string;
   version: number;
+  /** A question the narrative's agents need the client to answer (0117), and the answers
+   * the records suggest; empty for any other issue. */
+  question: string;
+  suggestions: string[];
+  /** A point to confirm (0118): the agents' statement of the fact (empty when the question
+   * is asked open), the narrative section and attribute codes it serves, its round, and
+   * whether it is a missing fact or a contradiction. */
+  proposal: string;
+  section: string;
+  attributes: string[];
+  round: number;
+  pointKind: "" | "MISSING" | "CONTRADICTION";
+  /** Where the statement comes from (0121): the client's records and answers, or the
+   * usual practice for a control of its kind; "" when asked open. */
+  proposalBasis: "" | "SOURCES" | "TYPICAL";
 };
 
 export type SupportingDocument = {
@@ -311,17 +328,480 @@ export type ProcessStep = {
   source: string;
   sourceTitle: string;
   quote: string;
+  /** The codes of the control's attributes evaluated at this step (A1, A2, ...). */
+  attributes: string[];
 };
+
+/** One version of the process narrative (0116): its words and steps, who made it, when. */
+export type NarrativeVersion = {
+  version: number;
+  kind: "BUILT" | "PROPOSED" | "SAVED" | "CONFIRMED" | "ADOPTED";
+  builtBy: string;
+  summary: string;
+  sections: NarrativeSection[];
+  steps: ProcessStep[];
+  actor: string | null;
+  at: string;
+};
+
+export const VERSION_KIND_LABELS: Record<NarrativeVersion["kind"], string> = {
+  BUILT: "Drafted",
+  PROPOSED: "Redrafted beside the current",
+  SAVED: "Saved as draft",
+  CONFIRMED: "Approved",
+  ADOPTED: "Redraft taken",
+};
+
+export function parseVersions(value: unknown): NarrativeVersion[] {
+  return records(value)
+    .map((item) => ({
+      version: num(item.version),
+      kind: oneOf(
+        item.kind,
+        ["BUILT", "PROPOSED", "SAVED", "CONFIRMED", "ADOPTED"] as const,
+        "SAVED",
+      ),
+      builtBy: str(item.built_by),
+      summary: str(item.summary),
+      sections: parseSections(item.sections),
+      steps: records(item.steps).map(parseStep),
+      actor: typeof item.actor === "string" ? item.actor : null,
+      at: str(item.created_at),
+    }))
+    .filter((item) => item.version > 0);
+}
+
+/** The API path that lists a control's narrative versions, checked; null when invalid. */
+export function versionsPath(fields: Fields): string | null {
+  const organizationId = text(fields, "organization_id");
+  const projectId = text(fields, "project_id");
+  const controlId = text(fields, "control_id");
+  if (![organizationId, projectId, controlId].every((id) => UUID.test(id))) {
+    return null;
+  }
+  return `/organizations/${organizationId}/projects/${projectId}/controls/${controlId}/process/versions`;
+}
+
+/** The narrative's fixed sections (0117), in order. */
+export const NARRATIVE_SECTIONS = [
+  ["PURPOSE", "Purpose and scope"],
+  ["INITIATION", "Initiation"],
+  ["APPROVAL", "Review and approval"],
+  ["EXECUTION", "Execution"],
+  ["RECORDING", "Recording and evidence"],
+  ["EXCEPTIONS", "Exceptions and escalation"],
+  ["MONITORING", "Monitoring and oversight"],
+] as const;
+export type SectionKey = (typeof NARRATIVE_SECTIONS)[number][0];
+export const SECTION_HEADINGS = Object.fromEntries(
+  NARRATIVE_SECTIONS,
+) as Record<SectionKey, string>;
+
+export type NarrativeSection = {
+  key: SectionKey;
+  heading: string;
+  text: string;
+  attributes: string[];
+};
+
+/** The narrative's background run: drafting, reviewing, or done. */
+export type NarrativeRun = {
+  status: "IDLE" | "PENDING" | "WORKING" | "FAILED";
+  /** PLAN updates the test plan from the approved narrative (0120). */
+  mode: "DRAFT" | "REVIEW" | "PLAN";
+  stage:
+    | ""
+    | "PREPARING"
+    | "DRAFTING"
+    | "REVIEWING"
+    | "CHECKING"
+    | "ATTRIBUTES"
+    | "EVIDENCE";
+  round: number;
+  note: string;
+  /** What the last update of the test plan from the narrative did, or null. */
+  planOutcome: {
+    attributes: number;
+    evidence: number;
+    evidenceProposed: number;
+    /** The planner did not answer; the rules planned without the narrative. */
+    evidenceFallback: boolean;
+    note: string;
+  } | null;
+  /** When the run and its stage began (0118), as ISO times, or "". */
+  startedAt: string;
+  stageAt: string;
+  /** What the run works from. */
+  progress: {
+    answers: number;
+    documents: number;
+    attributes: number;
+    points: number;
+  };
+};
+
+const RUN_STAGES = [
+  "",
+  "PREPARING",
+  "DRAFTING",
+  "REVIEWING",
+  "CHECKING",
+  "ATTRIBUTES",
+  "EVIDENCE",
+] as const;
+
+/** What an update of the test plan from the approved narrative did, in one line. */
+export function planOutcomeLine(
+  outcome: NonNullable<NarrativeRun["planOutcome"]>,
+): string {
+  const parts = [
+    outcome.attributes > 0
+      ? `${plural(outcome.attributes, "attribute change")} to decide on the Attributes tab`
+      : "",
+    outcome.evidenceProposed > 0
+      ? `${plural(outcome.evidenceProposed, "evidence change")} to accept on the Evidence tab`
+      : "",
+    outcome.evidence > 0
+      ? `${plural(outcome.evidence, "evidence item")} updated in the draft plan`
+      : "",
+  ].filter((part) => part !== "");
+  if (outcome.evidenceFallback) {
+    return `The evidence planner did not finish, so the evidence was not updated from the approved narrative${
+      parts.length > 0 ? ` (${parts.join("; ")})` : ""
+    }. Update the plan again.`;
+  }
+  return parts.length === 0
+    ? "The test plan was checked against the approved narrative: it already matches how the control operates."
+    : `The test plan was updated from the approved narrative: ${parts.join("; ")}.`;
+}
+
+export type ProgressStep = {
+  key: string;
+  label: string;
+  detail: string;
+  state: "done" | "active" | "pending";
+  /** Seconds in the step while it is active; 0 otherwise. */
+  seconds: number;
+};
+
+const since = (from: string, now: number) => {
+  const at = Date.parse(from);
+  return Number.isNaN(at) ? 0 : Math.max(0, Math.round((now - at) / 1000));
+};
+
+/** A narrative paragraph without the attribute codes the agents cite in it ("(A2, A3)"),
+ * for reading it as a document; the codes come back with Show attributes (27 October
+ * 2026). Display only: the narrative's text is unchanged. */
+export function withoutCodes(text: string): string {
+  return text.replace(/\s*\((?:A\d+[a-z]?(?:\s*(?:,|and|&)\s*)?)+\)/g, "");
+}
+
+/** The run's progress as the steps a person follows (decided by the product owner on 26
+ * October 2026: "a real status so that the user knows what's happening"): what each step
+ * does, which is done, which is under way and for how long. */
+export function narrativeProgress(
+  run: NarrativeRun,
+  now: number,
+): { steps: ProgressStep[]; seconds: number } {
+  if (run.mode === "PLAN") {
+    return planProgress(run, now);
+  }
+  const { answers, documents, attributes } = run.progress;
+  const reading =
+    answers + documents + attributes > 0
+      ? `${plural(answers, "answer")}, ${plural(documents, "document")} and ${plural(attributes, "attribute")}`
+      : "The client's answers, the documents and the attributes";
+  const plan: Array<{ key: string; label: string; detail: string }> = [
+    {
+      key: "PREPARING",
+      label: "Gathering the facts",
+      detail: reading,
+    },
+    run.mode === "REVIEW"
+      ? {
+          key: "DRAFTING",
+          label: "Reading the narrative",
+          detail: "The narrative as it stands, for the reviewer",
+        }
+      : {
+          key: "DRAFTING",
+          label: "Drafting the narrative",
+          detail: "Seven sections, every attribute explained",
+        },
+    {
+      key: "REVIEWING-1",
+      label: "Independent review",
+      detail: "Checks each fact and attribute, and fixes the draft",
+    },
+    ...(run.stage === "REVIEWING" && run.round >= 2
+      ? [
+          {
+            key: "REVIEWING-2",
+            label: "Second review",
+            detail: "Checks the fixes made in the first review",
+          },
+        ]
+      : []),
+    {
+      key: "CHECKING",
+      label: "Final checks",
+      detail: "Structure and coverage, then the points for the client",
+    },
+  ];
+  const at =
+    run.status === "PENDING" || run.stage === "" || run.stage === "PREPARING"
+      ? 0
+      : run.stage === "DRAFTING"
+        ? 1
+        : run.stage === "REVIEWING"
+          ? run.round >= 2
+            ? 3
+            : 2
+          : plan.length - 1;
+  const working = run.status === "WORKING" || run.status === "PENDING";
+  const active = working ? at : plan.length;
+  const stageSeconds = run.status === "WORKING" ? since(run.stageAt, now) : 0;
+  return {
+    steps: plan.map((step, index) => ({
+      ...step,
+      state: index < active ? "done" : index === active ? "active" : "pending",
+      seconds: index === active ? stageSeconds : 0,
+    })),
+    seconds: run.status === "WORKING" ? since(run.startedAt, now) : 0,
+  };
+}
+
+/** The steps of an update of the test plan from the approved narrative. */
+function planProgress(
+  run: NarrativeRun,
+  now: number,
+): { steps: ProgressStep[]; seconds: number } {
+  const plan = [
+    {
+      key: "PREPARING",
+      label: "Reading the approved narrative",
+      detail: "How the control operates, its steps and control points",
+    },
+    {
+      key: "ATTRIBUTES",
+      label: "Attributes",
+      detail: "Proposes the changes that test the control as it operates",
+    },
+    {
+      key: "EVIDENCE",
+      label: "Evidence",
+      detail: "Plans the evidence again from the narrative",
+    },
+  ];
+  const at = run.stage === "EVIDENCE" ? 2 : run.stage === "ATTRIBUTES" ? 1 : 0;
+  const working = run.status === "WORKING" || run.status === "PENDING";
+  const active = working ? at : plan.length;
+  const stageSeconds = run.status === "WORKING" ? since(run.stageAt, now) : 0;
+  return {
+    steps: plan.map((step, index) => ({
+      ...step,
+      state: index < active ? "done" : index === active ? "active" : "pending",
+      seconds: index === active ? stageSeconds : 0,
+    })),
+    seconds: run.status === "WORKING" ? since(run.startedAt, now) : 0,
+  };
+}
+
+/** 75 → "1:15". */
+export function clock(seconds: number): string {
+  const whole = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+/** The last review of the narrative, and the version it reviewed. */
+export type NarrativeReview = {
+  passed: boolean;
+  reviewer: "AGENT" | "RULES";
+  rounds: number;
+  coverage: Array<{ code: string; sections: string[]; steps: number[] }>;
+  /** What still falls short in the narrative as it stands. */
+  findings: string[];
+  /** What the reviewer corrected, across its rounds. */
+  fixes: string[];
+  /** Facts still to come from the client, asked in the walkthrough. */
+  questions: number;
+  /** The reviewer agent did not finish; the review is to be run again. */
+  incomplete: boolean;
+  version: number;
+};
+
+/** What the review box offers, so a held review always has a way forward: run the
+ * review again, answer the client's questions in the walkthrough, or redraft. */
+export type ReviewAction = "review" | "answer" | "redraft";
+
+export const REVIEW_ACTION_LABELS: Record<ReviewAction, string> = {
+  review: "Run the review again",
+  answer: "Confirm the points",
+  redraft: "Redraft and review",
+};
+
+export function reviewActions(
+  review: NarrativeReview,
+  version: number,
+): ReviewAction[] {
+  if (review.version < 0) {
+    // Use the newer draft, beside the narrative, is the way forward.
+    return [];
+  }
+  if (review.version !== version) {
+    return ["review"];
+  }
+  if (review.passed) {
+    return [];
+  }
+  const answer: ReviewAction[] = review.questions > 0 ? ["answer"] : [];
+  if (review.incomplete) {
+    return ["review", ...answer];
+  }
+  if (review.reviewer === "RULES") {
+    // No model is configured: running the rules again changes nothing.
+    return answer;
+  }
+  return [
+    ...answer,
+    ...(review.findings.length > 0 ? ["redraft" as const] : []),
+  ];
+}
+
+const plural = (count: number, word: string) =>
+  `${count} ${word}${count === 1 ? "" : "s"}`;
+
+/** The review's one-line verdict for the narrative at `version`. */
+export function reviewHeadline(
+  review: NarrativeReview,
+  version: number,
+): string {
+  if (review.version < 0) {
+    // The review is of the newer draft placed beside this narrative.
+    return review.passed
+      ? "The newer draft beside this one passed its review. Use the newer draft to take it with its review."
+      : "The newer draft beside this one has been reviewed. Use the newer draft to see what the review found.";
+  }
+  if (review.version !== version) {
+    return "Changed since the review. Review it again before approving.";
+  }
+  if (review.passed) {
+    return `Reviewed: every attribute covered${
+      review.rounds > 1 ? ` after ${review.rounds} rounds of fixes` : ""
+    }.`;
+  }
+  if (review.incomplete) {
+    return `The reviewer agent did not finish its review. Run it again${
+      review.questions > 0
+        ? `; ${plural(review.questions, "point")} also wait for the client's confirmation`
+        : ""
+    }.`;
+  }
+  if (review.reviewer === "RULES") {
+    return "Checked by the rules only: no model reviewed it.";
+  }
+  if (review.questions > 0) {
+    const points = plural(review.questions, "point");
+    return review.findings.length > 0
+      ? `${plural(review.findings.length, "issue")} to resolve, and ${points} for the client to confirm in the walkthrough.`
+      : `Waiting on ${points} for the client to confirm in the walkthrough. The narrative is drafted again once they are confirmed.`;
+  }
+  return "The review found issues to resolve before approval.";
+}
+
+const SECTION_KEYS = NARRATIVE_SECTIONS.map(([key]) => key);
+
+function parseSections(value: unknown): NarrativeSection[] {
+  return records(value)
+    .filter((item) => SECTION_KEYS.includes(item.key as SectionKey))
+    .map((item) => ({
+      key: item.key as SectionKey,
+      heading: str(item.heading) || SECTION_HEADINGS[item.key as SectionKey],
+      text: str(item.text),
+      attributes: (Array.isArray(item.attributes) ? item.attributes : [])
+        .filter((code): code is string => typeof code === "string")
+        .slice(0, 12),
+    }));
+}
+
+function parseRun(value: unknown): NarrativeRun | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return {
+    status: oneOf(
+      value.status,
+      ["IDLE", "PENDING", "WORKING", "FAILED"] as const,
+      "IDLE",
+    ),
+    mode: oneOf(value.mode, ["DRAFT", "REVIEW", "PLAN"] as const, "DRAFT"),
+    stage: oneOf(value.stage, RUN_STAGES, ""),
+    round: num(value.round),
+    note: str(value.note),
+    startedAt: str(value.started_at),
+    stageAt: str(value.stage_at),
+    progress: {
+      answers: num(isRecord(value.progress) ? value.progress.answers : 0),
+      documents: num(isRecord(value.progress) ? value.progress.documents : 0),
+      attributes: num(isRecord(value.progress) ? value.progress.attributes : 0),
+      points: num(isRecord(value.progress) ? value.progress.points : 0),
+    },
+    planOutcome: isRecord(value.plan_outcome)
+      ? {
+          attributes: num(value.plan_outcome.attributes),
+          evidence: num(value.plan_outcome.evidence),
+          evidenceProposed: num(value.plan_outcome.evidence_proposed),
+          evidenceFallback: value.plan_outcome.evidence_fallback === true,
+          note: str(value.plan_outcome.note),
+        }
+      : null,
+  };
+}
+
+function parseReview(value: unknown): NarrativeReview | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return {
+    passed: value.passed === true,
+    reviewer: value.reviewer === "AGENT" ? "AGENT" : "RULES",
+    rounds: num(value.rounds),
+    coverage: records(value.coverage).map((item) => ({
+      code: str(item.code),
+      sections: (Array.isArray(item.sections) ? item.sections : []).filter(
+        (key): key is string => typeof key === "string",
+      ),
+      steps: (Array.isArray(item.steps) ? item.steps : []).filter(
+        (step): step is number => typeof step === "number",
+      ),
+    })),
+    findings: (Array.isArray(value.findings) ? value.findings : []).filter(
+      (item): item is string => typeof item === "string",
+    ),
+    fixes: (Array.isArray(value.fixes) ? value.fixes : []).filter(
+      (item): item is string => typeof item === "string",
+    ),
+    questions: num(value.questions),
+    incomplete: value.incomplete === true,
+    version: num(value.version),
+  };
+}
 
 export type Understanding = {
   status: "NONE" | "DRAFT" | "CONFIRMED";
   summary: string;
+  sections: NarrativeSection[];
+  proposedSections: NarrativeSection[] | null;
+  run: NarrativeRun | null;
+  review: NarrativeReview | null;
   steps: ProcessStep[];
   builtBy: "PERSON" | "AGENT" | "RULES" | "LEGACY" | "FALLBACK";
   proposedSummary: string;
   proposedSteps: ProcessStep[] | null;
   proposedNote: string;
   confirmedBy: string | null;
+  /** When it was approved, as an ISO time, or "". */
+  confirmedAt: string;
   version: number;
 };
 
@@ -516,6 +996,7 @@ function parseDesign(value: unknown): Design | null {
         value: str(item.value),
         automatic: item.automatic === true,
         filledBy: typeof item.filled_by === "string" ? item.filled_by : null,
+        filledAt: str(item.filled_at),
         version: num(item.version),
         options: strings(item.options).slice(0, 6),
         question: str(item.question),
@@ -579,6 +1060,9 @@ function parseStep(item: Raw): ProcessStep {
     source: str(item.source),
     sourceTitle: str(item.source_title),
     quote: str(item.quote),
+    attributes: (Array.isArray(item.attributes) ? item.attributes : [])
+      .filter((code): code is string => typeof code === "string")
+      .slice(0, 12),
   };
 }
 
@@ -671,6 +1155,24 @@ export function parseContext(value: unknown): ControlContext | null {
       ),
       resolutionNote: str(item.resolution_note),
       version: num(item.version),
+      question: str(item.question),
+      suggestions: (Array.isArray(item.suggestions) ? item.suggestions : [])
+        .filter((answer): answer is string => typeof answer === "string")
+        .slice(0, 4),
+      proposal: str(item.proposal),
+      section: str(item.section),
+      attributes: strings(item.attributes).slice(0, 12),
+      round: num(item.round),
+      pointKind: oneOf(
+        item.point_kind,
+        ["", "MISSING", "CONTRADICTION"] as const,
+        "",
+      ),
+      proposalBasis: oneOf(
+        item.proposal_basis,
+        ["", "SOURCES", "TYPICAL"] as const,
+        "",
+      ),
     })),
     documents: records(value.documents).map((item) => ({
       id: str(item.id),
@@ -698,6 +1200,12 @@ export function parseContext(value: unknown): ControlContext | null {
         "NONE",
       ),
       summary: str(understanding.summary),
+      sections: parseSections(understanding.sections),
+      proposedSections: Array.isArray(understanding.proposed_sections)
+        ? parseSections(understanding.proposed_sections)
+        : null,
+      run: parseRun(understanding.run),
+      review: parseReview(understanding.review),
       steps: records(understanding.steps).map(parseStep),
       builtBy: oneOf(
         understanding.built_by,
@@ -713,6 +1221,7 @@ export function parseContext(value: unknown): ControlContext | null {
         typeof understanding.confirmed_by === "string"
           ? understanding.confirmed_by
           : null,
+      confirmedAt: str(understanding.confirmed_at),
       version: num(understanding.version),
     },
     testing: parseTesting(value.testing),
@@ -733,6 +1242,10 @@ export type ContextIntent =
   | "values-set"
   | "process-save"
   | "process-build"
+  | "process-narrate"
+  | "process-review"
+  | "process-update-plan"
+  | "process-points"
   | "process-adopt"
   | "review"
   | "issue-resolve"
@@ -869,6 +1382,34 @@ export function contextWrite(fields: Fields): ContextWrite {
       return ok("POST", `${control}/process/build`, {}, true);
     case "review":
       return ok("POST", `${control}/review`, {}, true);
+    case "process-narrate":
+      return ok("POST", `${control}/process/narrate`);
+    case "process-review":
+      return ok("POST", `${control}/process/review-narrative`);
+    case "process-update-plan":
+      return ok("POST", `${control}/process/update-plan`);
+    case "process-points": {
+      // A round of points confirmed or corrected as one decision.
+      const raw = Array.isArray(fields.items) ? fields.items : [];
+      const items = raw.filter(isRecord).map((item) => ({
+        issue_id: str(item.issue_id),
+        version: num(item.version),
+        answer: str(item.answer).trim().slice(0, 1000),
+      }));
+      return items.length >= 1 &&
+        items.length <= 12 &&
+        items.length === raw.length &&
+        items.every(
+          (item) =>
+            UUID.test(item.issue_id) &&
+            Number.isInteger(item.version) &&
+            item.version >= 1 &&
+            item.answer !== "" &&
+            !SECRET.test(item.answer),
+        )
+        ? ok("POST", `${control}/process/points`, { items })
+        : { error: "invalid" };
+    }
     case "process-adopt": {
       const at = version(fields);
       return at !== null && at >= 1
@@ -891,12 +1432,39 @@ export function contextWrite(fields: Fields): ContextWrite {
           ),
           source: str(step.source).slice(0, 60),
           quote: str(step.quote).slice(0, 200),
+          attributes: (Array.isArray(step.attributes) ? step.attributes : [])
+            .filter(
+              (code): code is string =>
+                typeof code === "string" &&
+                /^[A-Za-z0-9][A-Za-z0-9.-]{0,19}$/.test(code),
+            )
+            .slice(0, 12),
         }))
         .filter((step) => step.description !== "");
       const summary = text(fields, "summary");
+      const sections = (Array.isArray(fields.sections) ? fields.sections : [])
+        .filter(isRecord)
+        .filter((item) => SECTION_KEYS.includes(item.key as SectionKey))
+        .map((item) => ({
+          key: item.key as SectionKey,
+          text: str(item.text).trim().slice(0, 3000),
+          attributes: (Array.isArray(item.attributes) ? item.attributes : [])
+            .filter(
+              (code): code is string =>
+                typeof code === "string" &&
+                /^[A-Za-z0-9][A-Za-z0-9.-]{0,19}$/.test(code),
+            )
+            .slice(0, 12),
+        }))
+        .filter((item) => item.text !== "");
+      const reason = text(fields, "override_reason");
       if (
         at === null ||
         steps.length > 15 ||
+        sections.length > SECTION_KEYS.length ||
+        reason.length > 1000 ||
+        SECRET.test(reason) ||
+        sections.some((item) => SECRET.test(item.text)) ||
         summary.length > 20000 ||
         SECRET.test(summary) ||
         steps.some((step) => SECRET.test(step.description))
@@ -905,9 +1473,11 @@ export function contextWrite(fields: Fields): ContextWrite {
       }
       return ok("PUT", `${control}/process`, {
         summary,
+        sections,
         steps,
         version: at,
         confirm: fields.confirm === true || fields.confirm === "true",
+        ...(reason !== "" ? { override_reason: reason } : {}),
       });
     }
     case "issue-resolve": {

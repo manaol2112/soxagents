@@ -242,8 +242,11 @@ def load_facts(
             )
     for cid, linked, unreviewed in connection.execute(
         """
-        SELECT engagement_control_id, count(*), count(*) FILTER (WHERE reviewed_at IS NULL)
-        FROM source_document_controls WHERE project_id = %s GROUP BY 1
+        SELECT l.engagement_control_id, count(*),
+               count(*) FILTER (WHERE l.reviewed_at IS NULL)
+        FROM source_document_controls l
+        JOIN source_documents d ON d.id = l.document_id AND d.removed_at IS NULL
+        WHERE l.project_id = %s GROUP BY 1
         """,
         (project_id,),
     ).fetchall():

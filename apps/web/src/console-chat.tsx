@@ -160,6 +160,16 @@ export function ConsoleChat({
     setThread(initial);
   }, [initial]);
 
+  // A question asked from elsewhere, such as a control's AI assistant (?ask=), waits in
+  // the box for the person to send; nothing is sent for them.
+  useEffect(() => {
+    const asked = new URLSearchParams(window.location.search).get("ask");
+    if (asked !== null && asked.trim() !== "") {
+      setDraft(asked.slice(0, 2000));
+      box.current?.focus();
+    }
+  }, []);
+
   // The greeting follows the person's own clock, so it is set in the browser.
   useEffect(() => {
     setHello(greeting(new Date().getHours()));

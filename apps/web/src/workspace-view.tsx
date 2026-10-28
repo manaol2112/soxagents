@@ -90,11 +90,10 @@ import { LoadingScreen } from "./loading-screen";
 import { NavScroll } from "./nav-scroll";
 import { EMPTY_SETUP, type SetupState, uniqueKeys } from "./onboarding-model";
 import { PlanMissingButton } from "./plan-missing";
-import { PlanningPage } from "./planning-view";
 import type { RecipientLink } from "./portal-model";
 import { RecordDialog } from "./record-dialog";
 import { SetupForm } from "./setup-form";
-import { ScopePage, SetupMain } from "./setup-view";
+import { RegisterPage, ScopePage, SetupMain } from "./setup-view";
 import {
   type AgentDetail,
   type AgentNotice,
@@ -122,8 +121,12 @@ import {
   taskStatusChoices,
   workspaceHref,
 } from "./shell-model";
-import type { TestingView } from "./testing-hub-model";
-import { TestingPage } from "./testing-hub-view";
+import type { PlanningTab } from "./testing-hub-model";
+import {
+  PlanningDestination,
+  ReviewPage,
+  TestingPage,
+} from "./testing-hub-view";
 import type { Theme } from "./theme";
 import { ThemeSwitch } from "./theme-switch";
 import { type IconName, UiIcon } from "./ui-icon";
@@ -191,16 +194,34 @@ const NAV_GROUPS: ReadonlyArray<{ label: string; items: NavItem[] }> = [
         icon: "layers",
       },
       {
-        id: "testing",
-        label: "Testing",
-        detail: "Plans, phases, results and review",
-        icon: "check",
+        id: "register",
+        label: "Controls",
+        detail: "The controls selected for each system and process",
+        icon: "shield",
+      },
+      {
+        id: "planning",
+        label: "Planning",
+        detail: "Test plans, their release by phase, and the prior year",
+        icon: "file",
       },
       {
         id: "evidence",
         label: "Evidence",
         detail: "Requests, mailbox, files and contacts",
         icon: "inbox",
+      },
+      {
+        id: "testing",
+        label: "Testing",
+        detail: "Where each control's testing stands, and its result",
+        icon: "check",
+      },
+      {
+        id: "review",
+        label: "Review",
+        detail: "Independent review and sign-off",
+        icon: "shield",
       },
       {
         id: "reports",
@@ -282,7 +303,7 @@ export function WorkspaceView({
   evidenceView = DEFAULT_EVIDENCE_VIEW,
   evidenceCenter = null,
   planning = null,
-  testingView = "plans",
+  planningTab = "plans",
   testingFilter = null,
   library = null,
   page = "overview",
@@ -312,7 +333,7 @@ export function WorkspaceView({
   evidenceCenter?: EvidenceCenterState | null;
   planning?: PlanningPageState | null;
   /** The Testing destination's view and its results or review filter (M2b). */
-  testingView?: TestingView;
+  planningTab?: PlanningTab;
   testingFilter?: string | null;
   library?: LibraryPageState | null;
 }) {
@@ -320,6 +341,15 @@ export function WorkspaceView({
     workflow.approvals === null
       ? null
       : pendingApprovals(workflow.approvals, now).length;
+  // A control's own page belongs to Controls in the menu (26 October 2026).
+  const current =
+    model.status === "ready" &&
+    model.section === "controls" &&
+    engagement.filters.control !== null
+      ? "register"
+      : model.status === "ready"
+        ? model.section
+        : null;
   return (
     <div className="shell">
       <a className="skip" href="#content">
@@ -366,7 +396,7 @@ export function WorkspaceView({
                           }
                           className={locked ? "nav-locked" : undefined}
                           aria-current={
-                            model.section === item.id ? "page" : undefined
+                            current === item.id ? "page" : undefined
                           }
                         >
                           <UiIcon name={item.icon} size={16} />
@@ -410,7 +440,7 @@ export function WorkspaceView({
       <div className="workspace">
         <header className="topbar">
           {model.status === "ready" ? (
-            <WorkspaceControls model={model} theme={theme} />
+            <WorkspaceControls model={model} theme={theme} current={current} />
           ) : showsSignInPrompt(model) ? (
             <p className="topbar-title">Sign in to open an engagement</p>
           ) : null}
@@ -451,7 +481,7 @@ export function WorkspaceView({
             evidenceView={evidenceView}
             evidenceCenter={evidenceCenter}
             planning={planning}
-            testingView={testingView}
+            planningTab={planningTab}
             testingFilter={testingFilter}
             library={library}
             page={page}
@@ -497,13 +527,23 @@ function SidebarControls({
   );
 }
 
-function WorkspaceControls({ model, theme }: { model: Ready; theme: Theme }) {
+function WorkspaceControls({
+  model,
+  theme,
+  current,
+}: {
+  model: Ready;
+  theme: Theme;
+  /** The menu item the page belongs to: a control's own page is Controls'. */
+  current: string | null;
+}) {
   const sectionLabel =
     model.section === "console"
       ? "Agent console"
       : model.section === "setup"
         ? "Onboarding"
-        : (NAV.find((item) => item.id === model.section)?.label ?? "Home");
+        : (NAV.find((item) => item.id === (current ?? model.section))?.label ??
+          "Home");
   // The agent console is out of the menu (Milestone 2c) but always one click away, to
   // ask about anything in the engagement, once it has launched.
   const canAsk =
@@ -657,7 +697,7 @@ function WorkspaceMain({
   evidenceView,
   evidenceCenter,
   planning,
-  testingView,
+  planningTab,
   testingFilter,
   library,
   page,
@@ -681,7 +721,7 @@ function WorkspaceMain({
   evidenceView: EvidenceView;
   evidenceCenter: EvidenceCenterState | null;
   planning: PlanningPageState | null;
-  testingView: TestingView;
+  planningTab: PlanningTab;
   testingFilter: string | null;
   library: LibraryPageState | null;
 }) {
@@ -772,24 +812,30 @@ function WorkspaceMain({
   if (model.section === "approvals") {
     return <ApprovalsMain model={model} workflow={workflow} now={now} />;
   }
+  if (model.section === "register") {
+    // Controls (decided by the product owner on 26 October 2026): the controls selected
+    // for each system and process, on a page of their own.
+    return <RegisterPage model={model} setup={setup} engagement={engagement} />;
+  }
   if (model.section === "controls") {
-    // Systems & Processes (decided by the product owner): the engagement's scope, with
-    // the controls register under its Controls tab; an open control has its own page.
+    // Systems & Processes (decided by the product owner): the engagement's scope; an open
+    // control has its own page.
     if (engagement.filters.control !== null || model.selectedProject === null) {
       return <ControlsMain model={model} engagement={engagement} />;
     }
     return <ScopePage model={model} setup={setup} engagement={engagement} />;
   }
-  if (model.section === "planning") {
-    return <PlanningMain model={model} planning={planning} />;
-  }
-  if (model.section === "testing") {
+  if (
+    model.section === "planning" ||
+    model.section === "testing" ||
+    model.section === "review"
+  ) {
     return (
-      <TestingMain
+      <JourneyMain
         model={model}
         planning={planning}
         engagement={engagement}
-        view={testingView}
+        planningTab={planningTab}
         filter={testingFilter}
       />
     );
@@ -1559,52 +1605,64 @@ function ReportsStatus({
 }
 
 /** Testing (M2b): plans, phases, results and review across every control. */
-function TestingMain({
+/** Planning, Testing and Review (decided by the product owner on 25 October 2026): the
+ * audit's steps after scope, each its own destination. */
+function JourneyMain({
   model,
   planning,
   engagement,
-  view,
+  planningTab,
   filter,
 }: {
   model: Ready;
   planning: PlanningPageState | null;
   engagement: EngagementState;
-  view: TestingView;
+  planningTab: PlanningTab;
   filter: string | null;
 }) {
   const project = model.selectedProject;
+  const section = model.section;
   if (project === null) {
-    return <NoEngagement model={model} what="Testing" />;
+    return (
+      <NoEngagement
+        model={model}
+        what={
+          section === "planning"
+            ? "Test plans"
+            : section === "review"
+              ? "Reviews"
+              : "Testing"
+        }
+      />
+    );
+  }
+  const ids = { organizationId: model.organization.id, projectId: project.id };
+  if (section === "planning") {
+    return (
+      <PlanningDestination
+        ids={ids}
+        projectName={project.name}
+        tab={planningTab}
+        planning={planning}
+      />
+    );
+  }
+  if (section === "review") {
+    return (
+      <ReviewPage
+        ids={ids}
+        projectName={project.name}
+        engagement={engagement}
+        filter={filter}
+      />
+    );
   }
   return (
     <TestingPage
-      ids={{ organizationId: model.organization.id, projectId: project.id }}
+      ids={ids}
       projectName={project.name}
-      view={view}
-      planning={planning}
       engagement={engagement}
       filter={filter}
-    />
-  );
-}
-
-/** Test plans: the planning review queue, and one control's master test plan for review. */
-function PlanningMain({
-  model,
-  planning,
-}: {
-  model: Ready;
-  planning: PlanningPageState | null;
-}) {
-  const project = model.selectedProject;
-  if (project === null) {
-    return <NoEngagement model={model} what="Test plans" />;
-  }
-  return (
-    <PlanningPage
-      ids={{ organizationId: model.organization.id, projectId: project.id }}
-      projectName={project.name}
-      state={planning}
     />
   );
 }
