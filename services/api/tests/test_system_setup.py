@@ -187,3 +187,56 @@ def test_every_catalog_system_says_what_it_is() -> None:
     assert names == set(KNOWN_CATEGORIES)
     assert all(category.strip() for category in KNOWN_CATEGORIES.values())
     assert KNOWN_CATEGORIES["Workday"] == "HR"
+
+
+class _ReviewScheduler:
+    """Records what the API hands the worker, instead of running it."""
+
+    def __init__(self) -> None:
+        self.reviews: list[UUID] = []
+
+    def schedule_drafts(self, draft_ids: list[UUID]) -> None:
+        del draft_ids
+
+    def schedule_system_reviews(self, application_ids: list[UUID]) -> None:
+        self.reviews.extend(application_ids)
+
+
+def test_a_system_added_is_reviewed_by_the_agent_in_the_background(
+    migrated: Database,
+) -> None:
+    """Decided by the product owner on 27 October 2026: the agent reviews a new system's
+    candidate controls without being asked, so Map controls opens on its recommendations."""
+    from fastapi.testclient import TestClient
+
+    from ai_workforce_api.auth import token_hash
+    from ai_workforce_api.main import create_app
+    from ai_workforce_api.settings import Settings
+
+    team = _new_engagement(migrated, "add-reviewed")
+    base = _base(team["org"], team["project"])
+    token = uuid4().hex
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "INSERT INTO auth_sessions (user_id, token_hash, expires_at) "
+            "VALUES (%s, %s, clock_timestamp() + interval '1 hour')",
+            (team["owner_id"], token_hash(token)),
+        )
+        connection.commit()
+    scheduler = _ReviewScheduler()
+    owner = TestClient(
+        create_app(
+            Settings(database_url=migrated.url, session_cookie_secure=False),
+            draft_scheduler=scheduler,
+        ),
+        cookies={"aw_session": token},
+    )
+    added = owner.post(
+        f"{base}/systems", json={"name": "Active Directory", "layer": "INFRASTRUCTURE"}
+    )
+    assert added.status_code == 200, added.text
+    directory = next(a for a in added.json()["applications"] if a["name"] == "Active Directory")
+    assert directory["review"]["status"] == "PENDING"
+    assert scheduler.reviews == [UUID(directory["id"])]
+    # Adding a system still creates no work and selects no control.
+    assert directory["controls_in_scope"] == 0

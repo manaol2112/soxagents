@@ -11,17 +11,25 @@ import {
   basisLabel,
   CONTROL_AREAS,
   type ControlArea,
+  DEFAULT_ENVIRONMENT,
   type DetailField,
   type DetailSuggestion,
   ENVIRONMENTS,
   HOSTING_LABELS,
   LAYERS,
   parseAreaSuggestions,
+  parseOnboarding,
   parseSuggestion,
   type SetupSystem,
   suggestionSummary,
 } from "./onboarding-model";
 import { DiscardBar } from "./scope-actions";
+import { SystemAddedDialog } from "./system-added-dialog";
+import {
+  type AddedSystem,
+  addedSystem,
+  mapControlsHref,
+} from "./system-added-model";
 import { type KnownSystemOption, SystemNameField } from "./system-name-field";
 import { type IconName, UiIcon } from "./ui-icon";
 
@@ -63,7 +71,7 @@ const EMPTY: Draft = {
   layer: "APPLICATION",
   description: "",
   owner: "",
-  environment: "",
+  environment: DEFAULT_ENVIRONMENT,
   purpose: "",
   hosting: "",
   processes: "",
@@ -115,6 +123,8 @@ export function AddSystemWizard({
   const [approved, setApproved] = useState<ControlArea[]>([]);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  // Once added, the offer to select its controls takes the wizard's place.
+  const [added, setAdded] = useState<AddedSystem | null>(null);
   const first = useRef<HTMLButtonElement>(null);
   // Only the latest suggestion counts: an older answer arriving late is ignored.
   const latest = useRef(0);
@@ -301,7 +311,9 @@ export function AddSystemWizard({
   async function add() {
     setBusy(true);
     setProblem(null);
-    const { status } = await send("add", { approved_areas: approved });
+    const { status, answer } = await send("add", {
+      approved_areas: approved,
+    });
     setBusy(false);
     if (status !== 200) {
       setProblem(problemFor(status));
@@ -309,12 +321,28 @@ export function AddSystemWizard({
     }
     document.dispatchEvent(new Event(SYSTEM_SAVED_EVENT));
     startTransition(() => router.refresh());
-    onClose();
+    const system = addedSystem(systems, parseOnboarding(answer), draft.name);
+    if (system === null) {
+      onClose();
+      return;
+    }
+    setAdded(system);
   }
 
   const suggested = (suggestions?.areas ?? []).filter((item) => item.suggested);
   const notApproved = suggested.filter((item) => !approved.includes(item.area));
   const shownName = draft.name.trim() || "the system";
+
+  if (added !== null) {
+    return createPortal(
+      <SystemAddedDialog
+        system={added}
+        mapHref={mapControlsHref(organizationId, projectId, added.id)}
+        onClose={onClose}
+      />,
+      document.body,
+    );
+  }
 
   return createPortal(
     // A click outside never closes it: what was entered stays until Cancel or Close.

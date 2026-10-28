@@ -522,6 +522,47 @@ def test_evidence_planned_before_a_value_was_filled_still_names_its_attribute(
     assert "UNMATCHED_ATTRIBUTE" not in {f["kind"] for f in after["findings"]}
 
 
+def test_evidence_planned_before_an_attribute_was_reworded_still_names_it(
+    migrated: Database,
+) -> None:
+    """Rewording an attribute retires its old words and links the new attribute to them
+    (replaces_id); evidence planned with the old words named an attribute "the control
+    does not have" until the check followed that chain (28 October 2026)."""
+    team = _launched(migrated, "master-reworded")
+    control = _control(team, "ITGC-AC-01")["id"]
+    before = _master(team, control)
+    named = {name for e in before["evidence"] for name in _rows(
+        migrated,
+        "SELECT jsonb_array_elements_text(attributes) FROM evidence_requirements "
+        "WHERE id = %s",
+        UUID(e["id"]),
+    ) for name in name}  # fmt: skip
+    attribute = next(a for a in before["attributes"] if a["text"] in named)
+    reworded = team["owner"].patch(
+        f"{_project(team)}/controls/{control}/attributes/{attribute['id']}",
+        json={
+            "text": f"{attribute['text']}, in the ticketing system",
+            "version": attribute["version"],
+        },
+    )
+    assert reworded.status_code == 200, reworded.text
+    # Reworded once more: the chain is followed back to the words the evidence names.
+    current = next(
+        a for a in reworded.json()["attributes"]["approved"]
+        if a["text"].endswith("in the ticketing system")
+    )  # fmt: skip
+    again = team["owner"].patch(
+        f"{_project(team)}/controls/{control}/attributes/{current['id']}",
+        json={"text": f"{current['text']} (reviewed)", "version": current["version"]},
+    )
+    assert again.status_code == 200, again.text
+    after = _master(team, control)
+    assert all(e["unmatched"] == [] for e in after["evidence"]), [
+        e["unmatched"] for e in after["evidence"]
+    ]
+    assert "UNMATCHED_ATTRIBUTE" not in {f["kind"] for f in after["findings"]}
+
+
 def test_a_finding_offers_planning_the_control_again_with_the_rules(migrated: Database) -> None:
     team = _launched(migrated, "master-fix")
     control = _control(team, "ITGC-AC-02")["id"]

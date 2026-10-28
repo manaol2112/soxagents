@@ -1,377 +1,500 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  type PointerEvent as ReactPointerEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import type { ProcessStep } from "./control-context-model";
 import {
   BASIS_LABEL,
-  FLOW_PASSES,
-  FLOW_REST_MS,
-  FLOW_SPEED,
-  flowLayout,
+  fitScale,
+  flowSummary,
   type StepKind,
   stepKind,
+  stepTitle,
+  swimlaneLayout,
+  zoomStep,
 } from "./process-flow-model";
 import { type IconName, UiIcon } from "./ui-icon";
 
 const KIND_ICON: Record<StepKind, IconName> = {
   control: "shield",
   system: "database",
-  person: "user",
+  person: "file",
 };
 
-/** How long the marker waits at the last step before the flow runs again. */
-const LOOP_REST_MS = 3000;
+/** Each lane takes the next of four tones, so roles read apart at a glance. */
+const LANE_TONES = ["accent", "success", "ai", "warning"] as const;
 
-const ease = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
+const plural = (count: number, one: string, many = `${one}s`) =>
+  `${count} ${count === 1 ? one : many}`;
 
 /**
- * The narrative's steps as a map: cards joined by connectors, a marker travelling from
- * each step to the next and lighting the step it reaches, twice, then still until it is
- * replayed. Off when the person prefers reduced motion; paused while the map is out of
- * view, while the pointer or focus is on it, and while a step's detail is open, so it never
- * moves under what is being read. A step opens its detail below.
+ * The narrative's steps as a swimlane diagram (the product owner's reference of 27
+ * October 2026): a lane for each role, a card for each step with its system and the
+ * control where it operates, decisions as diamonds whose Yes and No lead where the
+ * narrative says, and the step's detail beside it. The diagram zooms, pans, fits the view,
+ * and opens full screen for a long process.
  */
 export function ProcessFlow({
   steps,
   attributes,
+  controlRef = "",
 }: {
   steps: ProcessStep[];
   attributes: Array<{ code: string; text: string }>;
+  /** The control's reference, shown where it operates (Control ITGC-AC-04). */
+  controlRef?: string;
 }) {
-  const canvas = useRef<HTMLElement | null>(null);
-  const atom = useRef<SVGGElement | null>(null);
-  const wires = useRef<Array<SVGPathElement | null>>([]);
-  const [width, setWidth] = useState<number | null>(null);
-  const [active, setActive] = useState(0);
-  const [lit, setLit] = useState(-1);
-  const [moving, setMoving] = useState(false);
-  const [done, setDone] = useState(false);
-  const [run, setRun] = useState(0);
+  const layout = useMemo(() => swimlaneLayout(steps), [steps]);
+  const summary = flowSummary(steps);
+  const view = useRef<HTMLDivElement | null>(null);
+  const [scale, setScale] = useState(1);
+  const [offset, setOffset] = useState<[number, number]>([0, 0]);
+  const [full, setFull] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
-  // Held while the person is reading: the pointer or focus on the map, or a step open.
-  const hovered = useRef(false);
-  const reading = useRef(false);
-  reading.current = selected !== null;
+  // Fitted until the person zooms or pans; then the view stays theirs.
+  const fitted = useRef(true);
+  const drag = useRef<{ x: number; y: number; from: [number, number] } | null>(
+    null,
+  );
 
-  useEffect(() => {
-    const node = canvas.current;
+  const fit = useCallback(() => {
+    const node = view.current;
     if (node === null) {
       return;
     }
-    const measure = () => setWidth(Math.round(node.clientWidth));
-    measure();
-    const observer = new ResizeObserver(measure);
+    const next = fitScale(layout, {
+      width: node.clientWidth,
+      height: node.clientHeight,
+    });
+    setScale(next);
+    setOffset([
+      Math.max(16, (node.clientWidth - layout.width * next) / 2),
+      Math.max(16, (node.clientHeight - layout.height * next) / 2),
+    ]);
+    fitted.current = true;
+  }, [layout]);
+
+  // Fit on first view, when the steps change, when full screen opens or closes, and when
+  // the view is resized, as long as the person has not moved it themselves.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: full re-fits on open and close.
+  useEffect(() => {
+    const node = view.current;
+    if (node === null) {
+      return;
+    }
+    fitted.current = true;
+    fit();
+    const observer = new ResizeObserver(() => {
+      if (fitted.current) {
+        fit();
+      }
+    });
     observer.observe(node);
     return () => observer.disconnect();
-  }, []);
+  }, [fit, full]);
 
-  const layout = useMemo(
-    () => (width === null ? null : flowLayout(steps.length, width)),
-    [steps.length, width],
-  );
-  const route = layout?.segments.join("|") ?? "";
-
-  // The marker: rests at a step, travels its connector to the next, and runs through
-  // FLOW_PASSES times. run is a dependency so Replay starts it again.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: run restarts the marker on Replay.
+  // Full screen: Escape closes it, and the page beneath does not scroll.
   useEffect(() => {
-    const node = canvas.current;
-    const marker = atom.current;
-    if (route === "" || node === null || marker === null) {
+    if (!full) {
       return;
     }
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      setMoving(false);
-      return;
-    }
-    const paths = route.split("|");
-    let visible = true;
-    const observer = new IntersectionObserver(([entry]) => {
-      visible = entry?.isIntersecting ?? true;
-    });
-    observer.observe(node);
-    let segment = 0;
-    let travelling = false;
-    let elapsed = 0;
-    let last = performance.now();
-    const place = (at: number, share: number) => {
-      const wire = wires.current[at];
-      if (wire === null || wire === undefined) {
-        return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setFull(false);
       }
-      const point = wire.getPointAtLength(wire.getTotalLength() * share);
-      marker.setAttribute("transform", `translate(${point.x} ${point.y})`);
     };
-    let passes = 1;
-    setActive(0);
-    setLit(-1);
-    setDone(false);
-    setMoving(true);
-    place(0, 0);
-    let frame = requestAnimationFrame(function tick(now) {
-      frame = requestAnimationFrame(tick);
-      const step = Math.min(now - last, 50);
-      last = now;
-      if (!visible || document.hidden || hovered.current || reading.current) {
-        return;
-      }
-      elapsed += step;
-      if (!travelling) {
-        const atEnd = segment >= paths.length;
-        if (elapsed < (atEnd ? LOOP_REST_MS : FLOW_REST_MS)) {
-          return;
-        }
-        elapsed = 0;
-        if (atEnd && passes >= FLOW_PASSES) {
-          cancelAnimationFrame(frame);
-          setMoving(false);
-          setDone(true);
-          return;
-        }
-        if (atEnd) {
-          passes += 1;
-          segment = 0;
-          setActive(0);
-          place(0, 0);
-          return;
-        }
-        travelling = true;
-        setLit(segment);
-        return;
-      }
-      const wire = wires.current[segment];
-      const length = wire?.getTotalLength() ?? 0;
-      const duration = Math.max(450, (length / FLOW_SPEED) * 1000);
-      const share = Math.min(1, elapsed / duration);
-      place(segment, ease(share));
-      if (share >= 1) {
-        travelling = false;
-        elapsed = 0;
-        segment += 1;
-        setLit(-1);
-        setActive(segment);
-      }
-    });
+    document.addEventListener("keydown", onKey);
+    document.body.classList.add("has-dialog");
     return () => {
-      cancelAnimationFrame(frame);
-      observer.disconnect();
+      document.removeEventListener("keydown", onKey);
+      document.body.classList.remove("has-dialog");
     };
-  }, [route, run]);
+  }, [full]);
+
+  const zoom = (direction: 1 | -1) => {
+    const node = view.current;
+    const next = zoomStep(scale, direction);
+    if (node !== null) {
+      // Zoom about the middle of the view.
+      const cx = node.clientWidth / 2;
+      const cy = node.clientHeight / 2;
+      setOffset([
+        cx - ((cx - offset[0]) * next) / scale,
+        cy - ((cy - offset[1]) * next) / scale,
+      ]);
+    }
+    setScale(next);
+    fitted.current = false;
+  };
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    // Panning starts on the canvas itself, never on a step.
+    if ((event.target as HTMLElement).closest("button") !== null) {
+      return;
+    }
+    drag.current = { x: event.clientX, y: event.clientY, from: offset };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const start = drag.current;
+    if (start === null) {
+      return;
+    }
+    setOffset([
+      start.from[0] + event.clientX - start.x,
+      start.from[1] + event.clientY - start.y,
+    ]);
+    fitted.current = false;
+  };
+  const endDrag = () => {
+    drag.current = null;
+  };
 
   const chosen = selected === null ? undefined : steps[selected];
+  const chosenLane =
+    selected === null ? 0 : (layout.nodes[selected]?.lane ?? 0);
+
   return (
-    <div className="pf">
-      <section
-        ref={canvas}
-        aria-label="Process flow"
-        className={`pf-canvas${layout?.compact ? " is-compact" : ""}${moving ? " is-moving" : ""}`}
-        style={{ height: layout?.height ?? 240 }}
-        onPointerEnter={() => {
-          hovered.current = true;
-        }}
-        onPointerLeave={() => {
-          hovered.current = false;
-        }}
-        onFocus={() => {
-          hovered.current = true;
-        }}
-        onBlur={() => {
-          hovered.current = false;
-        }}
-      >
-        {layout !== null ? (
-          <>
+    <div className={`pf${full ? " is-full" : ""}`}>
+      <div className="pf-bar">
+        <p className="pf-summary">
+          <span>
+            <UiIcon name="file" size={14} />
+            {plural(summary.steps, "step")}
+          </span>
+          <span>
+            <UiIcon name="shield" size={14} />
+            {plural(summary.controls, "control point")}
+          </span>
+          <span>
+            <UiIcon name="agents" size={14} />
+            {plural(summary.owners, "owner")}
+          </span>
+          <span>
+            <UiIcon name="flow" size={14} />
+            {plural(summary.decisions, "decision")}
+          </span>
+        </p>
+        <span className="pf-tools">
+          <button type="button" className="btn-secondary btn-sm" onClick={fit}>
+            <UiIcon name="fit" size={14} />
+            Fit view
+          </button>
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            aria-pressed={full}
+            onClick={() => setFull(!full)}
+          >
+            <UiIcon name={full ? "collapse" : "expand"} size={14} />
+            {full ? "Exit full screen" : "Full screen"}
+          </button>
+        </span>
+      </div>
+      <div className={`pf-body${chosen !== undefined ? " has-detail" : ""}`}>
+        <div
+          ref={view}
+          className="pf-view"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          onWheel={(event) => {
+            if (event.ctrlKey || event.metaKey) {
+              event.preventDefault();
+              zoom(event.deltaY < 0 ? 1 : -1);
+            }
+          }}
+        >
+          <section
+            aria-label="Process flow"
+            className="pf-canvas"
+            style={{
+              width: layout.width,
+              height: layout.height,
+              transform: `translate(${offset[0]}px, ${offset[1]}px) scale(${scale})`,
+            }}
+          >
+            {layout.lanes.map((lane, index) => (
+              <div
+                key={lane.name}
+                className={`pf-lane is-${LANE_TONES[index % LANE_TONES.length]}`}
+                style={{ top: lane.y, height: lane.h, width: layout.width }}
+              >
+                <div className="pf-lane-label">
+                  <span className="pf-lane-icon">
+                    <UiIcon name={index === 0 ? "user" : "agents"} size={18} />
+                  </span>
+                  <strong>{lane.name}</strong>
+                  <small>{plural(lane.steps, "step")}</small>
+                </div>
+              </div>
+            ))}
             <svg
               className="pf-wires"
               width={layout.width}
               height={layout.height}
               aria-hidden="true"
             >
-              {layout.segments.map((d, index) => (
-                <g key={d} className={index === lit ? "is-lit" : undefined}>
-                  <path
-                    ref={(element) => {
-                      wires.current[index] = element;
-                    }}
-                    className="pf-wire"
-                    d={d}
-                  />
-                  <path className="pf-wire-flow" d={d} />
-                </g>
+              <defs>
+                <marker
+                  id="pf-arrow"
+                  viewBox="0 0 10 10"
+                  refX="9"
+                  refY="5"
+                  markerWidth="7"
+                  markerHeight="7"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M0 0 L10 5 L0 10 z" />
+                </marker>
+                <marker
+                  id="pf-arrow-no"
+                  viewBox="0 0 10 10"
+                  refX="9"
+                  refY="5"
+                  markerWidth="7"
+                  markerHeight="7"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M0 0 L10 5 L0 10 z" />
+                </marker>
+              </defs>
+              {layout.edges.map((edge) => (
+                <path
+                  key={`${edge.from}-${edge.to}`}
+                  className={`pf-wire${edge.label === "No" ? " is-no" : edge.label === "Yes" ? " is-yes" : ""}`}
+                  d={edge.d}
+                  markerEnd={
+                    edge.label === "No" ? "url(#pf-arrow-no)" : "url(#pf-arrow)"
+                  }
+                />
               ))}
-              {layout.ports.map((port) => (
-                <g key={`${port.from.join()}-${port.to.join()}`}>
-                  <circle
-                    className="pf-port"
-                    cx={port.from[0]}
-                    cy={port.from[1]}
-                    r={4}
-                  />
-                  <circle
-                    className="pf-port"
-                    cx={port.to[0]}
-                    cy={port.to[1]}
-                    r={4}
-                  />
-                </g>
-              ))}
-              {layout.segments.length > 0 ? (
-                <g ref={atom} className={`pf-atom${moving ? "" : " is-still"}`}>
-                  <circle className="pf-atom-halo" r={18} />
-                  <g className="pf-atom-orbits">
-                    <ellipse rx={13} ry={4.6} />
-                    <ellipse rx={13} ry={4.6} transform="rotate(60)" />
-                    <ellipse rx={13} ry={4.6} transform="rotate(-60)" />
-                  </g>
-                  <circle className="pf-atom-core" r={4.6} />
-                </g>
-              ) : null}
             </svg>
-            <ol className="pf-cards">
-              {steps.map((step, index) => {
-                const box = layout.boxes[index];
-                if (box === undefined) {
-                  return null;
-                }
-                const kind = stepKind(step);
+            {layout.edges.map((edge) =>
+              edge.label !== null && edge.labelAt !== null ? (
+                <span
+                  key={`label-${edge.from}-${edge.to}`}
+                  className={`pf-answer is-${edge.label.toLowerCase()}`}
+                  style={{ left: edge.labelAt[0], top: edge.labelAt[1] }}
+                >
+                  {edge.label}
+                </span>
+              ) : null,
+            )}
+            {steps.map((step, index) => {
+              const node = layout.nodes[index];
+              if (node === undefined) {
+                return null;
+              }
+              const tone = LANE_TONES[node.lane % LANE_TONES.length];
+              const title = stepTitle(step);
+              if (node.decision) {
                 return (
-                  <li
+                  <button
                     key={step.key || index}
+                    type="button"
+                    className={`pf-diamond is-${tone}`}
                     style={{
-                      left: box.x,
-                      top: box.y,
-                      width: box.w,
-                      height: box.h,
+                      left: node.x,
+                      top: node.y,
+                      width: node.w,
+                      height: node.h,
                     }}
+                    aria-pressed={selected === index}
+                    aria-label={`Step ${index + 1}: ${title}`}
+                    onClick={() =>
+                      setSelected(selected === index ? null : index)
+                    }
                   >
-                    <button
-                      type="button"
-                      className={`pf-card is-${kind}${moving && index === active ? " is-active" : ""}`}
-                      aria-pressed={selected === index}
-                      onClick={() =>
-                        setSelected(selected === index ? null : index)
-                      }
-                    >
-                      <span className="pf-card-head">
-                        <span className={`pf-icon is-${kind}`}>
-                          <UiIcon name={KIND_ICON[kind]} size={15} />
-                        </span>
-                        <span className="pf-card-step">Step {index + 1}</span>
-                        {step.controlPoint ? (
-                          <span className="pf-chip is-control">Control</span>
-                        ) : null}
-                        <span
-                          className={`pf-basis is-${step.basis.toLowerCase()}`}
-                          title={BASIS_LABEL[step.basis]}
-                        >
-                          {step.basis === "DOCUMENTED" ? (
-                            <UiIcon name="check" size={10} />
-                          ) : null}
-                          <span className="sr-only">
-                            {BASIS_LABEL[step.basis]}
-                          </span>
-                        </span>
-                      </span>
-                      <span className="pf-card-text">{step.description}</span>
-                      <span className="pf-card-foot">
-                        <span className="pf-who">
-                          {[step.actor, step.system]
-                            .filter(Boolean)
-                            .join(" · ")}
-                        </span>
-                        {step.attributes.map((code) => (
-                          <span key={code} className="pa-code">
-                            {code}
-                          </span>
-                        ))}
-                      </span>
-                    </button>
-                  </li>
+                    <span className="pf-diamond-shape" aria-hidden="true" />
+                    <span className="pf-diamond-text">
+                      <UiIcon name="flow" size={16} />
+                      {title}
+                    </span>
+                  </button>
                 );
-              })}
-            </ol>
-          </>
-        ) : null}
-      </section>
-      {chosen !== undefined && selected !== null ? (
-        <section className="pf-detail" aria-label={`Step ${selected + 1}`}>
-          <header>
-            <h4>Step {selected + 1}</h4>
+              }
+              const kind = stepKind(step);
+              return (
+                <button
+                  key={step.key || index}
+                  type="button"
+                  className={`pf-card is-${tone}${selected === index ? " is-selected" : ""}`}
+                  style={{
+                    left: node.x,
+                    top: node.y,
+                    width: node.w,
+                    height: node.h,
+                  }}
+                  aria-pressed={selected === index}
+                  onClick={() => setSelected(selected === index ? null : index)}
+                >
+                  <span className="pf-card-head">
+                    <span className={`pf-icon is-${kind}`}>
+                      <UiIcon name={KIND_ICON[kind]} size={16} />
+                    </span>
+                    <span className="pf-card-titles">
+                      <small>Step {index + 1}</small>
+                      <strong>{title}</strong>
+                    </span>
+                  </span>
+                  <span className="pf-card-text">{step.description}</span>
+                  <span className="pf-card-foot">
+                    {step.controlPoint ? (
+                      <span className="pf-chip is-control">
+                        <UiIcon name="shield" size={12} />
+                        Control{controlRef !== "" ? ` ${controlRef}` : ""}
+                      </span>
+                    ) : null}
+                    {step.system !== "" ? (
+                      <span className="pf-chip">
+                        <UiIcon name="database" size={12} />
+                        {step.system}
+                      </span>
+                    ) : null}
+                    {step.attributes.map((code) => (
+                      <span key={code} className="pa-code">
+                        {code}
+                      </span>
+                    ))}
+                  </span>
+                </button>
+              );
+            })}
+          </section>
+          <fieldset className="pf-zoom">
+            <legend className="sr-only">Zoom</legend>
             <button
               type="button"
               className="btn-ghost btn-sm"
-              onClick={() => setSelected(null)}
+              aria-label="Zoom out"
+              onClick={() => zoom(-1)}
             >
-              <UiIcon name="x" size={13} />
-              Close
+              <UiIcon name="minus" size={14} />
             </button>
-          </header>
-          <p>{chosen.description}</p>
-          <dl>
-            {chosen.actor !== "" ? (
+            <span aria-live="polite">{Math.round(scale * 100)}%</span>
+            <button
+              type="button"
+              className="btn-ghost btn-sm"
+              aria-label="Zoom in"
+              onClick={() => zoom(1)}
+            >
+              <UiIcon name="plus" size={14} />
+            </button>
+          </fieldset>
+          <p className="pf-hint">Drag to move · Ctrl and scroll to zoom</p>
+        </div>
+        {chosen !== undefined && selected !== null ? (
+          <aside className="pf-detail" aria-label={`Step ${selected + 1}`}>
+            <header>
+              <h4>Step {selected + 1}</h4>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                aria-label="Close the step"
+                onClick={() => setSelected(null)}
+              >
+                <UiIcon name="x" size={14} />
+              </button>
+            </header>
+            <div className="pf-detail-title">
+              <span
+                className={`pf-detail-icon is-${LANE_TONES[chosenLane % LANE_TONES.length]}`}
+              >
+                <UiIcon
+                  name={
+                    chosen.kind === "DECISION"
+                      ? "flow"
+                      : KIND_ICON[stepKind(chosen)]
+                  }
+                  size={20}
+                />
+              </span>
+              <span>
+                <strong>{stepTitle(chosen)}</strong>
+                <small>{chosen.description}</small>
+              </span>
+            </div>
+            <dl>
               <div>
-                <dt>Performed by</dt>
-                <dd>{chosen.actor}</dd>
+                <dt>Owner</dt>
+                <dd>{chosen.actor !== "" ? chosen.actor : "Not named"}</dd>
               </div>
-            ) : null}
-            {chosen.system !== "" ? (
               <div>
                 <dt>System</dt>
-                <dd>{chosen.system}</dd>
+                <dd>{chosen.system !== "" ? chosen.system : "Not named"}</dd>
               </div>
-            ) : null}
-            <div>
-              <dt>Basis</dt>
-              <dd>
-                {BASIS_LABEL[chosen.basis]}
-                {chosen.quote !== "" ? (
-                  <q>
-                    {chosen.quote}
-                    {chosen.sourceTitle !== ""
-                      ? ` (${chosen.sourceTitle})`
-                      : ""}
-                  </q>
-                ) : null}
-              </dd>
-            </div>
-            {chosen.controlPoint ? (
               <div>
                 <dt>Control</dt>
-                <dd>The control operates at this step.</dd>
-              </div>
-            ) : null}
-            {chosen.attributes.length > 0 ? (
-              <div>
-                <dt>Evaluates</dt>
                 <dd>
-                  <ul>
-                    {chosen.attributes.map((code) => (
-                      <li key={code}>
-                        <span className="pa-code">{code}</span>
-                        {attributes.find((item) => item.code === code)?.text ??
-                          ""}
-                      </li>
-                    ))}
-                  </ul>
+                  {chosen.controlPoint
+                    ? `${controlRef !== "" ? `${controlRef} ` : ""}operates at this step`
+                    : "Not at this step"}
                 </dd>
               </div>
-            ) : null}
-          </dl>
-        </section>
-      ) : (
-        <p className="pf-hint">Select a step to see its details.</p>
-      )}
-      {done ? (
-        <button
-          type="button"
-          className="btn-secondary btn-sm pf-replay"
-          onClick={() => setRun(run + 1)}
-        >
-          <UiIcon name="retry" size={13} />
-          Replay the flow
-        </button>
-      ) : null}
+              <div>
+                <dt>Evidence</dt>
+                <dd>
+                  {chosen.evidence.length > 0
+                    ? chosen.evidence.join(", ")
+                    : "None named"}
+                </dd>
+              </div>
+              {chosen.kind === "DECISION" ? (
+                <div>
+                  <dt>Answers</dt>
+                  <dd>
+                    Yes leads to step{" "}
+                    {chosen.yes > 0 ? chosen.yes : selected + 2}; no leads to
+                    step {chosen.no > 0 ? chosen.no : selected + 2}
+                  </dd>
+                </div>
+              ) : null}
+              {chosen.attributes.length > 0 ? (
+                <div>
+                  <dt>Evaluates</dt>
+                  <dd>
+                    <ul>
+                      {chosen.attributes.map((code) => (
+                        <li key={code}>
+                          <span className="pa-code">{code}</span>
+                          {attributes.find((item) => item.code === code)
+                            ?.text ?? ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </dd>
+                </div>
+              ) : null}
+            </dl>
+            <p className={`pf-basis is-${chosen.basis.toLowerCase()}`}>
+              <UiIcon
+                name={chosen.basis === "DOCUMENTED" ? "check" : "sparkles"}
+                size={14}
+              />
+              {chosen.basis === "DOCUMENTED" ? (
+                <span>
+                  {BASIS_LABEL.DOCUMENTED}
+                  {chosen.sourceTitle !== "" ? ` in ${chosen.sourceTitle}` : ""}
+                  {chosen.quote !== "" ? <q>{chosen.quote}</q> : null}
+                </span>
+              ) : chosen.basis === "INFERRED" ? (
+                <span>AI-derived · Verify against source documents</span>
+              ) : (
+                <span>{BASIS_LABEL.TEAM}</span>
+              )}
+            </p>
+          </aside>
+        ) : null}
+      </div>
     </div>
   );
 }

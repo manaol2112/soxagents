@@ -55,7 +55,11 @@ logger = logging.getLogger(__name__)
 
 MAX_STEPS = 15
 MAX_ATTRIBUTES = 12
+MAX_EVIDENCE = 3
+TITLE_LENGTH = 60
+EVIDENCE_LENGTH = 80
 StepBasis = Literal["DOCUMENTED", "INFERRED", "TEAM"]
+StepKind = Literal["STEP", "DECISION"]
 _CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,19}$")
 
 
@@ -72,6 +76,41 @@ class Step(BaseModel):
     # The codes of the control's approved attributes evaluated at this step (A1, A2, ...),
     # decided by the product owner on 26 October 2026 so the flow shows where each is tested.
     attributes: list[str] = Field(default_factory=list, max_length=MAX_ATTRIBUTES)
+    # The flow as a diagram (decided by the product owner on 27 October 2026): a short
+    # title; a DECISION is where the process branches, its title the question and yes and
+    # no the step numbers each answer leads to (0: the next step); the records it leaves.
+    title: str = Field(default="", max_length=TITLE_LENGTH)
+    kind: StepKind = "STEP"
+    yes: int = Field(default=0, ge=0, le=MAX_STEPS)
+    no: int = Field(default=0, ge=0, le=MAX_STEPS)
+    evidence: list[str] = Field(default_factory=list, max_length=MAX_EVIDENCE)
+
+
+# The step fields the agents answer with for the diagram, shared by the process map and
+# the narrative (process_narrative.py): the same words, the same checks.
+FLOW_STEP_PROPERTIES: dict[str, Any] = {
+    "title": {"type": "string", "maxLength": TITLE_LENGTH},
+    "kind": {"type": "string", "enum": ["STEP", "DECISION"]},
+    "yes": {"type": "integer", "minimum": 0, "maximum": MAX_STEPS},
+    "no": {"type": "integer", "minimum": 0, "maximum": MAX_STEPS},
+    "evidence": {
+        "type": "array",
+        "maxItems": MAX_EVIDENCE,
+        "items": {"type": "string", "maxLength": EVIDENCE_LENGTH},
+    },
+}
+FLOW_STEP_REQUIRED = ["title", "kind", "yes", "no", "evidence"]
+FLOW_STEP_RULES = """- Give each step a title of at most six words, starting with a verb \
+("Submit access request").
+- Make a step a DECISION where the process branches on an answer: an approval that can be \
+refused, a check that can fail. Its title is the question ("Approved?"); yes and no are the \
+numbers of the steps each answer leads to (1 is the first step), 0 when the answer simply \
+continues to the next step. A refused request usually goes back to an earlier step or on to \
+an exception step. Every other step is a STEP with yes and no 0. Add a decision only where \
+the sources or the usual practice for this kind of control show one.
+- In each step's evidence, name up to three records the step leaves that an auditor could \
+inspect ("Approved ticket", "AD change log"), only where the sources or the usual practice \
+show them; leave it empty otherwise."""
 
 
 # The narrative's fixed sections, in order (decided by the product owner on 26 October
@@ -350,6 +389,11 @@ def approved_narrative(
                 "system": step.system,
                 "control_point": step.control_point,
                 "attributes": step.attributes,
+                "title": step.title,
+                "kind": step.kind,
+                "yes": step.yes,
+                "no": step.no,
+                "evidence": step.evidence,
             }
             for step in found.steps
         ],
@@ -389,10 +433,15 @@ def checked_steps(
     a step with a source that does not check out is inferred, never documented. Its
     attribute codes are kept only where the control has them."""
     found: list[Step] = []
+    # A step dropped below renumbers the rest: where each kept step's number now is.
+    numbers: dict[int, int] = {}
+    branches: list[tuple[int, int]] = []
     for index, step in enumerate(steps[:MAX_STEPS], start=1):
         description = line(step.description, 400)
         if not description or contains_secret({"step": description}):
             continue
+        numbers[index] = len(found) + 1
+        branches.append((step.yes, step.no) if step.kind == "DECISION" else (0, 0))
         cited = check_quote(sources, step.source.strip(), step.quote) if step.source else None
         basis: StepBasis = step.basis
         if cited is not None:
@@ -411,9 +460,35 @@ def checked_steps(
                 source_title="" if cited is None else cited.title,
                 quote="" if cited is None else cited.quote,
                 attributes=_codes(step.attributes, codes),
+                title=_title(step.title),
+                kind=step.kind,
+                evidence=_evidence(step.evidence),
             )
         )
+    for position, (yes, no) in enumerate(branches):
+        number = position + 1
+        decided = found[position]
+        # A branch leads to a kept step other than its own; else it continues (0).
+        decided.yes = numbers.get(yes, 0) if numbers.get(yes, 0) != number else 0
+        decided.no = numbers.get(no, 0) if numbers.get(no, 0) != number else 0
+        if decided.kind == "DECISION" and decided.yes == 0 and decided.no == 0:
+            # A decision that leads nowhere else is an ordinary step.
+            decided.kind = "STEP"
     return found
+
+
+def _title(given: str) -> str:
+    title = line(given, TITLE_LENGTH)
+    return "" if contains_secret({"title": title}) else title
+
+
+def _evidence(given: list[str]) -> list[str]:
+    kept: list[str] = []
+    for item in given:
+        text = line(item, EVIDENCE_LENGTH)
+        if text and text not in kept and not contains_secret({"evidence": text}):
+            kept.append(text)
+    return kept[:MAX_EVIDENCE]
 
 
 def _version(
@@ -660,7 +735,7 @@ def adopt(
 
 # Building the map
 
-SYSTEM_PROMPT = """You build the process understanding for one SOX business process \
+SYSTEM_PROMPT = f"""You build the process understanding for one SOX business process \
 control, for an audit team: the steps of the process that matter to this control, from \
 initiation to recording, who performs each, the system used, the handoffs, the step where \
 this control operates, and what happens to exceptions.
@@ -683,6 +758,7 @@ would resolve it, quoting the sources.
 Do not raise one that open_issues already lists, in any wording.
 - Leave actor or system empty when the sources do not say; do not write \
 "not specified".
+{FLOW_STEP_RULES}
 - Write the summary as the process narrative: two to four short paragraphs, separated by a \
 blank line, in an auditor's words and the third person (never "I" or "we"), from the \
 request to the record, naming who does what in which system. Use the client's answers \
@@ -712,10 +788,11 @@ PROCESS_SCHEMA: dict[str, Any] = {
                         "maxItems": MAX_ATTRIBUTES,
                         "items": {"type": "string", "maxLength": 20},
                     },
+                    **FLOW_STEP_PROPERTIES,
                 },
                 "required": [
                     "description", "actor", "system", "control_point", "basis", "source",
-                    "quote", "attributes",
+                    "quote", "attributes", *FLOW_STEP_REQUIRED,
                 ],
                 "additionalProperties": False,
             },
@@ -736,6 +813,11 @@ class _AnswerStep(BaseModel):
     source: str = ""
     quote: str = ""
     attributes: list[str] = Field(default_factory=list, max_length=MAX_ATTRIBUTES)
+    title: str = Field(default="", max_length=TITLE_LENGTH)
+    kind: StepKind = "STEP"
+    yes: int = Field(default=0, ge=0, le=MAX_STEPS)
+    no: int = Field(default=0, ge=0, le=MAX_STEPS)
+    evidence: list[str] = Field(default_factory=list, max_length=MAX_EVIDENCE)
 
 
 class _Answer(BaseModel):
@@ -791,7 +873,7 @@ def build(
                 cancelled=False,
                 system=SYSTEM_PROMPT,
             ),
-            "process-map/1",
+            "process-map/2",
             {"control": str(control_id), "sources": len(sources)},
         )
         status, raw, call_id = call.status, call.raw, call.call_id

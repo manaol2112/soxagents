@@ -232,9 +232,15 @@ def quality_from(
     if control_id is None:
         return checks
     _ = request_id
-    # Every item that evidences an attribute names one the plan approved.
+    # Every item that evidences an attribute names one the plan approved. Design evidence
+    # is not held to it, as the test plan's own check does not (master_plans.findings_of,
+    # EVIDENCE_WITHOUT_ATTRIBUTE): the design is assessed from it, not the attributes. The
+    # two disagreed, so a design request the plan showed as sound could not be sent
+    # (found by the product owner on 28 October 2026).
     unmapped = [
-        f"{row[1]} ({row[2]})" for row in items if set(row[3]) & EVIDENCES_ATTRIBUTES and not row[7]
+        f"{row[1]} ({row[2]})"
+        for row in items
+        if set(row[3]) & EVIDENCES_ATTRIBUTES and not row[7] and phase != "DESIGN"
     ]
     checks.append(
         Check(

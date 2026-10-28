@@ -109,6 +109,7 @@ export function ProcessNarrative({
   run,
   points = false,
   changed = [],
+  controlRef = "",
 }: {
   ids: Ids;
   /** The system and the control, under the narrative's title. */
@@ -123,6 +124,8 @@ export function ProcessNarrative({
   points?: boolean;
   /** The questions whose answer changed after the narrative was approved. */
   changed?: string[];
+  /** The control's reference, shown on the flow where it operates. */
+  controlRef?: string;
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("draft");
@@ -661,7 +664,11 @@ export function ProcessNarrative({
               The flow is drawn from the narrative's steps once it is drafted.
             </p>
           ) : (
-            <ProcessFlow steps={steps} attributes={attributes} />
+            <ProcessFlow
+              steps={steps}
+              attributes={attributes}
+              controlRef={controlRef}
+            />
           )}
         </div>
       ) : tab === "versions" ? (

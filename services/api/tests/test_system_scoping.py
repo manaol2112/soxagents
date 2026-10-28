@@ -261,3 +261,40 @@ def test_a_system_added_by_hand_is_scoped_from_the_library_and_the_clients_contr
         ).status_code
         == 422
     )
+
+
+def test_an_engagement_loads_after_the_rules_stood_in_for_a_failed_review(
+    migrated: Database,
+) -> None:
+    """A review whose model call failed is saved with source FALLBACK (migration 0094).
+    Reading the engagement refused it (422) until the response allowed it, so every page of
+    the engagement failed after the agent was asked (27 October 2026)."""
+    owner, base = _engagement(migrated)
+    body = owner.post(f"{base}/applications/known", json={"names": ["Workday"]}).json()
+    workday = _system(body, "Workday")
+    assert owner.post(f"{base}/systems/{workday['id']}/review").status_code == 200
+    with connect(migrated.url) as connection:
+        assert run_review(connection, None, UUID(workday["id"])) == "DONE"
+        # As _assess leaves it when the model's answer did not fit.
+        connection.execute(
+            "UPDATE system_reviews SET source = 'FALLBACK', note = %s WHERE application_id = %s",
+            (
+                "The agent did not answer, so the reviewed rules were used.",
+                UUID(workday["id"]),
+            ),
+        )
+        connection.commit()
+    loaded = owner.get(base)
+    assert loaded.status_code == 200, loaded.text
+    workday = _system(loaded.json(), "Workday")
+    assert workday["review"]["source"] == "FALLBACK"
+    assert workday["assessment"]["status"] == "IDLE"
+
+
+def test_the_review_has_room_for_every_candidate() -> None:
+    """8192 output tokens cut off a review of an infrastructure system's ~50 candidates, so
+    the reviewed rules stood in for the agent every time (27 October 2026)."""
+    from ai_workforce_api import system_applicability
+
+    assert system_applicability.ASSESS_MAX_TOKENS >= 32000
+    assert "every candidate" in system_applicability.ASSESS_PROMPT

@@ -1400,6 +1400,8 @@ function ControlRecord({
             procedures: item.procedureCodes,
           }))
         : [],
+    // The control's reference, shown on the flow where it operates.
+    controlRef: control.controlRef,
     // The narrative's subtitle: the system and the control it describes.
     subtitle: [control.applicationName, control.title]
       .filter((part) => part !== "")

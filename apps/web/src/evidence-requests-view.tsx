@@ -1,6 +1,15 @@
 "use client";
 
-import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
+import {
+  type ReactNode,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { ControlSend } from "./control-send";
 import type { ActivityItem } from "./control-workspace-model";
 import { centerHref, DEFAULT_QUERY } from "./evidence-center-model";
 import { RequestUpload } from "./evidence-intake";
@@ -17,6 +26,7 @@ import {
   itemSummary,
   mappingLine,
   NO_FILTER,
+  phaseWindow,
   procedureCoverage,
   progressOf,
   REQUEST_PHASE_LABELS,
@@ -33,6 +43,7 @@ import {
 import type { HeldFile, RequestRow } from "./evidence-workspace-model";
 import { linkableFiles } from "./evidence-workspace-model";
 import { fileLine, NO_UPLOAD } from "./evidence-workspace-view";
+import { type PanelPlacement, panelPlacement } from "./panel-placement";
 import type { MasterPlan } from "./planning-model";
 import { AddEvidence } from "./planning-view";
 import { RowMenu } from "./row-menu";
@@ -106,6 +117,80 @@ export function EvidenceRequests({
   }, [typed]);
   const shown = filterRequests(requests, filter);
   const open = requests.find((r) => r.key === selected) ?? null;
+  // A drafted request waiting for a person's approval: what Approve and send sends.
+  const drafted = rows.some((row) => row.status === "DRAFT");
+  // Each request's title as the list shows it, so Approve and send names it the same way.
+  const requestTitles = Object.fromEntries(
+    requests.flatMap((r) => {
+      if (r.request === null) {
+        return [];
+      }
+      const window = plan.phases.find((p) => p.phase === r.phase);
+      return [
+        [
+          r.request.id,
+          {
+            title: r.title,
+            period: window === undefined ? "" : phaseWindow(window),
+          },
+        ] as const,
+      ];
+    }),
+  );
+  // The picked request's detail: never a scroll area of its own (28 October 2026). It
+  // stays in view while it fits below the sticky bars, else it opens beside the request.
+  const main = useRef<HTMLDivElement | null>(null);
+  const slot = useRef<HTMLDivElement | null>(null);
+  const [placement, setPlacement] = useState<PanelPlacement>({
+    mode: "pinned",
+    offset: 0,
+  });
+  useLayoutEffect(() => {
+    const list = main.current;
+    const panel = slot.current;
+    if (open === null || list === null || panel === null) {
+      return;
+    }
+    const place = () => {
+      const styles = getComputedStyle(panel);
+      const bars =
+        (Number.parseFloat(styles.getPropertyValue("--header-height")) || 48) +
+        (Number.parseFloat(styles.getPropertyValue("--cw-bar-h")) || 0);
+      const card = list.querySelector(".er-card.is-selected");
+      // Stacked under the list on a narrow screen: it simply follows the list.
+      const beside =
+        panel.getBoundingClientRect().left >=
+        list.getBoundingClientRect().right - 1;
+      const next: PanelPlacement = !beside
+        ? { mode: "pinned", offset: 0 }
+        : panelPlacement({
+            panelHeight: panel.scrollHeight,
+            viewportHeight: window.innerHeight,
+            stickyTop: bars,
+            itemTop:
+              card === null
+                ? 0
+                : card.getBoundingClientRect().top -
+                  list.getBoundingClientRect().top,
+            listHeight: list.getBoundingClientRect().height,
+          });
+      setPlacement((current) =>
+        current.mode === next.mode && current.offset === next.offset
+          ? current
+          : next,
+      );
+    };
+    place();
+    // The panel's tabs, the list's filters and the window all change the room it needs.
+    const observer = new ResizeObserver(place);
+    observer.observe(panel);
+    observer.observe(list);
+    window.addEventListener("resize", place);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", place);
+    };
+  }, [open]);
   const people = assignees(requests);
   const sent = rows.length;
   const coverage = attributeCoverage(requests, master);
@@ -164,11 +249,6 @@ export function EvidenceRequests({
             trigger={{ label: "Bulk actions", icon: "more" }}
             items={[
               {
-                label: "Approve and send in the Evidence center",
-                icon: "mail",
-                href: centerHref(ids, DEFAULT_QUERY, { q: controlRef }),
-              },
-              {
                 label: "Assign owners",
                 icon: "user",
                 href: centerHref(ids, DEFAULT_QUERY, { assigning: true }),
@@ -183,13 +263,17 @@ export function EvidenceRequests({
           {canAct && master !== null ? (
             <button
               type="button"
-              className="btn btn-sm"
+              className="btn btn-secondary btn-sm"
               aria-expanded={adding}
               onClick={() => setAdding((value) => !value)}
             >
               <UiIcon name="plus" size={14} />
               Add evidence
             </button>
+          ) : null}
+          {/* Approved and sent here, to the control's owner (28 October 2026). */}
+          {canAct && drafted ? (
+            <ControlSend ids={ids} titles={requestTitles} />
           ) : null}
         </div>
       </header>
@@ -212,7 +296,7 @@ export function EvidenceRequests({
       >
         {view === "list" ? (
           <div className={`er-layout${open !== null ? " has-panel" : ""}`}>
-            <div className="er-main">
+            <div className="er-main" ref={main}>
               <div className="er-filters">
                 <Select
                   label="Phase"
@@ -283,19 +367,25 @@ export function EvidenceRequests({
               )}
             </div>
             {open !== null ? (
-              <RequestPanel
-                key={open.key}
-                ids={ids}
-                request={open}
-                master={master}
-                canAct={canAct}
-                files={files}
-                applications={applications}
-                system={system}
-                activity={activity}
-                onClose={() => setSelected(null)}
-                onMapping={() => setView("attributes")}
-              />
+              <div
+                ref={slot}
+                className={`er-panel-slot is-${placement.mode}`}
+                style={{ marginTop: placement.offset }}
+              >
+                <RequestPanel
+                  key={open.key}
+                  ids={ids}
+                  request={open}
+                  master={master}
+                  canAct={canAct}
+                  files={files}
+                  applications={applications}
+                  system={system}
+                  activity={activity}
+                  onClose={() => setSelected(null)}
+                  onMapping={() => setView("attributes")}
+                />
+              </div>
             ) : null}
           </div>
         ) : null}

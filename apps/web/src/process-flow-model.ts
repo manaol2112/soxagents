@@ -1,126 +1,300 @@
 /**
- * The process flow as a map (asked for by the product owner on 27 October 2026, from a
- * workflow-canvas reference: "I want to create a wow factor"): the narrative's steps as
- * cards that wind across the canvas, left to right, turning at the edge, then right to
- * left, joined by connectors an animated marker travels along, step by step.
- *
- * Every card has the same height, so the layout is computed from the canvas width alone
- * and the connectors are drawn from the same numbers as the cards.
+ * The process flow as a swimlane diagram (the product owner's reference of 27 October
+ * 2026, replacing the winding map of the same day): one lane for each role that performs a
+ * step, the steps in order across the lanes, a decision as a diamond whose Yes and No lead
+ * to the steps the narrative names, and connectors routed between them. Everything is
+ * worked out here from the steps alone, so the canvas, its zoom and its tests share it.
  */
 
 import type { ProcessStep } from "./control-context-model.ts";
 
-/** The canvas's padding: room at each side for the connector turning to the next row. */
-export const FLOW_PAD_X = 48;
-export const FLOW_PAD_Y = 24;
-export const FLOW_GAP_X = 56;
-export const FLOW_GAP_Y = 56;
-export const FLOW_CARD_HEIGHT = 148;
-/** One column wide enough for two lines of text: a shorter card, closer together. */
-const COMPACT_HEIGHT = 124;
-const COMPACT_GAP_Y = 32;
-const SINGLE_PAD_X = 24;
-/** How far a turning connector bends out past the cards. */
-const TURN = 36;
+/** The lane's label column, the cards, the decision diamond, and the gaps between. */
+export const LANE_LABEL_WIDTH = 200;
+export const CARD_WIDTH = 236;
+export const CARD_HEIGHT = 184;
+export const DIAMOND_SIZE = 112;
+const COLUMN_GAP = 72;
+const LANE_PAD_X = 28;
+const LANE_PAD_Y = 26;
+const LANE_GAP = 16;
+/** How far below a card a connector running back to an earlier step travels. */
+const RETURN_DROP = 14;
 
-export type FlowBox = {
+export const LANE_HEIGHT = CARD_HEIGHT + 2 * LANE_PAD_Y;
+
+/** The lane of a step with no role named. */
+export const UNNAMED_LANE = "Role not named";
+
+export type FlowLane = { name: string; y: number; h: number; steps: number };
+
+export type FlowNode = {
   index: number;
-  row: number;
-  col: number;
+  lane: number;
+  column: number;
   x: number;
   y: number;
   w: number;
   h: number;
+  decision: boolean;
 };
 
-export type FlowLayout = {
-  columns: number;
-  /** One column with room for each step's text on two lines. */
-  compact: boolean;
+export type FlowEdge = {
+  from: number;
+  to: number;
+  /** SVG path data, orthogonal. */
+  d: string;
+  /** A decision's answer on its connector, with where it is written. */
+  label: "Yes" | "No" | null;
+  labelAt: [number, number] | null;
+  /** Runs back to an earlier step (a refusal going round again). */
+  back: boolean;
+};
+
+export type SwimlaneLayout = {
   width: number;
   height: number;
-  boxes: FlowBox[];
-  /** The connector from each step to the next, as SVG path data; one fewer than boxes. */
-  segments: string[];
-  /** The two ends of each connector, for the port dots. */
-  ports: Array<{ from: [number, number]; to: [number, number] }>;
+  lanes: FlowLane[];
+  nodes: FlowNode[];
+  edges: FlowEdge[];
 };
 
-/** How many cards fit across: three on a wide canvas, two on a medium one, one on a
- * phone, never more than there are steps. */
-export function flowColumns(width: number, count: number): number {
-  const fit = width >= 900 ? 3 : width >= 600 ? 2 : 1;
-  return Math.max(1, Math.min(fit, count));
+/** The words for a step's role, its lane: as written, or the unnamed lane. */
+export function laneName(actor: string): string {
+  const name = actor.trim().replace(/\s+/g, " ");
+  return name === "" ? UNNAMED_LANE : name;
 }
 
-export function flowLayout(count: number, width: number): FlowLayout {
-  const columns = flowColumns(width, count);
-  // One column has no turns to make room for at its sides.
-  const padX = columns === 1 ? SINGLE_PAD_X : FLOW_PAD_X;
-  const compact = columns === 1 && width >= 420;
-  const gapY = columns === 1 ? COMPACT_GAP_Y : FLOW_GAP_Y;
-  const w = Math.max(
-    160,
-    (width - 2 * padX - (columns - 1) * FLOW_GAP_X) / columns,
-  );
-  const h = compact ? COMPACT_HEIGHT : FLOW_CARD_HEIGHT;
-  const boxes: FlowBox[] = [];
-  for (let index = 0; index < count; index++) {
-    const row = Math.floor(index / columns);
-    const step = index % columns;
-    // Even rows run left to right, odd rows right to left, so each row turns into the
-    // next at the same side.
-    const col = row % 2 === 0 ? step : columns - 1 - step;
-    boxes.push({
-      index,
-      row,
-      col,
-      x: padX + col * (w + FLOW_GAP_X),
-      y: FLOW_PAD_Y + row * (h + gapY),
-      w,
-      h,
-    });
+/** A step's title: the narrative's, else the first words of its description; a decision
+ * without one asks its question plainly. */
+export function stepTitle(
+  step: Pick<ProcessStep, "title" | "description" | "kind">,
+): string {
+  const given = step.title.trim();
+  if (given !== "") {
+    return given;
   }
-  const segments: string[] = [];
-  const ports: FlowLayout["ports"] = [];
-  for (let index = 0; index + 1 < boxes.length; index++) {
-    const a = boxes[index] as FlowBox;
-    const b = boxes[index + 1] as FlowBox;
-    const ay = a.y + a.h / 2;
-    const by = b.y + b.h / 2;
-    let from: [number, number];
-    let to: [number, number];
-    let d: string;
-    if (columns === 1) {
-      from = [a.x + a.w / 2, a.y + a.h];
-      to = [b.x + b.w / 2, b.y];
-      d = `M ${from[0]} ${from[1]} L ${to[0]} ${to[1]}`;
-    } else if (a.row === b.row) {
-      const rightward = b.col > a.col;
-      from = [rightward ? a.x + a.w : a.x, ay];
-      to = [rightward ? b.x : b.x + b.w, by];
-      d = `M ${from[0]} ${from[1]} L ${to[0]} ${to[1]}`;
-    } else {
-      // The turn into the next row, out past the cards and back.
-      const right = a.row % 2 === 0;
-      const side = right ? a.x + a.w : a.x;
-      const out = right ? side + TURN : side - TURN;
-      from = [side, ay];
-      to = [right ? b.x + b.w : b.x, by];
-      d = `M ${from[0]} ${from[1]} C ${out} ${ay} ${out} ${by} ${to[0]} ${to[1]}`;
+  if (step.kind === "DECISION") {
+    return "Approved?";
+  }
+  const words = step.description
+    .trim()
+    .replace(/[.;:].*$/s, "")
+    .split(/\s+/)
+    .filter((word) => word !== "");
+  const short = words.slice(0, 6).join(" ");
+  return words.length > 6 ? `${short}…` : short;
+}
+
+/** The step a decision's answer leads to, as an index: the one named (1 is the first),
+ * else the next step; null when there is none. */
+function target(
+  step: ProcessStep,
+  index: number,
+  count: number,
+  answer: "yes" | "no",
+) {
+  const named = step[answer];
+  if (named >= 1 && named <= count && named - 1 !== index) {
+    return named - 1;
+  }
+  return index + 1 < count ? index + 1 : null;
+}
+
+export function swimlaneLayout(steps: readonly ProcessStep[]): SwimlaneLayout {
+  const names: string[] = [];
+  const laneOf = steps.map((step) => {
+    const name = laneName(step.actor);
+    const known = names.findIndex(
+      (item) => item.toLowerCase() === name.toLowerCase(),
+    );
+    if (known >= 0) {
+      return known;
     }
-    segments.push(d);
-    ports.push({ from, to });
-  }
-  const rows = count === 0 ? 0 : Math.ceil(count / columns);
+    names.push(name);
+    return names.length - 1;
+  });
+
+  // Columns: the next step in the same lane moves right; a handoff to another lane drops
+  // or rises in the same column, as the reference does, unless that cell is taken.
+  const taken = new Set<string>();
+  const columnOf: number[] = [];
+  steps.forEach((_, index) => {
+    const lane = laneOf[index] ?? 0;
+    let column =
+      index === 0
+        ? 0
+        : (columnOf[index - 1] ?? 0) + (laneOf[index - 1] === lane ? 1 : 0);
+    while (taken.has(`${lane}:${column}`)) {
+      column += 1;
+    }
+    taken.add(`${lane}:${column}`);
+    columnOf.push(column);
+  });
+  const columns = Math.max(1, ...columnOf.map((column) => column + 1));
+
+  const lanes: FlowLane[] = names.map((name, lane) => ({
+    name,
+    y: lane * (LANE_HEIGHT + LANE_GAP),
+    h: LANE_HEIGHT,
+    steps: laneOf.filter((item) => item === lane).length,
+  }));
+  const cellX = (column: number) =>
+    LANE_LABEL_WIDTH + LANE_PAD_X + column * (CARD_WIDTH + COLUMN_GAP);
+  const nodes: FlowNode[] = steps.map((step, index) => {
+    const lane = laneOf[index] ?? 0;
+    const column = columnOf[index] ?? 0;
+    const top = (lanes[lane]?.y ?? 0) + LANE_PAD_Y;
+    const decision = step.kind === "DECISION";
+    return decision
+      ? {
+          index,
+          lane,
+          column,
+          x: cellX(column) + (CARD_WIDTH - DIAMOND_SIZE) / 2,
+          y: top + (CARD_HEIGHT - DIAMOND_SIZE) / 2,
+          w: DIAMOND_SIZE,
+          h: DIAMOND_SIZE,
+          decision,
+        }
+      : {
+          index,
+          lane,
+          column,
+          x: cellX(column),
+          y: top,
+          w: CARD_WIDTH,
+          h: CARD_HEIGHT,
+          decision,
+        };
+  });
+
+  const edges: FlowEdge[] = [];
+  steps.forEach((step, index) => {
+    const answers: Array<["Yes" | "No" | null, number | null]> =
+      step.kind === "DECISION"
+        ? [
+            ["Yes", target(step, index, steps.length, "yes")],
+            ["No", target(step, index, steps.length, "no")],
+          ]
+        : [[null, index + 1 < steps.length ? index + 1 : null]];
+    const seen = new Set<number>();
+    for (const [label, to] of answers) {
+      if (to === null || seen.has(to)) {
+        continue;
+      }
+      seen.add(to);
+      const from = nodes[index];
+      const into = nodes[to];
+      if (from === undefined || into === undefined) {
+        continue;
+      }
+      edges.push(route(from, into, label, lanes));
+    }
+  });
+
   return {
-    columns,
-    compact,
-    width,
-    height: rows === 0 ? 0 : 2 * FLOW_PAD_Y + rows * h + (rows - 1) * gapY,
-    boxes,
-    segments,
-    ports,
+    width: cellX(columns - 1) + CARD_WIDTH + LANE_PAD_X,
+    height:
+      lanes.length * LANE_HEIGHT + Math.max(0, lanes.length - 1) * LANE_GAP,
+    lanes,
+    nodes,
+    edges,
+  };
+}
+
+const mid = (node: FlowNode): [number, number] => [
+  node.x + node.w / 2,
+  node.y + node.h / 2,
+];
+
+/** An orthogonal connector from one step to another, with room for its label. */
+function route(
+  from: FlowNode,
+  into: FlowNode,
+  label: "Yes" | "No" | null,
+  lanes: FlowLane[],
+): FlowEdge {
+  const [fx, fy] = mid(from);
+  const [tx, ty] = mid(into);
+  const forward =
+    into.column > from.column ||
+    (into.column === from.column && into.index > from.index);
+  let d: string;
+  let labelAt: [number, number];
+  if (!forward) {
+    // Back to an earlier step: down below the lower card, across, and up into it.
+    const lane = lanes[Math.max(from.lane, into.lane)];
+    const floor = (lane?.y ?? 0) + (lane?.h ?? 0) - RETURN_DROP;
+    const below = Math.max(from.y + from.h, into.y + into.h) + RETURN_DROP;
+    const y = Math.min(floor, below);
+    d = `M ${fx} ${from.y + from.h} V ${y} H ${tx} V ${into.y + into.h}`;
+    labelAt = [(fx + tx) / 2, y];
+  } else if (into.column === from.column) {
+    // A handoff straight down (or up) to another lane.
+    const down = into.y > from.y;
+    const start = down ? from.y + from.h : from.y;
+    const end = down ? into.y : into.y + into.h;
+    d = `M ${fx} ${start} V ${end}`;
+    labelAt = [fx, (start + end) / 2];
+  } else if (Math.abs(fy - ty) < 1) {
+    d = `M ${from.x + from.w} ${fy} H ${into.x}`;
+    labelAt = [(from.x + from.w + into.x) / 2, fy];
+  } else {
+    // Across and into another lane: out to the gap, along it, and in.
+    const gap = into.x - (into.x - (from.x + from.w)) / 2;
+    d = `M ${from.x + from.w} ${fy} H ${gap} V ${ty} H ${into.x}`;
+    labelAt = [(from.x + from.w + gap) / 2, fy];
+  }
+  return {
+    from: from.index,
+    to: into.index,
+    d,
+    label,
+    labelAt: label === null ? null : labelAt,
+    back: !forward,
+  };
+}
+
+/** The zoom that fits the whole diagram in a view, never larger than life, never smaller
+ * than a third. */
+export function fitScale(
+  layout: Pick<SwimlaneLayout, "width" | "height">,
+  view: { width: number; height: number },
+  margin = 32,
+): number {
+  if (layout.width <= 0 || layout.height <= 0) {
+    return 1;
+  }
+  const scale = Math.min(
+    (view.width - 2 * margin) / layout.width,
+    (view.height - 2 * margin) / layout.height,
+    1,
+  );
+  return Math.max(MIN_ZOOM, Math.round(scale * 100) / 100);
+}
+
+export const MIN_ZOOM = 0.35;
+export const MAX_ZOOM = 2;
+
+/** One zoom step in or out, kept within bounds. */
+export function zoomStep(scale: number, direction: 1 | -1): number {
+  const next = Math.round((scale + direction * 0.1) * 100) / 100;
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next));
+}
+
+/** What the diagram holds, for the line above it. */
+export function flowSummary(steps: readonly ProcessStep[]): {
+  steps: number;
+  controls: number;
+  owners: number;
+  decisions: number;
+} {
+  return {
+    steps: steps.length,
+    controls: steps.filter((step) => step.controlPoint).length,
+    owners: new Set(steps.map((step) => laneName(step.actor).toLowerCase()))
+      .size,
+    decisions: steps.filter((step) => step.kind === "DECISION").length,
   };
 }
 
@@ -143,11 +317,3 @@ export const BASIS_LABEL: Record<ProcessStep["basis"], string> = {
   INFERRED: "Inferred",
   TEAM: "From the team",
 };
-
-/** The marker's pace along a connector, in pixels a second, how long it rests at each
- * step, and how many times it runs through before it stops. Slow and finite, so it never
- * pulls the eye away from reading (product owner, 27 October 2026: "the atom moves so
- * fast and it's disturbing me when I'm reading"). */
-export const FLOW_SPEED = 60;
-export const FLOW_REST_MS = 2200;
-export const FLOW_PASSES = 2;

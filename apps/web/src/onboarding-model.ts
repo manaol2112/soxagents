@@ -1945,7 +1945,8 @@ export type SetupSystem = {
   version: number;
   review: {
     status: "IDLE" | "PENDING" | "WORKING";
-    source: "NONE" | "RULES" | "AGENT";
+    /** FALLBACK: the reviewed rules stood in for a model call that failed. */
+    source: "NONE" | "RULES" | "AGENT" | "FALLBACK";
     summary: string;
     coverage: string;
     cuecs: SystemCuec[];
@@ -2030,6 +2031,10 @@ export const ENVIRONMENTS: ReadonlyArray<[string, string]> = [
   ["NON_PRODUCTION", "Non-production"],
   ["BOTH", "Production and non-production"],
 ];
+
+/** A new system starts as production, where the controls in scope run (decided by the
+ * product owner on 27 October 2026); the person changes it when it is not. */
+export const DEFAULT_ENVIRONMENT = "PRODUCTION";
 
 function isArea(value: unknown): value is ControlArea {
   return CONTROL_AREAS.some((area) => area.id === value);
@@ -2225,7 +2230,8 @@ export function chooseAll(
 
 export type SystemAssessment = {
   status: "IDLE" | "PENDING" | "WORKING";
-  source: "NONE" | "RULES" | "AGENT";
+  /** FALLBACK: the reviewed rules stood in for a model call that failed. */
+  source: "NONE" | "RULES" | "AGENT" | "FALLBACK";
   reviewedAt: string | null;
   summary: string;
   note: string;
@@ -2922,7 +2928,10 @@ function parseSystem(item: Record<string, unknown>): SetupSystem {
         : {
             status:
               status === "PENDING" || status === "WORKING" ? status : "IDLE",
-            source: source === "RULES" || source === "AGENT" ? source : "NONE",
+            source:
+              source === "RULES" || source === "AGENT" || source === "FALLBACK"
+                ? source
+                : "NONE",
             summary: str(review.summary),
             coverage: str(review.coverage),
             cuecs: records(review.cuecs).map((cuec, index) => ({
@@ -3008,7 +3017,8 @@ function parseAssessment(value: unknown): SystemAssessment | null {
   }
   return {
     status: pick(value.status, ["PENDING", "WORKING"] as const) ?? "IDLE",
-    source: pick(value.source, ["RULES", "AGENT"] as const) ?? "NONE",
+    source:
+      pick(value.source, ["RULES", "AGENT", "FALLBACK"] as const) ?? "NONE",
     reviewedAt:
       typeof value.reviewed_at === "string" ? value.reviewed_at : null,
     summary: str(value.summary),

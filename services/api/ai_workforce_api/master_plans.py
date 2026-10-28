@@ -201,6 +201,9 @@ class _Plan:
     understanding: dict[str, Any] = field(default_factory=dict)
     provisional: bool = False
     pending_revision: dict[str, Any] | None = None
+    # The words each current attribute had before it was reworded (its replaces chain), so
+    # evidence planned with the earlier words still names it (28 October 2026).
+    former_wordings: list[str] = field(default_factory=list)
     submitted_by: str | None = None
     submitted_at: datetime | None = None
     submitted_note: str = ""
@@ -378,6 +381,26 @@ def _load(
                 "criteria_accepted_by": str(row[19] or ""),
             }
         )  # fmt: skip
+    # Each current attribute's earlier wordings: the attributes it replaced, and theirs.
+    chains: dict[UUID, dict[UUID, tuple[UUID | None, str]]] = {}
+    for row in connection.execute(
+        f"SELECT engagement_control_id, id, replaces_id, text FROM control_attributes "
+        f"WHERE {scope}",
+        params,
+    ).fetchall():
+        chains.setdefault(UUID(str(row[0])), {})[UUID(str(row[1]))] = (
+            None if row[2] is None else UUID(str(row[2])),
+            str(row[3]),
+        )
+    for control_id, found in plans.items():
+        rows = chains.get(control_id, {})
+        for item in found.attributes:
+            seen: set[UUID] = {item["id"]}
+            earlier = rows.get(item["id"], (None, ""))[0]
+            while earlier is not None and earlier not in seen and earlier in rows:
+                seen.add(earlier)
+                earlier, text = rows[earlier]
+                found.former_wordings.append(text)
     for row in connection.execute(
         f"""
         SELECT q.engagement_control_id, q.id, q.code, q.phase, q.requirement_key, q.title,
@@ -790,14 +813,16 @@ class Finding(BaseModel):
     detail: str
 
 
-def _names_attribute(name: str, attributes: list[dict[str, Any]]) -> bool:
+def _names_attribute(
+    name: str, attributes: list[dict[str, Any]], former: list[str] | None = None
+) -> bool:
     """Whether evidence that names this wording names one of the control's attributes: the
-    same words, or the words it was planned with before a client value was filled into the
-    attribute (\"by [the deadline]\" naming \"by 30 days after quarter end\")."""
+    same words, the words it was planned with before a client value was filled into the
+    attribute (\"by [the deadline]\" naming \"by 30 days after quarter end\"), or the words
+    an attribute had before a person reworded it (its replaces chain, 28 October 2026)."""
     wanted = _normal(name)
-    return any(
-        _normal(item["text"]) == wanted or _filled_only(name, item["text"]) for item in attributes
-    )
+    texts = [str(item["text"]) for item in attributes] + list(former or [])
+    return any(_normal(text) == wanted or _filled_only(name, text) for text in texts)
 
 
 def findings_of(plan: _Plan) -> list[Finding]:
@@ -873,7 +898,7 @@ def findings_of(plan: _Plan) -> list[Finding]:
                 detail=f"{item['code']} ({item['title']}) supports no attribute of the control.",
             ))  # fmt: skip
         for name in item["named"]:
-            if not _names_attribute(name, plan.attributes):
+            if not _names_attribute(name, plan.attributes, plan.former_wordings):
                 found.append(Finding(
                     kind="UNMATCHED_ATTRIBUTE", code=item["code"],
                     detail=f"{item['code']} names an attribute the control does not have: "
@@ -1393,7 +1418,9 @@ def body_of(
                     ]
                 ),
                 unmatched=[
-                    name for name in item["named"] if not _names_attribute(name, plan.attributes)
+                    name
+                    for name in item["named"]
+                    if not _names_attribute(name, plan.attributes, plan.former_wordings)
                 ],
                 version=item["version"],
             )  # fmt: skip

@@ -39,7 +39,6 @@ import {
   type Foundation,
   launchChecklist,
 } from "./launch-checklist-model";
-import { NewControlForm } from "./new-control-form";
 import {
   inScopeSystems,
   type LaunchNext,
@@ -50,7 +49,6 @@ import {
   type Onboarding,
   openConflicts,
   type PlanItem,
-  PROCESS_CYCLES,
   pendingSuggestions,
   periodCorrections,
   type RcmImport,
@@ -90,6 +88,7 @@ import {
 } from "./scope-actions";
 import { type ControlsFor, parseControlsFor } from "./scope-controls-model";
 import { removalNote } from "./scoped-controls";
+import { adviceBySystem } from "./select-controls-model";
 import { guidedStep, ONBOARDING_STEPS } from "./setup-guide-model";
 import { ControlsAssistant, SetupAgent, SetupCycle } from "./setup-guide-view";
 import { impactHref } from "./setup-impact-model";
@@ -1974,29 +1973,6 @@ function ScopeControls({
       initial={initial}
       editable={editable}
       notices={notices}
-      extra={
-        editable ? (
-          <details className="card sys-more sc-write">
-            <summary>
-              <span>
-                Write a business process control of the client&apos;s own
-              </span>
-            </summary>
-            <NewControlForm
-              model={model}
-              onboarding={onboarding}
-              domains={PROCESS_CYCLES.map(([key]) => key)}
-              processes={onboarding.processes}
-              systems={[]}
-              title="New business process control"
-              example={{
-                controlRef: "BP-01",
-                title: "Credit notes are approved before posting",
-              }}
-            />
-          </details>
-        ) : null
-      }
     />
   );
 }
@@ -2285,6 +2261,7 @@ export function ScopePage({
             organizationId={model.organization.id}
             projectId={onboarding.projectId}
             targets={targets}
+            advice={adviceBySystem(onboarding)}
             finalized={finalized}
             rcm={controls.length === 0}
           />
@@ -2467,6 +2444,7 @@ export function RegisterPage({
             organizationId={model.organization.id}
             projectId={onboarding.projectId}
             targets={targets}
+            advice={adviceBySystem(onboarding)}
             finalized={finalized}
             rcm={controls.length === 0}
           />

@@ -180,6 +180,13 @@ describe("control context", () => {
           // The attributes evaluated at the step (26 October 2026): a code is kept only
           // when it is well formed.
           attributes: ["A1", "not a code!", 7],
+          // The diagram's fields (27 October 2026) travel with a person's save: the
+          // title trimmed, a branch to a step that cannot exist dropped, evidence cleaned.
+          title: " Raise invoice ",
+          kind: "DECISION",
+          yes: 3,
+          no: 99,
+          evidence: [" Invoice copy ", 5, ""],
         },
         { description: "   " },
       ],
@@ -201,6 +208,11 @@ describe("control context", () => {
           source: "",
           quote: "",
           attributes: ["A1"],
+          title: "Raise invoice",
+          kind: "DECISION",
+          yes: 3,
+          no: 0,
+          evidence: ["Invoice copy"],
         },
       ],
       version: 0,

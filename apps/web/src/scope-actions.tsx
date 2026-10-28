@@ -21,6 +21,17 @@ import {
   SHOW_PANE_EVENT,
   selectionCategory,
 } from "./controls-guide-model";
+import {
+  acceptRecommended,
+  adviceSourceLine,
+  clickRow,
+  libraryView,
+  pickCategory,
+  type SourceKey,
+  type SystemAdvice,
+  toggleVisible,
+} from "./select-controls-model";
+import { selectTargetFor } from "./system-added-model";
 import { type IconName, UiIcon } from "./ui-icon";
 
 type Target = { kind: "system" | "process"; id: string; name: string };
@@ -101,11 +112,14 @@ function useDrawer(event: string): {
     detail: null,
   });
   useEffect(() => {
-    const show = (raised: Event) =>
+    const show = (raised: Event) => {
+      // Taken: an opener that asks (a cancelable event) learns a drawer is here.
+      raised.preventDefault();
       setState({
         open: true,
         detail: (raised as CustomEvent<unknown>).detail ?? null,
       });
+    };
     document.addEventListener(event, show);
     return () => document.removeEventListener(event, show);
   }, [event]);
@@ -118,6 +132,8 @@ function useDrawer(event: string): {
 
 export function Drawer({
   title,
+  subtitle,
+  className,
   icon,
   busy,
   onClose,
@@ -127,6 +143,10 @@ export function Drawer({
   children,
 }: {
   title: string;
+  /** One line under the title. */
+  subtitle?: string;
+  /** A drawer with a layout of its own adds its class (Map controls). */
+  className?: string;
   icon: IconName;
   busy: boolean;
   onClose: () => void;
@@ -150,7 +170,7 @@ export function Drawer({
     // A click outside never closes it: what was entered stays until Cancel or Close.
     <div className="as-backdrop" role="presentation">
       <section
-        className={`as${aside === null ? " is-single" : ""}${compact ? " is-compact" : ""}`}
+        className={`as${aside === null ? " is-single" : ""}${compact ? " is-compact" : ""}${className === undefined ? "" : ` ${className}`}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={`${id}-title`}
@@ -159,7 +179,14 @@ export function Drawer({
           <span className="as-head-icon" aria-hidden="true">
             <UiIcon name={icon} size={16} />
           </span>
-          <h2 id={`${id}-title`}>{title}</h2>
+          {subtitle === undefined ? (
+            <h2 id={`${id}-title`}>{title}</h2>
+          ) : (
+            <span className="as-head-text">
+              <h2 id={`${id}-title`}>{title}</h2>
+              <span>{subtitle}</span>
+            </span>
+          )}
           <button
             type="button"
             className="as-close"
@@ -248,6 +275,7 @@ export function SelectControls({
   targets,
   finalized,
   rcm,
+  advice = {},
 }: {
   organizationId: string;
   projectId: string;
@@ -255,20 +283,27 @@ export function SelectControls({
   finalized: boolean;
   /** Whether the client's RCM can still be uploaded: only while no control is set up. */
   rcm: boolean;
+  /** The agent's review of each system, by its id (adviceBySystem). */
+  advice?: Record<string, SystemAdvice>;
 }) {
   const drawer = useDrawer(SELECT_CONTROLS_EVENT);
   if (!drawer.open) {
     return null;
   }
-  const named = targets.find((target) => target.id === drawer.detail);
+  // A system just added joins the targets once the page has refreshed.
+  const start = selectTargetFor(targets, drawer.detail);
+  if (start.wait) {
+    return null;
+  }
   return (
     <SelectControlsDrawer
       organizationId={organizationId}
       projectId={projectId}
       targets={targets}
-      initial={named ?? targets[0] ?? null}
+      initial={start.target}
       finalized={finalized}
       rcm={rcm}
+      advice={advice}
       onClose={drawer.close}
     />
   );
@@ -281,6 +316,7 @@ function SelectControlsDrawer({
   initial,
   finalized,
   rcm,
+  advice,
   onClose,
 }: {
   organizationId: string;
@@ -289,6 +325,7 @@ function SelectControlsDrawer({
   initial: Target | null;
   finalized: boolean;
   rcm: boolean;
+  advice: Record<string, SystemAdvice>;
   onClose: () => void;
 }) {
   const router = useRouter();
@@ -300,9 +337,40 @@ function SelectControlsDrawer({
   const [chosen, setChosen] = useState<string[]>([]);
   const [typed, setTyped] = useState("");
   const [query, setQuery] = useState("");
+  const [categoryWords, setCategoryWords] = useState("");
+  const [sources, setSources] = useState<SourceKey[]>([]);
+  const [recommendedOnly, setRecommendedOnly] = useState(false);
+  const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const latest = useRef(0);
+  // The row last clicked, where a Shift-click range starts.
+  const anchor = useRef<string | null>(null);
+
+  // The agent's review of the system; a process has none.
+  const advised =
+    target?.kind === "system" ? (advice[target.id] ?? null) : null;
+  // While the agent reviews the system, the page refreshes to bring its answer in; just
+  // after asking, until the review shows as started, for a minute at most.
+  const reviewing =
+    advised?.state === "WORKING" || (asking && advised?.state === "NONE");
+  useEffect(() => {
+    if (!reviewing) {
+      return;
+    }
+    const timer = window.setInterval(
+      () => startTransition(() => router.refresh()),
+      4000,
+    );
+    return () => window.clearInterval(timer);
+  }, [reviewing, router]);
+  useEffect(() => {
+    if (!asking) {
+      return;
+    }
+    const timer = window.setTimeout(() => setAsking(false), 60000);
+    return () => window.clearTimeout(timer);
+  }, [asking]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setQuery(typed), 150);
@@ -317,6 +385,9 @@ function SelectControlsDrawer({
     latest.current = ask;
     setOptions(null);
     setChosen([]);
+    anchor.current = null;
+    setAsking(false);
+    setRecommendedOnly(false);
     void call({
       organization_id: organizationId,
       project_id: projectId,
@@ -350,26 +421,45 @@ function SelectControlsDrawer({
     });
   }, [organizationId, projectId, target]);
 
-  const words = query.trim().toLowerCase();
   const all = options ?? [];
-  const counts = new Map<string, { label: string; count: number }>();
-  for (const item of all) {
-    const category = selectionCategory(item.domain);
-    const current = counts.get(category.key);
-    counts.set(category.key, {
-      label: category.label,
-      count: (current?.count ?? 0) + 1,
-    });
-  }
-  const shown = all.filter(
-    (item) =>
-      categories.includes(selectionCategory(item.domain).key) &&
-      (words === "" ||
-        `${item.controlRef} ${item.title}`.toLowerCase().includes(words)),
+  const view = libraryView(
+    all,
+    {
+      categories,
+      sources,
+      words: query,
+      categoryWords,
+      chosen,
+      recommendedOnly,
+    },
+    advised,
   );
-  const open = shown.filter((item) => !item.inScope);
-  const allChosen =
-    open.length > 0 && open.every((item) => chosen.includes(item.libraryKey));
+  const toggle = (key: string) =>
+    setChosen((current) =>
+      current.includes(key)
+        ? current.filter((item) => item !== key)
+        : [...current, key],
+    );
+  const name = target?.name ?? "a system or process";
+
+  async function ask() {
+    if (target === null || target.kind !== "system") {
+      return;
+    }
+    setProblem(null);
+    const { status } = await call({
+      organization_id: organizationId,
+      project_id: projectId,
+      intent: "assess",
+      system_id: target.id,
+    });
+    if (status !== 200) {
+      setProblem("The agent could not be asked. Try again.");
+      return;
+    }
+    setAsking(true);
+    startTransition(() => router.refresh());
+  }
 
   async function add() {
     if (target === null || chosen.length === 0) {
@@ -404,75 +494,115 @@ function SelectControlsDrawer({
 
   return (
     <Drawer
-      title="Select controls"
+      title={`Map controls to ${name}`}
+      subtitle={
+        rcm
+          ? "Select controls from your library or import a client RCM."
+          : "Select controls from your library."
+      }
+      className="mc"
       icon="shield"
       busy={busy}
       onClose={onClose}
       aside={
-        <aside className="sc-filters" aria-label="Filters">
-          <label htmlFor={`${id}-target`} className="sc-target">
-            <span>For</span>
-            <select
-              id={`${id}-target`}
-              value={target === null ? "" : `${target.kind}:${target.id}`}
-              onChange={(event) =>
-                setTarget(
-                  targets.find(
-                    (item) => `${item.kind}:${item.id}` === event.target.value,
-                  ) ?? null,
-                )
-              }
-            >
-              {targets.some((item) => item.kind === "system") ? (
-                <optgroup label="Systems">
-                  {targets
-                    .filter((item) => item.kind === "system")
-                    .map((item) => (
-                      <option key={item.id} value={`system:${item.id}`}>
-                        {item.name}
-                      </option>
-                    ))}
-                </optgroup>
-              ) : null}
-              {targets.some((item) => item.kind === "process") ? (
-                <optgroup label="Business processes">
-                  {targets
-                    .filter((item) => item.kind === "process")
-                    .map((item) => (
-                      <option key={item.id} value={`process:${item.id}`}>
-                        {item.name}
-                      </option>
-                    ))}
-                </optgroup>
-              ) : null}
-            </select>
+        <aside className="sc-filters mc-library" aria-label="Control library">
+          {targets.length > 1 ? (
+            <label htmlFor={`${id}-target`} className="sc-target">
+              <span>For</span>
+              <select
+                id={`${id}-target`}
+                value={target === null ? "" : `${target.kind}:${target.id}`}
+                onChange={(event) =>
+                  setTarget(
+                    targets.find(
+                      (item) =>
+                        `${item.kind}:${item.id}` === event.target.value,
+                    ) ?? null,
+                  )
+                }
+              >
+                {targets.some((item) => item.kind === "system") ? (
+                  <optgroup label="Systems">
+                    {targets
+                      .filter((item) => item.kind === "system")
+                      .map((item) => (
+                        <option key={item.id} value={`system:${item.id}`}>
+                          {item.name}
+                        </option>
+                      ))}
+                  </optgroup>
+                ) : null}
+                {targets.some((item) => item.kind === "process") ? (
+                  <optgroup label="Business processes">
+                    {targets
+                      .filter((item) => item.kind === "process")
+                      .map((item) => (
+                        <option key={item.id} value={`process:${item.id}`}>
+                          {item.name}
+                        </option>
+                      ))}
+                  </optgroup>
+                ) : null}
+              </select>
+            </label>
+          ) : null}
+          <h3 className="mc-heading">Control library</h3>
+          <label className="as-search">
+            <UiIcon name="search" size={14} />
+            <input
+              type="search"
+              value={categoryWords}
+              placeholder="Search control categories…"
+              aria-label="Search control categories"
+              onChange={(event) => setCategoryWords(event.target.value)}
+            />
           </label>
           <fieldset>
             <legend>Filter by category</legend>
-            {[...counts.entries()].map(([key, value]) => (
-              <label key={key} className="sc-category">
+            {view.categories.map((item) => (
+              <label key={item.key} className="sc-category">
                 <input
                   type="checkbox"
-                  checked={categories.includes(key)}
+                  checked={categories.includes(item.key)}
                   onChange={() =>
                     setCategories((current) =>
-                      current.includes(key)
-                        ? current.filter((item) => item !== key)
-                        : [...current, key],
+                      current.includes(item.key)
+                        ? current.filter((key) => key !== item.key)
+                        : [...current, item.key],
                     )
                   }
                 />
-                <span>{value.label}</span>
-                <small>{value.count}</small>
+                <span>{item.label}</span>
+                <small>{item.count}</small>
+              </label>
+            ))}
+          </fieldset>
+          <fieldset className="mc-sources">
+            <legend>Filter by source</legend>
+            {view.sources.map((item) => (
+              <label key={item.key} className="sc-category">
+                <input
+                  type="checkbox"
+                  checked={sources.includes(item.key)}
+                  onChange={() =>
+                    setSources((current) =>
+                      current.includes(item.key)
+                        ? current.filter((key) => key !== item.key)
+                        : [...current, item.key],
+                    )
+                  }
+                />
+                <span>{item.label}</span>
+                <small>{item.count}</small>
               </label>
             ))}
           </fieldset>
           {rcm ? (
             <OpenScopeAction
               event={RCM_UPLOAD_EVENT}
-              label="Upload the client's RCM"
+              label="Upload client RCM"
               icon="upload"
-              className="btn-secondary btn-sm"
+              className="btn-secondary mc-rcm"
             />
           ) : null}
         </aside>
@@ -485,10 +615,7 @@ function SelectControlsDrawer({
             </p>
           ) : (
             <span className="sc-count">
-              {chosen.length} selected
-              {finalized
-                ? " · each control added gets its work at once"
-                : " · no work starts until the scope is finalized"}
+              {chosen.length} control{chosen.length === 1 ? "" : "s"} selected
             </span>
           )}
           <span className="as-foot-actions">
@@ -506,7 +633,11 @@ function SelectControlsDrawer({
               disabled={busy || chosen.length === 0}
               onClick={() => void add()}
             >
-              {busy ? "Adding…" : "Add controls"}
+              {busy
+                ? "Mapping…"
+                : chosen.length === 0
+                  ? "Map controls"
+                  : `Map ${chosen.length} control${chosen.length === 1 ? "" : "s"}`}
               <UiIcon name="arrow" size={14} />
             </button>
           </span>
@@ -519,111 +650,289 @@ function SelectControlsDrawer({
           one of them.
         </p>
       ) : (
-        <>
-          <div className="sc-tools">
-            <label className="as-search">
-              <UiIcon name="search" size={14} />
-              <input
-                type="search"
-                value={typed}
-                placeholder="Search controls"
-                aria-label="Search controls"
-                onChange={(event) => setTyped(event.target.value)}
-              />
-            </label>
-            <label className="sc-all">
-              <input
-                type="checkbox"
-                checked={allChosen}
-                disabled={open.length === 0}
-                onChange={() =>
-                  setChosen((current) =>
-                    allChosen
-                      ? current.filter(
-                          (key) =>
-                            !open.some((item) => item.libraryKey === key),
-                        )
-                      : [
-                          ...new Set([
-                            ...current,
-                            ...open.map((item) => item.libraryKey),
-                          ]),
-                        ],
-                  )
-                }
-              />
-              Select all
-            </label>
-          </div>
-          {options === null ? (
-            <p className="as-loading" aria-live="polite">
-              <span className="ng-orb is-small" aria-hidden="true" />
-              Reading the library…
-            </p>
-          ) : (
-            <div className="st-scroll">
-              <table className="st-table sc-table">
-                <thead>
-                  <tr>
-                    <th scope="col">
-                      <span className="sr-only">Select</span>
-                    </th>
-                    <th scope="col">Control ID</th>
-                    <th scope="col">Control name</th>
-                    <th scope="col">Category</th>
-                    <th scope="col">Source</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shown.map((item) => (
-                    <tr
-                      key={item.libraryKey}
-                      className={item.inScope ? "is-in" : undefined}
+        <div className="mc-grid">
+          <section className="mc-available" aria-labelledby={`${id}-available`}>
+            <h3 id={`${id}-available`} className="mc-eyebrow">
+              Available controls
+            </h3>
+            {target?.kind === "system" ? (
+              <div className="mc-advice" role="status">
+                <span className="mc-advice-icon" aria-hidden="true">
+                  <UiIcon name="sparkles" size={15} />
+                </span>
+                {reviewing ? (
+                  <span className="mc-advice-text">
+                    <strong>The agent is reviewing {name}…</strong>
+                    <small>
+                      Its recommendations appear here when it finishes.
+                    </small>
+                  </span>
+                ) : advised === null || advised.state === "NONE" ? (
+                  <>
+                    <span className="mc-advice-text">
+                      <strong>No recommendations yet</strong>
+                      <small>
+                        The agent can recommend the controls that apply to{" "}
+                        {name}, from its details and any SOC 1 report uploaded
+                        for it.
+                      </small>
+                    </span>
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      onClick={() => void ask()}
                     >
-                      <td>
+                      Ask the agent
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="mc-advice-text">
+                      <strong>
+                        {view.recommended === 0 && view.potential === 0
+                          ? "Nothing more to recommend"
+                          : `${view.recommended} recommended${view.potential > 0 ? `, ${view.potential} potentially applicable` : ""}`}
+                      </strong>
+                      <small>
+                        {adviceSourceLine(advised.source, name)}
+                        {advised.cuecs > 0
+                          ? ` It used the ${advised.cuecs} CUEC${advised.cuecs === 1 ? "" : "s"} in the uploaded SOC 1 report.`
+                          : ""}{" "}
+                        Accept them or choose your own.
+                      </small>
+                    </span>
+                    {advised.source === "FALLBACK" ? (
+                      <button
+                        type="button"
+                        className="btn-secondary btn-sm"
+                        onClick={() => void ask()}
+                      >
+                        Ask the agent again
+                      </button>
+                    ) : null}
+                    <label className="sc-all">
+                      <input
+                        type="checkbox"
+                        checked={recommendedOnly}
+                        onChange={() => setRecommendedOnly((value) => !value)}
+                      />
+                      Recommended only
+                    </label>
+                    <button
+                      type="button"
+                      className="btn-sm"
+                      disabled={view.recommended === 0}
+                      onClick={() =>
+                        setChosen((current) =>
+                          acceptRecommended(current, all, advised),
+                        )
+                      }
+                    >
+                      Accept recommended
+                    </button>
+                  </>
+                )}
+              </div>
+            ) : null}
+            <div className="sc-tools">
+              <label className="as-search">
+                <UiIcon name="search" size={14} />
+                <input
+                  type="search"
+                  value={typed}
+                  placeholder="Search by control ID or name…"
+                  aria-label="Search controls"
+                  onChange={(event) => setTyped(event.target.value)}
+                />
+              </label>
+              <select
+                className="mc-category"
+                aria-label="Category"
+                value={view.categoryChoice}
+                onChange={(event) =>
+                  setCategories(pickCategory(all, event.target.value))
+                }
+              >
+                <option value="ALL">All categories</option>
+                {view.categoryChoice === "SOME" ? (
+                  <option value="SOME" disabled>
+                    Selected categories
+                  </option>
+                ) : null}
+                {view.allCategories.map((item) => (
+                  <option key={item.key} value={item.key}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+              <label className="sc-all">
+                <input
+                  type="checkbox"
+                  checked={view.allChosen}
+                  disabled={view.open.length === 0}
+                  onChange={() =>
+                    setChosen((current) => toggleVisible(current, view))
+                  }
+                />
+                Select all visible
+              </label>
+            </div>
+            {options === null ? (
+              <p className="as-loading" aria-live="polite">
+                <span className="ng-orb is-small" aria-hidden="true" />
+                Reading the library…
+              </p>
+            ) : (
+              <div className="st-scroll">
+                <table className="st-table sc-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">
                         <input
                           type="checkbox"
-                          aria-label={`Select ${item.controlRef}`}
-                          checked={
-                            item.inScope || chosen.includes(item.libraryKey)
-                          }
-                          disabled={item.inScope}
+                          aria-label="Select all visible"
+                          checked={view.allChosen}
+                          disabled={view.open.length === 0}
                           onChange={() =>
-                            setChosen((current) =>
-                              current.includes(item.libraryKey)
-                                ? current.filter(
-                                    (key) => key !== item.libraryKey,
-                                  )
-                                : [...current, item.libraryKey],
-                            )
+                            setChosen((current) => toggleVisible(current, view))
                           }
                         />
-                      </td>
-                      <td className="mono">{item.controlRef}</td>
-                      <td>{item.title}</td>
-                      <td>{selectionCategory(item.domain).key}</td>
-                      <td>
-                        {item.inScope ? (
-                          <span className="st-status is-in">
-                            <i aria-hidden="true" />
-                            In scope
-                          </span>
-                        ) : (
-                          <span className="as-tag">Standard</span>
-                        )}
-                      </td>
+                      </th>
+                      <th scope="col">Control ID</th>
+                      <th scope="col">Control name</th>
+                      <th scope="col">Category</th>
+                      <th scope="col">Source</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-              {shown.length === 0 ? (
-                <p className="st-none">
-                  No control matches the categories and the search.
-                </p>
-              ) : null}
-            </div>
-          )}
-        </>
+                  </thead>
+                  <tbody>
+                    {view.shown.map((item) => (
+                      <tr
+                        key={item.libraryKey}
+                        className={
+                          item.inScope
+                            ? "is-in"
+                            : chosen.includes(item.libraryKey)
+                              ? "is-picked"
+                              : undefined
+                        }
+                        // The whole row picks the control; Shift picks a range.
+                        onClick={(event) => {
+                          if (item.inScope) {
+                            return;
+                          }
+                          setChosen((current) =>
+                            clickRow(
+                              current,
+                              view.shown,
+                              item.libraryKey,
+                              anchor.current,
+                              event.shiftKey,
+                            ),
+                          );
+                          anchor.current = item.libraryKey;
+                        }}
+                      >
+                        <td>
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${item.controlRef}`}
+                            checked={
+                              item.inScope || chosen.includes(item.libraryKey)
+                            }
+                            disabled={item.inScope}
+                            // The row's click, which this click reaches, changes it.
+                            onChange={() => undefined}
+                          />
+                        </td>
+                        <td className="mono">{item.controlRef}</td>
+                        <td>
+                          {item.title}
+                          {advised?.byKey[item.libraryKey] !== undefined ? (
+                            <small className="mc-why">
+                              <span className="pill tone-ai">
+                                {advised.byKey[item.libraryKey]?.status ===
+                                "RECOMMENDED"
+                                  ? "Recommended"
+                                  : "Potentially applicable"}
+                              </span>
+                              {[
+                                advised.byKey[item.libraryKey]?.rationale ?? "",
+                                (advised.byKey[item.libraryKey]?.cuecs.length ??
+                                  0) > 0
+                                  ? `Answers ${advised.byKey[item.libraryKey]?.cuecs.join(", ")}`
+                                  : "",
+                              ]
+                                .filter((part) => part !== "")
+                                .join(" · ")}
+                            </small>
+                          ) : null}
+                        </td>
+                        <td>
+                          <span className="pill tone-info mc-tag">
+                            {selectionCategory(item.domain).key}
+                          </span>
+                        </td>
+                        <td>
+                          {item.inScope ? (
+                            <span className="st-status is-in">
+                              <i aria-hidden="true" />
+                              In scope
+                            </span>
+                          ) : (
+                            <span className="as-tag">Standard</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {view.shown.length === 0 ? (
+                  <p className="st-none">
+                    No control matches the categories and the search.
+                  </p>
+                ) : null}
+              </div>
+            )}
+          </section>
+          <aside className="mc-selected" aria-labelledby={`${id}-selected`}>
+            <h3 id={`${id}-selected`}>
+              Selected controls
+              <span className="mc-badge">{view.selected.length}</span>
+            </h3>
+            {view.selected.length === 0 ? (
+              <p className="mc-empty">
+                Tick controls in the list to map them to {name}.
+              </p>
+            ) : (
+              <ul>
+                {view.selected.map((item) => (
+                  <li key={item.libraryKey}>
+                    <span>
+                      <strong className="mono">{item.controlRef}</strong>
+                      <small>{item.title}</small>
+                    </span>
+                    <button
+                      type="button"
+                      className="btn-ghost btn-sm"
+                      aria-label={`Remove ${item.controlRef}`}
+                      onClick={() => toggle(item.libraryKey)}
+                    >
+                      <UiIcon name="x" size={14} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="mc-note">
+              <UiIcon name="info" size={14} />
+              <span>
+                {finalized
+                  ? `Mapping links controls to ${name}. Each control added gets its work at once.`
+                  : `Mapping links controls to ${name}. Testing will not start until the scope is finalized.`}
+              </span>
+            </p>
+          </aside>
+        </div>
       )}
     </Drawer>
   );

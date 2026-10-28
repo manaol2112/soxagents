@@ -330,6 +330,15 @@ export type ProcessStep = {
   quote: string;
   /** The codes of the control's attributes evaluated at this step (A1, A2, ...). */
   attributes: string[];
+  /** The diagram (27 October 2026): a short title, empty on a flow built before then. */
+  title: string;
+  /** A DECISION branches: yes and no are the step numbers each answer leads to (1 is the
+   * first step), 0 for the next step. */
+  kind: "STEP" | "DECISION";
+  yes: number;
+  no: number;
+  /** The records the step leaves that an auditor could inspect. */
+  evidence: string[];
 };
 
 /** One version of the process narrative (0116): its words and steps, who made it, when. */
@@ -1063,7 +1072,24 @@ function parseStep(item: Raw): ProcessStep {
     attributes: (Array.isArray(item.attributes) ? item.attributes : [])
       .filter((code): code is string => typeof code === "string")
       .slice(0, 12),
+    title: str(item.title),
+    kind: item.kind === "DECISION" ? "DECISION" : "STEP",
+    yes: stepNumber(item.yes),
+    no: stepNumber(item.no),
+    evidence: (Array.isArray(item.evidence) ? item.evidence : [])
+      .filter((text): text is string => typeof text === "string" && text !== "")
+      .slice(0, 3),
   };
+}
+
+/** A branch's step number: a whole number from 1 to 15, else 0 (the next step). */
+function stepNumber(value: unknown): number {
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= 15
+    ? value
+    : 0;
 }
 
 function parseReadiness(value: unknown): Readiness | null {
@@ -1439,6 +1465,17 @@ export function contextWrite(fields: Fields): ContextWrite {
                 /^[A-Za-z0-9][A-Za-z0-9.-]{0,19}$/.test(code),
             )
             .slice(0, 12),
+          // The diagram's fields travel with a person's save, so editing a step's words
+          // keeps its title, its branches and its evidence.
+          title: str(step.title).trim().slice(0, 60),
+          kind: step.kind === "DECISION" ? "DECISION" : "STEP",
+          yes: stepNumber(step.yes),
+          no: stepNumber(step.no),
+          evidence: (Array.isArray(step.evidence) ? step.evidence : [])
+            .filter((item): item is string => typeof item === "string")
+            .map((item) => item.trim().slice(0, 80))
+            .filter((item) => item !== "")
+            .slice(0, 3),
         }))
         .filter((step) => step.description !== "");
       const summary = text(fields, "summary");

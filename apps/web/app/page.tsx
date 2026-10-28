@@ -5,6 +5,11 @@ import { parseDirectoryQuery } from "../src/directory";
 import { parseEngagementsView } from "../src/engagements-model";
 import { parseCenterQuery } from "../src/evidence-center-model";
 import { parseEvidenceView } from "../src/evidence-model";
+import {
+  lastPageTarget,
+  opensOnLastPage,
+  rememberedPath,
+} from "../src/last-page-model";
 import { loadConsole } from "../src/load-console";
 import { loadEngagement } from "../src/load-engagement";
 import { loadEvidenceCenter } from "../src/load-evidence-center";
@@ -12,9 +17,9 @@ import { loadLibrary } from "../src/load-library";
 import { loadOnboarding } from "../src/load-onboarding";
 import { loadPlanning } from "../src/load-planning";
 import { loadWorkflow } from "../src/load-workflow";
-import { loadWorkspace } from "../src/load-workspace";
+import { apiGet, loadWorkspace, sessionToken } from "../src/load-workspace";
 import { setupPlacement } from "../src/routes";
-import { resolveRoute } from "../src/shell-model";
+import { homePlacement, resolveRoute } from "../src/shell-model";
 import { parsePlanningTab } from "../src/testing-hub-model";
 import { parseTheme, THEME_COOKIE } from "../src/theme";
 import { WorkspaceView } from "../src/workspace-view";
@@ -27,6 +32,18 @@ type HomeProps = {
 
 export default async function Home({ searchParams }: HomeProps) {
   const params = await searchParams;
+  // Opened with no address (signing in, a bookmark, the logo): back to the last page the
+  // person opened, on their account, while they may still open it.
+  if (opensOnLastPage(params)) {
+    const session = sessionToken((await cookies()).get("aw_session")?.value);
+    if (session !== undefined) {
+      const last = await apiGet("/me/last-page", session);
+      const target = last.status === 200 ? lastPageTarget(last.body) : null;
+      if (target !== null) {
+        redirect(target);
+      }
+    }
+  }
   // The six destinations (M2c): an older section's address redirects to where it now
   // lives, with its record kept; a destination's tab names the page the loaders read.
   const route = resolveRoute(params);
@@ -50,6 +67,14 @@ export default async function Home({ searchParams }: HomeProps) {
     );
     if (placed !== null) {
       redirect(placed);
+    }
+    const home = homePlacement(
+      route.section,
+      loaded.organization.id,
+      loaded.selectedProject,
+    );
+    if (home !== null) {
+      redirect(home);
     }
   }
   // The loaders read by the page; the shell renders the destination.
@@ -127,6 +152,7 @@ export default async function Home({ searchParams }: HomeProps) {
   ]);
   return (
     <WorkspaceView
+      lastPage={model.status === "ready" ? rememberedPath(params) : null}
       model={model}
       page={route.page}
       tab={route.tab}

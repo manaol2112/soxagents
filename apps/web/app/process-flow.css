@@ -1,25 +1,161 @@
-/* The process flow as a map (27 October 2026): cards on a grid canvas, joined by
-   connectors that a marker travels along from step to step. */
+/* The process flow as a swimlane diagram (ProcessFlow, the product owner's reference of
+   27 October 2026): lanes by role, step cards, decisions as diamonds, the step's detail
+   beside the canvas, zoom, Fit view and full screen. */
+
 .pf {
   display: grid;
   gap: 0.75rem;
+  min-width: 0;
+}
+
+/* Full screen: the diagram takes the window, over everything, until Escape or Exit. */
+.pf.is-full {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  grid-template-rows: auto minmax(0, 1fr);
+  padding: 1rem 1.25rem 1.25rem;
+  background: var(--surface);
+}
+
+.pf-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.pf-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.pf-summary span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.pf-summary svg {
+  color: var(--text-tertiary);
+}
+
+.pf-tools {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.pf-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+  min-height: 0;
+}
+
+.pf-body.has-detail {
+  grid-template-columns: minmax(0, 1fr) 320px;
+}
+
+.pf-view {
+  position: relative;
+  height: 560px;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  background-color: var(--surface-muted);
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+  background-size: 18px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.pf-view:active {
+  cursor: grabbing;
+}
+
+.pf.is-full .pf-body,
+.pf.is-full .pf-view {
+  height: 100%;
 }
 
 .pf-canvas {
-  --pf-grid: color-mix(in srgb, var(--border) 45%, transparent);
-  --pf-glow: color-mix(in srgb, var(--accent) 40%, transparent);
-  position: relative;
-  overflow: hidden;
-  background-color: var(--surface-sunken);
-  background-image:
-    linear-gradient(var(--pf-grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--pf-grid) 1px, transparent 1px);
-  background-size: 24px 24px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 14px;
-  transition: height 200ms ease;
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
 }
 
+/* Lanes: a tinted band per role, its label at the left. */
+.pf-lane {
+  position: absolute;
+  left: 0;
+  display: flex;
+  background: var(--lane-soft);
+  border: 1px solid var(--lane-border);
+  border-radius: var(--radius-lg);
+}
+
+.pf-lane.is-accent {
+  --lane: var(--accent-text);
+  --lane-soft: color-mix(in srgb, var(--accent-soft) 55%, transparent);
+  --lane-border: var(--accent-border);
+}
+
+.pf-lane.is-success {
+  --lane: var(--success);
+  --lane-soft: color-mix(in srgb, var(--success-soft) 55%, transparent);
+  --lane-border: var(--success-border);
+}
+
+.pf-lane.is-ai {
+  --lane: var(--ai);
+  --lane-soft: color-mix(in srgb, var(--ai-soft) 55%, transparent);
+  --lane-border: var(--ai-border);
+}
+
+.pf-lane.is-warning {
+  --lane: var(--warning);
+  --lane-soft: color-mix(in srgb, var(--warning-soft) 55%, transparent);
+  --lane-border: var(--warning-border);
+}
+
+.pf-lane-label {
+  display: grid;
+  align-content: center;
+  gap: 0.45rem;
+  width: 200px;
+  padding: 1rem 1.1rem;
+  border-right: 1px solid var(--lane-border);
+}
+
+.pf-lane-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  color: var(--lane);
+  background: var(--surface);
+  border-radius: 50%;
+}
+
+.pf-lane-label strong {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.pf-lane-label small {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+/* Connectors: grey and solid; a decision's Yes green, its No red and dashed back. */
 .pf-wires {
   position: absolute;
   inset: 0;
@@ -27,141 +163,115 @@
   pointer-events: none;
 }
 
-.pf-wire,
-.pf-wire-flow {
-  fill: none;
-  stroke-width: 2;
-  stroke-linecap: round;
-}
-
 .pf-wire {
-  stroke: color-mix(in srgb, var(--accent) 35%, var(--border-strong));
-  transition: stroke 200ms ease;
-}
-
-.pf-wire-flow {
-  stroke: var(--accent);
-  stroke-dasharray: 2 10;
-  opacity: 0.55;
-}
-
-/* The connectors drift only while the marker runs. */
-.pf-canvas.is-moving .pf-wire-flow {
-  animation: pf-flow 3s linear infinite;
-}
-
-button.pf-replay {
-  justify-self: start;
-}
-
-.is-lit > .pf-wire {
-  stroke: var(--accent);
-  filter: drop-shadow(0 0 4px var(--pf-glow));
-}
-
-.is-lit > .pf-wire-flow {
-  opacity: 0.9;
-}
-
-.pf-port {
-  fill: var(--surface);
-  stroke: var(--accent);
-  stroke-width: 2;
-}
-
-.pf-atom.is-still {
-  display: none;
-}
-
-.pf-atom-halo {
-  fill: var(--pf-glow);
-  opacity: 0.5;
-  animation: pf-pulse 2.6s ease-in-out infinite;
-}
-
-.pf-atom-orbits {
-  animation: pf-spin 4s linear infinite;
-}
-
-.pf-atom-orbits ellipse {
   fill: none;
-  stroke: var(--accent);
-  stroke-width: 1.4;
-  filter: drop-shadow(0 0 2px var(--pf-glow));
+  stroke: var(--text-secondary);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
 }
 
-.pf-atom-core {
-  fill: var(--accent);
-  stroke: var(--surface);
-  stroke-width: 1.5;
-  filter: drop-shadow(0 0 6px var(--accent));
+.pf-wire.is-yes {
+  stroke: var(--success);
 }
 
-.pf-cards {
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.pf-wire.is-no {
+  stroke: var(--danger);
+  stroke-dasharray: 5 4;
 }
 
-.pf-cards > li {
+#pf-arrow path {
+  fill: var(--text-secondary);
+}
+
+#pf-arrow-no path {
+  fill: var(--danger);
+}
+
+.pf-answer {
   position: absolute;
-  transition:
-    left 200ms ease,
-    top 200ms ease,
-    width 200ms ease;
+  padding: 0.1rem 0.5rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
 }
 
-/* The card resets the app's button look: it is a card, not an action button. */
-button.pf-card {
+.pf-answer.is-yes {
+  color: var(--success);
+  background: var(--success-soft);
+  border: 1px solid var(--success-border);
+}
+
+.pf-answer.is-no {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-border);
+}
+
+/* Step cards: a coloured top edge in the lane's tone, title, words, and chips. */
+.pf-card {
+  position: absolute;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 0.45rem;
-  align-items: start;
-  justify-content: stretch;
-  width: 100%;
-  height: 100%;
-  padding: 0.7rem 0.8rem;
+  gap: 0.5rem;
+  align-content: start;
+  height: auto;
+  padding: 0.8rem 0.9rem 0.75rem;
+  overflow: hidden;
   color: var(--text);
-  text-align: left;
+  font: inherit;
+  /* A button wraps no text by default; a card's words wrap. */
   white-space: normal;
+  text-align: left;
+  cursor: pointer;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-top: 3px solid var(--card-tone, var(--accent));
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
-  font-weight: 400;
-  line-height: 1.4;
   transition:
-    border-color 150ms ease,
-    box-shadow 250ms ease,
-    transform 150ms ease;
+    box-shadow 140ms ease,
+    border-color 140ms ease;
 }
 
-button.pf-card:hover {
+.pf-card.is-accent {
+  --card-tone: var(--accent);
+}
+
+.pf-card.is-success {
+  --card-tone: var(--success);
+}
+
+.pf-card.is-ai {
+  --card-tone: var(--ai);
+}
+
+.pf-card.is-warning {
+  --card-tone: var(--warning);
+}
+
+.pf-card:hover {
   color: var(--text);
   background: var(--surface);
   border-color: var(--accent-border);
-  transform: translateY(-1px);
+  box-shadow: var(--shadow-lg);
 }
 
-button.pf-card.is-control {
-  border-color: var(--accent-border);
-}
-
-button.pf-card.is-active {
+.pf-card.is-selected {
   border-color: var(--accent);
-  box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent),
-    0 0 26px -4px var(--pf-glow);
+  box-shadow: var(--ring);
 }
 
-button.pf-card[aria-pressed="true"] {
-  border-color: var(--accent);
+.pf-card:focus-visible,
+.pf-diamond:focus-visible {
+  outline: 0;
   box-shadow: var(--ring);
 }
 
 .pf-card-head {
   display: flex;
-  gap: 0.45rem;
+  gap: 0.6rem;
   align-items: center;
   min-width: 0;
 }
@@ -170,117 +280,185 @@ button.pf-card[aria-pressed="true"] {
   display: grid;
   flex: none;
   place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: var(--radius);
 }
 
 .pf-icon.is-control {
-  color: var(--text-on-accent);
-  background: var(--accent);
-  box-shadow: 0 0 14px -2px var(--pf-glow);
+  color: var(--success);
+  background: var(--success-soft);
 }
 
-.pf-icon.is-system {
-  color: var(--info);
-  background: var(--info-soft);
-}
-
-.pf-icon.is-person {
-  color: var(--ai);
-  background: var(--ai-soft);
-}
-
-.pf-card-step {
-  font-size: var(--fs-xs);
-  font-weight: 650;
-  color: var(--text-secondary);
-}
-
-.pf-chip {
-  padding: 0.05rem 0.4rem;
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  border-radius: 6px;
-}
-
-.pf-chip.is-control {
-  color: var(--accent-text);
-  background: var(--accent-soft);
-}
-
-.pf-basis {
+.pf-card-titles {
   display: grid;
-  flex: none;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  margin-left: auto;
-  border-radius: 999px;
+  min-width: 0;
 }
 
-.pf-basis.is-documented {
-  color: var(--text-on-accent);
-  background: var(--success);
+.pf-card-titles small {
+  color: var(--accent-text);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
 }
 
-.pf-basis.is-inferred {
-  background: var(--warning-soft);
-  border: 2px solid var(--warning);
-}
-
-.pf-basis.is-team {
-  background: var(--info-soft);
-  border: 2px solid var(--info);
+.pf-card-titles strong {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .pf-card-text {
   display: -webkit-box;
   overflow: hidden;
-  font-size: var(--fs-sm);
-  color: var(--text-strong);
-  -webkit-box-orient: vertical;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
   -webkit-line-clamp: 3;
-}
-
-.pf-canvas.is-compact .pf-card-text {
-  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  /* Three lines at most, whatever the tags below need. */
+  max-height: calc(1.45em * 3);
 }
 
 .pf-card-foot {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.3rem;
   align-items: center;
   min-width: 0;
 }
 
-.pf-who {
-  flex: 1 1 auto;
-  min-width: 0;
+.pf-chip {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  max-width: 100%;
+  padding: 0.15rem 0.5rem;
   overflow: hidden;
-  font-size: var(--fs-xs);
   color: var(--text-secondary);
+  font-size: var(--fs-2xs);
   white-space: nowrap;
   text-overflow: ellipsis;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+}
+
+.pf-chip.is-control {
+  color: var(--accent-text);
+  font-weight: 600;
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+/* Decisions: a diamond with its question, the answers on the connectors leaving it. */
+.pf-diamond {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--text-strong);
+  font: inherit;
+  white-space: normal;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  /* The diamond is the shape inside; the button itself draws nothing. */
+  box-shadow: none;
+}
+
+.pf-diamond:hover {
+  background: none;
+  box-shadow: none;
+}
+
+.pf-diamond-shape {
+  position: absolute;
+  inset: 14%;
+  background: var(--ai-soft);
+  border: 1.5px solid var(--ai-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  transform: rotate(45deg);
+  transition: box-shadow 140ms ease;
+}
+
+.pf-diamond:hover .pf-diamond-shape,
+.pf-diamond[aria-pressed="true"] .pf-diamond-shape {
+  border-color: var(--ai);
+  box-shadow: var(--shadow-lg);
+}
+
+.pf-diamond-text {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 0.2rem;
+  max-width: 76%;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.pf-diamond-text svg {
+  color: var(--ai);
+}
+
+/* Zoom and the hint, over the canvas's corners. */
+.pf-zoom {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+  margin: 0;
+  padding: 0.2rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.pf-zoom span {
+  min-width: 3rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-align: center;
 }
 
 .pf-hint {
+  position: absolute;
+  bottom: 0.9rem;
+  left: 0.9rem;
   margin: 0;
-  font-size: var(--fs-xs);
   color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  pointer-events: none;
 }
 
+/* The step's detail, beside the canvas. */
 .pf-detail {
   display: grid;
-  gap: 0.5rem;
-  padding: 0.85rem 1rem;
+  align-content: start;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+  overflow: auto;
   background: var(--surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: 12px;
-  animation: pf-open 200ms ease;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
 }
 
-.pf-detail > header {
+.pf.is-full .pf-detail {
+  max-height: 100%;
+}
+
+.pf-detail header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -288,31 +466,75 @@ button.pf-card[aria-pressed="true"] {
 
 .pf-detail h4 {
   margin: 0;
-  font-size: var(--fs-md);
   color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 650;
 }
 
-.pf-detail > p {
-  margin: 0;
+.pf-detail-title {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.pf-detail-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 50%;
+}
+
+.pf-detail-icon.is-success {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.pf-detail-icon.is-ai {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.pf-detail-icon.is-warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.pf-detail-title > span {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.pf-detail-title strong {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 650;
+}
+
+.pf-detail-title small {
+  color: var(--text-secondary);
   font-size: var(--fs-sm);
   line-height: 1.5;
-  color: var(--text-strong);
 }
 
 .pf-detail dl {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 0.35rem 1rem;
+  gap: 0.6rem;
   margin: 0;
-  font-size: var(--fs-sm);
 }
 
 .pf-detail dl > div {
-  display: contents;
+  display: grid;
+  grid-template-columns: 6rem minmax(0, 1fr);
+  gap: 0.5rem;
+  font-size: var(--fs-sm);
 }
 
 .pf-detail dt {
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
 }
 
 .pf-detail dd {
@@ -320,13 +542,7 @@ button.pf-card[aria-pressed="true"] {
   color: var(--text);
 }
 
-.pf-detail q {
-  display: block;
-  margin-top: 0.2rem;
-  color: var(--text-secondary);
-}
-
-.pf-detail ul {
+.pf-detail dd ul {
   display: grid;
   gap: 0.3rem;
   margin: 0;
@@ -334,48 +550,65 @@ button.pf-card[aria-pressed="true"] {
   list-style: none;
 }
 
-.pf-detail li {
+.pf-detail dd li {
   display: flex;
   gap: 0.4rem;
   align-items: baseline;
 }
 
-@keyframes pf-flow {
-  to {
-    stroke-dashoffset: -24;
+.pf-basis {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  background: var(--surface-muted);
+  border-radius: var(--radius);
+}
+
+.pf-basis.is-inferred {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.pf-basis.is-documented {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.pf-basis q {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+@media (max-width: 1000px) {
+  .pf-body.has-detail {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
-@keyframes pf-pulse {
-  50% {
-    opacity: 0.2;
+@media (max-width: 820px) {
+  .pf-view {
+    height: 440px;
   }
-}
 
-@keyframes pf-spin {
-  to {
-    transform: rotate(360deg);
+  .pf-hint {
+    display: none;
   }
-}
 
-@keyframes pf-open {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
+  .pf.is-full {
+    padding: 0.75rem;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pf-canvas.is-moving .pf-wire-flow,
-  .pf-atom-halo,
-  .pf-atom-orbits,
-  .pf-detail {
-    animation: none;
-  }
-
-  .pf-canvas,
-  .pf-cards > li,
-  button.pf-card {
+  .pf-card,
+  .pf-diamond-shape {
     transition: none;
   }
 }

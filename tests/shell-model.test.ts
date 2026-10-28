@@ -13,6 +13,7 @@ import {
   DESTINATIONS,
   deriveShell,
   destinationHref,
+  homePlacement,
   lockedBeforeLaunch,
   type Organization,
   type Project,
@@ -806,5 +807,46 @@ describe("the menu before the first engagement (27 October 2026)", () => {
     ] as const) {
       assert.equal(shownInMenu(section, true), true, section);
     }
+  });
+});
+
+describe("Home with nothing in scope yet (27 October 2026)", () => {
+  const org = "11111111-1111-7111-8111-111111111111";
+  const engagement = (status: string, controls: number) => ({
+    id: "22222222-2222-7222-8222-222222222222",
+    status,
+    controls,
+  });
+
+  it("opens a launched engagement without controls on Systems & Processes", () => {
+    const href = homePlacement("overview", org, engagement("ACTIVE", 0));
+    assert.ok(href !== null);
+    const params = new URLSearchParams(href.slice(href.indexOf("?") + 1));
+    assert.equal(params.get("section"), "controls");
+    assert.equal(params.get("project"), engagement("ACTIVE", 0).id);
+    assert.equal(params.get("organization"), org);
+  });
+
+  it("is where signing in lands: the address with no section is Home", () => {
+    assert.equal(resolveRoute({}).section, "overview");
+  });
+
+  it("keeps Home once there are controls, before launch, and when closed", () => {
+    assert.equal(homePlacement("overview", org, engagement("ACTIVE", 3)), null);
+    assert.equal(homePlacement("overview", org, engagement("DRAFT", 0)), null);
+    assert.equal(
+      homePlacement("overview", org, engagement("COMPLETED", 0)),
+      null,
+    );
+    assert.equal(
+      homePlacement("overview", org, engagement("ARCHIVED", 0)),
+      null,
+    );
+    assert.equal(homePlacement("overview", org, null), null);
+  });
+
+  it("leaves every other page where it is", () => {
+    assert.equal(homePlacement("evidence", org, engagement("ACTIVE", 0)), null);
+    assert.equal(homePlacement("controls", org, engagement("ACTIVE", 0)), null);
   });
 });

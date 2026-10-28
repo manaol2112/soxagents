@@ -30,6 +30,7 @@ from ai_workforce_api.consolidation import register_consolidation
 from ai_workforce_api.context_routes import register_control_context
 from ai_workforce_api.control_challenges import register_control_challenges
 from ai_workforce_api.control_reviews import register_control_reviews, review_runner
+from ai_workforce_api.control_send import register_control_send
 from ai_workforce_api.control_tests import register_control_tests
 from ai_workforce_api.db import connect
 from ai_workforce_api.demo_requests import register_demo_requests, register_library_summary
@@ -62,6 +63,7 @@ from ai_workforce_api.handoffs import register_handoffs
 from ai_workforce_api.identity import IdentityProvider
 from ai_workforce_api.inbound import register_inbound
 from ai_workforce_api.invitations import DomainChecker, register_invitations
+from ai_workforce_api.last_page import register_last_page
 from ai_workforce_api.library_governance import register_library_governance
 from ai_workforce_api.library_matching import register_library_matching
 from ai_workforce_api.mailbox import live_send_enabled, register_mailbox
@@ -191,6 +193,7 @@ def create_app(
     register_pbc(app, resolved)
     register_request_details(app, resolved)
     register_evidence_center(app, resolved, timer=timer)
+    register_control_send(app, resolved, timer=timer)
     register_outbound(app, resolved, timer=timer)
     register_followups(app, resolved, timer)
     register_inbound(app, resolved)
@@ -216,7 +219,7 @@ def create_app(
     register_library_matching(app, resolved)
     register_setup_drafting(app, resolved, drafts)
     register_system_scoping(app, resolved, drafts)
-    register_system_setup(app, resolved)
+    register_system_setup(app, resolved, drafts)
     register_scope_setup(app, resolved, drafts)
     register_system_suggestions(app, resolved)
     register_control_challenges(app, resolved)
@@ -244,6 +247,7 @@ def create_app(
     scans = drafts if isinstance(drafts, SystemScanScheduler) else None
     register_rcm_uploads(app, resolved, scans)
     register_workspace(app, resolved)
+    register_last_page(app, resolved)
 
     @app.get("/health", response_model=HealthBody)
     def health() -> HealthBody:

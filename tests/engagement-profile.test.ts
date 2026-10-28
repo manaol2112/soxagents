@@ -520,3 +520,14 @@ describe("the engagement memo (27 October 2026)", () => {
     }
   });
 });
+
+describe("the Controls page (27 October 2026)", () => {
+  // The product owner removed the form for writing a business process control of the
+  // client's own from the Controls page; controls are mapped from Systems & Processes.
+  const view = readFileSync("apps/web/src/setup-view.tsx", "utf8");
+
+  it("no longer offers to write a business process control there", () => {
+    assert.doesNotMatch(view, /Write a business process control/);
+    assert.doesNotMatch(view, /sc-write/);
+  });
+});

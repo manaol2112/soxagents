@@ -34,9 +34,10 @@ from ai_workforce_api.onboarding import (
     _authorize_setup,
     _snapshot,
     _taken_names,
+    pending_reviews,
 )
 from ai_workforce_api.settings import Settings
-from ai_workforce_api.system_review_queue import track_review
+from ai_workforce_api.system_review_queue import request_review, schedule_system_reviews
 
 Layer = Literal["APPLICATION", "DATABASE", "OPERATING_SYSTEM", "INFRASTRUCTURE", "TOOL"]
 Hosting = Literal["SAAS", "VENDOR_HOSTED", "ON_PREMISES"]
@@ -278,7 +279,10 @@ def create_system(
             """,
             (project_id, system_id),
         )
-        track_review(cursor, organization_id, project_id, system_id, principal.id)
+        # The agent reviews a new system in the background, so its recommendations are
+        # ready when its controls are mapped (decided by the product owner on 27 October
+        # 2026; until then it ran only when a person asked).
+        request_review(cursor, organization_id, project_id, system_id, principal.id)
         for related in integrations:
             cursor.execute(
                 """
@@ -309,7 +313,9 @@ def create_system(
     return _snapshot(connection, organization_id, project_id)
 
 
-def register_system_setup(app: FastAPI, settings: Settings) -> None:
+def register_system_setup(
+    app: FastAPI, settings: Settings, scheduler: object | None = None
+) -> None:
     base = "/organizations/{organization_id}/projects/{project_id}/onboarding/systems"
 
     def run[T](request: Request, work: Callable[[psycopg.Connection[Any], Principal], T]) -> T:
@@ -331,4 +337,6 @@ def register_system_setup(app: FastAPI, settings: Settings) -> None:
     def add_system(
         organization_id: UUID, project_id: UUID, body: SystemCreate, request: Request
     ) -> OnboardingBody:
-        return run(request, lambda c, p: create_system(c, p, organization_id, project_id, body))
+        result = run(request, lambda c, p: create_system(c, p, organization_id, project_id, body))
+        schedule_system_reviews(scheduler, pending_reviews(result))
+        return result

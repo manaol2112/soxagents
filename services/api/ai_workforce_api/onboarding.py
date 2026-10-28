@@ -170,7 +170,8 @@ class SystemReviewBody(BaseModel):
     """The scoping agent's review of one system (system_scoping.py)."""
 
     status: Literal["IDLE", "PENDING", "WORKING"]
-    source: Literal["NONE", "RULES", "AGENT"]
+    # FALLBACK: the reviewed rules stood in for a model call that failed (migration 0094).
+    source: Literal["NONE", "RULES", "AGENT", "FALLBACK"]
     basis: Literal["KNOWLEDGE"]
     summary: str
     coverage: str

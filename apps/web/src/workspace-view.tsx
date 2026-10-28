@@ -86,6 +86,7 @@ import {
   monogram,
 } from "./format";
 import { NextStepsPanel } from "./home-view";
+import { LastPageRecorder } from "./last-page-recorder";
 import { LibraryPage } from "./library-view";
 import type { EvidenceCenterState } from "./load-evidence-center";
 import type { LibraryPageState } from "./load-library";
@@ -298,6 +299,7 @@ export function WorkspaceView({
   now = 0,
   creatingAgent = false,
   creatingEngagement = false,
+  lastPage = null,
   editingEngagement = false,
   managingEngagement = false,
   engagementsView = "engagements",
@@ -326,6 +328,8 @@ export function WorkspaceView({
   now?: number;
   creatingAgent?: boolean;
   creatingEngagement?: boolean;
+  /** The page as kept on the person's account, for the workspace to open on next time. */
+  lastPage?: string | null;
   editingEngagement?: boolean;
   /** `manage=engagement`: an engagement's status and close-out, opened from its card. */
   managingEngagement?: boolean;
@@ -463,6 +467,9 @@ export function WorkspaceView({
           model.selectedProject !== null &&
           model.section !== "projects" ? (
             <VisitRecorder projectId={model.selectedProject.id} />
+          ) : null}
+          {model.status === "ready" && lastPage !== null ? (
+            <LastPageRecorder path={lastPage} />
           ) : null}
           {model.status === "ready" &&
           model.selectedProject !== null &&

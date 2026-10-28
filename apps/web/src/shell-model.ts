@@ -507,6 +507,20 @@ export function shownInMenu(
   return engagementOpen || BEFORE_FIRST_ENGAGEMENT.includes(section);
 }
 
+/** Home with nothing in scope has nothing to show yet: a launched engagement without
+ * controls opens on Systems & Processes, where the systems, processes and controls are
+ * added (decided by the product owner on 27 October 2026). Null when Home stays. */
+export function homePlacement(
+  section: SectionId,
+  organizationId: string,
+  project: (Pick<Project, "id"> & { status: string; controls: number }) | null,
+): string | null {
+  if (section !== "overview" || project === null || !controlsToSetUp(project)) {
+    return null;
+  }
+  return workspaceHref("controls", organizationId, project.id);
+}
+
 /** A draft engagement has not launched: its controls, evidence, plan, and approvals wait. */
 export function lockedBeforeLaunch(
   section: SectionId,

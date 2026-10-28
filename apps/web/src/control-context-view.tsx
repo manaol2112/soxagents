@@ -483,6 +483,8 @@ export function DesignPanel({
     issues: ContextIssue[];
     /** The system and the control, under the narrative's title. */
     subtitle?: string;
+    /** The control's reference, shown on the flow where it operates. */
+    controlRef?: string;
   } | null;
 }) {
   const action = useAction(ids);
@@ -677,6 +679,7 @@ export function DesignPanel({
               <ProcessNarrative
                 ids={ids}
                 subtitle={walkthrough.subtitle ?? ""}
+                controlRef={walkthrough.controlRef ?? ""}
                 understanding={walkthrough.understanding}
                 attributes={walkthrough.attributes}
                 canAct={canAct}
@@ -1427,6 +1430,11 @@ export function ProcessPanel({
                   sourceTitle: "",
                   quote: "",
                   attributes: [],
+                  title: "",
+                  kind: "STEP",
+                  yes: 0,
+                  no: 0,
+                  evidence: [],
                 },
               ]);
             }}

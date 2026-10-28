@@ -20142,3 +20142,194 @@ button.answer-done:hover {
     transition: none;
   }
 }
+
+/* After a system is added: the offer to select its controls (SystemAddedDialog, the
+   product owner's reference). Opaque, over the wizard's backdrop. */
+.sa {
+  position: relative;
+  display: grid;
+  width: min(600px, 100%);
+  max-height: min(92vh, 900px);
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-pop);
+  animation: sa-in 220ms ease-out both;
+}
+
+.sa-head {
+  display: grid;
+  gap: 0.4rem;
+  padding: 1.25rem 3.5rem 0.25rem 1.5rem;
+}
+
+.sa-head h2 {
+  margin: 0.35rem 0 0;
+  color: var(--text-strong);
+  font-size: var(--fs-xl);
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.sa-head p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+}
+
+.sa-head .sa-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: fit-content;
+  padding: 0.2rem 0.55rem 0.2rem 0.3rem;
+  color: var(--success);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--success-soft);
+  border-radius: var(--radius);
+}
+
+.sa-badge::before {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  color: var(--text-on-status);
+  font-size: var(--fs-2xs);
+  background: var(--success);
+  border-radius: 50%;
+  content: "\2713";
+}
+
+.sa-close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+}
+
+.sa-body {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem 1.25rem;
+}
+
+.sa-card {
+  display: flex;
+  gap: 0.875rem;
+  align-items: center;
+  padding: 0.875rem 1rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.sa-card.is-next {
+  align-items: flex-start;
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.sa-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: var(--radius-lg);
+}
+
+.sa-card.is-next .sa-icon {
+  background: var(--surface);
+}
+
+.sa-card-text {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.sa-card-text small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sa-card-text strong {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.sa-card-text > span:not(.sa-name) {
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+}
+
+.sa-name {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.sa-pill {
+  border-radius: 999px;
+}
+
+.sa-note {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.sa-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  padding: 0.9rem 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+@keyframes sa-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+}
+
+@media (max-width: 820px) {
+  .sa-head {
+    padding: 1.25rem 1rem 0.25rem;
+  }
+
+  .sa-body {
+    padding: 1rem;
+  }
+
+  .sa-foot {
+    padding: 0.75rem 1rem 1rem;
+  }
+
+  .sa-foot > * {
+    flex: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sa {
+    animation: none;
+  }
+}

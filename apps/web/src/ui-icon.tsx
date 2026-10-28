@@ -49,6 +49,10 @@ export type IconName =
   | "book"
   | "flow"
   | "list"
+  | "minus"
+  | "expand"
+  | "collapse"
+  | "fit"
   | "wand"
   | "window"
   | "wrench"
@@ -119,6 +123,12 @@ const PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   list: <path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01" />,
+  minus: <path d="M5 12h14" />,
+  expand: <path d="M15 4h5v5M9 20H4v-5M20 4l-6 6M4 20l6-6" />,
+  collapse: <path d="M4 14h6v6M20 10h-6V4M10 14l-6 6M14 10l6-6" />,
+  fit: (
+    <path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4" />
+  ),
   chart: (
     <>
       <rect x="5" y="11" width="4" height="9" rx="1" />

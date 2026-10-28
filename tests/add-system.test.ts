@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
+  DEFAULT_ENVIRONMENT,
+  ENVIRONMENTS,
   parseAreaSuggestions,
   parseOnboarding,
   systemDraftBody,
@@ -245,5 +248,17 @@ describe("the agent's suggested areas and the approved ones", () => {
       { name: "Workday", layer: "APPLICATION", category: "HR" },
       { name: "Linux", layer: "OPERATING_SYSTEM", category: "" },
     ]);
+  });
+});
+
+describe("a new system's environment (27 October 2026)", () => {
+  it("starts as production, one of the environments offered", () => {
+    assert.equal(DEFAULT_ENVIRONMENT, "PRODUCTION");
+    assert.ok(ENVIRONMENTS.some(([key]) => key === DEFAULT_ENVIRONMENT));
+  });
+
+  it("is what the Add system wizard starts with", () => {
+    const wizard = readFileSync("apps/web/src/add-system-wizard.tsx", "utf8");
+    assert.match(wizard, /environment: DEFAULT_ENVIRONMENT,/);
   });
 });
