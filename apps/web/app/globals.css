@@ -18149,6 +18149,16 @@ button.answer-done:hover {
   background: var(--surface);
 }
 
+/* Near either end, the label sits inside the axis instead of centred on the day, so it
+   never runs past the card (28 October 2026). */
+.mini-axis > .mini-today.is-start {
+  transform: none;
+}
+
+.mini-axis > .mini-today.is-end {
+  transform: translateX(-100%);
+}
+
 .home-back {
   margin: 0;
 }

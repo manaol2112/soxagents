@@ -8,6 +8,7 @@ tasks and draft PBC requests are created in one transaction. Nothing is emailed;
 each request still goes through the usual approval before it is sent.
 """
 
+import contextlib
 import hashlib
 import json
 import re
@@ -734,7 +735,7 @@ def register_onboarding(
         organization_id: UUID, project_id: UUID, body: TeamAdd, request: Request
     ) -> OnboardingBody:
         changed = run(request, lambda c, p: _add_member(c, p, organization_id, project_id, body))
-        schedule(drafts, started_drafts(settings, project_id))
+        schedule_started_work(settings, drafts, project_id)
         return changed
 
     @app.post(f"{base}/team/invite")
@@ -772,7 +773,7 @@ def register_onboarding(
             changed = run(request, work)
         except InviteRefused as refused:
             raise HTTPException(status_code=refused.status, detail=refused.detail) from None
-        schedule(drafts, started_drafts(settings, project_id))
+        schedule_started_work(settings, drafts, project_id)
         # With live email on, the welcome email goes now; otherwise it stays held.
         if invited and live_send_enabled(settings):
             with connect(settings.database_url) as connection:
@@ -839,7 +840,7 @@ def register_onboarding(
         changed = run(
             request, lambda c, p: _create_control(c, p, organization_id, project_id, body)
         )
-        schedule(drafts, started_drafts(settings, project_id))
+        schedule_started_work(settings, drafts, project_id)
         return changed
 
     @app.post(f"{base}/controls/{{control_id}}/scope")
@@ -885,7 +886,7 @@ def register_onboarding(
         organization_id: UUID, project_id: UUID, body: OwnerBulk, request: Request
     ) -> OnboardingBody:
         changed = run(request, lambda c, p: _bulk_owner(c, p, organization_id, project_id, body))
-        schedule(drafts, started_drafts(settings, project_id))
+        schedule_started_work(settings, drafts, project_id)
         return changed
 
     @app.post(f"{base}/controls/owner-batch")
@@ -893,7 +894,7 @@ def register_onboarding(
         organization_id: UUID, project_id: UUID, body: OwnerBatch, request: Request
     ) -> OwnerBatchResult:
         changed = run(request, lambda c, p: _owner_batch(c, p, organization_id, project_id, body))
-        schedule(drafts, started_drafts(settings, project_id))
+        schedule_started_work(settings, drafts, project_id)
         return changed
 
     @app.post(f"{base}/templates/confirm")
@@ -901,7 +902,7 @@ def register_onboarding(
         organization_id: UUID, project_id: UUID, request: Request
     ) -> OnboardingBody:
         changed = run(request, lambda c, p: _confirm_templates(c, p, organization_id, project_id))
-        schedule(drafts, started_drafts(settings, project_id))
+        schedule_started_work(settings, drafts, project_id)
         return changed
 
     @app.get(f"{base}/workpaper-preview")
@@ -930,7 +931,7 @@ def register_onboarding(
         changed = run(
             request, lambda c, p: _update_contacts(c, p, organization_id, project_id, body)
         )
-        schedule(drafts, started_drafts(settings, project_id))
+        schedule_started_work(settings, drafts, project_id)
         return changed
 
     @app.patch(f"{base}/pbc")
@@ -958,7 +959,7 @@ def register_onboarding(
         )
         # The kickoff has committed. The planner agent refines each control's evidence
         # plan in the background; nothing is requested until a person approves it.
-        schedule(drafts, started_drafts(settings, project_id))
+        schedule_started_work(settings, drafts, project_id)
         _schedule_plan_runs(settings, drafts, project_id)
         return started
 
@@ -971,7 +972,7 @@ def register_onboarding(
             request,
             lambda c, p: launch_engagement(c, p, organization_id, project_id, body, agent),
         )
-        schedule(drafts, started_drafts(settings, project_id))
+        schedule_started_work(settings, drafts, project_id)
         _schedule_plan_runs(settings, drafts, project_id)
         return started
 
@@ -3840,6 +3841,22 @@ def _drafting(connection: psycopg.Connection[Any], project_id: UUID) -> Drafting
         by_model=values[3],
         failed=values[4],
     )
+
+
+def schedule_started_work(settings: Settings, scheduler: Any, project_id: UUID) -> None:
+    """Once a change commits: the evidence coordinator drafts the requests it queued, and the
+    planner agent plans the controls it added (28 October 2026)."""
+
+    schedule(scheduler, started_drafts(settings, project_id))
+    if live_model(settings) and settings.database_url != "":
+        from ai_workforce_api.db import connect
+        from ai_workforce_api.evidence_plans import queue_unrefined_plans
+
+        # As started_drafts: on a database error nothing is queued now; the rules' plan
+        # stands and the next change queues it.
+        with contextlib.suppress(psycopg.Error), connect(settings.database_url) as connection:
+            queue_unrefined_plans(connection, project_id)
+    _schedule_plan_runs(settings, scheduler, project_id)
 
 
 def started_drafts(settings: Settings, project_id: UUID) -> list[UUID]:

@@ -111,6 +111,17 @@
   min-width: 0;
 }
 
+/* A tile is a button, which keeps its text on one line by default: its label wraps inside
+   it instead ("Testing in progress" ran past its tile at 1440px, 28 October 2026). */
+.cpg-tile {
+  line-height: 1.3;
+  white-space: normal;
+}
+
+.cpg-tile-icon {
+  flex: none;
+}
+
 .cpg-tile strong {
   font-size: var(--fs-display);
   line-height: 1.1;

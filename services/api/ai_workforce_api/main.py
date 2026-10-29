@@ -84,6 +84,7 @@ from ai_workforce_api.pbc_drafting import (
 from ai_workforce_api.phase_release import register_phase_release
 from ai_workforce_api.plan_impact import register_plan_impact
 from ai_workforce_api.policy import register_policy
+from ai_workforce_api.policy_evidence import register_policy_evidence
 from ai_workforce_api.prior_year_routes import register_prior_year
 from ai_workforce_api.projects import register_projects
 from ai_workforce_api.provenance import register_provenance
@@ -223,7 +224,8 @@ def create_app(
     register_scope_setup(app, resolved, drafts)
     register_system_suggestions(app, resolved)
     register_control_challenges(app, resolved)
-    register_governing_documents(app, resolved)
+    register_governing_documents(app, resolved, scheduler=drafts)
+    register_policy_evidence(app, resolved, drafts, analyses)
     register_standard_adoption(app, resolved)
     register_prior_year(app, resolved, drafts)
     register_workpaper_templates(app, resolved)
@@ -295,6 +297,7 @@ def _lifespan(
             return
         from ai_workforce_api.durable import serve
         from ai_workforce_api.evidence_plans import plan_runner
+        from ai_workforce_api.policy_evidence import policy_evidence_runner
         from ai_workforce_api.prior_year import prior_year_runner
         from ai_workforce_api.process_narrative import narrative_runner
 
@@ -313,6 +316,7 @@ def _lifespan(
             plan_runner(settings),
             prior_year_runner(settings),
             narrative_runner(settings),
+            policy_evidence_runner(settings),
         ):
             yield
 

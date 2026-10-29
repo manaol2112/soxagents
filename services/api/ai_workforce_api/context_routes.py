@@ -338,6 +338,36 @@ def register_control_context(
 
         return run(request, work)
 
+    # Bringing forward another control's answers (28 October 2026)
+
+    @app.get(f"{control}/understanding/sources")
+    def copy_sources(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> control_design.CopySourcesBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> control_design.CopySourcesBody:
+            _allowed(c, p, organization_id, project_id, control_id, Action.TASK_READ)
+            return control_design.copy_sources(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/understanding/copy")
+    def copy_understanding(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: control_design.CopyBody,
+        request: Request,
+    ) -> ContextBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            for changed_id in control_design.copy_values(
+                c, organization_id, project_id, control_id, p.id, body
+            ):
+                changed(c, project_id, changed_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
     # Client values for several controls at once, answered from the plan queue
 
     @app.put(f"{base}/control-values")

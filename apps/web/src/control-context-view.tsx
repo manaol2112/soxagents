@@ -612,6 +612,8 @@ export function DesignPanel({
                   blocks: slot.blocks,
                   value: slot.value,
                   filledBy: slot.filledBy,
+                  kind: slot.kind,
+                  label: slot.label,
                 }))}
                 // The facts the narrative's agents still need, as points to confirm together
                 // (decided by the product owner on 26 October 2026).
@@ -633,6 +635,18 @@ export function DesignPanel({
                     everywhere,
                   })
                 }
+                // Context added to an answer: a walkthrough note on this control, which
+                // the narrative's agents read (28 October 2026).
+                onNote={(question, text) =>
+                  action.run("note", {
+                    intent: "document-write",
+                    kind: "WALKTHROUGH",
+                    title: `Walkthrough note: ${question}`.slice(0, 200),
+                    body: text,
+                    control_ids: [ids.controlId],
+                  })
+                }
+                onAttach={(file) => attachToControl(ids, file)}
                 onComplete={() => {
                   // Every question answered: the narrative is drafted and reviewed in the
                   // background.
@@ -2037,4 +2051,41 @@ function DocumentDialog({
     </div>,
     document.body,
   );
+}
+
+/** A supporting file attached to the control from the walkthrough, as its walkthrough
+ * notes: read, kept as text, and linked to the control. Null once attached, else why not. */
+async function attachToControl(ids: Ids, file: File): Promise<string | null> {
+  const data = new FormData();
+  data.set("organization_id", ids.organizationId);
+  data.set("project_id", ids.projectId);
+  data.set("kind", "WALKTHROUGH");
+  data.set("title", file.name.slice(0, 200));
+  data.append("control_id", ids.controlId);
+  data.set("content", file);
+  try {
+    const response = await fetch("/workspace/control-context/upload", {
+      method: "POST",
+      body: data,
+    });
+    const answer = (await response.json()) as {
+      status?: unknown;
+      upload?: { readable?: unknown; note?: unknown } | null;
+    };
+    if (answer.status === 413) {
+      return "The file is larger than 5 MB.";
+    }
+    if (answer.status !== 200) {
+      return "The file could not be attached. Try again.";
+    }
+    if (answer.upload?.readable !== true) {
+      return typeof answer.upload?.note === "string" &&
+        answer.upload.note !== ""
+        ? answer.upload.note
+        : "The file could not be read.";
+    }
+    return null;
+  } catch {
+    return "The file could not be attached. Try again.";
+  }
 }

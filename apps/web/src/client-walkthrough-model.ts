@@ -20,7 +20,94 @@ export type WalkSlot = {
   filledBy: string | null;
   /** A question the narrative's agents raised (0117): answered by resolving its issue. */
   issue?: { id: string; version: number };
+  /** What the value is (ROLE, SYSTEM, DAYS, ...) and its name in the control's wording
+   * ("the role that approves privileged access"), for its category. */
+  kind?: string;
+  label?: string;
 };
+
+/** The icons a category is shown with (ui-icon names). */
+export type CategoryIcon =
+  | "user"
+  | "file"
+  | "server"
+  | "clock"
+  | "calendar"
+  | "chart"
+  | "table"
+  | "shield"
+  | "message";
+
+/**
+ * What a question is about, as a short category for its pill and for the answers captured
+ * so far (the product owner's reference, 28 October 2026: "Approval authority", "Request
+ * channel", "Access provisioner"): read from the value's kind and its name in the control's
+ * wording, never from the answer.
+ */
+export function categoryOf(
+  slot: Pick<WalkSlot, "key" | "question" | "kind" | "label">,
+): {
+  label: string;
+  icon: CategoryIcon;
+} {
+  const kind = (slot.kind ?? "").toUpperCase();
+  // The value's own name decides ("the role that administers user access"); the question
+  // only when there is none, as its wording may mention other steps ("once it is approved").
+  const words = (
+    (slot.label ?? "").trim() !== ""
+      ? (slot.label ?? "")
+      : `${slot.key.replaceAll("-", " ")} ${slot.question}`
+  ).toLowerCase();
+  const has = (pattern: RegExp) => pattern.test(words);
+  if (kind === "ROLE" || (kind === "" && has(/\b(role|owner|who)\b/))) {
+    if (has(/control owner|\bowner\b/))
+      return { label: "Control owner", icon: "user" };
+    if (has(/approv/)) return { label: "Approval authority", icon: "shield" };
+    if (has(/administer|grant|provision/))
+      return { label: "Access provisioner", icon: "user" };
+    if (has(/review/)) return { label: "Reviewer", icon: "user" };
+    if (has(/accept/)) return { label: "Risk acceptance", icon: "shield" };
+    if (has(/direct|database|operating/))
+      return { label: "Privileged access", icon: "user" };
+    return { label: "Responsible role", icon: "user" };
+  }
+  if (kind === "SYSTEM") {
+    if (has(/request/)) return { label: "Request channel", icon: "file" };
+    if (has(/\bhr\b|human resources/))
+      return { label: "HR source", icon: "server" };
+    if (has(/change/)) return { label: "Change tool", icon: "server" };
+    if (has(/scan/)) return { label: "Scanning tool", icon: "server" };
+    return { label: "System", icon: "server" };
+  }
+  if (kind === "DAYS") return { label: "Timeline", icon: "calendar" };
+  if (kind === "PERIOD") return { label: "Period", icon: "calendar" };
+  if (kind === "AMOUNT" || kind === "PERCENT")
+    return { label: "Threshold", icon: "chart" };
+  if (kind === "REPORT") return { label: "Report", icon: "table" };
+  if (has(/polic|procedure|standard/))
+    return { label: "Governing policy", icon: "file" };
+  if (has(/how often|frequen/)) return { label: "Frequency", icon: "clock" };
+  if (has(/setting|configur/))
+    return { label: "Required settings", icon: "shield" };
+  if (has(/privileged/)) return { label: "Privileged roles", icon: "user" };
+  const named = (slot.label ?? "").replace(/^the\s+/i, "").trim();
+  return {
+    label:
+      named === ""
+        ? "Client detail"
+        : named.charAt(0).toUpperCase() + named.slice(1),
+    icon: "message",
+  };
+}
+
+/** The segments of the progress bar: one a question, filled once answered; a long list is
+ * shown as twelve, filled in proportion. */
+export function progressSegments(done: number, total: number): boolean[] {
+  if (total <= 0) return [];
+  const count = Math.min(total, 12);
+  const filled = total <= 12 ? done : Math.round((done / total) * count);
+  return Array.from({ length: count }, (_, index) => index < filled);
+}
 
 /** The key a raised question goes by in the walkthrough. */
 export const issueKey = (id: string) => `issue-${id}`;

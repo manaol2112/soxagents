@@ -6476,12 +6476,13 @@ a.cw-lane:focus-visible {
   gap: 0.75rem;
   min-height: var(--cw-bar-h);
   padding: 0.4rem 0.6rem 0.4rem 1rem;
-  background: var(--surface-glass);
+  /* Opaque: the record scrolls under the bar, and through glass its text showed as smeared
+     letters (product owner, 28 October 2026). */
+  background: var(--surface);
   border: 1px solid var(--glass-edge, var(--border));
   border-top: 0;
   border-radius: 0 0 12px 12px;
   box-shadow: var(--shadow-lg);
-  backdrop-filter: saturate(160%) blur(14px);
   opacity: 0;
   pointer-events: none;
   transform: translateY(-6px);

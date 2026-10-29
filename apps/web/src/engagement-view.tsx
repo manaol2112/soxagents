@@ -842,7 +842,10 @@ function MiniTimeline({ phases, today }: { phases: Phase[]; today: string }) {
           </span>
         ))}
         {inside ? (
-          <span className="mini-today" style={{ left: `${now}%` }}>
+          <span
+            className={`mini-today${now < 8 ? " is-start" : now > 92 ? " is-end" : ""}`}
+            style={{ left: `${now}%` }}
+          >
             Today
           </span>
         ) : null}

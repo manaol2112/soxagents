@@ -2310,6 +2310,68 @@ input.is-drafted {
   display: grid;
   justify-items: start;
   gap: 0.6rem;
+  min-width: 0;
+}
+
+/* Inside a table's detail row, which has no padding of its own (28 October 2026). */
+.st-detail .ry-detail {
+  padding: 1rem 1.15rem 1.15rem;
+}
+
+.ry-detail > .ry-muted {
+  margin: 0;
+  font-size: var(--fs-xs);
+}
+
+/* The document's opening, framed as a preview of the file. */
+.ry-preview {
+  display: grid;
+  gap: 0.45rem;
+  justify-self: stretch;
+  max-width: 60rem;
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+}
+
+.ry-preview figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  align-items: center;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.ry-file {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.ry-file > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ry-preview figcaption small {
+  font-size: var(--fs-xs);
+}
+
+.ry-preview figcaption small.is-text {
+  color: var(--warning);
+}
+
+.ry-open {
+  gap: 0.3rem;
+  margin-left: auto;
+  font-size: var(--fs-xs);
 }
 
 .ry-excerpt {
@@ -2317,6 +2379,15 @@ input.is-drafted {
   color: var(--text-secondary);
   font-size: var(--fs-sm);
   white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.ry-preview .ry-excerpt {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 8;
 }
 
 .ry-pane {

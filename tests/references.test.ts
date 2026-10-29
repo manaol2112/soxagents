@@ -3,11 +3,14 @@ import { describe, it } from "node:test";
 
 import {
   DESCRIPTION_KINDS,
+  fileLineOf,
   governedNames,
   matchGroups,
   parsePolicies,
   parseReferences,
   policiesTile,
+  policyFileHref,
+  previewOf,
   priorYearTile,
   proposalGroups,
   referencesTile,
@@ -230,5 +233,54 @@ describe("the References tab (26 October 2026)", () => {
       count: 3,
       status: "1 to review",
     });
+  });
+});
+
+describe("a document's preview (28 October 2026)", () => {
+  // Found by the product owner: the API sends the first 400 characters, and the preview
+  // ended in the middle of a word ("for all Nor").
+  it("ends a cut preview at its last whole word, with an ellipsis", () => {
+    const cut =
+      "applications, including SAP S/4HANA, Oracle EPM, Snowflake, and AWS, for all Nor";
+    assert.equal(
+      previewOf(cut, 5000),
+      "applications, including SAP S/4HANA, Oracle EPM, Snowflake, and AWS, for all…",
+    );
+    assert.equal(
+      previewOf("Access is approved, then granted.", 33),
+      "Access is approved, then granted.",
+    );
+    assert.equal(previewOf("  Whole text  ", 14), "Whole text");
+    assert.equal(previewOf("", 0), "");
+  });
+});
+
+describe("a document's original file (28 October 2026)", () => {
+  it("says what is kept, and opens the original through the page's route", () => {
+    assert.equal(
+      fileLineOf({
+        fileKept: true,
+        fileSize: 38398,
+        fileType:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      }),
+      "Original file · Word document · 37 KB",
+    );
+    assert.equal(
+      fileLineOf({
+        fileKept: true,
+        fileSize: 3_400_000,
+        fileType: "application/pdf",
+      }),
+      "Original file · PDF · 3.2 MB",
+    );
+    assert.equal(
+      fileLineOf({ fileKept: false, fileSize: null, fileType: "" }),
+      "Text only · replace the file to keep the original",
+    );
+    assert.equal(
+      policyFileHref({ organizationId: "o", projectId: "p" }, "d1"),
+      "/workspace/policy-file?organization=o&project=p&document=d1",
+    );
   });
 });

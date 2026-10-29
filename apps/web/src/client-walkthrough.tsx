@@ -1,16 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { AgentBot } from "./agent-panel";
+import { BringForward } from "./bring-forward";
 import {
   alternativesFor,
+  categoryOf,
   documentsFor,
-  initialsOf,
   isQuestion,
   nextQuestion,
   pointAnswers,
   pointsSaid,
+  progressSegments,
   type Suggestion,
   suggestionFor,
   type WalkDocument,
@@ -24,6 +26,12 @@ import {
 } from "./client-walkthrough-model";
 import { acceptProposal, controlProposals } from "./references-view";
 import { UiIcon } from "./ui-icon";
+import {
+  type CopyOffer,
+  controlLabel,
+  parseOffer,
+  suggestedSource,
+} from "./understanding-copy-model";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
 
@@ -33,35 +41,6 @@ export const WALK_ASK_EVENT = "aw:walk-ask";
 /** Another part of the page opens the points waiting for the client's confirmation. */
 export const WALK_POINTS_EVENT = "aw:walk-points";
 
-/** One line of the conversation: the agent's, or the person's. */
-type Entry =
-  | { id: number; at: Date; who: "agent"; kind: "ask"; key: string }
-  | {
-      id: number;
-      at: Date;
-      who: "agent";
-      kind: "say";
-      text: string;
-      strong?: string;
-      recorded?: boolean;
-      /** Null under the last answer: every question has its answer. */
-      next?: null;
-      link?: { label: string; href: string };
-    }
-  | { id: number; at: Date; who: "you"; text: string };
-
-/** An entry before it is timed and numbered, kind by kind. */
-type NewEntry = Entry extends infer E
-  ? E extends Entry
-    ? Omit<E, "id" | "at">
-    : never
-  : never;
-
-const TIME = new Intl.DateTimeFormat("en-US", {
-  hour: "numeric",
-  minute: "2-digit",
-});
-
 const STATUS_WORDS = {
   CONFIRMED: "Confirmed",
   IN_PROGRESS: "In progress",
@@ -69,15 +48,25 @@ const STATUS_WORDS = {
   PENDING: "Pending",
 } as const;
 
+/** What the agent says under the question after a step: saved, skipped, or a link. */
+type Notice = {
+  tone: "done" | "info" | "error";
+  text: string;
+  link?: { label: string; href: string };
+};
+
+const OTHER = "\u0000other";
+
 /**
- * The client-specific information as a conversation (decided by the product owner on 26
- * October 2026, from the walkthrough references): the Control Understanding Agent asks the
- * control's client questions one at a time, with the answers to choose from (the agent's
- * prior-year proposal or the usual answers as chips; the control's own policies for a
- * question that asks for one); each answer is saved as it is chosen or typed, with who
- * recorded it; once every question is answered the process narrative is drafted from them.
- * A typed question goes to the agent console. The agent's lines are fixed wording: no model
- * writes them.
+ * The client-specific information, as the product owner's reference (28 October 2026,
+ * replacing the conversation of 26 October): the Control Understanding Agent asks the
+ * control's client questions one at a time, each with its category, the answers to choose
+ * from (the agent's prior-year proposal or the usual answer first, with where it came from;
+ * the control's own policies for a question that asks for one) and Other; optional context
+ * is kept as a walkthrough note on the control and a file can be attached to it. Beside the
+ * question, the understanding so far: each answer under its category, opened to change it.
+ * Each answer is saved with who recorded it; once every question is answered the process
+ * narrative is drafted from them. The agent's words are fixed: no model writes them.
  */
 export function ClientWalkthrough({
   ids,
@@ -86,11 +75,12 @@ export function ClientWalkthrough({
   documents,
   policiesHref,
   askHref,
-  viewer,
   everywhere,
   onEverywhere,
   onSave,
   onComplete,
+  onNote,
+  onAttach,
   points = [],
   onConfirmPoints,
   problem,
@@ -105,14 +95,18 @@ export function ClientWalkthrough({
   policiesHref: string;
   /** The agent console, for a question about the control. */
   askHref: string;
-  /** The person answering, by name or email, for their initials. */
-  viewer: string;
+  /** The person answering, by name or email (kept for callers; not shown). */
+  viewer?: string;
   everywhere: boolean;
   onEverywhere: (value: boolean) => void;
   /** Saves one answer as the client's value; true once it is saved. */
   onSave: (key: string, value: string) => Promise<boolean>;
   /** Every question has its answer: the narrative is drafted from them. */
   onComplete: () => void;
+  /** Keeps added context as a walkthrough note on the control; true once it is saved. */
+  onNote?: (question: string, text: string) => Promise<boolean>;
+  /** Attaches a supporting file to the control; null once attached, else why not. */
+  onAttach?: (file: File) => Promise<string | null>;
   /** The narrative's points still waiting for the client, confirmed as one decision. */
   points?: WalkPoint[];
   /** Sends a round's answers; true once they are recorded. */
@@ -140,17 +134,35 @@ export function ClientWalkthrough({
   const [current, setCurrent] = useState<string | null>(() =>
     nextQuestion(slots, new Set()),
   );
-  const [choosing, setChoosing] = useState(false);
-  const [text, setText] = useState("");
   const [showAll, setShowAll] = useState(false);
-  const idRef = useRef(1);
-  const [log, setLog] = useState<Entry[]>(() =>
-    current === null
-      ? []
-      : [{ id: 0, at: new Date(), who: "agent", kind: "ask", key: current }],
-  );
-  const scroller = useRef<HTMLDivElement>(null);
-  const input = useRef<HTMLInputElement>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const card = useRef<HTMLDivElement>(null);
+  // Another control's answers to bring forward (28 October 2026), read once.
+  const [offer, setOffer] = useState<CopyOffer | null>(null);
+  const [copying, setCopying] = useState<string | null>(null);
+  useEffect(() => {
+    if (!canAct) {
+      return;
+    }
+    let alive = true;
+    void fetch(
+      `/workspace/understanding-copy?${new URLSearchParams({
+        organization: ids.organizationId,
+        project: ids.projectId,
+        control: ids.controlId,
+      }).toString()}`,
+    )
+      .then((response) => response.json())
+      .then((answer: { result?: unknown }) => {
+        if (alive) {
+          setOffer(parseOffer(answer.result));
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [ids, canAct]);
 
   useEffect(() => {
     let alive = true;
@@ -174,43 +186,9 @@ export function ClientWalkthrough({
     };
   }, [ids]);
 
-  // The newest line stays in view, inside the conversation's own scroll.
-  useEffect(() => {
-    const box = scroller.current;
-    if (box !== null && log.length > 0) {
-      box.scrollTop = box.scrollHeight;
-    }
-  }, [log]);
-
-  // The narrative's points arrive in rounds: each round is announced once, and shown
-  // together below the conversation to confirm as one decision.
-  const knownPoints = useRef(new Set(points.map((point) => point.id)));
+  // The narrative's points arrive in rounds, shown together under the question to confirm
+  // as one decision.
   const [pointsOpen, setPointsOpen] = useState(true);
-  useEffect(() => {
-    const fresh = points.filter((point) => !knownPoints.current.has(point.id));
-    for (const point of points) {
-      knownPoints.current.add(point.id);
-    }
-    if (fresh.length === 0) {
-      return;
-    }
-    setPointsOpen(true);
-    setLog((now) => [
-      ...now,
-      {
-        id: idRef.current++,
-        at: new Date(),
-        who: "agent",
-        kind: "say",
-        text:
-          points.length === 1
-            ? "The narrative needs one point confirmed before it is final."
-            : `The narrative needs ${points.length} points confirmed before it is final.`,
-      },
-    ]);
-  }, [points]);
-
-  // The narrative's review sends the person here to confirm the points.
   const pointsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const show = () => {
@@ -226,20 +204,12 @@ export function ClientWalkthrough({
     return () => document.removeEventListener(WALK_POINTS_EVENT, show);
   }, []);
 
-  // A source listed beside the conversation opens its question here.
+  // A source listed beside the narrative opens its question here.
   useEffect(() => {
     const open = (event: Event) => {
-      const key = String((event as CustomEvent<string>).detail);
-      setCurrent(key);
-      setChoosing(false);
-      setLog((now) => [
-        ...now,
-        { id: idRef.current++, at: new Date(), who: "agent", kind: "ask", key },
-      ]);
-      scroller.current?.scrollIntoView({
-        block: "nearest",
-        behavior: "smooth",
-      });
+      setCurrent(String((event as CustomEvent<string>).detail));
+      setNotice(null);
+      card.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     };
     document.addEventListener(WALK_ASK_EVENT, open);
     return () => document.removeEventListener(WALK_ASK_EVENT, open);
@@ -247,31 +217,16 @@ export function ClientWalkthrough({
 
   const slotOf = (key: string | null) =>
     live.find((slot) => slot.key === key) ?? null;
-  const add = (entries: NewEntry[]) =>
-    setLog((now) => [
-      ...now,
-      ...entries.map(
-        (entry) => ({ ...entry, id: idRef.current++, at: new Date() }) as Entry,
-      ),
-    ]);
-  const ask = (key: string | null) => {
+  const open = (key: string | null) => {
     setCurrent(key);
-    setChoosing(false);
-    if (key !== null) {
-      add([{ who: "agent", kind: "ask", key }]);
-    }
+    setNotice(null);
   };
 
-  async function confirm(
-    value: string,
-    said: string,
-    suggestion: Suggestion | null,
-  ) {
+  async function confirm(value: string, suggestion: Suggestion | null) {
     const slot = slotOf(current);
     if (slot === null || value.trim() === "" || busy) {
-      return;
+      return false;
     }
-    add([{ who: "you", text: said }]);
     let ok = false;
     if (suggestion?.proposalId != null && suggestion.value === value) {
       // The prior-year proposal is accepted, so the decision is on record with it.
@@ -283,14 +238,11 @@ export function ClientWalkthrough({
       ok = await onSave(slot.key, value);
     }
     if (!ok) {
-      add([
-        {
-          who: "agent",
-          kind: "say",
-          text: "The answer could not be saved. Try again.",
-        },
-      ]);
-      return;
+      setNotice({
+        tone: "error",
+        text: "The answer could not be saved. Try again.",
+      });
+      return false;
     }
     const wasComplete = live.every((item) => item.value.trim() !== "");
     const done = { ...saved, [slot.key]: value };
@@ -305,57 +257,36 @@ export function ClientWalkthrough({
     const complete = live.every(
       (item) => item.value.trim() !== "" || answered.has(item.key),
     );
-    // The answer is recorded on its own line; the next question follows in its own card.
-    const recorded: NewEntry = {
-      who: "agent",
-      kind: "say",
-      text: "Recorded:",
-      strong: value,
-      recorded: true,
-      // "Every question has its answer" under the last one.
-      ...(next === null && complete ? { next: null } : {}),
-    };
-    add(
-      next === null
-        ? [recorded]
-        : [recorded, { who: "agent", kind: "ask", key: next }],
-    );
     setCurrent(next);
-    setChoosing(false);
+    setNotice(
+      complete && !wasComplete
+        ? {
+            tone: "done",
+            text: "Every question has its answer. The process narrative is being drafted from them.",
+          }
+        : { tone: "done", text: `Recorded: ${value}.` },
+    );
     if (complete && !wasComplete) {
-      add([
-        {
-          who: "agent",
-          kind: "say",
-          text: "The process narrative is being drafted from the answers, below this conversation.",
-        },
-      ]);
       onComplete();
     }
+    return true;
   }
 
   async function confirmPoints(
     items: Array<{ issue_id: string; version: number; answer: string }>,
-    said: string,
   ) {
     if (onConfirmPoints === undefined || busy) {
       return;
     }
-    add([{ who: "you", text: said }]);
     const ok = await onConfirmPoints(items);
-    add([
+    setNotice(
       ok
         ? {
-            who: "agent",
-            kind: "say",
-            text: "Recorded. The narrative is being drafted again from the answers, below this conversation.",
+            tone: "done",
+            text: "Recorded. The narrative is being drafted again from the answers.",
           }
-        : {
-            who: "agent",
-            kind: "say",
-            text: "The answers could not be saved. Try again.",
-          },
-    ]);
+        : { tone: "error", text: "The answers could not be saved. Try again." },
+    );
   }
 
   function skip() {
@@ -371,222 +302,96 @@ export function ClientWalkthrough({
       slot.key,
       new Set(Object.keys(saved)),
     );
-    const following = next === slot.key ? null : next;
-    const said: NewEntry[] = [
-      { who: "you", text: "Skip for now" },
-      {
-        who: "agent",
-        kind: "say",
-        text: "Skipped. The question stays open; return to it from View all questions.",
-      },
-    ];
-    add(
-      following === null
-        ? said
-        : [...said, { who: "agent", kind: "ask", key: following }],
+    setCurrent(next === slot.key ? null : next);
+    setNotice({
+      tone: "info",
+      text: "Skipped. The question stays open; return to it from View all questions.",
+    });
+  }
+
+  function copied(values: Record<string, string>, from: string) {
+    setCopying(null);
+    const wasComplete = live.every((item) => item.value.trim() !== "");
+    const done = { ...saved, ...values };
+    setSaved(done);
+    const answered = new Set(Object.keys(done));
+    const complete = live.every(
+      (item) => item.value.trim() !== "" || answered.has(item.key),
     );
-    setCurrent(following);
-    setChoosing(false);
+    setCurrent(nextQuestion(walkSlots(live, filter), skipped, null, answered));
+    const count = Object.keys(values).length;
+    setNotice({
+      tone: "done",
+      text: `Brought forward ${count} answer${count === 1 ? "" : "s"} from ${from}.${
+        complete && !wasComplete
+          ? " Every question has its answer; the process narrative is being drafted from them."
+          : ""
+      }`,
+    });
+    if (complete && !wasComplete) {
+      onComplete();
+    }
   }
 
-  function send() {
-    const typed = text.trim();
-    if (typed === "") {
-      return;
-    }
-    setText("");
-    if (isQuestion(typed)) {
-      const url = new URL(askHref, window.location.origin);
-      url.searchParams.set("ask", typed.slice(0, 1500));
-      add([
-        { who: "you", text: typed },
-        {
-          who: "agent",
-          kind: "say",
-          text: "Questions about the control are answered in the agent console.",
-          link: { label: "Ask the agent", href: url.toString() },
-        },
-      ]);
-      return;
-    }
-    if (current === null) {
-      add([
-        { who: "you", text: typed },
-        {
-          who: "agent",
-          kind: "say",
-          text: "Every question has an answer. Open one from View all questions to change it.",
-        },
-      ]);
-      return;
-    }
-    void confirm(typed, typed, null);
-  }
-
-  // The agent's last line that names a question: where the question asked now is answered.
-  const promptKeyOf = (entry: Entry): string | null =>
-    entry.who !== "agent"
-      ? null
-      : entry.kind === "ask"
-        ? entry.key
-        : (entry.next ?? null);
-  const lastPrompt =
-    [...log].reverse().find((entry) => promptKeyOf(entry) !== null)?.id ?? -1;
+  const sources = offer?.sources ?? [];
+  const suggested = suggestedSource(offer);
   const progress = walkProgress(live);
+  const segments = progressSegments(progress.done, progress.total);
+  const asked = slotOf(current);
+  const answers = live.filter((slot) => slot.value.trim() !== "");
 
-  const prompt = (slot: WalkSlot) => {
-    if (!canAct) {
-      return null;
-    }
-    const docs = documentsFor(slot, documents);
-    const [first, ...rest] = docs;
-    if (first !== undefined) {
-      return (
-        <div className="wt-prompt">
-          <div className="wt-doc">
-            <span className="wt-doc-icon" aria-hidden="true">
-              <UiIcon name="file" size={18} />
+  return (
+    <section className="wt cu" aria-labelledby="wt-title" id="client-info">
+      <header className="cu-head">
+        <span className="cu-head-icon" aria-hidden="true">
+          <UiIcon name="layers" size={24} />
+        </span>
+        <div className="cu-head-text">
+          <small>Control understanding</small>
+          <h4 id="wt-title">Understand how this control operates</h4>
+          <p>
+            Answer a few focused questions to build a client-specific process
+            narrative.
+          </p>
+        </div>
+        <div className="cu-head-side">
+          <span className="cu-progress">
+            <span className="cu-segments" aria-hidden="true">
+              {segments.map((filled, index) => (
+                <span
+                  // biome-ignore lint/suspicious/noArrayIndexKey: segments are positional.
+                  key={index}
+                  className={filled ? "is-done" : undefined}
+                />
+              ))}
             </span>
-            <span className="wt-doc-text">
-              <strong>{first.title}</strong>
-              <small>{first.detail}</small>
-            </span>
-            <a className="wt-doc-view" href={policiesHref}>
-              View document
-            </a>
-          </div>
-          <div className="wt-actions">
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={busy}
-              onClick={() => void confirm(first.title, first.title, null)}
-            >
-              Use this document
-            </button>
-            {rest.length > 0 ? (
+            <small>
+              {progress.done} of {progress.total} answered
+            </small>
+          </span>
+          <span className="cu-head-actions">
+            {canAct && sources.length > 0 ? (
               <button
                 type="button"
                 className="btn-secondary btn-sm"
-                aria-expanded={choosing}
-                onClick={() => setChoosing(!choosing)}
+                onClick={() =>
+                  setCopying((suggested ?? sources[0])?.controlId ?? null)
+                }
               >
-                Choose a different document
+                <UiIcon name="copy" size={15} />
+                Copy from another system
               </button>
             ) : null}
             <button
               type="button"
               className="btn-secondary btn-sm"
-              onClick={() => input.current?.focus()}
+              aria-expanded={showAll}
+              onClick={() => setShowAll(!showAll)}
             >
-              Type my own answer
+              <UiIcon name="list" size={15} />
+              View all questions
             </button>
-          </div>
-          {choosing ? (
-            <div className="wt-chips">
-              {rest.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className="wt-chip"
-                  disabled={busy}
-                  onClick={() => void confirm(item.title, item.title, null)}
-                >
-                  {item.title}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          <button type="button" className="wt-skip" onClick={skip}>
-            Skip for now
-          </button>
-        </div>
-      );
-    }
-    const suggestion = suggestionFor(slot, proposals);
-    const others = alternativesFor(slot, suggestion);
-    return (
-      <div className="wt-prompt">
-        {suggestion?.source === "PRIOR_YEAR" ? (
-          <p className="wt-prior">
-            <UiIcon name="clock" size={12} />
-            {suggestion.label}
-            {suggestion.quote !== "" ? <q>{suggestion.quote}</q> : null}
-          </p>
-        ) : null}
-        <div className="wt-chips">
-          {suggestion !== null ? (
-            <button
-              type="button"
-              className="wt-chip is-suggested"
-              disabled={busy}
-              title={suggestion.label}
-              onClick={() =>
-                void confirm(suggestion.value, suggestion.value, suggestion)
-              }
-            >
-              <span className="wt-chip-mark" aria-hidden="true">
-                <UiIcon name="check" size={10} />
-              </span>
-              {suggestion.value}
-            </button>
-          ) : null}
-          {others.map((option) => (
-            <button
-              key={option}
-              type="button"
-              className="wt-chip"
-              disabled={busy}
-              onClick={() => void confirm(option, option, null)}
-            >
-              {option}
-            </button>
-          ))}
-          <button
-            type="button"
-            className="wt-chip"
-            onClick={() => input.current?.focus()}
-          >
-            Other (specify)
-          </button>
-        </div>
-        <button type="button" className="wt-skip" onClick={skip}>
-          Skip for now
-        </button>
-      </div>
-    );
-  };
-
-  return (
-    <section className="wt" aria-labelledby="wt-title" id="client-info">
-      <header className="wt-head">
-        <span className="wt-head-icon" aria-hidden="true">
-          <UiIcon name="layers" size={22} />
-        </span>
-        <div>
-          <h4 id="wt-title">Client-specific information</h4>
-          <p>
-            A walk through how this control works in the client's environment: a
-            few questions, whose answers draft the process narrative.
-          </p>
-        </div>
-        <div className="wt-head-side">
-          <span className="wt-progress">
-            <span className="wt-bar" aria-hidden="true">
-              <span style={{ width: `${progress.percent}%` }} />
-            </span>
-            <small>
-              {progress.done} of {progress.total} completed
-            </small>
           </span>
-          <button
-            type="button"
-            className="btn-secondary btn-sm"
-            aria-expanded={showAll}
-            onClick={() => setShowAll(!showAll)}
-          >
-            View all questions
-          </button>
         </div>
       </header>
 
@@ -630,7 +435,7 @@ export function ClientWalkthrough({
                   <button
                     type="button"
                     onClick={() => {
-                      ask(slot.key);
+                      open(slot.key);
                       setShowAll(false);
                     }}
                   >
@@ -652,145 +457,449 @@ export function ClientWalkthrough({
         </div>
       ) : null}
 
-      <div className="wt-log" ref={scroller} aria-live="polite">
-        {log.length === 0 ? (
-          <p className="wt-empty">
-            Every question has its answer. Open one from View all questions to
-            change it.
-          </p>
-        ) : null}
-        {log.map((entry) => {
-          if (entry.who === "you") {
-            return (
-              <div key={entry.id} className="wt-you">
-                <div>
-                  <p className="wt-meta">
-                    You <time>{TIME.format(entry.at)}</time>
-                  </p>
-                  <p className="wt-bubble is-you">{entry.text}</p>
-                </div>
-                <span className="wt-avatar" aria-hidden="true">
-                  {initialsOf(viewer)}
-                </span>
-              </div>
-            );
-          }
-          const asked = entry.kind === "ask" ? slotOf(entry.key) : null;
-          const here =
-            promptKeyOf(entry) === current && entry.id === lastPrompt
-              ? slotOf(current)
-              : null;
-          return (
-            <div key={entry.id} className="wt-agent">
-              <span className="wt-agent-mark" aria-hidden="true">
-                <AgentBot />
+      <div className="cu-grid">
+        <div className="cu-main" ref={card}>
+          <div className="cu-agent">
+            <span className="cu-agent-mark" aria-hidden="true">
+              <AgentBot size={44} />
+            </span>
+            <strong>Control Understanding Agent</strong>
+            <span className="cu-agent-step">
+              {asked !== null
+                ? `Question ${live.findIndex((item) => item.key === asked.key) + 1} of ${live.length}`
+                : `${progress.done} of ${progress.total} answered`}
+            </span>
+          </div>
+          {asked !== null ? (
+            <QuestionCard
+              key={asked.key}
+              slot={asked}
+              canAct={canAct}
+              busy={busy}
+              documents={documentsFor(asked, documents)}
+              policiesHref={policiesHref}
+              suggestion={suggestionFor(asked, proposals)}
+              askHref={askHref}
+              onConfirm={confirm}
+              onSkip={skip}
+              onNote={onNote}
+              onAttach={onAttach}
+              onNotice={setNotice}
+            />
+          ) : (
+            <div className="cu-card cu-done">
+              <span className="cu-done-mark" aria-hidden="true">
+                <UiIcon name="check" size={18} />
               </span>
-              <div className="wt-agent-body">
-                <p className="wt-meta">
-                  Control Understanding Agent{" "}
-                  <time>{TIME.format(entry.at)}</time>
+              <div>
+                <strong>Every question has its answer.</strong>
+                <p>
+                  The process narrative is drafted from them. Change one from
+                  the understanding so far, or from View all questions.
                 </p>
-                <div className="wt-bubble">
-                  {asked !== null ? (
-                    <>
-                      <span className="wt-qnum">
-                        Question{" "}
-                        {live.findIndex((item) => item.key === asked.key) + 1}{" "}
-                        of {live.length}
-                      </span>
-                      <strong>{asked.question}</strong>
-                      {asked.hint !== "" ? <span>{asked.hint}</span> : null}
-                      {here !== null && canAct ? (
-                        <span className="wt-lead">
-                          Choose from the options below or type your own answer.
-                        </span>
-                      ) : null}
-                    </>
-                  ) : entry.kind === "say" ? (
-                    <div className={entry.recorded ? "wt-recorded" : undefined}>
-                      {entry.recorded ? (
-                        <span className="wt-recorded-mark" aria-hidden="true">
-                          <UiIcon name="check" size={14} />
-                        </span>
-                      ) : null}
-                      <span className="wt-say">
-                        <span>
-                          {entry.text}
-                          {entry.strong !== undefined ? (
-                            <>
-                              {" "}
-                              <strong>{entry.strong}</strong>.
-                            </>
-                          ) : null}
-                        </span>
-                        {entry.recorded && entry.next === null ? (
-                          <span className="wt-next">
-                            Every question has its answer.
-                          </span>
-                        ) : null}
-                        {entry.link !== undefined ? (
-                          <a className="wt-link" href={entry.link.href}>
-                            {entry.link.label}
-                            <UiIcon name="arrow" size={13} />
-                          </a>
-                        ) : null}
-                      </span>
-                    </div>
-                  ) : null}
-                </div>
-                {here !== null ? prompt(here) : null}
               </div>
             </div>
-          );
-        })}
-        {points.length > 0 ? (
-          <div ref={pointsRef}>
-            <PointsCard
-              points={points}
-              open={pointsOpen}
-              onOpen={setPointsOpen}
-              canAct={canAct && onConfirmPoints !== undefined}
-              busy={busy}
-              onConfirm={(items, said) => void confirmPoints(items, said)}
-            />
-          </div>
-        ) : null}
-      </div>
+          )}
+          {notice !== null ? (
+            <p className={`cu-notice is-${notice.tone}`} role="status">
+              <UiIcon
+                name={notice.tone === "done" ? "check" : "info"}
+                size={14}
+              />
+              <span>{notice.text}</span>
+              {notice.link !== undefined ? (
+                <a className="text-link is-plain" href={notice.link.href}>
+                  {notice.link.label}
+                  <UiIcon name="arrow" size={13} />
+                </a>
+              ) : null}
+            </p>
+          ) : null}
+          {points.length > 0 ? (
+            <div ref={pointsRef}>
+              <PointsCard
+                points={points}
+                open={pointsOpen}
+                onOpen={setPointsOpen}
+                canAct={canAct && onConfirmPoints !== undefined}
+                busy={busy}
+                onConfirm={(items) => void confirmPoints(items)}
+              />
+            </div>
+          ) : null}
+          {problem !== null ? (
+            <p className="form-error" role="alert">
+              {problem}
+            </p>
+          ) : null}
+        </div>
 
-      {canAct ? (
-        <form
-          className="wt-input"
-          autoComplete="off"
-          onSubmit={(event) => {
-            event.preventDefault();
-            send();
-          }}
-        >
-          <input
-            ref={input}
-            type="text"
-            value={text}
-            maxLength={300}
-            placeholder="Type your answer or ask a question…"
-            aria-label="Type your answer or ask a question"
-            onChange={(event) => setText(event.target.value)}
-          />
-          <button
-            type="submit"
-            className="btn"
-            aria-label="Send"
-            disabled={text.trim() === "" || busy}
+        <aside className="cu-side" aria-labelledby="cu-side-title">
+          <h5 id="cu-side-title">Understanding so far</h5>
+          <span
+            className={`cu-captured${answers.length === 0 ? " is-none" : ""}`}
           >
-            <UiIcon name="arrow" size={16} />
-          </button>
-        </form>
-      ) : null}
-      {problem !== null ? (
-        <p className="form-error" role="alert">
-          {problem}
-        </p>
+            <span className="cu-tick" aria-hidden="true">
+              <UiIcon name="check" size={11} />
+            </span>
+            {answers.length === 1
+              ? "1 answer captured"
+              : `${answers.length} answers captured`}
+          </span>
+          {answers.length > 0 ? (
+            <ul className="cu-answers">
+              {answers.map((slot) => {
+                const category = categoryOf(slot);
+                return (
+                  <li key={slot.key}>
+                    <button
+                      type="button"
+                      className={
+                        slot.key === current ? "is-current" : undefined
+                      }
+                      title={`Change: ${slot.question}`}
+                      onClick={() => open(slot.key)}
+                    >
+                      <span className="cu-answer-icon" aria-hidden="true">
+                        <UiIcon name={category.icon} size={17} />
+                      </span>
+                      <span className="cu-answer-text">
+                        <small>{category.label}</small>
+                        <strong>{slot.value}</strong>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <p className="cu-side-empty">
+              Each answer appears here under what it covers.
+            </p>
+          )}
+          {canAct && suggested !== null && answers.length < live.length ? (
+            // The same control answered on another system: offered, never applied.
+            <div className="cu-reuse">
+              <p>
+                <UiIcon name="copy" size={15} />
+                <span>
+                  <strong>{controlLabel(suggested)}</strong> is answered (
+                  {suggested.answers.length} answer
+                  {suggested.answers.length === 1 ? "" : "s"}).
+                </span>
+              </p>
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                onClick={() => setCopying(suggested.controlId)}
+              >
+                Bring forward its answers
+              </button>
+            </div>
+          ) : null}
+          <div className="cu-insights">
+            <p>
+              <UiIcon name="sparkles" size={15} />
+              <strong>Draft insights</strong>
+              <span>· Not yet verified</span>
+            </p>
+            <p>
+              Your answers help prepare the process narrative for reviewer
+              validation.
+            </p>
+          </div>
+        </aside>
+      </div>
+      {copying !== null && offer !== null ? (
+        <BringForward
+          ids={ids}
+          offer={offer}
+          initial={copying}
+          onClose={() => setCopying(null)}
+          onCopied={copied}
+        />
       ) : null}
     </section>
+  );
+}
+
+/**
+ * One question, as the reference's card: its category, the question and how to answer it,
+ * the answers to choose from as cards (the suggestion first and chosen, with where it came
+ * from), Other with a field of its own, Skip for now; then context to add, a file to attach,
+ * and Save & continue. A typed question in the context goes to the agent console.
+ */
+function QuestionCard({
+  slot,
+  canAct,
+  busy,
+  documents,
+  policiesHref,
+  suggestion,
+  askHref,
+  onConfirm,
+  onSkip,
+  onNote,
+  onAttach,
+  onNotice,
+}: {
+  slot: WalkSlot;
+  canAct: boolean;
+  busy: boolean;
+  documents: WalkDocument[];
+  policiesHref: string;
+  suggestion: Suggestion | null;
+  askHref: string;
+  onConfirm: (value: string, suggestion: Suggestion | null) => Promise<boolean>;
+  onSkip: () => void;
+  onNote?: ((question: string, text: string) => Promise<boolean>) | undefined;
+  onAttach?: ((file: File) => Promise<string | null>) | undefined;
+  onNotice: (notice: Notice | null) => void;
+}) {
+  const id = useId();
+  const category = categoryOf(slot);
+  // A document question offers the control's policies; any other, the suggestion and the
+  // usual answers.
+  const options =
+    documents.length > 0
+      ? documents.map((item) => item.title)
+      : [
+          ...(suggestion !== null ? [suggestion.value] : []),
+          ...alternativesFor(slot, suggestion),
+        ];
+  const answered = slot.value.trim();
+  const [choice, setChoice] = useState<string>(() =>
+    answered !== ""
+      ? options.includes(answered)
+        ? answered
+        : OTHER
+      : (options[0] ?? OTHER),
+  );
+  const [other, setOther] = useState(
+    answered !== "" && !options.includes(answered) ? answered : "",
+  );
+  const [context, setContext] = useState("");
+  const [attached, setAttached] = useState<string | null>(null);
+  const [attaching, setAttaching] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const otherInput = useRef<HTMLInputElement>(null);
+  const value = choice === OTHER ? other.trim() : choice;
+
+  async function save() {
+    setProblem(null);
+    const extra = context.trim();
+    if (value === "") {
+      setProblem("Choose an answer, or write one under Other.");
+      return;
+    }
+    setSaving(true);
+    let noted: Notice | null = null;
+    if (extra !== "") {
+      if (isQuestion(extra)) {
+        const url = new URL(askHref, window.location.origin);
+        url.searchParams.set("ask", extra.slice(0, 1500));
+        noted = {
+          tone: "info",
+          text: "Questions about the control are answered in the agent console.",
+          link: { label: "Ask the agent", href: url.toString() },
+        };
+      } else if (
+        onNote !== undefined &&
+        !(await onNote(slot.question, extra))
+      ) {
+        setProblem("The context could not be saved. Try again.");
+        setSaving(false);
+        return;
+      }
+    }
+    const used =
+      suggestion !== null && value === suggestion.value ? suggestion : null;
+    const ok = await onConfirm(value, used);
+    setSaving(false);
+    if (ok && noted !== null) {
+      onNotice(noted);
+    }
+  }
+
+  async function attach(file: File) {
+    if (onAttach === undefined) {
+      return;
+    }
+    setAttaching(true);
+    setProblem(null);
+    const refused = await onAttach(file);
+    setAttaching(false);
+    if (refused === null) {
+      setAttached(file.name);
+    } else {
+      setProblem(refused);
+    }
+  }
+
+  return (
+    <div className="cu-card">
+      <span className="cu-pill">{category.label}</span>
+      <h5 className="cu-question">{slot.question}</h5>
+      {slot.hint !== "" ? <p className="cu-hint">{slot.hint}</p> : null}
+      {canAct ? (
+        <>
+          <fieldset className="cu-options">
+            <legend className="sr-only">{slot.question}</legend>
+            {options.map((option) => (
+              <label
+                key={option}
+                className={`cu-option${choice === option ? " is-on" : ""}`}
+              >
+                <input
+                  type="radio"
+                  name={`${id}-answer`}
+                  value={option}
+                  checked={choice === option}
+                  onChange={() => setChoice(option)}
+                />
+                <span className="cu-radio" aria-hidden="true">
+                  <UiIcon name="check" size={12} />
+                </span>
+                {option}
+              </label>
+            ))}
+            <label className={`cu-option${choice === OTHER ? " is-on" : ""}`}>
+              <input
+                type="radio"
+                name={`${id}-answer`}
+                value="other"
+                checked={choice === OTHER}
+                onChange={() => {
+                  setChoice(OTHER);
+                  window.setTimeout(() => otherInput.current?.focus(), 0);
+                }}
+              />
+              <span className="cu-radio" aria-hidden="true">
+                <UiIcon name="check" size={12} />
+              </span>
+              Other (specify)
+            </label>
+          </fieldset>
+          {choice === OTHER ? (
+            <input
+              ref={otherInput}
+              className="cu-other"
+              type="text"
+              value={other}
+              maxLength={300}
+              autoComplete="off"
+              placeholder={
+                slot.example !== ""
+                  ? `For example: ${slot.example}`
+                  : "Your answer"
+              }
+              aria-label="Your answer"
+              onChange={(event) => setOther(event.target.value)}
+            />
+          ) : null}
+          {documents.length > 0 ? (
+            <p className="cu-source">
+              <UiIcon name="file" size={13} />
+              The control's policies on file.{" "}
+              <a className="text-link is-plain" href={policiesHref}>
+                View documents
+              </a>
+            </p>
+          ) : suggestion !== null && choice === suggestion.value ? (
+            <p className="cu-source">
+              <UiIcon
+                name={suggestion.source === "PRIOR_YEAR" ? "clock" : "sparkles"}
+                size={13}
+              />
+              {suggestion.label}
+              {suggestion.quote !== "" ? <q>{suggestion.quote}</q> : null}
+            </p>
+          ) : null}
+          <button type="button" className="cu-skip" onClick={onSkip}>
+            Skip for now
+          </button>
+          <div className="cu-context">
+            <label htmlFor={`${id}-context`}>
+              Additional context (optional)
+              <span
+                className="cu-info"
+                title="Kept as a walkthrough note on this control, which the narrative's agents read. A question goes to the agent console."
+              >
+                <UiIcon name="info" size={14} />
+              </span>
+            </label>
+            <span className="cu-context-box">
+              <textarea
+                id={`${id}-context`}
+                rows={2}
+                maxLength={2000}
+                value={context}
+                autoComplete="off"
+                placeholder="Add context about this answer or ask a follow-up…"
+                onChange={(event) => setContext(event.target.value)}
+              />
+              {onAttach !== undefined ? (
+                <button
+                  type="button"
+                  className="cu-attach"
+                  aria-label="Attach a supporting file to this control"
+                  title="Attach a supporting file to this control"
+                  disabled={attaching}
+                  onClick={() => fileInput.current?.click()}
+                >
+                  {attaching ? (
+                    <span className="spinner small" aria-hidden="true" />
+                  ) : (
+                    <UiIcon name="paperclip" size={17} />
+                  )}
+                </button>
+              ) : null}
+              <input
+                ref={fileInput}
+                type="file"
+                hidden
+                aria-label="Supporting file"
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  event.currentTarget.value = "";
+                  if (file !== undefined) {
+                    void attach(file);
+                  }
+                }}
+              />
+            </span>
+            {attached !== null ? (
+              <small className="cu-attached">
+                <UiIcon name="file" size={12} />
+                {attached} is attached to the control.
+              </small>
+            ) : null}
+          </div>
+          {problem !== null ? (
+            <p className="form-error" role="alert">
+              {problem}
+            </p>
+          ) : null}
+          <div className="cu-foot">
+            <button
+              type="button"
+              disabled={busy || saving || value === ""}
+              onClick={() => void save()}
+            >
+              {saving ? (
+                <span className="spinner small" aria-hidden="true" />
+              ) : null}
+              Save &amp; continue
+              <UiIcon name="arrow" size={15} />
+            </button>
+          </div>
+        </>
+      ) : answered !== "" ? (
+        <p className="cu-readonly">{answered}</p>
+      ) : null}
+    </div>
   );
 }
 

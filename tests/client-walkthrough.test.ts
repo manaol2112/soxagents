@@ -4,12 +4,14 @@ import { describe, it } from "node:test";
 import {
   alternativesFor,
   asksForDocument,
+  categoryOf,
   documentsFor,
   initialsOf,
   isQuestion,
   nextQuestion,
   pointAnswers,
   pointsSaid,
+  progressSegments,
   suggestionFor,
   type WalkProposal,
   type WalkSlot,
@@ -357,12 +359,17 @@ describe("points to confirm", () => {
     assert.ok(source.includes("Other answers"));
   });
 
-  it("records each answer on its own line and asks the next question in its own card", () => {
+  it("records each answer and opens the next question in the card", () => {
+    // Rewritten for the product owner's reference of 28 October 2026, which replaced the
+    // conversation with one question at a time beside the understanding so far. Was: the
+    // next question appended to the conversation as its own card ({ who: "agent", kind:
+    // "ask", key: next }) and "below this conversation". Now: the answer is recorded in
+    // words under the card and the next question takes its place. The method is the same:
+    // each answer saved as it is confirmed, then the next unanswered question.
     const source = readFileSync("apps/web/src/client-walkthrough.tsx", "utf8");
-    // The next question is no longer folded into the "Recorded" line: no "Next:" label.
     assert.ok(!source.includes("Next: <strong>"));
-    assert.ok(source.includes('{ who: "agent", kind: "ask", key: next }'));
-    assert.ok(source.includes("below this conversation"));
+    assert.match(source, /text: `Recorded: \$\{value\}\.`/);
+    assert.ok(source.includes("setCurrent(next);"));
     assert.ok(!source.includes("beside this conversation"));
   });
 });
@@ -475,5 +482,133 @@ describe("the answers once the narrative is approved", () => {
       "utf8",
     );
     assert.ok(narrative.includes("Redraft to match"));
+  });
+});
+
+// The product owner's reference (28 October 2026): one question at a time with its category,
+// beside the understanding so far, each answer under what it covers.
+describe("control understanding", () => {
+  const slot = (kind: string, label: string, question = "") => ({
+    key: "k",
+    question,
+    kind,
+    label,
+  });
+
+  it("names what each question covers from the value's own name", () => {
+    assert.deepEqual(categoryOf(slot("SYSTEM", "the access request tool")), {
+      label: "Request channel",
+      icon: "file",
+    });
+    assert.equal(
+      categoryOf(slot("ROLE", "the role that approves privileged access"))
+        .label,
+      "Approval authority",
+    );
+    // The question may mention approval; the value is who grants.
+    assert.equal(
+      categoryOf(
+        slot(
+          "ROLE",
+          "the role that administers user access",
+          "Who grants access once it is approved?",
+        ),
+      ).label,
+      "Access provisioner",
+    );
+    assert.equal(
+      categoryOf(slot("ROLE", "the control owner for user access")).label,
+      "Control owner",
+    );
+    assert.equal(
+      categoryOf(slot("ROLE", "the role that reviews access")).label,
+      "Reviewer",
+    );
+    assert.equal(
+      categoryOf(slot("SYSTEM", "the HR system")).label,
+      "HR source",
+    );
+    assert.equal(
+      categoryOf(slot("TEXT", "the access management policy")).label,
+      "Governing policy",
+    );
+    assert.equal(
+      categoryOf(slot("TEXT", "how often IT receives terminations")).label,
+      "Frequency",
+    );
+    assert.equal(
+      categoryOf(slot("DAYS", "the removal period")).label,
+      "Timeline",
+    );
+    assert.equal(
+      categoryOf(slot("TEXT", "the escalation contact")).label,
+      "Escalation contact",
+    );
+  });
+
+  it("shows one segment a question, filled as answered, at most twelve", () => {
+    assert.deepEqual(progressSegments(2, 4), [true, true, false, false]);
+    assert.deepEqual(progressSegments(0, 0), []);
+    assert.equal(progressSegments(10, 24).length, 12);
+    assert.equal(progressSegments(10, 24).filter(Boolean).length, 5);
+  });
+
+  it("lays out the question beside the understanding so far, as the reference", () => {
+    const source = readFileSync("apps/web/src/client-walkthrough.tsx", "utf8");
+    for (const words of [
+      "Control understanding",
+      "Understand how this control operates",
+      "Understanding so far",
+      "answers captured",
+      "Draft insights",
+      "Additional context (optional)",
+      "Save &amp; continue",
+      "Other (specify)",
+      "Skip for now",
+    ]) {
+      assert.ok(source.includes(words), words);
+    }
+    // Context is kept where the narrative's agents read it; a question goes to the console.
+    const view = readFileSync("apps/web/src/control-context-view.tsx", "utf8");
+    assert.ok(view.includes('kind: "WALKTHROUGH"'));
+    assert.ok(
+      source.includes(
+        "Questions about the control are answered in the agent console.",
+      ),
+    );
+  });
+});
+
+// Found by the product owner (28 October 2026): a long answer ran past its card on the
+// right, and some lines were smaller than the conversation they replaced.
+describe("control understanding: text fits and keeps its size", () => {
+  const css = readFileSync("apps/web/app/client-walkthrough.css", "utf8");
+  const own = css.slice(
+    css.indexOf("/* Control understanding: the product owner"),
+  );
+  const rule = (selector: string) => {
+    const at = own.indexOf(`${selector} {`);
+    return at < 0 ? "" : own.slice(at, own.indexOf("}", at));
+  };
+
+  it("wraps a long answer inside its card", () => {
+    assert.match(rule(".cu-answers button"), /white-space: normal/);
+    assert.match(rule(".cu-answer-text strong"), /overflow-wrap: anywhere/);
+  });
+
+  it("sets no text smaller than the conversation's 12.5px, but the uppercase labels", () => {
+    assert.doesNotMatch(own, /font-size: var\(--fs-xs\)/);
+    // Every rule at 11px is an uppercase label (the eyebrows and the category pill).
+    const tiny = own
+      .split("}")
+      .filter((rule) => rule.includes("font-size: var(--fs-2xs)"));
+    assert.ok(tiny.length >= 2);
+    for (const rule of tiny) {
+      assert.match(
+        rule,
+        /text-transform: uppercase/,
+        rule.trim().split("\n")[0],
+      );
+    }
   });
 });

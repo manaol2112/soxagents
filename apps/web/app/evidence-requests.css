@@ -1733,3 +1733,373 @@
 .rs-foot.is-end {
   justify-content: flex-end;
 }
+
+/* While the agent reads the policies on file for an item (28 October 2026). */
+.pf-checking {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0 0 0 2.5rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+@media (max-width: 640px) {
+  .pf-checking {
+    margin-left: 0;
+  }
+}
+
+/* The item's facts in one row, as the product owner's reference (28 October 2026). */
+.er-facts.is-row {
+  display: grid;
+  /* Each column as wide as its value needs, the space left shared out. */
+  grid-template-columns: repeat(4, auto);
+  gap: 0;
+  padding: 0.7rem 0;
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.er-facts.is-row > div {
+  display: grid;
+  gap: 0.2rem;
+  align-content: start;
+  min-width: 0;
+  padding: 0 0.85rem;
+}
+
+.er-facts.is-row > div:first-child {
+  padding-left: 0.25rem;
+}
+
+.er-facts.is-row > div + div {
+  border-left: 1px solid var(--border-subtle);
+}
+
+.er-facts.is-row dt {
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.er-facts.is-row dd {
+  overflow-wrap: break-word;
+}
+
+/* The related policy on file (the product owner's reference, 28 October 2026). */
+.er-item.has-policy {
+  padding-bottom: 0;
+}
+
+.pm {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.pm-head {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pm-head h4,
+.pm-sub {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.pm-sub {
+  margin-top: 0.15rem;
+}
+
+.pm-head .text-link {
+  gap: 0.35rem;
+}
+
+.pm-doc {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.85rem;
+  align-items: center;
+  padding: 0.85rem 1rem;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-lg);
+}
+
+.pm-doc-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  color: var(--accent-text);
+  background: var(--surface);
+  border-radius: var(--radius);
+}
+
+.pm-doc-text {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.pm-doc-text strong {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.pm-doc-text small {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.pm-state {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.3rem 0.65rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  border-radius: var(--radius);
+}
+
+.pm-state.is-ready {
+  color: var(--success);
+  background: var(--success-soft);
+  border: 1px solid color-mix(in srgb, var(--success) 22%, transparent);
+}
+
+.pm-state.is-needed {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+}
+
+.pm-tick {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  color: var(--surface);
+  background: var(--success);
+  border-radius: 50%;
+}
+
+.pm-quote {
+  margin: 0;
+  padding: 0.15rem 0 0.15rem 1rem;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-style: italic;
+  line-height: 1.5;
+  border-left: 3px solid var(--accent);
+}
+
+.pm-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.pm-why summary {
+  color: var(--accent-strong);
+  font-size: var(--fs-xs);
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.pm-why p {
+  margin: 0.35rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.pm-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+
+.pm-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0.2rem -1rem 0;
+  padding: 0.85rem 1rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pm-foot p {
+  display: flex;
+  flex: 1 1 9rem;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.pm-foot p > svg {
+  flex: none;
+}
+
+.pm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.pm-actions > button,
+.pm-actions > a {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+@media (max-width: 640px) {
+  .er-facts.is-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 0.6rem;
+  }
+
+  .er-facts.is-row > div:nth-child(3) {
+    padding-left: 0.25rem;
+    border-left: 0;
+  }
+
+  .pm-doc {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .pm-state {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
+
+/* Add evidence as a choice: upload, a policy on file, or a file held (28 October 2026). */
+.ae {
+  display: grid;
+  justify-items: end;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.ae-running {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.ae-panel {
+  display: grid;
+  gap: 0.6rem;
+  justify-self: stretch;
+  min-width: 0;
+  margin: 0;
+  padding: 0.85rem 1rem;
+  text-align: left;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+}
+
+.ae-panel legend,
+.ae-panel .ae-legend {
+  float: left;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.ae-panel ul {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ae-panel li label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.6rem;
+  align-items: start;
+  padding: 0.55rem 0.7rem;
+  cursor: pointer;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+}
+
+.ae-panel li label:has(input:checked) {
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+
+.ae-panel li label.is-off {
+  cursor: default;
+}
+
+.ae-panel li label > span {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.ae-panel li strong {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.ae-panel li small {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.ae-panel li label.is-off strong {
+  color: var(--text-secondary);
+}
+
+.ae-panel > label {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.ae-panel select,
+.ae-panel input:not([type="radio"]) {
+  width: 100%;
+  min-width: 0;
+}
+
+.ae-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.ae-actions > button {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+}

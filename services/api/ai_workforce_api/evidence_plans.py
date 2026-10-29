@@ -2000,6 +2000,25 @@ PLAN_RUN_ATTEMPTS = 3
 PLAN_LEASE_MINUTES = 20
 
 
+def queue_unrefined_plans(connection: psycopg.Connection[Any], project_id: UUID) -> list[UUID]:
+    """The engagement's plans the rules drew up that the planner agent has never refined,
+    such as a control added after launch, queued for it (product owner, 28 October 2026:
+    the agent should fix what planning leaves, for a person to review and approve). A plan
+    the agent has run on, or one a person approved, is left as it is."""
+    with transaction(connection) as cursor:
+        rows = cursor.execute(
+            """
+            UPDATE evidence_plans
+            SET run_status = 'PENDING', run_lease_until = NULL, run_note = ''
+            WHERE project_id = %s AND status = 'PROPOSED' AND source = 'RULES'
+              AND run_status = 'IDLE' AND run_attempts = 0
+            RETURNING id
+            """,
+            (project_id,),
+        ).fetchall()
+    return [UUID(str(row[0])) for row in rows]
+
+
 def replan_for_new_attributes(connection: psycopg.Connection[Any], control_id: UUID) -> UUID | None:
     """An attribute approved after the plan was made has no evidence: approving it sent
     the plan back for approval (revise_evidence_plan), and the planner agent now plans it

@@ -468,3 +468,30 @@ class PbcDraftWorkflow:
             )
             return "FAILED"
         return str(result)
+
+
+class PolicyEvidenceRequest(TypedDict):
+    project_id: str
+
+
+@workflow.defn(name="policy_evidence_run")
+class PolicyEvidenceWorkflow:
+    """The agent reads an engagement's policies on file against its requests, with retries."""
+
+    @workflow.run
+    async def run(self, payload: PolicyEvidenceRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "run_policy_evidence",
+                args=[payload["project_id"]],
+                start_to_close_timeout=timedelta(minutes=30),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_policy_evidence_run",
+                args=[payload["project_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)

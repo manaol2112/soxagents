@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import {
   type DragEvent,
   useCallback,
@@ -12,6 +13,7 @@ import {
 import { PANE_COUNT_EVENT } from "./controls-guide-model";
 import {
   DESCRIPTION_KINDS,
+  fileLineOf,
   type GoverningKind,
   governedNames,
   KIND_LABEL,
@@ -31,6 +33,8 @@ import {
   parseReferences,
   plural,
   policiesTile,
+  policyFileHref,
+  previewOf,
   priorYearTile,
   proposalGroups,
   referencesTile,
@@ -824,6 +828,7 @@ export function PoliciesPane({
     list.filter((item) => variant.kinds.includes(item.kind));
   const [policies, setPolicies] = useState(() => mine(initial));
   const [adding, setAdding] = useState(false);
+  const opened = useSearchParams().get("document");
   useEffect(() => {
     if (onChange !== undefined) {
       onChange(policies);
@@ -969,6 +974,8 @@ export function PoliciesPane({
           ...variant.kinds.map((item) => [item, KIND_LABEL[item]] as const),
         ]}
         action={add}
+        // A link to one document (an evidence item's View document) opens on it.
+        initial={opened}
         rows={policies.map((policy) => {
           const names = governedNames(policy, systems, processes);
           return {
@@ -1008,10 +1015,33 @@ export function PoliciesPane({
             ],
             detail: (
               <div className="ry-detail">
-                <p className="ry-excerpt">{policy.excerpt}</p>
+                <figure className="ry-preview">
+                  <figcaption>
+                    <span className="ry-file">
+                      <UiIcon name="file" size={14} />
+                      <span>{policy.fileName || policy.title}</span>
+                    </span>
+                    <small className={policy.fileKept ? undefined : "is-text"}>
+                      {fileLineOf(policy)}
+                    </small>
+                    {policy.fileKept ? (
+                      <a
+                        className="text-link is-plain ry-open"
+                        href={policyFileHref(ids, policy.id)}
+                        target="_blank"
+                        rel="noopener"
+                      >
+                        Open file
+                        <UiIcon name="window" size={13} />
+                      </a>
+                    ) : null}
+                  </figcaption>
+                  <p className="ry-excerpt">
+                    {previewOf(policy.excerpt, policy.characters)}
+                  </p>
+                </figure>
                 <p className="ry-muted">
-                  {policy.fileName}. A control can be taken off from its own
-                  documents.
+                  A control can be taken off from its own documents.
                 </p>
                 {editable ? (
                   <span className="ry-actions">

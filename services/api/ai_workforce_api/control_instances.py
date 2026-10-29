@@ -189,7 +189,39 @@ def _clone(
     from ai_workforce_api.library_definitions import link_definitions
 
     link_definitions(cursor, copied, None)
+    carry_criteria(cursor, source_id, copied)
     return copied
+
+
+def carry_criteria(cursor: psycopg.Cursor[Any], source_id: UUID, copied_id: UUID) -> int:
+    """A copy's attributes keep what their source's say about testing them (product owner,
+    28 October 2026: a control added to SAP S/4HANA carried Active Directory's reworded
+    attributes as bare wording, with no criteria and no procedure to test them). Matched
+    by wording; the copy takes the source's objective, condition, pass and fail criteria,
+    judgment, automation, phases, the criteria's origin and its library definition where it
+    has none. An acceptance is not carried: the copy's criteria are reviewed for its own
+    system. Returns how many attributes took them."""
+    rows = cursor.execute(
+        """
+        UPDATE control_attributes AS c
+        SET objective = s.objective, condition = s.condition, pass_criteria = s.pass_criteria,
+            fail_criteria = s.fail_criteria, judgment_required = s.judgment_required,
+            automatable = s.automatable, phases = s.phases, criteria_origin = s.criteria_origin,
+            definition_key = coalesce(c.definition_key, s.definition_key),
+            version = c.version + 1, updated_at = clock_timestamp()
+        FROM control_attributes AS s
+        WHERE c.engagement_control_id = %s AND c.status = 'APPROVED'
+          AND s.engagement_control_id = %s AND s.status = 'APPROVED'
+          AND lower(regexp_replace(btrim(c.text), '\\s+', ' ', 'g'))
+              = lower(regexp_replace(btrim(s.text), '\\s+', ' ', 'g'))
+          AND c.pass_criteria = '' AND c.fail_criteria = '' AND c.condition = ''
+          AND (s.pass_criteria <> '' OR s.fail_criteria <> '' OR s.condition <> ''
+               OR s.judgment_required IS NOT NULL OR s.definition_key IS NOT NULL)
+        RETURNING c.id
+        """,
+        (copied_id, source_id),
+    ).fetchall()
+    return len(rows)
 
 
 def _delete_instance(cursor: psycopg.Cursor[Any], control_id: UUID, label: str) -> None:

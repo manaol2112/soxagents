@@ -32,6 +32,8 @@ from ai_workforce_api.durable_workflow import (
     NarrativeWorkflow,
     PbcDraftWorkflow,
     PlanRunRequest,
+    PolicyEvidenceRequest,
+    PolicyEvidenceWorkflow,
     PriorYearRequest,
     PriorYearWorkflow,
     RcmSystemScanWorkflow,
@@ -170,6 +172,12 @@ class TemporalAdapter:
         except Exception as error:
             raise DurableUnavailable() from error
 
+    def schedule_policy_evidence_runs(self, project_ids: list[UUID]) -> None:
+        try:
+            asyncio.run(_schedule_policy_evidence_runs(self._address, project_ids))
+        except Exception as error:
+            raise DurableUnavailable() from error
+
 
 @asynccontextmanager
 async def serve(
@@ -187,6 +195,7 @@ async def serve(
     plan: Callable[[UUID], str] | None = None,
     prior: Callable[[UUID], str] | None = None,
     narrative: Callable[[UUID], str] | None = None,
+    policy: Callable[[UUID], str] | None = None,
 ) -> AsyncIterator[None]:
     client = await Client.connect(address)
     worker = Worker(
@@ -207,6 +216,7 @@ async def serve(
             EvidencePlanRunWorkflow,
             PriorYearWorkflow,
             NarrativeWorkflow,
+            PolicyEvidenceWorkflow,
         ],
         activities=activities_for(
             database_url,
@@ -223,6 +233,7 @@ async def serve(
             plan,
             prior,
             narrative,
+            policy,
         ),
     )
     async with worker:
@@ -239,6 +250,7 @@ async def serve(
         await resume_plan_runs(client, database_url)
         await resume_prior_year_runs(client, database_url)
         await resume_narrative_runs(client, database_url)
+        await resume_policy_evidence_runs(client, database_url)
         yield
 
 
@@ -267,6 +279,39 @@ async def start_narrative_run(client: Client, control_id: UUID) -> None:
         )
     except WorkflowAlreadyStartedError:
         return
+
+
+async def resume_policy_evidence_runs(client: Client, database_url: str) -> int:
+    from ai_workforce_api.policy_evidence import open_runs
+
+    try:
+        with connect(database_url) as connection:
+            ids = open_runs(connection)
+        for project_id in ids:
+            await start_policy_evidence_run(client, project_id)
+    except Exception:
+        logger.warning("policy evidence runs could not be resumed")
+        return 0
+    return len(ids)
+
+
+async def start_policy_evidence_run(client: Client, project_id: UUID) -> None:
+    payload: PolicyEvidenceRequest = {"project_id": str(project_id)}
+    try:
+        await client.start_workflow(
+            PolicyEvidenceWorkflow.run,
+            payload,
+            id=f"policy-evidence-run:{project_id}",
+            task_queue=TASK_QUEUE,
+        )
+    except WorkflowAlreadyStartedError:
+        return
+
+
+async def _schedule_policy_evidence_runs(address: str, project_ids: list[UUID]) -> None:
+    client = await Client.connect(address)
+    for project_id in project_ids:
+        await start_policy_evidence_run(client, project_id)
 
 
 async def _schedule_narrative_runs(address: str, control_ids: list[UUID]) -> None:
@@ -677,6 +722,7 @@ def activities_for(
     plan: Callable[[UUID], str] | None = None,
     prior: Callable[[UUID], str] | None = None,
     narrative: Callable[[UUID], str] | None = None,
+    policy: Callable[[UUID], str] | None = None,
 ) -> list[Any]:
     @activity.defn(name="record_effect")
     async def record_effect(
@@ -936,7 +982,25 @@ def activities_for(
 
         await asyncio.to_thread(fail)
 
+    @activity.defn(name="run_policy_evidence")
+    async def run_policy_evidence(project_id: str) -> str:
+        if policy is None:
+            return "SKIPPED"
+        return await asyncio.to_thread(policy, UUID(project_id))
+
+    @activity.defn(name="fail_policy_evidence_run")
+    async def fail_policy_evidence_run(project_id: str) -> None:
+        from ai_workforce_api.policy_evidence import fail_run
+
+        def fail() -> None:
+            with connect(database_url) as connection:
+                fail_run(connection, UUID(project_id))
+
+        await asyncio.to_thread(fail)
+
     return [
+        run_policy_evidence,
+        fail_policy_evidence_run,
         run_narrative,
         fail_narrative_run,
         draft_workpaper,

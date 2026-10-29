@@ -58,7 +58,8 @@ def test_a_page_in_a_firm_left_since_is_not_offered(migrated: Database) -> None:
     assert owner.put("/me/last-page", json={"path": path}).status_code == 204
     with connect(migrated.url) as connection:
         connection.execute(
-            "UPDATE memberships SET status = 'DISABLED' WHERE organization_id = %s AND user_id = %s",
+            "UPDATE memberships SET status = 'DISABLED' "
+            "WHERE organization_id = %s AND user_id = %s",
             (UUID(str(org)), team["owner_id"]),
         )
         connection.commit()

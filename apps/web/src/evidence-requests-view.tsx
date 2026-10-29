@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { AddEvidenceMenu } from "./add-evidence-menu";
 import { ControlSend } from "./control-send";
 import type { ActivityItem } from "./control-workspace-model";
 import { centerHref, DEFAULT_QUERY } from "./evidence-center-model";
@@ -46,6 +47,17 @@ import { fileLine, NO_UPLOAD } from "./evidence-workspace-view";
 import { type PanelPlacement, panelPlacement } from "./panel-placement";
 import type { MasterPlan } from "./planning-model";
 import { AddEvidence } from "./planning-view";
+import {
+  choosable,
+  type PolicyEvidence,
+  proposalsFor,
+  stillChecking,
+} from "./policy-evidence-model";
+import {
+  CheckingPolicies,
+  PolicyOnFile,
+  usePolicyEvidence,
+} from "./policy-on-file";
 import { RowMenu } from "./row-menu";
 import { UiIcon } from "./ui-icon";
 
@@ -98,6 +110,8 @@ export function EvidenceRequests({
     [plan, rows, master],
   );
   const [view, setView] = useState<View>("list");
+  // Policies on file the agent proposes for the items (28 October 2026).
+  const policies = usePolicyEvidence(ids);
   const [filter, setFilter] = useState<RequestFilter>(NO_FILTER);
   const [typed, setTyped] = useState("");
   const [adding, setAdding] = useState(false);
@@ -382,6 +396,8 @@ export function EvidenceRequests({
                   applications={applications}
                   system={system}
                   activity={activity}
+                  policies={policies.evidence}
+                  onPolicyDecided={policies.reload}
                   onClose={() => setSelected(null)}
                   onMapping={() => setView("attributes")}
                 />
@@ -547,6 +563,8 @@ function RequestPanel({
   applications,
   system,
   activity,
+  policies,
+  onPolicyDecided,
   onClose,
   onMapping,
 }: {
@@ -558,6 +576,8 @@ function RequestPanel({
   applications: Array<{ id: string; name: string }>;
   system: string | null;
   activity: ActivityItem[] | null;
+  policies: PolicyEvidence;
+  onPolicyDecided: () => void;
   onClose: () => void;
   onMapping: () => void;
 }) {
@@ -673,6 +693,9 @@ function RequestPanel({
                   files={files}
                   applications={applications}
                   system={system}
+                  policies={policies}
+                  onPolicyDecided={onPolicyDecided}
+                  onMapping={onMapping}
                 />
               ))}
             </ol>
@@ -774,6 +797,9 @@ function ItemCard({
   files,
   applications,
   system,
+  policies,
+  onPolicyDecided,
+  onMapping,
 }: {
   ids: Ids;
   number: number;
@@ -784,22 +810,33 @@ function ItemCard({
   files: HeldFile[];
   applications: Array<{ id: string; name: string }>;
   system: string | null;
+  policies: PolicyEvidence;
+  onPolicyDecided: () => void;
+  onMapping: () => void;
 }) {
   const { item } = entry;
+  const onFile = proposalsFor(policies, item.id);
   const status = ITEM_STATUS[entry.status];
   const count = item.files.length;
+  // A related policy on file takes the item's place for adding evidence (28 October 2026).
+  const related = onFile.length > 0;
   return (
-    <li className="er-item">
+    <li className={`er-item${related ? " has-policy" : ""}`}>
       <div className="er-item-head">
         <span className="er-num is-small" aria-hidden="true">
-          {number}
+          {String(number).padStart(2, "0")}
         </span>
         <div className="er-item-text">
           <strong>{item.title}</strong>
           <p>{itemSummary(item.description)}</p>
         </div>
         <div className="er-item-side">
-          <StatusChip label={status.label} tone={status.tone} />
+          <StatusChip
+            label={
+              entry.status === "MISSING" ? "Missing evidence" : status.label
+            }
+            tone={status.tone}
+          />
           {count > 0 ? (
             <span className="er-files">
               <UiIcon name="file" size={13} />
@@ -808,28 +845,55 @@ function ItemCard({
           ) : null}
         </div>
       </div>
-      <dl className="er-facts">
-        <dt>Phase</dt>
-        <dd>{REQUEST_PHASE_LABELS[item.phase]}</dd>
-        <dt>Owner/Recipient</dt>
-        <dd>{recipient || item.requestRecipient || "Not assigned"}</dd>
-        <dt>Format</dt>
-        <dd>{entry.format}</dd>
-        <dt>Population</dt>
-        <dd>{entry.population || "Not stated"}</dd>
-      </dl>
-      <p className="er-supports">
-        <span>Supports</span>
-        {entry.attributeCodes.length > 0 ? (
-          entry.attributeCodes.map((code) => (
-            <span key={code} className="er-chip">
-              Attribute {code}
-            </span>
-          ))
-        ) : (
-          <span className="er-sub">No attribute linked</span>
-        )}
-      </p>
+      {related ? (
+        // The facts in one row, with the related policy (the product owner's reference).
+        <dl className="er-facts is-row">
+          <div>
+            <dt>Phase</dt>
+            <dd>{REQUEST_PHASE_LABELS[item.phase]}</dd>
+          </div>
+          <div>
+            <dt>Recipient</dt>
+            <dd>{recipient || item.requestRecipient || "Not assigned"}</dd>
+          </div>
+          <div>
+            <dt>Format</dt>
+            <dd>{entry.format}</dd>
+          </div>
+          <div>
+            <dt>Population</dt>
+            <dd>{entry.population || "Not stated"}</dd>
+          </div>
+        </dl>
+      ) : (
+        // Every other item keeps the list it had (product owner, 28 October 2026: "I don't
+        // need this section in all my evidence request").
+        <dl className="er-facts">
+          <dt>Phase</dt>
+          <dd>{REQUEST_PHASE_LABELS[item.phase]}</dd>
+          <dt>Owner/Recipient</dt>
+          <dd>{recipient || item.requestRecipient || "Not assigned"}</dd>
+          <dt>Format</dt>
+          <dd>{entry.format}</dd>
+          <dt>Population</dt>
+          <dd>{entry.population || "Not stated"}</dd>
+        </dl>
+      )}
+      {related ? null : (
+        <p className="er-supports">
+          <span>Supports</span>
+          {entry.attributeCodes.length > 0 ? (
+            entry.attributeCodes.map((code) => (
+              <span key={code} className="er-chip">
+                Attribute {code}
+              </span>
+            ))
+          ) : (
+            <span className="er-sub">No attribute linked</span>
+          )}
+        </p>
+      )}
+      {stillChecking(policies, item) ? <CheckingPolicies /> : null}
       <ul className="cc-list er-review">
         <RequirementRow
           item={item}
@@ -840,6 +904,7 @@ function ItemCard({
           bare
           upload={
             canAct &&
+            !related &&
             item.requestId !== null &&
             !NO_UPLOAD.includes(item.state) ? (
               <RequestUpload
@@ -854,6 +919,28 @@ function ItemCard({
                     : []
                 }
                 system={system}
+                chooser={(pick, running) => (
+                  // Upload, a policy on file, or a file the control holds (28 October 2026).
+                  <AddEvidenceMenu
+                    ids={ids}
+                    itemId={item.id}
+                    itemTitle={item.title}
+                    pick={pick}
+                    running={running}
+                    documents={choosable(policies, item.id)}
+                    held={linkableFiles(item, files)}
+                    onLink={(fileId, reason) =>
+                      action.run(`link-${item.id}`, {
+                        intent: "link",
+                        requirement_id: item.id,
+                        file_id: fileId,
+                        reason,
+                        version: item.version,
+                      })
+                    }
+                    onFiled={onPolicyDecided}
+                  />
+                )}
               />
             ) : null
           }
@@ -870,6 +957,18 @@ function ItemCard({
           }
         />
       </ul>
+      {/* The policy on file the agent relates to the item: filed only once a person
+          adds it (28 October 2026). */}
+      {onFile.map((proposal) => (
+        <PolicyOnFile
+          key={proposal.id}
+          ids={ids}
+          proposal={proposal}
+          canAct={canAct}
+          onDecided={onPolicyDecided}
+          onMapping={onMapping}
+        />
+      ))}
     </li>
   );
 }

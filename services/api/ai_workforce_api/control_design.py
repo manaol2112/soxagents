@@ -588,3 +588,186 @@ def set_values(
             ),
         )  # fmt: skip
     return list(targets)
+
+
+# Bringing forward another control's answers (decided by the product owner on 28 October
+# 2026): a control on another system whose process is the same is answered once; its
+# answers are reviewed and copied here, each a person's choice, recorded with where it came
+# from. The answers are context for the narrative, never evidence.
+
+MAX_SOURCES = 20
+
+
+class CopyAnswer(BaseModel):
+    key: str
+    label: str
+    kind: str
+    question: str
+    value: str
+    filled_by: str | None
+
+
+class CopySource(BaseModel):
+    control_id: UUID
+    control_ref: str
+    title: str
+    system: str
+    # The same control on another system, rather than another control asking the same.
+    same_control: bool
+    answers: list[CopyAnswer]
+
+
+class CopyTarget(BaseModel):
+    control_ref: str
+    title: str
+    system: str
+    # This control's answers now, by question.
+    values: dict[str, str]
+
+
+class CopySourcesBody(BaseModel):
+    target: CopyTarget
+    sources: list[CopySource]
+
+
+class CopyBody(BaseModel):
+    source_control_id: UUID
+    keys: list[str] = Field(min_length=1, max_length=40)
+
+
+def _questions_of(statement: Statement) -> dict[str, Any]:
+    """The questions a control asks the client, by key: the automatic ones are not asked."""
+    return {slot.key: slot for slot in statement.slots if slot.key not in AUTOMATIC}
+
+
+def _control_row(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> tuple[str, str, str, str] | None:
+    row = connection.execute(
+        """
+        SELECT c.control_ref, c.title, coalesce(a.name, ''), coalesce(c.library_key, '')
+        FROM engagement_controls c
+        LEFT JOIN engagement_applications a ON a.id = c.engagement_application_id
+        WHERE c.id = %s AND c.project_id = %s
+        """,
+        (control_id, project_id),
+    ).fetchone()
+    return None if row is None else (str(row[0]), str(row[1]), str(row[2]), str(row[3]))
+
+
+def copy_sources(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> CopySourcesBody:
+    """The engagement's other controls whose answers this control could take: those that
+    answered at least one question this control asks, the same control on another system
+    first, then by how many they answered."""
+    from ai_workforce_api.slot_questions import question_for
+
+    found = _statement(connection, control_id)
+    me = _control_row(connection, project_id, control_id)
+    if found is None or me is None:
+        raise ContextState("this control has no statement to fill")
+    asked = _questions_of(found[0])
+    current = {
+        str(key): str(value)
+        for key, value in connection.execute(
+            "SELECT slot_key, value FROM control_parameters WHERE engagement_control_id = %s",
+            (control_id,),
+        ).fetchall()
+    }
+    rows = connection.execute(
+        """
+        SELECT c.id, c.control_ref, c.title, coalesce(a.name, ''), p.slot_key, p.value,
+               u.display_name
+        FROM control_parameters p
+        JOIN engagement_controls c ON c.id = p.engagement_control_id
+        LEFT JOIN engagement_applications a ON a.id = c.engagement_application_id
+        LEFT JOIN users u ON u.id = p.filled_by
+        WHERE c.project_id = %s AND c.id <> %s AND p.value <> '' AND p.slot_key = ANY(%s)
+        ORDER BY c.control_ref, a.name, p.slot_key
+        """,
+        (project_id, control_id, list(asked)),
+    ).fetchall()
+    sources: dict[UUID, CopySource] = {}
+    for cid, ref, title, system, key, value, who in rows:
+        source_id = UUID(str(cid))
+        slot = asked[str(key)]
+        source = sources.setdefault(
+            source_id,
+            CopySource(
+                control_id=source_id, control_ref=str(ref), title=str(title),
+                system=str(system), same_control=str(ref) == me[0], answers=[],
+            ),
+        )  # fmt: skip
+        source.answers.append(
+            CopyAnswer(
+                key=str(key), label=slot.label, kind=slot.kind,
+                question=question_for(slot), value=str(value),
+                filled_by=None if who is None else str(who),
+            )
+        )  # fmt: skip
+    ranked = sorted(
+        sources.values(), key=lambda s: (not s.same_control, -len(s.answers), s.control_ref)
+    )
+    return CopySourcesBody(
+        target=CopyTarget(
+            control_ref=me[0], title=me[1], system=me[2],
+            values={key: value for key, value in current.items() if key in asked and value},
+        ),
+        sources=ranked[:MAX_SOURCES],
+    )  # fmt: skip
+
+
+def copy_values(
+    connection: psycopg.Connection[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID,
+    body: CopyBody,
+) -> list[UUID]:
+    """Copy the chosen answers from another control of the engagement, read from the source
+    itself (never as sent), saved as answers are (validated, with who recorded them), and
+    recorded with where they came from. Only this control changes."""
+    if body.source_control_id == control_id:
+        raise ContextState("choose another control to copy from")
+    source = _control_row(connection, project_id, body.source_control_id)
+    if source is None:
+        raise ContextState("that control is not in this engagement")
+    found = _statement(connection, control_id)
+    if found is None:
+        raise ContextState("this control has no statement to fill")
+    asked = _questions_of(found[0])
+    keys = list(dict.fromkeys(body.keys))
+    if any(key not in asked for key in keys):
+        raise ContextState("this control does not ask that question")
+    held = {
+        str(key): str(value)
+        for key, value in connection.execute(
+            "SELECT slot_key, value FROM control_parameters "
+            "WHERE engagement_control_id = %s AND slot_key = ANY(%s) AND value <> ''",
+            (body.source_control_id, keys),
+        ).fetchall()
+    }
+    if set(keys) - set(held):
+        raise ContextState("that control has no answer to copy for one of them")
+    changed = set_values(
+        connection, organization_id, project_id, control_id, actor,
+        ValuesBody(values={key: held[key] for key in keys}, everywhere=False),
+    )  # fmt: skip
+    with transaction(connection) as cursor:
+        cursor.execute(
+            """
+            INSERT INTO audit_events (
+                organization_id, project_id, actor_user_id, action, target_type, target_id,
+                payload
+            )
+            VALUES (%s, %s, %s, 'control.understanding_copied', 'engagement_control', %s, %s)
+            """,
+            (
+                organization_id, project_id, actor, control_id,
+                Json({"source_control_id": str(body.source_control_id),
+                      "source": f"{source[0]} {source[2]}".strip(), "keys": sorted(keys)}),
+            ),
+        )  # fmt: skip
+    return changed

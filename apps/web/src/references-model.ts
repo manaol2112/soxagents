@@ -31,6 +31,8 @@ export type Policy = {
   title: string;
   fileName: string;
   excerpt: string;
+  /** The length of the whole text, so a cut preview says it continues. */
+  characters: number;
   createdBy: string | null;
   createdAt: string;
   systemIds: string[];
@@ -38,6 +40,10 @@ export type Policy = {
   /** The engagement's controls it applies to, and those a person took it off. */
   controls: number;
   excluded: number;
+  /** Its original file is kept (from 28 October 2026), with its size and type. */
+  fileKept: boolean;
+  fileSize: number | null;
+  fileType: string;
 };
 
 export type ProposalKind =
@@ -130,12 +136,16 @@ export function parsePolicy(value: unknown): Policy | null {
     title: str(item.title),
     fileName: str(item.file_name),
     excerpt: str(item.excerpt),
+    characters: num(item.characters),
     createdBy: typeof item.created_by === "string" ? item.created_by : null,
     createdAt: str(item.created_at),
     systemIds: strings(item.system_ids),
     processIds: strings(item.process_ids),
     controls: num(item.controls),
     excluded: num(item.excluded),
+    fileKept: item.file_kept === true,
+    fileSize: typeof item.file_size === "number" ? item.file_size : null,
+    fileType: str(item.file_type),
   };
 }
 
@@ -422,4 +432,56 @@ export function priorYearTile(references: readonly PriorYearReference[]): {
     count: references.length,
     status: waiting === 0 ? "Reviewed" : `${waiting} to review`,
   };
+}
+
+/** The opening of a document as a preview: the API sends its first characters, so one cut
+ * short ends at its last whole word, with an ellipsis, never in the middle of a word. */
+export function previewOf(excerpt: string, characters: number): string {
+  const text = excerpt.trim();
+  if (characters <= excerpt.length || text === "") {
+    return text;
+  }
+  const space = text.search(/\s\S*$/);
+  const whole = space > 0 ? text.slice(0, space) : text;
+  return `${whole.replace(/[\s,;:.-]+$/, "")}…`;
+}
+
+const FILE_TYPES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/pdf/, "PDF"],
+  [/wordprocessingml|msword/, "Word document"],
+  [/spreadsheetml|ms-excel|csv/, "Spreadsheet"],
+  [/presentationml|powerpoint/, "Presentation"],
+  [/^image\//, "Image"],
+  [/^text\//, "Text file"],
+];
+
+/** What is kept of a document: "Original file · Word document · 38 KB", or its text only
+ * for one uploaded before files were kept, which Replace file fixes. */
+export function fileLineOf(
+  policy: Pick<Policy, "fileKept" | "fileSize" | "fileType">,
+): string {
+  if (!policy.fileKept) {
+    return "Text only · replace the file to keep the original";
+  }
+  const type =
+    FILE_TYPES.find(([pattern]) => pattern.test(policy.fileType))?.[1] ??
+    "File";
+  const size = policy.fileSize ?? 0;
+  const shown =
+    size >= 1024 * 1024
+      ? `${(size / (1024 * 1024)).toFixed(1)} MB`
+      : `${Math.max(1, Math.round(size / 1024))} KB`;
+  return `Original file · ${type} · ${shown}`;
+}
+
+/** The original file, through the page's own route (opened in a new tab). */
+export function policyFileHref(
+  ids: { organizationId: string; projectId: string },
+  documentId: string,
+): string {
+  return `/workspace/policy-file?${new URLSearchParams({
+    organization: ids.organizationId,
+    project: ids.projectId,
+    document: documentId,
+  }).toString()}`;
 }

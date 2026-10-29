@@ -30,6 +30,7 @@ export type IconName =
   | "message"
   | "more"
   | "panel"
+  | "paperclip"
   | "plus"
   | "retry"
   | "risk"
@@ -123,6 +124,9 @@ const PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   list: <path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01" />,
+  paperclip: (
+    <path d="m21 11-8.9 8.9a5.5 5.5 0 0 1-7.8-7.8l8.9-8.9a3.7 3.7 0 0 1 5.2 5.2l-8.9 8.9a1.8 1.8 0 0 1-2.6-2.6L15 6.6" />
+  ),
   minus: <path d="M5 12h14" />,
   expand: <path d="M15 4h5v5M9 20H4v-5M20 4l-6 6M4 20l6-6" />,
   collapse: <path d="M4 14h6v6M20 10h-6V4M10 14l-6 6M14 10l6-6" />,

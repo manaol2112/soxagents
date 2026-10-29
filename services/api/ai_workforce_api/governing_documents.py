@@ -20,10 +20,10 @@ says is read and quoted, never followed.
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import psycopg
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field
 
@@ -47,11 +47,14 @@ from ai_workforce_api.model_providers import live_model, provider_for
 from ai_workforce_api.models import ModelProvider, ModelRaw
 from ai_workforce_api.provenance import AgentCaller, CallerProvider, Job, agent_actor
 from ai_workforce_api.settings import Settings
+from ai_workforce_api.storage import StoreError, open_store
 
 # Policies and procedures govern; process narratives and flow diagrams describe (decided by
 # the product owner on 26 October 2026, the References tab). Each is linked the same way.
 GoverningKind = Literal["POLICY", "PROCEDURE", "NARRATIVE", "FLOWCHART"]
 GOVERNING_KINDS: tuple[GoverningKind, ...] = ("POLICY", "PROCEDURE", "NARRATIVE", "FLOWCHART")
+# Those whose original file is kept, to be proposed and filed as evidence (0125).
+EVIDENCE_KINDS = ("POLICY", "PROCEDURE")
 
 
 class ScopeBody(BaseModel):
@@ -75,6 +78,10 @@ class PolicyBody(BaseModel):
     # The engagement's controls it applies to, and those a person took it off.
     controls: int
     excluded: int
+    # Its original file is kept (0125): its size and type. One uploaded before is text only.
+    file_kept: bool = False
+    file_size: int | None = None
+    file_type: str = ""
 
 
 class PolicyResult(BaseModel):
@@ -96,7 +103,8 @@ def policies(connection: psycopg.Connection[Any], project_id: UUID) -> list[Poli
                 WHERE c.project_id = d.project_id AND c.included
                   AND {applies_to("c.id")}),
                (SELECT count(*) FROM source_document_exclusions x
-                WHERE x.document_id = d.id)
+                WHERE x.document_id = d.id),
+               d.object_key IS NOT NULL, d.size_bytes, d.content_type
         FROM source_documents d
         LEFT JOIN users u ON u.id = d.created_by
         WHERE d.project_id = %s AND d.kind = ANY(%s) AND d.removed_at IS NULL
@@ -118,9 +126,27 @@ def policies(connection: psycopg.Connection[Any], project_id: UUID) -> list[Poli
             process_ids=[UUID(str(item)) for item in row[9]],
             controls=int(row[10]),
             excluded=int(row[11]),
+            file_kept=bool(row[12]),
+            file_size=None if row[13] is None else int(row[13]),
+            file_type=str(row[14]),
         )
         for row in rows
     ]
+
+
+def original_file(
+    connection: psycopg.Connection[Any], store: Any, project_id: UUID, document_id: UUID
+) -> tuple[str, str, bytes]:
+    """A policy or procedure's original file, as uploaded: its name, type and bytes. One
+    uploaded before its file was kept (0125) has none."""
+    row = connection.execute(
+        "SELECT file_name, title, content_type, object_key FROM source_documents "
+        "WHERE id = %s AND project_id = %s AND kind = ANY(%s)",
+        (document_id, project_id, list(GOVERNING_KINDS)),
+    ).fetchone()
+    if row is None or row[3] is None:
+        raise NotVisible()
+    return str(row[0]) or str(row[1]), str(row[2]), store.get(str(row[3]))
 
 
 def set_scope(
@@ -300,6 +326,13 @@ def replace(
     return new_id
 
 
+def _kind(cursor: psycopg.Cursor[Any], document_id: UUID) -> str:
+    row = cursor.execute(
+        "SELECT kind FROM source_documents WHERE id = %s", (document_id,)
+    ).fetchone()
+    return "" if row is None else str(row[0])
+
+
 def _governing(connection: psycopg.Connection[Any], project_id: UUID, document_id: UUID) -> None:
     found = connection.execute(
         "SELECT 1 FROM source_documents WHERE id = %s AND project_id = %s AND kind = ANY(%s) "
@@ -330,9 +363,34 @@ def _audit(
     )
 
 
-def register_governing_documents(
-    app: FastAPI, settings: Settings, provider: ModelProvider | None = None
+def keep_file(
+    cursor: psycopg.Cursor[Any],
+    store: Any,
+    document_id: UUID,
+    content: bytes,
+    content_type: str,
 ) -> None:
+    """Keep the original file of a policy or procedure, so it can be filed as evidence
+    (migration 0125). The text read from it stays what the agents quote."""
+    key = f"documents/{uuid4()}"
+    store.put(key, content)
+    cursor.execute(
+        "UPDATE source_documents SET object_key = %s, content_type = %s, size_bytes = %s "
+        "WHERE id = %s",
+        (key, line(content_type, 100) or "application/octet-stream", len(content), document_id),
+    )
+
+
+def register_governing_documents(
+    app: FastAPI,
+    settings: Settings,
+    provider: ModelProvider | None = None,
+    scheduler: object | None = None,
+    store: Callable[[Settings, psycopg.Connection[Any]], Any] = open_store,
+) -> None:
+    from ai_workforce_api.policy_evidence import request_run
+    from ai_workforce_api.policy_evidence import schedule as schedule_policy_evidence
+
     base = "/organizations/{organization_id}/projects/{project_id}"
 
     def model() -> ModelProvider | None:
@@ -348,6 +406,8 @@ def register_governing_documents(
             raise HTTPException(status_code=409, detail=error.detail) from None
         except ValueError:
             raise HTTPException(status_code=422, detail="policy is invalid") from None
+        except StoreError as error:
+            raise HTTPException(status_code=503, detail=error.detail) from None
 
     def one(connection: psycopg.Connection[Any], project_id: UUID, document_id: UUID) -> PolicyBody:
         return next(item for item in policies(connection, project_id) if item.id == document_id)
@@ -396,13 +456,49 @@ def register_governing_documents(
                     file_name=read.file_name, sha256=read.sha256,
                 )  # fmt: skip
                 set_scope(cursor, project_id, document_id, p.id, scope)
+                if kind in EVIDENCE_KINDS:
+                    keep_file(cursor, store(settings, c), document_id, content, content_type)
+                    queued.append(request_run(cursor, organization_id, project_id, p.id))
                 _audit(cursor, organization_id, project_id, p.id, "document.uploaded",
                        document_id, {"kind": kind, "systems": len(scope.system_ids),
                                      "processes": len(scope.process_ids)})  # fmt: skip
             return PolicyResult(policy=one(c, project_id, document_id), readable=True,
                                 note=read.note)  # fmt: skip
 
-        return run(request, work)
+        queued: list[UUID] = []
+        result = run(request, work)
+        schedule_policy_evidence(scheduler, queued)
+        return result
+
+    @app.get(f"{base}/policies/{{document_id}}/file")
+    def policy_file(
+        organization_id: UUID, project_id: UUID, document_id: UUID, request: Request
+    ) -> Response:
+        """The original file: a PDF or image shown in the page, sandboxed; anything else,
+        such as a Word document, downloaded."""
+        from ai_workforce_api.evidence import _filename, preview_type
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> tuple[str, str, bytes]:
+            _project(c, p, organization_id, project_id, Action.TASK_READ)
+            return original_file(c, store(settings, c), project_id, document_id)
+
+        name, content_type, content = run(request, work)
+        shown = preview_type(content)
+        headers = {
+            "Content-Disposition": (
+                f'{"inline" if shown else "attachment"}; filename="{_filename(name)}"'
+            ),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        }
+        if shown:
+            # Shown, never run: no scripts, forms, or requests from the file.
+            headers["Content-Security-Policy"] = "sandbox; default-src 'none'; img-src data:"
+        return Response(
+            content=content,
+            media_type=shown or content_type or "application/octet-stream",
+            headers=headers,
+        )
 
     @app.post(f"{base}/policies/{{document_id}}/remove")
     def remove_policy(
@@ -451,10 +547,16 @@ def register_governing_documents(
                 )  # fmt: skip
                 _audit(cursor, organization_id, project_id, p.id, "document.replaced",
                        new_id, {"previous": str(document_id)})  # fmt: skip
+                if _kind(cursor, new_id) in EVIDENCE_KINDS:
+                    keep_file(cursor, store(settings, c), new_id, content, content_type)
+                    queued.append(request_run(cursor, organization_id, project_id, p.id))
             return PolicyResult(policy=one(c, project_id, new_id), readable=True,
                                 note=read.note)  # fmt: skip
 
-        return run(request, work)
+        queued: list[UUID] = []
+        result = run(request, work)
+        schedule_policy_evidence(scheduler, queued)
+        return result
 
     @app.put(f"{base}/policies/{{document_id}}/scope")
     def scope_policy(
@@ -472,6 +574,11 @@ def register_governing_documents(
                 _audit(cursor, organization_id, project_id, p.id, "document.scoped",
                        document_id, {"systems": [str(i) for i in body.system_ids],
                                      "processes": [str(i) for i in body.process_ids]})  # fmt: skip
+                if _kind(cursor, document_id) in EVIDENCE_KINDS:
+                    queued.append(request_run(cursor, organization_id, project_id, p.id))
             return one(c, project_id, document_id)
 
-        return run(request, work)
+        queued: list[UUID] = []
+        result = run(request, work)
+        schedule_policy_evidence(scheduler, queued)
+        return result

@@ -66,3 +66,46 @@ describe("phone layout", () => {
     assert.match(rule(narrow, ".cw-body .workpaper-table"), /display: table;/);
   });
 });
+
+describe("the governing documents card stays inside its column (28 October 2026)", () => {
+  // Found by the product owner: a long file name widened the list past the card. The layout
+  // was checked in a browser at the rail's width; this keeps the rules from being dropped.
+  const plan = readFileSync("apps/web/app/control-plan.css", "utf8");
+  const rule = (selector: string) => {
+    const at = plan.indexOf(`${selector} {`);
+    return at < 0 ? "" : plan.slice(at, plan.indexOf("}", at));
+  };
+
+  it("holds one column no wider than the card, and long names wrap or end in an ellipsis", () => {
+    assert.match(
+      rule(".cw-docs-list"),
+      /grid-template-columns: minmax\(0, 1fr\)/,
+    );
+    assert.match(rule(".cw-docs-list strong"), /overflow-wrap: anywhere/);
+    assert.match(rule(".cw-docs-list small"), /text-overflow: ellipsis/);
+  });
+});
+
+describe("the control bar hides what scrolls under it (28 October 2026)", () => {
+  // Found by the product owner: through the glass bar, the question's text scrolling under
+  // it showed as smeared letters. Checked in a browser on the record page.
+  it("is opaque", () => {
+    const css = readFileSync("apps/web/app/control-workspace.css", "utf8");
+    const at = css.indexOf(".cw-bar {");
+    const rule = css.slice(at, css.indexOf("}", at));
+    assert.match(rule, /background: var\(--surface\);/);
+    assert.doesNotMatch(rule, /surface-glass|backdrop-filter/);
+  });
+});
+
+describe("the test plan's figures fit their card (28 October 2026)", () => {
+  // Found by the product owner: five equal columns in a narrow card pushed "Moderate" out of
+  // its cell. The figures now take as many columns as fit at a readable width.
+  it("wraps to another row instead of squeezing", () => {
+    const css = readFileSync("apps/web/app/control-plan.css", "utf8");
+    const at = css.indexOf(".pr-figures {");
+    const rule = css.slice(at, css.indexOf("}", at));
+    assert.match(rule, /repeat\(auto-fit, minmax\(11rem, 1fr\)\)/);
+    assert.doesNotMatch(css, /repeat\(var\(--pr-count/);
+  });
+});

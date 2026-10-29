@@ -1,7 +1,13 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { type DragEvent, useEffect, useRef, useState } from "react";
+import {
+  type DragEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { planUploads, systemsAnswer } from "./evidence-model";
 import { formatBytes } from "./format";
 import { UiIcon } from "./ui-icon";
@@ -486,6 +492,7 @@ export function RequestUpload({
   variant = "row",
   systems = [],
   system = null,
+  chooser = null,
 }: {
   organizationId: string;
   projectId: string;
@@ -500,6 +507,9 @@ export function RequestUpload({
   system?: string | null;
   /** A button in a table row, or a drop zone in a request's side panel. */
   variant?: "row" | "panel";
+  /** In place of the button: a chooser that opens the file picker among other ways to
+   * add evidence (an item's Add evidence menu); dropping files still works. */
+  chooser?: ((pick: () => void, running: boolean) => ReactNode) | null;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const {
@@ -534,30 +544,34 @@ export function RequestUpload({
       onDragLeave={() => setOver(false)}
       onDrop={(event) => void onDrop(event)}
     >
-      <button
-        type="button"
-        className={
-          variant === "panel" ? "btn-secondary" : "btn-secondary btn-sm"
-        }
-        disabled={running}
-        onClick={() => input.current?.click()}
-        title={
-          requirementId === undefined
-            ? "Choose files, or drop them here. They are filed to this request."
-            : "Choose files, or drop them here. They are evidence for this item only."
-        }
-      >
-        {running ? (
-          <span className="spinner small" aria-hidden="true" />
-        ) : (
-          <UiIcon name="upload" size={13} />
-        )}
-        {running
-          ? `Uploading ${finished} of ${total}`
-          : variant === "panel"
-            ? "Choose files"
-            : "Add evidence"}
-      </button>
+      {chooser !== null ? (
+        chooser(() => input.current?.click(), running)
+      ) : (
+        <button
+          type="button"
+          className={
+            variant === "panel" ? "btn-secondary" : "btn-secondary btn-sm"
+          }
+          disabled={running}
+          onClick={() => input.current?.click()}
+          title={
+            requirementId === undefined
+              ? "Choose files, or drop them here. They are filed to this request."
+              : "Choose files, or drop them here. They are evidence for this item only."
+          }
+        >
+          {running ? (
+            <span className="spinner small" aria-hidden="true" />
+          ) : (
+            <UiIcon name="upload" size={13} />
+          )}
+          {running
+            ? `Uploading ${finished} of ${total}`
+            : variant === "panel"
+              ? "Choose files"
+              : "Add evidence"}
+        </button>
+      )}
       {variant === "panel" && !running ? (
         <span className="request-upload-hint">or drop them here</span>
       ) : null}

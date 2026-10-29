@@ -234,6 +234,8 @@ def reconcile_scope(
             # As at kickoff: attributes follow their testing definitions, and the evidence
             # is planned by phase.
             link_definitions(cursor, control.id, actor_id)
+            # The rules plan it now; once the change commits, the planner agent refines the
+            # plan when a model is configured (onboarding.schedule_started_work).
             created = plan_and_issue(
                 cursor, organization_id, project_id, control.id, actor_id, "scope_change"
             )

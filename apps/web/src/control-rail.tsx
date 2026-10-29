@@ -800,7 +800,8 @@ export function GoverningDocumentsCard({
           </span>
           <span>
             <strong>{item.title}</strong>
-            <small>{item.detail}</small>
+            {/* One line; the whole of it on hover. */}
+            <small title={item.detail}>{item.detail}</small>
             {item.reviewed === false ? (
               <em className="cw-docs-new">Not reviewed yet</em>
             ) : null}

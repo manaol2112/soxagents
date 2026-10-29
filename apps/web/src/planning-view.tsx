@@ -2,7 +2,6 @@
 
 import { useRouter } from "next/navigation";
 import {
-  type CSSProperties,
   Fragment,
   type ReactNode,
   useEffect,
@@ -1949,15 +1948,7 @@ function PlanSummary({
         </div>
       ) : (
         <div className="pr-box">
-          <ul
-            className="pr-figures"
-            aria-label="The plan in figures"
-            style={
-              {
-                "--pr-count": figures.length + (confidence !== null ? 1 : 0),
-              } as CSSProperties
-            }
-          >
+          <ul className="pr-figures" aria-label="The plan in figures">
             {figures.map((item) => (
               <li key={item.key}>
                 <button type="button" onClick={item.open}>

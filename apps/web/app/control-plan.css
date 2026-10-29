@@ -62,21 +62,24 @@
   border-radius: 12px;
 }
 
+/* As many figures a row as fit at a readable width, the rest on the next row (product
+   owner, 28 October 2026: five equal columns in a narrow card squeezed "Moderate" out of
+   its cell). Each cell draws its own right and bottom lines; the box clips the outer ones. */
 .pr-figures {
   display: grid;
-  grid-template-columns: repeat(var(--pr-count, 5), minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
   margin: 0;
   padding: 0;
+  overflow: hidden;
   list-style: none;
 }
 
 .pr-figures > li {
   display: flex;
   min-width: 0;
-}
-
-.pr-figures > li + li {
-  border-left: 1px solid var(--border-subtle);
+  box-shadow:
+    1px 0 0 var(--border-subtle),
+    0 1px 0 var(--border-subtle);
 }
 
 .pr-figures button,
@@ -145,6 +148,7 @@
   font-size: var(--fs-xl);
   line-height: 1.2;
   color: var(--text-strong);
+  overflow-wrap: anywhere;
 }
 
 .pr-text > span {
@@ -503,6 +507,8 @@
 
 .cw-docs-list {
   display: grid;
+  /* One column no wider than the card: a long file name wraps instead of widening it. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.5rem;
   margin: 0;
   padding: 0;
@@ -525,16 +531,17 @@
 }
 
 .cw-docs-list strong {
-  overflow: hidden;
   font-size: var(--fs-sm);
   color: var(--text-strong);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .cw-docs-list small {
+  overflow: hidden;
   font-size: var(--fs-xs);
   color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* A document the agent has not reviewed the control against yet. */

@@ -1016,6 +1016,7 @@ class LocalDraftScheduler:
         plan: Callable[[UUID], str] | None = None,
         prior: Callable[[UUID], str] | None = None,
         narrative: Callable[[UUID], str] | None = None,
+        policy: Callable[[UUID], str] | None = None,
     ) -> None:
         from ai_workforce_api.console import console_runner
         from ai_workforce_api.evidence_analysis import analysis_runner
@@ -1056,6 +1057,9 @@ class LocalDraftScheduler:
         from ai_workforce_api.process_narrative import narrative_runner
 
         self._narrative = narrative if narrative is not None else narrative_runner(settings)
+        from ai_workforce_api.policy_evidence import policy_evidence_runner
+
+        self._policy = policy if policy is not None else policy_evidence_runner(settings)
         self._pool = ThreadPoolExecutor(
             max_workers=settings.local_worker_threads, thread_name_prefix="pbc-draft"
         )
@@ -1213,6 +1217,32 @@ class LocalDraftScheduler:
         with connect(self._settings.database_url) as connection:
             fail_run(connection, document_id)
 
+    def schedule_policy_evidence_runs(self, project_ids: list[UUID]) -> None:
+        for project_id in project_ids:
+            self._pool.submit(self._attempt_policy_evidence, project_id)
+
+    def _attempt_policy_evidence(self, project_id: UUID) -> None:
+        from ai_workforce_api.policy_evidence import RUN_ATTEMPTS, fail_run
+
+        for _ in range(RUN_ATTEMPTS):
+            try:
+                self._policy(project_id)
+                return
+            except Exception:
+                logger.warning("policies on file could not be read against requests; retrying")
+                try:
+                    with connect(self._settings.database_url) as connection:
+                        connection.execute(
+                            "UPDATE policy_evidence_runs SET run_status = 'PENDING', "
+                            "run_lease_until = NULL WHERE project_id = %s "
+                            "AND run_status = 'WORKING'",
+                            (project_id,),
+                        )
+                except psycopg.Error:
+                    logger.warning("a policy evidence run could not be reset for retry")
+        with connect(self._settings.database_url) as connection:
+            fail_run(connection, project_id)
+
     def schedule_narrative_runs(self, control_ids: list[UUID]) -> None:
         for control_id in control_ids:
             self._pool.submit(self._attempt_narrative, control_id)
@@ -1354,6 +1384,7 @@ class LocalDraftScheduler:
         from ai_workforce_api.control_reviews import open_reperformances
         from ai_workforce_api.evidence_analysis import open_analyses
         from ai_workforce_api.evidence_plans import open_plan_runs
+        from ai_workforce_api.policy_evidence import open_runs as open_policies
         from ai_workforce_api.prior_year import open_runs as open_prior_year
         from ai_workforce_api.process_narrative import open_runs as open_narratives
         from ai_workforce_api.rcm_systems import open_scans
@@ -1375,10 +1406,12 @@ class LocalDraftScheduler:
             plans = open_plan_runs(connection)
             priors = open_prior_year(connection)
             narratives = open_narratives(connection)
+            policies = open_policies(connection)
         self.schedule_drafts(ids)
         self.schedule_plan_runs(plans)
         self.schedule_prior_year_runs(priors)
         self.schedule_narrative_runs(narratives)
+        self.schedule_policy_evidence_runs(policies)
         self.schedule_system_reviews(scopings)
         self.schedule_reviews(reviews)
         self.schedule_workpaper_drafts(workpapers)
@@ -1400,6 +1433,7 @@ class LocalDraftScheduler:
             + len(plans)
             + len(priors)
             + len(narratives)
+            + len(policies)
         )
 
     def shutdown(self) -> None:

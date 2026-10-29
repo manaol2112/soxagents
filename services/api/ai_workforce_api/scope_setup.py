@@ -539,10 +539,10 @@ def register_scope_setup(
 
     def drafts(project_id: UUID) -> None:
         """The evidence coordinator drafts the requests the new work queued."""
-        from ai_workforce_api.onboarding import started_drafts
-        from ai_workforce_api.pbc_drafting import schedule
+        from ai_workforce_api.onboarding import schedule_started_work
 
-        schedule(scheduler, started_drafts(settings, project_id))
+        # And the planner agent plans the controls the change added.
+        schedule_started_work(settings, scheduler, project_id)
 
     @app.post(f"{base}/processes/areas")
     def process_areas(
