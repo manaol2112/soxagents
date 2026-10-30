@@ -57,6 +57,7 @@ from ai_workforce_api.authorization import (
 )
 from ai_workforce_api.console_citations import find_quote, location_of
 from ai_workforce_api.db import transaction
+from ai_workforce_api.evidence_findings import derive_from_mapping
 from ai_workforce_api.evidence_withdrawn import in_force
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.model_providers import call_note
@@ -980,6 +981,9 @@ def run_mapping(
                     call_id,
                 ),  # fmt: skip
             )
+        # The run's missing records, conflicts and concerns as findings a person disposes
+        # of (docs/evidence-intelligence.md, increment 2).
+        derive_from_mapping(cursor, organization_id, project_id, control_id, run_id)
         cursor.execute(
             """
             INSERT INTO audit_events (

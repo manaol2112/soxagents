@@ -14,6 +14,10 @@ import { ControlSend } from "./control-send";
 import type { ActivityItem } from "./control-workspace-model";
 import { centerHref, DEFAULT_QUERY } from "./evidence-center-model";
 import { RequestUpload } from "./evidence-intake";
+import {
+  EvidenceIntelligence,
+  type Intelligence,
+} from "./evidence-intelligence-view";
 import type { EvidencePlan } from "./evidence-plan-model";
 import { PHASE_SHORT } from "./evidence-plan-model";
 import { Problem, RequirementRow, usePlanAction } from "./evidence-plan-view";
@@ -63,7 +67,7 @@ import { UiIcon } from "./ui-icon";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
 
-type View = "list" | "groups" | "attributes" | "procedures";
+type View = "evidence" | "list" | "groups" | "attributes" | "procedures";
 type PanelTab = "items" | "attributes" | "procedures" | "guidance" | "activity";
 
 /**
@@ -88,6 +92,7 @@ export function EvidenceRequests({
   sentRequests,
   controlRef,
   focusRequest,
+  intelligence = null,
 }: {
   ids: Ids;
   plan: EvidencePlan;
@@ -103,13 +108,20 @@ export function EvidenceRequests({
   controlRef: string;
   /** The request a link names (?request=), opened on arrival. */
   focusRequest: string | null;
+  /** The evidence workspace's records (docs/evidence-intelligence.md); null keeps the
+   * list of requests as the first view. */
+  intelligence?: Intelligence | null;
 }) {
   const id = useId();
   const requests = useMemo(
     () => evidenceRequests(plan, rows, master),
     [plan, rows, master],
   );
-  const [view, setView] = useState<View>("list");
+  // The workspace opens on the evidence (the product owner's reference, 30 October
+  // 2026); a link to one request opens that request's list.
+  const [view, setView] = useState<View>(
+    focusRequest !== null || intelligence === null ? "list" : "evidence",
+  );
   // Policies on file the agent proposes for the items (28 October 2026).
   const policies = usePolicyEvidence(ids);
   const [filter, setFilter] = useState<RequestFilter>(NO_FILTER);
@@ -210,6 +222,9 @@ export function EvidenceRequests({
   const coverage = attributeCoverage(requests, master);
   const uncovered = coverage.filter((a) => !a.covered).length;
   const tabs: Array<[View, string, ReactNode]> = [
+    ...(intelligence !== null
+      ? [["evidence", "Evidence", null] as [View, string, ReactNode]]
+      : []),
     ["list", "Evidence list", null],
     [
       "groups",
@@ -308,6 +323,26 @@ export function EvidenceRequests({
         role="tabpanel"
         aria-labelledby={`${id}-tab-${view}`}
       >
+        {view === "evidence" && intelligence !== null ? (
+          <EvidenceIntelligence
+            ids={ids}
+            plan={plan}
+            register={intelligence.register}
+            mapping={intelligence.mapping}
+            attributes={intelligence.attributes}
+            controlRef={controlRef}
+            controlTitle={intelligence.controlTitle}
+            canAct={canAct}
+            held={files}
+            applications={applications}
+            system={system}
+            policies={policies.evidence}
+            onPolicyDecided={policies.reload}
+            askHref={intelligence.askHref}
+            focusFile={intelligence.focusFile}
+            findings={intelligence.findings}
+          />
+        ) : null}
         {view === "list" ? (
           <div className={`er-layout${open !== null ? " has-panel" : ""}`}>
             <div className="er-main" ref={main}>

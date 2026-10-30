@@ -142,6 +142,18 @@ class ItemCoverage(BaseModel):
     note: str = Field(default="", max_length=300)
 
 
+class FollowUp(BaseModel):
+    """The reader's proposal for one gap: what it observed, the question to ask the control
+    owner, what would answer it, and the passage of the file it rests on (verified against
+    the stored text before it becomes a citation; evidence_findings.py)."""
+
+    gap_index: int = Field(ge=0, lt=6)
+    observation: str = Field(default="", max_length=300)
+    question: str = Field(default="", max_length=300)
+    expected: str = Field(default="", max_length=160)
+    quote: str = Field(default="", max_length=300)
+
+
 class Classification(BaseModel):
     kind: EvidenceKind
     confidence: Confidence
@@ -149,6 +161,7 @@ class Classification(BaseModel):
     reason: str = Field(default="", max_length=400)
     items: list[ItemCoverage] = Field(default_factory=list, max_length=MAX_ITEMS)
     gaps: list[str] = Field(default_factory=list, max_length=6)
+    follow_ups: list[FollowUp] = Field(default_factory=list, max_length=6)
     period: str = Field(default="", max_length=160)
     # Which of the control's applications the file shows: its exact name, "ALL" when it
     # applies to all of them (such as a policy), or "" when it cannot be told.
@@ -190,6 +203,29 @@ CLASSIFY_SCHEMA: dict[str, Any] = {
             "items": {"type": "string", "maxLength": 300},
             "description": "What a person should follow up with the control owner.",
         },
+        "follow_ups": {
+            "type": "array",
+            "maxItems": 6,
+            "description": "For each gap, by its index: the follow-up to propose.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "gap_index": {"type": "integer"},
+                    "observation": _text(300, "What the file shows, or does not, in one sentence."),
+                    "question": _text(
+                        300, "The question for the control owner, ready to send, specific."
+                    ),
+                    "expected": _text(160, "The document or answer that would settle it."),
+                    "quote": _text(
+                        300,
+                        "The exact words of the file the observation rests on, copied; "
+                        "empty when the gap is something the file does not say.",
+                    ),
+                },
+                "required": ["gap_index", "question"],
+                "additionalProperties": False,
+            },
+        },
         "period": _text(160, "The period or date range the file covers, if it shows one."),
         "application": _text(
             200,
@@ -216,6 +252,10 @@ proof that a report is complete); NOT_COVERED otherwise.
 - List at most six gaps a person should raise with the control owner, most important \
 first. Check the requested fields, the period, and, for reports, the parameters and \
 completeness. Be specific.
+- For each gap, propose the follow-up (follow_ups, by the gap's index): what you observed \
+in one sentence, the question to the control owner ready to send, what would settle it, \
+and the exact words of the file the observation rests on, copied as they are (leave the \
+quote empty when the gap is something the file does not say). Never state a page number.
 - Say what period the file covers when it shows one.
 - Say which of the control's systems the file shows, by its exact name from the list. \
 Use ALL for a document that applies to all of them, such as a policy. Leave it empty when \
@@ -446,6 +486,18 @@ def check_classification(output: dict[str, Any], context: ClassifyContext) -> Cl
         reason=_clean(answer.reason, 400),
         items=items,
         gaps=[gap for gap in (_clean(gap, 300) for gap in answer.gaps) if gap][:6],
+        follow_ups=[
+            FollowUp(
+                gap_index=item.gap_index,
+                observation=_clean(item.observation, 300),
+                question=_clean(item.question, 300),
+                expected=_clean(item.expected, 160),
+                # The quote is matched against the file's text later; only cleaned here.
+                quote=_clean(item.quote, 300),
+            )
+            for item in answer.follow_ups
+            if item.gap_index < len(answer.gaps) and _clean(item.question, 300)
+        ][:6],
         period=_clean(answer.period, 160),
         application=_application(answer.application, context),
     )

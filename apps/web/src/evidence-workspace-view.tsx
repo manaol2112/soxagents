@@ -4,6 +4,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import type { ActivityItem } from "./control-workspace-model";
 import { FileChanges } from "./evidence-change";
 import { RequestUpload } from "./evidence-intake";
+import type { Intelligence } from "./evidence-intelligence-view";
 import type { RequirementFile } from "./evidence-plan-model";
 import {
   type EvidencePlan,
@@ -65,9 +66,12 @@ export function EvidenceWorkspace({
   applications = [],
   system = null,
   requestList,
+  intelligence = null,
 }: {
   ids: Ids;
   plan: EvidencePlan | null;
+  /** The evidence workspace's records (docs/evidence-intelligence.md). */
+  intelligence?: Intelligence | null;
   /** The test plan's codes and links, the control's activity, and its reference, for the
    * Request step's list of requests; without it the evidence shows by phase. */
   requestList?: {
@@ -252,6 +256,7 @@ export function EvidenceWorkspace({
           sentRequests={requests.all}
           controlRef={requestList.controlRef}
           focusRequest={focus.request}
+          intelligence={intelligence}
         />
         <section className="ew-card" aria-label="Files and planning basis">
           {filesRow}

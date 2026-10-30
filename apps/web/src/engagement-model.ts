@@ -1,6 +1,7 @@
 import type { EvidenceAnalysis, EvidenceReview } from "./analysis-model.ts";
 import type { ActivityItem } from "./control-workspace-model.ts";
 import type { ChangeNotice } from "./evidence-change-model.ts";
+import type { EvidenceFinding } from "./evidence-findings-model.ts";
 import type { EvidenceMappingRun } from "./evidence-mapping-model.ts";
 import type { RegisterApplication, RegisterFile } from "./evidence-model.ts";
 import type { ExportListing } from "./exports-model.ts";
@@ -652,6 +653,8 @@ export type EngagementState = {
   phaseProgress?: PhaseProgress | null;
   /** The open control's evidence-to-attribute mapping (M3b); null when none or not loaded. */
   evidenceMapping?: EvidenceMappingRun | null;
+  /** The open control's evidence findings (increment 2); null when not loaded. */
+  evidenceFindings?: EvidenceFinding[] | null;
   /** The engagement's journey and what waits on the team (next_steps.py), for Home. */
   nextSteps?: NextSteps | null;
   notice: EngagementNotice | null;

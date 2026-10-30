@@ -22,6 +22,7 @@ import "./process-flow.css";
 import "./procedure-board.css";
 import "./trial.css";
 import "./demo.css";
+import "./evidence-intelligence.css";
 // Last: the glass layer sits over the modules' own surfaces.
 import "./glass.css";
 

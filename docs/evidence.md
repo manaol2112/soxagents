@@ -206,3 +206,32 @@ says when a run is stale (a file replaced, withdrawn or added; the attributes ch
 plan approved again). Without a model the rules name the candidates and a person maps.
 The model sees the files as untrusted data inside the evidence block; an instruction in a
 file is content to report, never followed ([milestone-3-plan.md §16](milestone-3-plan.md)).
+
+## Evidence findings
+
+Increment 2 of the Evidence Intelligence Workspace (`evidence_findings.py`, migration
+0137; [evidence-intelligence.md](evidence-intelligence.md)). When a reading lands, the
+reader's gaps become findings (with the question the reader proposed for each and the
+passage it rests on, kept only when the quote is in the stored text), as do the requested
+items the file covers in part or not at all, and the deterministic checks on the read
+text: placeholder text located to its line, a policy or design document whose text
+states no version, approval or effective date, and dates outside an interim or
+roll-forward item's window. When a mapping run completes, what an attribute still lacks,
+the conflicts between passages and the concerns become findings too. A finding is
+recorded once per content (a fingerprint), pinned to the plan revision and the file's
+hash, and marked stale when the plan is approved again, the file is replaced or
+withdrawn, or a later reading no longer finds it; a mapping finding names the approved
+attribute by its own identifier and code; findings are never deleted and their history
+(`evidence_finding_events`) is append-only.
+
+A person accepts, edits the question, dismisses, resolves, accepts a clarification, asks
+for more, marks not applicable (with a reason), escalates or reopens
+(`POST …/controls/{id}/evidence-findings/{finding}/decide`, project update rights, a
+person only). The accepted findings go to the control owner as one message on the
+request (`POST …/controls/{id}/evidence-findings/follow-up`), composed from their
+questions, reviewed and confirmed by the person; links and requests for credentials are
+refused, the owner is emailed a fresh link, and the send is audited
+(`evidence.follow_up_sent`). The owner's message, portal answers or submission on the
+request, or a later file read on it, attach to the open findings and propose ANSWERED; a
+person decides what it resolves. An agent never sends a follow-up and never closes a
+finding.

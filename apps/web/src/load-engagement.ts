@@ -14,6 +14,7 @@ import {
   QUEUES,
 } from "./engagement-model";
 import { parseChangeNotice } from "./evidence-change-model";
+import { parseFindings } from "./evidence-findings-model";
 import { parseEvidenceMapping } from "./evidence-mapping-model";
 import { parseRegister } from "./evidence-model";
 import { parsePlan as parseEvidencePlan } from "./evidence-plan-model";
@@ -159,6 +160,7 @@ export async function loadEngagement(
     masterPlan,
     phaseProgress,
     evidenceMapping,
+    evidenceFindings,
     exportsListed,
   ] = await Promise.all([
     wanted.dashboard || wanted.agentWork
@@ -219,6 +221,10 @@ export async function loadEngagement(
     // The Test step's evidence mapping (M3b): the latest run, read only.
     open
       ? apiGet(`${base}/controls/${query.control}/evidence-mapping`, session)
+      : null,
+    // The evidence workspace's findings (docs/evidence-intelligence.md, increment 2).
+    open
+      ? apiGet(`${base}/controls/${query.control}/evidence-findings`, session)
       : null,
     wanted.exports ? apiGet(`${base}/exports`, session) : null,
   ]);
@@ -302,6 +308,10 @@ export async function loadEngagement(
       ok(evidenceMapping) === undefined
         ? null
         : parseEvidenceMapping(ok(evidenceMapping)),
+    evidenceFindings:
+      ok(evidenceFindings) === undefined
+        ? null
+        : parseFindings(ok(evidenceFindings)),
     automation:
       ok(automation) === undefined ? null : parseAutomation(ok(automation)),
     work: ok(work) === undefined ? null : parseQueue(ok(work)),

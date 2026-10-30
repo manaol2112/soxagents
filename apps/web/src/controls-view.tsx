@@ -2077,6 +2077,29 @@ function ControlRecord({
                   view: engagement.filters.evidenceView ?? null,
                   request: focusRow?.id ?? null,
                 }}
+                // The evidence workspace (docs/evidence-intelligence.md): the control's
+                // file register and readings, the latest mapping, and the attributes'
+                // codes in the mapping's order.
+                intelligence={{
+                  register: engagement.files,
+                  mapping:
+                    engagement.evidenceMapping != null &&
+                    engagement.evidenceMapping.controlId === control.id
+                      ? engagement.evidenceMapping
+                      : null,
+                  attributes:
+                    engagement.masterPlan != null &&
+                    engagement.masterPlan.controlId === control.id
+                      ? engagement.masterPlan.attributes.map((item) => ({
+                          code: item.code,
+                          text: item.text,
+                        }))
+                      : [],
+                  controlTitle: control.title,
+                  askHref,
+                  focusFile: null,
+                  findings: engagement.evidenceFindings ?? null,
+                }}
                 files={(engagement.files?.files ?? []).map((file) => ({
                   id: file.id,
                   fileName: file.fileName,

@@ -384,6 +384,15 @@ def save_answers(
             ),
         )  # fmt: skip
         saved += 1
+    if saved:
+        # The answers are attached to the findings a person sent or accepted on the
+        # request (docs/evidence-intelligence.md, increment 2); a person decides.
+        from ai_workforce_api.evidence_findings import note_owner_answers
+
+        note_owner_answers(
+            cursor, organization_id, project_id, request_id,
+            [item.key for item in body.answers if _clean_text(item.answer) != ""],
+        )  # fmt: skip
     return saved
 
 
@@ -411,7 +420,13 @@ def post_owner_message(
         (organization_id, project_id, request_id, recipient, text),
     ).fetchone()
     assert row is not None
-    return UUID(str(row[0]))
+    message_id = UUID(str(row[0]))
+    # The reply is attached to the findings a person sent or accepted on the request
+    # (docs/evidence-intelligence.md, increment 2); a person decides what it resolves.
+    from ai_workforce_api.evidence_findings import note_owner_reply
+
+    note_owner_reply(cursor, organization_id, project_id, request_id, message_id)
+    return message_id
 
 
 def submit(
@@ -436,6 +451,9 @@ def submit(
         "WHERE id = %s",
         (note, request_id),
     )
+    from ai_workforce_api.evidence_findings import note_owner_submission
+
+    note_owner_submission(cursor, request_id)
     return missing
 
 

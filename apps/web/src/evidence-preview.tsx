@@ -55,6 +55,39 @@ export function PreviewButton(props: Props) {
   );
 }
 
+/** The document itself, inline in a page (the evidence workspace's centre panel): the
+ * same viewers as the dialog, with page and zoom tools for a PDF. */
+export function EvidenceViewer({
+  organizationId,
+  projectId,
+  file,
+  citations = [],
+  focused = null,
+}: {
+  organizationId: string;
+  projectId: string;
+  file: PreviewFile;
+  citations?: EvidenceCitation[];
+  focused?: EvidenceCitation | null;
+}) {
+  const query = fileQuery(organizationId, projectId);
+  const mine = citations.filter((item) => item.fileId === file.id);
+  return (
+    <div className="preview-stage is-inline">
+      <Viewer
+        key={file.id}
+        file={file}
+        query={query}
+        citations={mine}
+        focused={
+          focused !== null && focused.fileId === file.id ? focused : null
+        }
+        tools
+      />
+    </div>
+  );
+}
+
 /** The evidence preview, for a caller that decides when it is open. */
 export function EvidencePreview(
   props: Omit<Props, "label" | "className"> & {
@@ -267,11 +300,14 @@ function Viewer({
   query,
   citations,
   focused,
+  tools = false,
 }: {
   file: PreviewFile;
   query: string;
   citations: EvidenceCitation[];
   focused: EvidenceCitation | null;
+  /** Page and zoom tools on every PDF, not only one with several pages. */
+  tools?: boolean;
 }) {
   const kind = previewKind(file.fileName);
   if (kind === "pdf") {
@@ -280,6 +316,7 @@ function Viewer({
         url={`/workspace/evidence-files/${file.id}/preview?${query}`}
         citations={citations}
         focused={focused}
+        tools={tools}
       />
     );
   }
@@ -384,15 +421,23 @@ type PdfState =
   | { status: "failed" }
   | { status: "ready"; pages: number };
 
+const ZOOMS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2, 2.5] as const;
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 2.5;
+
 function PdfViewer({
   url,
   citations,
   focused,
+  tools = false,
 }: {
   url: string;
   citations: EvidenceCitation[];
   focused: EvidenceCitation | null;
+  tools?: boolean;
 }) {
+  // Relative to the width that fits the stage: 1 fits, 2 is twice that.
+  const [zoom, setZoom] = useState(1);
   const canvas = useRef<HTMLCanvasElement>(null);
   const holder = useRef<HTMLDivElement>(null);
   // biome-ignore lint/suspicious/noExplicitAny: pdf.js types load with the library.
@@ -461,7 +506,7 @@ function PdfViewer({
     );
     const width = holder.current?.clientWidth ?? 800;
     const base = pdfPage.getViewport({ scale: 1 });
-    const scale = Math.min(2.5, Math.max(0.5, (width - 8) / base.width));
+    const scale = Math.min(5, Math.max(0.3, ((width - 8) / base.width) * zoom));
     const viewport = pdfPage.getViewport({ scale });
     const ratio = window.devicePixelRatio || 1;
     target.width = Math.floor(viewport.width * ratio);
@@ -520,7 +565,7 @@ function PdfViewer({
       }
     }
     setBoxes(found);
-  }, [page, quotes, state]);
+  }, [page, quotes, state, zoom]);
 
   useEffect(() => {
     void render();
@@ -533,29 +578,85 @@ function PdfViewer({
       </p>
     );
   }
+  const step = (direction: 1 | -1) => {
+    const at = ZOOMS.findIndex((value) => value >= zoom - 0.001);
+    const next = ZOOMS[Math.min(ZOOMS.length - 1, Math.max(0, at + direction))];
+    setZoom(next ?? 1);
+  };
   return (
-    <div className="pdf-stage" ref={holder}>
-      {state.status === "ready" && state.pages > 1 ? (
+    <div className={`pdf-stage${tools ? " has-tools" : ""}`} ref={holder}>
+      {state.status === "ready" && (state.pages > 1 || tools) ? (
         <div className="pdf-bar">
           <button
             type="button"
             className="btn-ghost btn-sm"
             disabled={page <= 1}
+            aria-label="Previous page"
             onClick={() => setPage(page - 1)}
           >
-            Previous page
+            {tools ? <UiIcon name="chevron" size={14} /> : "Previous page"}
           </button>
           <span className="num">
-            Page {page} of {state.pages}
+            {tools ? (
+              <>
+                <input
+                  type="number"
+                  min={1}
+                  max={state.pages}
+                  value={page}
+                  aria-label="Page"
+                  onChange={(event) => {
+                    const wanted = Number(event.target.value);
+                    if (Number.isInteger(wanted)) {
+                      setPage(Math.min(state.pages, Math.max(1, wanted)));
+                    }
+                  }}
+                />{" "}
+                / {state.pages}
+              </>
+            ) : (
+              `Page ${page} of ${state.pages}`
+            )}
           </span>
           <button
             type="button"
             className="btn-ghost btn-sm"
             disabled={page >= state.pages}
+            aria-label="Next page"
             onClick={() => setPage(page + 1)}
           >
-            Next page
+            {tools ? <UiIcon name="chevron" size={14} /> : "Next page"}
           </button>
+          {tools ? (
+            <span className="pdf-zoom">
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                aria-label="Zoom out"
+                disabled={zoom <= MIN_ZOOM}
+                onClick={() => step(-1)}
+              >
+                <UiIcon name="minus" size={14} />
+              </button>
+              <button
+                type="button"
+                className="pdf-zoom-value"
+                title="Fit the width"
+                onClick={() => setZoom(1)}
+              >
+                {Math.round(zoom * 100)}%
+              </button>
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                aria-label="Zoom in"
+                disabled={zoom >= MAX_ZOOM}
+                onClick={() => step(1)}
+              >
+                <UiIcon name="plus" size={14} />
+              </button>
+            </span>
+          ) : null}
         </div>
       ) : null}
       {state.status === "loading" ? (

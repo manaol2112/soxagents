@@ -63,6 +63,7 @@ from ai_workforce_api.evidence_extraction import (
     with_ocr,
     without_ocr,
 )
+from ai_workforce_api.evidence_findings import derive_from_analysis, reassess_on_reading
 from ai_workforce_api.evidence_links import (
     RequestRef,
     control_request,
@@ -405,6 +406,10 @@ def run_analysis(
         ).fetchone()
         if saved is None:
             return "SKIPPED"
+        # The findings this reading gives, and the open findings it answers
+        # (docs/evidence-intelligence.md, increment 2).
+        derive_from_analysis(cursor, organization_id, project_id, analysis_id)
+        reassess_on_reading(cursor, organization_id, project_id, analysis_id)
         if filing is not None:
             filed = _save_filing(cursor, filing[0], decided, request)
             if filed is not None and request is not None:

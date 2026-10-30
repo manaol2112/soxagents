@@ -2034,6 +2034,14 @@ def approve(
             "AND needs_review",
             (plan_id,),
         )
+        # Open evidence findings pinned to an earlier revision are stale, never closed
+        # (docs/evidence-intelligence.md, increment 2).
+        from ai_workforce_api.evidence_findings import mark_stale_for_control
+
+        mark_stale_for_control(
+            cursor, control_id, revision,
+            f"The test plan was approved again (revision {revision}).",
+        )  # fmt: skip
         _audit(
             cursor, organization_id, project_id, actor, "evidence_plan.approved",
             "evidence_plan", plan_id,

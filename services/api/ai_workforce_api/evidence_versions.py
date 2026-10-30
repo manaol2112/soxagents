@@ -36,6 +36,7 @@ from ai_workforce_api.evidence_analysis import (
     queue_analysis,
     schedule_analyses,
 )
+from ai_workforce_api.evidence_findings import mark_stale_for_file
 from ai_workforce_api.evidence_intake import (
     IntakeState,
     RegisterBody,
@@ -398,6 +399,7 @@ def withdraw(
             """,
             (organization_id, project_id, file_id, reason, principal.id),
         )
+        mark_stale_for_file(cursor, file_id, "The file was withdrawn.", {})
         match = cursor.execute(
             "SELECT id FROM evidence_matches WHERE evidence_file_id = %s", (file_id,)
         ).fetchone()
@@ -594,6 +596,7 @@ def replace(
             """,
             (organization_id, project_id, file_id, reason, principal.id, new_id),
         )
+        mark_stale_for_file(cursor, file_id, "The file was replaced.", {"file_id": str(new_id)})
         runs = _off_testing(cursor, project_id, control_id, file_id)
         _audit(
             cursor, organization_id, project_id, principal.id, "evidence.uploaded", new_id,
