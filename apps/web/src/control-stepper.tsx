@@ -29,6 +29,11 @@ const PHASE_SHORT: Record<string, string> = {
  * and who that person is, everything outstanding with where it is resolved, and the
  * sign-offs on record. Every state comes from the API's journey; nothing is derived or
  * decided here, and no step is a gate: each opens on a click.
+ *
+ * Laid out as the product owner's reference of 30 October 2026: the steps as a line of
+ * marks, one banner for what needs a person with its action, and the agent's note and
+ * what is outstanding behind the banner's "more" control; the completion and phase
+ * details fold under the steps.
  */
 export function ControlStepper({
   journey,
@@ -64,7 +69,8 @@ export function ControlStepper({
   activityHref: string;
   /** The agent block for the open step (M1c). */
   agent: Says | null;
-  /** The trace rail: the chain of records, and each attribute's row (M1c). */
+  /** The trace rail: the chain of records, and each attribute's row (M1c). The Test
+   * step draws it in its workspace instead and passes null here. */
   trace: { nodes: TraceNode[]; rows: TraceRow[] } | null;
   /** The Plan step with the test plan open below (decided by the product owner): the
    * plan itself says what it needs and is edited in place, so the steps and phases stay
@@ -77,104 +83,130 @@ export function ControlStepper({
   planPending?: boolean;
 }) {
   const done = completion(journey);
+  const more = agent !== null || blockers.length > 0;
   return (
     <div className="cw-guide">
       <nav className="cw-stepper" aria-label="Control workflow">
         <ol>
-          {items.map((item, index) => (
-            <li
-              key={item.step}
-              className={`is-${item.status}${item.step === current ? " is-open" : ""}`}
-            >
-              <a
-                href={hrefs[item.step]}
-                aria-current={item.step === current ? "step" : undefined}
-                title={
-                  item.step === current
-                    ? `${item.label}: open now`
-                    : item.status === "working"
-                      ? `${item.label}: work in progress`
-                      : undefined
-                }
+          {items.map((item, index) => {
+            // The state word shows on the open step and on one with work still going;
+            // a done or upcoming step says it by its mark, and to a screen reader.
+            const spoken =
+              item.step === current || item.status === "working"
+                ? ""
+                : " sr-only";
+            return (
+              <li
+                key={item.step}
+                className={`is-${item.status}${item.step === current ? " is-open" : ""}`}
               >
-                <span className="cw-step-mark" aria-hidden="true">
-                  {item.status === "done" ? (
-                    <UiIcon name="check" size={12} />
-                  ) : (
-                    index + 1
-                  )}
-                </span>
-                <span className="cw-step-copy">
-                  <span className="cw-step-name">
-                    <strong>{item.label}</strong>
-                    <span className={`cw-step-state is-${item.status}`}>
-                      {stepState(item, planPending)}
-                    </span>
+                <a
+                  href={hrefs[item.step]}
+                  aria-current={item.step === current ? "step" : undefined}
+                  title={
+                    item.step === current
+                      ? `${item.label}: open now`
+                      : item.status === "working"
+                        ? `${item.label}: work in progress`
+                        : undefined
+                  }
+                >
+                  <span className="cw-step-mark" aria-hidden="true">
+                    {item.status === "done" ? (
+                      <UiIcon name="check" size={13} />
+                    ) : (
+                      index + 1
+                    )}
                   </span>
-                  <small>{STEP_DETAIL[item.step]}</small>
-                  {item.note !== "" ? (
-                    <span className="sr-only">: {item.note}</span>
-                  ) : null}
-                </span>
-              </a>
-            </li>
-          ))}
+                  <span className="cw-step-copy">
+                    <span className="cw-step-name">
+                      <span className="cw-step-no" aria-hidden="true">
+                        {index + 1}
+                      </span>
+                      <strong>{item.label}</strong>
+                      <span
+                        className={`cw-step-state is-${item.status}${spoken}`}
+                      >
+                        {stepState(item, planPending)}
+                      </span>
+                    </span>
+                    <small>{STEP_DETAIL[item.step]}</small>
+                    {item.note !== "" ? (
+                      <span className="sr-only">: {item.note}</span>
+                    ) : null}
+                  </span>
+                </a>
+              </li>
+            );
+          })}
         </ol>
         {simple ? null : (
-          <p className="cw-completion">
-            <span className={done.testing ? "is-done" : ""}>
-              <UiIcon name={done.testing ? "check" : "clock"} size={12} />{" "}
-              Testing
-              {done.testing ? " complete" : " open"}
-            </span>
-            <span className={done.review ? "is-done" : ""}>
-              <UiIcon name={done.review ? "check" : "clock"} size={12} /> Review
-              {done.review ? " complete" : " pending"}
-            </span>
-            <span className={done.final ? "is-done is-final" : ""}>
-              <UiIcon name={done.final ? "check" : "clock"} size={12} />
-              {done.final ? " Final conclusion" : " Not final"}
-            </span>
-            <a className="cw-classic" href={activityHref}>
-              Activity
-            </a>
-          </p>
+          <details className="cw-guide-more">
+            <summary>
+              Status details
+              <UiIcon name="chevron" size={13} />
+            </summary>
+            <p className="cw-completion">
+              <span className={done.testing ? "is-done" : ""}>
+                <UiIcon name={done.testing ? "check" : "clock"} size={12} />{" "}
+                Testing
+                {done.testing ? " complete" : " open"}
+              </span>
+              <span className={done.review ? "is-done" : ""}>
+                <UiIcon name={done.review ? "check" : "clock"} size={12} />{" "}
+                Review
+                {done.review ? " complete" : " pending"}
+              </span>
+              <span className={done.final ? "is-done is-final" : ""}>
+                <UiIcon name={done.final ? "check" : "clock"} size={12} />
+                {done.final ? " Final conclusion" : " Not final"}
+              </span>
+              <a className="cw-classic" href={activityHref}>
+                Activity
+              </a>
+            </p>
+            {phases.length > 0 ? (
+              <ol className="cw-phases" aria-label="Testing phases">
+                {phases.map((phase) => (
+                  <li
+                    key={phase.phase}
+                    className={`is-${phase.state.toLowerCase()}${phase.phase === journey?.stepPhase ? " is-open" : ""}`}
+                  >
+                    <span className="cw-phase-name">
+                      {PHASE_SHORT[phase.phase] ?? phase.label}
+                    </span>
+                    <span className="cw-phase-state">
+                      {phase.stateLabel}
+                      {phase.releasedEarly ? " · released early" : ""}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            ) : null}
+          </details>
         )}
       </nav>
-      {phases.length > 0 && !simple ? (
-        <ol className="cw-phases" aria-label="Testing phases">
-          {phases.map((phase) => (
-            <li
-              key={phase.phase}
-              className={`is-${phase.state.toLowerCase()}${phase.phase === journey?.stepPhase ? " is-open" : ""}`}
-            >
-              <span className="cw-phase-name">
-                {PHASE_SHORT[phase.phase] ?? phase.label}
-              </span>
-              <span className="cw-phase-state">
-                {phase.stateLabel}
-                {phase.releasedEarly ? " · released early" : ""}
-              </span>
-            </li>
-          ))}
-        </ol>
-      ) : null}
       {simple || !summary ? null : (
         <section
           className={`cw-needs${needs.mine ? " is-mine" : ""}`}
           aria-labelledby="cw-needs-title"
         >
-          <p className="cw-needs-kicker" id="cw-needs-title">
-            {needs.mine
-              ? "Needs you"
-              : needs.waitsOn !== ""
-                ? `Waits on ${needs.waitsOn}`
-                : `Waits on ${needs.who.toLowerCase()}`}
-          </p>
-          <p className="cw-needs-title">{needs.title}</p>
-          {needs.reason !== "" ? (
-            <p className="cw-needs-reason">{needs.reason}</p>
-          ) : null}
+          <span className="cw-needs-icon" aria-hidden="true">
+            <UiIcon name={needs.mine ? "file" : "clock"} size={22} />
+          </span>
+          <div className="cw-needs-copy">
+            <p className="cw-needs-kicker" id="cw-needs-title">
+              {needs.mine
+                ? "Needs you"
+                : needs.waitsOn !== ""
+                  ? `Waits on ${needs.waitsOn}`
+                  : `Waits on ${needs.who.toLowerCase()}`}
+            </p>
+            <p className="cw-needs-title">{needs.title}</p>
+            {needs.reason !== "" ? (
+              <p className="cw-needs-reason">{needs.reason}</p>
+            ) : null}
+          </div>
           {needs.mine && actionHref !== null ? (
             <div className="cw-needs-actions">
               <a className="btn" href={actionHref}>
@@ -183,27 +215,44 @@ export function ControlStepper({
               </a>
             </div>
           ) : null}
+          {more ? (
+            // The agent's note on this step and what is outstanding, on request: the
+            // banner keeps to the one thing that needs a person.
+            <details className="cw-needs-more">
+              <summary
+                aria-label="The agent's note and what is outstanding"
+                title="The agent's note and what is outstanding"
+              >
+                <UiIcon name="more" size={16} />
+              </summary>
+              <div className="cw-needs-drawer">
+                {agent !== null ? (
+                  <AgentSays says={agent} ids={ids} back={hrefs[current]} />
+                ) : null}
+                {blockers.length > 0 ? (
+                  <section
+                    className="cw-blockers"
+                    aria-labelledby="cw-blockers-title"
+                  >
+                    <h2 id="cw-blockers-title">Outstanding</h2>
+                    <ul>
+                      {blockers.map((item) => (
+                        <li
+                          key={item.text}
+                          className={item.holdsConclusion ? "is-holding" : ""}
+                        >
+                          <span>{item.text}</span>
+                          <a href={hrefs[item.step]}>{STEP_WORDS[item.step]}</a>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                ) : null}
+              </div>
+            </details>
+          ) : null}
         </section>
       )}
-      {agent !== null && !simple && summary ? (
-        <AgentSays says={agent} ids={ids} back={hrefs[current]} />
-      ) : null}
-      {blockers.length > 0 && !simple && summary ? (
-        <section className="cw-blockers" aria-labelledby="cw-blockers-title">
-          <h2 id="cw-blockers-title">Outstanding</h2>
-          <ul>
-            {blockers.map((item) => (
-              <li
-                key={item.text}
-                className={item.holdsConclusion ? "is-holding" : ""}
-              >
-                <span>{item.text}</span>
-                <a href={hrefs[item.step]}>{STEP_WORDS[item.step]}</a>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
       {receipts.length > 0 ? (
         <section className="cw-receipts" aria-labelledby="cw-receipts-title">
           <h2 id="cw-receipts-title">On record</h2>

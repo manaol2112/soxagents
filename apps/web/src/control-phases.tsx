@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 import { stepAnchor } from "./assistant-model";
 import type { PlanTask } from "./engagement-model";
-import { UiIcon } from "./ui-icon";
+import { type IconName, UiIcon } from "./ui-icon";
 import { StatusPill } from "./workspace-view";
 
 export type PhaseState = "todo" | "active" | "done" | "issue";
@@ -15,9 +15,10 @@ const PHASE_WORD: Record<PhaseState, string> = {
 };
 
 /**
- * One phase of a control's audit (design, interim testing, roll-forward, review): a
- * header that says where it stands, then the phase's steps in the order an auditor works
- * them. What the phase tests is in the test plan; the agent's work is under AI activity.
+ * One phase of a control's audit (design, interim testing, roll-forward, review): a card
+ * whose header says where it stands, then the phase's steps in the order an auditor
+ * works them. A finished phase folds to its header and opens on request; the others
+ * open. What the phase tests is in the test plan; the agent's work is under AI activity.
  */
 export function PhasePanel({
   number,
@@ -39,8 +40,12 @@ export function PhasePanel({
   children: ReactNode;
 }) {
   return (
-    <section className={`cx-phase is-${state}`} aria-label={title}>
-      <header className="cx-phase-head">
+    <details
+      className={`cx-phase is-${state}`}
+      aria-label={title}
+      open={state !== "done"}
+    >
+      <summary className="cx-phase-head">
         <span className="cx-phase-no" aria-hidden="true">
           {state === "done" ? <UiIcon name="check" size={14} /> : number}
         </span>
@@ -49,7 +54,7 @@ export function PhasePanel({
           {summary !== undefined && summary !== "" ? <p>{summary}</p> : null}
         </div>
         <div className="cx-phase-side">
-          <span className={`cx-status ${PHASE_TONE[state]}`}>
+          <span className={`cx-phase-state is-${state}`}>
             {PHASE_WORD[state]}
           </span>
           {task !== undefined ? (
@@ -61,18 +66,14 @@ export function PhasePanel({
           ) : null}
           {aside}
         </div>
-      </header>
+        <span className="cx-phase-toggle" aria-hidden="true">
+          <UiIcon name="chevron" size={15} />
+        </span>
+      </summary>
       <div className="cx-phase-body">{children}</div>
-    </section>
+    </details>
   );
 }
-
-const PHASE_TONE: Record<PhaseState, string> = {
-  todo: "",
-  active: "tone-info",
-  done: "tone-success",
-  issue: "tone-danger",
-};
 
 /** A numbered step inside a phase: where it stands and the controls for it. A finished
  * step, and one that cannot start yet, fold to one line; either opens on request. */
@@ -80,16 +81,20 @@ export function PhaseStep({
   number,
   title,
   hint,
+  icon,
   state,
   note,
   waits,
   keepOpen = false,
+  plain = false,
   children,
 }: {
   number: number;
   title: string;
   /** What this step is for, in one line, when the title does not say it. */
   hint?: string;
+  /** The step's mark in place of its number. */
+  icon?: IconName;
   state: PhaseState;
   /** A short status note: "3 of 7 received", "Signed off by Dana". */
   note?: string | undefined;
@@ -98,13 +103,33 @@ export function PhaseStep({
   /** A finished step folds to its heading; this keeps it open, as when it shows the
    * result of something just done in it. */
   keepOpen?: boolean;
+  /** Only the step's content, which carries its own heading line (the workpaper row);
+   * the anchor stays so links to the step still land on it. */
+  plain?: boolean;
   children: ReactNode;
 }) {
+  if (plain) {
+    return (
+      <section
+        className={`cx-step is-plain is-${state}`}
+        aria-label={title}
+        id={stepAnchor(title)}
+      >
+        {children}
+      </section>
+    );
+  }
   const head = (
     <>
-      <span className="cx-step-no" aria-hidden="true">
-        {state === "done" ? <UiIcon name="check" size={12} /> : number}
-      </span>
+      {icon !== undefined ? (
+        <span className={`cx-step-icon is-${state}`} aria-hidden="true">
+          <UiIcon name={icon} size={16} />
+        </span>
+      ) : (
+        <span className="cx-step-no" aria-hidden="true">
+          {state === "done" ? <UiIcon name="check" size={12} /> : number}
+        </span>
+      )}
       <div>
         <h3>{title}</h3>
         {hint !== undefined && hint !== "" ? <p>{hint}</p> : null}

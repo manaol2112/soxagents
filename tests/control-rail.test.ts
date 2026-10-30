@@ -12,12 +12,17 @@ import {
   governingDocuments,
   informationSources,
   lowestConfidence,
+  nextBestActions,
   openSection,
   parseChallenges,
   relatedControls,
   SECTION_MENU,
   stepPosition,
 } from "../apps/web/src/control-rail-model.ts";
+import type {
+  AttentionItem,
+  NextAction,
+} from "../apps/web/src/control-workspace-model.ts";
 
 // The control workspace's side panels (decided by the product owner, 25 October 2026):
 // the section menu, the AI assistant's suggestions from the records, and the context.
@@ -345,9 +350,95 @@ describe("one place for each part of the Plan step", () => {
     assert.ok(
       !view.includes("Nothing goes to the owner until a person approves it."),
     );
-    // Needs you, the agent, outstanding and the trace each give way; the sign-offs stay.
-    assert.equal((stepper.match(/!simple && summary/g) ?? []).length, 3);
+    // Needs you (with the agent's note and the outstanding items behind its "more"
+    // control since 30 October 2026) and the trace each give way; the sign-offs stay.
     assert.ok(stepper.includes("{simple || !summary ? null : ("));
+    assert.ok(stepper.includes("{trace !== null && !simple && summary ? ("));
+    assert.ok(stepper.includes('<details className="cw-needs-more">'));
     assert.ok(stepper.includes("{receipts.length > 0 ? ("));
+  });
+});
+
+// The Test step's next best actions (product owner's reference, 30 October 2026): the
+// viewer's next actions as the assistant lists them, each opening where it is done.
+describe("nextBestActions", () => {
+  const item = (over: Partial<AttentionItem>): AttentionItem => ({
+    key: "k",
+    title: "Do the thing",
+    detail: "",
+    owner: "You",
+    kind: "action",
+    tab: "testing",
+    anchor: "",
+    quick: null,
+    ...over,
+  });
+  const hrefs = { testing: "/?tab=testing", evidence: "/?tab=evidence" };
+
+  it("lists the primary first, then the viewer's others, then what waits on others", () => {
+    const next: NextAction = {
+      primary: item({
+        key: "sheet",
+        title: "Record the results",
+        anchor: "sheet",
+      }),
+      more: [
+        item({
+          key: "files",
+          title: "Read 2 files",
+          detail: "Two files arrived.",
+          tab: "evidence",
+        }),
+      ],
+      waiting: [
+        item({
+          key: "approve",
+          title: "Approve the samples",
+          owner: "Reviewer",
+          kind: "waiting",
+        }),
+      ],
+      calm: "clear",
+    };
+    const actions = nextBestActions(next, hrefs);
+    assert.deepEqual(
+      actions.map((action) => [action.key, action.href, action.waiting]),
+      [
+        ["sheet", "/?tab=testing#sheet", false],
+        ["files", "/?tab=evidence#cw-work", false],
+        ["approve", "/?tab=testing#cw-work", true],
+      ],
+    );
+    assert.equal(actions[0]?.icon, "table");
+    assert.equal(actions[1]?.icon, "inbox");
+    assert.equal(actions[1]?.detail, "Two files arrived.");
+    // Who it waits on is said in the line; a page outside the record keeps its link.
+    assert.equal(actions[2]?.detail, "Waits on the reviewer.");
+    const queue = nextBestActions(
+      { ...next, primary: item({ key: "q", href: "/approvals?x=1" }) },
+      hrefs,
+    );
+    assert.equal(queue[0]?.href, "/approvals?x=1");
+  });
+
+  it("keeps one entry per key and no more than the limit", () => {
+    const next: NextAction = {
+      primary: item({ key: "a" }),
+      more: [item({ key: "a" }), item({ key: "b" }), item({ key: "c" })],
+      waiting: [item({ key: "d", kind: "waiting", owner: "Preparer" })],
+      calm: "clear",
+    };
+    assert.deepEqual(
+      nextBestActions(next, hrefs).map((action) => action.key),
+      ["a", "b", "c", "d"],
+    );
+    assert.deepEqual(
+      nextBestActions(next, hrefs, 2).map((action) => action.key),
+      ["a", "b"],
+    );
+    assert.deepEqual(
+      nextBestActions({ ...next, primary: null, more: [], waiting: [] }, hrefs),
+      [],
+    );
   });
 });

@@ -43,6 +43,7 @@ import {
   GOVERNING_KINDS,
   governingDocuments,
   lowestConfidence,
+  nextBestActions,
   openSection,
   type RecordSection,
   relatedControls,
@@ -131,6 +132,7 @@ import {
   requestStage,
 } from "./evidence-flow";
 import { RequestUpload } from "./evidence-intake";
+import { mappingSummary } from "./evidence-mapping-model";
 import { EvidenceMappingPanel } from "./evidence-mapping-view";
 import {
   agentStatus,
@@ -187,6 +189,7 @@ import { TestBasisCard } from "./test-basis-view";
 import { testFor } from "./testing-model";
 import { TestPlanCard } from "./testing-view";
 import { type TraceRound, traceOf, traceRows } from "./trace-model";
+import { TraceRail } from "./trace-rail";
 import { UiIcon } from "./ui-icon";
 import { canDecide, canRequestEvidence } from "./workflow-model";
 import { WorkpapersTab } from "./workpaper-view";
@@ -1745,6 +1748,18 @@ function ControlRecord({
       target: { anchor: "cw-prior-year" },
     },
   ];
+  // On the Test step, the assistant's next best actions are the viewer's next actions
+  // (nextActionOf), each opening where a person does it.
+  const testActions: AssistantAction[] = nextBestActions(
+    nextAction,
+    tabHrefs,
+  ).map((action) => ({
+    key: action.key,
+    label: action.label,
+    detail: action.detail,
+    icon: action.icon,
+    target: { href: action.href },
+  }));
   const actionItems: RowMenuItem[] = [
     {
       label: "Open the test plan in Testing",
@@ -1906,7 +1921,8 @@ function ControlRecord({
             receipts={engagement.signoffs ?? []}
             activityHref="#activity"
             agent={agent}
-            trace={trace}
+            // The Test step draws the trace in its workspace, under its heading.
+            trace={step === "TEST" ? null : trace}
             simple={step === "PLAN" && planHere}
             // The Request step's list says what waits and where each request stands, so
             // the summary blocks are not repeated above it (product owner, 27 October 2026).
@@ -2126,7 +2142,26 @@ function ControlRecord({
               />
             ) : null}
             {tab === "testing" ? (
-              <>
+              // The testing workspace (product owner's reference, 30 October 2026): the
+              // heading, the trace of records, then the phases as cards whose rows
+              // fold to a line until they need a person.
+              <section className="cw-work" aria-labelledby="cw-work-title">
+                <header className="cw-work-head">
+                  <div>
+                    <h2 id="cw-work-title">Testing workspace</h2>
+                    <p>
+                      Complete the testing activities for this control using the
+                      steps below.
+                    </p>
+                  </div>
+                  <a className="btn-secondary btn-sm" href={stepHrefs.PLAN}>
+                    <UiIcon name="file" size={13} />
+                    View test plan
+                  </a>
+                </header>
+                {trace !== null ? (
+                  <TraceRail nodes={trace.nodes} rows={trace.rows} />
+                ) : null}
                 {pendingImpact > 0 ? (
                   <p
                     className="banner banner-warning cw-impact-banner"
@@ -2146,6 +2181,7 @@ function ControlRecord({
                   <PhasePanel
                     number={1}
                     title="Design and walkthrough"
+                    summary="Understand the control design and perform a walkthrough."
                     state={lifeState("design")}
                   >
                     <PhaseStep
@@ -2154,6 +2190,7 @@ function ControlRecord({
                       state={paperState("DESIGN")}
                       waits="Starts when design evidence has been read"
                       keepOpen={keepWorkpaper}
+                      plain
                     >
                       <WorkpapersTab
                         compact
@@ -2166,12 +2203,15 @@ function ControlRecord({
                 <PhasePanel
                   number={2}
                   title="Interim testing"
+                  summary="Test control operating effectiveness for the interim period."
                   state={lifeState("interim")}
                 >
                   {test !== null || sheet?.method !== "TEST_OF_ONE" ? (
                     <PhaseStep
                       number={1}
                       title="Population and sample"
+                      hint="Define the population and sample for testing."
+                      icon="user"
                       state={
                         test === null
                           ? "todo"
@@ -2205,26 +2245,50 @@ function ControlRecord({
                       />
                     </PhaseStep>
                   ) : null}
-                  {engagement.evidenceMapping === undefined ? null : (
-                    <EvidenceMappingPanel
-                      run={
-                        engagement.evidenceMapping !== null &&
-                        engagement.evidenceMapping.controlId === control.id
-                          ? engagement.evidenceMapping
-                          : null
-                      }
-                      ids={{
-                        organizationId: ids.organizationId,
-                        projectId: ids.projectId,
-                        controlId: control.id,
-                      }}
-                      back={stepHrefs.TEST ?? ""}
-                      canMap={true}
-                    />
-                  )}
+                  {engagement.evidenceMapping === undefined
+                    ? null
+                    : (() => {
+                        const run =
+                          engagement.evidenceMapping !== null &&
+                          engagement.evidenceMapping.controlId === control.id
+                            ? engagement.evidenceMapping
+                            : null;
+                        return (
+                          <PhaseStep
+                            number={2}
+                            title="Evidence mapping"
+                            hint="Map evidence to the control attributes."
+                            icon="database"
+                            state={
+                              run === null
+                                ? "todo"
+                                : run.stale
+                                  ? "issue"
+                                  : "done"
+                            }
+                            note={
+                              run === null ? undefined : mappingSummary(run)
+                            }
+                            waits="Not mapped yet"
+                          >
+                            <EvidenceMappingPanel
+                              run={run}
+                              ids={{
+                                organizationId: ids.organizationId,
+                                projectId: ids.projectId,
+                                controlId: control.id,
+                              }}
+                              back={stepHrefs.TEST ?? ""}
+                              canMap={true}
+                            />
+                          </PhaseStep>
+                        );
+                      })()}
                   <PhaseStep
-                    number={2}
+                    number={3}
                     title="Test results and sign-off"
+                    hint="Record test results and obtain sign-off."
+                    icon="chart"
                     state={
                       control.sheetStatus === "SIGNED_OFF"
                         ? "done"
@@ -2256,8 +2320,10 @@ function ControlRecord({
                     />
                   </PhaseStep>
                   <PhaseStep
-                    number={3}
+                    number={4}
                     title="Interim workpaper"
+                    hint="Complete the interim testing workpaper."
+                    icon="file"
                     state={paperState("EFFECTIVENESS")}
                     waits="Starts when testing begins"
                     keepOpen={keepWorkpaper}
@@ -2275,11 +2341,14 @@ function ControlRecord({
                   <PhasePanel
                     number={3}
                     title="Roll-forward and retests"
+                    summary="Perform roll-forward procedures and any required retesting."
                     state={lifeState("rollforward")}
                   >
                     <PhaseStep
                       number={1}
                       title="Rounds"
+                      hint="Test any interim items signed off before year end."
+                      icon="retry"
                       state={
                         rounds.length === 0 ? "todo" : lifeState("rollforward")
                       }
@@ -2313,6 +2382,8 @@ function ControlRecord({
                     <PhaseStep
                       number={2}
                       title="Roll-forward workpaper"
+                      hint="Complete roll-forward testing for the first round."
+                      icon="file"
                       state={
                         rounds.length === 0 ? "todo" : lifeState("rollforward")
                       }
@@ -2328,7 +2399,7 @@ function ControlRecord({
                     </PhaseStep>
                   </PhasePanel>
                 ) : null}
-              </>
+              </section>
             ) : null}
             {tab === "findings" ? (
               <>
@@ -2523,7 +2594,9 @@ function ControlRecord({
                 (item) => item.status === "OPEN" && item.kind === "CONFLICT",
               )
               .map((item) => item.topic)}
-            nextActions={planHere ? planActions : []}
+            nextActions={
+              step === "TEST" ? testActions : planHere ? planActions : []
+            }
           />
           {engagement.masterPlan != null &&
           engagement.masterPlan.controlId === control.id ? (

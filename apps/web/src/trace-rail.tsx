@@ -28,7 +28,7 @@ export function TraceRail({
   return (
     <details className="cw-trace">
       <summary>
-        <span className="cw-trace-title">Trace</span>
+        <span className="cw-trace-title">Traceability</span>
         <ol className="cw-trace-chain" aria-label="Traceability chain">
           {nodes.map((node) => (
             <li

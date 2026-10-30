@@ -6,6 +6,7 @@
  */
 
 import type { Design } from "./control-context-model.ts";
+import type { AttentionItem, NextAction } from "./control-workspace-model.ts";
 
 /** Opens a section of the test plan in the control's Plan step (its tab's key). */
 export const PLAN_TAB_EVENT = "aw:plan-tab";
@@ -319,4 +320,69 @@ export function activitiesOn(
 ): number {
   const key = day.toISOString().slice(0, 10);
   return items.filter((item) => item.at.slice(0, 10) === key).length;
+}
+
+/** A next best action beside the control's Test step: what to do, why in a line, and
+ * where a person does it. */
+export type RailAction = {
+  key: string;
+  label: string;
+  detail: string;
+  icon: "file" | "inbox" | "table" | "risk" | "check" | "clock";
+  href: string;
+  /** Waits on someone else: listed after the viewer's own, without the highlight. */
+  waiting: boolean;
+};
+
+const TAB_ICON: Record<string, RailAction["icon"]> = {
+  overview: "file",
+  design: "file",
+  evidence: "inbox",
+  testing: "table",
+  findings: "risk",
+  review: "check",
+  activity: "clock",
+};
+
+/**
+ * The next best actions from the viewer's next actions (control-workspace-model
+ * nextActionOf): the one to do first, then the viewer's others, then what waits on
+ * someone else, each opening where it is done. Nothing is derived or decided here.
+ */
+export function nextBestActions(
+  next: NextAction,
+  tabHrefs: Partial<Record<string, string>>,
+  limit = 4,
+): RailAction[] {
+  const place = (item: AttentionItem, waiting: boolean): RailAction => {
+    const who =
+      waiting && item.owner !== ""
+        ? `Waits on the ${item.owner.toLowerCase()}.`
+        : "";
+    return {
+      key: item.key,
+      label: item.title,
+      detail: [item.detail, who].filter((part) => part !== "").join(" "),
+      icon: TAB_ICON[item.tab] ?? "file",
+      href:
+        item.href ??
+        `${tabHrefs[item.tab] ?? ""}#${item.anchor !== "" ? item.anchor : "cw-work"}`,
+      waiting,
+    };
+  };
+  const own = [
+    ...(next.primary === null ? [] : [next.primary]),
+    ...next.more,
+  ].map((item) => place(item, false));
+  const rest = next.waiting.map((item) => place(item, true));
+  const seen = new Set<string>();
+  return [...own, ...rest]
+    .filter((action) => {
+      if (seen.has(action.key)) {
+        return false;
+      }
+      seen.add(action.key);
+      return true;
+    })
+    .slice(0, limit);
 }

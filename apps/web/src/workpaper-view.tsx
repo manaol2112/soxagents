@@ -106,8 +106,26 @@ export function WorkpapersTab({
       ? all
       : all.filter((paper) => paper.stage === stage);
   const drafting = (papers ?? []).some((paper) => paper.drafting);
-  return (
-    <div className="workpapers">
+  const draft = canAct ? (
+    <form autoComplete="off" method="post" action="/workspace/workpapers">
+      <Hidden ids={ids} intent="draft" />
+      <button
+        type="submit"
+        className={compact ? "btn-secondary btn-sm" : "btn-sm"}
+        disabled={drafting || hasInput === false}
+        title={
+          hasInput === false
+            ? "The agent drafts once evidence has been read or the testing is signed off."
+            : undefined
+        }
+      >
+        <UiIcon name="sparkles" size={13} />{" "}
+        {(papers ?? []).length === 0 ? "Draft the workpaper" : "Draft again"}
+      </button>
+    </form>
+  ) : null;
+  const notices = (
+    <>
       {drafting ? <AutoRefresh /> : null}
       {notice !== null ? (
         <p
@@ -118,93 +136,103 @@ export function WorkpapersTab({
           <span>{WORKPAPER_NOTICES[notice]}</span>
         </p>
       ) : null}
-      <header className="wp-bar">
-        <div>
-          <strong>Workpaper</strong>
-          {compact ? null : (
-            <small>
-              One workbook: design, interim testing, and roll-forward tabs,
-              filled from the records and the evidence. The agent drafts the
-              narratives with citations; you edit, then prepare the design tab
-              and the testing tabs.
-            </small>
-          )}
-        </div>
-        {canAct ? (
-          <form autoComplete="off" method="post" action="/workspace/workpapers">
-            <Hidden ids={ids} intent="draft" />
-            <button
-              type="submit"
-              className="btn-sm"
-              disabled={drafting || hasInput === false}
-              title={
-                hasInput === false
-                  ? "The agent drafts once evidence has been read or the testing is signed off."
-                  : undefined
-              }
-            >
-              <UiIcon name="sparkles" size={13} />{" "}
-              {(papers ?? []).length === 0
-                ? "Draft the workpaper"
-                : "Draft again"}
-            </button>
-          </form>
-        ) : null}
-      </header>
-      {hasInput === false ? (
-        <p className="wp-waiting" role="status">
-          <UiIcon name="clock" size={14} />
-          <span>
-            Waiting for evidence. The agent drafts the narratives once evidence
-            has been read or the testing is signed off; the header fields are
-            filled from the records meanwhile.
-          </span>
-        </p>
-      ) : null}
-      {papers === null ? (
-        <p className="form-hint">
-          The workpapers could not be loaded. Refresh to try again.
-        </p>
-      ) : papers.length === 0 ? (
-        <p className="sheet-empty">
-          <UiIcon name="table" size={16} />
-          <span>
-            {stage === "DESIGN"
-              ? "No design workpaper yet. Draft it and the agent writes the walkthrough from the evidence."
-              : "No workpaper yet. The testing tabs open when the control's testing is signed off, or draft the whole workbook now."}
-          </span>
-        </p>
-      ) : compact ? (
+    </>
+  );
+  const waiting =
+    hasInput === false ? (
+      <p className="wp-waiting" role="status">
+        <UiIcon name="clock" size={14} />
+        <span>
+          Waiting for evidence. The agent drafts the narratives once evidence
+          has been read or the testing is signed off; the header fields are
+          filled from the records meanwhile.
+        </span>
+      </p>
+    ) : null;
+  const body =
+    papers === null ? (
+      <p className="form-hint">
+        The workpapers could not be loaded. Refresh to try again.
+      </p>
+    ) : papers.length === 0 ? (
+      <p className="sheet-empty">
+        <UiIcon name="table" size={16} />
+        <span>
+          {stage === "DESIGN"
+            ? "No design workpaper yet. Draft it and the agent writes the walkthrough from the evidence."
+            : "No workpaper yet. The testing tabs open when the control's testing is signed off, or draft the whole workbook now."}
+        </span>
+      </p>
+    ) : (
+      <WorkpaperBook
+        papers={papers}
+        ids={ids}
+        canAct={canAct}
+        viewing={viewing}
+        initial={initial}
+      />
+    );
+  if (compact) {
+    // One row on the control's testing (product owner's reference, 30 October 2026):
+    // where each record stands, the draft action, and the workbook open on request.
+    const line =
+      papers === null
+        ? "The workpapers could not be loaded"
+        : papers.length === 0
+          ? stage === "DESIGN"
+            ? "No design workpaper yet"
+            : "No workpaper yet"
+          : papers.map((paper) => paperLine(paper, automation)).join(" · ");
+    return (
+      <div className="workpapers is-compact">
+        {notices}
         <details
-          className="wp-fold"
+          className="wp-fold wp-row"
           open={viewing !== null || notice !== null ? true : undefined}
         >
           <summary>
-            <span>
-              {papers.map((paper) => paperLine(paper, automation)).join(" · ")}
+            <span className="wp-row-icon" aria-hidden="true">
+              <UiIcon name="file" size={16} />
             </span>
-            <span className="wp-fold-toggle">
-              Open the workpaper
-              <UiIcon name="chevron" size={14} />
+            <span className="wp-row-copy">
+              <strong>Workpaper</strong>
+              <small>{line}</small>
+            </span>
+            <span className="wp-row-actions">
+              {draft}
+              {papers !== null && papers.length > 0 ? (
+                <span className="wp-fold-toggle btn">
+                  Open workpaper
+                  <UiIcon name="arrow" size={14} />
+                </span>
+              ) : null}
             </span>
           </summary>
-          <WorkpaperBook
-            papers={papers}
-            ids={ids}
-            canAct={canAct}
-            viewing={viewing}
-            initial={initial}
-          />
+          <div className="wp-row-body">
+            {waiting}
+            {body}
+          </div>
         </details>
-      ) : (
-        <WorkpaperBook
-          papers={papers}
-          ids={ids}
-          canAct={canAct}
-          viewing={viewing}
-          initial={initial}
-        />
-      )}
+      </div>
+    );
+  }
+  return (
+    <div className="workpapers">
+      {notices}
+      <header className="wp-bar">
+        <div>
+          <strong>Workpaper</strong>
+          <small>
+            One workbook: design, interim testing, and roll-forward tabs, filled
+            from the records and the evidence. The agent drafts the narratives
+            with citations; you edit, then prepare the design tab and the
+            testing tabs.
+          </small>
+        </div>
+        {draft}
+      </header>
+      {waiting}
+      {body}
     </div>
   );
 }

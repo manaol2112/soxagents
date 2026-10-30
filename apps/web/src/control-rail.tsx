@@ -135,8 +135,11 @@ type Suggestion = "answers" | "documents" | "related" | "contradictions";
 export type AssistantAction = {
   key: string;
   label: string;
+  /** Why, in a line, under the label. */
+  detail?: string;
   icon: IconName;
-  target: { tab?: string; anchor?: string; ask?: string };
+  /** A section of the plan, a part of the page, a question for the agent, or a page. */
+  target: { tab?: string; anchor?: string; ask?: string; href?: string };
 };
 
 function follow(
@@ -144,6 +147,10 @@ function follow(
   askHref: string,
   about: string,
 ) {
+  if (target.href !== undefined) {
+    window.location.assign(target.href);
+    return;
+  }
   if (target.ask !== undefined) {
     // A question for the agent console about this control.
     const url = new URL(askHref, window.location.origin);
@@ -449,7 +456,7 @@ export function ControlAssistant({
           <p>
             {mode !== null
               ? mode.intro
-              : "Analyzed this control using the system, process, and client documents. Here is what was found and suggested."}
+              : "Get guidance, summarize evidence, and find what to do next for this control."}
           </p>
         </div>
       </div>
@@ -471,106 +478,133 @@ export function ControlAssistant({
           ))}
         </ul>
       ) : null}
-      {onProcedures ? null : (
-        <ul className="cw-assist-list cw-assist-found">
-          {items.map((item) => {
-            const isOpen = open === item.key;
-            return (
-              <li key={item.key} className={isOpen ? "is-open" : undefined}>
-                <button
-                  type="button"
-                  aria-expanded={isOpen}
-                  onClick={() => {
-                    setOpen(isOpen ? null : item.key);
-                  }}
-                >
-                  <span
-                    className={`cw-assist-icon ${item.tone}`}
-                    aria-hidden="true"
-                  >
-                    <UiIcon name={item.icon} size={14} />
-                  </span>
-                  <span className="cw-assist-label">{item.label}</span>
-                  {item.ai ? <span className="cw-assist-ai">AI</span> : null}
-                  <UiIcon name="chevron" size={13} />
-                </button>
-                {isOpen ? (
-                  <div className="cw-assist-body">
-                    {item.key === "documents"
-                      ? list(
-                          documents.map((entry) => entry.title),
-                          "No policy, procedure, narrative or diagram applies yet.",
-                        )
-                      : null}
-                    {item.key === "contradictions"
-                      ? list(contradictions, "Its sources agree.")
-                      : null}
-                    {item.key === "answers" ? (
-                      answers.length === 0 ? (
-                        <p className="cw-assist-none">
-                          No usual answers are recorded for its questions.
-                        </p>
-                      ) : (
-                        <dl>
-                          {answers.map((entry) => (
-                            <div key={entry.question}>
-                              <dt>{entry.question}</dt>
-                              <dd>{entry.answers.join(" · ")}</dd>
-                            </div>
-                          ))}
-                        </dl>
-                      )
-                    ) : null}
-                    {item.key === "related" ? (
-                      related.length === 0 ? (
-                        <p className="cw-assist-none">
-                          It relies on no other control.
-                        </p>
-                      ) : (
-                        <ul className="cw-assist-chips">
-                          {related.map((entry) =>
-                            entry.href === null ? (
-                              <li key={entry.ref}>
-                                <span title="Not in this engagement's scope">
-                                  {entry.ref}
-                                </span>
-                              </li>
-                            ) : (
-                              <li key={entry.ref}>
-                                <a href={entry.href}>{entry.ref}</a>
-                              </li>
-                            ),
-                          )}
-                        </ul>
-                      )
-                    ) : null}
-                  </div>
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
-      )}
       {nextActions.length > 0 && !onProcedures ? (
         <div className="cw-assist-next">
-          <h3>Suggested next actions</h3>
+          <h3>Next best actions</h3>
           <ul>
-            {nextActions.map((action, index) => (
-              <li key={action.key}>
-                <button
-                  type="button"
+            {nextActions.map((action, index) => {
+              const body = (
+                <>
+                  <span className="cw-assist-icon is-blue" aria-hidden="true">
+                    <UiIcon name={action.icon} size={14} />
+                  </span>
+                  <span className="cw-assist-copy">
+                    <span className="cw-assist-label">{action.label}</span>
+                    {action.detail !== undefined && action.detail !== "" ? (
+                      <small>{action.detail}</small>
+                    ) : null}
+                  </span>
+                  <UiIcon name="chevron" size={13} />
+                </>
+              );
+              return (
+                <li
+                  key={action.key}
                   className={index === 0 ? "is-first" : undefined}
-                  onClick={() => follow(action.target, askHref, about)}
                 >
-                  <UiIcon name={action.icon} size={14} />
-                  <span>{action.label}</span>
-                  {index === 0 ? <UiIcon name="arrow" size={13} /> : null}
-                </button>
-              </li>
-            ))}
+                  {action.target.href !== undefined ? (
+                    <a href={action.target.href}>{body}</a>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => follow(action.target, askHref, about)}
+                    >
+                      {body}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </div>
       ) : null}
+      {onProcedures ? null : (
+        // What the records show, on request: the actions come first.
+        <details className="cw-assist-fold">
+          <summary>
+            What the agent found
+            <UiIcon name="chevron" size={13} />
+          </summary>
+          <ul className="cw-assist-list cw-assist-found">
+            {items.map((item) => {
+              const isOpen = open === item.key;
+              return (
+                <li key={item.key} className={isOpen ? "is-open" : undefined}>
+                  <button
+                    type="button"
+                    aria-expanded={isOpen}
+                    onClick={() => {
+                      setOpen(isOpen ? null : item.key);
+                    }}
+                  >
+                    <span
+                      className={`cw-assist-icon ${item.tone}`}
+                      aria-hidden="true"
+                    >
+                      <UiIcon name={item.icon} size={14} />
+                    </span>
+                    <span className="cw-assist-label">{item.label}</span>
+                    {item.ai ? <span className="cw-assist-ai">AI</span> : null}
+                    <UiIcon name="chevron" size={13} />
+                  </button>
+                  {isOpen ? (
+                    <div className="cw-assist-body">
+                      {item.key === "documents"
+                        ? list(
+                            documents.map((entry) => entry.title),
+                            "No policy, procedure, narrative or diagram applies yet.",
+                          )
+                        : null}
+                      {item.key === "contradictions"
+                        ? list(contradictions, "Its sources agree.")
+                        : null}
+                      {item.key === "answers" ? (
+                        answers.length === 0 ? (
+                          <p className="cw-assist-none">
+                            No usual answers are recorded for its questions.
+                          </p>
+                        ) : (
+                          <dl>
+                            {answers.map((entry) => (
+                              <div key={entry.question}>
+                                <dt>{entry.question}</dt>
+                                <dd>{entry.answers.join(" · ")}</dd>
+                              </div>
+                            ))}
+                          </dl>
+                        )
+                      ) : null}
+                      {item.key === "related" ? (
+                        related.length === 0 ? (
+                          <p className="cw-assist-none">
+                            It relies on no other control.
+                          </p>
+                        ) : (
+                          <ul className="cw-assist-chips">
+                            {related.map((entry) =>
+                              entry.href === null ? (
+                                <li key={entry.ref}>
+                                  <span title="Not in this engagement's scope">
+                                    {entry.ref}
+                                  </span>
+                                </li>
+                              ) : (
+                                <li key={entry.ref}>
+                                  <a href={entry.href}>{entry.ref}</a>
+                                </li>
+                              ),
+                            )}
+                          </ul>
+                        )
+                      ) : null}
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </details>
+      )}
       <div className="cw-assist-ask">
         {onProcedures ? null : <h3>Ask the agent</h3>}
         <form
