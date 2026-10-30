@@ -33,6 +33,7 @@ import {
 import { PlanMissingButton } from "./plan-missing";
 import { parseQueueFilter, type Queue } from "./queue-model";
 import { QueuePanel } from "./queue-panel";
+import { RemediationHistoryCard } from "./remediation-history";
 import { canonicalQuery, placeSetup } from "./routes";
 import { canManageProjects, type ShellModel } from "./shell-model";
 import { UiIcon } from "./ui-icon";
@@ -1493,7 +1494,12 @@ export function DeficienciesMain({
         />
       </section>
       {selected !== null ? (
-        <DeficiencyDetail model={model} item={selected} controls={controls} />
+        <DeficiencyDetail
+          model={model}
+          item={selected}
+          controls={controls}
+          engagement={engagement}
+        />
       ) : null}
       <section className="card" aria-labelledby="log-title">
         <details className="log-deficiency" open={logFor !== null}>
@@ -1806,12 +1812,16 @@ function DeficiencyDetail({
   model,
   item,
   controls,
+  engagement,
 }: {
   model: Ready;
   item: Deficiency;
   controls: ControlRow[];
+  /** The control's sheets, rounds and reviews, for the remediation history. */
+  engagement: EngagementState;
 }) {
   const closed = item.status === "CLOSED";
+  const project = model.selectedProject;
   return (
     <section
       className="card control-editor"
@@ -1934,6 +1944,14 @@ function DeficiencyDetail({
             </dd>
           </div>
         </dl>
+        {project !== null && item.controlId !== null ? (
+          <RemediationHistoryCard
+            item={item}
+            engagement={engagement}
+            organizationId={model.organization.id}
+            projectId={project.id}
+          />
+        ) : null}
         {!closed ? (
           <div className="deficiency-actions">
             <form

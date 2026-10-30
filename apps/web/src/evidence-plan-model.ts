@@ -260,7 +260,7 @@ export type RequirementFile = {
   linkVersion: number | null;
   readStatus: string | null;
   /** Who read it: the model, or the keyword rules (which match kinds, not detail). */
-  readBy: "MODEL" | "RULES" | "FALLBACK" | "FAILED" | null;
+  readBy: "MODEL" | "RULES" | "FALLBACK" | "FAILED" | "SEEDED" | null;
   kind: string | null;
   kindConfirmed: boolean;
   coverage: "COVERED" | "PARTIAL" | "NOT_COVERED" | null;
@@ -574,7 +574,8 @@ function parseRequirementFile(item: Raw): RequirementFile {
       item.read_by === "MODEL" ||
       item.read_by === "RULES" ||
       item.read_by === "FALLBACK" ||
-      item.read_by === "FAILED"
+      item.read_by === "FAILED" ||
+      item.read_by === "SEEDED"
         ? item.read_by
         : null,
     kind: strOrNull(item.kind),

@@ -27,6 +27,7 @@ from ai_workforce_api.clients import (
 )
 from ai_workforce_api.db import ConcurrentUpdateError, require_one_row, transaction
 from ai_workforce_api.settings import Settings
+from ai_workforce_api.subscriptions import require_capacity
 
 ProjectStatus = Literal["DRAFT", "ACTIVE", "PAUSED", "COMPLETED", "ARCHIVED"]
 # The engagement lifecycle (Milestones 8.13 and 8.14). A draft becomes active only by
@@ -106,6 +107,8 @@ class ProjectDetailBody(BaseModel):
     client_name: str = ""
     period_end: date | None = None
     launched: bool = False
+    # The firm's synthetic demo engagement (demo.py).
+    demo: bool = False
 
 
 class ProjectFields(BaseModel):
@@ -410,6 +413,7 @@ def list_assignable_members(
         WHERE m.organization_id = %s
           AND m.status = 'ACTIVE'
           AND u.status = 'ACTIVE'
+          AND u.demo_organization_id IS NULL
         ORDER BY u.display_name
         """,
         (organization_id,),
@@ -451,6 +455,8 @@ def create_project(
     with transaction(connection) as cursor:
         if not _active_member(cursor, organization_id, body.owner_user_id):
             raise NotVisible()
+        # A trial has one engagement of its own (the database refuses a second one too).
+        require_capacity(cursor, organization_id, "engagements")
         try:
             cursor.execute(
                 """
@@ -666,7 +672,7 @@ def _load_detail(
         SELECT p.id, p.name, p.slug, p.scope, p.owner_user_id, u.display_name,
                p.status::text, p.starts_on, p.ends_on, p.version,
                coalesce(s.client_name, ''), s.period_end, s.kicked_off_at IS NOT NULL,
-               s.client_id
+               s.client_id, p.demo
         FROM projects AS p
         JOIN users AS u ON u.id = p.owner_user_id
         LEFT JOIN engagement_settings AS s ON s.project_id = p.id
@@ -691,6 +697,7 @@ def _load_detail(
         period_end,
         launched,
         client_id,
+        demo,
     ) = row
     if (
         not isinstance(project_id_value, UUID)
@@ -759,6 +766,7 @@ def _load_detail(
         client_name=str(client_name),
         period_end=period_end if isinstance(period_end, date) else None,
         launched=launched is True,
+        demo=demo is True,
     )
 
 

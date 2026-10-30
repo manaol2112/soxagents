@@ -348,24 +348,50 @@
   gap: 0.9rem;
 }
 
-.lp-hero-solo {
-  margin: 1.25rem 0 0;
-  font-size: 13px;
+/* The two actions and, beneath them, the trial's terms and the way in for teams, as wide
+   as the buttons above. */
+.lp-hero-cta {
+  display: inline-grid;
+  gap: 1.1rem;
+  max-width: 100%;
+}
+
+.lp-play {
+  width: 11px;
+  height: 13px;
+  fill: currentColor;
+}
+
+.lp-hero-trial {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
   color: var(--lp-muted);
 }
 
-.lp-hero-solo a {
+.lp-hero-trial > span {
   display: inline-flex;
-  gap: 0.35rem;
+  gap: 0.5rem;
   align-items: center;
-  font-weight: 600;
-  color: var(--lp-ink);
-  text-decoration: none;
-  vertical-align: middle;
 }
 
-.lp-hero-solo a:hover {
+.lp-hero-trial svg {
+  color: var(--lp-text);
+}
+
+.lp-hero-trial a {
+  color: var(--lp-ink);
+  text-decoration: underline;
+  text-decoration-color: rgb(207 214 232 / 45%);
+  text-underline-offset: 4px;
+}
+
+.lp-hero-trial a:hover {
   color: var(--lp-accent-2);
+  text-decoration-color: currentColor;
 }
 
 /* The hero's artwork: the five steps as orbs around the workpaper, each labelled and
@@ -1614,23 +1640,6 @@
   grid-template-columns: 30px minmax(0, 1fr);
   gap: 0.7rem;
   opacity: 0;
-  transform: translateY(10px);
-  transition:
-    opacity 420ms ease,
-    transform 420ms ease;
-}
-
-.lp-run-chat.is-in li {
-  opacity: 1;
-  transform: none;
-}
-
-.lp-run-chat.is-in li:nth-child(2) {
-  transition-delay: 500ms;
-}
-
-.lp-run-chat.is-in li:nth-child(3) {
-  transition-delay: 1000ms;
 }
 
 .lp-run-chat li > div {
@@ -1728,6 +1737,249 @@
   color: var(--lp-ink);
   border: 1px solid var(--lp-line-strong);
   border-radius: 50%;
+}
+
+/* The control run, played once as it scrolls into view (28 October 2026): the rail
+   carries the work through the steps and stops at the person's sign-off; the tester fills
+   the sheet row by row and S-14 is flagged; then the agents report in turn and the
+   independent reviewer's challenge lights up. Every element's resting state is the
+   finished one, so with reduced motion the page simply shows the result. */
+
+.lp-steps {
+  position: relative;
+}
+
+/* The rail beneath the steps: a track, filled up to the sign-off, and its leading light. */
+.lp-steps::before,
+.lp-steps::after {
+  position: absolute;
+  bottom: -1.6rem;
+  left: 22px;
+  content: "";
+  pointer-events: none;
+}
+
+.lp-steps::before {
+  width: calc(80% + 0.8rem);
+  height: 2px;
+  background:
+    linear-gradient(90deg, #2f7a55, #3ad29a) left / 100% 100% no-repeat,
+    var(--lp-cream-line);
+  border-radius: 2px;
+}
+
+.lp-steps::after {
+  bottom: calc(-1.6rem - 4px);
+  left: calc(80% + 0.8rem + 22px - 5px);
+  width: 10px;
+  height: 10px;
+  background: #3ad29a;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px rgb(58 210 154 / 22%);
+}
+
+.lp-steps.is-in::before {
+  animation: lp-rail 1.8s linear 350ms both;
+}
+
+.lp-steps.is-in::after {
+  animation:
+    lp-rail-head 1.8s linear 350ms both,
+    lp-await 1.6s ease-out 2.2s 4;
+}
+
+.lp-steps.is-in .is-done .lp-step-mark {
+  animation: lp-step-fill 420ms cubic-bezier(0.3, 1.4, 0.5, 1)
+    calc(350ms + var(--i) * 450ms) both;
+}
+
+.lp-steps.is-in .is-done .lp-step-mark svg {
+  animation: lp-pop 320ms cubic-bezier(0.3, 1.6, 0.5, 1)
+    calc(470ms + var(--i) * 450ms) both;
+}
+
+.lp-steps.is-in .is-now .lp-step-mark {
+  animation: lp-await-mark 1.6s ease-out 2.2s 4;
+}
+
+/* The app rises into place. */
+.lp .lp-control-app[data-reveal] {
+  transform: perspective(1800px) rotateX(9deg) translateY(36px) scale(0.97);
+  transform-origin: 50% 100%;
+  transition:
+    opacity 800ms ease,
+    transform 1000ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.lp .lp-control-app[data-reveal].is-in {
+  transform: none;
+}
+
+/* The tester works down the sheet: each row lights as it is tested, its marks land. */
+.lp-control-app.is-in .lp-run-sheet tbody td {
+  animation: lp-scan 700ms ease calc(900ms + var(--r) * 240ms) both;
+}
+
+.lp-control-app.is-in .lp-mark {
+  animation: lp-pop 380ms cubic-bezier(0.3, 1.6, 0.5, 1)
+    calc(1000ms + var(--r) * 240ms + var(--c) * 80ms) both;
+}
+
+.lp-mark.is-review {
+  position: relative;
+}
+
+.lp-mark.is-review::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  border: 2px solid var(--lp-amber);
+  border-radius: 50%;
+  opacity: 0;
+}
+
+.lp-control-app.is-in .lp-mark.is-review::after {
+  animation: lp-ping 1.4s ease-out 1.6s 3;
+}
+
+.lp-control-app.is-in .lp-run-samples li {
+  animation: lp-rise 450ms ease calc(2150ms + var(--c) * 100ms) both;
+}
+
+/* Then the agents report, one after another. */
+.lp-run-chat li:nth-child(1) {
+  --d: 500ms;
+}
+
+.lp-run-chat li:nth-child(2) {
+  --d: 1900ms;
+}
+
+.lp-run-chat li:nth-child(3) {
+  --d: 3100ms;
+}
+
+.lp-run-chat.is-in li {
+  animation: lp-message 550ms cubic-bezier(0.2, 0.7, 0.2, 1) var(--d) both;
+}
+
+.lp-run-chat.is-in .lp-file {
+  animation: lp-rise 400ms ease calc(var(--d) + 250ms) both;
+}
+
+.lp-run-chat.is-in .lp-file + .lp-file {
+  animation-delay: calc(var(--d) + 400ms);
+}
+
+.lp-run-chat.is-in li.is-challenge em {
+  animation: lp-pop 360ms cubic-bezier(0.3, 1.6, 0.5, 1) calc(var(--d) + 300ms)
+    both;
+}
+
+.lp-run-chat.is-in li.is-challenge > div {
+  animation: lp-challenge 1.3s ease-out calc(var(--d) + 400ms) 2;
+}
+
+@keyframes lp-rail {
+  from {
+    background-size:
+      0% 100%,
+      auto;
+  }
+}
+
+@keyframes lp-rail-head {
+  from {
+    left: 17px;
+  }
+}
+
+@keyframes lp-await {
+  to {
+    box-shadow: 0 0 0 14px rgb(58 210 154 / 0%);
+  }
+}
+
+@keyframes lp-await-mark {
+  from {
+    box-shadow: 0 0 0 0 rgb(47 122 85 / 35%);
+  }
+
+  to {
+    box-shadow: 0 0 0 12px rgb(47 122 85 / 0%);
+  }
+}
+
+@keyframes lp-step-fill {
+  from {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px #b9b2a4;
+    transform: scale(0.88);
+  }
+}
+
+@keyframes lp-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.2);
+  }
+}
+
+@keyframes lp-scan {
+  30% {
+    background: rgb(88 118 255 / 12%);
+  }
+}
+
+@keyframes lp-ping {
+  from {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(2.3);
+  }
+}
+
+@keyframes lp-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes lp-message {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+    transform: translateY(14px);
+  }
+
+  to {
+    opacity: 1;
+    filter: none;
+    transform: none;
+  }
+}
+
+@keyframes lp-challenge {
+  from {
+    box-shadow: 0 0 0 0 rgb(242 182 75 / 45%);
+  }
+
+  to {
+    box-shadow: 0 0 0 10px rgb(242 182 75 / 0%);
+  }
+}
+
+@media (max-width: 1000px) {
+  /* The steps scroll sideways here; the rail would not follow them. */
+  .lp-steps::before,
+  .lp-steps::after {
+    display: none;
+  }
 }
 
 /* The dark sections */
@@ -2444,6 +2696,234 @@
   }
 }
 
+/* Pricing, after the product owner's design (28 October 2026): the free trial as the lit
+   card, the enterprise conversation beside it, the trial's terms and three short
+   questions beneath. */
+
+.lp-pricing {
+  padding-bottom: clamp(2rem, 5vw, 3.5rem);
+  background:
+    radial-gradient(45% 35% at 20% 30%, rgb(70 90 255 / 12%), transparent 70%),
+    radial-gradient(35% 30% at 85% 60%, rgb(154 133 255 / 6%), transparent 70%);
+}
+
+.lp-pricing .lp-head > p:last-child {
+  text-wrap: balance;
+}
+
+.lp-nowrap {
+  white-space: nowrap;
+}
+
+.lp-plans {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: stretch;
+}
+
+.lp-plan {
+  display: flex;
+  flex-direction: column;
+  padding: clamp(1.5rem, 3.5vw, 2.75rem) clamp(1.25rem, 3.5vw, 3rem);
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 3.5%) 0%, rgb(255 255 255 / 1%) 100%),
+    var(--lp-bg-2);
+  border: 1px solid var(--lp-line-strong);
+  border-radius: 22px;
+}
+
+.lp-plan.is-featured {
+  background:
+    radial-gradient(80% 60% at 20% 0%, rgb(88 118 255 / 14%), transparent 70%),
+    var(--lp-bg-2);
+  border-color: rgb(110 140 255 / 70%);
+  box-shadow:
+    0 0 0 1px rgb(88 118 255 / 25%),
+    0 0 48px -8px rgb(88 118 255 / 45%),
+    inset 0 1px 0 rgb(255 255 255 / 8%);
+}
+
+.lp-plan-badge {
+  align-self: flex-start;
+  margin: 0 0 1.25rem;
+  padding: 0.4rem 0.8rem;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  color: var(--lp-accent-2);
+  text-transform: uppercase;
+  background: var(--lp-accent-soft);
+  border: 1px solid rgb(125 149 255 / 30%);
+  border-radius: 8px;
+}
+
+.lp .lp-plan h3 {
+  margin: 0 0 0.75rem;
+  font-family: var(--lp-serif);
+  font-size: clamp(1.6rem, 2.6vw, 2.25rem);
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.lp-plan-price {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  align-items: baseline;
+  margin: 0 0 0.75rem;
+}
+
+.lp-plan-price strong {
+  font-family: var(--lp-serif);
+  font-size: clamp(3.75rem, 7vw, 5.5rem);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  color: var(--lp-ink);
+}
+
+.lp-plan-price span {
+  font-size: clamp(1.15rem, 1.8vw, 1.5rem);
+  color: var(--lp-text);
+}
+
+.lp-plan-price.is-talk {
+  margin: clamp(0.5rem, 2vw, 1.25rem) 0 1.25rem;
+}
+
+.lp-plan-price.is-talk strong {
+  font-size: clamp(3rem, 5.5vw, 4.25rem);
+}
+
+.lp-plan-note {
+  margin: 0 0 0.6rem;
+  font-size: 16px;
+  color: var(--lp-text);
+}
+
+.lp-plan-lead {
+  margin: 0;
+  padding-bottom: 1.5rem;
+  font-size: 1.075rem;
+  line-height: 1.6;
+  color: var(--lp-text);
+  border-bottom: 1px solid var(--lp-line-strong);
+}
+
+.lp-plan-list {
+  display: grid;
+  gap: 0.95rem;
+  margin: 1.5rem 0 2rem;
+  padding: 0;
+  list-style: none;
+}
+
+.lp-plan-list.is-split {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-template-rows: repeat(4, auto);
+  column-gap: 2rem;
+}
+
+.lp-plan-list li {
+  display: flex;
+  gap: 0.85rem;
+  align-items: center;
+  font-size: 15.5px;
+  color: var(--lp-text);
+}
+
+.lp-plan-check {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  color: var(--lp-bg);
+  background: var(--lp-green);
+  border-radius: 50%;
+  box-shadow: 0 0 12px -2px rgb(58 210 154 / 55%);
+}
+
+.lp-plan-limits {
+  margin: -1rem 0 1.25rem;
+  font-size: 13.5px;
+  color: var(--lp-muted);
+  text-align: center;
+  text-wrap: balance;
+}
+
+.lp-plan-cta {
+  width: 100%;
+  margin-top: auto;
+}
+
+.lp-plan-fine {
+  margin: 1.5rem 0 clamp(2rem, 4vw, 2.75rem);
+  font-size: 13.5px;
+  color: var(--lp-muted);
+  text-align: center;
+}
+
+.lp-faq.is-plain {
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--lp-line-strong);
+  border-radius: 14px;
+}
+
+.lp-faq.is-plain details {
+  border: 0;
+  border-radius: 0;
+}
+
+.lp-faq.is-plain details + details {
+  border-top: 1px solid var(--lp-line-strong);
+}
+
+.lp-faq.is-plain summary {
+  padding: 1rem 1.5rem;
+}
+
+.lp-faq.is-plain .lp-faq-q {
+  font-size: clamp(1.05rem, 1.4vw, 1.25rem);
+}
+
+.lp-faq.is-plain .lp-faq-toggle {
+  width: 30px;
+  height: 30px;
+}
+
+.lp-faq.is-plain details > p {
+  margin: 0 1.5rem;
+  padding: 0.25rem 0 1.25rem;
+  border-top: 0;
+}
+
+@media (max-width: 1000px) {
+  .lp-plans {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .lp-plan-list.is-split {
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-flow: row;
+    grid-template-rows: none;
+  }
+
+  .lp-faq.is-plain summary {
+    padding: 0.9rem 1rem;
+  }
+
+  .lp-faq.is-plain details > p {
+    margin: 0 1rem;
+  }
+}
+
 /* The demo request, after the product owner's design: the invitation on the left, the
    form as a card on the right. */
 
@@ -2844,6 +3324,11 @@
     transform: none;
   }
 
+  .lp-steps::before,
+  .lp-steps::after {
+    display: none;
+  }
+
   .lp-bar.is-live > i {
     width: 64%;
   }
@@ -2889,7 +3374,8 @@
     margin-left: auto;
   }
 
-  .lp-hero-actions {
+  .lp-hero-actions,
+  .lp-hero-trial {
     justify-content: center;
   }
 

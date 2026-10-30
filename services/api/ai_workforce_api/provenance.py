@@ -73,6 +73,7 @@ from ai_workforce_api.models import (
     record_call,
 )
 from ai_workforce_api.settings import Settings
+from ai_workforce_api.subscriptions import reserve_call, settle_call
 
 logger = logging.getLogger(__name__)
 
@@ -266,7 +267,13 @@ class AgentCaller:
                     "cancelled before the call", inputs,
                 )  # fmt: skip
                 return Call("CANCELLED", nothing, call_id, attempt)
-            refusal = self._over_budget(estimate_micros(self.config, request))
+            estimate = estimate_micros(self.config, request)
+            refusal = self._over_budget(estimate)
+            # A trial firm's call is also reserved against its allowance (Step 2): the
+            # worst case before dispatch, settled to the cost afterwards.
+            reservation: UUID | None = None
+            if not refusal:
+                reservation, refusal = self._reserve(estimate)
             if refusal:
                 call_id = self._record(
                     "BUDGET_EXCEEDED", nothing, request, prompt_version, attempt, None, refusal,
@@ -276,11 +283,13 @@ class AgentCaller:
             started = time.perf_counter()
             found = outcome(cast(ModelProvider, self._provider), request, self.config)
             duration = int((time.perf_counter() - started) * 1000)
-            self.spent += cost_micros(self.config, found.raw.input_tokens, found.raw.output_tokens)
+            cost = cost_micros(self.config, found.raw.input_tokens, found.raw.output_tokens)
+            self.spent += cost
             call_id = self._record(
                 found.status, found.raw, request, prompt_version, attempt, duration,
                 found.error, inputs,
             )  # fmt: skip
+            settle_call(self._connection, reservation, call_id, cost)
             last = Call(found.status, found.raw, call_id, attempt)
             if found.status == "SUCCEEDED" or not self._retry:
                 return last
@@ -317,9 +326,13 @@ class AgentCaller:
         )
         nothing = ModelRaw(None, (), 0, 0)
         inputs = {"messages": len(messages), "tools": len(tools)}
-        refusal = self._over_budget(
-            cost_micros(self.config, estimate_tokens(system) + estimate_tokens(transcript), 4096)
+        estimate = cost_micros(
+            self.config, estimate_tokens(system) + estimate_tokens(transcript), 4096
         )
+        refusal = self._over_budget(estimate)
+        reservation: UUID | None = None
+        if not refusal:
+            reservation, refusal = self._reserve(estimate)
         if refusal:
             self._record(
                 "BUDGET_EXCEEDED", nothing, request, prompt_version, attempt, None, refusal,
@@ -348,10 +361,13 @@ class AgentCaller:
                 if isinstance(error, ModelProviderError) and error.status
                 else status.lower().replace("_", " ")
             )
-            self._record(
+            call_id = self._record(
                 status, nothing, request, prompt_version, attempt, duration, detail, inputs,
                 operation="propose_tools",
             )  # fmt: skip
+            # A failed turn may still have cost tokens the provider did not report: the
+            # reservation settles at its worst case, never below what was used.
+            settle_call(self._connection, reservation, call_id, estimate)
             raise
         duration = int((time.perf_counter() - started) * 1000)
         raw = ModelRaw(
@@ -365,12 +381,25 @@ class AgentCaller:
             reply.input_tokens,
             reply.output_tokens,
         )
-        self.spent += cost_micros(self.config, raw.input_tokens, raw.output_tokens)
-        self._record(
+        cost = cost_micros(self.config, raw.input_tokens, raw.output_tokens)
+        self.spent += cost
+        call_id = self._record(
             "SUCCEEDED", raw, request, prompt_version, attempt, duration, "", inputs,
             operation="propose_tools",
         )  # fmt: skip
+        settle_call(self._connection, reservation, call_id, cost)
         return reply
+
+    def _reserve(self, estimate: int) -> tuple[UUID | None, str]:
+        return reserve_call(
+            self._connection,
+            self.job.organization_id,
+            self.job.project_id,
+            self.job.job_id,
+            self.job.agent_key,
+            estimate,
+            None if self._settings is None else self._settings.trial_ai_quiet_seconds,
+        )
 
     def _over_budget(self, estimate: int) -> str:
         limits = self._limits

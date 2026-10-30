@@ -920,6 +920,7 @@ describe("a plan that follows a standard pending review", () => {
       area: "",
       keyControl: false,
       application: "",
+      units: "",
       classifications: [],
       source: "UPLOAD",
       testBasis: "STANDARD",

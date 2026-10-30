@@ -36,6 +36,7 @@ from ai_workforce_api.authorization import (
 from ai_workforce_api.db import transaction
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import DeletableStore, ObjectStore, StoreError, digest_of, open_store
+from ai_workforce_api.storage_sweep import discard, discarding
 
 RETENTION_DAYS = 30
 Dataset = Literal["evidence_requests", "controls", "exceptions", "review_items"]
@@ -92,7 +93,9 @@ COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("Testing status", "testing_status"),
         ("Stage", "stage"),
         ("Test sheet", "test_sheet"),
-        ("Test result", "test_result"),
+        ("Interim result", "test_result"),
+        ("Current result", "current_result"),
+        ("Current result basis", "current_result_basis"),
         ("Conclusion", "conclusion"),
         ("Failed", "failed"),
         ("Independent review", "review"),
@@ -102,6 +105,7 @@ COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("Evidence pending", "evidence_pending"),
         ("Evidence overdue", "evidence_overdue"),
         ("Open deficiencies", "open_deficiencies"),
+        ("Closed deficiencies", "closed_deficiencies"),
         ("Next step", "next_step"),
         ("Waiting on", "waiting_on"),
     ],
@@ -389,8 +393,9 @@ def create_export(
     except StoreError as error:
         raise ExportFailed("The file could not be stored. Nothing was saved; try again.") from error
     if digest != digest_of(content):
+        discard(store, key)
         raise ExportFailed("The stored file does not match. Nothing was saved; try again.")
-    with transaction(connection) as cursor:
+    with discarding(store, key), transaction(connection) as cursor:
         row = cursor.execute(
             """
             WITH stamp AS (SELECT clock_timestamp() AS now)
@@ -462,6 +467,69 @@ class ExportGone(Exception):
     """The export is past its retention; its file is no longer kept."""
 
 
+class ExportListing(BaseModel):
+    id: UUID
+    dataset: str
+    title: str
+    file_format: str
+    file_name: str
+    created_at: datetime
+    created_by: str
+    as_of: datetime
+    row_count: int
+    narrative: bool
+    available: bool
+    expires_at: datetime
+
+
+def list_exports(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+) -> list[ExportListing]:
+    """The engagement's exports and reports on record, newest first, for someone who can
+    see the engagement: what each is, who made it and whether its file is still kept.
+    Never the stored key or the digest."""
+    authorize(
+        connection,
+        principal=principal,
+        action=Action.TASK_READ,
+        organization_id=organization_id,
+        project_id=project_id,
+    )
+    from ai_workforce_api.reports import REPORTS
+
+    rows = connection.execute(
+        """
+        SELECT e.id, e.dataset, e.file_format, e.file_name, e.created_at, u.display_name,
+               e.as_of, e.row_count, e.narrative <> '', e.expires_at,
+               e.expires_at >= clock_timestamp() AND e.purged_at IS NULL
+        FROM engagement_exports e LEFT JOIN users u ON u.id = e.created_by
+        WHERE e.project_id = %s AND e.organization_id = %s
+        ORDER BY e.created_at DESC, e.id
+        """,
+        (project_id, organization_id),
+    ).fetchall()
+    return [
+        ExportListing(
+            id=UUID(str(r[0])),
+            dataset=str(r[1]),
+            title=REPORTS.get(str(r[1]), str(r[1]).replace("_", " ").capitalize()),
+            file_format=str(r[2]),
+            file_name=str(r[3]),
+            created_at=r[4],
+            created_by=str(r[5] or ""),
+            as_of=r[6],
+            row_count=int(r[7]),
+            narrative=bool(r[8]),
+            expires_at=r[9],
+            available=bool(r[10]),
+        )
+        for r in rows
+    ]
+
+
 def fetch_export(
     connection: psycopg.Connection[Any],
     settings: Settings,
@@ -525,6 +593,14 @@ def _audit(
 def register_exports(
     app: FastAPI, settings: Settings, store_for: StoreFactory = open_store
 ) -> None:
+    @app.get("/organizations/{organization_id}/projects/{project_id}/exports")
+    def listing(organization_id: UUID, project_id: UUID, request: Request) -> list[ExportListing]:
+        principal = _session_principal(request)
+        return _call(
+            settings,
+            lambda connection: list_exports(connection, principal, organization_id, project_id),
+        )
+
     @app.get("/organizations/{organization_id}/projects/{project_id}/exports/{export_id}")
     def download(
         organization_id: UUID, project_id: UUID, export_id: UUID, request: Request

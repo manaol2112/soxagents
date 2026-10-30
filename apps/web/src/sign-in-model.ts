@@ -60,13 +60,20 @@ export function providerHref(
   return match === undefined ? null : `${apiBase}${match.loginPath}`;
 }
 
-export type SignInNotice = "failed" | "unlinked" | "disabled" | "unavailable";
+export type SignInNotice =
+  | "failed"
+  | "unlinked"
+  | "disabled"
+  | "unavailable"
+  | "throttled";
 
 export const SIGN_IN_NOTICES: Record<SignInNotice, string> = {
   failed: "Sign-in did not complete. Try again.",
   unlinked:
     "This email is already linked to a different account with that provider. Sign in with the account you used before.",
   disabled: "This account is disabled. Ask an owner of your workspace.",
+  throttled:
+    "Too many sign-in attempts from this network. Wait a few minutes and try again.",
   unavailable: "Sign-in is not available right now. Try again in a moment.",
 };
 
@@ -75,6 +82,7 @@ export function parseSignInNotice(value: string | null): SignInNotice | null {
     value === "failed" ||
     value === "unlinked" ||
     value === "disabled" ||
+    value === "throttled" ||
     value === "unavailable"
   ) {
     return value;

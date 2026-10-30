@@ -42,6 +42,7 @@ from ai_workforce_api.authorization import (
     authorize,
 )
 from ai_workforce_api.db import connect, transaction
+from ai_workforce_api.entitlement_errors import trial_limit_from
 from ai_workforce_api.evidence_analysis import (
     EvidenceAnalysisScheduler,
     queue_analysis,
@@ -66,6 +67,7 @@ from ai_workforce_api.portal_workspace import (
 )
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import ObjectStore, StoreError, digest_of, open_store
+from ai_workforce_api.storage_sweep import discard
 
 logger = logging.getLogger(__name__)
 
@@ -947,8 +949,12 @@ def upload(
                 cursor, link.organization_id, link.project_id, file_id, requester
             )
     except UniqueViolation:
-        # The same file arrived twice at once: the first one is kept.
+        # The same file arrived twice at once: the first one is kept; this object goes.
+        discard(store, key)
         return PortalUploadBody(file_name=file_name, duplicate=True), None
+    except Exception:
+        discard(store, key)
+        raise
     return PortalUploadBody(file_name=file_name, duplicate=False), queued
 
 
@@ -1213,7 +1219,11 @@ def register_evidence_portal(
             ) from None
         except StoreError as error:
             raise HTTPException(status_code=503, detail=error.detail) from None
-        except psycopg.Error:
+        except psycopg.Error as error:
+            # The trial's allowances answer as they do everywhere else (Step 6).
+            refused = trial_limit_from(error)
+            if refused is not None:
+                raise HTTPException(status_code=402, detail=refused) from None
             logger.warning("evidence portal query failed")
             raise HTTPException(status_code=503, detail="evidence upload unavailable") from None
 

@@ -294,7 +294,11 @@ def detect_everywhere(connection: psycopg.Connection[Any]) -> int:
     count = 0
     with transaction(connection) as cursor:
         projects = cursor.execute(
-            "SELECT DISTINCT organization_id, project_id FROM test_sheet_signoffs"
+            """
+            SELECT DISTINCT s.organization_id, s.project_id FROM test_sheet_signoffs s
+            JOIN projects p ON p.id = s.project_id
+            WHERE p.status <> 'ARCHIVED' AND p.deleted_at IS NULL
+            """
         ).fetchall()
         for organization_id, project_id in projects:
             count += len(detect(cursor, UUID(str(organization_id)), UUID(str(project_id))))

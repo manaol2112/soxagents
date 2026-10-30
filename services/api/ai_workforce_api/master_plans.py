@@ -2240,6 +2240,7 @@ def settle_library_attributes(
         JOIN projects j ON j.id = c.project_id
         WHERE c.included AND c.library_key IS NOT NULL AND c.library_version >= %s
           AND (%s::uuid IS NULL OR c.project_id = %s)
+          AND j.status <> 'ARCHIVED' AND j.deleted_at IS NULL
           AND p.status NOT IN ('APPROVED', 'CHANGES_PROPOSED')
           AND p.run_status NOT IN ('PENDING', 'WORKING')
         ORDER BY c.project_id, c.control_ref
@@ -2716,7 +2717,9 @@ def accept_criteria(
                 raise PlanState("the attribute changed")
             if row[1] != "APPROVED":
                 raise PlanState("decide the attribute first")
-            if row[2] != "AGENT":
+            # A person accepts criteria proposed for them: an agent's, or those prepared with
+            # the demo (SEEDED, migration 0130); their own need no acceptance.
+            if row[2] not in ("AGENT", "SEEDED"):
                 raise PlanState("the criteria are not the agent's")
             cursor.execute(
                 """

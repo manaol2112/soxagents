@@ -1,4 +1,3 @@
-import { GoogleMark } from "./provider-marks";
 import { UiIcon } from "./ui-icon";
 import {
   ControlRun,
@@ -10,7 +9,12 @@ import {
 } from "./welcome-mocks";
 import {
   DEMO_FOCUS,
+  ENTERPRISE_INCLUDES,
   type LibrarySummary,
+  PRICING_QUESTIONS,
+  TRIAL_DAYS,
+  TRIAL_INCLUDES,
+  TRIAL_LIMITS,
   WELCOME_NOTICES,
   type WelcomeNotice,
 } from "./welcome-model";
@@ -125,6 +129,17 @@ function Point({ children }: { children: React.ReactNode }) {
   );
 }
 
+function PlanPoint({ children }: { children: React.ReactNode }) {
+  return (
+    <li>
+      <span className="lp-plan-check" aria-hidden="true">
+        <UiIcon name="check" size={12} />
+      </span>
+      <span>{children}</span>
+    </li>
+  );
+}
+
 /** A share of the artwork's width or height, for placing a card on it. */
 const across = (value: number) => `${(value / CYCLE.width) * 100}%`;
 const down = (value: number) => `${(value / CYCLE.height) * 100}%`;
@@ -155,9 +170,10 @@ export function WelcomePage({
           Audit Workforce
         </a>
         <nav className="lp-nav-links" aria-label="Page">
-          <a href="#control">Product</a>
-          <a href="#assurance">Assurance</a>
-          <a href="#auditors">Who it's for</a>
+          <a href="#control">Platform</a>
+          <a href="#assurance">Trust</a>
+          <a href="#auditors">Solutions</a>
+          <a href="#pricing">Pricing</a>
           <a href="#faq">FAQ</a>
         </nav>
         <div className="lp-nav-actions">
@@ -372,26 +388,37 @@ export function WelcomePage({
             and documents every control, with the auditor in command. For every
             auditor, from a one-person practice to a global firm.
           </p>
-          <div className="lp-hero-actions">
-            <a className="lp-btn lp-btn-primary lp-btn-lg" href="#control">
-              Watch a control run
-              <UiIcon name="arrow" size={16} />
-            </a>
-            <a className="lp-btn lp-btn-line lp-btn-lg" href="#demo">
-              Book a private demo
-              <UiIcon name="arrow" size={16} />
-            </a>
+          <div className="lp-hero-cta">
+            <div className="lp-hero-actions">
+              <a
+                className="lp-btn lp-btn-primary lp-btn-lg"
+                href={googleHref ?? "/sign-in"}
+              >
+                Start free trial
+                <UiIcon name="arrow" size={16} />
+              </a>
+              <a className="lp-btn lp-btn-line lp-btn-lg" href="#control">
+                <svg
+                  className="lp-play"
+                  viewBox="0 0 12 14"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <path d="M1 1.2v11.6a.8.8 0 0 0 1.2.7l9.4-5.8a.8.8 0 0 0 0-1.4L2.2.5A.8.8 0 0 0 1 1.2Z" />
+                </svg>
+                See how it works
+              </a>
+            </div>
+            <div className="lp-hero-trial">
+              <span>
+                <UiIcon name="check" size={15} />
+                {TRIAL_DAYS}-day trial · No credit card required
+              </span>
+              <span>
+                For teams: <a href="#demo">Request a demo</a>
+              </span>
+            </div>
           </div>
-          {googleHref !== null ? (
-            <p className="lp-hero-solo">
-              Working on your own?{" "}
-              <a href={googleHref}>
-                <GoogleMark size={14} />
-                Start with Google
-              </a>{" "}
-              and your workspace is ready in a minute.
-            </p>
-          ) : null}
         </div>
         <div className="lp-hero-app" data-reveal>
           <MissionControl />
@@ -410,6 +437,7 @@ export function WelcomePage({
               <li
                 key={title}
                 className={index < STEPS.length - 1 ? "is-done" : "is-now"}
+                style={stepOf(index)}
               >
                 <span className="lp-step-mark">
                   {index < STEPS.length - 1 ? (
@@ -563,6 +591,91 @@ export function WelcomePage({
               </li>
             </ul>
           ) : null}
+        </div>
+      </section>
+
+      <section className="lp-dark lp-pricing" id="pricing">
+        <div className="lp-wrap">
+          <div className="lp-head" data-reveal>
+            <p className="lp-kicker">Pricing / Early access</p>
+            <h2>
+              Simple access. Real audit capability
+              <span className="lp-dot">.</span>
+            </h2>
+            <p>
+              Explore Audit Workforce with a complete{" "}
+              <span className="lp-nowrap">{TRIAL_DAYS}-day trial.</span> No
+              credit card required.
+            </p>
+          </div>
+          <div className="lp-plans">
+            <article className="lp-plan is-featured" data-reveal>
+              <p className="lp-plan-badge">Early access</p>
+              <h3>Free trial</h3>
+              <p className="lp-plan-price">
+                <strong>$0</strong>
+                <span>for {TRIAL_DAYS} days</span>
+              </p>
+              <p className="lp-plan-note">No credit card required.</p>
+              <p className="lp-plan-lead">
+                Experience the full AI-assisted audit lifecycle with one
+                engagement.
+              </p>
+              <ul className="lp-plan-list is-split">
+                {TRIAL_INCLUDES.map((item) => (
+                  <PlanPoint key={item}>{item}</PlanPoint>
+                ))}
+              </ul>
+              <p className="lp-plan-limits">{TRIAL_LIMITS}</p>
+              <a
+                className="lp-btn lp-btn-primary lp-btn-lg lp-plan-cta"
+                href={googleHref ?? "/sign-in"}
+              >
+                Start free trial
+                <UiIcon name="arrow" size={16} />
+              </a>
+            </article>
+            <article
+              className="lp-plan"
+              data-reveal
+              style={{ transitionDelay: "90ms" }}
+            >
+              <h3>Enterprise evaluation</h3>
+              <p className="lp-plan-price is-talk">
+                <strong>Let's talk</strong>
+              </p>
+              <p className="lp-plan-lead">
+                For audit teams exploring a broader rollout, security needs, and
+                custom capacity.
+              </p>
+              <ul className="lp-plan-list">
+                {ENTERPRISE_INCLUDES.map((item) => (
+                  <PlanPoint key={item}>{item}</PlanPoint>
+                ))}
+              </ul>
+              <a
+                className="lp-btn lp-btn-line lp-btn-lg lp-plan-cta"
+                href="#demo"
+              >
+                Book a private demo
+                <UiIcon name="arrow" size={16} />
+              </a>
+            </article>
+          </div>
+          <p className="lp-plan-fine">
+            Your work remains accessible after the trial.
+          </p>
+          <div className="lp-faq is-plain" data-reveal>
+            {PRICING_QUESTIONS.map((item) => (
+              <details key={item.q}>
+                <summary>
+                  <span className="lp-faq-q">{item.q}</span>
+                  <span className="lp-faq-toggle" aria-hidden="true" />
+                </summary>
+                <p>{item.a}</p>
+              </details>
+            ))}
+          </div>
         </div>
       </section>
 
@@ -752,8 +865,9 @@ export function WelcomePage({
         </div>
         <p>The agentic audit workspace, for every auditor.</p>
         <nav aria-label="Footer">
-          <a href="#control">Product</a>
-          <a href="#assurance">Assurance</a>
+          <a href="#control">Platform</a>
+          <a href="#assurance">Trust</a>
+          <a href="#pricing">Pricing</a>
           <a href="#faq">FAQ</a>
           <a href="/sign-in">Sign in</a>
         </nav>

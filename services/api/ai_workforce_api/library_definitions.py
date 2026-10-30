@@ -33,6 +33,7 @@ from ai_workforce_api.definition_registry import (
     definition_for,
     definition_version,
 )
+from ai_workforce_api.entitlement_errors import trial_limit_from
 from ai_workforce_api.testing_definitions import (
     DEFINED_SINCE,
     DEFINITIONS_VERSION,
@@ -645,6 +646,13 @@ def adopt_latest(connection: psycopg.Connection[Any], project_id: UUID | None = 
             connection.commit()
             adopted.adopted += 1
         except ContextState:
+            connection.rollback()
+            adopted.kept += 1
+        except psycopg.Error as error:
+            # A trial firm at its controls allowance keeps the version it has (the split
+            # the new version adds would be one control more); every other firm adopts.
+            if trial_limit_from(error) is None:
+                raise
             connection.rollback()
             adopted.kept += 1
     return adopted

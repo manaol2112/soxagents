@@ -32,6 +32,9 @@ def workflow_address_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MODEL_API_KEY", "")
     monkeypatch.setenv("MODEL_NAME", "")
     monkeypatch.setenv("LOCAL_WORKER_ENABLED", "false")
+    # The developer's .env names the demo dataset for the local stack; a test that needs one
+    # passes demo_dataset in Settings (test_demo.py). Start from none configured.
+    monkeypatch.setenv("DEMO_DATASET", "")
     # A developer's .env may relax these for local use; tests start from the strict defaults.
     monkeypatch.setenv("REVIEW_INDEPENDENCE_REQUIRED", "true")
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "")

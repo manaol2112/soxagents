@@ -158,6 +158,29 @@ def main() -> None:
     with psycopg.connect(settings.database_url, connect_timeout=3) as connection:
         purged = purge_expired_contents(connection)
     print(f"model call contents: {purged} expired records removed")
+    # A reservation a dead worker never settled stops counting as a run in progress once
+    # its run could no longer be running; it is charged at its estimate (Step 6).
+    from ai_workforce_api.subscriptions import release_abandoned_everywhere
+
+    with psycopg.connect(settings.database_url, connect_timeout=3) as connection:
+        released = release_abandoned_everywhere(connection)
+    print(f"model call reservations: {released} abandoned runs released")
+    # Request throttle windows older than a day, and objects no record names (an upload
+    # whose row was refused after the bytes were stored, or a process that died between
+    # the two), are removed (Step 7).
+    from ai_workforce_api.rate_limit import sweep as sweep_windows
+    from ai_workforce_api.storage import open_store
+    from ai_workforce_api.storage_sweep import sweep_orphans
+
+    with psycopg.connect(settings.database_url, connect_timeout=3) as connection:
+        windows = sweep_windows(connection)
+        swept = sweep_orphans(connection, open_store(settings, connection))
+        connection.commit()
+    print(f"rate limit windows: {windows} old windows removed")
+    print(
+        f"object storage: {swept.listed} objects listed, {swept.orphaned} orphaned, "
+        f"{swept.removed} removed"
+    )
 
 
 if __name__ == "__main__":

@@ -46,6 +46,7 @@ NARRATIVE_NOTE = (
 )
 STATUS_WORDS = {
     "complete": "Complete",
+    "awaiting_rollforward": "Awaiting roll-forward evidence",
     "awaiting_review": "Awaiting review",
     "in_testing": "In testing",
     "awaiting_evidence": "Awaiting evidence",
@@ -214,7 +215,8 @@ def _control_table(rows: list[dict[str, Any]], total: int) -> Table:
         "Controls",
         [
             "Control", "Application", "Process", "Testing status", "Evidence pending",
-            "Test result", "Workpapers", "Review", "Open notes", "Deficiencies", "Next step",
+            "Interim result", "Current result", "Workpapers", "Review", "Open notes",
+            "Deficiencies (open / closed)", "Next step",
         ],
         [
             [
@@ -232,18 +234,29 @@ def _control_table(rows: list[dict[str, Any]], total: int) -> Table:
                     else ""
                 ),
                 _words(r["test_result"]),
+                _current_result(r),
                 r["workpapers"],
                 _words(r["review"]),
                 str(r["open_review_notes"]),
-                str(r["open_deficiencies"]),
+                f"{r['open_deficiencies']} / {r['closed_deficiencies']}",
                 r["next_step"] or "",
             ]
             for r in rows
         ],
         total=total,
-        widths=[2.8, 1.2, 1.3, 1.2, 1.5, 1.2, 1.3, 1.0, 0.9, 1.2, 1.9],
+        widths=[2.6, 1.1, 1.2, 1.3, 1.4, 1.0, 1.4, 1.2, 1.0, 0.7, 1.0, 1.7],
         empty="No controls match.",
     )  # fmt: skip
+
+
+def _current_result(row: dict[str, Any]) -> str:
+    """The latest signed-off round's result with the round it comes from, so a retest
+    reads beside the interim result it supersedes."""
+    words = _words(row["current_result"])
+    basis = row.get("current_result_basis") or ""
+    if basis in ("", "Interim", data.NOT_RECORDED) or row["current_result"] == "NOT_CONCLUDED":
+        return words
+    return f"{words} ({basis})"
 
 
 def _exception_action(row: dict[str, Any]) -> str:
@@ -253,8 +266,41 @@ def _exception_action(row: dict[str, Any]) -> str:
         "OPEN": "Agree the remediation",
         "REMEDIATION_IN_PROGRESS": "Remediate",
         "READY_FOR_RETEST": "Retest",
+        "REMEDIATED": "Confirm closure",
+        "CLOSED": "Closed",
         "NOT_EVALUATED": "Auditor to judge whether it is a deficiency",
     }.get(row["status"], "")
+
+
+def _closed_table(rows: list[dict[str, Any]]) -> Table:
+    """Deficiencies remediated or closed, with the retest that closed them: the history
+    stays in the report beside the open items."""
+    return Table(
+        "Closed deficiencies and remediation outcomes",
+        [
+            "Deficiency", "Control", "Severity (as recorded)", "Status", "Fix in effect",
+            "Retest result", "Closed on",
+        ],
+        [
+            [
+                f"{r['exception_id']}: {r['title']}",
+                r["control_ref"],
+                _words(r["severity_as_recorded"])
+                if r["severity_as_recorded"] != "Not recorded"
+                else r["severity_as_recorded"],
+                _words(r["status"]),
+                _date(r["remediated_on"]),
+                _words(r["retest_result"])
+                if r["retest_result"] != "Not recorded"
+                else r["retest_result"],
+                _date(r["closed_on"]),
+            ]
+            for r in rows
+        ],
+        total=len(rows),
+        widths=[3.2, 1.4, 1.6, 1.3, 1.2, 1.2, 1.1],
+        empty="No deficiency has been remediated or closed.",
+    )  # fmt: skip
 
 
 def _exception_table(rows: list[dict[str, Any]], total: int) -> Table:
@@ -316,11 +362,13 @@ def _overview_facts(status: dict[str, Any]) -> list[tuple[str, str]]:
         ("Period end", _date(status["period_end"])),
         ("Controls in scope", f"{controls['in_scope']} ({controls['key']} key)"),
         ("Testing complete", f"{completion['complete']} of {completion['in_scope']} ({percent})"),
-        ("Failed testing", str(controls["failed"])),
+        ("Failed testing (current result)", str(controls["failed"])),
+        ("Remediated and retested effective", str(controls["retested_effective"])),
         ("Evidence requests pending", str(evidence["pending"])),
         ("Overdue", str(evidence["overdue"])),
         ("Received, not yet reviewed", str(evidence["received_not_reviewed"])),
         ("Open deficiencies", str(status["exceptions"]["open_deficiencies"])),
+        ("Closed deficiencies", str(status["exceptions"]["closed_deficiencies"])),
         ("Open review notes", str(status["review"]["open_review_notes"])),
         ("Missed milestones", str(status["schedule"]["missed_milestones"])),
     ]
@@ -344,6 +392,12 @@ def _next_actions(status: dict[str, Any], requests: dict[str, Any]) -> list[str]
     if awaiting:
         actions.append(f"Review {awaiting} control{'s' if awaiting != 1 else ''} whose testing "
                        "is signed off.")  # fmt: skip
+    rolling = status["review"].get("controls_awaiting_rollforward", 0)
+    if rolling:
+        actions.append(
+            f"Obtain roll-forward evidence for {rolling} control{'s' if rolling != 1 else ''} "
+            "whose interim conclusion is reviewed."
+        )
     undecided = status["exceptions"]["failed_tests_without_deficiency"]
     if undecided:
         actions.append(
@@ -501,6 +555,13 @@ def build(
                     connection, principal, organization_id, project_id, limit=None
                 )
             )
+            every = read(
+                lambda: data.exceptions(
+                    connection, principal, organization_id, project_id, limit=None,
+                    include_closed=True,
+                )
+            )  # fmt: skip
+            closed = [r for r in every["exceptions"] if r["status"] in data.CLOSED_DEFICIENCIES]
             review = read(
                 lambda: data.review_items(
                     connection, principal, organization_id, project_id, limit=None
@@ -511,7 +572,7 @@ def build(
                 Section("Overall status", facts=_overview_facts(status)),
                 Section(
                     "Control testing progress",
-                    intro=controls["completion"]["rule"],
+                    intro=controls["completion"]["rule"] + " " + controls["failed_rule"],
                     tables=[
                         Table(
                             "Controls by testing status",
@@ -520,7 +581,20 @@ def build(
                                 [STATUS_WORDS[key], str(count)]
                                 for key, count in controls["by_testing_status"].items()
                             ]
-                            + [["Failed testing (any status)", str(controls["failed"])]],
+                            + [
+                                [
+                                    "Failed testing, current result (any status)",
+                                    str(controls["failed"]),
+                                ],
+                                [
+                                    "Interim result not effective (original outcome)",
+                                    str(controls["interim_failed"]),
+                                ],
+                                [
+                                    "Remediated and retested effective",
+                                    str(controls["retested_effective"]),
+                                ],
+                            ],  # fmt: skip
                             widths=[3, 1],
                         )
                     ],
@@ -531,20 +605,65 @@ def build(
                     facts=[
                         (data.GROUP_LABELS[key], str(count))
                         for key, count in status["evidence"]["by_status_group"].items()
-                    ],
+                    ]
+                    + [
+                        (
+                            "Future phase (roll-forward, not yet sent)",
+                            str(status["evidence"]["future_phase"]),
+                        )
+                    ],  # fmt: skip
                     tables=[
+                        Table(
+                            "Evidence requirements by state",
+                            ["State", "All phases"]
+                            + [
+                                _words(phase)
+                                for phase in status["evidence"]["requirements"]["by_phase"]
+                            ],
+                            [
+                                [data.REQUIREMENT_WORDS[key], str(counts[key])]
+                                + [
+                                    str(by_phase[key])
+                                    for by_phase in status["evidence"]["requirements"][
+                                        "by_phase"
+                                    ].values()
+                                ]
+                                for key in data.REQUIREMENT_STATES
+                                for counts in (status["evidence"]["requirements"]["by_state"],)
+                            ]
+                            + [
+                                [
+                                    "Total requirements",
+                                    str(status["evidence"]["requirements"]["total"]),
+                                ]
+                                + [
+                                    str(sum(by_phase.values()))
+                                    for by_phase in status["evidence"]["requirements"][
+                                        "by_phase"
+                                    ].values()
+                                ]
+                            ],  # fmt: skip
+                            widths=[3.0, 1.0]
+                            + [1.0 for _ in status["evidence"]["requirements"]["by_phase"]],
+                        ),
                         _request_table(
                             late,
                             status["evidence"]["overdue"],
                             "Overdue evidence requests",
                             empty="No evidence requests are overdue.",
                             titled=True,
-                        )
+                        ),
                     ],
                 ),
                 Section(
                     "Open exceptions and deficiencies",
                     tables=[_exception_table(exceptions["exceptions"], exceptions["total"])],
+                ),
+                Section(
+                    "Closed deficiencies and remediation outcomes",
+                    intro="The original failed tests stay in the testing history; a closed "
+                    "deficiency records the fix, the retest and the reviewer's decision.",
+                    tables=[_closed_table(closed)],
                 ),
                 Section(
                     "Outstanding review items",
@@ -566,8 +685,10 @@ def build(
             done = controls["by_testing_status"].get("complete", 0)
             received = status["evidence"]["by_status_group"].get("received", 0)
             reviewing = controls["by_testing_status"].get("awaiting_review", 0)
+            rolling = controls["by_testing_status"].get("awaiting_rollforward", 0)
+            closed_count = status["exceptions"]["closed_deficiencies"]
             sections += [
-                Section("Progress", facts=_overview_facts(status)[:8]),
+                Section("Progress", facts=_overview_facts(status)[:10]),
                 Section(
                     "Key accomplishments",
                     bullets=[
@@ -577,7 +698,15 @@ def build(
                         f"{reviewing} control{'s' if reviewing != 1 else ''} tested and "
                         "awaiting review.",
                     ]
-                    if done or received or reviewing
+                    + (
+                        [
+                            f"{closed_count} deficienc{'y' if closed_count == 1 else 'ies'} "
+                            "remediated and closed after retesting."
+                        ]
+                        if closed_count
+                        else []
+                    )  # fmt: skip
+                    if done or received or reviewing or closed_count
                     else [
                         "None yet: no control is complete, no evidence request has been "
                         "received, and no tested control awaits review."
@@ -587,9 +716,13 @@ def build(
                     "Significant outstanding items",
                     bullets=[
                         f"{status['evidence']['pending']} evidence requests pending, "
-                        f"{status['evidence']['overdue']} overdue.",
-                        f"{controls['failed']} controls failed testing.",
+                        f"{status['evidence']['overdue']} overdue "
+                        f"({status['evidence']['future_phase']} for the roll-forward phase, "
+                        "not yet sent).",
+                        f"{controls['failed']} controls failed testing on their current result.",
                         f"{status['exceptions']['open_deficiencies']} open deficiencies.",
+                        f"{rolling} control{'s' if rolling != 1 else ''} awaiting roll-forward "
+                        "evidence.",
                         f"{status['review']['open_review_notes']} open review notes.",
                     ],
                 ),

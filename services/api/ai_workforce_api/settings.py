@@ -85,6 +85,39 @@ class Settings(BaseSettings):
     model_budget_call_micros: int = Field(default=1_000_000, ge=0)
     model_budget_job_micros: int = Field(default=10_000_000, ge=0)
     model_budget_engagement_month_micros: int = Field(default=50_000_000, ge=0)
+    # The free trial (Trial Management, Step 2; the owner's decisions of 28 October 2026):
+    # what a firm's subscription row is given when it signs itself up. The row is what the
+    # database and the agent caller enforce, so a change here applies to trials that start
+    # after it. The AI allowance is for the whole trial, never renewed.
+    trial_days: int = Field(default=7, ge=1, le=365)
+    trial_limit_engagements: int = Field(default=1, ge=0)
+    trial_limit_systems: int = Field(default=1, ge=0)
+    trial_limit_controls: int = Field(default=5, ge=0)
+    trial_limit_members: int = Field(default=1, ge=0)
+    trial_limit_uploads: int = Field(default=10, ge=0)
+    trial_limit_upload_bytes: int = Field(default=250_000_000, ge=0)
+    trial_ai_budget_micros: int = Field(default=5_000_000, ge=0)
+    trial_ai_run_limit: int = Field(default=20, ge=0)
+    trial_ai_concurrent_runs: int = Field(default=1, ge=1)
+    trial_ai_run_seconds: int = Field(default=600, ge=60)
+    # Request throttles (pre-launch hardening, Step 7; rate_limit.py): how many requests
+    # a window allows per network address, per sign-up identity and per firm. 0 turns a
+    # throttle off. Sign-in windows fail open on a counting error; sign-up and the demo
+    # fail closed.
+    rate_limit_login_per_address: int = Field(default=30, ge=0)
+    rate_limit_login_window_seconds: int = Field(default=600, ge=10)
+    rate_limit_signup_per_address: int = Field(default=5, ge=0)
+    rate_limit_signup_per_identity: int = Field(default=2, ge=0)
+    rate_limit_signup_window_seconds: int = Field(default=3600, ge=60)
+    rate_limit_demo_per_firm: int = Field(default=10, ge=0)
+    rate_limit_demo_window_seconds: int = Field(default=3600, ge=60)
+    # How long an agent run may be quiet between model calls and still hold the
+    # trial's one concurrent slot (subscriptions.py).
+    trial_ai_quiet_seconds: int = Field(default=90, ge=10, le=3600)
+    # The dataset a trial firm's synthetic demo engagement is built from (demo_datasets.py),
+    # by key. Empty means no demo is available yet: the invitation leads to the preparation
+    # notice. `placeholder/0` is for development and integration tests only.
+    demo_dataset: str = Field(default="", pattern=r"^$|^[a-z0-9-]+/[0-9]+$")
     # The key that encrypts stored prompts and answers (provenance.py): 32 bytes,
     # base64. Without it, only hashes are kept. Never logged.
     provenance_key: str = Field(default="", repr=False)

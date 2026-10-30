@@ -1,5 +1,11 @@
 import { UiIcon } from "./ui-icon";
 
+/** Where an element falls in the control run's sequence, for the CSS to time it by. */
+const at = (place: Record<string, number>) =>
+  Object.fromEntries(
+    Object.entries(place).map(([key, value]) => [`--${key}`, value]),
+  ) as React.CSSProperties;
+
 // The landing page's product views, drawn in code from the workspace's own concepts (the
 // product owner's references, 27 October 2026). Every name and figure is synthetic; each
 // view is captioned as an illustration. Nothing here claims a feature the product lacks:
@@ -367,17 +373,18 @@ export function ControlRun() {
             </thead>
             <tbody>
               {attributes.map(([icon, text], row) => (
-                <tr key={text}>
+                <tr key={text} style={at({ r: row })}>
                   <td>
                     <UiIcon name={icon} size={13} />
                     <span>
                       <b>A{row + 1}</b> {text}
                     </span>
                   </td>
-                  {samples.map(([id, results]) => (
+                  {samples.map(([id, results], column) => (
                     <td key={id}>
                       <span
                         className={`lp-mark is-${results[row]}`}
+                        style={at({ r: row, c: column })}
                         role="img"
                         aria-label={
                           results[row] === "ok" ? "Pass" : "Needs review"
@@ -396,10 +403,10 @@ export function ControlRun() {
             </tbody>
           </table>
           <ul className="lp-run-samples">
-            {samples.map(([id, results]) => {
+            {samples.map(([id, results], column) => {
               const review = results.includes("review");
               return (
-                <li key={id}>
+                <li key={id} style={at({ c: column })}>
                   <span>
                     <b>{id}</b>
                     <small>Access grant</small>

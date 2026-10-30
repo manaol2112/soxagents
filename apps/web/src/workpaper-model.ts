@@ -27,7 +27,7 @@ export type WorkpaperSection = {
   columns: string[];
   rows: string[][];
   /** FALLBACK: the agent failed and the records' plain words stand in. */
-  source: "RECORDS" | "AGENT" | "PERSON" | "FALLBACK";
+  source: "RECORDS" | "AGENT" | "PERSON" | "FALLBACK" | "SEEDED";
   /** The template tab the section is on; empty for a workpaper drafted before tabs. */
   tab: string;
   period: string;
@@ -142,7 +142,8 @@ function parseSection(value: unknown): WorkpaperSection | null {
     source:
       value.source === "AGENT" ||
       value.source === "PERSON" ||
-      value.source === "FALLBACK"
+      value.source === "FALLBACK" ||
+      value.source === "SEEDED"
         ? value.source
         : "RECORDS",
     tab: str(value.tab),

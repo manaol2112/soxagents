@@ -30,7 +30,7 @@ from ai_workforce_api.authorization import (
 )
 from ai_workforce_api.evidence_withdrawn import in_force
 
-RULES_VERSION = "Metrics rulebook v1, pending approval"
+RULES_VERSION = "Metrics rulebook v1.1, pending approval"
 
 # How an evidence request's status reads, in groups an audit team uses.
 REQUEST_GROUPS: dict[str, str] = {
@@ -74,8 +74,27 @@ RequestGroup = Literal[
 ]
 Phase = Literal["DESIGN", "INTERIM", "ROLLFORWARD", "RETEST", "REMEDIATION", "NOT_RECORDED"]
 TestingStatus = Literal[
-    "complete", "awaiting_review", "in_testing", "awaiting_evidence", "not_started"
+    "complete",
+    "awaiting_rollforward",
+    "awaiting_review",
+    "in_testing",
+    "awaiting_evidence",
+    "not_started",
 ]
+TESTING_STATUSES: tuple[str, ...] = (
+    "complete",
+    "awaiting_rollforward",
+    "awaiting_review",
+    "in_testing",
+    "awaiting_evidence",
+    "not_started",
+)
+# How a round reads as the basis of a control's current result (v1.1).
+ROUND_WORDS = {"INTERIM": "Interim", "RETEST": "Retest", "ROLLFORWARD": "Roll-forward"}
+# A request for the roll-forward phase that has not gone out yet is year-end work, not
+# evidence outstanding against the interim conclusion (v1.1).
+FUTURE_PHASE = "ROLLFORWARD"
+NOT_SENT = ("draft", "awaiting_approval")
 
 
 class DataUnavailable(Exception):
@@ -539,15 +558,26 @@ class ControlFilters:
 def testing_status(row: Any, open_notes: int, pending: int) -> str:
     """Where a control's testing stands (RULES): complete only when its conclusion is
     final (every required phase and round tested and independently reviewed:
-    control_journey.finality), its review is signed off, and no review note is open."""
-    if (
-        row.conclusion != "NOT_CONCLUDED"
-        and getattr(row, "final", False)
-        and row.review_status == "SIGNED_OFF"
-        and open_notes == 0
-    ):
+    control_journey.finality), its review is signed off, and no review note is open.
+    Awaiting roll-forward evidence (v1.1): the interim conclusion is reviewed with no note
+    open, and only a roll-forward round, requested or in testing, keeps it from final."""
+    reviewed = (
+        row.conclusion != "NOT_CONCLUDED" and row.review_status == "SIGNED_OFF" and open_notes == 0
+    )
+    if reviewed and getattr(row, "final", False):
         return "complete"
     if row.sheet_status == "SIGNED_OFF":
+        reasons = list(getattr(row, "not_final", None) or [])
+        if (
+            reviewed
+            and reasons
+            and all(
+                getattr(reason, "kind", "") == "ROUND"
+                and getattr(reason, "phase", "") == FUTURE_PHASE
+                for reason in reasons
+            )
+        ):
+            return "awaiting_rollforward"
         return "awaiting_review"
     if row.sheet_status == "OPEN" and row.sheet_left not in ("EVIDENCE",):
         return "in_testing"
@@ -599,14 +629,54 @@ def _control_rows(
     for request in requests:
         if request["_control_id"] is not None:
             by_control.setdefault(request["_control_id"], []).append(request)
+    # The latest signed-off round of each control (a retest or a roll-forward): its result
+    # is the control's current result. The interim sheet's result stays as the original
+    # outcome; nothing in the history is rewritten (v1.1).
+    latest_round: dict[UUID, tuple[str, int, str]] = {}
+    for control_id, kind, number, conclusion in connection.execute(
+        """
+        SELECT r.engagement_control_id, r.kind, r.number, s.conclusion
+        FROM test_sheets s JOIN test_rounds r ON r.id = s.test_round_id
+        WHERE s.project_id = %s AND s.status = 'SIGNED_OFF' AND s.conclusion IS NOT NULL
+          AND r.status <> 'CANCELLED'
+        ORDER BY s.signed_at, r.number
+        """,
+        (scope.project_id,),
+    ).fetchall():
+        latest_round[control_id] = (str(kind), int(number), str(conclusion))
+    # Every deficiency logged against the control, open or closed, so a remediated one
+    # still counts as logged (v1.1).
+    logged: dict[UUID, Counter[str]] = {}
+    for control_id, status in connection.execute(
+        """
+        SELECT engagement_control_id, status FROM deficiencies
+        WHERE project_id = %s AND engagement_control_id IS NOT NULL
+        """,
+        (scope.project_id,),
+    ).fetchall():
+        logged.setdefault(control_id, Counter())[str(status)] += 1
     found = []
     for c in controls:
         mine = [r for r in by_control.get(c.id, []) if r["status_group"] != "cancelled"]
         pending = [r for r in mine if r["status_group"] in PENDING_GROUPS]
+        future = [
+            r for r in pending if r["phase"] == FUTURE_PHASE and r["status_group"] in NOT_SENT
+        ]
         open_notes = int(notes.get(c.id, 0))
         status = testing_status(c, open_notes, len(pending))
         written = papers.get(c.id, [])
-        failed = c.conclusion == "EXCEPTION" or c.test_result == "NOT_EFFECTIVE"
+        interim = c.test_result or "NOT_CONCLUDED"
+        found_round = latest_round.get(c.id)
+        if found_round is not None:
+            kind, number, current = found_round
+            basis = f"{ROUND_WORDS.get(kind, kind.title())} {number}"
+        else:
+            current = interim
+            basis = "Interim" if c.test_result else NOT_RECORDED
+        counts = logged.get(c.id, Counter())
+        # Failed (v1.1): the current result is not effective, or the conclusion records an
+        # exception. A control retested effective after remediation is no longer failed.
+        failed = c.conclusion == "EXCEPTION" or current == "NOT_EFFECTIVE"
         found.append(
             {
                 "control_ref": c.label or c.control_ref,
@@ -621,7 +691,12 @@ def _control_rows(
                 "stage": c.stage,
                 "testing_status": status,
                 "test_sheet": c.sheet_status or "NOT_STARTED",
-                "test_result": c.test_result or "NOT_CONCLUDED",
+                # The interim sheet's signed-off result: the original testing outcome.
+                "test_result": interim,
+                # The latest signed-off round's result, and which round that is.
+                "current_result": current,
+                "current_result_basis": basis,
+                "retested": found_round is not None and found_round[0] == "RETEST",
                 "conclusion": c.conclusion,
                 "failed": failed,
                 "review": c.review_status or "NOT_OPENED",
@@ -635,7 +710,10 @@ def _control_rows(
                 "evidence_pending": len(pending),
                 "evidence_overdue": sum(1 for r in mine if r["overdue"]),
                 "evidence_pending_by_phase": dict(Counter(r["phase"] for r in pending)),
+                "evidence_pending_future": len(future),
                 "open_deficiencies": c.deficiencies,
+                "closed_deficiencies": sum(counts[s] for s in CLOSED_DEFICIENCIES),
+                "deficiencies_logged": sum(counts.values()),
                 "next_step": c.next_step,
                 "waiting_on": c.waiting_on,
                 "_sheet_left": c.sheet_left,
@@ -704,13 +782,19 @@ def control_checks(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     checks: list[tuple[str, str, list[dict[str, Any]]]] = [
         (
             "concluded_with_pending_evidence",
-            "Concluded while evidence is still outstanding",
-            [r for r in rows if r["conclusion"] != "NOT_CONCLUDED" and r["evidence_pending"] > 0],
+            "Concluded while evidence is still outstanding (roll-forward requests not yet "
+            "sent are left out)",
+            [
+                r
+                for r in rows
+                if r["conclusion"] != "NOT_CONCLUDED"
+                and r["evidence_pending"] - r["evidence_pending_future"] > 0
+            ],
         ),
         (
             "failed_without_deficiency",
             "A failed test with no deficiency logged",
-            [r for r in rows if r["failed"] and r["open_deficiencies"] == 0],
+            [r for r in rows if r["failed"] and r["deficiencies_logged"] == 0],
         ),
         (
             "tested_without_received_evidence",
@@ -781,10 +865,16 @@ def exceptions(
                 else item.remediation_due.isoformat(),
                 "identified_on": item.identified_at.date().isoformat(),
                 "pending_decision": item.pending_change is not None,
+                # The remediation's outcome, as recorded (v1.1).
+                "retest_result": item.retest_result or NOT_RECORDED,
+                "remediated_on": None
+                if item.remediated_on is None
+                else item.remediated_on.isoformat(),
+                "closed_on": None if item.closed_at is None else item.closed_at.date().isoformat(),
             }
         )
     for control in control_list:
-        if control["failed"] and control["open_deficiencies"] == 0:
+        if control["failed"] and control["deficiencies_logged"] == 0:
             rows.append(
                 {
                     "exception_id": f"TEST-{control['control_ref']}",
@@ -801,6 +891,9 @@ def exceptions(
                     "remediation_due": None,
                     "identified_on": None,
                     "pending_decision": False,
+                    "retest_result": NOT_RECORDED,
+                    "remediated_on": None,
+                    "closed_on": None,
                 }
             )
     chosen = [
@@ -933,6 +1026,74 @@ def review_items(
 # The overview
 
 
+REQUIREMENT_STATES = (
+    "accepted",
+    "insufficient",
+    "received_not_reviewed",
+    "outstanding",
+    "not_yet_requested",
+    "waived",
+)
+REQUIREMENT_WORDS = {
+    "accepted": "Accepted",
+    "insufficient": "Insufficient or follow-up required",
+    "received_not_reviewed": "Received, not yet judged",
+    "outstanding": "Requested, outstanding",
+    "not_yet_requested": "Planned, not yet requested",
+    "waived": "Waived",
+}
+
+
+def requirement_state(status: str, sufficiency: str, request_status: str | None, files: int) -> str:
+    """One state per evidence requirement (v1.1), by precedence, so the states add up: a
+    waiver first, then the judgment, then whether anything came, then whether the request
+    has gone out."""
+    if status == "WAIVED":
+        return "waived"
+    if sufficiency == "ACCEPTED":
+        return "accepted"
+    if sufficiency in ("INSUFFICIENT", "FOLLOW_UP_REQUIRED"):
+        return "insufficient"
+    if files > 0:
+        return "received_not_reviewed"
+    if status == "REQUESTED" and request_status not in (None, "DRAFT", "APPROVAL_PENDING"):
+        return "outstanding"
+    return "not_yet_requested"
+
+
+def requirement_summary(connection: psycopg.Connection[Any], project_id: UUID) -> dict[str, Any]:
+    """The engagement's evidence requirements by state, and by phase and state: the states
+    are exclusive and add up to the total; the phase is a second dimension over the same
+    records, never added to the first."""
+    by_state: Counter[str] = Counter()
+    by_phase: dict[str, Counter[str]] = {}
+    for phase, status, sufficiency, request_status, files in connection.execute(
+        """
+        SELECT q.phase, q.status, q.sufficiency, p.status,
+               (SELECT count(*) FROM evidence_matches m WHERE m.requirement_id = q.id)
+        FROM evidence_requirements q LEFT JOIN pbc_requests p ON p.id = q.pbc_request_id
+        WHERE q.project_id = %s AND q.status <> 'REMOVED'
+          AND (p.id IS NULL OR p.status <> 'CANCELLED')
+        """,
+        (project_id,),
+    ).fetchall():
+        state = requirement_state(str(status), str(sufficiency), request_status, int(files))
+        by_state[state] += 1
+        by_phase.setdefault(str(phase), Counter())[state] += 1
+    return {
+        "total": sum(by_state.values()),
+        "by_state": {key: by_state.get(key, 0) for key in REQUIREMENT_STATES},
+        "by_phase": {
+            phase: {key: counts.get(key, 0) for key in REQUIREMENT_STATES}
+            for phase, counts in sorted(by_phase.items())
+        },
+        "rule": "One state per requirement, by precedence: waived; accepted; insufficient or "
+        "follow-up required; received but not yet judged; requested and outstanding; "
+        "planned and not yet requested. Phases are a second dimension over the same "
+        "requirements.",
+    }
+
+
 def status(
     connection: psycopg.Connection[Any],
     principal: Principal,
@@ -962,6 +1123,7 @@ def status(
             """,
             (project_id,),
         ).fetchone()
+        requirement_states = requirement_summary(connection, project_id)
     live = [r for r in requests if r["status_group"] != "cancelled"]
     groups = Counter(r["status_group"] for r in live)
     late = sorted((r for r in live if r["overdue"]), key=lambda r: -r["days_overdue"])
@@ -1019,17 +1181,16 @@ def status(
         "controls": {
             "in_scope": in_scope,
             "key": sum(1 for c in control_list if c["key_control"]),
-            "by_testing_status": {
-                key: statuses.get(key, 0)
-                for key in (
-                    "complete",
-                    "awaiting_review",
-                    "in_testing",
-                    "awaiting_evidence",
-                    "not_started",
-                )
-            },
+            "by_testing_status": {key: statuses.get(key, 0) for key in TESTING_STATUSES},
             "failed": len(failed),
+            # The original outcomes and what retesting changed (v1.1).
+            "interim_failed": sum(1 for c in control_list if c["test_result"] == "NOT_EFFECTIVE"),
+            "retested_effective": sum(
+                1 for c in control_list if c["retested"] and c["current_result"] == "EFFECTIVE"
+            ),
+            "failed_rule": "Failed = the current result (the latest signed-off round: retest, "
+            "roll-forward, else interim) is not effective, or the conclusion records an "
+            "exception. The interim result stays shown as the original outcome.",
             "completion": {
                 "complete": complete,
                 "in_scope": in_scope,
@@ -1044,21 +1205,33 @@ def status(
             "pending": sum(groups.get(k, 0) for k in PENDING_GROUPS),
             "overdue": len(late),
             "received_not_reviewed": sum(1 for r in live if r["evidence_review"] == "not reviewed"),
+            "future_phase": sum(
+                1 for r in live if r["phase"] == FUTURE_PHASE and r["status_group"] in NOT_SENT
+            ),
             "cancelled_left_out": sum(1 for r in requests if r["status_group"] == "cancelled"),
             "rule": "Pending = not yet received (draft, awaiting approval, with the client, partly "
-            "received). Overdue = sent, not fully received, and past its due date.",
+            "received). Overdue = sent, not fully received, and past its due date. Future "
+            "phase = a roll-forward request not yet sent; it is counted in pending.",
+            "requirements": requirement_states,
         },
         "exceptions": {
             "open_deficiencies": len(open_findings),
+            "closed_deficiencies": len(findings) - len(open_findings),
+            "remediated_and_retested": sum(
+                1
+                for d in findings
+                if d.status in CLOSED_DEFICIENCIES and d.retest_result == "PASSED"
+            ),
             "severity_as_recorded": dict(Counter(d.severity for d in open_findings)),
             "awaiting_decision": sum(1 for d in open_findings if d.pending_change),
             "failed_tests_without_deficiency": sum(
-                1 for c in failed if c["open_deficiencies"] == 0
+                1 for c in failed if c["deficiencies_logged"] == 0
             ),
         },
         "review": {
             "open_review_notes": notes_open,
             "controls_awaiting_review": statuses.get("awaiting_review", 0),
+            "controls_awaiting_rollforward": statuses.get("awaiting_rollforward", 0),
         },
         "schedule": {
             "missed_milestones": len(missed),

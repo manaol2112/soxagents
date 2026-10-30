@@ -16,6 +16,8 @@ from uuid import UUID
 import psycopg
 from pydantic import BaseModel
 
+from ai_workforce_api.scenario import scenario_today
+
 # READY: the round may be sampled and tested now. NOT_READY: the blockers say why. DONE:
 # the round's own testing activity is signed off (or the round cancelled); it says nothing
 # about the round's independent review or the control's final completion, which
@@ -155,7 +157,8 @@ def round_facts(
         (project_id,),
     ).fetchall():
         pending[UUID(str(control_id))] = int(count)
-    today = date.today()
+    # A demo engagement's rounds read its scenario date (scenario.py); real ones, the clock.
+    today = scenario_today(connection, project_id)
     found: list[RoundFacts] = []
     for row in rows:
         control_id = UUID(str(row[4]))

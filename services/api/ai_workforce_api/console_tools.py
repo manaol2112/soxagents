@@ -121,7 +121,14 @@ class EngagementArg(BaseModel):
 
 class ControlQuery(BaseModel):
     testing_status: (
-        Literal["complete", "awaiting_review", "in_testing", "awaiting_evidence", "not_started"]
+        Literal[
+            "complete",
+            "awaiting_rollforward",
+            "awaiting_review",
+            "in_testing",
+            "awaiting_evidence",
+            "not_started",
+        ]
         | None
     ) = Field(default=None, description="Where testing stands, by the rulebook.")
     stage: str | None = Field(default=None, max_length=40)

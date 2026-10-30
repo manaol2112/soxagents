@@ -365,6 +365,7 @@ describe("the engagements list (portfolio view)", () => {
     overdueRequests: 0,
     missedMilestones: 0,
     lastActivityAt: null,
+    demo: false,
     nextMilestone: null,
     progress: [],
     ...extra,

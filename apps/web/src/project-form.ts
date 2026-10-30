@@ -298,13 +298,22 @@ export type ProjectNoticeCode =
   | "client-exists"
   | "client-changed"
   | "denied"
-  | "unavailable";
+  | "unavailable"
+  | "trial-limit"
+  | "trial-ended";
 
 export function noticeForStatus(
   status: number,
   detail: string,
   intent = "",
 ): ProjectNoticeCode {
+  // The subscription refused the change (subscriptions.py): the trial's allowance of
+  // engagements is used, or the trial has ended.
+  if (status === 402) {
+    return detail.startsWith("subscription inactive")
+      ? "trial-ended"
+      : "trial-limit";
+  }
   if (status === 200 || status === 201) {
     return intent === "complete"
       ? "completed-done"

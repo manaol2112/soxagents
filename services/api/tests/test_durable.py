@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 
 import psycopg
 import pytest
-from support import Database
+from support import Database, unrestricted
 from temporalio.client import Client
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.testing import WorkflowEnvironment
@@ -177,6 +177,8 @@ def _seed_run(connection: psycopg.Connection[Any]) -> dict[str, UUID]:
             ("Durable", slug),
         )
         organization = cursor.fetchone()
+        assert organization is not None
+        unrestricted(cursor, organization[0])
         cursor.execute(
             "INSERT INTO users (email, display_name) VALUES (%s, %s) RETURNING id",
             (f"{slug}@example.com", "Owner"),

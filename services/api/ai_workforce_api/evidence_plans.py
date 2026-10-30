@@ -343,8 +343,9 @@ def fingerprint(facts: PlanFacts) -> str:
 class Planned:
     output: PlanOutput
     # MODEL: the agent's checked plan. RULES: the rules by design (no model). FALLBACK:
-    # the model failed or its plan was rejected, and the rules' plan stands in.
-    source: Literal["MODEL", "RULES", "FALLBACK"]
+    # the model failed or its plan was rejected, and the rules' plan stands in. SEEDED: a
+    # plan prepared with the demo dataset (Step 4A), never a fresh model result.
+    source: Literal["MODEL", "RULES", "FALLBACK", "SEEDED"]
     note: str
     call_id: UUID | None
 
@@ -2371,7 +2372,7 @@ class RequirementFile(BaseModel):
     link_version: int | None = None
     read_status: str | None = None
     # Who read it: the model, or the reviewed keyword rules (no model, or a rejected answer).
-    read_by: Literal["MODEL", "RULES"] | None = None
+    read_by: Literal["MODEL", "RULES", "SEEDED"] | None = None
     kind: str | None = None
     kind_confirmed: bool = False
     coverage: Coverage | None = None
@@ -2977,7 +2978,7 @@ def requirement_files(
             linked_by=None if shared else row[5], reason=str(row[6] or ""),
             link_version=row[7], read_status=row[8], kind=row[9],
             kind_confirmed=bool(row[10]),
-            read_by=row[13] if row[13] in ("MODEL", "RULES") else None,
+            read_by=row[13] if row[13] in ("MODEL", "RULES", "SEEDED") else None,
             coverage=coverage if read else None, note=note if read else "",
             period=period, gaps=gaps, shared_from=str(row[5]) if shared else None,
         )  # fmt: skip

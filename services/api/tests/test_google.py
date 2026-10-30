@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
-from support import Database
+from support import Database, unrestricted
 
 from ai_workforce_api.auth import workspace_name, workspace_slug
 from ai_workforce_api.db import connect, transaction
@@ -221,7 +221,12 @@ def test_google_sign_up_creates_the_user_and_their_own_workspace(
         audit = connection.execute("SELECT action FROM audit_events ORDER BY action").fetchall()
     assert identities == [("google", "109876543210")]
     assert name == ("Dana Ruiz",)
-    assert [row[0] for row in audit] == ["membership.grant", "organization.create"]
+    # Registration is audited since the pre-launch hardening (Step 7, 29 October 2026).
+    assert [row[0] for row in audit] == [
+        "membership.grant",
+        "organization.create",
+        "registration.accepted",
+    ]
     # The firm's own domain is where its invitations may go.
     with connect(migrated.url) as connection:
         domains = connection.execute(
@@ -326,6 +331,7 @@ def test_an_existing_member_does_not_get_a_second_workspace(migrated: Database) 
             )
             organization = cursor.fetchone()
             assert organization is not None
+            unrestricted(cursor, organization[0])
             cursor.execute(
                 """
                 INSERT INTO memberships (organization_id, user_id, role, status)

@@ -1,7 +1,11 @@
 import type { Client } from "./client-model.ts";
+import { DEFAULT_DEMO, type DemoSummary, parseDemo } from "./demo-model.ts";
+import { DEFAULT_TOUR, parseTour, type TourState } from "./demo-tour-model.ts";
 import type { Completion } from "./engagement-lifecycle.ts";
 import type { ProjectNoticeCode } from "./project-form.ts";
 import { canonicalQuery, parseSection, type SectionId } from "./routes.ts";
+import { parseSubscription, type SubscriptionSummary } from "./trial-model.ts";
+import { parseTrialUsage, type TrialUsage } from "./trial-usage-model.ts";
 
 export type SessionUser = {
   id: string;
@@ -13,6 +17,8 @@ export type Organization = {
   name: string;
   slug: string;
   role: string;
+  /** The firm's subscription as the API says it stands (trial-model.ts). */
+  subscription: SubscriptionSummary;
 };
 
 export type Project = {
@@ -38,6 +44,8 @@ export type Project = {
   lastActivityAt: string | null;
   /** The engagement team's names, the lead first. */
   team: string[];
+  /** The firm's synthetic demo engagement (demo-model.ts): marked by the server. */
+  demo: boolean;
 };
 
 export type AssignableMember = {
@@ -135,6 +143,8 @@ const PROJECT_NOTICES: ReadonlySet<string> = new Set<ProjectNoticeCode>([
   "client-changed",
   "denied",
   "unavailable",
+  "trial-limit",
+  "trial-ended",
 ]);
 
 export type AgentNotice =
@@ -237,6 +247,12 @@ export type ShellModel =
       taskAssignees: AssignableMember[];
       agentInstances: AgentInstanceChoice[];
       taskNotice: TaskNotice | null;
+      /** The firm's synthetic demo, as the API says it stands (demo-model.ts). */
+      demo: DemoSummary;
+      /** Where this person stands in the demo's guided tour (demo-tour-model.ts). */
+      tour: TourState;
+      /** The trial's allowances and usage (trial-usage-model.ts); read for Settings. */
+      trialUsage: TrialUsage | null;
     };
 
 /** Whether the shell says to sign in. Never while the page is still loading: a member
@@ -272,6 +288,12 @@ export type WorkspaceSnapshot = {
   canManageTasks: boolean;
   taskAssignees: unknown;
   agentInstances: unknown;
+  /** The firm's demo answer, read only for a firm on a running trial. */
+  demo?: unknown;
+  /** The tour's answer, read only when the firm's demo is ready. */
+  tour?: unknown;
+  /** The subscription route's answer, read for the settings page. */
+  subscription?: unknown;
 };
 
 const ROLE_LABELS: Record<string, string> = {
@@ -391,6 +413,12 @@ export function deriveShell(snapshot: WorkspaceSnapshot): ShellModel {
     taskAssignees: tasks.assignees,
     agentInstances: tasks.instances,
     taskNotice: section === "tasks" ? parseTaskNotice(snapshot.notice) : null,
+    demo: snapshot.demo === undefined ? DEFAULT_DEMO : parseDemo(snapshot.demo),
+    tour: snapshot.tour === undefined ? DEFAULT_TOUR : parseTour(snapshot.tour),
+    trialUsage:
+      snapshot.subscription === undefined
+        ? null
+        : parseTrialUsage(snapshot.subscription),
   };
 }
 
@@ -669,7 +697,13 @@ function parseOrganizations(value: unknown): Organization[] | null {
     ) {
       return null;
     }
-    organizations.push({ id, name, slug, role });
+    organizations.push({
+      id,
+      name,
+      slug,
+      role,
+      subscription: parseSubscription(item),
+    });
   }
   return organizations;
 }
@@ -738,6 +772,7 @@ function parseProjects(value: unknown): Project[] | null {
               typeof entry === "string" && entry !== "",
           )
         : [],
+      demo: item.demo === true,
     });
   }
   return projects;

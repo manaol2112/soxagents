@@ -163,6 +163,7 @@ export default async function Home({ searchParams }: HomeProps) {
       creatingEngagement={firstParam(params.create) === "engagement"}
       editingEngagement={firstParam(params.edit) === "engagement"}
       managingEngagement={firstParam(params.manage) === "engagement"}
+      invitingDemo={firstParam(params.demo) === "invite"}
       engagementsView={parseEngagementsView(firstParam(params.view))}
       setup={setup}
       engagement={engagement}

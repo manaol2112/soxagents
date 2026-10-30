@@ -33,7 +33,9 @@ from ai_workforce_api.control_reviews import register_control_reviews, review_ru
 from ai_workforce_api.control_send import register_control_send
 from ai_workforce_api.control_tests import register_control_tests
 from ai_workforce_api.db import connect
+from ai_workforce_api.demo import register_demo
 from ai_workforce_api.demo_requests import register_demo_requests, register_library_summary
+from ai_workforce_api.demo_tour import register_demo_tour
 from ai_workforce_api.engagement_close import (
     register_closed_engagements,
     register_engagement_close,
@@ -69,7 +71,6 @@ from ai_workforce_api.library_matching import register_library_matching
 from ai_workforce_api.mailbox import live_send_enabled, register_mailbox
 from ai_workforce_api.manager import register_manager
 from ai_workforce_api.master_plans import register_master_plans
-from ai_workforce_api.model_providers import provider_for
 from ai_workforce_api.models import ModelProvider, register_models
 from ai_workforce_api.next_steps import register_next_steps
 from ai_workforce_api.onboarding import register_onboarding
@@ -97,6 +98,7 @@ from ai_workforce_api.settings import Settings
 from ai_workforce_api.setup_drafting import draft_runner as setup_runner
 from ai_workforce_api.setup_drafting import register_setup_drafting
 from ai_workforce_api.standard_adoption import register_standard_adoption
+from ai_workforce_api.subscriptions import register_subscription_gate, register_subscriptions
 from ai_workforce_api.system_scoping import register_system_scoping
 from ai_workforce_api.system_scoping import review_runner as scoping_runner
 from ai_workforce_api.system_setup import register_system_setup
@@ -171,8 +173,12 @@ def create_app(
     app.state.settings = resolved
     # Registered before the session middleware so that it runs after it (Milestone 8.14).
     register_closed_engagements(app, resolved)
+    register_subscription_gate(app, resolved)
     register_auth(app, resolved, provider, google)
     register_authorization(app, resolved)
+    register_subscriptions(app, resolved)
+    register_demo(app, resolved)
+    register_demo_tour(app, resolved)
     register_projects(app, resolved)
     register_engagement_close(app, resolved)
     register_clients(app, resolved)
@@ -180,7 +186,10 @@ def create_app(
     register_agents(app, resolved)
     register_tasks(app, resolved)
     register_workflows(app, resolved, durable=attached)
-    models = model_provider if model_provider is not None else provider_for(resolved)
+    # The direct model-call and manager-plan routes get only a provider a test injects,
+    # else the local one (operations.md: every live call goes through the agent caller,
+    # tiered, budgeted and recorded; these routes have none of that).
+    models = model_provider
     register_models(app, resolved, models)
     register_provenance(app, resolved)
     register_agent_runs(app, resolved)

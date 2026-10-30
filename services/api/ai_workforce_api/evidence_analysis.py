@@ -1171,7 +1171,8 @@ def _reanalyze(
     with transaction(connection) as cursor:
         current = cursor.execute(
             """
-            SELECT status, version, confirmed_kind, evidence_file_id FROM evidence_analyses
+            SELECT status, version, confirmed_kind, evidence_file_id, source
+            FROM evidence_analyses
             WHERE id = %s AND organization_id = %s AND project_id = %s FOR UPDATE
             """,
             (analysis_id, organization_id, project_id),
@@ -1184,6 +1185,13 @@ def _reanalyze(
             raise AnalysisState("analysis is in progress")
         if current[2] is not None:
             raise AnalysisState("analysis is confirmed")
+        if current[4] == "SEEDED":
+            # A reading prepared with the demo is a kept example (migration 0129): the
+            # test results cite its text. A live analysis runs on a file added now.
+            raise AnalysisState(
+                "the analysis was prepared with the demo and is kept as an example; add a "
+                "copy of the file to analyse it live"
+            )
         if review_decided(connection, analysis_id):
             raise AnalysisState("review is signed off")
         if is_withdrawn(cursor, UUID(str(current[3]))):

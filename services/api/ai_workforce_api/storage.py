@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
 import psycopg
@@ -27,6 +28,14 @@ class DeletableStore(Protocol):
     """A store that can also remove an object, for files kept only for a while (exports)."""
 
     def delete(self, key: str) -> None: ...
+
+
+@runtime_checkable
+class ListableStore(Protocol):
+    """A store that can name the objects under a prefix, with when each was stored, for
+    the orphan sweep (storage_sweep.py)."""
+
+    def list_keys(self, prefix: str) -> list[tuple[str, datetime]]: ...
 
 
 class MockObjectStore:
@@ -64,6 +73,13 @@ class MockObjectStore:
 
     def delete(self, key: str) -> None:
         self._connection.execute("DELETE FROM mock_objects WHERE object_key = %s", (key,))
+
+    def list_keys(self, prefix: str) -> list[tuple[str, datetime]]:
+        rows = self._connection.execute(
+            "SELECT object_key, created_at FROM mock_objects WHERE object_key LIKE %s",
+            (prefix.replace("%", "") + "%",),
+        ).fetchall()
+        return [(str(key), moment) for key, moment in rows]
 
 
 class S3ObjectStore:
@@ -128,6 +144,23 @@ class S3ObjectStore:
         except ClientError:
             logger.warning("object storage could not be cleaned up")
             raise StoreError("object storage is unavailable") from None
+
+    def list_keys(self, prefix: str) -> list[tuple[str, datetime]]:
+        from botocore.exceptions import ClientError
+
+        found: list[tuple[str, datetime]] = []
+        try:
+            pages = self._client.get_paginator("list_objects_v2").paginate(
+                Bucket=self._bucket, Prefix=prefix
+            )
+            for page in pages:
+                for item in page.get("Contents", []):
+                    modified = item.get("LastModified") or datetime.now(UTC)
+                    found.append((str(item["Key"]), modified))
+        except ClientError:
+            logger.warning("object storage could not be listed")
+            raise StoreError("object storage is unavailable") from None
+        return found
 
 
 def open_store(settings: Settings, connection: psycopg.Connection[Any]) -> ObjectStore:

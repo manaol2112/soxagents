@@ -48,6 +48,7 @@ from ai_workforce_api.models import ModelProvider, ModelRaw
 from ai_workforce_api.provenance import AgentCaller, CallerProvider, Job, agent_actor
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import StoreError, open_store
+from ai_workforce_api.storage_sweep import discarding
 
 # Policies and procedures govern; process narratives and flow diagrams describe (decided by
 # the product owner on 26 October 2026, the References tab). Each is linked the same way.
@@ -374,11 +375,17 @@ def keep_file(
     (migration 0125). The text read from it stays what the agents quote."""
     key = f"documents/{uuid4()}"
     store.put(key, content)
-    cursor.execute(
-        "UPDATE source_documents SET object_key = %s, content_type = %s, size_bytes = %s "
-        "WHERE id = %s",
-        (key, line(content_type, 100) or "application/octet-stream", len(content), document_id),
-    )
+    with discarding(store, key):
+        cursor.execute(
+            "UPDATE source_documents SET object_key = %s, content_type = %s, size_bytes = %s "
+            "WHERE id = %s",
+            (
+                key,
+                line(content_type, 100) or "application/octet-stream",
+                len(content),
+                document_id,
+            ),
+        )
 
 
 def register_governing_documents(

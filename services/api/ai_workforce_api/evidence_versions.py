@@ -49,6 +49,7 @@ from ai_workforce_api.evidence_receipts import apply_receipt, undo_receipt
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import StoreError, digest_of, open_store
+from ai_workforce_api.storage_sweep import discarding
 from ai_workforce_api.testing_engine import TestScheduler, request_run, schedule_runs
 
 
@@ -485,9 +486,9 @@ def replace(
             raise IntakeState(f"the file cannot be replaced: {blocked}")
     new_id = uuid4()
     key = f"evidence/{new_id}"
-    # Stored before the record, as an upload is: an orphaned object is harmless.
+    # Stored before the record, as an upload is; a refused record removes it again.
     store.put(key, content)
-    with transaction(connection) as cursor:
+    with discarding(store, key), transaction(connection) as cursor:
         if _in_force(cursor, file_id) is not None:
             raise IntakeState("this file changed; refresh and try again")
         request_id, control_id = _link(cursor, project_id, file_id)

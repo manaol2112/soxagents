@@ -4,7 +4,7 @@ from uuid import UUID
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
-from support import Database
+from support import Database, unrestricted
 
 from ai_workforce_api.auth import token_hash
 from ai_workforce_api.db import connect, transaction
@@ -265,7 +265,8 @@ def test_a_new_engagement_keeps_the_frameworks_it_covers(migrated: Database) -> 
 
     def settings(project_id: str) -> dict[str, Any]:
         body: dict[str, Any] = client.get(f"{base}/{project_id}/onboarding").json()
-        return body["settings"]
+        settings: dict[str, Any] = body["settings"]
+        return settings
 
     chosen = client.post(
         base,
@@ -320,6 +321,8 @@ def _seed_org(connection: psycopg.Connection[Any], slug: str, email: str) -> dic
             (slug, slug),
         )
         organization = cursor.fetchone()
+        assert organization is not None
+        unrestricted(cursor, organization[0])
         cursor.execute(
             "INSERT INTO users (email, display_name) VALUES (%s, %s) RETURNING id",
             (email, slug),

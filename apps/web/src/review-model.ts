@@ -77,7 +77,7 @@ export type ControlReview = {
   reperformState: RunState;
   reperformedAt: string | null;
   /** FALLBACK: the rules' checks stand; the model did not re-perform the items. */
-  reperformSource: "MODEL" | "RULES" | "FALLBACK" | null;
+  reperformSource: "MODEL" | "RULES" | "FALLBACK" | "SEEDED" | null;
   reperformNote: string;
   cancelState?: CancelState;
   sheetStatus: string | null;
@@ -224,7 +224,8 @@ export function parseReviews(value: unknown): ControlReview[] | null {
       reperformSource:
         item.reperform_source === "MODEL" ||
         item.reperform_source === "RULES" ||
-        item.reperform_source === "FALLBACK"
+        item.reperform_source === "FALLBACK" ||
+        item.reperform_source === "SEEDED"
           ? item.reperform_source
           : null,
       reperformNote: str(item.reperform_note),

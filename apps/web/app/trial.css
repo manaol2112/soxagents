@@ -1,0 +1,318 @@
+/* The free trial in the shell (Trial Management, Step 2): a badge beside the
+   notifications, and a strip above the page while the subscription allows no change.
+   Tokens only; both read the same in the dark theme. */
+
+.trial-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 30px;
+  padding: 0 0.75rem;
+  color: var(--info);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  text-decoration: none;
+  background: var(--info-soft);
+  border: 1px solid var(--info-border);
+  border-radius: 999px;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.trial-badge.tone-warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+}
+
+.trial-badge:hover,
+.trial-badge:focus-visible {
+  border-color: currentColor;
+}
+
+.trial-badge svg {
+  flex: none;
+}
+
+.trial-badge-kind::after {
+  margin: 0 0.1rem 0 0.4rem;
+  content: "\00b7";
+  opacity: 0.6;
+}
+
+.trial-strip {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0 0 1.25rem;
+  padding: 0.625rem 0.875rem;
+  color: var(--warning);
+  font-size: var(--fs-base);
+  line-height: 1.45;
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius);
+}
+
+.trial-strip svg {
+  flex: none;
+  margin-top: 0.15rem;
+}
+
+.trial-strip a {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+@media (max-width: 640px) {
+  .trial-badge {
+    padding: 0 0.6rem;
+  }
+
+  .trial-badge-kind {
+    display: none;
+  }
+}
+
+/* ==========================================================================
+   The trial's usage (Step 6): Settings > Free trial, one card with the trial's standing,
+   a notice when the trial has ended or the AI allowance is spent, and compact meters for
+   each allowance. The demo workspace card carries the reset. Tokens only.
+   ========================================================================== */
+
+.tu-card {
+  display: grid;
+  gap: 1.1rem;
+  max-width: 880px;
+}
+
+.tu-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.tu-head h2 {
+  margin: 0.15rem 0 0;
+  font-size: var(--fs-title);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.tu-standing {
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+  height: 32px;
+  padding: 0 0.8rem;
+  color: var(--info);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  background: var(--info-soft);
+  border: 1px solid var(--info-border);
+  border-radius: 999px;
+}
+
+.tu-standing.tone-warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+}
+
+.tu-standing.tone-danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+}
+
+.tu-notice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.tu-notice > div {
+  flex: 1 1 320px;
+}
+
+.tu-notice strong {
+  display: block;
+  color: var(--text-strong);
+  font-weight: 650;
+}
+
+.tu-notice p {
+  margin: 0.25rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.tu-notice.tone-warning {
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+}
+
+.tu-notice.tone-danger {
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+}
+
+.tu-meters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tu-meter {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.85rem 1rem;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.tu-meter-head {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.tu-meter-label {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.tu-meter-words {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tu-bar {
+  height: 6px;
+  overflow: hidden;
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.tu-bar span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 200ms ease;
+}
+
+.tu-meter.tone-warning .tu-bar span {
+  background: var(--warning);
+}
+
+.tu-meter.tone-danger .tu-bar span {
+  background: var(--danger);
+}
+
+.tu-meter-note {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.tu-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.tu-foot p {
+  flex: 1 1 320px;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+/* The demo workspace card on the demo engagement's settings. */
+.demo-reset-card {
+  display: grid;
+  gap: 0.9rem;
+  margin-bottom: 1.25rem;
+}
+
+.demo-reset-head {
+  display: flex;
+  gap: 0.8rem;
+  align-items: flex-start;
+}
+
+.demo-reset-head h2 {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: 650;
+}
+
+.demo-reset-head p {
+  margin: 0.3rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.demo-reset-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.6rem 1rem;
+  margin: 0;
+}
+
+.demo-reset-facts dt {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.demo-reset-facts dd {
+  margin: 0.15rem 0 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.demo-reset-form {
+  display: flex;
+}
+
+@media (max-width: 640px) {
+  .tu-meters {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tu-bar span {
+    transition: none;
+  }
+}

@@ -112,3 +112,43 @@ export function parseLibrarySummary(value: unknown): LibrarySummary | null {
   }
   return { controls, areas, agents };
 }
+
+/** The early-access offer on the landing page (decided by the product owner, 28 October
+ * 2026): a free trial of one engagement, and a conversation for anything larger. The
+ * length lives here once, so no line on the page can promise a different one. */
+export const TRIAL_DAYS = 7;
+
+export const TRIAL_INCLUDES = [
+  "1 active engagement",
+  "Up to 5 controls",
+  "1 system",
+  "1 user",
+  "Full AI agent workforce",
+  "Evidence and testing",
+  "Independent review",
+  "10 evidence uploads",
+] as const;
+
+export const TRIAL_LIMITS =
+  "AI processing credits included · Usage limits apply";
+
+export const ENTERPRISE_INCLUDES = [
+  "Multi-team rollout",
+  "Security and governance review",
+  "Custom onboarding",
+] as const;
+
+export const PRICING_QUESTIONS = [
+  {
+    q: `What happens after ${TRIAL_DAYS} days?`,
+    a: "Your engagement, evidence and workpapers stay in your workspace, so nothing is lost. To keep the agents working, book a call and we will set up continued access with you.",
+  },
+  {
+    q: "Can I use my own audit evidence?",
+    a: "Yes. Load your client's RCM and the evidence it returns, as on any engagement. Evidence stays within your workspace and is visible only to its members.",
+  },
+  {
+    q: "Will I need a credit card?",
+    a: "No. Sign up and your workspace is ready in a minute, with no payment details.",
+  },
+] as const;

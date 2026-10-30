@@ -512,6 +512,9 @@ export function EngagementsBoard({
                       </span>
                     </span>
                     <span className="eg-cell" data-label="Status">
+                      {project.demo ? (
+                        <span className="eg-demo-tag">Demo</span>
+                      ) : null}
                       {atRisk(project) ? (
                         <span
                           className="eg-status is-risk"
@@ -645,6 +648,9 @@ export function EngagementsBoard({
                         ? project.clientName
                         : "No client"}
                     </span>
+                    {project.demo ? (
+                      <span className="eg-demo-tag">Demo</span>
+                    ) : null}
                     <span
                       className={`eg-status is-${project.status.toLowerCase()}`}
                     >

@@ -120,6 +120,10 @@ export const NOTICES: Record<SetupNotice, string> = {
     "The launch took longer than expected to answer. This page shows where it stands: if it says the engagement is running, it launched. It cannot launch twice.",
   "setup-slow":
     "That took longer than expected to answer and may have been saved. This page shows the latest.",
+  "trial-limit":
+    "The free trial has reached its allowance for this. Explore plans to add more.",
+  "trial-ended":
+    "The free trial has ended. Everything here stays to read; explore plans to keep working.",
   "setup-already-launched":
     "This engagement has already launched. It launches once, so nothing was started twice.",
   "setup-archived":

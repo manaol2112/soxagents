@@ -27,6 +27,7 @@ from ai_workforce_api.evidence_analysis import (
 )
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import ObjectStore, StoreError, digest_of, open_store
+from ai_workforce_api.storage_sweep import discarding
 
 MAX_BYTES = 25_000_000
 EMAIL_EVIDENCE_REFUSED = (
@@ -247,29 +248,30 @@ def _store(
         file_id = uuid4()
         key = f"evidence/{file_id}"
         store.put(key, content)
-        row = cursor.execute(
-            """
-            INSERT INTO evidence_files (
-                id, organization_id, project_id, mailbox_attachment_id, object_key,
-                content_sha256, size_bytes, content_type, file_name, stored_by
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id, mailbox_attachment_id, content_sha256, size_bytes,
-                      content_type, file_name, created_at
-            """,
-            (
-                file_id,
-                organization_id,
-                project_id,
-                attachment_id,
-                key,
-                digest,
-                len(content),
-                str(attachment[1]),
-                str(attachment[2]),
-                principal.id,
-            ),
-        ).fetchone()
+        with discarding(store, key):
+            row = cursor.execute(
+                """
+                INSERT INTO evidence_files (
+                    id, organization_id, project_id, mailbox_attachment_id, object_key,
+                    content_sha256, size_bytes, content_type, file_name, stored_by
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, mailbox_attachment_id, content_sha256, size_bytes,
+                          content_type, file_name, created_at
+                """,
+                (
+                    file_id,
+                    organization_id,
+                    project_id,
+                    attachment_id,
+                    key,
+                    digest,
+                    len(content),
+                    str(attachment[1]),
+                    str(attachment[2]),
+                    principal.id,
+                ),
+            ).fetchone()
         if row is None:
             raise NotVisible()
         stored = _body(row)

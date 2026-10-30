@@ -17,7 +17,7 @@ export type RequestDraft = {
   requestId: string;
   status: "PENDING" | "DRAFTING" | "DRAFTED" | "FAILED" | "SKIPPED";
   /** FALLBACK: the model failed and the rules drafted the request instead. */
-  source: "MODEL" | "RULES" | "FALLBACK" | null;
+  source: "MODEL" | "RULES" | "FALLBACK" | "SEEDED" | null;
   summary: string;
   items: DraftItem[];
   questions: string[];
@@ -72,7 +72,8 @@ export function parseDrafts(value: unknown): Map<string, RequestDraft> {
       source:
         item.source === "MODEL" ||
         item.source === "RULES" ||
-        item.source === "FALLBACK"
+        item.source === "FALLBACK" ||
+        item.source === "SEEDED"
           ? item.source
           : null,
       summary: str(content?.summary),
@@ -108,6 +109,9 @@ export function draftLabel(
   }
   if (draft.status === "FAILED") {
     return { label: "Drafting did not finish", tone: "warning" };
+  }
+  if (draft.source === "SEEDED") {
+    return { label: "Prepared with the demo", tone: "neutral" };
   }
   if (draft.source === "FALLBACK") {
     return {

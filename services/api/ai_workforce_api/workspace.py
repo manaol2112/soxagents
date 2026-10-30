@@ -63,6 +63,7 @@ from ai_workforce_api.evidence_plans import (
 )
 from ai_workforce_api.profile_checks import period_state
 from ai_workforce_api.readiness import readiness_states
+from ai_workforce_api.scenario import scenario_today
 from ai_workforce_api.schedule import KIND_PHASES, PHASE_KEYS, standard_schedule
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.test_rounds import (
@@ -885,7 +886,8 @@ def _plan(
     _authorize(connection, principal, organization_id, project_id, Action.TASK_READ)
     kickoff, period_end, _due = _engagement(connection, organization_id, project_id)
     tasks = _tasks(connection, project_id)
-    today = datetime.now(UTC).date()
+    # A demo engagement's schedule reads its scenario date (scenario.py); real ones, the clock.
+    today = scenario_today(connection, project_id)
     now = datetime.now(UTC)
     open_marks = {
         str(row[0])
@@ -2632,7 +2634,7 @@ def _progress(
             if body.status == "READY_FOR_RETEST" and on_control:
                 if body.remediated_on is None:
                     raise ValueError("give the date the fix took effect")
-                if body.remediated_on > datetime.now(UTC).date():
+                if body.remediated_on > scenario_today(connection, project_id):
                     raise ValueError("the fix cannot take effect in the future")
             cursor.execute(
                 """

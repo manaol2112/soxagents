@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
-from support import Database
+from support import Database, unrestricted
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
@@ -285,6 +285,8 @@ def _seed_org(connection: psycopg.Connection[Any], slug: str) -> dict[str, Any]:
             (name, name),
         )
         organization = cursor.fetchone()
+        assert organization is not None
+        unrestricted(cursor, organization[0])
         cursor.execute(
             "INSERT INTO users (email, display_name) VALUES (%s, %s) RETURNING id",
             (email, email),

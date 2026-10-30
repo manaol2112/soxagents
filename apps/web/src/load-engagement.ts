@@ -18,6 +18,7 @@ import { parseEvidenceMapping } from "./evidence-mapping-model";
 import { parseRegister } from "./evidence-model";
 import { parsePlan as parseEvidencePlan } from "./evidence-plan-model";
 import { parseAutomation } from "./execution-model";
+import { parseExports } from "./exports-model";
 import { parseNextSteps } from "./home-model";
 import { parseImpact } from "./impact-model";
 import { apiGet, sessionToken } from "./load-workspace";
@@ -96,6 +97,9 @@ export async function loadEngagement(
   // The Testing destination (M2b) reads the controls, sheets, rounds, reviews and the
   // queue the guided workspace reads, for every control.
   const testing = section === "testing" || section === "review";
+  // The deficiencies page shows each deficiency's remediation history from the rounds,
+  // sheets and reviews of its control.
+  const remediation = section === "deficiencies";
   const wanted = {
     dashboard: section === "overview",
     // Settings › AI workforce shows the engagement's open work by agent (docs/home-plan.md, D5).
@@ -113,6 +117,8 @@ export async function loadEngagement(
       section === "timeline" ||
       (section === "controls" && query.control !== null),
     deficiencies: section === "deficiencies" || section === "controls",
+    // Reports › Status and reports lists the engagement's exports and reports.
+    exports: section === "reports",
   };
   if (!Object.values(wanted).some(Boolean)) {
     return EMPTY_ENGAGEMENT;
@@ -153,6 +159,7 @@ export async function loadEngagement(
     masterPlan,
     phaseProgress,
     evidenceMapping,
+    exportsListed,
   ] = await Promise.all([
     wanted.dashboard || wanted.agentWork
       ? apiGet(`${base}/workspace/dashboard`, session)
@@ -171,13 +178,13 @@ export async function loadEngagement(
     wanted.controls ? apiGet(`${base}/workspace/controls`, session) : null,
     wanted.plan ? apiGet(`${base}/workspace/plan`, session) : null,
     wanted.deficiencies ? apiGet(`${base}/deficiencies`, session) : null,
-    section === "controls" || testing
+    section === "controls" || testing || remediation
       ? apiGet(`${base}/control-tests`, session)
       : null,
-    section === "controls" || testing
+    section === "controls" || testing || remediation
       ? apiGet(`${base}/test-sheets`, session)
       : null,
-    section === "controls" || testing
+    section === "controls" || testing || remediation
       ? apiGet(`${base}/test-rounds`, session)
       : null,
     open ? apiGet(`${base}/evidence-register`, session) : null,
@@ -192,7 +199,7 @@ export async function loadEngagement(
           session,
         )
       : null,
-    section === "controls" || testing
+    section === "controls" || testing || remediation
       ? apiGet(`${base}/reviews`, session)
       : null,
     open ? apiGet(`${base}/controls/${query.control}/context`, session) : null,
@@ -213,6 +220,7 @@ export async function loadEngagement(
     open
       ? apiGet(`${base}/controls/${query.control}/evidence-mapping`, session)
       : null,
+    wanted.exports ? apiGet(`${base}/exports`, session) : null,
   ]);
   // The request opened on the control's Evidence tab, with its details for review.
   const focus =
@@ -262,6 +270,8 @@ export async function loadEngagement(
         )
       : null,
     rounds: ok(rounds) === undefined ? null : parseRounds(ok(rounds)),
+    exports:
+      ok(exportsListed) === undefined ? null : parseExports(ok(exportsListed)),
     sheetNotice: section === "controls" ? parseSheetNotice(query.notice) : null,
     workpapers: withVersion(ok(papers), ok(shownPaper)),
     workpaperNotice: open ? parseWorkpaperNotice(query.notice) : null,

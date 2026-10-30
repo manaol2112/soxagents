@@ -224,13 +224,26 @@ describe("a name and period that disagree", () => {
       `/organizations/${org}/projects/${project}/onboarding/period/align`,
     );
     assert.deepEqual(write.body, { basis, to: "name" });
+    // The scope and the fiscal year label are corrections too (period corrections,
+    // commit cae02d1); a correction the API does not offer is never sent.
+    for (const to of ["scope", "fiscal_year"]) {
+      const corrected = setupWrite({
+        organization_id: org,
+        project_id: project,
+        intent: "period-align",
+        basis,
+        to,
+      });
+      assert.ok(!("error" in corrected), to);
+      assert.deepEqual(corrected.body, { basis, to });
+    }
     assert.deepEqual(
       setupWrite({
         organization_id: org,
         project_id: project,
         intent: "period-align",
         basis,
-        to: "scope",
+        to: "everything",
       }),
       { error: "invalid" },
     );

@@ -3,8 +3,12 @@ import { describe, it } from "node:test";
 
 import {
   demoWrite,
+  ENTERPRISE_INCLUDES,
+  PRICING_QUESTIONS,
   parseLibrarySummary,
   parseWelcomeNotice,
+  TRIAL_DAYS,
+  TRIAL_INCLUDES,
   welcomeNoticeFor,
 } from "../apps/web/src/welcome-model.ts";
 
@@ -93,5 +97,33 @@ describe("the landing page's library figures", () => {
     ]) {
       assert.equal(parseLibrarySummary(bad), null);
     }
+  });
+});
+
+describe("the landing page's pricing", () => {
+  it("offers a seven-day trial and never promises another length", () => {
+    assert.equal(TRIAL_DAYS, 7);
+    const words = [
+      ...TRIAL_INCLUDES,
+      ...ENTERPRISE_INCLUDES,
+      ...PRICING_QUESTIONS.flatMap((item) => [item.q, item.a]),
+    ].join(" ");
+    assert.match(words, /What happens after 7 days\?/);
+    for (const days of words.matchAll(/(\d+)[ -]days?/g)) {
+      assert.equal(Number(days[1]), TRIAL_DAYS);
+    }
+    // The trial's limits as the product owner set them (28 October 2026).
+    assert.deepEqual(TRIAL_INCLUDES.slice(0, 4), [
+      "1 active engagement",
+      "Up to 5 controls",
+      "1 system",
+      "1 user",
+    ]);
+    assert.ok(TRIAL_INCLUDES.includes("10 evidence uploads"));
+  });
+
+  it("keeps the product's neutral voice", () => {
+    const answers = PRICING_QUESTIONS.map((item) => item.a).join(" ");
+    assert.doesNotMatch(answers, /\b(I|I'll|I'm|me|my)\b/);
   });
 });

@@ -182,3 +182,27 @@ def approve_control_plan(database: Database, control_id: object) -> list[object]
         if status == "PROPOSED":
             approve(connection, organization, project, control, owner, VersionBody(version=version))
         return list(release(connection, organization, project, control, owner))
+
+
+def unrestricted(cursor: object, organization_id: object) -> None:
+    """A firm with no trial limits (INTERNAL), as every firm that predates subscriptions
+    is (migration 0127). The tests' hand-made firms are such firms, unless a test is
+    about the trial, which signs up through the API instead. A database migrated only to
+    a point before 0127 has no subscriptions and no trial: nothing to do."""
+    cursor.execute(  # type: ignore[attr-defined]
+        "SELECT to_regclass('public.organization_subscriptions')"
+    )
+    if cursor.fetchone()[0] is None:  # type: ignore[attr-defined]
+        return
+    cursor.execute(  # type: ignore[attr-defined]
+        """
+        UPDATE organization_subscriptions
+        SET status = 'ACTIVE', plan_type = 'INTERNAL', limit_engagements = NULL,
+            limit_systems = NULL, limit_controls = NULL, limit_members = NULL,
+            limit_uploads = NULL, limit_upload_bytes = NULL, ai_budget_micros = NULL,
+            ai_run_limit = NULL, ai_concurrent_runs = NULL, ai_run_seconds = NULL,
+            status_reason = 'test fixture'
+        WHERE organization_id = %s
+        """,
+        (organization_id,),
+    )

@@ -3,6 +3,7 @@ import type { ActivityItem } from "./control-workspace-model.ts";
 import type { ChangeNotice } from "./evidence-change-model.ts";
 import type { EvidenceMappingRun } from "./evidence-mapping-model.ts";
 import type { RegisterApplication, RegisterFile } from "./evidence-model.ts";
+import type { ExportListing } from "./exports-model.ts";
 import type { MasterPlan, PhaseProgress } from "./planning-model.ts";
 import type { RequestDetails } from "./request-details-model.ts";
 import type { TestRound } from "./round-model.ts";
@@ -612,6 +613,8 @@ export type EngagementState = {
   sheets: TestSheet[] | null;
   /** Roll-forward and remediation retests, for every control. */
   rounds: TestRound[] | null;
+  /** The engagement's exports and reports on record (Reports › Status and reports). */
+  exports: ExportListing[] | null;
   sheetNotice: SheetNotice | null;
   /** An open control's evidence files, with what the agents read and reviewed. */
   files: ControlFiles | null;
@@ -689,6 +692,7 @@ export const EMPTY_ENGAGEMENT: EngagementState = {
   testNotice: null,
   sheets: null,
   rounds: null,
+  exports: null,
   sheetNotice: null,
   files: null,
   changeNotice: null,

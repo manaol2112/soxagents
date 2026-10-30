@@ -27,12 +27,14 @@ import {
   type WorkspaceSnapshot,
   workspaceHref,
 } from "../apps/web/src/shell-model.ts";
+import { DEFAULT_SUBSCRIPTION } from "../apps/web/src/trial-model.ts";
 
 const organization: Organization = {
   id: "11111111-1111-7111-8111-111111111111",
   name: "Acme",
   slug: "acme",
   role: "OWNER",
+  subscription: DEFAULT_SUBSCRIPTION,
 };
 
 const other: Organization = {
@@ -40,6 +42,7 @@ const other: Organization = {
   name: "Beta",
   slug: "beta",
   role: "REVIEWER",
+  subscription: DEFAULT_SUBSCRIPTION,
 };
 
 const project: Project = {
@@ -59,6 +62,7 @@ const project: Project = {
   nextMilestone: null,
   missedMilestones: 0,
   lastActivityAt: null,
+  demo: false,
   team: ["Pat Lee"],
 };
 

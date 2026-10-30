@@ -97,7 +97,7 @@ def test_the_status_is_worked_out_from_the_records(migrated: Database) -> None:
     completion = result["controls"]["completion"]
     assert completion["in_scope"] == expected[0] and completion["complete"] == 0
     assert "review signed off" in completion["rule"]
-    assert result["rules"] == "Metrics rulebook v1, pending approval"
+    assert result["rules"] == "Metrics rulebook v1.1, pending approval"
     assert datetime.fromisoformat(result["as_of"]) <= datetime.now(UTC)
     late = next(b for b in result["blockers"] if "overdue" in b["blocker"])
     assert any(ref.startswith("PBC-") for ref in late["records"])
@@ -252,7 +252,7 @@ def test_an_excel_export_holds_exactly_the_filtered_records(migrated: Database) 
     about = {row[0].value: row[1].value for row in book["About"].iter_rows(min_row=3)}
     assert about["Records"] == f"{record[0]:,}"
     assert about["Filters"] == "overdue only = True"
-    assert about["Rules"] == "Metrics rulebook v1, pending approval"
+    assert about["Rules"] == "Metrics rulebook v1.1, pending approval"
     assert datetime.fromisoformat(str(about["Data as of (UTC)"])) == record[1]
     sheet = book["Records"]
     rows = list(sheet.iter_rows(min_row=2, values_only=True))
@@ -660,3 +660,71 @@ def test_the_console_offers_the_file_with_the_answer(migrated: Database) -> None
     file = export["result"]["export"]
     assert file["file_name"].endswith(".xlsx") and file["rows"] > 0
     assert file["project_id"] == str(team["project"])
+
+
+# Rulebook v1.1: the current result, roll-forward waits, and requirement states
+
+
+def test_testing_status_tells_roll_forward_waits_from_review_waits() -> None:
+    from types import SimpleNamespace
+
+    from ai_workforce_api.control_journey import NotFinal
+
+    reviewed: dict[str, Any] = {
+        "conclusion": "EFFECTIVE",
+        "review_status": "SIGNED_OFF",
+        "sheet_status": "SIGNED_OFF",
+        "sheet_left": None,
+    }
+    rolling = [
+        NotFinal(
+            kind="ROUND",
+            text="Roll-forward requested, evidence outstanding",
+            step="REQUEST",
+            phase="ROLLFORWARD",
+        )
+    ]
+    retest = [NotFinal(kind="ROUND", text="Retest in progress", step="TEST", phase="RETEST")]
+    status = engagement_data.testing_status
+    assert status(SimpleNamespace(**reviewed, final=True, not_final=[]), 0, 0) == "complete"
+    # Reviewed, and only the roll-forward round keeps the conclusion from final.
+    assert (
+        status(SimpleNamespace(**reviewed, final=False, not_final=rolling), 0, 2)
+        == "awaiting_rollforward"
+    )
+    # An open note, an unsigned review, or any other reason: awaiting review, as before.
+    assert (
+        status(SimpleNamespace(**reviewed, final=False, not_final=rolling), 1, 2)
+        == "awaiting_review"
+    )
+    unsigned = {**reviewed, "review_status": "OPEN", "conclusion": "NOT_CONCLUDED"}
+    assert (
+        status(SimpleNamespace(**unsigned, final=False, not_final=rolling), 0, 0)
+        == "awaiting_review"
+    )
+    assert (
+        status(SimpleNamespace(**reviewed, final=False, not_final=retest), 0, 0)
+        == "awaiting_review"
+    )
+    assert (
+        status(SimpleNamespace(**reviewed, final=False, not_final=rolling + retest), 0, 0)
+        == "awaiting_review"
+    )
+    open_sheet = {**unsigned, "sheet_status": "OPEN", "sheet_left": "TESTING"}
+    assert status(SimpleNamespace(**open_sheet, final=False, not_final=[]), 0, 0) == "in_testing"
+
+
+def test_requirement_states_are_exclusive_by_precedence() -> None:
+    state = engagement_data.requirement_state
+    assert state("WAIVED", "ACCEPTED", "SENT", 1) == "waived"
+    assert state("REQUESTED", "ACCEPTED", "RECEIVED", 1) == "accepted"
+    assert state("REQUESTED", "FOLLOW_UP_REQUIRED", "RECEIVED", 1) == "insufficient"
+    assert state("REQUESTED", "INSUFFICIENT", "PARTIALLY_RECEIVED", 0) == "insufficient"
+    assert state("REQUESTED", "NOT_REVIEWED", "PARTIALLY_RECEIVED", 2) == "received_not_reviewed"
+    assert state("REQUESTED", "UNDER_REVIEW", "RECEIVED", 1) == "received_not_reviewed"
+    assert state("REQUESTED", "NOT_REVIEWED", "SENT", 0) == "outstanding"
+    assert state("REQUESTED", "NOT_REVIEWED", "DRAFT", 0) == "not_yet_requested"
+    assert state("REQUESTED", "NOT_REVIEWED", "APPROVAL_PENDING", 0) == "not_yet_requested"
+    assert state("PLANNED", "NOT_REVIEWED", None, 0) == "not_yet_requested"
+    assert state("AWAITING_DEPENDENCY", "NOT_REVIEWED", None, 0) == "not_yet_requested"
+    assert set(engagement_data.REQUIREMENT_WORDS) == set(engagement_data.REQUIREMENT_STATES)

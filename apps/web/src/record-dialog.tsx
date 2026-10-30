@@ -26,6 +26,7 @@ export function RecordDialog({
   closeHref,
   children,
   className,
+  onClose,
 }: {
   eyebrow: string;
   title: string;
@@ -34,13 +35,23 @@ export function RecordDialog({
   children: ReactNode;
   /** A dialog with a layout of its own adds its class (the launch checklist). */
   className?: string;
+  /** A dialog whose closing is an action of its own (the demo invitation keeps the
+   * person's answer) handles it here instead of the route change. */
+  onClose?: () => void;
 }) {
   const router = useRouter();
   const dialog = useRef<HTMLDivElement>(null);
   const [pending, startTransition] = useTransition();
   const [mounted, setMounted] = useState(false);
+  // Read through a ref so a new callback each render never re-runs the focus effect.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   const close = useCallback(() => {
+    if (onCloseRef.current !== undefined) {
+      onCloseRef.current();
+      return;
+    }
     startTransition(() => {
       router.replace(closeHref, { scroll: false });
     });

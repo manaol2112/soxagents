@@ -86,6 +86,8 @@ milestone report says why the selection is enough, or escalates to Tier 3.
 | `make test-critical` | The CRITICAL files of §4 and the single safeguard tests of §6 (`CRITICAL_PICKED`), in parallel on six workers, then the Node safeguard tests (`CRITICAL_NODE`) | ≈ 6 min |
 | `make test-changed [BASE=<ref>]` | `scripts/changed_tests.py`: tests that import or name the changed modules, migration tests when `migrations/` changed, Node tests importing changed web files; one level deep, so it complements `test-critical` rather than replacing it | depends |
 | `make test` | `test-critical` then the Node smoke test (what `make ci` runs) | |
+| Pre-launch hardening (Step 7) | `test_registration_hardening.py` (throttles, duplicate trials, concurrent registration), `test_storage_cleanup.py` (refused uploads, orphan sweep, the development store's guard), `test_archived_guard.py` (archived engagements read-only, active and completed unchanged, the demo reset), `test_trial_hardening.py` (abandoned runs, the quiet window, storage allowance) and `test_demo_reset.py` are in `CRITICAL_PY` | part of `make test-critical` |
+| `make test-demo` | The demo's release gate (Step 6): the Northstar dataset, lifecycle and closure suites, the guided tour, the demo reset, the demo record and the subscriptions, with the demo's Node model tests; the Northstar fixture builds once per run | ≈ 12 min serial |
 | `make test-full` | The entire Python suite (873 tests and 6 gated live tests in October 2026) with `-rsw` for skips and warnings | ≈ 60 min serial; ≈ 13 min on six workers, when nothing else holds database connections |
 
 Mechanics that keep the tests trustworthy and fast: every Python test still gets its own

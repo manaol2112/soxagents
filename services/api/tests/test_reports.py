@@ -46,7 +46,7 @@ def test_every_report_is_made_as_pdf_from_the_records(migrated: Database, report
     assert reports.REPORTS[report] in text
     assert "SOX 2027" in text
     assert "Data as of" in text and file["as_of"][:10] in text
-    assert "Metrics rulebook v1, pending approval" in text
+    assert "Metrics rulebook v1.1, pending approval" in text
     assert "About this report" in text
     assert "AI-written summary" not in text
 

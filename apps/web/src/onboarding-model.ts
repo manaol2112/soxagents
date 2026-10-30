@@ -1755,6 +1755,8 @@ export function pendingSuggestions(onboarding: Onboarding): {
 
 export type SetupNotice =
   | "setup-created"
+  | "trial-limit"
+  | "trial-ended"
   | "setup-saved"
   | "setup-drafting"
   | "setup-accepted"
@@ -2842,6 +2844,12 @@ export function wizardProblem(status: number, detail = ""): string | null {
   if (status === 200) {
     return null;
   }
+  // The subscription refused the change (subscriptions.py).
+  if (status === 402) {
+    return detail.startsWith("subscription inactive")
+      ? "The free trial has ended. Everything here stays to read; explore plans to keep working."
+      : "The free trial has reached its allowance for this. Explore plans to add more.";
+  }
   const known: Record<string, string> = {
     "say why a recommended control is not selected":
       "Say why each recommended control you leave out is not selected.",
@@ -3175,6 +3183,13 @@ export function setupNoticeFor(
     return intent === "launch" || intent === "approve"
       ? "setup-launch-slow"
       : "setup-slow";
+  }
+  // The subscription refused the change (subscriptions.py): the trial's allowance of
+  // systems, controls or members is used, or the trial has ended.
+  if (status === 402) {
+    return detail.startsWith("subscription inactive")
+      ? "trial-ended"
+      : "trial-limit";
   }
   if (
     intent.endsWith("-domain") &&

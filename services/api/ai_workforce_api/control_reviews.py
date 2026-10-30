@@ -539,8 +539,8 @@ def endorsed(
     where an element is contradicted, and UNABLE where an element is absent, not
     verifiable or shown by nothing that checks out (a passage on a line that instructs its
     reader or claims the audit's own conclusion shows nothing); the note says which. Other
-    results are kept. The checked elements (status and whether verified, no quote) go with each result
-    for the outcome record."""
+    results are kept. The checked elements (status and whether verified, no quote) go with
+    each result for the outcome record."""
     cited = tuple(
         CitedFile(item.file_id, item.file_name, item.text, item.seen_as_image)
         for item in files

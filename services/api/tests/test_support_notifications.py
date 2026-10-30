@@ -6,13 +6,14 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from support import Database
+from support import Database, unrestricted
 from test_google import FakeProvider
 from test_outbound import migrated
 
 from ai_workforce_api import smtp_mailbox
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.identity import Identity
+from ai_workforce_api.mailbox import MailboxState
 from ai_workforce_api.main import create_app
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.support_notifications import deliver_held
@@ -181,6 +182,7 @@ def test_a_new_sign_up_is_announced_once_and_an_existing_member_is_not(
                 "INSERT INTO organizations (name, slug) VALUES ('Other', 'other') RETURNING id"
             ).fetchone()
             assert user is not None and organization is not None
+            unrestricted(cursor, organization[0])
             cursor.execute(
                 "INSERT INTO memberships (organization_id, user_id, role) "
                 "VALUES (%s, %s, 'REVIEWER')",
@@ -202,7 +204,7 @@ def test_a_new_sign_up_is_announced_once_and_an_existing_member_is_not(
 
 def test_a_steered_reply_to_is_refused_by_the_mail_builder() -> None:
     settings = _settings("")
-    with pytest.raises(smtp_mailbox.MailboxState):
+    with pytest.raises(MailboxState):
         smtp_mailbox.build(
             settings,
             idempotency_key="k",
@@ -212,7 +214,7 @@ def test_a_steered_reply_to_is_refused_by_the_mail_builder() -> None:
             body="b",
             reply_to="a@b.example\r\nBcc: x@y.example",
         )
-    with pytest.raises(smtp_mailbox.MailboxState):
+    with pytest.raises(MailboxState):
         smtp_mailbox.build(
             settings,
             idempotency_key="k",

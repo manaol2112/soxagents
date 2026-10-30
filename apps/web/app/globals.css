@@ -19888,15 +19888,15 @@ button.answer-done:hover {
 
 .lc-dialog .rd-head h2 {
   margin-top: 0.5rem;
-  font-size: clamp(var(--fs-title), 2.6vw, var(--fs-hero));
-  font-weight: 700;
-  letter-spacing: -0.015em;
+  font-size: var(--fs-title);
+  font-weight: 650;
+  letter-spacing: -0.02em;
   line-height: 1.2;
 }
 
 .lc-dialog .rd-desc {
   color: var(--text-secondary);
-  font-size: var(--fs-lg);
+  font-size: var(--fs-md);
 }
 
 .lc-dialog .rd-body {
@@ -20019,13 +20019,13 @@ button.answer-done:hover {
 
 .lc-text strong {
   color: var(--text-strong);
-  font-size: var(--fs-lg);
+  font-size: var(--fs-md);
   font-weight: 600;
 }
 
 .lc-text small {
   color: var(--text-secondary);
-  font-size: var(--fs-md);
+  font-size: var(--fs-base);
 }
 
 .lc-status {
@@ -20049,14 +20049,14 @@ button.answer-done:hover {
 .lc-aside h3 {
   margin: 0.5rem 0 0;
   color: var(--text-strong);
-  font-size: var(--fs-xl);
+  font-size: var(--fs-lg);
   font-weight: 600;
 }
 
 .lc-aside p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: var(--fs-md);
+  font-size: var(--fs-base);
   line-height: 1.6;
 }
 

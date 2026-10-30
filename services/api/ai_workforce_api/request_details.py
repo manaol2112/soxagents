@@ -52,6 +52,7 @@ from ai_workforce_api.portal_workspace import (
 )
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import StoreError, digest_of, open_store
+from ai_workforce_api.storage_sweep import discarding
 
 RequestType = Literal[
     "POPULATION",
@@ -2061,19 +2062,20 @@ def _upload(
     _attachable(connection, organization_id, project_id, request_id)
     key = f"evidence/{uuid4()}"
     digest = store.put(key, content)
-    return _insert(
-        connection,
-        principal,
-        organization_id,
-        project_id,
-        request_id,
-        source="UPLOAD",
-        file_name=file_name,
-        content_type=content_type,
-        size=len(content),
-        key=key,
-        digest=digest,
-    )
+    with discarding(store, key):
+        return _insert(
+            connection,
+            principal,
+            organization_id,
+            project_id,
+            request_id,
+            source="UPLOAD",
+            file_name=file_name,
+            content_type=content_type,
+            size=len(content),
+            key=key,
+            digest=digest,
+        )
 
 
 def _link(
@@ -2137,20 +2139,21 @@ def _link(
     label = f"{year} " if year else ""
     key = f"evidence/{uuid4()}"
     digest = store.put(key, content)
-    return _insert(
-        connection,
-        principal,
-        organization_id,
-        project_id,
-        request_id,
-        source="PRIOR_YEAR_WORKPAPER",
-        file_name=clean_name(f"{label}{reference} {stage.lower()} workpaper.xlsx"),
-        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        size=len(content),
-        key=key,
-        digest=digest,
-        prior=(prior_id, paper_id, year),
-    )
+    with discarding(store, key):
+        return _insert(
+            connection,
+            principal,
+            organization_id,
+            project_id,
+            request_id,
+            source="PRIOR_YEAR_WORKPAPER",
+            file_name=clean_name(f"{label}{reference} {stage.lower()} workpaper.xlsx"),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            size=len(content),
+            key=key,
+            digest=digest,
+            prior=(prior_id, paper_id, year),
+        )
 
 
 def _attachable(

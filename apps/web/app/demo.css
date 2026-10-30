@@ -1,0 +1,805 @@
+/* The synthetic demo in the shell (Trial Management and Synthetic Demo Experience,
+   Step 3): the first-login invitation over the page, the account menu's entry, the strip
+   above a demo engagement's pages, and the tag on its card. Tokens only; both themes
+   read the same. Motion is the record dialog's own. */
+
+.record-dialog.demo-dialog {
+  width: min(600px, 100%);
+}
+
+.demo-dialog .rd-head {
+  padding: 1.5rem 1.5rem 0.25rem 1.75rem;
+  border-bottom: 0;
+}
+
+.demo-dialog .rd-head-text {
+  gap: 0.6rem;
+}
+
+.demo-dialog .rd-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: fit-content;
+  padding: 0.3rem 0.7rem;
+  color: var(--accent);
+  letter-spacing: 0.08em;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+}
+
+.demo-dialog .rd-head h2 {
+  margin-top: 0.35rem;
+  font-size: var(--fs-title);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.demo-dialog .rd-body {
+  padding: 0.75rem 1.75rem 1.5rem;
+  background: var(--surface);
+}
+
+.demo-invite {
+  display: grid;
+  gap: 1.1rem;
+}
+
+.demo-lead {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+
+.demo-points {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.demo-points li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+  line-height: 1.45;
+}
+
+.demo-point-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--radius);
+}
+
+.demo-preparing {
+  display: flex;
+  gap: 0.9rem;
+  padding: 1rem 1.1rem;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.demo-preparing strong {
+  display: block;
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.demo-preparing p {
+  margin: 0.25rem 0 0;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.demo-preparing-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  color: var(--info);
+  background: var(--info-soft);
+  border-radius: 50%;
+}
+
+.demo-outcome {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  color: var(--warning);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius);
+}
+
+.demo-outcome.is-failed {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+}
+
+.demo-outcome svg {
+  flex: none;
+  margin-top: 0.15rem;
+}
+
+.demo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding-top: 0.25rem;
+}
+
+.demo-note {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  margin: 0;
+  padding-top: 0.9rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.demo-note svg {
+  flex: none;
+  margin-top: 0.15rem;
+}
+
+/* The account menu's way back to the demo. */
+.menu-panel .menu-link {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.5rem 0.6rem;
+  color: var(--text-strong);
+  font-weight: 600;
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+  transition: background 120ms ease;
+}
+
+.menu-panel .menu-link:hover,
+.menu-panel .menu-link:focus-visible {
+  background: var(--surface-sunken);
+}
+
+/* Above every page of the demo engagement. */
+.demo-strip {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0 0 1.25rem;
+  padding: 0.625rem 0.875rem;
+  color: var(--info);
+  font-size: var(--fs-base);
+  line-height: 1.45;
+  background: var(--info-soft);
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius);
+}
+
+.demo-strip svg {
+  flex: none;
+  margin-top: 0.15rem;
+}
+
+/* On the engagement's card, beside its status. */
+.eg-demo-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  margin-right: 0.4rem;
+  padding: 0 0.45rem;
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+}
+
+@media (max-width: 640px) {
+  .demo-dialog .rd-head {
+    padding: 1.25rem 1rem 0.25rem 1.25rem;
+  }
+
+  .demo-dialog .rd-body {
+    padding: 0.5rem 1.25rem 1.25rem;
+  }
+
+  .demo-actions .btn {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu-panel .menu-link {
+    transition: none;
+  }
+}
+
+/* ==========================================================================
+   The guided tour (Step 5): the welcome over the demo's first page, the guide panel
+   docked at the corner while the tour runs, the spotlight on the part of the page a
+   stage is about, and the quiet pill that resumes a skipped tour. Tokens only; both
+   themes read the same. Motion is short and stops under reduced motion.
+   ========================================================================== */
+
+.demo-welcome-detail {
+  margin: -0.4rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+}
+
+.demo-welcome-stages {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.35rem 1rem;
+  margin: 0;
+  padding: 0.9rem 1rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  list-style: decimal inside;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.demo-welcome-stages li::marker {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+/* The top bar's entry: explore, resume, or the way back. */
+.demo-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 30px;
+  padding: 0 0.7rem;
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.demo-nav:hover,
+.demo-nav:focus-visible {
+  border-color: var(--accent);
+}
+
+.demo-nav.is-back {
+  color: var(--text-strong);
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+/* The guide: a fixed corner card above the page, below dialogs. */
+.dg {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 55;
+  max-width: calc(100vw - 2rem);
+}
+
+.dg-panel {
+  position: fixed;
+  display: grid;
+  gap: 0.6rem;
+  width: 360px;
+  max-height: calc(100vh - 2.5rem);
+  padding: 0.95rem 1.05rem 0.9rem;
+  overflow: auto;
+  color: var(--text);
+  background: var(--glass-strong);
+  border: 1px solid var(--ai-border);
+  border-radius: var(--radius-xl);
+  box-shadow:
+    var(--glass-shine),
+    var(--shadow-pop);
+  animation: dg-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.dg-panel::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--ai), var(--accent), transparent);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  content: "";
+}
+
+.dg-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.dg-head-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.dg-head-text strong {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.dg-progress-label {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.dg-orb {
+  position: relative;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  background: var(--ai-soft);
+  border: 1px solid var(--ai-border);
+  border-radius: 50%;
+}
+
+.dg-orb::after {
+  position: absolute;
+  inset: 7px;
+  background: var(--ai);
+  border-radius: 50%;
+  content: "";
+}
+
+.dg-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.dg-icon svg {
+  transform: rotate(90deg);
+}
+
+.dg-icon:hover,
+.dg-icon:focus-visible {
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+}
+
+/* The eight stages as a thin track: done, current, to come. */
+.dg-steps {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dg-steps li {
+  height: 4px;
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.dg-steps li.is-done {
+  background: var(--accent-border);
+}
+
+.dg-steps li.is-current {
+  background: var(--accent);
+}
+
+.dg-title {
+  margin: 0.1rem 0 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+.dg-lead {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.dg-points {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dg-points li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.dg-points li svg {
+  flex: none;
+  margin-top: 0.2rem;
+  color: var(--accent);
+}
+
+.dg-points .dg-point-strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.dg-note {
+  display: flex;
+  gap: 0.45rem;
+  align-items: flex-start;
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  background: var(--surface-sunken);
+  border-radius: var(--radius);
+}
+
+.dg-note svg {
+  flex: none;
+  margin-top: 0.15rem;
+  color: var(--info);
+}
+
+.dg-problem {
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  color: var(--danger);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius);
+}
+
+.dg-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  padding-top: 0.2rem;
+}
+
+.dg-skip {
+  margin-left: auto;
+  padding: 0.35rem 0.4rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.dg-skip:hover,
+.dg-skip:focus-visible {
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+}
+
+/* The quiet pill: a collapsed guide, or a skipped tour to resume. */
+.dg-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.85rem 0.5rem 0.75rem;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  background: var(--glass-strong);
+  border: 1px solid var(--ai-border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-pop);
+  cursor: pointer;
+  transition: border-color 120ms ease;
+}
+
+.dg-pill svg {
+  color: var(--ai);
+}
+
+.dg-pill small {
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.dg-pill:hover,
+.dg-pill:focus-visible {
+  border-color: var(--accent);
+}
+
+.dg-resume .dg-problem {
+  margin-top: 0.5rem;
+}
+
+/* The spotlight: a ring around the part of the page the stage is about. The page is
+   not dimmed; everything stays usable. */
+.dg-spot {
+  position: fixed;
+  z-index: 54;
+  border-radius: var(--radius-xl);
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 28px 4px var(--guide-glow);
+  pointer-events: none;
+  transition:
+    top 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    left 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    width 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    height 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: ng-fade 220ms ease-out;
+}
+
+@keyframes dg-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The prepared reports on Reports > Status and reports. */
+.demo-reports-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.demo-reports-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.9rem;
+  align-items: center;
+  padding: 0.6rem 0.75rem;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+}
+
+.demo-reports-list .report-title {
+  flex: 1 1 220px;
+  min-width: 0;
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.demo-reports-list .report-meta {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.demo-reports-list .report-format {
+  padding: 0.1rem 0.45rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.report-draft-note {
+  margin: 0.75rem 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+/* The remediation history on a deficiency: the lifecycle as a vertical track, and the
+   original test beside the retest. */
+.rem-history {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rem-history li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 0 0.75rem;
+  padding: 0 0 0.9rem;
+}
+
+.rem-history li::before {
+  position: absolute;
+  top: 18px;
+  bottom: 0;
+  left: 10px;
+  width: 2px;
+  background: var(--border);
+  content: "";
+}
+
+.rem-history li:last-child::before {
+  display: none;
+}
+
+.rem-dot {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  color: var(--text-tertiary);
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 50%;
+}
+
+.rem-history li.is-done .rem-dot {
+  color: var(--positive);
+  border-color: var(--positive);
+}
+
+.rem-history li.is-failed .rem-dot {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.rem-history li.is-pending .rem-dot {
+  border-style: dashed;
+}
+
+.rem-body strong {
+  display: block;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.rem-body span,
+.rem-body a {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.rem-compare {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.rem-compare > div {
+  padding: 0.75rem 0.9rem;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.rem-compare h4 {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0 0 0.5rem;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+}
+
+.rem-compare dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  font-size: var(--fs-xs);
+}
+
+.rem-compare dt {
+  color: var(--text-tertiary);
+}
+
+.rem-compare dd {
+  margin: 0;
+  color: var(--text);
+}
+
+@media (max-width: 640px) {
+  .dg {
+    right: 0.5rem;
+    bottom: 0.5rem;
+    left: 0.5rem;
+    max-width: none;
+  }
+
+  .dg-panel {
+    right: 0.5rem;
+    bottom: 0.5rem;
+    left: 0.5rem;
+    width: auto;
+    max-height: 60vh;
+  }
+
+  .dg-resume {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .demo-welcome-stages,
+  .rem-compare {
+    grid-template-columns: 1fr;
+  }
+
+  .demo-nav span {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dg-panel,
+  .dg-spot {
+    animation: none;
+    transition: none;
+  }
+
+  .demo-nav,
+  .dg-pill,
+  .dg-icon {
+    transition: none;
+  }
+}

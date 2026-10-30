@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
-from support import Database
+from support import Database, unrestricted
 
 from ai_workforce_api.auth import token_hash
 from ai_workforce_api.db import connect, transaction
@@ -252,6 +252,8 @@ def _seed_org(connection: psycopg.Connection[Any], slug: str, email: str) -> dic
             (slug, slug),
         )
         organization_id = cursor.fetchone()
+        assert organization_id is not None
+        unrestricted(cursor, organization_id[0])
         cursor.execute(
             "INSERT INTO users (email, display_name) VALUES (%s, %s) RETURNING id",
             (email, email),

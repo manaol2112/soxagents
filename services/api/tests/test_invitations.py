@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from support import Database
+from support import Database, unrestricted
 
 import ai_workforce_api.invitations as invitations
 from ai_workforce_api.auth import token_hash
@@ -237,6 +237,7 @@ def _engagement(
             org_row = cursor.fetchone()
             assert org_row is not None
             org = org_row[0]
+            unrestricted(cursor, org)
             if domains:
                 for domain in [FIRM, *(extra_domains or [])]:
                     cursor.execute(

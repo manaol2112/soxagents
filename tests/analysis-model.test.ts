@@ -61,10 +61,22 @@ describe("evidence reading model", () => {
   it("keeps a fallback or failed reading apart from a rules one", () => {
     // Milestone 3a: FALLBACK is the rules' classification after a model failure, FAILED a
     // model failure with nothing in its place; neither reads as RULES.
-    const sources = ["MODEL", "RULES", "FALLBACK", "FAILED", "OTHER"].map(
-      (source) => parseAnalyses([{ ...row, source }])?.[0]?.source ?? null,
-    );
-    assert.deepEqual(sources, ["MODEL", "RULES", "FALLBACK", "FAILED", null]);
+    const sources = [
+      "MODEL",
+      "RULES",
+      "FALLBACK",
+      "FAILED",
+      "SEEDED",
+      "OTHER",
+    ].map((source) => parseAnalyses([{ ...row, source }])?.[0]?.source ?? null);
+    assert.deepEqual(sources, [
+      "MODEL",
+      "RULES",
+      "FALLBACK",
+      "FAILED",
+      "SEEDED",
+      null,
+    ]);
   });
 
   it("parses analyses and drops what it does not know", () => {

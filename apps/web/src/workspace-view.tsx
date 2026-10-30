@@ -22,6 +22,16 @@ import {
   waitingHref,
 } from "./console-model";
 import { ConsoleMain } from "./console-view";
+import { DemoInvitation } from "./demo-invitation";
+import {
+  demoHref,
+  demoMenuEntry,
+  demoStrip,
+  showsInvitation,
+} from "./demo-model";
+import { DemoResetCard } from "./demo-reset";
+import { DemoGuide, DemoWelcome } from "./demo-tour";
+import { demoNavEntry, showsWelcome } from "./demo-tour-model";
 import {
   type DirectoryQuery,
   directoryHref,
@@ -74,6 +84,11 @@ import {
 } from "./evidence-model";
 import { EvidenceFiles } from "./evidence-view";
 import {
+  exportDownloadHref,
+  FORMAT_WORDS,
+  reportsFirst,
+} from "./exports-model";
+import {
   FIRST_ENGAGEMENT_STEPS,
   firstEngagementCopy,
 } from "./first-engagement-model";
@@ -97,6 +112,7 @@ import { EMPTY_SETUP, type SetupState, uniqueKeys } from "./onboarding-model";
 import { PlanMissingButton } from "./plan-missing";
 import type { RecipientLink } from "./portal-model";
 import { RecordDialog } from "./record-dialog";
+import { TRIAL_TAB } from "./routes";
 import { SetupForm } from "./setup-form";
 import { RegisterPage, ScopePage, SetupMain } from "./setup-view";
 import {
@@ -135,6 +151,14 @@ import {
 } from "./testing-hub-view";
 import type { Theme } from "./theme";
 import { ThemeSwitch } from "./theme-switch";
+import {
+  PLANS_HREF,
+  type SubscriptionSummary,
+  trialBadge,
+  trialStrip,
+} from "./trial-model";
+import { TrialUsageMain } from "./trial-usage";
+import { onTrialPlan, usageHref } from "./trial-usage-model";
 import { type IconName, UiIcon } from "./ui-icon";
 import { VisitRecorder } from "./visit-recorder";
 import {
@@ -302,6 +326,7 @@ export function WorkspaceView({
   lastPage = null,
   editingEngagement = false,
   managingEngagement = false,
+  invitingDemo = false,
   engagementsView = "engagements",
   setup = EMPTY_SETUP,
   engagement = EMPTY_ENGAGEMENT,
@@ -333,6 +358,8 @@ export function WorkspaceView({
   editingEngagement?: boolean;
   /** `manage=engagement`: an engagement's status and close-out, opened from its card. */
   managingEngagement?: boolean;
+  /** `demo=invite`: the demo invitation opened again from the account menu. */
+  invitingDemo?: boolean;
   engagementsView?: EngagementsView;
   setup?: SetupState;
   engagement?: EngagementState;
@@ -472,6 +499,73 @@ export function WorkspaceView({
             <LastPageRecorder path={lastPage} />
           ) : null}
           {model.status === "ready" &&
+          trialStrip(model.organization.subscription) !== null ? (
+            <p className="trial-strip" role="status">
+              <UiIcon name="info" size={14} />
+              <span>
+                {trialStrip(model.organization.subscription)}{" "}
+                <a href={PLANS_HREF}>Explore plans</a>
+              </span>
+            </p>
+          ) : null}
+          {model.status === "ready" &&
+          demoStrip(model.selectedProject, model.demo) !== null ? (
+            <p className="demo-strip" role="status">
+              <UiIcon name="sparkles" size={14} />
+              <span>{demoStrip(model.selectedProject, model.demo)}</span>
+            </p>
+          ) : null}
+          {/* The demo invitation (Step 3): once, on first login, and again from the
+              account menu; never over another dialog or inside the demo. */}
+          {model.status === "ready" &&
+          showsInvitation(model.demo, {
+            reopened: invitingDemo,
+            dialogOpen:
+              creatingEngagement ||
+              editingEngagement ||
+              managingEngagement ||
+              creatingAgent,
+            inDemo: model.selectedProject?.demo === true,
+          }) ? (
+            <DemoInvitation
+              organizationId={model.organization.id}
+              reopened={invitingDemo}
+              firstEngagement={model.projects.length === 0}
+              createHref={createEngagementHref(model)}
+              closeHref={sectionHref(model, model.section)}
+            />
+          ) : null}
+          {/* The guided tour (Step 5): the welcome once, inside the demo engagement;
+              then the guide at the corner while the tour runs. */}
+          {model.status === "ready" &&
+          model.selectedProject !== null &&
+          model.selectedProject.demo &&
+          showsWelcome(model.tour, {
+            inDemo: true,
+            dialogOpen:
+              invitingDemo ||
+              creatingEngagement ||
+              editingEngagement ||
+              managingEngagement ||
+              creatingAgent,
+          }) ? (
+            <DemoWelcome
+              organizationId={model.organization.id}
+              projectId={model.selectedProject.id}
+              tour={model.tour}
+              closeHref={sectionHref(model, model.section)}
+            />
+          ) : model.status === "ready" &&
+            model.selectedProject !== null &&
+            model.selectedProject.demo &&
+            model.tour.available ? (
+            <DemoGuide
+              organizationId={model.organization.id}
+              projectId={model.selectedProject.id}
+              tour={model.tour}
+            />
+          ) : null}
+          {model.status === "ready" &&
           model.selectedProject !== null &&
           LAUNCHED_SECTIONS.includes(model.section) &&
           closedNotice(model.selectedProject.status) !== null ? (
@@ -543,6 +637,36 @@ function SidebarControls({
   );
 }
 
+/** The free trial's standing, beside the notifications, leading to its usage (Step 6)
+ * while it runs and to the plans once it has ended. */
+function TrialBadgeLink({
+  subscription,
+  usageHref: usage,
+}: {
+  subscription: SubscriptionSummary;
+  usageHref: string;
+}) {
+  const badge = trialBadge(subscription, new Date());
+  if (badge === null) {
+    return null;
+  }
+  return (
+    <a
+      className={`trial-badge tone-${badge.tone}`}
+      href={subscription.state === "TRIAL" ? usage : PLANS_HREF}
+      title={
+        subscription.state === "TRIAL"
+          ? `${badge.title.replace(" Explore plans.", "")} See your trial usage.`
+          : badge.title
+      }
+    >
+      <UiIcon name="clock" size={13} />
+      <span className="trial-badge-kind">{badge.kind}</span>
+      {badge.detail !== "" ? <span>{badge.detail}</span> : null}
+    </a>
+  );
+}
+
 function WorkspaceControls({
   model,
   theme,
@@ -565,6 +689,21 @@ function WorkspaceControls({
   const canAsk =
     model.selectedProject !== null &&
     !lockedBeforeLaunch("console", model.selectedProject);
+  // The way back to the demo while the trial runs: the invitation, or the demo itself.
+  const demoEntry = demoMenuEntry(model.demo, model.organization.subscription);
+  // The persistent entry (Step 5): explore or resume the demo, or the way back from it.
+  const navEntry = demoNavEntry(
+    model.demo,
+    model.organization.subscription,
+    model.tour,
+    {
+      inDemo: model.selectedProject?.demo === true,
+      organizationId: model.organization.id,
+      ownProjectId:
+        model.projects.find((item) => !item.demo && item.status !== "ARCHIVED")
+          ?.id ?? null,
+    },
+  );
   return (
     <>
       <nav aria-label="Breadcrumb">
@@ -603,6 +742,26 @@ function WorkspaceControls({
         </ol>
       </nav>
       <div className="topbar-actions">
+        {navEntry !== null ? (
+          <a
+            className={`demo-nav${navEntry.kind === "back" ? " is-back" : ""}`}
+            href={navEntry.href}
+            aria-label={navEntry.label}
+          >
+            <UiIcon
+              name={navEntry.kind === "back" ? "grid" : "sparkles"}
+              size={13}
+            />
+            <span>{navEntry.label}</span>
+          </a>
+        ) : null}
+        <TrialBadgeLink
+          subscription={model.organization.subscription}
+          usageHref={usageHref(
+            model.organization.id,
+            model.selectedProject?.id ?? null,
+          )}
+        />
         {canAsk ? (
           <a
             className={`btn btn-secondary btn-sm topbar-ask${model.section === "console" ? " is-current" : ""}`}
@@ -648,6 +807,31 @@ function WorkspaceControls({
               </span>
             </div>
             <ThemeSwitch initial={theme} />
+            {onTrialPlan(model.organization.subscription) ? (
+              <a
+                className="menu-link"
+                href={usageHref(
+                  model.organization.id,
+                  model.selectedProject?.id ?? null,
+                )}
+              >
+                <UiIcon name="chart" size={14} />
+                Trial usage
+              </a>
+            ) : null}
+            {demoEntry !== null ? (
+              <a
+                className="menu-link"
+                href={
+                  demoEntry.kind === "open" && model.demo.projectId !== null
+                    ? demoHref(model.organization.id, model.demo.projectId)
+                    : `${sectionHref(model, model.section)}&demo=invite`
+                }
+              >
+                <UiIcon name="sparkles" size={14} />
+                {demoEntry.label}
+              </a>
+            ) : null}
             <form autoComplete="off" method="post" action="/sign-out">
               <button type="submit" className="btn-secondary btn-block">
                 Sign out
@@ -872,7 +1056,11 @@ function WorkspaceMain({
         ) : page === "timeline" ? (
           <TimelineMain model={model} engagement={engagement} />
         ) : page === "reports" ? (
-          <ReportsStatus model={model} workflow={workflow} />
+          <ReportsStatus
+            model={model}
+            workflow={workflow}
+            exports={engagement.exports}
+          />
         ) : (
           <DeficienciesMain
             model={model}
@@ -889,13 +1077,22 @@ function WorkspaceMain({
         model={model}
         section="settings"
         tab={tab}
-        tabs={SETTINGS_TABS}
+        tabs={
+          onTrialPlan(model.organization.subscription)
+            ? SETTINGS_TABS
+            : SETTINGS_TABS.filter((item) => item !== TRIAL_TAB)
+        }
         labels={SETTINGS_TAB_LABELS}
         dividerBefore={SETTINGS_FIRM_FROM}
         title="Settings"
         description="Set up this engagement and its tasks, and manage your firm's AI workforce."
       >
-        {page === "agents" ? (
+        {page === "settings" ? (
+          <TrialUsageMain
+            usage={model.trialUsage}
+            organizationName={model.organization.name}
+          />
+        ) : page === "agents" ? (
           <AgentsMain
             model={model}
             workflow={workflow}
@@ -906,7 +1103,15 @@ function WorkspaceMain({
         ) : page === "tasks" ? (
           <TasksMain model={model} directory={directory} />
         ) : (
-          <SetupMain model={model} setup={setup} />
+          <>
+            {model.selectedProject?.demo ? (
+              <DemoResetCard
+                organizationId={model.organization.id}
+                demo={model.demo}
+              />
+            ) : null}
+            <SetupMain model={model} setup={setup} />
+          </>
         )}
       </Destination>
     );
@@ -1502,6 +1707,10 @@ const NOTICES: Record<ProjectNotice, string> = {
   archived: "This engagement is archived. It is closed and cannot change.",
   denied: "You cannot change this engagement.",
   unavailable: "The engagement could not be saved.",
+  "trial-limit":
+    "The free trial has reached its allowance of engagements. Explore plans to add more.",
+  "trial-ended":
+    "The free trial has ended. Everything here stays to read; explore plans to keep working.",
 };
 
 /** An engagement section opened before launch: setup is the work until then. */
@@ -1592,9 +1801,12 @@ function Destination({
 function ReportsStatus({
   model,
   workflow,
+  exports,
 }: {
   model: Ready;
   workflow: WorkflowState;
+  /** The engagement's exports and reports on record; null when they could not be read. */
+  exports: EngagementState["exports"];
 }) {
   const project = model.selectedProject;
   if (project === null) {
@@ -1605,8 +1817,55 @@ function ReportsStatus({
     workflow.approvals === null
       ? null
       : pendingApprovals(workflow.approvals, 0).length;
+  const listed = exports === null ? [] : reportsFirst(exports);
   return (
     <div className="page">
+      {listed.length > 0 ? (
+        <section className="card destination-links demo-reports">
+          <h2>Reports on record</h2>
+          <p>
+            The reports and exports produced for this engagement, each from the
+            records at the moment it states. A report describes the engagement's
+            status; it is not an audit opinion.
+          </p>
+          <ul className="demo-reports-list">
+            {listed.map((item) => (
+              <li key={item.id}>
+                <span className="report-title">{item.title}</span>
+                <span className="report-format">
+                  {FORMAT_WORDS[item.fileFormat] ??
+                    item.fileFormat.toUpperCase()}
+                </span>
+                <span className="report-meta">
+                  {item.createdBy !== "" ? `${item.createdBy} · ` : ""}
+                  {item.createdAt.slice(0, 10)}
+                  {item.narrative ? " · includes an AI-written summary" : ""}
+                </span>
+                {item.available ? (
+                  <a
+                    className="btn btn-secondary btn-sm"
+                    href={exportDownloadHref(
+                      item.id,
+                      ids.organizationId,
+                      ids.projectId,
+                    )}
+                  >
+                    Download <UiIcon name="arrow" size={13} />
+                  </a>
+                ) : (
+                  <span className="report-meta">Expired; make it again</span>
+                )}
+              </li>
+            ))}
+          </ul>
+          {project.demo ? (
+            <p className="report-draft-note">
+              These are simulated interim reports prepared with the demo, not
+              finalised audit opinions.
+            </p>
+          ) : null}
+        </section>
+      ) : null}
       <section className="card destination-links">
         <h2>Status and close-out</h2>
         <p>

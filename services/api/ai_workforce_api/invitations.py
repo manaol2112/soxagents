@@ -246,13 +246,16 @@ def invite(
         raise InviteRefused(422, "name is not valid")
     existing = connection.execute(
         """
-        SELECT u.id, u.status::text, m.status::text
+        SELECT u.id, u.status::text, m.status::text, u.demo_organization_id IS NOT NULL
         FROM users AS u
         LEFT JOIN memberships AS m ON m.user_id = u.id AND m.organization_id = %s
         WHERE u.email = %s
         """,
         (organization_id, email),
     ).fetchone()
+    if existing is not None and existing[3] is True:
+        # A demo identity (migration 0130) is nobody's to invite.
+        raise InviteRefused(409, "invitation could not be made")
     if existing is not None and existing[2] == "ACTIVE":
         if not isinstance(existing[0], UUID):
             raise InviteRefused(409, "invitation could not be made")

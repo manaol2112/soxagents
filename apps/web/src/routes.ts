@@ -97,13 +97,21 @@ export const REPORT_TAB_LABELS: Record<ReportTab, string> = {
 };
 
 /** This engagement's settings first, then the firm's (from `SETTINGS_FIRM_FROM` on). */
-export const SETTINGS_TABS = ["engagement", "tasks", "workforce"] as const;
+export const SETTINGS_TABS = [
+  "engagement",
+  "tasks",
+  "workforce",
+  "trial",
+] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 export const SETTINGS_TAB_LABELS: Record<SettingsTab, string> = {
   engagement: "Engagement setup",
   workforce: "AI workforce",
   tasks: "Tasks",
+  trial: "Free trial",
 };
+/** The tab shown only to a firm on the free trial (Step 6). */
+export const TRIAL_TAB: SettingsTab = "trial";
 /** The first tab that is the firm's rather than this engagement's. */
 export const SETTINGS_FIRM_FROM: SettingsTab = "workforce";
 
@@ -118,6 +126,7 @@ const SETTINGS_PAGES: Record<SettingsTab, SectionId> = {
   engagement: "setup",
   workforce: "agents",
   tasks: "tasks",
+  trial: "settings",
 };
 /** The Settings tabs that became their own destinations, and the section each opens. */
 const LEFT_SETTINGS: Record<string, SectionId> = {

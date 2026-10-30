@@ -45,6 +45,10 @@ const policy = (kind: Policy["kind"]): Policy => ({
   title: kind,
   fileName: "",
   excerpt: "",
+  characters: 0,
+  fileKept: false,
+  fileSize: null,
+  fileType: "",
   createdBy: null,
   createdAt: "2026-10-27T10:00:00Z",
   systemIds: [],
@@ -162,5 +166,18 @@ describe("the launch checklist's styles", () => {
 
   it("drops the old What to do next dialog's rules", () => {
     assert.doesNotMatch(globals, /\.launch-dialog-(steps|foot)\b/);
+  });
+});
+
+describe("text written into the page's markup", () => {
+  // A JSX attribute in quotes is not a JavaScript string: "Let’s" reached the launch
+  // dialog's title as six characters of code. Type the character itself.
+  it("never carries an escape sequence in a quoted attribute", () => {
+    const view = readFileSync("apps/web/src/setup-view.tsx", "utf8");
+    assert.doesNotMatch(view, /\b[a-z]+="[^"\n]*\\u[0-9a-f]{4}/i);
+    assert.match(
+      view,
+      /title="Your engagement is ready\. Set up the scope next\."/,
+    );
   });
 });

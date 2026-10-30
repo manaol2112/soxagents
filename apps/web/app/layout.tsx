@@ -20,6 +20,8 @@ import "./client-walkthrough.css";
 import "./evidence-requests.css";
 import "./process-flow.css";
 import "./procedure-board.css";
+import "./trial.css";
+import "./demo.css";
 // Last: the glass layer sits over the modules' own surfaces.
 import "./glass.css";
 

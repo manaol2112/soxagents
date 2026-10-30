@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { type Client, parseClients } from "./client-model";
+import { demoReady, offersDemo } from "./demo-model";
 import { parseCompletion } from "./engagement-lifecycle";
 
 import {
@@ -38,6 +39,22 @@ export async function loadWorkspace(
       ? { status: 200, body: [] }
       : await apiGet(`/organizations/${organizationId}/projects`, session);
   const visibleProjectId = projectIdInList(projects.body, request.projectId);
+  // The demo invitation and the account menu's entry: one more read, for a firm on a
+  // running trial only (no other firm is offered one).
+  const demo =
+    organizationId !== null && offersDemo(organizations.body, organizationId)
+      ? await apiGet(`/organizations/${organizationId}/demo`, session)
+      : { status: 0, body: null };
+  // The trial's allowances and usage (Step 6): one more read, for the settings page.
+  const subscription =
+    organizationId !== null && request.section === "settings"
+      ? await apiGet(`/organizations/${organizationId}/subscription`, session)
+      : { status: 0, body: null };
+  // The guided tour's standing (Step 5): one more read, only once the demo exists.
+  const tour =
+    organizationId !== null && demo.status === 200 && demoReady(demo.body)
+      ? await apiGet(`/organizations/${organizationId}/demo/tour`, session)
+      : { status: 0, body: null };
   const agents = await loadAgents(
     session,
     organizationId,
@@ -85,6 +102,9 @@ export async function loadWorkspace(
       canManageTasks: taskWork.canManage,
       taskAssignees: taskWork.assignees,
       agentInstances: taskWork.instances,
+      demo: demo.status === 200 ? demo.body : undefined,
+      tour: tour.status === 200 ? tour.body : undefined,
+      subscription: subscription.status === 200 ? subscription.body : undefined,
     });
   }
   return deriveShell({
@@ -114,6 +134,9 @@ export async function loadWorkspace(
     canManageTasks: taskWork.canManage,
     taskAssignees: taskWork.assignees,
     agentInstances: taskWork.instances,
+    demo: demo.status === 200 ? demo.body : undefined,
+    tour: tour.status === 200 ? tour.body : undefined,
+    subscription: subscription.status === 200 ? subscription.body : undefined,
   });
 }
 

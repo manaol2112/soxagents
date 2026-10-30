@@ -2713,7 +2713,7 @@ function LaunchedDialog({
     <RecordDialog
       className="lc-dialog"
       eyebrow="Engagement launched"
-      title="Your engagement is ready. Let\u2019s set up the scope."
+      title="Your engagement is ready. Set up the scope next."
       description={`Complete these ${total === 5 ? "five" : total} foundations to prepare your audit workspace and activate testing.`}
       closeHref={setupHref(model, "launch")}
     >

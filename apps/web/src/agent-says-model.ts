@@ -372,8 +372,12 @@ function testStep(input: AgentInput): AgentSays {
       `${plural(found.exceptions, "exception")}, ${found.unable} with insufficient evidence, ${found.review} needing a person's review, across ${found.tested} tested samples.`,
     );
   } else if (sheet.status === "SIGNED_OFF") {
+    // SEEDED results were prepared with the demo dataset, never a model's run (0129).
+    const seeded =
+      sheet.items.length > 0 &&
+      sheet.items.every((item) => item.source === "SEEDED");
     says.did.push(
-      `A person signed the testing off${sheet.signedBy !== null ? ` (${sheet.signedBy})` : ""}${when(sheet.signedAt)}; the agent's results stand as recorded`,
+      `A person signed the testing off${sheet.signedBy !== null ? ` (${sheet.signedBy})` : ""}${when(sheet.signedAt)}; ${seeded ? "the results were prepared with the demo (simulated) and stand as recorded" : "the agent's results stand as recorded"}`,
     );
   }
   for (const code of found.exceptionCodes.slice(0, 4)) {
@@ -500,7 +504,7 @@ function reviewStep(input: AgentInput): AgentSays {
   }
   if (review.reperformedAt !== null) {
     says.did.push(
-      `Re-performed the testing from the evidence (${review.reperformSource === "MODEL" ? "the model" : review.reperformSource === "FALLBACK" ? "rules only; the model failed" : "rules only"})${when(review.reperformedAt)}; raised ${plural(agentNotes.length, "review note")}`,
+      `Re-performed the testing from the evidence (${review.reperformSource === "MODEL" ? "the model" : review.reperformSource === "FALLBACK" ? "rules only; the model failed" : review.reperformSource === "SEEDED" ? "prepared with the demo, simulated" : "rules only"})${when(review.reperformedAt)}; raised ${plural(agentNotes.length, "review note")}`,
     );
   }
   const proposed = agentNotes.filter((note) => note.status === "PROPOSED");

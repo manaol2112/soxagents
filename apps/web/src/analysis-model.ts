@@ -68,7 +68,7 @@ export type EvidenceAnalysis = {
   classification: Classification | null;
   /** MODEL: the model's checked answer. RULES: the rules by design. FALLBACK: the rules
    * after a model failure. FAILED: the model failed and nothing stands in. */
-  source: "MODEL" | "RULES" | "FALLBACK" | "FAILED" | null;
+  source: "MODEL" | "RULES" | "FALLBACK" | "FAILED" | "SEEDED" | null;
   note: string;
   confirmedKind: EvidenceKind | null;
   confirmedNote: string;
@@ -196,11 +196,13 @@ export function parseAnalyses(value: unknown): EvidenceAnalysis[] | null {
         ? item.columns.filter((c): c is string => typeof c === "string")
         : [],
       classification: parseClassification(item.classification),
+      // SEEDED: prepared with the demo dataset, not read by a model now (Step 4A).
       source: oneOf(item.source, [
         "MODEL",
         "RULES",
         "FALLBACK",
         "FAILED",
+        "SEEDED",
       ] as const),
       note: str(item.note),
       confirmedKind: oneOf(item.confirmed_kind, EVIDENCE_KINDS),

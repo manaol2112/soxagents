@@ -17,7 +17,16 @@ from starlette.middleware.base import RequestResponseEndpoint
 
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.identity import Identity, IdentityError, IdentityProvider, Issuer
+from ai_workforce_api.rate_limit import (
+    RateLimited,
+    Scope,
+    client_address,
+    enforce,
+    enforce_on,
+    identity_hash,
+)
 from ai_workforce_api.settings import Settings
+from ai_workforce_api.subscriptions import make_internal, start_trial
 from ai_workforce_api.support_notifications import deliver_held, record, sign_up_text
 
 SESSION_COOKIE = "aw_session"
@@ -70,12 +79,18 @@ PUBLIC_MAIL_DOMAINS = frozenset(
     }
 )
 SLUG_CHARS = re.compile(r"[^a-z0-9]+")
-LoginFailure = Literal["failed", "unlinked", "disabled"]
-FAILURE_STATUS: dict[LoginFailure, int] = {"failed": 400, "unlinked": 409, "disabled": 403}
+LoginFailure = Literal["failed", "unlinked", "disabled", "throttled"]
+FAILURE_STATUS: dict[LoginFailure, int] = {
+    "failed": 400,
+    "unlinked": 409,
+    "disabled": 403,
+    "throttled": 429,
+}
 FAILURE_DETAIL: dict[LoginFailure, str] = {
     "failed": "authentication failed",
     "unlinked": "account could not be linked",
     "disabled": "account is disabled",
+    "throttled": "too many sign-in attempts; try again in a few minutes",
 }
 logger = logging.getLogger(__name__)
 
@@ -134,16 +149,18 @@ def register_auth(
         return ProvidersBody(providers=listed, preview=preview)
 
     @app.get("/auth/login")
-    def login() -> RedirectResponse:
-        return _begin_login(settings, provider, "entra", settings.oidc_redirect_url)
+    def login(request: Request) -> Response:
+        return _begin_login(settings, provider, "entra", settings.oidc_redirect_url, request)
 
     @app.get("/auth/callback")
     def callback(request: Request, tasks: BackgroundTasks) -> Response:
         return _finish_login(settings, provider, "entra", request, tasks)
 
     @app.get("/auth/google/login")
-    def google_login() -> RedirectResponse:
-        return _begin_login(settings, google_provider, "google", settings.google_redirect_url)
+    def google_login(request: Request) -> Response:
+        return _begin_login(
+            settings, google_provider, "google", settings.google_redirect_url, request
+        )
 
     @app.get("/auth/google/callback")
     def google_callback(request: Request, tasks: BackgroundTasks) -> Response:
@@ -204,10 +221,18 @@ def register_auth(
 
 
 def _begin_login(
-    settings: Settings, provider: IdentityProvider | None, issuer: Issuer, redirect_uri: str
-) -> RedirectResponse:
+    settings: Settings,
+    provider: IdentityProvider | None,
+    issuer: Issuer,
+    redirect_uri: str,
+    request: Request,
+) -> Response:
     if provider is None:
         raise HTTPException(status_code=503, detail="authentication is not configured")
+    # A network address starts only so many sign-ins in a window (Step 7); the count is
+    # kept with the login attempts, failing open if it cannot be kept.
+    if settings.database_url != "" and _throttled(settings, "login", client_address(request)):
+        return _login_failed(settings, "throttled")
     try:
         started = provider.begin(redirect_uri=redirect_uri)
         _save_attempt(settings, started.state, {**started.flow, FLOW_PROVIDER_KEY: issuer})
@@ -232,6 +257,8 @@ def _finish_login(
     state = request.query_params.get("state", "")
     if state == "":
         return _login_failed(settings, "failed")
+    if settings.database_url != "" and _throttled(settings, "callback", client_address(request)):
+        return _login_failed(settings, "throttled")
     try:
         flow = _take_attempt(settings, state)
     except psycopg.Error:
@@ -246,7 +273,9 @@ def _finish_login(
         logger.warning("oidc callback failed: %s", issuer)
         return _login_failed(settings, "failed")
     try:
-        raw_token = _open_session(settings, identity)
+        raw_token = _open_session(settings, identity, client_address(request))
+    except RateLimited:
+        return _login_failed(settings, "throttled")
     except AccountLinkError:
         return _login_failed(settings, "unlinked")
     except psycopg.Error:
@@ -330,14 +359,27 @@ def _take_attempt(settings: Settings, state: str) -> dict[str, Any] | None:
     return flow
 
 
-def _open_session(settings: Settings, identity: Identity) -> str | None:
+def _throttled(settings: Settings, scope: Scope, key: str) -> bool:
+    """Whether the window for this key is full. Sign-in counts fail open: a database
+    hiccup never locks everyone out."""
+    try:
+        with connect(settings.database_url) as connection:
+            enforce_on(connection, settings, scope, key, fail_closed=False)
+    except RateLimited:
+        return True
+    except psycopg.Error:
+        return False
+    return False
+
+
+def _open_session(settings: Settings, identity: Identity, address: str = "unknown") -> str | None:
     raw_token = secrets.token_urlsafe(32)
     with connect(settings.database_url) as connection:
         with transaction(connection) as cursor:
             user_id = _link_user(cursor, identity)
             if user_id is None:
                 return None
-            workspace = _ensure_workspace(cursor, user_id, identity)
+            workspace = _ensure_workspace(cursor, user_id, identity, settings, address)
             if workspace is not None:
                 subject, text = sign_up_text(
                     name=identity.display_name or "",
@@ -382,8 +424,15 @@ def _link_user(cursor: psycopg.Cursor[Any], identity: Identity) -> UUID | None:
     )
     matched = cursor.fetchone()
     if matched is None:
-        cursor.execute("SELECT id, status FROM users WHERE email = %s", (identity.email,))
+        cursor.execute(
+            "SELECT id, status, demo_organization_id IS NOT NULL FROM users WHERE email = %s",
+            (identity.email,),
+        )
         matched = cursor.fetchone()
+        if matched is not None and matched[2] is True:
+            # A demo identity (migration 0130) never signs in, whatever the provider says.
+            raise AccountLinkError()
+        matched = None if matched is None else matched[:2]
         if matched is None:
             cursor.execute(
                 """
@@ -419,12 +468,74 @@ def _link_user(cursor: psycopg.Cursor[Any], identity: Identity) -> UUID | None:
 PROVIDER_WORDS = {"google": "Google", "entra": "Microsoft"}
 
 
-def _ensure_workspace(cursor: psycopg.Cursor[Any], user_id: UUID, identity: Identity) -> str | None:
-    """Give a person who belongs to no organization one of their own, as its owner.
-    Returns the new workspace's name, or None when they already belonged to one."""
+def _registration_event(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID | None,
+    user_id: UUID,
+    action: str,
+    identity: Identity,
+    address: str,
+) -> None:
+    """Every registration attempt and its outcome, on the audit trail: the provider, the
+    address's hash (never the address) and the mailbox's domain. A throttled attempt has
+    no firm to record against, so it is logged the same way instead."""
+    if organization_id is None:
+        logger.warning(
+            "registration %s: issuer=%s domain=%s address=%s",
+            action.rsplit(".", 1)[-1],
+            identity.issuer,
+            identity.email.rsplit("@", 1)[-1].lower()[:120],
+            hashlib.sha256(address.encode("utf-8")).hexdigest()[:16],
+        )
+        return
+    cursor.execute(
+        """
+        INSERT INTO audit_events (
+            organization_id, actor_user_id, action, target_type, target_id, payload
+        )
+        VALUES (%s, %s, %s, 'registration', %s, %s)
+        """,
+        (
+            organization_id,
+            user_id,
+            action,
+            user_id,
+            Json(
+                {
+                    "issuer": identity.issuer,
+                    "domain": identity.email.rsplit("@", 1)[-1].lower()[:120],
+                    "address_hash": hashlib.sha256(address.encode("utf-8")).hexdigest()[:16],
+                }
+            ),
+        ),
+    )
+
+
+def _ensure_workspace(
+    cursor: psycopg.Cursor[Any],
+    user_id: UUID,
+    identity: Identity,
+    settings: Settings,
+    address: str = "unknown",
+) -> str | None:
+    """Give a person who belongs to no organization one of their own, as its owner, on the
+    free trial (subscriptions.py). Returns the new workspace's name, or None when they
+    already belonged to one; signing in again never makes another, so never another trial.
+
+    Pre-launch hardening (Step 7): a network address and a normalised email identity
+    create only so many firms in a window (fail closed), the attempt is audited, and a
+    second trial under an identity that already had one is held: the firm exists, its
+    subscription is suspended for review, and nothing can be created in it."""
     cursor.execute("SELECT 1 FROM memberships WHERE user_id = %s LIMIT 1", (user_id,))
     if cursor.fetchone() is not None:
         return None
+    mailbox = identity_hash(identity.email)
+    try:
+        enforce(cursor, settings, "signup", address, fail_closed=True)
+        enforce(cursor, settings, "signup_identity", mailbox, fail_closed=True)
+    except RateLimited:
+        _registration_event(cursor, None, user_id, "registration.throttled", identity, address)
+        raise
     name = workspace_name(identity.email, identity.display_name)
     organization_id: UUID | None = None
     base = workspace_slug(name)
@@ -453,6 +564,37 @@ def _ensure_workspace(cursor: psycopg.Cursor[Any], user_id: UUID, identity: Iden
         (organization_id, user_id),
     )
     membership = cursor.fetchone()
+    # The trial the database started for the new firm takes this deployment's length and
+    # limits, in the same transaction as the firm itself.
+    start_trial(cursor, organization_id, user_id, settings)
+    # One trial per mailbox: an alias of a mailbox that already had its trial gets a firm
+    # on hold, for support to review, never another allowance.
+    cursor.execute("SELECT user_id FROM trial_identities WHERE identity_hash = %s", (mailbox,))
+    earlier = cursor.fetchone()
+    held = earlier is not None and earlier[0] != user_id
+    if held:
+        cursor.execute(
+            """
+            UPDATE organization_subscriptions
+            SET status = 'SUSPENDED', status_reason = 'duplicate-identity', updated_by = %s,
+                version = version + 1
+            WHERE organization_id = %s
+            """,
+            (user_id, organization_id),
+        )
+    else:
+        cursor.execute(
+            """
+            INSERT INTO trial_identities (identity_hash, organization_id, user_id)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (identity_hash) DO NOTHING
+            """,
+            (mailbox, organization_id, user_id),
+        )
+    _registration_event(
+        cursor, organization_id, user_id,
+        "registration.held" if held else "registration.accepted", identity, address,
+    )  # fmt: skip
     # A firm's own domain is where its invitations may go. A personal mailbox is not.
     domain = identity.email.rsplit("@", 1)[-1].strip().lower()
     if domain not in PUBLIC_MAIL_DOMAINS and "." in domain:
@@ -557,6 +699,8 @@ def _ensure_preview_owner(cursor: psycopg.Cursor[Any]) -> UUID:
     if organization is None or not isinstance(organization[0], UUID):
         raise AccountLinkError()
     organization_id = organization[0]
+    # The platform's own workspace is not a trial.
+    make_internal(cursor, organization_id, "preview workspace")
     cursor.execute(
         """
         INSERT INTO memberships (organization_id, user_id, role)

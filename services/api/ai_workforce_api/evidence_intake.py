@@ -48,6 +48,7 @@ from ai_workforce_api.evidence_review import review_decided
 from ai_workforce_api.evidence_withdrawn import in_force, is_withdrawn
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import StoreError, digest_of, open_store
+from ai_workforce_api.storage_sweep import discard
 from ai_workforce_api.testing_engine import TestScheduler, request_run, schedule_runs
 
 MAX_PATH = 500
@@ -541,13 +542,19 @@ def _store_upload(
             )
             queued = queue_analysis(cursor, organization_id, project_id, file_id, principal.id)
     except UniqueViolation:
-        # The same file arrived twice at once: the first one is kept.
+        # The same file arrived twice at once: the first one is kept; this object goes.
+        discard(store, key)
         again = _existing(connection, project_id, digest, folder, file_name)
         if again is None:
             raise
         return UploadBody(
             file_id=again, file_name=file_name, folder_path=folder, duplicate=True
         ), None
+    except Exception:
+        # Whatever refused the row (an allowance, a constraint, a lost connection), the
+        # bytes stored for it are removed again; the sweep catches what this cannot.
+        discard(store, key)
+        raise
     return UploadBody(
         file_id=file_id, file_name=file_name, folder_path=folder, duplicate=False
     ), queued

@@ -187,9 +187,14 @@ def test_a_request_is_checked_against_the_test_plan_before_approval(migrated: Da
         )
         connection.commit()
     details = _details(team, draft["id"])
+    # Design evidence is not held to the attributes (the design is assessed from it; the
+    # product owner, 28 October 2026): the design draft stays mapped with its item's
+    # attribute links removed. Before 28 October 2026 it was expected to fail the check.
+    # The rule still binds the testing phases' requests, whose sample items arrive once
+    # the population has (lean evidence requests); none exists at this stage, so the
+    # unmapped case is not exercised here.
     if sample is not None:
-        assert not _check(details, "mapping")["ok"]
-        assert "evidences no approved attribute" in _check(details, "mapping")["detail"]
+        assert _check(details, "mapping")["ok"], _check(details, "mapping")
     period = _check(_details(team, str(interim[0])), "period")
     assert not period["ok"] and "outside the phase's window" in period["detail"]
     assert not _check(details, "duplicate")["ok"]
