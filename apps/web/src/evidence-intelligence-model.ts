@@ -929,3 +929,72 @@ export function fileMeta(
   }
   return parts.join(" · ");
 }
+
+/** The phase whose items hold the file, or null. */
+export function phaseOfFile(
+  phases: readonly NavPhase[],
+  fileId: string | null,
+): Phase | null {
+  if (fileId === null) {
+    return null;
+  }
+  return (
+    phases.find((entry) =>
+      entry.items.some((item) => item.files.some((file) => file.id === fileId)),
+    )?.phase ?? null
+  );
+}
+
+/** The item new evidence is added to: the one chosen, else the open file's, else the
+ * first requested item still without a file, else the first requested item. An item not
+ * yet requested takes no files, so it is never the fallback. */
+export function uploadTargetOf(
+  phases: readonly NavPhase[],
+  chosenItem: string | null,
+  fileId: string | null,
+): NavItem | null {
+  const items = phases.flatMap((entry) => entry.items);
+  const fileItem = items.find((item) =>
+    item.files.some((file) => file.id === fileId),
+  );
+  return (
+    items.find((item) => item.requirement.id === chosenItem) ??
+    fileItem ??
+    items.find(
+      (item) => item.files.length === 0 && item.requirement.requestId !== null,
+    ) ??
+    items.find((item) => item.requirement.requestId !== null) ??
+    null
+  );
+}
+
+/** The phase whose items hold the item. */
+export function phaseOfItem(
+  phases: readonly NavPhase[],
+  itemId: string | null,
+): Phase | null {
+  return (
+    phases.find((entry) =>
+      entry.items.some((item) => item.requirement.id === itemId),
+    )?.phase ?? null
+  );
+}
+
+/** The navigator's phase sections that start open: the one holding the open file, else
+ * the one holding the item new evidence goes to (so its drop zone is in view), else the
+ * first with items. */
+export function openAtStart(
+  phases: readonly NavPhase[],
+  fileId: string | null,
+): Phase[] {
+  const held = phaseOfFile(phases, fileId);
+  if (held !== null) {
+    return [held];
+  }
+  const target = uploadTargetOf(phases, null, fileId);
+  const phase =
+    phaseOfItem(phases, target?.requirement.id ?? null) ??
+    phases.find((entry) => entry.items.length > 0)?.phase ??
+    null;
+  return phase === null ? [] : [phase];
+}

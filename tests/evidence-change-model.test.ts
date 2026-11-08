@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
+  answersInPlace,
   changeBlocked,
   changeNoticeFor,
   changeNoticeOk,
@@ -129,12 +131,17 @@ describe("notices", () => {
         "the file cannot be withdrawn: the approved sample for ITGC-AC-01 was drawn from it",
         "sample-drawn",
       ],
+      // Since 31 October 2026 only reliance on the file itself keeps it.
       [
-        "the file cannot be replaced: testing for ITGC-AC-01 is signed off; reopen it first",
+        'the file cannot be withdrawn: the evidence item "Access policy" was accepted with it; change that decision first',
+        "item-accepted",
+      ],
+      [
+        "the file cannot be replaced: testing for ITGC-AC-01 is signed off on it; reopen it first",
         "testing-signed",
       ],
       [
-        "the file cannot be withdrawn: a workpaper for ITGC-AC-01 is prepared; reopen it first",
+        "the file cannot be withdrawn: the prepared design workpaper for ITGC-AC-01 cites it; reopen it first",
         "workpaper-prepared",
       ],
       ["this is the same file; nothing to replace", "same-file"],
@@ -216,5 +223,38 @@ describe("withdrawn files in the register", () => {
     assert.equal(filterWithdrawn(register.withdrawn, "payroll").length, 0);
     // An older API without the list still parses.
     assert.deepEqual(parseRegister({ files: [], controls: [] })?.withdrawn, []);
+  });
+});
+
+describe("withdrawing in place", () => {
+  it("answers with JSON only when the form asks for it", () => {
+    assert.equal(answersInPlace("application/json"), true);
+    assert.equal(answersInPlace("text/html,application/json;q=0.9"), true);
+    assert.equal(answersInPlace("text/html,application/xhtml+xml"), false);
+    assert.equal(answersInPlace(null), false);
+  });
+
+  it("shows a refusal in the form on a control page, not after a reload", () => {
+    // 31 Oct 2026: a withdrawal refused because the workpaper was prepared reloaded
+    // the page with its notice inside the closed Files received section.
+    const form = readFileSync(
+      new URL("../apps/web/src/evidence-change.tsx", import.meta.url),
+      "utf8",
+    );
+    assert.match(form, /onSubmit=\{withdraw\}/);
+    assert.match(form, /Withdrawing…/);
+    const line = readFileSync(
+      new URL("../apps/web/src/evidence-workspace-view.tsx", import.meta.url),
+      "utf8",
+    );
+    assert.match(line, /onDone=\{/);
+    const route = readFileSync(
+      new URL(
+        "../apps/web/app/workspace/evidence-change/route.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    assert.match(route, /searchParams\.set\("ev", "files"\)/);
   });
 });

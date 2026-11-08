@@ -17,6 +17,7 @@ import {
   type RequirementState,
   waitsOnPerson,
 } from "./evidence-plan-model.ts";
+import { formatBytes, formatDate } from "./format.ts";
 
 export const EVIDENCE_VIEWS = [
   "requirements",
@@ -405,7 +406,29 @@ export type HeldFile = {
   blocked?: string | null;
   /** The control has several applications and which one the file shows is not known. */
   applicationUnknown?: boolean;
+  /** When it was added, and its size: shown on the item's file card. */
+  createdAt?: string;
+  sizeBytes?: number;
 };
+
+/** The second line of an item's file card: when the file was uploaded, its size, and how
+ * it serves the item when not through its request (product owner's reference, 31
+ * October 2026: "Uploaded Oct 29, 2026 • 13 KB"). */
+export function fileCardMeta(
+  held: Pick<HeldFile, "createdAt" | "sizeBytes"> | undefined,
+  file: { via: string; linkedBy: string | null; sharedFrom: string | null },
+): string {
+  return [
+    held?.createdAt ? `Uploaded ${formatDate(held.createdAt)}` : "",
+    held?.sizeBytes != null ? formatBytes(held.sizeBytes) : "",
+    file.via === "LINK" ? `Linked by ${file.linkedBy ?? "a person"}` : "",
+    file.via === "SHARED" && file.sharedFrom
+      ? `Shared from ${file.sharedFrom}`
+      : "",
+  ]
+    .filter((part) => part !== "")
+    .join(" • ");
+}
 
 /**
  * The files the evidence items show, each on the line of the item it serves, with its

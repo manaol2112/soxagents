@@ -43,7 +43,11 @@ from ai_workforce_api.evidence_analysis import (
 )
 from ai_workforce_api.evidence_classify import KIND_LABELS
 from ai_workforce_api.evidence_links import control_request, evidence_hint
-from ai_workforce_api.evidence_receipts import apply_receipt, undo_receipt
+from ai_workforce_api.evidence_receipts import (
+    apply_receipt,
+    follow_evidence,
+    release_receipt,
+)
 from ai_workforce_api.evidence_review import review_decided
 from ai_workforce_api.evidence_withdrawn import in_force, is_withdrawn
 from ai_workforce_api.settings import Settings
@@ -963,7 +967,7 @@ def _file(
                     "confirmed",
                 )
         else:
-            undo_receipt(cursor, organization_id, project_id, match_id, principal.id)
+            released = release_receipt(cursor, match_id)
             if control is None:
                 cursor.execute(
                     """
@@ -1017,6 +1021,12 @@ def _file(
                     # Read it again against its control: coverage, review, and sampling.
                     restart_analysis(cursor, analysis_id, principal.id)
                     queued = analysis_id
+            # The request it left follows the evidence still on it.
+            if released is not None:
+                follow_evidence(
+                    cursor, organization_id, project_id, released.request_id, principal.id,
+                    released.before,
+                )  # fmt: skip
     return _register(connection, principal, organization_id, project_id, file_id), queued
 
 

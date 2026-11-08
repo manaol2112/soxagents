@@ -1966,6 +1966,9 @@ function ScopeControls({
         all.map((control) => [control.id, action(control)]),
       )}
       systems={systems.map((system) => system.name)}
+      systemLayers={Object.fromEntries(
+        systems.map((system) => [system.name, system.layer]),
+      )}
       processes={scopedProcesses(onboarding).map((row) => ({
         key: row.processId ?? row.domain,
         label: row.label,

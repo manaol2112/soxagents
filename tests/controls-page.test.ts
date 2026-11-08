@@ -2,14 +2,19 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  cardStatus,
+  controlIcon,
   counts,
+  DEFAULT_PAGE_VIEW,
   filterRows,
+  groupProgress,
   groupRows,
   initials,
   NO_FILTERS,
   type PageRow,
   pageOf,
   planOf,
+  readPageView,
   type ScopeFacts,
   stepStates,
   testingOf,
@@ -312,5 +317,94 @@ describe("controls page layout and export", () => {
     assert.equal(initials("Dana Reviewer"), "DR");
     assert.equal(initials("ops.lead@example.com"), "OL");
     assert.equal(initials(""), "?");
+  });
+});
+
+describe("the controls page view a browser remembers", () => {
+  it("opens by system until the person chooses otherwise", () => {
+    assert.deepEqual(DEFAULT_PAGE_VIEW, {
+      by: "system",
+      layout: "table",
+      size: 50,
+    });
+    assert.deepEqual(readPageView(null), DEFAULT_PAGE_VIEW);
+  });
+
+  it("keeps the person's choice", () => {
+    assert.deepEqual(
+      readPageView(
+        JSON.stringify({ by: "process", layout: "cards", size: 100 }),
+      ),
+      { by: "process", layout: "cards", size: 100 },
+    );
+    assert.deepEqual(readPageView(JSON.stringify({ by: "control" })), {
+      ...DEFAULT_PAGE_VIEW,
+      by: "control",
+    });
+  });
+
+  it("falls back to the default for anything it does not recognize", () => {
+    assert.deepEqual(readPageView("not json"), DEFAULT_PAGE_VIEW);
+    assert.deepEqual(readPageView("[]"), DEFAULT_PAGE_VIEW);
+    assert.deepEqual(
+      readPageView(JSON.stringify({ by: "owner", layout: "grid", size: 7 })),
+      DEFAULT_PAGE_VIEW,
+    );
+  });
+});
+
+describe("the card view (product owner, 2 November 2026, card reference)", () => {
+  it("shows what a control needs next in its one status pill", () => {
+    assert.equal(cardStatus(row({ plan: "PENDING" })).label, "Plan to approve");
+    assert.equal(cardStatus(row({ plan: "DRAFT" })).label, "Plan in draft");
+    assert.equal(
+      cardStatus(row({ plan: "APPROVED", testing: "NOT_STARTED" })).label,
+      "In scope",
+    );
+    assert.equal(
+      cardStatus(row({ plan: "APPROVED", testing: "EXCEPTIONS" })).tone,
+      "is-danger",
+    );
+    assert.equal(cardStatus(row({ included: false })).label, "Out of scope");
+  });
+
+  it("picks the card's icon from what the control is about", () => {
+    assert.equal(
+      controlIcon(row({ title: "User Access Provisioning and Approval" })),
+      "userPlus",
+    );
+    assert.equal(
+      controlIcon(row({ title: "Timely Removal of Terminated User Access" })),
+      "clock",
+    );
+    assert.equal(
+      controlIcon(row({ title: "Authentication and Password Configuration" })),
+      "shield",
+    );
+    assert.equal(
+      controlIcon(row({ title: "Quarterly user access certification" })),
+      "eye",
+    );
+    assert.equal(
+      controlIcon(
+        row({ title: "Three-way match blocks invoices outside tolerance" }),
+      ),
+      "file",
+    );
+    assert.equal(
+      controlIcon(row({ title: "Something else", description: "" })),
+      "layers",
+    );
+  });
+
+  it("counts a group's approved plans among its in-scope controls", () => {
+    assert.deepEqual(
+      groupProgress([
+        row({ id: "a", plan: "APPROVED" }),
+        row({ id: "b", plan: "PENDING" }),
+        row({ id: "c", plan: "APPROVED", included: false }),
+      ]),
+      { planned: 1, total: 2 },
+    );
   });
 });

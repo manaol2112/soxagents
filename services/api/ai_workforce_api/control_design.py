@@ -22,9 +22,10 @@ from pydantic import BaseModel, Field
 
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.control_context import ContextState
-from ai_workforce_api.control_statements import ASSERTION_LABELS, Statement, render
+from ai_workforce_api.control_statements import ASSERTION_LABELS, Statement, render, shown
 from ai_workforce_api.db import transaction
 from ai_workforce_api.inbound import clean_line
+from ai_workforce_api.slot_questions import asks_for_document, holds_testing
 from ai_workforce_api.statement_registry import statement_for
 from ai_workforce_api.testing_definitions import DEFINED_SINCE
 
@@ -50,6 +51,9 @@ class SlotBody(BaseModel):
     question: str = ""
     # How to answer it, for whoever fills it in (slot_questions.hint_for).
     hint: str = ""
+    # A governing document's name, answered from a linked document
+    # (slot_questions.asks_for_document).
+    document: bool = False
 
 
 class OpenValueBody(BaseModel):
@@ -163,17 +167,19 @@ def _blocking(statement: Statement) -> set[str]:
     }  # fmt: skip
     return {
         slot.key for slot in statement.slots
-        if slot.blocks and slot.key not in AUTOMATIC and slot.key not in owner_only
+        if holds_testing(slot) and slot.key not in AUTOMATIC and slot.key not in owner_only
     }  # fmt: skip
 
 
 def _waited(statement: Statement, texts: Sequence[str] = ()) -> set[str]:
     """The slots testing waits for: the blocking ones, and each an approved attribute still
     shows in brackets (a library attribute that depends on the client is approved with its
-    standard, milestone L3e, and cannot be tested until the client's value is in place)."""
+    standard, milestone L3e, and cannot be tested until the client's value is in place). A
+    governing document never holds it: a client may have none."""
     return _blocking(statement) | {
         slot.key for slot in statement.slots
-        if slot.key not in AUTOMATIC and any(f"[{slot.fills}]" in text for text in texts)
+        if slot.key not in AUTOMATIC and not asks_for_document(slot)
+        and any(f"[{slot.fills}]" in text for text in texts)
     }  # fmt: skip
 
 
@@ -263,6 +269,7 @@ def design_for(connection: psycopg.Connection[Any], control_id: UUID) -> DesignB
                 options=options_for(slot, systems),
                 question=question_for(slot),
                 hint=hint_for(slot),
+                document=asks_for_document(slot),
             )
             for slot in statement.slots
         ],  # fmt: skip
@@ -443,7 +450,7 @@ def filled_wording(cursor: psycopg.Cursor[Any], control_id: UUID, text: str) -> 
     for slot in statement.slots:
         value = values.get(slot.key, "").strip()
         if value and slot.key not in AUTOMATIC:
-            text = text.replace(f"[{slot.fills}]", value)
+            text = text.replace(f"[{slot.fills}]", shown(value))
     return text[:300]
 
 
@@ -490,7 +497,7 @@ def refresh_statement(cursor: psycopg.Cursor[Any], control_id: UUID) -> None:
             cursor.execute(
                 "UPDATE control_attributes SET text = %s, version = version + 1, "
                 "updated_at = clock_timestamp() WHERE id = %s",
-                (str(text).replace(marker, value)[:300], row_id),
+                (str(text).replace(marker, shown(value))[:300], row_id),
             )
             changed = changed or status == "APPROVED"
     if changed:

@@ -94,6 +94,7 @@ from ai_workforce_api.queue import register_queue
 from ai_workforce_api.rcm_systems import SystemScanScheduler, scan_runner
 from ai_workforce_api.rcm_uploads import register_rcm_uploads
 from ai_workforce_api.request_details import register_request_details
+from ai_workforce_api.sample_traces import register_sample_traces
 from ai_workforce_api.scope_setup import register_scope_setup
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.setup_drafting import draft_runner as setup_runner
@@ -108,6 +109,7 @@ from ai_workforce_api.tasks import register_tasks
 from ai_workforce_api.test_rounds import register_test_rounds
 from ai_workforce_api.test_sheets import register_test_sheets
 from ai_workforce_api.testing_engine import TestScheduler, test_runner
+from ai_workforce_api.walkthrough_instances import register_walkthrough_instances
 from ai_workforce_api.workflow import DurableRun, register_workflows
 from ai_workforce_api.workforce import register_workforce
 from ai_workforce_api.workpaper_service import draft_runner as workpaper_runner
@@ -220,6 +222,8 @@ def create_app(
     register_evidence_reviews(app, resolved)
     register_evidence_mapping(app, resolved, model_provider)
     register_evidence_findings(app, resolved)
+    register_walkthrough_instances(app, resolved)
+    register_sample_traces(app, resolved)
     register_control_tests(app, resolved)
     register_control_context(app, resolved, drafts if isinstance(drafts, TestScheduler) else None)
     register_test_sheets(app, resolved, drafts if isinstance(drafts, TestScheduler) else None)

@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-
+import { AgentAvatar } from "./agent-avatar";
 import type { TourStep } from "./tour-model";
 import { UiIcon } from "./ui-icon";
 
@@ -299,7 +299,7 @@ export function SpotlightTour({
           setOpen(true);
         }}
       >
-        <span className="ng-orb is-small" aria-hidden="true" />
+        <AgentAvatar size={20} />
         Guide me
       </button>
       {mounted && open && current !== undefined
@@ -330,7 +330,7 @@ export function SpotlightTour({
                 style={position}
               >
                 <div className="ng-head">
-                  <span className="ng-orb" aria-hidden="true" />
+                  <AgentAvatar size={40} label="Setup agent" />
                   <span className="ng-who">
                     <strong>Setup agent</strong>
                     <small>

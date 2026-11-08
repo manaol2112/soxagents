@@ -2254,7 +2254,9 @@ function ValuesDialog({
   );
 }
 
-function ReviewActions({ ids, plan }: { ids: Ids; plan: MasterPlan }) {
+/** The plan's review decisions (approve, return, submit), also used by a control's guided
+ * setup (control-setup.tsx). */
+export function ReviewActions({ ids, plan }: { ids: Ids; plan: MasterPlan }) {
   const action = useAction(ids);
   const commentId = useId();
   const [mode, setMode] = useState<"none" | "approve" | "return" | "submit">(

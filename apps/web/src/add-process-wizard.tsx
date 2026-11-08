@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
-
+import { AgentAvatar } from "./agent-avatar";
 import { ADD_PROCESS_EVENT, PROCESS_SAVED_EVENT } from "./controls-guide-model";
 import {
   type AreaSuggestions,
@@ -17,6 +17,7 @@ import {
 } from "./onboarding-model";
 import { DiscardBar } from "./scope-actions";
 import { type IconName, UiIcon } from "./ui-icon";
+import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
 
 type Step = 1 | 2 | 3 | 4;
 
@@ -126,6 +127,8 @@ function AddProcessWizard({
 }) {
   const router = useRouter();
   const id = useId();
+  const dialogRef = useRef<HTMLElement>(null);
+  useFocusTrap(dialogRef);
   const [, startTransition] = useTransition();
   const [step, setStep] = useState<Step>(1);
   const [draft, setDraft] = useState<Draft>(EMPTY_PROCESS);
@@ -163,7 +166,7 @@ function AddProcessWizard({
   const requestClose = () => closing.current();
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && isTopmostDialog(dialogRef.current)) {
         closing.current();
       }
     };
@@ -298,6 +301,7 @@ function AddProcessWizard({
     // A click outside never closes it: what was entered stays until Cancel or Close.
     <div className="as-backdrop" role="presentation">
       <section
+        ref={dialogRef}
         className="as"
         role="dialog"
         aria-modal="true"
@@ -476,7 +480,7 @@ function AddProcessWizard({
                 </p>
                 {suggestions === null ? (
                   <p className="as-loading" aria-live="polite">
-                    <span className="ng-orb is-small" aria-hidden="true" />
+                    <AgentAvatar size={20} state="thinking" />
                     The setup agent is reading the details…
                   </p>
                 ) : (

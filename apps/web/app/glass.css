@@ -154,7 +154,7 @@
 }
 
 :root[data-theme="light"] .shell .sidebar nav a[aria-current="page"] svg {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 :root[data-theme="light"] .shell .sidebar nav a.nav-locked,

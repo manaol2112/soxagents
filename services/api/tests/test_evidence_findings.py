@@ -11,7 +11,7 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from support import Database
-from test_evidence_analysis import _no_ocr, _Provider, _settings
+from test_evidence_analysis import _Engine, _engines, _no_ocr, _Provider, _settings
 from test_evidence_intake import _client, _engagement, _Scheduler
 from test_evidence_plans import _control, _phase, _plan
 from test_evidence_portal import _code, _public, _sent, _verify
@@ -950,3 +950,45 @@ def test_a_withdrawn_file_marks_its_open_findings_stale(migrated: Database) -> N
             connection.execute(
                 "DELETE FROM evidence_finding_events WHERE finding_id = %s", (stale[0]["id"],)
             )
+
+
+def test_a_finding_on_a_scanned_page_cites_the_real_page(migrated: Database) -> None:
+    """A policy PDF whose approval page is a scan: the reader's gap and the placeholder
+    check rest on the OCR'd passage, and the finding cites page 4, the page a person opens,
+    not the scan's place among the scanned pages (increment 3A)."""
+    from test_evidence_reading import _mixed_pdf
+
+    team, client, scheduler = _engagement(migrated, "ef-ocr-page")
+    control = _control(migrated, team, "ITGC-AC-01")
+    request_id, _item = _design_request(client, team, control)
+    scanned = "Emergency access is approved after the fact within [1] business day."
+    pdf = _mixed_pdf(
+        [
+            ("text", "Access Security Policy. Document control: version, owner, approvals."),
+            ("scan", "Approved by the CIO"),
+            ("text", "Section 3. Access is provisioned on an approved ticket."),
+            ("scan", scanned),
+        ]
+    )
+    added = client.post(
+        f"{_base(team)}/evidence-uploads",
+        params={"batch_id": str(uuid4()), "name": "policy.pdf", "request_id": request_id},
+        content=pdf,
+        headers={"content-type": "application/pdf"},
+    )
+    assert added.status_code == 200, added.text
+    local = _Engine("LOCAL", ["Approved by the CIO", scanned])
+    provider = _Provider([_answer()])
+    with connect(migrated.url) as connection:
+        for analysis_id in scheduler.analyses:
+            run_analysis(connection, _settings(migrated), provider, analysis_id, _engines(local))
+    scheduler.analyses.clear()
+    assert local.calls == [2]
+    findings = _findings(client, team, control)
+    located = [f for f in findings if f["citation"] is not None]
+    assert located, findings
+    assert {f["kind"] for f in located} >= {"GAP", "PLACEHOLDER"}
+    for finding in located:
+        assert finding["citation"]["page"] == 4, finding["citation"]
+        assert finding["citation"]["location"] == "Page 4"
+        assert finding["citation"]["found"] is True

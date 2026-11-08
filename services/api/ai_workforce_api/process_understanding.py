@@ -50,6 +50,7 @@ from ai_workforce_api.db import transaction
 from ai_workforce_api.model_providers import fallback_note
 from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
+from ai_workforce_api.question_review import review_open_questions
 
 logger = logging.getLogger(__name__)
 
@@ -683,7 +684,7 @@ def _reviewed_as_is(
         return False
     open_questions = cursor.execute(
         "SELECT count(*) FROM control_context_issues WHERE engagement_control_id = %s "
-        "AND status = 'OPEN' AND question <> ''",
+        "AND origin = 'PROCESS' AND status = 'OPEN' AND question <> ''",
         (control_id,),
     ).fetchone()
     return open_questions is not None and int(open_questions[0]) == 0
@@ -944,6 +945,10 @@ def build(
             {"built_by": built, "steps": len(steps), "proposed": current is not None
              and int(current[0]) > 0},
         )  # fmt: skip
+    review_open_questions(
+        connection, provider, organization_id, project_id, control_id, requester, package,
+        sources,
+    )  # fmt: skip
     return note
 
 

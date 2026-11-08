@@ -13,8 +13,12 @@ import {
   insightOf,
   navigatorFiles,
   navigatorOf,
+  openAtStart,
   phaseCounts,
+  phaseOfFile,
+  phaseOfItem,
   type Register,
+  uploadTargetOf,
 } from "../apps/web/src/evidence-intelligence-model.ts";
 import type { EvidenceMappingRun } from "../apps/web/src/evidence-mapping-model.ts";
 import type { RegisterFile } from "../apps/web/src/evidence-model.ts";
@@ -456,6 +460,61 @@ describe("navigatorOf", () => {
       0,
     );
     assert.equal(navigatorOf(null, register()).length, 0);
+  });
+});
+
+describe("the navigator's phase sections", () => {
+  it("finds the phase that holds a file", () => {
+    const phases = navigatorOf(plan(), register());
+    assert.equal(phaseOfFile(phases, POLICY), "DESIGN");
+    assert.equal(phaseOfFile(phases, GRANTS), "INTERIM");
+    assert.equal(phaseOfFile(phases, "f-unknown"), null);
+    assert.equal(phaseOfFile(phases, null), null);
+  });
+
+  it("opens the open file's phase, else the phase of the item new files go to", () => {
+    // 31 October 2026: the drop zone sits in the item it adds to, so that item's phase
+    // opens; it was the first phase needing a person before, which could hide the zone.
+    const phases = navigatorOf(plan(), register());
+    assert.deepEqual(openAtStart(phases, SCREEN), ["INTERIM"]);
+    // No file open: the design item still without a file takes the next files.
+    assert.deepEqual(openAtStart(phases, null), ["DESIGN"]);
+    const designDone = phases.map((entry) => ({
+      ...entry,
+      items: entry.items.map((item) =>
+        item.requirement.id === "d2"
+          ? { ...item, files: entry.items[0]?.files ?? [] }
+          : item.requirement.id === "i1"
+            ? { ...item, files: [] }
+            : item,
+      ),
+    }));
+    assert.deepEqual(openAtStart(designDone, null), ["INTERIM"]);
+    assert.deepEqual(openAtStart([], null), []);
+  });
+
+  it("names the item new evidence goes to, never one not yet requested", () => {
+    const phases = navigatorOf(plan(), register());
+    const target = (chosen: string | null, file: string | null) =>
+      uploadTargetOf(phases, chosen, file)?.requirement.id ?? null;
+    // The item chosen, then the open file's item, then the first requested item without
+    // a file.
+    assert.equal(target("i1", POLICY), "i1");
+    assert.equal(target(null, GRANTS), "i1");
+    assert.equal(target(null, null), "d2");
+    // An item not yet requested takes no files: the first requested item stands in.
+    const unrequested = phases.map((entry) => ({
+      ...entry,
+      items: entry.items.map((item) =>
+        item.requirement.id === "d2"
+          ? { ...item, requirement: { ...item.requirement, requestId: null } }
+          : item,
+      ),
+    }));
+    assert.equal(uploadTargetOf(unrequested, null, null)?.requirement.id, "d1");
+    assert.equal(phaseOfItem(phases, "i1"), "INTERIM");
+    assert.equal(phaseOfItem(phases, "d2"), "DESIGN");
+    assert.equal(phaseOfItem(phases, null), null);
   });
 });
 

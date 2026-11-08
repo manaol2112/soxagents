@@ -21,6 +21,40 @@ export type RowMenuItem = {
  * A row's less frequent actions behind one button, so the row shows only what it is and
  * its main action. Closes on a choice, a click outside, or Escape.
  */
+/** The left edge a menu must stay right of: the window's, or that of the nearest panel
+ * that clips its content (a scrolling navigator, say), with a little room. */
+function clippedLeft(list: HTMLElement): number {
+  let edge = 8;
+  for (
+    let node = list.parentElement;
+    node !== null;
+    node = node.parentElement
+  ) {
+    const style = getComputedStyle(node);
+    if (style.overflowX !== "visible" || style.overflowY !== "visible") {
+      edge = Math.max(edge, node.getBoundingClientRect().left + 4);
+    }
+  }
+  return edge;
+}
+
+/** The bottom edge a menu must stay above: the window's, or that of the nearest panel
+ * that clips its content (a scrolling card in a dialog, say). */
+function clippedBottom(list: HTMLElement): number {
+  let edge = window.innerHeight - 8;
+  for (
+    let node = list.parentElement;
+    node !== null;
+    node = node.parentElement
+  ) {
+    const style = getComputedStyle(node);
+    if (style.overflowX !== "visible" || style.overflowY !== "visible") {
+      edge = Math.min(edge, node.getBoundingClientRect().bottom - 4);
+    }
+  }
+  return edge;
+}
+
 export function RowMenu({
   label,
   items,
@@ -29,46 +63,62 @@ export function RowMenu({
   /** What the menu acts on, for its accessible name. */
   label: string;
   items: RowMenuItem[];
-  /** A labelled button in place of the row's "more" icon, such as a page's Add. */
-  trigger?: { label: string; icon: IconName } | null;
+  /** A labelled button in place of the row's "more" icon, such as a page's Add, or a
+   * row's status that opens what can change it (with a class of its own). */
+  trigger?: { label: string; icon: IconName; className?: string } | null;
 }) {
   const [open, setOpen] = useState(false);
   // Opens to the left of its button, or to the right where the left has no room.
   const [toRight, setToRight] = useState(false);
+  // Opens above its button where the space below is clipped.
+  const [up, setUp] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!open) {
       setToRight(false);
+      setUp(false);
       return;
     }
     const list = root.current?.querySelector<HTMLElement>(".row-menu-list");
     if (
       list !== null &&
       list !== undefined &&
-      list.getBoundingClientRect().left < 8
+      list.getBoundingClientRect().left < clippedLeft(list)
     ) {
       setToRight(true);
+    }
+    if (
+      list !== null &&
+      list !== undefined &&
+      list.getBoundingClientRect().bottom > clippedBottom(list) &&
+      (button.current?.getBoundingClientRect().top ?? 0) -
+        list.getBoundingClientRect().height >
+        8
+    ) {
+      setUp(true);
     }
     const outside = (event: MouseEvent) => {
       if (!root.current?.contains(event.target as Node)) {
         setOpen(false);
       }
     };
+    // Escape closes the menu only: caught first, so a dialog the menu sits in stays open.
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        event.stopPropagation();
         setOpen(false);
         button.current?.focus();
       }
     };
     document.addEventListener("mousedown", outside);
-    document.addEventListener("keydown", onKey);
+    document.addEventListener("keydown", onKey, true);
     root.current
       ?.querySelector<HTMLElement>(".row-menu-list a, .row-menu-list button")
       ?.focus();
     return () => {
       document.removeEventListener("mousedown", outside);
-      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("keydown", onKey, true);
     };
   }, [open]);
   return (
@@ -90,7 +140,7 @@ export function RowMenu({
         <button
           ref={button}
           type="button"
-          className="btn row-menu-trigger"
+          className={`btn row-menu-trigger${trigger.className ? ` ${trigger.className}` : ""}`}
           aria-haspopup="menu"
           aria-expanded={open}
           onClick={() => setOpen((value) => !value)}
@@ -104,7 +154,7 @@ export function RowMenu({
       )}
       {open ? (
         <div
-          className={`row-menu-list${toRight ? " is-right" : ""}`}
+          className={`row-menu-list${toRight ? " is-right" : ""}${up ? " is-up" : ""}`}
           role="menu"
           aria-label={label}
         >

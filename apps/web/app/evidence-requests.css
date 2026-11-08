@@ -112,6 +112,7 @@
 .er-head-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.5rem;
   padding-bottom: 0.5rem;
 }
@@ -2102,4 +2103,670 @@
   display: inline-flex;
   gap: 0.35rem;
   align-items: center;
+}
+
+/* --- An evidence item as a card (product owner's reference, 31 October 2026) ---------- */
+
+.er-review > .ep-item.is-bare.is-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.85rem;
+  padding: 0.85rem 0 0;
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+.ep-card-body {
+  display: grid;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.ep-card-body:empty {
+  display: none;
+}
+
+.ep-file-cards {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ep-file-card {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.75rem 0.85rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  container-type: inline-size;
+}
+
+.ep-file-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.ep-file-card .ei-badge {
+  width: 38px;
+  height: 38px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.ep-file-text {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.ep-file-text > p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+  margin: 0;
+  min-width: 0;
+}
+
+.ep-file-text .ep-file-name,
+.ep-file-cards .ep-file-open {
+  display: inline;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  padding: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  line-height: 1.35;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  background: none;
+  border: 0;
+  box-shadow: none;
+}
+
+.ep-file-cards .ep-file-open:hover,
+.ep-file-cards .ep-file-open:focus-visible {
+  color: var(--accent-text);
+  background: none;
+  text-decoration: underline;
+}
+
+.ep-file-cards .ep-file-flag {
+  justify-self: start;
+  height: 22px;
+  padding: 0 0.5rem;
+  color: var(--warning);
+  font-size: var(--fs-xs);
+  background: var(--warning-soft);
+  border: 0;
+  box-shadow: none;
+}
+
+.ep-file-text small {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.ep-file-text .ep-file-meta {
+  color: var(--text-tertiary);
+}
+
+@container (max-width: 520px) {
+  .ep-file-main {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .ep-file-main > .ep-pill {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: start;
+  }
+
+  .ep-file-main > .ep-file-menu {
+    grid-column: 3;
+    grid-row: 1;
+  }
+}
+
+.ep-file-menu {
+  display: flex;
+  align-items: center;
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--border);
+}
+
+/* The reader's proposal: a pill that opens what it found. */
+.ep-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 28px;
+  padding: 0.2rem 0.75rem;
+  color: var(--ai);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--ai-soft);
+  border: 1px solid var(--ai-border);
+  border-radius: 999px;
+  box-shadow: none;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.ep-pill:hover,
+.ep-pill[aria-expanded="true"] {
+  border-color: var(--ai);
+}
+
+.ep-pill.is-sufficient {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: color-mix(in srgb, var(--success) 30%, transparent);
+}
+
+.ep-pill.is-insufficient {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: color-mix(in srgb, var(--warning) 30%, transparent);
+}
+
+.ep-pill.is-decided {
+  opacity: 0.75;
+}
+
+.ep-pill-row {
+  margin: 0;
+}
+
+.ep-found-box {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.65rem 0.85rem;
+  background: var(--ai-soft);
+  border-radius: var(--radius-md, 8px);
+}
+
+.ep-found-box .ep-found {
+  margin: 0;
+}
+
+.ep-found-title {
+  margin: 0.2rem 0 0;
+  color: var(--text-strong);
+  font-size: var(--fs-xs);
+  font-weight: 650;
+}
+
+/* Nothing serves the item yet. */
+.ep-empty {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.8rem 0.95rem;
+  border: 1px dashed var(--border-strong, var(--border));
+  border-radius: var(--radius-lg);
+}
+
+.ep-empty-icon {
+  display: inline-grid;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border-radius: 9px;
+}
+
+.ep-empty strong {
+  display: block;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+}
+
+.ep-empty small {
+  display: block;
+  margin-top: 0.1rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+/* One action bar: add or link evidence and the item's menu, then Accept evidence. */
+.ep-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem 0.75rem;
+}
+
+.ep-card-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.ep-card-add .ae {
+  justify-items: start;
+}
+
+.ep-card-add .row-menu-trigger {
+  min-height: 40px;
+  padding: 0 0.8rem;
+  color: var(--text-strong);
+  font-weight: 600;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-xs);
+}
+
+.ep-card-add .row-menu-trigger:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+  border-color: var(--border-strong, var(--border));
+}
+
+.ep-card-add .row-menu-trigger .row-menu-caret {
+  border-left-color: var(--border);
+}
+
+.ep-item-menu .row-menu-button {
+  width: 40px;
+  height: 40px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: var(--shadow-xs);
+}
+
+.ep-accept {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 40px;
+  margin-left: auto;
+  padding: 0 1rem;
+  font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .ep-file-main {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .ep-file-main > .ep-pill {
+    grid-column: 2 / -1;
+    grid-row: 2;
+    justify-self: start;
+  }
+
+  .ep-card-actions,
+  .ep-accept {
+    width: 100%;
+  }
+
+  .ep-card-add {
+    flex-wrap: nowrap;
+    width: 100%;
+  }
+
+  .ep-card-add .request-upload,
+  .ep-card-add .ae {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .ep-card-add .row-menu-trigger {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .ep-accept {
+    justify-content: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ep-pill {
+    transition: none;
+  }
+}
+
+/* --- The sample of one, traced across an item's files (31 October 2026) --------------- */
+
+.st-card {
+  container-type: inline-size;
+  display: grid;
+  gap: 0.7rem;
+  min-width: 0;
+  padding: 0.85rem 1rem;
+  background: color-mix(in srgb, var(--accent-soft) 30%, var(--surface));
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+
+.st-card.is-confirmed {
+  background: var(--surface);
+}
+
+.st-card.is-ready {
+  border-color: color-mix(in srgb, var(--success) 35%, var(--border-subtle));
+}
+
+.st-quiet {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.st-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.st-mark {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  color: var(--accent-text);
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+
+.st-head-text {
+  display: grid;
+  min-width: 0;
+}
+
+.st-head-text strong {
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.st-head-text small {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.st-subject {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+
+.st-avatar {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border-radius: 999px;
+}
+
+.st-subject-text {
+  display: grid;
+  min-width: 0;
+}
+
+.st-subject-text strong {
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: 14.5px;
+  font-weight: 650;
+}
+
+.st-subject-text small {
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.st-subject-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.st-reasons,
+.st-points ul {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.st-candidates {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.st-candidates li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+
+.st-candidates li > span {
+  display: grid;
+  min-width: 0;
+}
+
+.st-candidates strong {
+  color: var(--text-strong);
+  font-size: 14px;
+}
+
+.st-candidates small {
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.st-search,
+.st-change {
+  justify-self: start;
+}
+
+.st-picker {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.st-picker-file {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 13px;
+}
+
+.st-picker-file select {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.st-files {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.st-files li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.6rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.st-file-mark {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  place-items: center;
+  border-radius: 999px;
+}
+
+.st-files .is-ok .st-file-mark {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.st-files .is-warn .st-file-mark {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.st-files .is-quiet .st-file-mark {
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+}
+
+.st-file-text {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.st-file-text strong {
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.st-file-text > small {
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.st-dates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  margin-top: 0.15rem;
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.st-date em {
+  color: var(--text-secondary);
+  font-style: normal;
+}
+
+.st-date small {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.st-date.is-over,
+.st-date.is-over small {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.st-points {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border, var(--border-subtle));
+  border-radius: 10px;
+}
+
+.st-points-title {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.st-points-title small {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.st-points ul {
+  color: var(--text);
+}
+
+.st-ready {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin: 0;
+  color: var(--success);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ep-file-text .st-note {
+  color: var(--success);
+}
+
+@container (max-width: 520px) {
+  .st-subject {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .st-subject-actions,
+  .st-change {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .st-subject {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .st-subject-actions,
+  .st-change {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
 }

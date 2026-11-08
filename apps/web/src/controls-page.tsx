@@ -15,17 +15,25 @@ import { type ControlContext, parseContext } from "./control-context-model";
 import { SELECT_CONTROLS_EVENT } from "./controls-guide-model";
 import {
   type ControlType,
+  cardStatus,
+  controlIcon,
   counts,
+  DEFAULT_PAGE_VIEW,
   type Filters,
   filterRows,
+  groupProgress,
   groupRows,
   initials,
   NO_FILTERS,
+  PAGE_SIZES,
+  PAGE_VIEW_KEY,
   type PageRow,
+  type PageView,
   PLAN_FILTER_LABEL,
   PLAN_LABEL,
   type PlanStatus,
   pageOf,
+  readPageView,
   SOURCE_LABEL,
   STEPS,
   stepStates,
@@ -43,6 +51,7 @@ import {
   type ControlsFor,
 } from "./scope-controls-model";
 import { SetupForm } from "./setup-form";
+import { layerIcon } from "./system-layer";
 import { controlStepHref } from "./testing-hub-model";
 import { type IconName, UiIcon } from "./ui-icon";
 
@@ -70,7 +79,6 @@ const TESTINGS: TestingStatus[] = [
   "COMPLETED",
   "EXCEPTIONS",
 ];
-const SIZES = [25, 50, 100];
 const TABS = [
   "Overview",
   "Client context",
@@ -540,6 +548,7 @@ export function ControlsPage({
   editable,
   notices = null,
   extra = null,
+  systemLayers = {},
 }: {
   ids: Ids;
   rows: PageRow[];
@@ -554,6 +563,8 @@ export function ControlsPage({
   /** What stands between the header and the tiles. */
   notices?: ReactNode;
   extra?: ReactNode;
+  /** Each system's layer by its name, for its icon on its group (system-layer.ts). */
+  systemLayers?: Record<string, string>;
 }) {
   const [filters, setFiltersNow] = useState<Filters>(() => {
     if (initial === null) {
@@ -567,15 +578,42 @@ export function ControlsPage({
       ? NO_FILTERS
       : { ...NO_FILTERS, systems: [named] };
   });
-  const [view, setView] = useState<"table" | "cards">("table");
-  const [by, setBy] = useState<ViewBy>("control");
+  // By system until the person chooses otherwise; their choice is kept in this browser
+  // (product owner, 2 November 2026).
+  const [view, setView] = useState<PageView["layout"]>(
+    DEFAULT_PAGE_VIEW.layout,
+  );
+  const [by, setBy] = useState<ViewBy>(DEFAULT_PAGE_VIEW.by);
+  // The card view's groups the person folded, for this visit.
+  const [folded, setFolded] = useState<string[]>([]);
   const [open, setOpen] = useState<string | null>(null);
   const router = useRouter();
   const [selected, setSelected] = useState<string[]>([]);
   const [page, setPage] = useState(1);
-  const [size, setSize] = useState(50);
+  const [size, setSize] = useState<number>(DEFAULT_PAGE_VIEW.size);
   const [side, setSide] = useState(true);
   const [typed, setTyped] = useState("");
+  // The view the person last chose in this browser, once the page is in it.
+  useEffect(() => {
+    let saved: string | null = null;
+    try {
+      saved = window.localStorage.getItem(PAGE_VIEW_KEY);
+    } catch {
+      saved = null;
+    }
+    const chosen = readPageView(saved);
+    setBy(chosen.by);
+    setView(chosen.layout);
+    setSize(chosen.size);
+  }, []);
+  const keepView = (next: Partial<PageView>) => {
+    const whole: PageView = { by, layout: view, size, ...next };
+    try {
+      window.localStorage.setItem(PAGE_VIEW_KEY, JSON.stringify(whole));
+    } catch {
+      // Storage can be off; the choice then lasts until the page is left.
+    }
+  };
   // On a narrow screen the filters start folded away; More filters opens them.
   useEffect(() => {
     if (window.matchMedia("(max-width: 900px)").matches) {
@@ -873,7 +911,10 @@ export function ControlsPage({
               ["system", "View by system"],
               ["process", "View by process"],
             ]}
-            onChange={(value) => setBy(value as ViewBy)}
+            onChange={(value) => {
+              setBy(value as ViewBy);
+              keepView({ by: value as ViewBy });
+            }}
           />
           <button
             type="button"
@@ -990,7 +1031,10 @@ export function ControlsPage({
             type="button"
             className={view === "table" ? "is-on" : undefined}
             aria-pressed={view === "table"}
-            onClick={() => setView("table")}
+            onClick={() => {
+              setView("table");
+              keepView({ layout: "table" });
+            }}
           >
             <UiIcon name="table" size={14} /> Table
           </button>
@@ -998,7 +1042,10 @@ export function ControlsPage({
             type="button"
             className={view === "cards" ? "is-on" : undefined}
             aria-pressed={view === "cards"}
-            onClick={() => setView("cards")}
+            onClick={() => {
+              setView("cards");
+              keepView({ layout: "cards" });
+            }}
           >
             <UiIcon name="grid" size={14} /> Cards
           </button>
@@ -1116,6 +1163,9 @@ export function ControlsPage({
         <section className="card cpg-main" aria-labelledby="cpg-title">
           <header className="cpg-main-head">
             <h2 id="cpg-title">
+              <span className="cpg-title-icon" aria-hidden="true">
+                <UiIcon name="layers" size={20} />
+              </span>
               {scopeLabel} <span>({shown.length})</span>
             </h2>
             {selected.length > 0 ? (
@@ -1208,7 +1258,18 @@ export function ControlsPage({
                       {group.label !== "" ? (
                         <tr className="cpg-group">
                           <th scope="rowgroup" colSpan={13}>
-                            {group.label} <span>({group.rows.length})</span>
+                            <div className="cpg-group-band">
+                              <UiIcon
+                                name={
+                                  by === "system"
+                                    ? layerIcon(systemLayers[group.label])
+                                    : "layers"
+                                }
+                                size={20}
+                              />
+                              <strong>{group.label}</strong>
+                              <span>({group.rows.length})</span>
+                            </div>
                           </th>
                         </tr>
                       ) : null}
@@ -1219,43 +1280,130 @@ export function ControlsPage({
               </table>
             </div>
           ) : (
-            <ul className="cpg-cards">
-              {paged.rows.map((item) => (
-                <li key={item.id} className="cpg-card">
-                  <span className="cpg-control">
-                    {item.included ? (
-                      <a href={controlHref(ids, item.id)}>{item.ref}</a>
-                    ) : (
-                      <strong>{item.ref}</strong>
-                    )}
-                    <span>{item.title}</span>
-                  </span>
-                  <small>
-                    {[item.system, item.process].filter(Boolean).join(" · ")}
-                  </small>
-                  <span className="cpg-card-pills">
-                    <span className="cpg-type">{TYPE_LABEL[item.type]}</span>
-                    {item.included ? (
-                      <>
-                        <Pill tone={PLAN_TONE[item.plan]}>
-                          {PLAN_LABEL[item.plan]}
-                        </Pill>
-                        <Pill tone={TESTING_TONE[item.testing]}>
-                          {TESTING_LABEL[item.testing]}
-                        </Pill>
-                      </>
-                    ) : (
-                      <Pill tone="is-muted">Out of scope</Pill>
-                    )}
-                  </span>
-                  {item.included ? (
-                    <a className="btn btn-sm" href={controlHref(ids, item.id)}>
-                      Open control <UiIcon name="arrow" size={13} />
-                    </a>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
+            <div className="cpg-card-groups">
+              {groups.map((group) => {
+                const progress = groupProgress(group.rows);
+                const open = !folded.includes(group.key);
+                const listId = `cpg-cards-${group.key.replace(/\W+/g, "-")}`;
+                return (
+                  <section
+                    key={group.key}
+                    className="cpg-card-group"
+                    aria-label={group.label || scopeLabel}
+                  >
+                    {group.label !== "" ? (
+                      <div className="cpg-group-band">
+                        <UiIcon
+                          name={
+                            by === "system"
+                              ? layerIcon(systemLayers[group.label])
+                              : "layers"
+                          }
+                          size={20}
+                        />
+                        <strong>{group.label}</strong>
+                        <span>({group.rows.length})</span>
+                        {progress.total > 0 ? (
+                          <span className="cpg-group-progress">
+                            <span className="cpg-group-bar" aria-hidden="true">
+                              <span
+                                style={{
+                                  width: `${(progress.planned / progress.total) * 100}%`,
+                                }}
+                              />
+                            </span>
+                            {progress.planned} of {progress.total} planned
+                          </span>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="cpg-group-fold"
+                          aria-expanded={open}
+                          aria-controls={listId}
+                          aria-label={`${open ? "Collapse" : "Expand"} ${group.label}`}
+                          onClick={() =>
+                            setFolded((now) =>
+                              open
+                                ? [...now, group.key]
+                                : now.filter((key) => key !== group.key),
+                            )
+                          }
+                        >
+                          <UiIcon name="chevron" size={16} />
+                        </button>
+                      </div>
+                    ) : null}
+                    {open ? (
+                      <ul className="cpg-cards" id={listId}>
+                        {group.rows.map((item) => {
+                          const status = cardStatus(item);
+                          return (
+                            <li key={item.id} className="cpg-card">
+                              <div className="cpg-card-top">
+                                <span
+                                  className="cpg-card-icon"
+                                  aria-hidden="true"
+                                >
+                                  <UiIcon name={controlIcon(item)} size={22} />
+                                </span>
+                                <span className="cpg-card-name">
+                                  {item.included ? (
+                                    <a href={controlHref(ids, item.id)}>
+                                      {item.ref}
+                                    </a>
+                                  ) : (
+                                    <span className="cpg-card-ref">
+                                      {item.ref}
+                                    </span>
+                                  )}
+                                  <strong>{item.title}</strong>
+                                  <small>
+                                    {[item.system, item.process]
+                                      .filter(Boolean)
+                                      .join(" · ")}
+                                  </small>
+                                </span>
+                                {item.key ? (
+                                  <span className="cpg-key">
+                                    <UiIcon name="star" size={10} /> Key
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="cpg-card-foot">
+                                <span className="cpg-owner">
+                                  <span
+                                    className="cpg-avatar"
+                                    aria-hidden="true"
+                                  >
+                                    {initials(item.owner || "Unassigned")}
+                                  </span>
+                                  {item.owner || "Unassigned"}
+                                </span>
+                                <span
+                                  className={`cpg-pill cpg-card-status ${status.tone}`}
+                                >
+                                  <UiIcon name={status.icon} size={13} />
+                                  {status.label}
+                                </span>
+                                {item.included ? (
+                                  <a
+                                    className="cpg-card-open"
+                                    href={controlHref(ids, item.id)}
+                                    aria-label={`Open ${item.ref}`}
+                                  >
+                                    <UiIcon name="arrow" size={15} />
+                                  </a>
+                                ) : null}
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    ) : null}
+                  </section>
+                );
+              })}
+            </div>
           )}
           <footer className="cpg-foot">
             <span>
@@ -1282,12 +1430,13 @@ export function ControlsPage({
               <Select
                 label="Rows per page"
                 value={String(size)}
-                options={SIZES.map(
+                options={PAGE_SIZES.map(
                   (value) => [String(value), `${value} / page`] as const,
                 )}
                 onChange={(value) => {
                   setSize(Number(value));
                   setPage(1);
+                  keepView({ size: Number(value) });
                 }}
               />
             </span>

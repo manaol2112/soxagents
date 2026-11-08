@@ -537,3 +537,109 @@ def test_a_garbled_coverage_list_keeps_the_rest_of_the_answer() -> None:
         ("Access changes", "NOT_COVERED"),
         ("Password standard", "NOT_COVERED"),
     ]
+
+
+def _mixed_pdf(pages: list[tuple[str, str]]) -> bytes:
+    """A PDF whose pages are, in order, ("text", words) with a text layer, ("scan", words)
+    an image of the words with no text layer, or ("blank", "") an empty page."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas
+
+    buffer = io.BytesIO()
+    sheet = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    for kind, words in pages:
+        if kind == "text":
+            sheet.setFont("Helvetica", 11)
+            sheet.drawString(50, height - 60, words)
+        elif kind == "scan":
+            picture = Image.new("RGB", (900, 300), "white")
+            ImageDraw.Draw(picture).text((20, 120), words, fill="black")
+            sheet.drawImage(ImageReader(picture), 40, height - 400, width=520, height=170)
+        sheet.showPage()
+    sheet.save()
+    return buffer.getvalue()
+
+
+def test_ocr_text_of_a_mixed_pdf_is_labelled_with_its_real_page() -> None:
+    """A PDF with text pages and scanned pages: each scanned page's OCR text carries the
+    page it is on, in page order, so a cited passage opens on the right page (the defect
+    docs/evidence-intelligence.md section 2 item 8 names)."""
+    from ai_workforce_api.console_citations import location_of
+
+    read = extract(
+        _mixed_pdf(
+            [
+                ("text", "Policy cover page with the document control table"),
+                ("scan", "Approved by the CIO"),
+                ("text", "Section 3 Access provisioning requires a ticket"),
+                ("scan", "Effective 1 January 2027"),
+            ]
+        ),
+        "policy.pdf",
+        "application/pdf",
+    )
+    assert read.status == "NEEDS_OCR"
+    assert read.pages == 4
+    assert len(read.images) == 2
+    assert read.image_pages == (2, 4)
+    assert read.note == ""
+    done = with_ocr(read, ["Approved by the CIO", "Effective 1 January 2027"])
+    assert done.status == "EXTRACTED"
+    assert done.images == () and done.image_pages == ()
+    text = done.text
+    marks = [
+        text.index("[Page 1]"),
+        text.index("[Page 2, read by OCR]"),
+        text.index("[Page 3]"),
+        text.index("[Page 4, read by OCR]"),
+    ]
+    assert marks == sorted(marks)
+    assert "[Page 2, read by OCR]\nApproved by the CIO" in text
+    assert "[Page 4, read by OCR]\nEffective 1 January 2027" in text
+    assert location_of(text, text.index("Approved by the CIO")) == "Page 2"
+    assert location_of(text, text.index("Section 3 Access")) == "Page 3"
+    assert location_of(text, text.index("Effective 1 January")) == "Page 4"
+
+
+def test_a_blank_page_does_not_shift_the_scanned_pages_after_it() -> None:
+    read = extract(
+        _mixed_pdf(
+            [
+                ("text", "Change management standard"),
+                ("blank", ""),
+                ("scan", "Emergency changes are approved within one business day"),
+            ]
+        ),
+        "standard.pdf",
+        "application/pdf",
+    )
+    assert read.pages == 3
+    assert len(read.images) == 1
+    assert read.image_pages == (3,)
+    # A blank page is passed over; it is not an unread page.
+    assert read.note == ""
+    done = with_ocr(read, ["Emergency changes are approved within one business day"])
+    assert done.status == "EXTRACTED"
+    assert "[Page 3, read by OCR]\nEmergency changes" in done.text
+    assert "[Page 2" not in done.text
+
+
+def test_an_extraction_without_page_numbers_labels_scans_by_their_order() -> None:
+    """Images that are not numbered pages (an extraction made before the numbers were
+    kept) follow the text pages, numbered by their order, as before."""
+    from dataclasses import replace
+
+    read = replace(
+        extract(
+            _mixed_pdf([("text", "Cover page of the access policy"), ("scan", "Signed")]),
+            "old.pdf",
+            "",
+        ),
+        image_pages=(),
+    )
+    done = with_ocr(read, ["Signed"])
+    assert done.text.index("[Page 1]\nCover page") < done.text.index(
+        "[Page 1, read by OCR]\nSigned"
+    )

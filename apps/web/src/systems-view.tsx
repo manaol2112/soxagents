@@ -24,9 +24,10 @@ import { SetupForm } from "./setup-form";
 import { impactHref } from "./setup-impact-model";
 import { type ShellModel, workspaceHref } from "./shell-model";
 import { SocAssessment, SocReports, SocUpload } from "./soc-view";
+import { LAYER_ICON } from "./system-layer";
 import { SystemRows } from "./system-rows";
 import { SystemWizard } from "./system-wizard";
-import { type IconName, UiIcon } from "./ui-icon";
+import { UiIcon } from "./ui-icon";
 import { CardHeader, EmptyState } from "./workspace-view";
 
 type Ready = Extract<ShellModel, { status: "ready" }>;
@@ -37,13 +38,6 @@ const LAYER_PLURAL: Record<string, string> = {
   OPERATING_SYSTEM: "Operating systems",
   INFRASTRUCTURE: "Infrastructure",
   TOOL: "Tools",
-};
-const LAYER_ICON: Record<string, IconName> = {
-  APPLICATION: "window",
-  DATABASE: "database",
-  OPERATING_SYSTEM: "server",
-  INFRASTRUCTURE: "cloud",
-  TOOL: "wrench",
 };
 const LAYER_LABEL: Record<string, string> = Object.fromEntries(LAYERS);
 

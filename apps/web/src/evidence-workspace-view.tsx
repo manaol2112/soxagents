@@ -29,6 +29,7 @@ import {
   type EvidenceView,
   evidenceTotal,
   evidenceViewOf,
+  fileCardMeta,
   type HeldFile,
   linkableFiles,
   liveRequirements,
@@ -465,13 +466,15 @@ export function fileLine(
   canAct: boolean,
   applications: Array<{ id: string; name: string }>,
   form: FileForm | null,
-  setForm: (form: FileForm | null) => void,
+  setForm: (form: FileForm | null, done?: string) => void,
 ): FileLine {
   const unknown =
     canAct && held?.applicationUnknown === true && applications.length > 1;
   const blocked = held?.blocked ?? null;
   const changes = canAct && held !== undefined;
+  const meta = fileCardMeta(held, file);
   return {
+    meta,
     name: (
       <PreviewButton
         organizationId={ids.organizationId}
@@ -532,6 +535,12 @@ export function fileLine(
             controlId={ids.controlId}
             start={form}
             onCancel={() => setForm(null)}
+            onDone={() =>
+              setForm(
+                null,
+                `${file.name} was withdrawn. It is kept on record with who withdrew it, and can be restored.`,
+              )
+            }
           />
         </div>
       ) : form === "application" ? (

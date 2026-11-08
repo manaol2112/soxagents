@@ -46,7 +46,11 @@ from ai_workforce_api.evidence_intake import (
     clean_name,
     clean_type,
 )
-from ai_workforce_api.evidence_receipts import apply_receipt, undo_receipt
+from ai_workforce_api.evidence_receipts import (
+    apply_receipt,
+    follow_evidence,
+    release_receipt,
+)
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import StoreError, digest_of, open_store
@@ -217,7 +221,13 @@ def _blocked(
     file_id: UUID,
     control_id: UUID | None,
 ) -> str | None:
-    """Why the file cannot move now, or None. Signed-off work is reopened first."""
+    """Why the file cannot move now, or None. Only reliance on this file keeps it: an item
+    a person accepted with it, testing signed off on it, a sample drawn from it, its signed
+    screenshot review, or a prepared workpaper that cites it. A file no one has accepted or
+    used in testing can be withdrawn or replaced, whatever else the control has signed off
+    (product owner, 31 Oct 2026: such a file was kept because the control's design
+    workpaper was prepared before it arrived)."""
+    del control_id  # Reliance is the file's own, not its control's.
     reading = cursor.execute(
         "SELECT 1 FROM evidence_analyses WHERE evidence_file_id = %s "
         "AND status IN ('PENDING', 'WORKING')",
@@ -241,34 +251,73 @@ def _blocked(
     ).fetchone()
     if drawn is not None:
         return f"the approved sample for {drawn[0]} was drawn from it"
-    if control_id is None:
-        return None
+    accepted = _accepted_with(cursor, file_id)
+    if accepted is not None:
+        return f'the evidence item "{accepted}" was accepted with it; change that decision first'
     signed = cursor.execute(
         """
-        SELECT c.control_ref FROM test_sheets s
+        SELECT c.control_ref FROM test_item_files f
+        JOIN test_items i ON i.id = f.test_item_id
+        JOIN test_sheets s ON s.id = i.test_sheet_id
         JOIN engagement_controls c ON c.id = s.engagement_control_id
-        WHERE s.project_id = %s AND s.engagement_control_id = %s AND s.status = 'SIGNED_OFF'
-          AND (s.test_round_id IS NULL
-               OR EXISTS (SELECT 1 FROM test_sheet_files f
-                          WHERE f.test_sheet_id = s.id AND f.evidence_file_id = %s))
-          AND NOT (s.test_round_id IS NULL AND %s)
+        WHERE f.evidence_file_id = %s AND s.project_id = %s AND s.status = 'SIGNED_OFF'
+        LIMIT 1
         """,
-        (project_id, control_id, file_id, _for_round(cursor, project_id, control_id, file_id)),
+        (file_id, project_id),
     ).fetchone()
     if signed is not None:
-        return f"testing for {signed[0]} is signed off; reopen it first"
-    prepared = cursor.execute(
+        return f"testing for {signed[0]} is signed off on it; reopen it first"
+    cited = cursor.execute(
         """
-        SELECT c.control_ref FROM workpapers w
+        SELECT c.control_ref, w.stage FROM workpapers w
+        JOIN workpaper_versions v ON v.workpaper_id = w.id AND v.number = w.current_version
         JOIN engagement_controls c ON c.id = w.engagement_control_id
-        WHERE w.project_id = %s AND w.engagement_control_id = %s AND w.status = 'PREPARED'
+        WHERE w.project_id = %s AND w.status = 'PREPARED'
+          AND strpos(v.content::text, %s) > 0
         ORDER BY w.stage LIMIT 1
         """,
-        (project_id, control_id),
+        (project_id, str(file_id)),
     ).fetchone()
-    if prepared is not None:
-        return f"a workpaper for {prepared[0]} is prepared; reopen it first"
+    if cited is not None:
+        stage = "design" if cited[1] == "DESIGN" else "effectiveness"
+        return f"the prepared {stage} workpaper for {cited[0]} cites it; reopen it first"
     return None
+
+
+def _accepted_with(cursor: psycopg.Cursor[Any], file_id: UUID) -> str | None:
+    """The title of an item a person accepted with the file: one the file serves (filed for
+    it, filed for its request and not read as missing it, linked to it by a person, or
+    shared to it from a sibling control, as the evidence plan counts an item's files) and
+    already served when the person accepted it. A file that arrived after the acceptance
+    was not part of that decision."""
+    from ai_workforce_api.evidence_plans import request_file_serves, shared_from_sibling
+
+    row = cursor.execute(
+        """
+        SELECT q.title FROM evidence_requirements q
+        JOIN evidence_files arrived ON arrived.id = %(file)s
+        WHERE q.status = 'REQUESTED' AND q.sufficiency = 'ACCEPTED'
+          -- An acceptance with no time (older records) is read as covering the file.
+          AND (q.sufficiency_at IS NULL OR arrived.created_at <= q.sufficiency_at)
+          AND (
+            EXISTS (
+                SELECT 1 FROM evidence_file_links l
+                LEFT JOIN evidence_analyses a ON a.evidence_file_id = l.evidence_file_id
+                WHERE l.evidence_file_id = %(file)s AND l.pbc_request_id = q.pbc_request_id
+                  AND {SERVES})
+            OR EXISTS (
+                SELECT 1 FROM evidence_requirement_files ef
+                WHERE ef.evidence_file_id = %(file)s AND ef.requirement_id = q.id
+                  AND ef.status = 'LINKED'
+                  AND (q.sufficiency_at IS NULL OR ef.linked_at <= q.sufficiency_at))
+            OR EXISTS ({SHARED} AND f.id = %(file)s))
+        ORDER BY q.created_at LIMIT 1
+        """.replace("{SERVES}", request_file_serves("l.evidence_file_id")).replace(
+            "{SHARED}", shared_from_sibling("1")
+        ),
+        {"file": file_id},
+    ).fetchone()
+    return None if row is None else str(row[0])
 
 
 def _in_force(cursor: psycopg.Cursor[Any], file_id: UUID) -> tuple[UUID, UUID | None] | None:
@@ -278,23 +327,6 @@ def _in_force(cursor: psycopg.Cursor[Any], file_id: UUID) -> tuple[UUID, UUID | 
         (file_id,),
     ).fetchone()
     return None if row is None else (row[0], row[1])
-
-
-def _for_round(
-    cursor: psycopg.Cursor[Any], project_id: UUID, control_id: UUID, file_id: UUID
-) -> bool:
-    """Whether the file was sent for a roll-forward, a retest, or a remediation."""
-    from ai_workforce_api.test_rounds import followup_requests
-
-    request = cursor.execute(
-        "SELECT pbc_request_id FROM evidence_file_links WHERE evidence_file_id = %s",
-        (file_id,),
-    ).fetchone()
-    return (
-        request is not None
-        and request[0] is not None
-        and request[0] in followup_requests(cursor, project_id, control_id)
-    )
 
 
 def _off_testing(
@@ -386,7 +418,7 @@ def withdraw(
         _file(cursor, organization_id, project_id, file_id)
         if _in_force(cursor, file_id) is not None:
             raise IntakeState("this file is already withdrawn")
-        _request_id, control_id = _link(cursor, project_id, file_id)
+        request_id, control_id = _link(cursor, project_id, file_id)
         blocked = _blocked(cursor, project_id, file_id, control_id)
         if blocked is not None:
             raise IntakeState(f"the file cannot be withdrawn: {blocked}")
@@ -403,8 +435,14 @@ def withdraw(
         match = cursor.execute(
             "SELECT id FROM evidence_matches WHERE evidence_file_id = %s", (file_id,)
         ).fetchone()
-        if match is not None:
-            undo_receipt(cursor, organization_id, project_id, match[0], principal.id)
+        # The request follows the evidence left on it, whichever file first moved it.
+        released = None if match is None else release_receipt(cursor, match[0])
+        left = request_id if released is None else released.request_id
+        if left is not None:
+            follow_evidence(
+                cursor, organization_id, project_id, left, principal.id,
+                None if released is None else released.before,
+            )  # fmt: skip
         runs = _off_testing(cursor, project_id, control_id, file_id)
         _audit(
             cursor, organization_id, project_id, principal.id, "evidence.withdrawn", file_id,

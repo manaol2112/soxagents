@@ -663,3 +663,528 @@ def test_a_file_already_on_the_request_is_not_linked_again(migrated: Database) -
     )
     assert same.status_code == 409
     assert same.json()["detail"] == "the file already serves it through its request"
+
+
+def test_a_file_for_one_item_never_marks_the_whole_request_received(migrated: Database) -> None:
+    """Found by the product owner on 31 October 2026: a policy added on one design item
+    marked the request received, so the other item, with no file, read "Received, not yet
+    reviewed". A request sent from the evidence plan has no drafted item list (its draft is
+    skipped), and the receipt counted that as every item covered. Now each requested item
+    counts by its own evidence: one item in makes the request partly received, the other
+    stays awaited, and the request is received once both are in."""
+    from test_evidence_analysis import _no_ocr, _settings
+    from test_evidence_portal import _sent
+
+    from ai_workforce_api.evidence_analysis import run_analysis
+
+    sent = _sent(migrated, "receipt-item", phase="DESIGN")
+    team, client, request_id = sent["team"], sent["client"], str(sent["request_id"])
+    control = _control(migrated, team, "ITGC-AC-01")
+    with connect(migrated.url) as connection:
+        # As a request sent from the evidence plan: its draft was skipped.
+        connection.execute(
+            "UPDATE pbc_drafts SET status = 'SKIPPED' WHERE pbc_request_id = %s", (request_id,)
+        )
+    design = _phase(_plan(client, team, control), "DESIGN")
+    carried = [r for r in _open(design) if r["request_id"] == request_id]
+    assert len(carried) >= 2
+    first, rest = carried[0], carried[1:]
+
+    def add_for(item: dict[str, Any], name: str) -> None:
+        added = client.post(
+            f"{_base(team)}/evidence-uploads",
+            params={"batch_id": str(uuid4()), "name": name, "request_id": request_id,
+                    "requirement_id": item["id"]},
+            content=f"Evidence for {item['title']}: managers approve access.".encode(),
+            headers={"content-type": "text/plain"},
+        )  # fmt: skip
+        assert added.status_code == 200, added.text
+        with connect(migrated.url) as connection:
+            for (analysis_id,) in connection.execute(
+                "SELECT id FROM evidence_analyses WHERE status = 'PENDING' ORDER BY created_at"
+            ).fetchall():
+                run_analysis(connection, _settings(migrated), None, analysis_id, _no_ocr)
+
+    def states() -> tuple[str, dict[str, str]]:
+        phase = _phase(_plan(client, team, control), "DESIGN")
+        request = next(r for r in phase["requests"] if r["id"] == request_id)
+        items = {
+            r["id"]: r["state"] for r in phase["requirements"] if r["request_id"] == request_id
+        }
+        return str(request["status"]), items
+
+    add_for(first, "access policy.txt")
+    status, items = states()
+    assert status == "PARTIALLY_RECEIVED"
+    assert items[first["id"]] == "PARTIALLY_RECEIVED"
+    # The items with nothing of their own are still awaited from the owner.
+    assert all(items[item["id"]] == "SENT" for item in rest)
+
+    for number, item in enumerate(rest):
+        add_for(item, f"evidence {number}.txt")
+    status, items = states()
+    assert status == "RECEIVED"
+    assert all(items[item["id"]] == "RECEIVED" for item in carried)
+
+
+def test_withdrawing_one_items_file_steps_the_request_back(migrated: Database) -> None:
+    """Found by the product owner on 31 October 2026: withdrawing a file left its request
+    received. The request now follows the evidence left on it: partly received while some
+    items still have files, back to sent once none has, and received again when a file is
+    restored. Each move is audited."""
+    from test_evidence_analysis import _no_ocr, _settings
+    from test_evidence_portal import _sent
+
+    from ai_workforce_api.evidence_analysis import run_analysis
+
+    sent = _sent(migrated, "receipt-withdraw", phase="DESIGN")
+    team, client, request_id = sent["team"], sent["client"], str(sent["request_id"])
+    control = _control(migrated, team, "ITGC-AC-01")
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE pbc_drafts SET status = 'SKIPPED' WHERE pbc_request_id = %s", (request_id,)
+        )
+    design = _phase(_plan(client, team, control), "DESIGN")
+    carried = [r for r in _open(design) if r["request_id"] == request_id]
+    assert len(carried) >= 2
+
+    def add_for(item: dict[str, Any], name: str) -> str:
+        added = client.post(
+            f"{_base(team)}/evidence-uploads",
+            params={"batch_id": str(uuid4()), "name": name, "request_id": request_id,
+                    "requirement_id": item["id"]},
+            content=f"Evidence for {item['title']}: managers approve access.".encode(),
+            headers={"content-type": "text/plain"},
+        )  # fmt: skip
+        assert added.status_code == 200, added.text
+        with connect(migrated.url) as connection:
+            for (analysis_id,) in connection.execute(
+                "SELECT id FROM evidence_analyses WHERE status = 'PENDING' ORDER BY created_at"
+            ).fetchall():
+                run_analysis(connection, _settings(migrated), None, analysis_id, _no_ocr)
+            row = connection.execute(
+                "SELECT id FROM evidence_files WHERE file_name = %s AND project_id = %s",
+                (name, team["project"]),
+            ).fetchone()
+        assert row is not None
+        return str(row[0])
+
+    def status() -> str:
+        phase = _phase(_plan(client, team, control), "DESIGN")
+        return str(next(r for r in phase["requests"] if r["id"] == request_id)["status"])
+
+    def change(file_id: str, action: str) -> None:
+        moved = client.post(
+            f"{_base(team)}/evidence-files/{file_id}/{action}",
+            json={"reason": "Uploaded the wrong document."},
+        )
+        assert moved.status_code == 200, moved.text
+
+    files = [add_for(item, f"evidence {number}.txt") for number, item in enumerate(carried)]
+    assert status() == "RECEIVED"
+
+    # The last item's file goes: the other items still have theirs.
+    change(files[-1], "withdraw")
+    assert status() == "PARTIALLY_RECEIVED"
+    # Every file goes: the request is back where it was before any evidence came.
+    for file_id in files[:-1]:
+        change(file_id, "withdraw")
+    assert status() == "SENT"
+    # A file restored counts again.
+    change(files[0], "restore")
+    assert status() == "PARTIALLY_RECEIVED"
+    for file_id in files[1:]:
+        change(file_id, "restore")
+    assert status() == "RECEIVED"
+
+    # A person accepted every item: its files are relied on, so none can be withdrawn
+    # (product owner, 31 October 2026), and the request stays received.
+    for item in _open(_phase(_plan(client, team, control), "DESIGN")):
+        if item["request_id"] != request_id:
+            continue
+        accepted = client.post(
+            f"{_base(team)}/controls/{control}/evidence-requirements/{item['id']}/sufficiency",
+            json={"sufficiency": "ACCEPTED", "version": item["version"]},
+        )
+        assert accepted.status_code == 200, accepted.text
+    kept = client.post(
+        f"{_base(team)}/evidence-files/{files[-1]}/withdraw",
+        json={"reason": "Uploaded the wrong document."},
+    )
+    assert kept.status_code == 409
+    assert "was accepted with it" in kept.json()["detail"]
+    assert status() == "RECEIVED"
+
+    with connect(migrated.url) as connection:
+        moves = [
+            (row[0]["from"], row[0]["status"])
+            for row in connection.execute(
+                "SELECT payload FROM audit_events WHERE action = 'pbc.receipt_undone' "
+                "AND target_id = %s ORDER BY occurred_at",
+                (request_id,),
+            ).fetchall()
+        ]
+    assert moves == [("RECEIVED", "PARTIALLY_RECEIVED"), ("PARTIALLY_RECEIVED", "SENT")]
+
+
+def test_a_file_no_one_relied_on_can_be_withdrawn(migrated: Database) -> None:
+    """Product owner, 31 October 2026: evidence uploaded and not yet accepted or used in
+    testing can be removed. A file was kept because its control's design workpaper had
+    been prepared before the file arrived. Now only reliance on the file itself keeps it:
+    an item accepted with it, or a prepared workpaper that cites it."""
+    from psycopg.types.json import Json
+    from test_evidence_analysis import _no_ocr, _settings
+    from test_evidence_portal import _sent
+
+    from ai_workforce_api.evidence_analysis import run_analysis
+
+    sent = _sent(migrated, "withdraw-unused", phase="DESIGN")
+    team, client, request_id = sent["team"], sent["client"], str(sent["request_id"])
+    control = _control(migrated, team, "ITGC-AC-01")
+    design = _phase(_plan(client, team, control), "DESIGN")
+    first, second = [r for r in _open(design) if r["request_id"] == request_id][:2]
+
+    def add_for(item: dict[str, Any], name: str) -> str:
+        added = client.post(
+            f"{_base(team)}/evidence-uploads",
+            params={"batch_id": str(uuid4()), "name": name, "request_id": request_id,
+                    "requirement_id": item["id"]},
+            content=f"{name}: managers approve access for {item['title']}.".encode(),
+            headers={"content-type": "text/plain"},
+        )  # fmt: skip
+        assert added.status_code == 200, added.text
+        with connect(migrated.url) as connection:
+            for (analysis_id,) in connection.execute(
+                "SELECT id FROM evidence_analyses WHERE status = 'PENDING' ORDER BY created_at"
+            ).fetchall():
+                run_analysis(connection, _settings(migrated), None, analysis_id, _no_ocr)
+            row = connection.execute(
+                "SELECT id FROM evidence_files WHERE file_name = %s AND project_id = %s",
+                (name, team["project"]),
+            ).fetchone()
+        assert row is not None
+        return str(row[0])
+
+    cited = add_for(first, "policy.txt")
+    accepted = add_for(second, "walkthrough.txt")
+    # A person accepts the second item with its file.
+    item = next(
+        r for r in _phase(_plan(client, team, control), "DESIGN")["requirements"]
+        if r["id"] == second["id"]
+    )  # fmt: skip
+    judged = client.post(
+        f"{_base(team)}/controls/{control}/evidence-requirements/{item['id']}/sufficiency",
+        json={"sufficiency": "ACCEPTED", "version": item["version"]},
+    )
+    assert judged.status_code == 200, judged.text
+    # The design workpaper is prepared, citing the policy.
+    with connect(migrated.url) as connection:
+        found = connection.execute(
+            "SELECT id, current_version FROM workpapers "
+            "WHERE project_id = %s AND engagement_control_id = %s AND stage = 'DESIGN'",
+            (team["project"], control),
+        ).fetchone()
+        if found is None:
+            found = connection.execute(
+                """
+                INSERT INTO workpapers (organization_id, project_id, engagement_control_id,
+                                        stage, template_key, requested_by, draft_status)
+                VALUES (%s, %s, %s, 'DESIGN', 'itgc', %s, 'IDLE')
+                RETURNING id, current_version
+                """,
+                (team["org"], team["project"], control, team["owner_id"]),
+            ).fetchone()
+        assert found is not None
+        number = int(found[1]) + 1
+        connection.execute(
+            "INSERT INTO workpaper_versions (workpaper_id, number, content, source, created_by) "
+            "VALUES (%s, %s, %s, 'PERSON', %s)",
+            (found[0], number,
+             Json({"walkthrough": f'Managers approve access [cite:{cited} "managers approve"]'}),
+             team["owner_id"]),
+        )  # fmt: skip
+        connection.execute(
+            "UPDATE workpapers SET current_version = %s, status = 'PREPARED', prepared_by = %s, "
+            "prepared_at = clock_timestamp(), prepared_version = %s, draft_status = 'IDLE' "
+            "WHERE id = %s",
+            (number, team["owner_id"], number, found[0]),
+        )
+    # A file added after: no one accepted it or used it in testing.
+    later = add_for(first, "later upload.txt")
+
+    def withdraw(file_id: str) -> Any:
+        return client.post(
+            f"{_base(team)}/evidence-files/{file_id}/withdraw",
+            json={"reason": "Uploaded by mistake."},
+        )
+
+    kept = withdraw(cited)
+    assert kept.status_code == 409
+    assert "prepared design workpaper for ITGC-AC-01 cites it" in kept.json()["detail"]
+    kept = withdraw(accepted)
+    assert kept.status_code == 409
+    assert "was accepted with it" in kept.json()["detail"]
+    # The prepared workpaper does not keep a file it does not cite.
+    removed = withdraw(later)
+    assert removed.status_code == 200, removed.text
+    # A file added to the accepted item after it was accepted was not part of that decision.
+    after = add_for(second, "after acceptance.txt")
+    removed = withdraw(after)
+    assert removed.status_code == 200, removed.text
+
+
+def test_unlinking_an_items_only_file_steps_the_request_back(migrated: Database) -> None:
+    """Found by the product owner on 31 October 2026: after an item's only file was
+    unlinked, the item read "Provided" with nothing linked, because its request stayed
+    received. The request now follows the evidence left on it, as when a file is
+    withdrawn."""
+    from test_evidence_analysis import _no_ocr, _settings
+    from test_evidence_portal import _sent
+
+    from ai_workforce_api.evidence_analysis import run_analysis
+
+    sent = _sent(migrated, "receipt-unlink", phase="DESIGN")
+    team, client, request_id = sent["team"], sent["client"], str(sent["request_id"])
+    control = _control(migrated, team, "ITGC-AC-01")
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE pbc_drafts SET status = 'SKIPPED' WHERE pbc_request_id = %s", (request_id,)
+        )
+    design = _phase(_plan(client, team, control), "DESIGN")
+    carried = [r for r in _open(design) if r["request_id"] == request_id]
+    assert len(carried) == 2
+    first, second = carried
+    items = f"{_base(team)}/controls/{control}/evidence-requirements"
+
+    def add_for(item: dict[str, Any], name: str) -> str:
+        added = client.post(
+            f"{_base(team)}/evidence-uploads",
+            params={"batch_id": str(uuid4()), "name": name, "request_id": request_id,
+                    "requirement_id": item["id"]},
+            content=f"{name}: managers approve access for {item['title']}.".encode(),
+            headers={"content-type": "text/plain"},
+        )  # fmt: skip
+        assert added.status_code == 200, added.text
+        with connect(migrated.url) as connection:
+            for (analysis_id,) in connection.execute(
+                "SELECT id FROM evidence_analyses WHERE status = 'PENDING' ORDER BY created_at"
+            ).fetchall():
+                run_analysis(connection, _settings(migrated), None, analysis_id, _no_ocr)
+            row = connection.execute(
+                "SELECT id FROM evidence_files WHERE file_name = %s AND project_id = %s",
+                (name, team["project"]),
+            ).fetchone()
+        assert row is not None
+        return str(row[0])
+
+    def current(item_id: str) -> dict[str, Any]:
+        phase = _phase(_plan(client, team, control), "DESIGN")
+        return next(r for r in phase["requirements"] if r["id"] == item_id)
+
+    def status() -> str:
+        phase = _phase(_plan(client, team, control), "DESIGN")
+        return str(next(r for r in phase["requests"] if r["id"] == request_id)["status"])
+
+    shared = add_for(first, "approval rules.txt")
+    assert status() == "PARTIALLY_RECEIVED"
+    # The same file is linked to the second item, then the first item gets another file.
+    linked = client.post(
+        f"{items}/{second['id']}/files",
+        json={"file_id": shared, "reason": "The rules name who grants access.",
+              "version": current(second["id"])["version"]},
+    )  # fmt: skip
+    assert linked.status_code == 200, linked.text
+    add_for(first, "approval rules v2.txt")
+    assert status() == "RECEIVED"
+
+    link = next(f for f in current(second["id"])["files"] if f["via"] == "LINK")
+    removed = client.post(
+        f"{items}/{second['id']}/files/{link['link_id']}/remove",
+        json={"reason": "It does not show who grants access.", "version": link["link_version"]},
+    )
+    assert removed.status_code == 200, removed.text
+    assert status() == "PARTIALLY_RECEIVED"
+    assert current(second["id"])["state"] == "SENT"
+    with connect(migrated.url) as connection:
+        moved = connection.execute(
+            "SELECT payload FROM audit_events WHERE action = 'pbc.receipt_undone' "
+            "AND target_id = %s",
+            (request_id,),
+        ).fetchall()
+    assert [row[0]["status"] for row in moved] == ["PARTIALLY_RECEIVED"]
+
+
+def test_an_item_without_its_own_file_cannot_be_accepted(migrated: Database) -> None:
+    """Found by the product owner on 31 October 2026: an item with no file showed Accept,
+    because its request had received a file for another item; accepted, it had nothing to
+    stand on and no way back. Accepting now needs a file of the item's own, and a person
+    can reopen a decision, with why."""
+    from test_evidence_analysis import _no_ocr, _settings
+    from test_evidence_portal import _sent
+
+    from ai_workforce_api.evidence_analysis import run_analysis
+
+    sent = _sent(migrated, "accept-own", phase="DESIGN")
+    team, client, request_id = sent["team"], sent["client"], str(sent["request_id"])
+    control = _control(migrated, team, "ITGC-AC-01")
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE pbc_drafts SET status = 'SKIPPED' WHERE pbc_request_id = %s", (request_id,)
+        )
+    design = _phase(_plan(client, team, control), "DESIGN")
+    first, second = [r for r in _open(design) if r["request_id"] == request_id][:2]
+    added = client.post(
+        f"{_base(team)}/evidence-uploads",
+        params={"batch_id": str(uuid4()), "name": "policy.txt", "request_id": request_id,
+                "requirement_id": first["id"]},
+        content=b"Managers approve access before it is granted.",
+        headers={"content-type": "text/plain"},
+    )  # fmt: skip
+    assert added.status_code == 200, added.text
+    with connect(migrated.url) as connection:
+        for (analysis_id,) in connection.execute(
+            "SELECT id FROM evidence_analyses WHERE status = 'PENDING'"
+        ).fetchall():
+            run_analysis(connection, _settings(migrated), None, analysis_id, _no_ocr)
+
+    items = f"{_base(team)}/controls/{control}/evidence-requirements"
+
+    def current(item_id: str) -> dict[str, Any]:
+        phase = _phase(_plan(client, team, control), "DESIGN")
+        return next(r for r in phase["requirements"] if r["id"] == item_id)
+
+    def judge(item_id: str, sufficiency: str, note: str = "") -> Any:
+        return client.post(
+            f"{items}/{item_id}/sufficiency",
+            json={"sufficiency": sufficiency, "note": note,
+                  "version": current(item_id)["version"]},
+        )  # fmt: skip
+
+    refused = judge(second["id"], "ACCEPTED")
+    assert refused.status_code == 409
+    assert "no file serves this item yet" in refused.json()["detail"]
+    assert current(second["id"])["state"] != "ACCEPTED"
+    # The item with its own file is accepted, and the decision can be reopened.
+    assert judge(first["id"], "ACCEPTED").status_code == 200
+    assert current(first["id"])["state"] == "ACCEPTED"
+    reopened = judge(first["id"], "NOT_REVIEWED", "Accepted on the wrong version.")
+    assert reopened.status_code == 200, reopened.text
+    assert current(first["id"])["state"] != "ACCEPTED"
+
+
+def test_a_phase_waits_until_each_item_is_complete(migrated: Database) -> None:
+    """Found by the product owner on 31 October 2026: one design file moved the control to
+    Testing. A file the reader finds covers an item only in part does not complete it; a
+    phase goes to testing once each item is accepted by a person, covered in full by a
+    file, or marked not applicable."""
+    from psycopg.types.json import Json
+    from test_control_progress import _controls
+    from test_evidence_analysis import _no_ocr, _settings
+    from test_evidence_portal import _sent
+
+    from ai_workforce_api.evidence_analysis import run_analysis
+
+    sent = _sent(migrated, "phase-complete", phase="DESIGN")
+    team, client, request_id = sent["team"], sent["client"], str(sent["request_id"])
+    control = _control(migrated, team, "ITGC-AC-01")
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE pbc_drafts SET status = 'SKIPPED' WHERE pbc_request_id = %s", (request_id,)
+        )
+    design = _phase(_plan(client, team, control), "DESIGN")
+    first, second = [r for r in _open(design) if r["request_id"] == request_id][:2]
+    items = f"{_base(team)}/controls/{control}/evidence-requirements"
+
+    def add_for(item: dict[str, Any], name: str) -> str:
+        added = client.post(
+            f"{_base(team)}/evidence-uploads",
+            params={"batch_id": str(uuid4()), "name": name, "request_id": request_id,
+                    "requirement_id": item["id"]},
+            content=f"{name}: managers approve access for {item['title']}.".encode(),
+            headers={"content-type": "text/plain"},
+        )  # fmt: skip
+        assert added.status_code == 200, added.text
+        with connect(migrated.url) as connection:
+            for (analysis_id,) in connection.execute(
+                "SELECT id FROM evidence_analyses WHERE status = 'PENDING'"
+            ).fetchall():
+                run_analysis(connection, _settings(migrated), None, analysis_id, _no_ocr)
+            row = connection.execute(
+                "SELECT id FROM evidence_files WHERE file_name = %s AND project_id = %s",
+                (name, team["project"]),
+            ).fetchone()
+        assert row is not None
+        return str(row[0])
+
+    def coverage(file_id: str, item_id: str, value: str) -> None:
+        # What the reader found, pinned for the test: "covers it in part" or in full.
+        with connect(migrated.url) as connection:
+            found = connection.execute(
+                "SELECT classification FROM evidence_analyses WHERE evidence_file_id = %s",
+                (file_id,),
+            ).fetchone()
+            assert found is not None
+            classification = dict(found[0])
+            classification["items"] = [
+                {"index": 0, "title": "item", "coverage": value, "requirement_id": item_id}
+            ]
+            connection.execute(
+                "UPDATE evidence_analyses SET classification = %s WHERE evidence_file_id = %s",
+                (Json(classification), file_id),
+            )
+
+    def version_of(item_id: str) -> int:
+        phase = _phase(_plan(client, team, control), "DESIGN")
+        return int(next(r for r in phase["requirements"] if r["id"] == item_id)["version"])
+
+    def design_phase() -> tuple[str, dict[str, Any]]:
+        journey = _controls(client, team)[control]["journey"]
+        phase = next(item for item in journey["phases"] if item["phase"] == "DESIGN")
+        return str(journey["step"]), phase
+
+    policy = add_for(first, "policy.txt")
+    trace = add_for(second, "one leaver.txt")
+    coverage(policy, first["id"], "PARTIAL")
+    coverage(trace, second["id"], "PARTIAL")
+    status = _phase(_plan(client, team, control), "DESIGN")
+    assert next(r for r in status["requests"] if r["id"] == request_id)["status"] == "RECEIVED"
+    # Both files cover their items only in part: the phase still waits on its evidence.
+    step, phase = design_phase()
+    assert (step, phase["state"]) == ("REQUEST", "REQUESTED")
+    assert any("2 evidence items are not complete" in b for b in phase["blockers"])
+
+    accepted = client.post(
+        f"{items}/{first['id']}/sufficiency",
+        json={"sufficiency": "ACCEPTED", "version": version_of(first["id"])},
+    )
+    assert accepted.status_code == 200, accepted.text
+    step, phase = design_phase()
+    assert (step, phase["state"]) == ("REQUEST", "REQUESTED")
+    assert any("1 evidence item is not complete" in b for b in phase["blockers"])
+
+    # The reader finds the other item covered in full: the phase is ready for testing.
+    coverage(trace, second["id"], "COVERED")
+    step, phase = design_phase()
+    assert (step, phase["state"]) == ("TEST", "RECEIVED")
+    assert not any("not complete" in b for b in phase["blockers"])
+
+    # Covered only in part again, then marked not applicable: ready again.
+    coverage(trace, second["id"], "PARTIAL")
+    assert design_phase()[1]["state"] == "REQUESTED"
+    waived = client.post(
+        f"{items}/{second['id']}/waive",
+        json={"reason": "The walkthrough is covered by the policy for this period.",
+              "version": version_of(second["id"])},
+    )  # fmt: skip
+    assert waived.status_code == 200, waived.text
+    # Marking an item not applicable revises the test plan; once approved again, the
+    # phase is ready for testing.
+    assert design_phase()[0] == "PLAN"
+    plan = _plan(client, team, control)
+    approved = client.post(
+        f"{_base(team)}/controls/{control}/evidence-plan/approve",
+        json={"version": plan["version"], "comment": ""},
+    )
+    assert approved.status_code == 200, approved.text
+    step, phase = design_phase()
+    assert (step, phase["state"]) == ("TEST", "RECEIVED")

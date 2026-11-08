@@ -16,11 +16,13 @@ from test_onboarding import _complete_setup, _new_engagement
 from test_outbound import migrated
 from test_testing_engine import _base
 
-from ai_workforce_api.control_statements import ASSERTIONS, render
+from ai_workforce_api.control_design import AUTOMATIC, _blocking, _waited
+from ai_workforce_api.control_statements import ASSERTIONS, NO_DOCUMENT, render
 from ai_workforce_api.controls import LIBRARY, SPLITS, V2_LIBRARY, V4_LIBRARY
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.definition_registry import v2_attributes
 from ai_workforce_api.library_definitions import adopt_latest, library_update
+from ai_workforce_api.slot_questions import asks_for_document, holds_testing
 from ai_workforce_api.statement_registry import STATEMENTS, problems, statement_for
 from ai_workforce_api.testing_engine import ItemContext, ItemFile, design_prompt, prompt_for
 
@@ -81,6 +83,43 @@ def test_a_statement_shows_each_missing_value_by_its_label() -> None:
     )
 
 
+def test_a_governing_document_never_holds_testing() -> None:
+    """Product owner, 4 November 2026: "There are companies that don't have a formal policy so
+    this should be optional". The library marks some of them as holding testing; none does."""
+    with_documents = [
+        (statement, slot)
+        for statement in STATEMENTS.values()
+        for slot in statement.slots
+        if asks_for_document(slot)
+    ]
+    assert any(slot.blocks for _statement, slot in with_documents)
+    for statement, slot in with_documents:
+        assert not holds_testing(slot)
+        assert slot.key not in _blocking(statement)
+        # Nor does an approved attribute that still shows it in brackets.
+        assert slot.key not in _waited(statement, [f"Approved under [{slot.fills}]."])
+    # A value that is not a document still holds testing, as it always has.
+    other = next(
+        (statement, slot)
+        for statement in STATEMENTS.values()
+        for slot in statement.slots
+        if slot.blocks and not asks_for_document(slot) and slot.key not in AUTOMATIC
+    )
+    assert holds_testing(other[1])
+    assert other[1].key in _waited(other[0], [f"Done by [{other[1].fills}]."])
+
+
+def test_no_formal_document_reads_as_established_practice() -> None:
+    labels = {"doa": "the delegation of authority"}
+    text = "Each order is approved by the approvers {doa} requires."
+    assert render(text, {}, labels) == (
+        "Each order is approved by the approvers [the delegation of authority] requires."
+    )
+    assert render(text, {"doa": NO_DOCUMENT}, labels) == (
+        "Each order is approved by the approvers the client's established practice requires."
+    )
+
+
 def test_the_tester_reads_the_controls_design() -> None:
     design = design_prompt(None)
     assert design is None
@@ -122,6 +161,42 @@ def _context(client: TestClient, team: dict[str, Any], control_id: str) -> dict[
     assert found.status_code == 200, found.text
     body: dict[str, Any] = found.json()
     return body
+
+
+def test_a_client_with_no_formal_document_records_that_and_testing_is_not_held(
+    migrated: Database,
+) -> None:
+    team, client, _scheduler = _engagement(migrated, "stmt-no-document")
+    key, slot = next(
+        (key, slot)
+        for key, statement in STATEMENTS.items()
+        for slot in statement.slots
+        if slot.key == "access-policy"
+    )
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            "SELECT id, control_ref FROM engagement_controls "
+            "WHERE project_id = %s AND library_key = %s",
+            (team["project"], key),
+        ).fetchone()
+    assert row is not None
+    control = str(row[0])
+    before = _context(client, team, control)["design"]
+    assert f"[{slot.fills}]" in before["text"]
+    assert next(s for s in before["slots"] if s["key"] == "access-policy")["document"] is True
+    saved = client.put(
+        f"{_base(team)}/controls/{control}/values",
+        json={"values": {"access-policy": NO_DOCUMENT}},
+    )
+    assert saved.status_code == 200, saved.text
+    after = _context(client, team, control)["design"]
+    # The wording reads as what happens; the answer is kept as given, for the audit file.
+    assert f"[{slot.fills}]" not in after["text"]
+    assert "the client's established practice" in after["text"]
+    assert NO_DOCUMENT not in after["text"]
+    held = next(s for s in after["slots"] if s["key"] == "access-policy")
+    assert (held["value"], held["blocks"]) == (NO_DOCUMENT, False)
+    assert slot.label not in after["missing"]
 
 
 def test_the_team_fills_a_value_once_for_every_control_that_uses_it(migrated: Database) -> None:

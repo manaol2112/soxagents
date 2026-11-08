@@ -11,7 +11,7 @@ import {
   useTransition,
 } from "react";
 import { createPortal } from "react-dom";
-
+import { AgentAvatar } from "./agent-avatar";
 import {
   CONTROLS_SAVED_EVENT,
   FINALIZE_EVENT,
@@ -779,7 +779,7 @@ function SelectControlsDrawer({
             </div>
             {options === null ? (
               <p className="as-loading" aria-live="polite">
-                <span className="ng-orb is-small" aria-hidden="true" />
+                <AgentAvatar size={20} state="thinking" />
                 Reading the library…
               </p>
             ) : (

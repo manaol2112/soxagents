@@ -288,6 +288,27 @@ _DOCUMENTS = (
 )
 
 
+# Kinds answered with a role, a system, a time, a number or a report: never a document,
+# even when the question mentions a policy ("What settings does the policy require?").
+_NOT_DOCUMENTS = ("ROLE", "SYSTEM", "DAYS", "PERIOD", "AMOUNT", "PERCENT", "REPORT")
+
+
+def asks_for_document(slot: Slot) -> bool:
+    """Whether the value is a governing document's name (which policy, which procedure):
+    answered with a document linked to the control, so the name in the control's wording
+    and the file never disagree (product owner, 2 November 2026)."""
+    return slot.kind not in _NOT_DOCUMENTS and any(
+        word in slot.key or word in slot.label for word in _DOCUMENTS
+    )
+
+
+def holds_testing(slot: Slot) -> bool:
+    """Whether testing waits for the value. A governing document never holds it, whatever the
+    library says: a client may have no formal policy, and records that instead (product owner,
+    4 November 2026)."""
+    return slot.blocks and not asks_for_document(slot)
+
+
 def hint_for(slot: Slot) -> str:
     """How to answer a value, for whoever fills it in: what form the answer takes and
     where it is usually found."""
@@ -307,6 +328,6 @@ def hint_for(slot: Slot) -> str:
         return "As the client's procedure sets it, in the reporting currency where it is an amount."
     if slot.kind == "REPORT":
         return "The report name or transaction code as it is run in the system."
-    if any(word in slot.key or word in slot.label for word in _DOCUMENTS):
+    if asks_for_document(slot):
         return "The document's title and version, as the client names it."
     return "As the client's documentation or the control owner describes it."

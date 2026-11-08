@@ -811,7 +811,8 @@
   line-height: 1.5;
 }
 
-.cw-card-head .btn-secondary {
+.cw-card-head .btn-secondary,
+.ov-head .btn-secondary {
   display: inline-flex;
   gap: 0.3rem;
   align-items: center;

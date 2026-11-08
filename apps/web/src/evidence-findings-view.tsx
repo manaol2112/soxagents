@@ -81,6 +81,9 @@ const KIND_ICON: Record<EvidenceFinding["kind"], IconName> = {
   MISSING: "search",
   CONFLICT: "risk",
   CONCERN: "shield",
+  LATE: "clock",
+  NOT_TRACED: "search",
+  ACTIVITY: "activity",
 };
 
 function toneOf(

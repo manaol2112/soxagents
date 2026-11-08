@@ -460,8 +460,8 @@ export function ClientWalkthrough({
       <div className="cu-grid">
         <div className="cu-main" ref={card}>
           <div className="cu-agent">
-            <span className="cu-agent-mark" aria-hidden="true">
-              <AgentBot size={44} />
+            <span className="cu-agent-mark">
+              <AgentBot size={44} label="Control Understanding Agent" />
             </span>
             <strong>Control Understanding Agent</strong>
             <span className="cu-agent-step">

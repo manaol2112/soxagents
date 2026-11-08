@@ -21,18 +21,24 @@ import {
   walkSettled,
 } from "./client-walkthrough-model";
 import {
+  ATTRIBUTE_MAX,
   type Attribute,
+  type AttributeDecisionKind,
   type AttributeDefinition,
+  attributeLetter,
+  attributesSummary,
   BASIS_LABELS,
   CLASSIFICATIONS,
   type Classification,
   CONFIDENCE_LABELS,
+  type Confidence,
   type ContextIssue,
   type ControlContext,
   contextProblem,
   type Design,
   DOCUMENT_KINDS,
   type DocumentKind,
+  decidedNote,
   FREQUENCY_LABELS,
   type LibraryUpdate,
   NATURE_LABELS,
@@ -42,6 +48,7 @@ import {
   SECTION_HEADINGS,
   SOURCE_LABELS,
   STATE_TONES,
+  selectionPlan,
   type Testing,
   TYPE_LABELS,
   type Understanding,
@@ -52,7 +59,10 @@ import {
   NarrativeUses,
   ProcessNarrative,
 } from "./process-narrative";
-import { UiIcon } from "./ui-icon";
+import { RecordDialog } from "./record-dialog";
+import { RowMenu, type RowMenuItem } from "./row-menu";
+import { type IconName, UiIcon } from "./ui-icon";
+import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
 
@@ -233,29 +243,6 @@ function Badge({
   return <span className={`cc-badge ${tone}`}>{children}</span>;
 }
 
-function SourceLine({ attribute }: { attribute: Attribute }) {
-  return (
-    <span className="cc-source">
-      <Badge>
-        {attribute.sourceTitle || SOURCE_LABELS[attribute.sourceKind]}
-      </Badge>
-      {attribute.basis === "INFERRED" ? (
-        <Badge tone="is-inferred">Inferred</Badge>
-      ) : null}
-      {attribute.sourceQuote !== "" ? (
-        <q className="cc-quote">{attribute.sourceQuote}</q>
-      ) : null}
-    </span>
-  );
-}
-
-const CONFIDENCE_TONES: Record<AttributeDefinition["confidence"], string> = {
-  HIGH: "is-reviewed",
-  MODERATE: "",
-  LOW: "is-inferred",
-  NOT_ESTABLISHED: "is-conflict",
-};
-
 function Rule({ label, text }: { label: string; text: string }) {
   return text === "" ? null : (
     <>
@@ -265,39 +252,23 @@ function Rule({ label, text }: { label: string; text: string }) {
   );
 }
 
-/** How one attribute is tested: what to look at, what to compare, and when it passes,
- * fails, lacks evidence, or needs a person, with the basis for each. */
-function DefinitionDetails({
-  definition,
-}: {
-  definition: AttributeDefinition | null;
-}) {
-  if (definition === null) {
-    return null;
-  }
+/** How one attribute is tested, as its rules. */
+function DefinitionRules({ definition }: { definition: AttributeDefinition }) {
   return (
-    <details className="cc-def">
-      <summary>
-        How it is tested{" "}
-        <Badge tone={CONFIDENCE_TONES[definition.confidence]}>
-          {CONFIDENCE_LABELS[definition.confidence]}
-        </Badge>
-      </summary>
-      <dl>
-        <Rule label="Applies when" text={definition.condition} />
-        <Rule label="Why" text={definition.why} />
-        <Rule label="Evidence" text={definition.evidence.join("; ")} />
-        <Rule label="Read from it" text={definition.extract.join("; ")} />
-        <Rule label="Compare" text={definition.compare} />
-        <Rule label="Pass" text={definition.passes} />
-        <Rule label="Exception" text={definition.fails} />
-        <Rule label="Insufficient evidence" text={definition.insufficient} />
-        <Rule label="Human review" text={definition.review} />
-        <Rule label="Do not infer" text={definition.notInfer} />
-        <Rule label="Basis" text={definition.basis.join("; ")} />
-        <Rule label="Open question" text={definition.question} />
-      </dl>
-    </details>
+    <dl className="cc-def-list">
+      <Rule label="Applies when" text={definition.condition} />
+      <Rule label="Why" text={definition.why} />
+      <Rule label="Evidence" text={definition.evidence.join("; ")} />
+      <Rule label="Read from it" text={definition.extract.join("; ")} />
+      <Rule label="Compare" text={definition.compare} />
+      <Rule label="Pass" text={definition.passes} />
+      <Rule label="Exception" text={definition.fails} />
+      <Rule label="Insufficient evidence" text={definition.insufficient} />
+      <Rule label="Human review" text={definition.review} />
+      <Rule label="Do not infer" text={definition.notInfer} />
+      <Rule label="Basis" text={definition.basis.join("; ")} />
+      <Rule label="Open question" text={definition.question} />
+    </dl>
   );
 }
 
@@ -733,33 +704,575 @@ export function DesignPanel({
 }
 
 /** The control's attributes: approved, proposed by the agent, and their history. */
+/** Where an attribute's wording came from, as an icon beside its label. */
+const SOURCE_ICONS: Record<Attribute["sourceKind"], IconName> = {
+  LIBRARY: "layers",
+  RCM: "table",
+  MANUAL: "user",
+  AGENT: "sparkles",
+  DOCUMENT: "file",
+};
+
+const CONFIDENCE_LEVELS: Record<Confidence, number> = {
+  HIGH: 4,
+  MODERATE: 3,
+  LOW: 2,
+  NOT_ESTABLISHED: 1,
+};
+
+const CONFIDENCE_CHIPS: Record<Confidence, string> = {
+  HIGH: "is-high",
+  MODERATE: "is-moderate",
+  LOW: "is-low",
+  NOT_ESTABLISHED: "is-none",
+};
+
+/** Four bars, as many filled as the confidence is high. */
+function ConfidenceBars({ confidence }: { confidence: Confidence }) {
+  const level = CONFIDENCE_LEVELS[confidence];
+  return (
+    <svg
+      className="ta-bars"
+      width="14"
+      height="12"
+      viewBox="0 0 14 12"
+      aria-hidden="true"
+    >
+      {[0, 1, 2, 3].map((bar) => (
+        <rect
+          key={bar}
+          x={bar * 3.6}
+          y={9 - bar * 3}
+          width="2.4"
+          height={3 + bar * 3}
+          rx="0.8"
+          fill="currentColor"
+          opacity={bar < level ? 1 : 0.3}
+        />
+      ))}
+    </svg>
+  );
+}
+
+function SourceChip({ attribute }: { attribute: Attribute }) {
+  return (
+    <span className="ta-chip">
+      <UiIcon name={SOURCE_ICONS[attribute.sourceKind]} size={13} />
+      {attribute.sourceTitle || SOURCE_LABELS[attribute.sourceKind]}
+    </span>
+  );
+}
+
+function ConfidenceChip({ confidence }: { confidence: Confidence }) {
+  return (
+    <span className={`ta-chip ${CONFIDENCE_CHIPS[confidence]}`}>
+      <ConfidenceBars confidence={confidence} />
+      {CONFIDENCE_LABELS[confidence]}
+    </span>
+  );
+}
+
+/** What an attribute is drawn from and how firmly it is established. */
+function AttributeChips({ attribute }: { attribute: Attribute }) {
+  return (
+    <span className="ta-chips">
+      <SourceChip attribute={attribute} />
+      {attribute.basis === "INFERRED" ? (
+        <span className="ta-chip is-inferred">Inferred</span>
+      ) : null}
+      {attribute.definition !== null ? (
+        <ConfidenceChip confidence={attribute.definition.confidence} />
+      ) : null}
+    </span>
+  );
+}
+
+type AttributeDialogState =
+  | { mode: "add" }
+  | { mode: "edit" | "review"; attribute: Attribute; letter: string };
+
+/**
+ * One attribute in a dialog (product owner, 2 November 2026): its wording to change, and
+ * what the records hold about it. The source and the confidence are shown, never edited:
+ * the source records where the wording came from (new wording is the team's), and the
+ * confidence comes from the library's testing definition.
+ */
+function AttributeDialog({
+  ids,
+  state,
+  replaced,
+  onClose,
+  onDone,
+}: {
+  ids: Ids;
+  state: AttributeDialogState;
+  /** The approved attribute a proposed change or retirement names, with its letter. */
+  replaced: { letter: string; text: string } | null;
+  onClose: () => void;
+  onDone: (note: string) => void;
+}) {
+  const action = useAction(ids);
+  const id = useId();
+  const attribute = state.mode === "add" ? null : state.attribute;
+  const [text, setText] = useState(attribute?.text ?? "");
+  const wording = text.trim();
+  const changed = wording !== (attribute?.text ?? "");
+  const definition = attribute?.definition ?? null;
+  const letter = state.mode === "add" ? "" : state.letter;
+  const title =
+    state.mode === "add"
+      ? "Add attribute"
+      : state.mode === "review"
+        ? "Review proposed attribute"
+        : "Edit attribute";
+  const description =
+    state.mode === "add"
+      ? "Add one testable condition the test checks on each item."
+      : state.mode === "review"
+        ? "Decide the attribute the agent proposes for this control."
+        : "Update the testing attribute for this control.";
+  const note =
+    state.mode === "add"
+      ? "Recorded as written by the team. It joins the testing criteria when it is added."
+      : state.mode === "edit"
+        ? "New wording is recorded as written by the team. The current wording stays in the history."
+        : replaced !== null
+          ? `Approving replaces attribute ${replaced.letter}; its wording stays in the history. A change to the wording before approving is recorded.`
+          : "Approving adds it to the testing criteria. A change to the wording before approving is recorded.";
+
+  async function submit(decision: "APPROVE" | "REJECT" | null) {
+    if (state.mode === "add") {
+      if (
+        await action.run("save", { intent: "attribute-add", text: wording })
+      ) {
+        onDone("Attribute added.");
+      }
+      return;
+    }
+    if (state.mode === "edit") {
+      if (
+        await action.run("save", {
+          intent: "attribute-edit",
+          attribute_id: state.attribute.id,
+          text: wording,
+          version: state.attribute.version,
+        })
+      ) {
+        onDone(`Attribute ${letter} updated.`);
+      }
+      return;
+    }
+    const verdict = decision ?? "APPROVE";
+    if (
+      await action.run(verdict === "APPROVE" ? "save" : "reject", {
+        intent: "attribute-decide",
+        attribute_id: state.attribute.id,
+        decision: verdict,
+        version: state.attribute.version,
+        ...(verdict === "APPROVE" && changed ? { text: wording } : {}),
+      })
+    ) {
+      onDone(decidedNote(verdict, 1));
+    }
+  }
+
+  const canSave =
+    !action.pending && wording !== "" && (state.mode === "review" || changed);
+  return (
+    <RecordDialog
+      icon={
+        <UiIcon name={state.mode === "add" ? "plus" : "compose"} size={24} />
+      }
+      eyebrow={
+        state.mode === "add"
+          ? "New attribute"
+          : state.mode === "review"
+            ? "Proposed attribute"
+            : `Attribute ${letter}`
+      }
+      title={title}
+      description={description}
+      closeHref=""
+      className="tae-dialog"
+      onClose={onClose}
+    >
+      <form
+        autoComplete="off"
+        className="tae-form"
+        aria-busy={action.pending}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (canSave) {
+            void submit(null);
+          }
+        }}
+      >
+        {replaced !== null ? (
+          <p className="tae-replaces">
+            <span>Replaces {replaced.letter}</span> {replaced.text}
+          </p>
+        ) : null}
+        <div className="tae-field">
+          <label htmlFor={`${id}-text`}>
+            Testing attribute
+            <span className="tae-required" aria-hidden="true">
+              *
+            </span>
+          </label>
+          <textarea
+            id={`${id}-text`}
+            value={text}
+            rows={3}
+            required
+            maxLength={ATTRIBUTE_MAX}
+            disabled={action.pending}
+            aria-describedby={`${id}-count ${id}-note`}
+            placeholder="One testable condition, such as who approves and by when"
+            onChange={(event) => setText(event.target.value)}
+          />
+          <p className="tae-count" id={`${id}-count`}>
+            {text.length} / {ATTRIBUTE_MAX}
+          </p>
+        </div>
+        {attribute !== null ? (
+          <dl className="tae-facts">
+            <div>
+              <dt>Source</dt>
+              <dd>
+                <SourceChip attribute={attribute} />
+                {attribute.basis === "INFERRED" ? (
+                  <span className="ta-chip is-inferred">Inferred</span>
+                ) : null}
+              </dd>
+            </div>
+            <div>
+              <dt>Confidence</dt>
+              <dd>
+                {definition !== null ? (
+                  <ConfidenceChip confidence={definition.confidence} />
+                ) : (
+                  <span className="tae-none">
+                    Not rated: no library testing definition
+                  </span>
+                )}
+              </dd>
+            </div>
+          </dl>
+        ) : null}
+        {attribute !== null && attribute.sourceQuote !== "" ? (
+          <blockquote className="tae-quote">
+            <q>{attribute.sourceQuote}</q>
+          </blockquote>
+        ) : null}
+        {attribute !== null &&
+        attribute.note !== "" &&
+        state.mode === "review" ? (
+          <p className="tae-why">{attribute.note}</p>
+        ) : null}
+        <p className="tae-note" id={`${id}-note`}>
+          {note}
+        </p>
+        {definition !== null ? (
+          <details className="tae-how">
+            <summary>
+              <UiIcon name="info" size={18} />
+              <span>
+                <strong>How it is tested</strong>
+                <small>{definition.compare || definition.condition}</small>
+              </span>
+              <span className="tae-how-caret" aria-hidden="true">
+                <UiIcon name="chevron" size={16} />
+              </span>
+            </summary>
+            <DefinitionRules definition={definition} />
+          </details>
+        ) : null}
+        <Problem text={action.problem} />
+        <footer className="tae-foot">
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={action.pending}
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <span className="tae-foot-main">
+            {state.mode === "review" ? (
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={action.pending}
+                onClick={() => void submit("REJECT")}
+              >
+                {action.busy === "reject" ? "Rejecting…" : "Reject"}
+              </button>
+            ) : null}
+            <button type="submit" className="btn" disabled={!canSave}>
+              {action.busy === "save" ? (
+                <span className="spinner small" aria-hidden="true" />
+              ) : (
+                <UiIcon name="check" size={16} />
+              )}
+              {action.busy === "save"
+                ? "Saving…"
+                : state.mode === "add"
+                  ? "Add attribute"
+                  : state.mode === "review"
+                    ? changed
+                      ? "Approve with changes"
+                      : "Approve"
+                    : "Save changes"}
+            </button>
+          </span>
+        </footer>
+      </form>
+    </RecordDialog>
+  );
+}
+
 export function AttributesPanel({
   ids,
   context,
   canAct,
   compact = false,
+  showQuestions = true,
 }: {
   ids: Ids;
   context: ControlContext;
   canAct: boolean;
+  /** Off in the guided setup, which asks the open questions on its own step. */
+  showQuestions?: boolean;
   /** Inside the test plan, whose attribute table is the one list of the attributes (and
    * whose Procedures tab already says how each is tested): only what waits on a decision,
    * the agent's proposals and the history are shown here. */
   compact?: boolean;
 }) {
   const action = useAction(ids);
-  const id = useId();
-  const [adding, setAdding] = useState("");
-  const [editing, setEditing] = useState<{ id: string; text: string } | null>(
-    null,
+  const [chosen, setChosen] = useState<ReadonlySet<string>>(new Set());
+  const [dialog, setDialog] = useState<AttributeDialogState | null>(null);
+  const [shown, setShown] = useState<ReadonlySet<string>>(new Set());
+  const [about, setAbout] = useState(false);
+  const [done, setDone] = useState("");
+  const aboutId = useId();
+  const letters = new Map(
+    context.approved.map((item, index) => [item.id, attributeLetter(index)]),
   );
-  const [reworded, setReworded] = useState<Record<string, string>>({});
-  const replaced = new Map(
-    context.approved.map((item) => [item.id, item.text]),
+  // Only what is still on the list stays chosen after a refresh.
+  const live = new Set(
+    [...context.approved, ...context.proposed].map((item) => item.id),
   );
+  const selected = new Set([...chosen].filter((each) => live.has(each)));
+  const plan = selectionPlan(selected, context);
   const issues = context.issues.filter((item) => item.origin !== "PROCESS");
+  const lastOne = context.approved.length <= 1;
+
+  function toggle(set: ReadonlySet<string>, each: string): Set<string> {
+    const next = new Set(set);
+    if (next.has(each)) {
+      next.delete(each);
+    } else {
+      next.add(each);
+    }
+    return next;
+  }
+
+  async function decideMany(
+    decision: AttributeDecisionKind,
+    items: Attribute[],
+  ) {
+    setDone("");
+    if (
+      await action.run(`many-${decision}`, {
+        intent: "attributes-decide",
+        items: items.map((item) => ({
+          attribute_id: item.id,
+          decision,
+          version: item.version,
+        })),
+      })
+    ) {
+      setChosen(new Set());
+      setDone(decidedNote(decision, items.length));
+    }
+  }
+
+  async function decideOne(decision: AttributeDecisionKind, item: Attribute) {
+    setDone("");
+    const ok =
+      decision === "RETIRE"
+        ? await action.run(`retire-${item.id}`, {
+            intent: "attribute-retire",
+            attribute_id: item.id,
+            version: item.version,
+          })
+        : await action.run(`decide-${item.id}`, {
+            intent: "attribute-decide",
+            attribute_id: item.id,
+            decision,
+            version: item.version,
+          });
+    if (ok) {
+      setDone(decidedNote(decision, 1));
+    }
+  }
+
+  function row(item: Attribute, letter: string | null) {
+    const proposed = item.status === "PROPOSED";
+    const target =
+      item.replacesId !== null
+        ? (context.approved.find((each) => each.id === item.replacesId) ?? null)
+        : null;
+    const targetLetter = target !== null ? (letters.get(target.id) ?? "") : "";
+    const open = shown.has(item.id);
+    const name = letter !== null ? `attribute ${letter}` : "the proposal";
+    const statusItems: RowMenuItem[] = proposed
+      ? [
+          {
+            label:
+              item.proposal === "RETIRE" ? "Approve the retirement" : "Approve",
+            icon: "check",
+            onSelect: () => void decideOne("APPROVE", item),
+          },
+          {
+            label: "Reject",
+            icon: "x",
+            onSelect: () => void decideOne("REJECT", item),
+          },
+        ]
+      : [
+          {
+            label: "Retire attribute",
+            icon: "trash",
+            danger: true,
+            unavailable: lastOne
+              ? "A control keeps at least one attribute."
+              : null,
+            onSelect: () => void decideOne("RETIRE", item),
+          },
+        ];
+    const moreItems: RowMenuItem[] = [
+      ...(item.definition !== null
+        ? [
+            {
+              label: open ? "Hide how it is tested" : "Show how it is tested",
+              icon: "info" as IconName,
+              onSelect: () => setShown(toggle(shown, item.id)),
+            },
+          ]
+        : []),
+      ...(canAct ? statusItems : []),
+    ];
+    const editable = canAct && item.proposal !== "RETIRE";
+    return (
+      <li
+        key={item.id}
+        className={`ta-row${selected.has(item.id) ? " is-selected" : ""}${proposed ? " is-proposed" : ""}`}
+      >
+        {canAct ? (
+          <input
+            type="checkbox"
+            className="ta-check"
+            checked={selected.has(item.id)}
+            disabled={action.pending}
+            aria-label={`Select ${name}`}
+            onChange={() => setChosen(toggle(selected, item.id))}
+          />
+        ) : null}
+        <span className="ta-letter" aria-hidden={letter === null}>
+          {letter ?? <UiIcon name="sparkles" size={15} />}
+        </span>
+        <div className="ta-main">
+          {target !== null ? (
+            <p className="ta-replaces">
+              <span>
+                {item.proposal === "RETIRE" ? "Retires" : "Replaces"}{" "}
+                {targetLetter}
+              </span>{" "}
+              {target.text}
+            </p>
+          ) : null}
+          <p className="ta-text">{item.text}</p>
+          <AttributeChips attribute={item} />
+          {item.sourceQuote !== "" ? (
+            <q className="ta-quote">{item.sourceQuote}</q>
+          ) : null}
+          {proposed && item.note !== "" ? (
+            <p className="ta-why">{item.note}</p>
+          ) : null}
+          {open && item.definition !== null ? (
+            <div className="ta-how">
+              <p className="ta-how-title">How it is tested</p>
+              <DefinitionRules definition={item.definition} />
+            </div>
+          ) : null}
+        </div>
+        <div className="ta-side">
+          {canAct ? (
+            <RowMenu
+              label={`Status of ${name}`}
+              items={statusItems}
+              trigger={
+                proposed
+                  ? {
+                      label: "Proposed",
+                      icon: "sparkles",
+                      className: "ta-status is-proposed",
+                    }
+                  : {
+                      label: "Approved",
+                      icon: "check",
+                      className: "ta-status is-approved",
+                    }
+              }
+            />
+          ) : (
+            <span
+              className={`ta-status ${proposed ? "is-proposed" : "is-approved"}`}
+            >
+              <UiIcon name={proposed ? "sparkles" : "check"} size={15} />
+              {proposed ? "Proposed" : "Approved"}
+            </span>
+          )}
+          {editable ? (
+            <button
+              type="button"
+              className="ta-icon-button"
+              disabled={action.pending}
+              aria-label={proposed ? `Review ${name}` : `Edit ${name}`}
+              title={proposed ? "Review" : "Edit"}
+              onClick={() =>
+                setDialog({
+                  mode: proposed ? "review" : "edit",
+                  attribute: item,
+                  letter: letter ?? "proposed",
+                })
+              }
+            >
+              <UiIcon name="compose" size={16} />
+            </button>
+          ) : canAct ? (
+            <span className="ta-icon-gap" aria-hidden="true" />
+          ) : null}
+          {moreItems.length > 0 ? (
+            <RowMenu label={name} items={moreItems} />
+          ) : (
+            <span className="ta-icon-gap" aria-hidden="true" />
+          )}
+        </div>
+      </li>
+    );
+  }
+
+  const busyMany = action.busy.startsWith("many-");
+  const dialogTarget =
+    dialog !== null && dialog.mode !== "add"
+      ? (context.approved.find(
+          (each) => each.id === dialog.attribute.replacesId,
+        ) ?? null)
+      : null;
   return (
-    <div className="cc-attributes" aria-busy={action.pending}>
+    <div className="cc-attributes ta" aria-busy={action.pending}>
       {context.libraryUpdate !== null ? (
         <LibraryUpdatePanel
           ids={ids}
@@ -768,104 +1281,67 @@ export function AttributesPanel({
         />
       ) : null}
       {compact ? null : (
-        <ol className="cc-list">
-          {context.approved.map((attribute, index) => (
-            <li key={attribute.id} className="cc-item">
-              <span className="cc-index">
-                {String.fromCharCode(65 + index)}
-              </span>
-              <div className="cc-item-body">
-                {editing?.id === attribute.id ? (
-                  <form
-                    autoComplete="off"
-                    className="cc-inline"
-                    onSubmit={async (event) => {
-                      event.preventDefault();
-                      if (
-                        await action.run("edit", {
-                          intent: "attribute-edit",
-                          attribute_id: attribute.id,
-                          text: editing.text,
-                          version: attribute.version,
-                        })
-                      ) {
-                        setEditing(null);
-                      }
-                    }}
-                  >
-                    <label className="sr-only" htmlFor={`${id}-edit`}>
-                      Attribute
-                    </label>
-                    <input
-                      id={`${id}-edit`}
-                      value={editing.text}
-                      maxLength={300}
-                      onChange={(event) =>
-                        setEditing({
-                          id: attribute.id,
-                          text: event.target.value,
-                        })
-                      }
-                    />
-                    <button
-                      type="submit"
-                      className="btn-sm"
-                      disabled={action.pending}
-                    >
-                      Save
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => setEditing(null)}
-                    >
-                      Cancel
-                    </button>
-                  </form>
-                ) : (
-                  <p className="cc-text">{attribute.text}</p>
-                )}
-                <SourceLine attribute={attribute} />
-                <DefinitionDetails definition={attribute.definition} />
-              </div>
-              {canAct && editing?.id !== attribute.id ? (
-                <span className="cc-actions">
-                  <button
-                    type="button"
-                    className="btn-ghost btn-sm"
-                    onClick={() =>
-                      setEditing({ id: attribute.id, text: attribute.text })
-                    }
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-ghost btn-sm"
-                    disabled={action.pending || context.approved.length <= 1}
-                    title={
-                      context.approved.length <= 1
-                        ? "A control keeps at least one attribute."
-                        : undefined
-                    }
-                    onClick={() =>
-                      action.run("retire", {
-                        intent: "attribute-retire",
-                        attribute_id: attribute.id,
-                        version: attribute.version,
-                      })
-                    }
-                  >
-                    Retire
-                  </button>
-                </span>
-              ) : null}
-            </li>
-          ))}
-          {context.approved.length === 0 ? (
-            <li className="cc-empty">No approved attributes yet.</li>
+        <section className="ta-reco" aria-labelledby={`${aboutId}-reco`}>
+          <span className="ta-reco-icon" aria-hidden="true">
+            <UiIcon name="sparkles" size={20} />
+          </span>
+          <div>
+            <h4 id={`${aboutId}-reco`}>Agent recommendation</h4>
+            <p>{attributesSummary(context)}</p>
+            {about ? (
+              <p className="ta-about" id={`${aboutId}-about`}>
+                Approved attributes are the testing criteria: the test checks
+                each one on every item. A proposal changes nothing until a
+                person approves it, and a changed or retired attribute keeps its
+                earlier wording in the history.
+              </p>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="ta-icon-button ta-about-button"
+            aria-label="About testing attributes"
+            aria-expanded={about}
+            aria-controls={`${aboutId}-about`}
+            onClick={() => setAbout(!about)}
+          >
+            <UiIcon name="info" size={18} />
+          </button>
+        </section>
+      )}
+      {compact ? null : (
+        <div className="ta-head">
+          <h4>
+            Testing attributes{" "}
+            <span className="ta-count">({context.approved.length})</span>
+          </h4>
+          {canAct ? (
+            <span className="ta-head-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={action.pending}
+                onClick={() =>
+                  action.run("generate", { intent: "attributes-generate" })
+                }
+              >
+                <UiIcon name="sparkles" size={15} />
+                {action.busy === "generate"
+                  ? "Reading the sources…"
+                  : "Propose with the agent"}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={action.pending}
+                onClick={() => setDialog({ mode: "add" })}
+              >
+                <UiIcon name="plus" size={15} />
+                Add attribute
+              </button>
+            </span>
           ) : null}
-        </ol>
+        </div>
       )}
       {canAct && compact ? (
         <p className="cc-propose">
@@ -887,157 +1363,135 @@ export function AttributesPanel({
               : "Propose with the agent"}
           </button>
         </p>
-      ) : canAct ? (
-        <form
-          autoComplete="off"
-          className="cc-add"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            if (
-              await action.run("add", { intent: "attribute-add", text: adding })
-            ) {
-              setAdding("");
-            }
-          }}
-        >
-          <label className="sr-only" htmlFor={`${id}-add`}>
-            New attribute
-          </label>
-          <input
-            id={`${id}-add`}
-            value={adding}
-            maxLength={300}
-            placeholder="Add an attribute: one testable condition, such as who approves and by when"
-            onChange={(event) => setAdding(event.target.value)}
-          />
-          <button
-            type="submit"
-            className="btn btn-secondary btn-sm"
-            disabled={action.pending || adding.trim() === ""}
-          >
-            <UiIcon name="plus" size={13} /> Add
-          </button>
-          <button
-            type="button"
-            className="btn-sm"
-            disabled={action.pending}
-            onClick={() =>
-              action.run("generate", { intent: "attributes-generate" })
-            }
-          >
-            <UiIcon name="sparkles" size={13} />{" "}
-            {action.busy === "generate"
-              ? "Reading the sources…"
-              : "Propose with the agent"}
-          </button>
-        </form>
       ) : null}
+      {canAct && selected.size > 0 ? (
+        <fieldset className="ta-bulk">
+          <legend className="sr-only">Selected attributes</legend>
+          <span className="ta-bulk-count">{selected.size} selected</span>
+          <span className="ta-bulk-actions">
+            {plan.proposals.length > 0 ? (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={action.pending}
+                  onClick={() => void decideMany("APPROVE", plan.proposals)}
+                >
+                  {action.busy === "many-APPROVE"
+                    ? "Approving…"
+                    : `Approve ${plan.proposals.length}`}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary btn-sm"
+                  disabled={action.pending}
+                  onClick={() => void decideMany("REJECT", plan.proposals)}
+                >
+                  {action.busy === "many-REJECT"
+                    ? "Rejecting…"
+                    : `Reject ${plan.proposals.length}`}
+                </button>
+              </>
+            ) : null}
+            {plan.approved.length > 0 ? (
+              <button
+                type="button"
+                className="btn-secondary btn-sm ta-retire"
+                disabled={action.pending || plan.retireBlocked}
+                title={
+                  plan.retireBlocked
+                    ? "A control keeps at least one attribute."
+                    : undefined
+                }
+                onClick={() => void decideMany("RETIRE", plan.approved)}
+              >
+                {action.busy === "many-RETIRE"
+                  ? "Retiring…"
+                  : `Retire ${plan.approved.length}`}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="btn-ghost btn-sm"
+              disabled={busyMany}
+              onClick={() => setChosen(new Set())}
+            >
+              Clear
+            </button>
+          </span>
+          {plan.retireBlocked ? (
+            <small className="ta-bulk-hint">
+              A control keeps at least one attribute.
+            </small>
+          ) : null}
+        </fieldset>
+      ) : null}
+      <p className="ta-done" role="status">
+        {done !== "" && action.problem === null ? (
+          <>
+            <UiIcon name="check" size={14} />
+            {done}
+          </>
+        ) : null}
+      </p>
       {action.note !== "" && action.problem === null ? (
         <p className="cc-note">{action.note}</p>
       ) : null}
       <Problem text={action.problem} />
+      {compact ? null : (
+        <ol className="ta-list" aria-label="Testing attributes">
+          {context.approved.map((item, index) =>
+            row(item, attributeLetter(index)),
+          )}
+          {context.approved.length === 0 ? (
+            <li className="ta-empty">No approved attributes yet.</li>
+          ) : null}
+        </ol>
+      )}
       {context.proposed.length > 0 ? (
-        <section className="cc-proposals" aria-label="Proposed changes">
+        <section className="ta-waiting" aria-label="Proposed changes">
           <h4>
-            Proposed changes{" "}
-            <span className="num">{context.proposed.length}</span>
+            Waiting on a decision{" "}
+            <span className="ta-count">({context.proposed.length})</span>
           </h4>
           <p className="form-hint">
-            The approved attributes stay as they are until you approve a change.
+            The approved attributes stay as they are until a change is approved.
             Each proposal says whether a source states it or it is inferred.
           </p>
-          <ul className="cc-list">
-            {context.proposed.map((attribute) => (
-              <li key={attribute.id} className="cc-item is-proposed">
-                <Badge tone="is-proposal">
-                  {attribute.proposal === "CHANGE"
-                    ? "Change"
-                    : attribute.proposal === "RETIRE"
-                      ? "Retire"
-                      : "Add"}
-                </Badge>
-                <div className="cc-item-body">
-                  {attribute.replacesId !== null ? (
-                    <p className="cc-replaces">
-                      Replaces:{" "}
-                      {replaced.get(attribute.replacesId) ??
-                        "an earlier attribute"}
-                    </p>
-                  ) : null}
-                  {canAct && attribute.proposal !== "RETIRE" ? (
-                    <textarea
-                      autoComplete="off"
-                      className="cc-reword"
-                      rows={2}
-                      aria-label="Proposed wording"
-                      value={reworded[attribute.id] ?? attribute.text}
-                      maxLength={300}
-                      onChange={(event) =>
-                        setReworded({
-                          ...reworded,
-                          [attribute.id]: event.target.value,
-                        })
-                      }
-                    />
-                  ) : (
-                    <p className="cc-text">{attribute.text}</p>
-                  )}
-                  <SourceLine attribute={attribute} />
-                  {attribute.note !== "" ? (
-                    <p className="cc-why">{attribute.note}</p>
-                  ) : null}
-                  <DefinitionDetails definition={attribute.definition} />
-                </div>
-                {canAct ? (
-                  <span className="cc-actions">
-                    <button
-                      type="button"
-                      className="btn-sm"
-                      disabled={action.pending}
-                      onClick={() => {
-                        const changedText = reworded[attribute.id];
-                        action.run("decide", {
-                          intent: "attribute-decide",
-                          attribute_id: attribute.id,
-                          decision: "APPROVE",
-                          version: attribute.version,
-                          ...(changedText !== undefined &&
-                          changedText !== attribute.text
-                            ? { text: changedText }
-                            : {}),
-                        });
-                      }}
-                    >
-                      Approve
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      disabled={action.pending}
-                      onClick={() =>
-                        action.run("decide", {
-                          intent: "attribute-decide",
-                          attribute_id: attribute.id,
-                          decision: "REJECT",
-                          version: attribute.version,
-                        })
-                      }
-                    >
-                      Reject
-                    </button>
-                  </span>
-                ) : null}
-              </li>
-            ))}
+          <ul className="ta-list">
+            {context.proposed.map((item) => row(item, null))}
           </ul>
         </section>
       ) : null}
-      <IssuesList
-        ids={ids}
-        issues={issues}
-        canAct={canAct}
-        title="Open questions"
-      />
+      {dialog !== null ? (
+        <AttributeDialog
+          key={dialog.mode === "add" ? "add" : dialog.attribute.id}
+          ids={ids}
+          state={dialog}
+          replaced={
+            dialogTarget !== null
+              ? {
+                  letter: letters.get(dialogTarget.id) ?? "",
+                  text: dialogTarget.text,
+                }
+              : null
+          }
+          onClose={() => setDialog(null)}
+          onDone={(note) => {
+            setDialog(null);
+            setChosen(new Set());
+            setDone(note);
+          }}
+        />
+      ) : null}
+      {showQuestions ? (
+        <IssuesList
+          ids={ids}
+          issues={issues}
+          canAct={canAct}
+          title="Open questions"
+        />
+      ) : null}
       {context.history.length > 0 ? (
         <details className="cc-history">
           <summary>
@@ -1221,10 +1675,13 @@ export function ProcessPanel({
   ids,
   context,
   canAct,
+  showQuestions = true,
 }: {
   ids: Ids;
   context: ControlContext;
   canAct: boolean;
+  /** Off in the guided setup, which asks the open questions on its own step. */
+  showQuestions?: boolean;
 }) {
   const action = useAction(ids);
   const understanding = context.understanding;
@@ -1485,12 +1942,14 @@ export function ProcessPanel({
         </div>
       ) : null}
       <Problem text={action.problem} />
-      <IssuesList
-        ids={ids}
-        issues={context.issues.filter((item) => item.origin === "PROCESS")}
-        canAct={canAct}
-        title="Open questions on the process"
-      />
+      {showQuestions ? (
+        <IssuesList
+          ids={ids}
+          issues={context.issues.filter((item) => item.origin === "PROCESS")}
+          canAct={canAct}
+          title="Open questions on the process"
+        />
+      ) : null}
       <Classifications ids={ids} context={context} canAct={canAct} />
     </div>
   );
@@ -1778,6 +2237,7 @@ function DocumentDialog({
 }) {
   const id = useId();
   const dialog = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialog);
   const [mode, setMode] = useState<"upload" | "write">("upload");
   const [kind, setKind] = useState<DocumentKind>("NARRATIVE");
   const [title, setTitle] = useState("");
@@ -1798,7 +2258,7 @@ function DocumentDialog({
     const previous = document.activeElement as HTMLElement | null;
     dialog.current?.focus();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && isTopmostDialog(dialog.current)) {
         onClose();
       }
     };

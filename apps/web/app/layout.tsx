@@ -1,4 +1,4 @@
-import { Inter } from "next/font/google";
+import { Inter, Source_Serif_4 } from "next/font/google";
 import { cookies } from "next/headers";
 import type { ReactNode } from "react";
 
@@ -23,6 +23,11 @@ import "./procedure-board.css";
 import "./trial.css";
 import "./demo.css";
 import "./evidence-intelligence.css";
+import "./evidence-dialog.css";
+import "./control-tabs.css";
+import "./control-setup.css";
+import "./agent-avatar.css";
+import "./attribute-list.css";
 // Last: the glass layer sits over the modules' own surfaces.
 import "./glass.css";
 
@@ -32,6 +37,15 @@ const inter = Inter({
   subsets: ["latin"],
   display: "swap",
   variable: "--font-inter",
+});
+
+/** A display serif for the few headlines the owner's references set in one (the setup
+ * introduction, 2 November 2026). */
+const serif = Source_Serif_4({
+  subsets: ["latin"],
+  weight: ["600", "700"],
+  display: "swap",
+  variable: "--font-serif",
 });
 
 export const metadata = {
@@ -47,7 +61,11 @@ export default async function RootLayout({
   // The theme is set on the first paint, so a page never flashes the other one.
   const theme = parseTheme((await cookies()).get(THEME_COOKIE)?.value);
   return (
-    <html lang="en" className={inter.variable} data-theme={theme}>
+    <html
+      lang="en"
+      className={`${inter.variable} ${serif.variable}`}
+      data-theme={theme}
+    >
       <body>{children}</body>
     </html>
   );

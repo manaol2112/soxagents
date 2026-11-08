@@ -1054,7 +1054,7 @@
 
 .pt-drop > svg {
   flex: none;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .pt-drop strong {

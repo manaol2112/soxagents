@@ -58,6 +58,8 @@ function useUpload(
   requirementId?: string,
   /** Hold picked files until the person says which systems they apply to. */
   hold = false,
+  /** Told the ids of the files added, once an upload ends (the evidence dialog opens them). */
+  onUploaded?: (fileIds: string[]) => void,
 ) {
   const router = useRouter();
   const [over, setOver] = useState(false);
@@ -105,6 +107,7 @@ function useUpload(
         ),
       );
     let next = 0;
+    const added: string[] = [];
     const worker = async () => {
       while (next < plan.accepted.length) {
         const position = next;
@@ -142,7 +145,11 @@ function useUpload(
           const body = (await response.json().catch(() => ({}))) as {
             duplicate?: boolean;
             detail?: unknown;
+            file_id?: unknown;
           };
+          if (response.ok && typeof body.file_id === "string") {
+            added.push(body.file_id);
+          }
           if (!response.ok && typeof body.detail === "string") {
             const said = body.detail;
             setRefusal((current) => current ?? said);
@@ -158,6 +165,9 @@ function useUpload(
     };
     await Promise.all(Array.from({ length: AT_ONCE }, worker));
     setRunning(false);
+    if (added.length > 0) {
+      onUploaded?.(added);
+    }
     // The register catches up, and keeps refreshing while the agents read.
     router.refresh();
     // What was added shows on its item, being read; this note goes after a moment,
@@ -493,6 +503,8 @@ export function RequestUpload({
   systems = [],
   system = null,
   chooser = null,
+  target,
+  onUploaded,
 }: {
   organizationId: string;
   projectId: string;
@@ -505,11 +517,16 @@ export function RequestUpload({
   systems?: Array<{ id: string; name: string }>;
   /** The system of this item's control, ticked first when only some apply. */
   system?: string | null;
-  /** A button in a table row, or a drop zone in a request's side panel. */
-  variant?: "row" | "panel";
+  /** A button in a table row, a drop zone in a request's side panel, or the evidence
+   * dialog's large drop zone (31 October 2026). */
+  variant?: "row" | "panel" | "dialog";
   /** In place of the button: a chooser that opens the file picker among other ways to
    * add evidence (an item's Add evidence menu); dropping files still works. */
   chooser?: ((pick: () => void, running: boolean) => ReactNode) | null;
+  /** The zone's line saying where the files go; by default the item's title. */
+  target?: ReactNode;
+  /** Told the ids of the files added (the evidence dialog opens them). */
+  onUploaded?: (fileIds: string[]) => void;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const {
@@ -532,11 +549,29 @@ export function RequestUpload({
     requestId,
     requirementId,
     systems.length > 1,
+    onUploaded,
   );
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: a drop target for the mouse; the button inside picks files from the keyboard.
+    // biome-ignore lint/a11y/useKeyWithClickEvents: a click anywhere in the zone is a shortcut for the mouse; the button inside picks files from the keyboard.
     <div
-      className={`request-upload${variant === "panel" ? " is-panel" : ""}${over ? " is-over" : ""}`}
+      className={`request-upload${variant === "panel" ? " is-panel" : ""}${variant === "dialog" ? " is-panel is-zone is-dialog" : ""}${over ? " is-over" : ""}`}
+      // The whole zone picks files on a click; its buttons and menus keep their own.
+      onClick={
+        variant === "dialog"
+          ? (event) => {
+              const target = event.target as HTMLElement;
+              if (
+                !running &&
+                target.closest(
+                  "button, a, input, label, select, textarea, [role='dialog'], .ae-panel",
+                ) === null
+              ) {
+                input.current?.click();
+              }
+            }
+          : undefined
+      }
       onDragOver={(event) => {
         event.preventDefault();
         setOver(true);
@@ -544,7 +579,64 @@ export function RequestUpload({
       onDragLeave={() => setOver(false)}
       onDrop={(event) => void onDrop(event)}
     >
-      {chooser !== null ? (
+      {variant === "dialog" ? (
+        <>
+          <span className="request-upload-art" aria-hidden="true">
+            <span className="request-upload-tile is-pdf">
+              <UiIcon name="file" size={18} />
+              <em>PDF</em>
+            </span>
+            <span className="request-upload-tile is-doc">
+              <em>W</em>
+            </span>
+            <span className="request-upload-icon">
+              <UiIcon name="cloudUpload" size={38} />
+            </span>
+            <span className="request-upload-tile is-xls">
+              <em>X</em>
+            </span>
+            <span className="request-upload-tile is-img">
+              <UiIcon name="image" size={20} />
+            </span>
+          </span>
+          <strong className="request-upload-title">
+            {over ? (
+              "Drop to add the files"
+            ) : (
+              <>
+                Drop evidence here or{" "}
+                <button
+                  type="button"
+                  className="request-upload-link"
+                  disabled={running}
+                  onClick={() => input.current?.click()}
+                >
+                  browse files
+                </button>
+              </>
+            )}
+          </strong>
+          <span className="request-upload-for">
+            {target ?? "PDF, Word, Excel, CSV and images, up to 25 MB each"}
+          </span>
+          <button
+            type="button"
+            className="btn request-upload-browse"
+            disabled={running}
+            onClick={() => input.current?.click()}
+          >
+            {running ? (
+              <span className="spinner small" aria-hidden="true" />
+            ) : (
+              <UiIcon name="folder" size={17} />
+            )}
+            {running
+              ? `Uploading ${finished} of ${total}`
+              : "Browse from computer"}
+          </button>
+        </>
+      ) : null}
+      {variant === "dialog" ? null : chooser !== null ? (
         chooser(() => input.current?.click(), running)
       ) : (
         <button
@@ -573,7 +665,7 @@ export function RequestUpload({
         </button>
       )}
       {variant === "panel" && !running ? (
-        <span className="request-upload-hint">or drop them here</span>
+        <span className="request-upload-hint">or drag and drop files here</span>
       ) : null}
       <input
         ref={input}

@@ -14,7 +14,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 import psycopg
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, field_validator
 
@@ -32,7 +32,15 @@ from ai_workforce_api.evidence_extraction import Table, read_table
 from ai_workforce_api.evidence_links import file_request
 from ai_workforce_api.evidence_withdrawn import is_withdrawn
 from ai_workforce_api.inbound import clean_line
-from ai_workforce_api.sampling import build_frame, explanation, new_seed, select
+from ai_workforce_api.sampling import (
+    MAX_SAMPLE,
+    build_frame,
+    date_column,
+    explanation,
+    key_column,
+    new_seed,
+    select,
+)
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import ObjectStore, StoreError, digest_of, open_store
 from ai_workforce_api.testing_engine import create_sample_sheet
@@ -262,6 +270,29 @@ class TestBody(BaseModel):
 
 class ProposeBody(BaseModel):
     evidence_file_id: UUID
+    # The number of samples the person chose in the evidence dialog (product owner, 31
+    # October 2026: a free choice); none keeps the test plan's size. Both are audited.
+    sample_size: int | None = Field(default=None, ge=1, le=MAX_SAMPLE)
+
+
+class TableRow(BaseModel):
+    row_number: int
+    values: list[str]
+
+
+class PopulationTable(BaseModel):
+    """A page of a population's rows, as read for sampling: for the evidence dialog's Data
+    view and for picking a walkthrough instance."""
+
+    file_id: UUID
+    file_name: str
+    columns: list[str]
+    rows: list[TableRow]
+    total: int
+    matched: int
+    offset: int
+    key_column: str | None
+    date_column: str | None
 
 
 class VersionBody(BaseModel):
@@ -308,7 +339,38 @@ def register_control_tests(
         return run(
             request,
             lambda c, p: _propose(
-                c, p, store(settings, c), organization_id, project_id, body.evidence_file_id
+                c,
+                p,
+                store(settings, c),
+                organization_id,
+                project_id,
+                body.evidence_file_id,
+                body.sample_size,
+            ),
+        )
+
+    @app.get(f"{base}/evidence-files/{{file_id}}/table", response_model=PopulationTable)
+    def table(
+        organization_id: UUID,
+        project_id: UUID,
+        file_id: UUID,
+        request: Request,
+        offset: int = Query(default=0, ge=0, le=1_000_000),
+        limit: int = Query(default=50, ge=1, le=200),
+        search: str = Query(default="", max_length=100),
+    ) -> PopulationTable:
+        return run(
+            request,
+            lambda c, p: _table(
+                c,
+                p,
+                store(settings, c),
+                organization_id,
+                project_id,
+                file_id,
+                offset,
+                limit,
+                search,
             ),
         )
 
@@ -395,6 +457,7 @@ def _propose(
     organization_id: UUID,
     project_id: UUID,
     file_id: UUID,
+    chosen: int | None = None,
 ) -> TestBody:
     _person(connection, principal, organization_id, project_id)
     table, name, sha256 = _population(connection, store, project_id, file_id)
@@ -411,6 +474,9 @@ def _propose(
     window = None if found is None else (found.window_start, found.window_end)
     if found is not None:
         size = found.sample_size
+    planned = size
+    if chosen is not None:
+        size = chosen
     with transaction(connection) as cursor:
         test_id = propose(
             cursor,
@@ -430,9 +496,65 @@ def _propose(
             test_round_id=None if found is None else found.id,
             window=window,
         )
+        if test_id is not None and chosen is not None and chosen != planned:
+            # A size other than the plan's is the person's choice, kept beside the plan's.
+            _audit(
+                cursor,
+                organization_id,
+                project_id,
+                principal.id,
+                "control_test.sample_size_chosen",
+                test_id,
+                {"plan_size": planned, "chosen_size": chosen},
+            )
     if test_id is None:
         raise TestState("the samples are already approved")
     return _one(connection, organization_id, project_id, test_id)
+
+
+def _table(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    store: ObjectStore,
+    organization_id: UUID,
+    project_id: UUID,
+    file_id: UUID,
+    offset: int,
+    limit: int,
+    search: str,
+) -> PopulationTable:
+    """A page of the population's rows, numbered as sampling numbers them, optionally those
+    whose values contain the search text. The values are the file's own, shown as text."""
+    authorize(
+        connection,
+        principal=principal,
+        action=Action.TASK_READ,
+        organization_id=organization_id,
+        project_id=project_id,
+    )
+    table, name, _sha256 = _population(connection, store, project_id, file_id)
+    needle = search.strip().lower()
+    numbered = [
+        (number, row)
+        for number, row in enumerate(table.rows, start=1)
+        if needle == "" or any(needle in value.lower() for value in row)
+    ]
+    key = key_column(table)
+    when = date_column(table)
+    return PopulationTable(
+        file_id=file_id,
+        file_name=name,
+        columns=[column[:200] for column in table.columns],
+        rows=[
+            TableRow(row_number=number, values=[value[:300] for value in row])
+            for number, row in numbered[offset : offset + limit]
+        ],
+        total=len(table.rows),
+        matched=len(numbered),
+        offset=offset,
+        key_column=None if key is None else table.columns[key],
+        date_column=None if when is None else table.columns[when],
+    )
 
 
 def _replace(

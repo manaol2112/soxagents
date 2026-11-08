@@ -1,0 +1,685 @@
+/* ==========================================================================
+   A control's testing attributes (product owner, 2 November 2026), to the owner's
+   reference: the agent's recommendation, the list with its count and Add, one card per
+   attribute (select, letter, wording, source and confidence, status, edit, more), what
+   waits on a decision, and the dialog that edits one. Tokens only, so both themes follow.
+   ========================================================================== */
+
+.ta {
+  gap: 1rem;
+}
+
+/* The recommendation. */
+.ta-reco {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.9rem;
+  padding: 1rem 1.1rem;
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
+  border: 1px solid var(--accent-border, var(--border));
+  border-radius: 14px;
+}
+
+.ta-reco-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  color: var(--accent-text);
+}
+
+.ta-reco h4 {
+  margin: 0 0 0.15rem;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 700;
+}
+
+.ta-reco p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.ta-reco .ta-about {
+  margin-top: 0.5rem;
+  color: var(--text);
+}
+
+/* The heading with Add and Propose. */
+.ta-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  margin-top: 0.25rem;
+}
+
+.ta-head h4,
+.ta-waiting h4 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.ta-count {
+  font-weight: 600;
+}
+
+.ta-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.ta-head-actions .btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding: 0 1rem;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  border-radius: 12px;
+}
+
+/* A selection, decided as one decision. */
+.ta-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0.6rem 0.75rem 0.6rem 1rem;
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--surface));
+  border: 1px solid var(--accent-border, var(--border));
+  border-radius: 12px;
+}
+
+.ta-bulk-count {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+}
+
+.ta-bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.ta-bulk .ta-retire:not(:disabled) {
+  color: var(--danger);
+}
+
+.ta-bulk-hint {
+  flex-basis: 100%;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.ta-done {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  color: var(--success);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.ta-done:empty {
+  display: none;
+}
+
+/* The list: one card per attribute. */
+.ta-list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ta-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.85rem;
+  min-width: 0;
+  padding: 1rem 1rem 1rem 1.1rem;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 14px;
+  box-shadow: var(--shadow-xs);
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.ta-row:hover {
+  border-color: var(--border);
+}
+
+.ta-row.is-selected {
+  background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface));
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* Drawn from the tokens, so its edge meets 3:1 in both themes; centred on the letter. */
+.ta-row .ta-check {
+  appearance: none;
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  margin: 7px 0 0;
+  place-items: center;
+  background: var(--surface);
+  border: 1.5px solid var(--border-control);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.ta-row .ta-check:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.ta-row .ta-check:checked::after {
+  width: 10px;
+  height: 6px;
+  border: solid var(--text-on-accent, #fff);
+  border-width: 0 0 2px 2px;
+  transform: translateY(-1px) rotate(-45deg);
+  content: "";
+}
+
+.ta-row .ta-check:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.ta-row .ta-check:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.ta-letter {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  color: var(--accent-text);
+  font-size: var(--fs-md);
+  font-weight: 700;
+  background: var(--accent-soft);
+  border-radius: 9px;
+}
+
+.ta-row.is-proposed .ta-letter {
+  color: var(--ai, var(--accent-text));
+  background: var(--ai-soft, var(--accent-soft));
+}
+
+.ta-main {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  padding-top: 0.3rem;
+}
+
+.ta-text {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ta-replaces {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.ta-replaces span {
+  color: var(--text-strong);
+  font-weight: 650;
+}
+
+.ta-quote,
+.ta-why {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.ta-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.ta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 28px;
+  padding: 0 0.6rem;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  background: var(--surface-muted);
+  border-radius: 8px;
+}
+
+.ta-chip svg {
+  flex: none;
+}
+
+.ta-chip.is-high {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.ta-chip.is-moderate {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.ta-chip.is-low,
+.ta-chip.is-inferred {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.ta-chip.is-none {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.ta-how {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.75rem 0.9rem;
+  background: var(--surface-muted);
+  border-radius: 10px;
+}
+
+.ta-how-title {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+}
+
+/* The status that opens what can change it, edit, and more. */
+.ta-side {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ta-status,
+.row-menu-trigger.ta-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 40px;
+  padding: 0 0.75rem;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+.ta-status.is-approved,
+.row-menu-trigger.ta-status.is-approved,
+.row-menu-trigger.ta-status.is-approved:hover:not(:disabled) {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: var(--success-border);
+}
+
+.ta-status.is-proposed,
+.row-menu-trigger.ta-status.is-proposed,
+.row-menu-trigger.ta-status.is-proposed:hover:not(:disabled) {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+}
+
+/* The arrow alone: no divider before it (the shared caret's, made for filled buttons). */
+.row-menu-trigger.ta-status .row-menu-caret {
+  display: inline-flex;
+  margin-left: 0.15rem;
+  padding-left: 0;
+  color: currentcolor;
+  border-left: 0;
+}
+
+.ta-icon-button,
+.ta-side .row-menu-button {
+  display: inline-grid;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  place-items: center;
+  color: var(--text-strong);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.ta-icon-button:hover:not(:disabled),
+.ta-side .row-menu-button:hover,
+.ta-side .row-menu.is-open .row-menu-button {
+  background: var(--surface-muted);
+  border-color: var(--border);
+}
+
+.ta-icon-gap {
+  width: 40px;
+  height: 40px;
+}
+
+.ta-reco .ta-about-button {
+  width: 36px;
+  height: 36px;
+  color: var(--text-secondary);
+  background: transparent;
+  border-color: transparent;
+}
+
+.ta-reco .ta-about-button:hover:not(:disabled),
+.ta-reco .ta-about-button[aria-expanded="true"] {
+  color: var(--text-strong);
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+.ta-empty {
+  padding: 1rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  border: 1px dashed var(--border);
+  border-radius: 14px;
+}
+
+.ta-waiting {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+}
+
+.ta-waiting .form-hint {
+  margin: 0;
+}
+
+/* The dialog that edits, adds, or reviews one attribute. */
+.record-dialog.tae-dialog {
+  width: min(760px, 100%);
+}
+
+.tae-dialog .rd-head {
+  align-items: center;
+  gap: 1.1rem;
+  padding: 1.4rem 1.5rem 1.2rem;
+}
+
+.tae-dialog .rd-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+}
+
+.tae-dialog .rd-head h2 {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.tae-dialog .rd-body {
+  padding: 1.25rem 1.5rem 1.4rem;
+  background: var(--surface);
+}
+
+.tae-form {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.tae-field {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.tae-field label,
+.tae-facts dt {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 650;
+}
+
+.tae-required {
+  margin-left: 0.2rem;
+  color: var(--danger);
+}
+
+.tae-field textarea {
+  width: 100%;
+  min-height: 104px;
+  padding: 0.75rem 0.9rem;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  border-radius: 12px;
+  resize: vertical;
+}
+
+.tae-count {
+  justify-self: end;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.tae-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 0;
+}
+
+.tae-facts > div {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.tae-facts dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 52px;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 12px;
+}
+
+.tae-facts .ta-chip {
+  min-height: 32px;
+  font-size: var(--fs-sm);
+}
+
+.tae-none {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.tae-replaces,
+.tae-why,
+.tae-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.tae-replaces span {
+  color: var(--text-strong);
+  font-weight: 650;
+}
+
+.tae-quote {
+  margin: 0;
+  padding: 0.6rem 0.9rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  border-left: 3px solid var(--accent-border, var(--border));
+}
+
+.tae-how {
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 14px;
+}
+
+.tae-how summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+  color: var(--text-secondary);
+  list-style: none;
+  cursor: pointer;
+}
+
+.tae-how summary::-webkit-details-marker {
+  display: none;
+}
+
+.tae-how summary > span {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.tae-how strong {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+}
+
+.tae-how small {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.tae-how-caret {
+  display: inline-flex;
+  transform: rotate(90deg);
+  transition: transform 150ms ease;
+}
+
+.tae-how[open] .tae-how-caret {
+  transform: rotate(-90deg);
+}
+
+.tae-how dl {
+  margin: 0;
+  padding: 0 1rem 1rem 3rem;
+}
+
+.tae-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+.tae-foot-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.tae-foot .btn,
+.tae-foot .btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-width: 104px;
+  min-height: 48px;
+  padding: 0 1.3rem;
+  font-size: var(--fs-md);
+  border-radius: 12px;
+}
+
+@media (max-width: 640px) {
+  .ta-row {
+    grid-template-columns: auto auto minmax(0, 1fr);
+    gap: 0.7rem;
+    padding: 0.85rem;
+  }
+
+  /* The status and actions under the wording, on the right. */
+  .ta-side {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+
+  .ta-reco {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .ta-reco-icon {
+    display: none;
+  }
+
+  .ta-head-actions,
+  .ta-head-actions .btn-secondary {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+
+  .tae-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tae-foot .btn,
+  .tae-foot .btn-secondary {
+    flex: 1;
+  }
+
+  .tae-foot-main {
+    flex: 1 1 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ta-row,
+  .tae-how-caret {
+    transition: none;
+  }
+}

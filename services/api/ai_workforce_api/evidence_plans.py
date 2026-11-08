@@ -3717,6 +3717,10 @@ def set_sufficiency(
         judgeable = row[1] == "REQUESTED" or (row[1] == "PLANNED" and linked)
         if body.sufficiency != "NOT_REVIEWED" and (not judgeable or not arrived):
             raise PlanState("nothing has been received for this requirement yet")
+        if body.sufficiency == "ACCEPTED" and not _has_own_evidence(cursor, requirement_id):
+            # Accepting judges the item's own files: a request received as a whole, or a
+            # file on it that serves another item, is nothing to accept.
+            raise PlanState("no file serves this item yet; add or link its evidence first")
         cursor.execute(
             """
             UPDATE evidence_requirements
@@ -3810,6 +3814,33 @@ def _received_when_accepted(
         cursor, organization_id, project_id, actor, "pbc_request.received",
         "pbc_request", request_id, {"by": "every item accepted"},
     )  # fmt: skip
+
+
+def _has_own_evidence(cursor: psycopg.Cursor[Any], requirement_id: UUID) -> bool:
+    """Whether a file serves the item itself: one on its request that serves it (filed for
+    it, or for the request and not read as missing it), one a sibling control shares for
+    it, or one a person linked to it. The test the plan uses for an item's files."""
+    row = cursor.execute(
+        """
+        SELECT 1 FROM evidence_requirements q
+        WHERE q.id = %s AND (
+            EXISTS (
+                SELECT 1 FROM evidence_file_links l
+                LEFT JOIN evidence_analyses a ON a.evidence_file_id = l.evidence_file_id
+                WHERE l.pbc_request_id = q.pbc_request_id AND {SERVES})
+            OR EXISTS ({SHARED})
+            OR EXISTS (
+                SELECT 1 FROM evidence_requirement_files ef
+                JOIN evidence_file_links l
+                  ON l.evidence_file_id = ef.evidence_file_id
+                 AND l.engagement_control_id = ef.engagement_control_id
+                WHERE ef.requirement_id = q.id AND ef.status = 'LINKED'))
+        """.replace("{SERVES}", request_file_serves("l.evidence_file_id")).replace(
+            "{SHARED}", shared_from_sibling("1")
+        ),
+        (requirement_id,),
+    ).fetchone()
+    return row is not None
 
 
 def _linked(cursor: psycopg.Cursor[Any], requirement_id: UUID) -> bool:
@@ -3964,6 +3995,12 @@ def unlink_file(
             """,
             (others, others, others, others, requirement_id),
         )
+        if row[3] is not None:
+            # The item's request follows the evidence left on it (31 Oct 2026: an item read
+            # "Provided" with nothing linked after its only file was unlinked).
+            from ai_workforce_api.evidence_receipts import follow_evidence
+
+            follow_evidence(cursor, organization_id, project_id, row[3], actor)
         _audit(
             cursor, organization_id, project_id, actor, "evidence_requirement.file_unlinked",
             "evidence_requirement", requirement_id,

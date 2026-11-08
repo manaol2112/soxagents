@@ -100,7 +100,11 @@
     box-shadow 120ms ease;
 }
 
+/* A tile is a button: the global button hover would fill it with the accent colour, so
+   it keeps its own surface and lifts with its border and shadow (31 October 2026). */
 .cpg-tile:hover {
+  color: inherit;
+  background: var(--surface);
   border-color: var(--accent-border);
   box-shadow: var(--shadow-sm);
 }
@@ -341,38 +345,58 @@
   overflow: hidden;
 }
 
+/* The table's head, to the owner's reference (2 November 2026): an icon tile beside a
+   large title and its count, the bulk actions at the right. */
 .cpg-main-head {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
   align-items: center;
-  padding: 0.85rem 1rem;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 1.25rem 1.5rem 1rem;
 }
 
 .cpg-main-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
   margin: 0;
   margin-right: auto;
-  font-size: var(--fs-md);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   color: var(--text-strong);
 }
 
-.cpg-main-head h2 span {
+.cpg-main-head h2 > span:not(.cpg-title-icon) {
   font-weight: 500;
   color: var(--text-secondary);
+}
+
+.cpg-title-icon {
+  display: inline-grid;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 12px;
 }
 
 .cpg-scroll {
   /* Holds its positioned descendants (the hidden column labels) inside the scroll. */
   position: relative;
   overflow-x: auto;
+  padding: 0 1rem 0.25rem;
 }
 
+/* Separate borders, so the header and the group bands can round their ends. */
 .cpg-table {
   width: 100%;
   min-width: 980px;
   font-size: var(--fs-sm);
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 .cpg-table th,
@@ -383,11 +407,24 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* The column names on one tinted band with rounded ends. */
 .cpg-table thead th {
-  font-size: var(--fs-xs);
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+  font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--text-secondary);
-  background: var(--surface-muted);
+  background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface-muted));
+  border-bottom: 0;
+}
+
+.cpg-table thead th:first-child {
+  padding-left: 0.75rem;
+  border-radius: 12px 0 0 12px;
+}
+
+.cpg-table thead th:last-child {
+  border-radius: 0 12px 12px 0;
 }
 
 .cpg-table .cpg-pick,
@@ -560,14 +597,39 @@
   white-space: nowrap;
 }
 
+/* Each system (or process) on its own tinted band with its icon, set apart from the
+   rows above it. */
 .cpg-group th {
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  color: var(--text-strong);
-  background: var(--surface-muted);
+  padding: 1.25rem 0 0.35rem;
+  background: none;
+  border-bottom: 0;
 }
 
-.cpg-group th span {
+.cpg-table tbody .cpg-group:first-child th {
+  padding-top: 0.85rem;
+}
+
+.cpg-group-band {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.8rem 1rem;
+  color: var(--text-strong);
+  font-size: 18px;
+  background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface-muted));
+  border-radius: 12px;
+}
+
+.cpg-group-band svg {
+  flex: none;
+  color: var(--accent-text);
+}
+
+.cpg-group-band strong {
+  font-weight: 650;
+}
+
+.cpg-group-band span {
   font-weight: 500;
   color: var(--text-secondary);
 }
@@ -814,32 +876,192 @@
   min-width: 112px;
 }
 
+/* The card view, to the owner's reference (2 November 2026): each system on the
+   table's band, with how many of its plans are approved and a fold, then its controls
+   as cards filling the row. */
+.cpg-card-groups {
+  display: grid;
+  gap: 1.25rem;
+  /* A grid item: without this it grows to its cards' widest content on a phone. */
+  min-width: 0;
+  padding: 0.25rem 1rem 1rem;
+}
+
+.cpg-card-group {
+  display: grid;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.cpg-group-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-left: auto;
+  font-size: var(--fs-sm);
+}
+
+.cpg-group-bar {
+  display: block;
+  width: 112px;
+  height: 8px;
+  overflow: hidden;
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.cpg-group-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--success);
+  border-radius: inherit;
+}
+
+.cpg-group-band > .cpg-group-fold {
+  display: inline-grid;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  margin-left: auto;
+  padding: 0;
+  place-items: center;
+  color: var(--text-secondary);
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.cpg-group-progress + .cpg-group-fold {
+  margin-left: 0.5rem;
+}
+
+.cpg-group-band > .cpg-group-fold:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+.cpg-group-band > .cpg-group-fold svg {
+  color: inherit;
+  transform: rotate(90deg);
+  transition: transform 150ms ease;
+}
+
+.cpg-group-band > .cpg-group-fold[aria-expanded="true"] svg {
+  transform: rotate(-90deg);
+}
+
 .cpg-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr));
+  gap: 1rem;
   margin: 0;
-  padding: 1rem;
+  padding: 0;
   list-style: none;
 }
 
 .cpg-card {
   display: grid;
-  gap: 0.5rem;
   align-content: start;
-  padding: 0.85rem 1rem;
+  min-width: 0;
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
 }
 
-.cpg-card > small {
+.cpg-card-top {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: start;
+  padding: 1.1rem 1.25rem 1rem;
+}
+
+.cpg-card-icon {
+  display: inline-grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 14px;
+}
+
+.cpg-card-name {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.cpg-card-name > a,
+.cpg-card-ref {
+  width: fit-content;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.cpg-card-name > a:hover {
+  text-decoration: underline;
+}
+
+.cpg-card-name > strong {
+  color: var(--text-strong);
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.cpg-card-name > small {
   color: var(--text-secondary);
+  font-size: var(--fs-sm);
 }
 
-.cpg-card-pills {
+.cpg-card-foot {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  align-items: center;
+  gap: 0.6rem 0.75rem;
+  margin: 0 1.25rem;
+  padding: 0.85rem 0 1rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.cpg-card-foot > .cpg-owner {
+  margin-right: auto;
+  font-size: var(--fs-sm);
+}
+
+.cpg-card-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.8rem;
+  font-size: var(--fs-sm);
+}
+
+.cpg-card-open {
+  display: inline-grid;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  color: var(--text-strong);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+}
+
+.cpg-card-open:hover {
+  background: var(--surface-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cpg-group-band > .cpg-group-fold svg {
+    transition: none;
+  }
 }
 
 .cpg-empty {
@@ -933,6 +1155,56 @@
   .cpg-head-icon {
     width: 40px;
     height: 40px;
+  }
+
+  .cpg-main-head h2 {
+    font-size: 20px;
+  }
+
+  /* On a phone the band's progress takes its own line under the name. */
+  .cpg-card-group .cpg-group-band {
+    flex-wrap: wrap;
+    font-size: 16px;
+  }
+
+  .cpg-group-progress {
+    order: 1;
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .cpg-group-progress + .cpg-group-fold {
+    margin-left: auto;
+  }
+
+  .cpg-card-top {
+    gap: 0.75rem;
+    padding: 1rem;
+  }
+
+  .cpg-card-icon {
+    width: 44px;
+    height: 44px;
+  }
+
+  /* The owner on one line; the status and the arrow on the next, the arrow at the end. */
+  .cpg-card-foot {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    margin: 0 1rem;
+  }
+
+  .cpg-card-foot > .cpg-owner {
+    grid-column: 1 / -1;
+  }
+
+  .cpg-card-foot > .cpg-card-status {
+    justify-self: start;
+  }
+
+  .cpg-title-icon {
+    width: 38px;
+    height: 38px;
   }
 
   .cpg-tile {

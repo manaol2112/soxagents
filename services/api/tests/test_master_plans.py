@@ -799,7 +799,10 @@ def test_the_rules_settle_what_a_plan_left_of_its_standard(migrated: Database) -
     _unlink(migrated, timely["id"])
     gaps = {"ATTRIBUTE_WITHOUT_PROCEDURE", "ATTRIBUTE_WITHOUT_EVIDENCE"}
     found = {(f["kind"], f["code"]) for f in _master(team, control)["findings"]}
-    assert ("ATTRIBUTE_WITHOUT_PROCEDURE", timely["code"]) in found
+    # Attributes need not be mapped to procedures (product owner, 31 October 2026): the
+    # unlinked attribute shows only its missing evidence; the rules still relink both.
+    assert ("ATTRIBUTE_WITHOUT_EVIDENCE", timely["code"]) in found
+    assert ("ATTRIBUTE_WITHOUT_PROCEDURE", timely["code"]) not in found
     with connect(migrated.url) as connection:
         assert settle_library_attributes(connection, project).redrawn >= 1
     after = _master(team, control)
@@ -826,7 +829,26 @@ def test_the_rules_settle_what_a_plan_left_of_its_standard(migrated: Database) -
     held = _master(team, provisioning)
     assert held["revision"] == held["approved_revision"] == approved["revision"]
     found = {(f["kind"], f["code"]) for f in held["findings"]}
-    assert ("ATTRIBUTE_WITHOUT_PROCEDURE", attribute["code"]) in found
+    assert ("ATTRIBUTE_WITHOUT_EVIDENCE", attribute["code"]) in found
+
+
+def test_an_attribute_need_not_be_mapped_to_a_procedure(migrated: Database) -> None:
+    """Product owner, 31 October 2026: "I don't need to map attributes to any procedures."
+    An attribute no procedure tests raises no finding, and the plan is approved."""
+    team = _launched(migrated, "master-noproc")
+    control = _control(team, "ITGC-AC-02")["id"]
+    attribute = _master(team, control)["attributes"][0]
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "DELETE FROM plan_procedure_attributes WHERE attribute_id = %s", (attribute["id"],)
+        )
+    plan = _master(team, control)
+    assert not any(p for p in plan["procedures"] if attribute["code"] in p["attribute_codes"])
+    kinds = {f["kind"] for f in plan["findings"]}
+    assert not kinds & {"ATTRIBUTE_WITHOUT_PROCEDURE", "PROCEDURE_WITHOUT_ATTRIBUTE"}
+    _approve(team, control)
+    held = _master(team, control)
+    assert held["approved_revision"] == held["revision"]
 
 
 def test_evidence_for_an_attribute_the_control_does_not_test_is_not_planned(

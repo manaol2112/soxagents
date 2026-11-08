@@ -1482,6 +1482,19 @@ button.cite-open:hover {
   .cc-docs li {
     grid-template-columns: 28px minmax(0, 1fr);
   }
+
+  /* The review state and the row's action share a second line under the title,
+     rather than squeezing into the icon's column. */
+  .cc-docs li > .cc-badge,
+  .cc-docs li > button {
+    grid-row: 2;
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .cc-docs li > button {
+    justify-self: end;
+  }
 }
 
 /* ==========================================================================
@@ -1758,6 +1771,32 @@ button.cite-open:hover {
   background: var(--cx-tint);
   border-radius: 6px;
   font-size: 12.5px;
+}
+
+/* A change to an item's file, confirmed by the server. */
+.ep-done {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin: 0.4rem 0;
+  padding: 0.45rem 0.7rem;
+  color: var(--text-strong);
+  background: var(--success-soft);
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.ep-done svg {
+  flex: none;
+  margin-top: 0.15rem;
+  color: var(--success);
+}
+
+/* A long file name wraps inside the note instead of running under the item's buttons. */
+.ep-done span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .ep-change {

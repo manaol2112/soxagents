@@ -9,7 +9,8 @@ import {
   knownSystemGroups,
   LAYERS,
 } from "./onboarding-model";
-import { type IconName, UiIcon } from "./ui-icon";
+import { LAYER_ICON } from "./system-layer";
+import { UiIcon } from "./ui-icon";
 
 type System = { name: string; layer: string };
 type Custom = { name: string; layer: string };
@@ -29,13 +30,6 @@ const LAYER_PLURAL: Record<string, string> = {
   OPERATING_SYSTEM: "Operating systems",
   INFRASTRUCTURE: "Infrastructure",
   TOOL: "Tools",
-};
-const LAYER_ICON: Record<string, IconName> = {
-  APPLICATION: "window",
-  DATABASE: "database",
-  OPERATING_SYSTEM: "server",
-  INFRASTRUCTURE: "cloud",
-  TOOL: "wrench",
 };
 
 /**

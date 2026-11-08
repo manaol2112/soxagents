@@ -30,8 +30,11 @@ import {
   shownRequirements,
   waitsOnPerson,
 } from "./evidence-plan-model";
+import { FileBadge } from "./file-badge";
 import { formatDate } from "./format";
 import { RowMenu, type RowMenuItem } from "./row-menu";
+import { traceFileNote, tracesSample } from "./sample-trace-model";
+import { SampleTrace, useSampleTrace } from "./sample-trace-view";
 import { UiIcon } from "./ui-icon";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
@@ -83,7 +86,7 @@ export function usePlanAction(ids: Ids) {
     }
     return message === null;
   }
-  return { run, busy, pending: pending || busy !== "", problem, note };
+  return { run, busy, pending: pending || busy !== "", problem, note, ids };
 }
 
 export function Problem({ text }: { text: string | null }) {
@@ -287,7 +290,14 @@ const COVERAGE_WORDS: Record<
 };
 
 type Asking =
-  | { kind: "INSUFFICIENT" | "FOLLOW_UP_REQUIRED" | "WAIVE" | "LINK" }
+  | {
+      kind:
+        | "INSUFFICIENT"
+        | "FOLLOW_UP_REQUIRED"
+        | "NOT_REVIEWED"
+        | "WAIVE"
+        | "LINK";
+    }
   | { kind: "UNLINK"; file: RequirementFile };
 
 /**
@@ -330,6 +340,13 @@ function ReadingMark({ label }: { label: string }) {
   );
 }
 
+/** The reader's proposal on an item card's pill (product owner's reference). */
+const CARD_PROPOSAL: Record<string, string> = {
+  SUFFICIENT: "Looks sufficient",
+  FOLLOW_UP: "Follow-up suggested",
+  INSUFFICIENT: "Looks insufficient",
+};
+
 /** The reader's note is kept to a length, so it can stop mid-sentence: say so. */
 function endsCleanly(text: string): string {
   const trimmed = text.trimEnd();
@@ -344,6 +361,8 @@ export type FileForm = "replace" | "withdraw" | "application";
 export type FileLine = {
   name: ReactNode;
   flag: ReactNode;
+  /** When it was added and its size, where the page knows them. */
+  meta?: string;
   actions: RowMenuItem[];
   form: ReactNode;
 };
@@ -377,7 +396,7 @@ export function RequirementRow({
   fileLine?: (
     file: RequirementFile,
     form: FileForm | null,
-    setForm: (form: FileForm | null) => void,
+    setForm: (form: FileForm | null, done?: string) => void,
   ) => FileLine;
   /** Adding evidence for this item, where the page offers it: shown on the item always. */
   upload?: ReactNode;
@@ -392,14 +411,19 @@ export function RequirementRow({
     fileId: string;
     form: FileForm;
   } | null>(null);
+  // A change to one of its files, confirmed by the server: shown on the item, which stays
+  // when the file leaves it.
+  const [fileDone, setFileDone] = useState<string | null>(null);
   const lines = new Map(
     item.files.map((file) => [
       file.fileId,
       fileLine?.(
         file,
         fileForm?.fileId === file.fileId ? fileForm.form : null,
-        (form) =>
-          setFileForm(form === null ? null : { fileId: file.fileId, form }),
+        (form, done) => {
+          setFileForm(form === null ? null : { fileId: file.fileId, form });
+          setFileDone(done ?? null);
+        },
       ) ?? null,
     ]),
   );
@@ -413,6 +437,17 @@ export function RequirementRow({
   const judgeable = JUDGEABLE.includes(item.state);
   const open = item.state !== "NOT_APPLICABLE" && item.state !== "REMOVED";
   const assessed = item.files.length > 0;
+  // A design item that walks one instance through: its files are read together for the
+  // sample (31 October 2026), read again when they change.
+  const traced = bare && open && assessed && tracesSample(item);
+  const [trace, setTrace, traceFailed] = useSampleTrace(
+    action.ids,
+    item.id,
+    traced,
+    item.files
+      .map((file) => `${file.fileId}:${fileIsReading(file) ? 1 : 0}`)
+      .join(","),
+  );
   const proposal = item.assessment;
   // A person's judgment stands; the reader's proposal stays for the record.
   const decided =
@@ -477,10 +512,21 @@ export function RequirementRow({
               },
             ]
           : []),
+        // A person's decision can be taken back, with why (31 October 2026: an item
+        // accepted with nothing to stand on had no way back).
+        ...(decided
+          ? [
+              {
+                label: "Reopen decision",
+                onSelect: () => ask({ kind: "NOT_REVIEWED" }),
+              },
+            ]
+          : []),
       ]
     : [];
   const menu = [...judgments, ...fileActions];
-  const accept = canAct && judgeable && item.state !== "ACCEPTED";
+  // Accepting judges the item's own files: an item with none has nothing to accept.
+  const accept = canAct && judgeable && assessed && item.state !== "ACCEPTED";
   const compactButtons =
     asking === null && (accept || menu.length > 0) ? (
       <span className="ep-buttons is-compact">
@@ -507,7 +553,7 @@ export function RequirementRow({
   const fullButtons =
     canAct && asking === null ? (
       <span className="ep-buttons">
-        {judgeable && item.state !== "ACCEPTED" ? (
+        {accept ? (
           <button
             type="button"
             className="btn-sm"
@@ -548,6 +594,16 @@ export function RequirementRow({
               Follow up
             </button>
           </>
+        ) : null}
+        {decided ? (
+          <button
+            type="button"
+            className="btn-ghost btn-sm"
+            disabled={action.pending}
+            onClick={() => ask({ kind: "NOT_REVIEWED" })}
+          >
+            Reopen decision
+          </button>
         ) : null}
         {open && item.pendingChange === null ? (
           <button
@@ -702,6 +758,377 @@ export function RequirementRow({
       )}
     </div>
   ) : null;
+  // A change planning proposes, and the form a judgment or a link opens.
+  const changeBlock =
+    item.pendingChange !== null ? (
+      <div className="ep-change">
+        <p>
+          <strong>Planning again proposes a change.</strong>{" "}
+          {item.pendingChange.remove
+            ? "It would take this item out of the plan."
+            : `${item.pendingChange.title}: ${item.pendingChange.description}`}
+        </p>
+        {canAct ? (
+          <span className="cc-actions">
+            <button
+              type="button"
+              className="btn-sm"
+              disabled={action.pending}
+              onClick={() =>
+                action.run(`change-${item.id}`, {
+                  intent: "change",
+                  requirement_id: item.id,
+                  decision: "ACCEPT",
+                  version: item.version,
+                })
+              }
+            >
+              Accept change
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              disabled={action.pending}
+              onClick={() =>
+                action.run(`change-${item.id}`, {
+                  intent: "change",
+                  requirement_id: item.id,
+                  decision: "DISMISS",
+                  version: item.version,
+                })
+              }
+            >
+              Keep as is
+            </button>
+          </span>
+        ) : null}
+      </div>
+    ) : null;
+  const askForm =
+    canAct && asking !== null ? (
+      <form
+        autoComplete="off"
+        className="cc-inline ep-ask"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          const done =
+            asking.kind === "WAIVE"
+              ? await action.run(`waive-${item.id}`, {
+                  intent: "waive",
+                  requirement_id: item.id,
+                  reason: words,
+                  version: item.version,
+                })
+              : asking.kind === "LINK"
+                ? await action.run(`link-${item.id}`, {
+                    intent: "link",
+                    requirement_id: item.id,
+                    file_id: fileId,
+                    reason: words,
+                    version: item.version,
+                  })
+                : asking.kind === "UNLINK"
+                  ? await action.run(`unlink-${item.id}`, {
+                      intent: "unlink",
+                      requirement_id: item.id,
+                      link_id: asking.file.linkId,
+                      reason: words,
+                      version: asking.file.linkVersion,
+                    })
+                  : await action.run(`judge-${item.id}`, {
+                      intent: "sufficiency",
+                      requirement_id: item.id,
+                      sufficiency: asking.kind,
+                      note: words,
+                      version: item.version,
+                    });
+          if (done) {
+            setAsking(null);
+            setWords("");
+          }
+        }}
+      >
+        {asking.kind === "LINK" ? (
+          <>
+            <label className="sr-only" htmlFor={`${id}-file`}>
+              File
+            </label>
+            <select
+              id={`${id}-file`}
+              value={fileId}
+              onChange={(event) => setFileId(event.target.value)}
+            >
+              <option value="">Choose a file</option>
+              {linkable.map((file) => (
+                <option key={file.id} value={file.id}>
+                  {file.name}
+                </option>
+              ))}
+            </select>
+          </>
+        ) : null}
+        <label className="sr-only" htmlFor={`${id}-words`}>
+          {asking.kind === "WAIVE"
+            ? "Why it does not apply"
+            : asking.kind === "LINK"
+              ? "Why the file serves it"
+              : asking.kind === "UNLINK"
+                ? "Why it no longer serves it"
+                : asking.kind === "NOT_REVIEWED"
+                  ? "Why the decision is reopened"
+                  : "What is missing"}
+        </label>
+        <input
+          id={`${id}-words`}
+          value={words}
+          maxLength={
+            asking.kind === "LINK" || asking.kind === "UNLINK" ? 500 : 1000
+          }
+          placeholder={
+            asking.kind === "WAIVE"
+              ? "Why this does not apply (scope, control, or methodology)"
+              : asking.kind === "LINK"
+                ? "Why this file serves it, e.g. the procedure covers the whole year"
+                : asking.kind === "UNLINK"
+                  ? `Why ${asking.file.name} no longer serves it`
+                  : asking.kind === "NOT_REVIEWED"
+                    ? "Why the decision is reopened"
+                    : "What is missing or needs a follow-up"
+          }
+          onChange={(event) => setWords(event.target.value)}
+        />
+        <button
+          type="submit"
+          className="btn-sm"
+          disabled={
+            action.pending ||
+            (asking.kind === "LINK" && fileId === "") ||
+            words.trim().length < (asking.kind === "WAIVE" ? 10 : 3)
+          }
+        >
+          {asking.kind === "LINK"
+            ? "Link"
+            : asking.kind === "UNLINK"
+              ? "Unlink"
+              : asking.kind === "NOT_REVIEWED"
+                ? "Reopen"
+                : "Save"}
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          onClick={() => setAsking(null)}
+        >
+          Cancel
+        </button>
+      </form>
+    ) : null;
+  if (bare) {
+    // The request panel's item (product owner's reference, 31 October 2026): each file as
+    // a card with its type, when it came and its size, the reader's proposal, and its
+    // own menu; an empty state when nothing serves it; one action bar beneath.
+    const pill =
+      proposal.proposal === "NONE" ? null : (
+        <button
+          type="button"
+          className={`ep-pill is-${proposal.proposal.toLowerCase()}${decided ? " is-decided" : ""}`}
+          aria-expanded={showFound}
+          title={
+            decided
+              ? "The evidence reader's proposal; a person has decided. Show what it found."
+              : "The evidence reader's proposal, not a decision. Show what it found."
+          }
+          onClick={() => setShowFound((value) => !value)}
+        >
+          <UiIcon name="sparkles" size={13} />
+          {CARD_PROPOSAL[proposal.proposal]}
+        </button>
+      );
+    const single = item.files.length === 1;
+    const itemMenu = judgments.filter(
+      (entry) => entry.label !== "Restore" || item.state === "NOT_APPLICABLE",
+    );
+    const waived = item.state === "NOT_APPLICABLE" || item.state === "REMOVED";
+    return (
+      <li
+        id={`req-${item.id}`}
+        className={`cc-item ep-item is-bare is-card${item.needsReview ? " is-review" : ""}`}
+      >
+        <div className="ep-card-body">
+          <p className="ep-title sr-only">
+            <strong>{item.title}</strong>
+          </p>
+          {fileDone !== null ? (
+            <p className="ep-done" role="status">
+              <UiIcon name="check" size={14} />
+              <span>{fileDone}</span>
+            </p>
+          ) : null}
+          {assessed ? (
+            <ul className="ep-file-cards">
+              {item.files.map((file) => {
+                const line = lines.get(file.fileId) ?? null;
+                const menu: RowMenuItem[] = [
+                  ...(line?.actions ?? []),
+                  ...(canAct && file.via === "LINK" && file.linkId !== null
+                    ? [
+                        {
+                          label: "Unlink from this item",
+                          onSelect: () => ask({ kind: "UNLINK", file }),
+                        },
+                      ]
+                    : []),
+                ];
+                return (
+                  <li
+                    key={file.fileId}
+                    className={`ep-file-card${fileIsReading(file) ? " is-reading" : ""}`}
+                  >
+                    <div className="ep-file-main">
+                      <FileBadge name={file.name} />
+                      <div className="ep-file-text">
+                        <p>
+                          {line?.name ?? (
+                            <span className="ep-file-name">{file.name}</span>
+                          )}
+                          {traceFileNote(trace, file.fileId) !== null ? (
+                            <small className="st-note">
+                              {traceFileNote(trace, file.fileId)}
+                            </small>
+                          ) : (
+                            <CompactFileNote file={file} />
+                          )}
+                        </p>
+                        {line?.meta ? (
+                          <small className="ep-file-meta">{line.meta}</small>
+                        ) : null}
+                        {line?.flag ?? null}
+                      </div>
+                      {single && reading === 0 ? pill : null}
+                      {menu.length > 0 ? (
+                        <span className="ep-file-menu">
+                          <RowMenu label={file.name} items={menu} />
+                        </span>
+                      ) : null}
+                    </div>
+                    {line?.form ?? null}
+                  </li>
+                );
+              })}
+            </ul>
+          ) : waived ? null : (
+            <div className="ep-empty">
+              <span className="ep-empty-icon" aria-hidden="true">
+                <UiIcon name="file" size={16} />
+              </span>
+              <span>
+                <strong>No evidence linked yet</strong>
+                <small>
+                  {item.state === "RECEIVED" ||
+                  item.state === "PARTIALLY_RECEIVED" ||
+                  item.state === "UNDER_REVIEW" ||
+                  item.state === "ACCEPTED"
+                    ? "Its request is marked received, but no file serves this item. Add the file, or link one the control already holds."
+                    : "Add a file to this request, or link one the control already holds."}
+                </small>
+              </span>
+            </div>
+          )}
+          {traced ? (
+            <SampleTrace
+              ids={action.ids}
+              requirementId={item.id}
+              trace={trace}
+              failed={traceFailed}
+              canAct={canAct}
+              onTrace={setTrace}
+            />
+          ) : null}
+          {!single && assessed && reading === 0 && pill !== null ? (
+            <p className="ep-pill-row">{pill}</p>
+          ) : null}
+          {showFound && proposal.proposal !== "NONE" ? (
+            <div className="ep-found-box">
+              <p className="ep-found">{endsCleanly(proposal.reason)}</p>
+              {item.files
+                .filter((file) => file.period !== "")
+                .map((file) => (
+                  <p key={`period-${file.fileId}`} className="ep-found">
+                    Period: {file.period}
+                  </p>
+                ))}
+              {proposal.followUps.length > 0 ? (
+                <>
+                  <p className="ep-found-title">
+                    {points} point{points === 1 ? "" : "s"} to raise
+                  </p>
+                  <ul className="ep-follow">
+                    {proposal.followUps.map((entry) => (
+                      <li key={entry}>{entry}</li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+          {item.passedOver.length > 0 ? (
+            <p className="ep-passed">
+              {item.passedOver.join(", ")} came in on its request, but the
+              reader found{" "}
+              {item.passedOver.length === 1 ? "it does" : "they do"} not cover
+              this item.
+              {canAct && open && linkable.length > 0
+                ? " Use it from the menu if it does."
+                : ""}
+            </p>
+          ) : null}
+          {item.sufficiencyNote ? (
+            <p className="ep-note">
+              {decided || item.sufficiencyBy ? "" : "Decision reopened: "}
+              {item.sufficiencyNote}
+              {item.sufficiencyBy ? ` (${item.sufficiencyBy})` : ""}
+            </p>
+          ) : null}
+          {item.state === "NOT_APPLICABLE" && item.waiveReason ? (
+            <p className="ep-note">Not applicable: {item.waiveReason}</p>
+          ) : null}
+          {changeBlock}
+          {askForm}
+        </div>
+        {upload !== null ||
+        (canAct && asking === null && (itemMenu.length > 0 || accept)) ? (
+          <div className="ep-card-actions">
+            <div className="ep-card-add">
+              {upload}
+              {canAct && asking === null && itemMenu.length > 0 ? (
+                <span className="ep-item-menu">
+                  <RowMenu label={item.title} items={itemMenu} />
+                </span>
+              ) : null}
+            </div>
+            {accept && asking === null ? (
+              <button
+                type="button"
+                className="btn ep-accept"
+                disabled={action.pending}
+                onClick={() =>
+                  action.run(`judge-${item.id}`, {
+                    intent: "sufficiency",
+                    requirement_id: item.id,
+                    sufficiency: "ACCEPTED",
+                    version: item.version,
+                  })
+                }
+              >
+                <UiIcon name="check" size={15} />
+                Accept evidence
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </li>
+    );
+  }
   return (
     <li
       id={`req-${item.id}`}
@@ -731,6 +1158,12 @@ export function RequirementRow({
           ) : null}
         </p>
         {compact ? null : <p className="cc-text">{item.description}</p>}
+        {fileDone !== null ? (
+          <p className="ep-done" role="status">
+            <UiIcon name="check" size={14} />
+            <span>{fileDone}</span>
+          </p>
+        ) : null}
         {fold ? null : evidence}
         {item.passedOver.length > 0 ? (
           <p className="ep-passed">
@@ -816,6 +1249,7 @@ export function RequirementRow({
         </details>
         {item.sufficiencyNote ? (
           <p className="ep-note">
+            {decided || item.sufficiencyBy ? "" : "Decision reopened: "}
             {item.sufficiencyNote}
             {item.sufficiencyBy ? ` (${item.sufficiencyBy})` : ""}
           </p>
@@ -823,162 +1257,8 @@ export function RequirementRow({
         {item.state === "NOT_APPLICABLE" && item.waiveReason ? (
           <p className="ep-note">Not applicable: {item.waiveReason}</p>
         ) : null}
-        {item.pendingChange !== null ? (
-          <div className="ep-change">
-            <p>
-              <strong>Planning again proposes a change.</strong>{" "}
-              {item.pendingChange.remove
-                ? "It would take this item out of the plan."
-                : `${item.pendingChange.title}: ${item.pendingChange.description}`}
-            </p>
-            {canAct ? (
-              <span className="cc-actions">
-                <button
-                  type="button"
-                  className="btn-sm"
-                  disabled={action.pending}
-                  onClick={() =>
-                    action.run(`change-${item.id}`, {
-                      intent: "change",
-                      requirement_id: item.id,
-                      decision: "ACCEPT",
-                      version: item.version,
-                    })
-                  }
-                >
-                  Accept change
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  disabled={action.pending}
-                  onClick={() =>
-                    action.run(`change-${item.id}`, {
-                      intent: "change",
-                      requirement_id: item.id,
-                      decision: "DISMISS",
-                      version: item.version,
-                    })
-                  }
-                >
-                  Keep as is
-                </button>
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-        {canAct && asking !== null ? (
-          <form
-            autoComplete="off"
-            className="cc-inline ep-ask"
-            onSubmit={async (event) => {
-              event.preventDefault();
-              const done =
-                asking.kind === "WAIVE"
-                  ? await action.run(`waive-${item.id}`, {
-                      intent: "waive",
-                      requirement_id: item.id,
-                      reason: words,
-                      version: item.version,
-                    })
-                  : asking.kind === "LINK"
-                    ? await action.run(`link-${item.id}`, {
-                        intent: "link",
-                        requirement_id: item.id,
-                        file_id: fileId,
-                        reason: words,
-                        version: item.version,
-                      })
-                    : asking.kind === "UNLINK"
-                      ? await action.run(`unlink-${item.id}`, {
-                          intent: "unlink",
-                          requirement_id: item.id,
-                          link_id: asking.file.linkId,
-                          reason: words,
-                          version: asking.file.linkVersion,
-                        })
-                      : await action.run(`judge-${item.id}`, {
-                          intent: "sufficiency",
-                          requirement_id: item.id,
-                          sufficiency: asking.kind,
-                          note: words,
-                          version: item.version,
-                        });
-              if (done) {
-                setAsking(null);
-                setWords("");
-              }
-            }}
-          >
-            {asking.kind === "LINK" ? (
-              <>
-                <label className="sr-only" htmlFor={`${id}-file`}>
-                  File
-                </label>
-                <select
-                  id={`${id}-file`}
-                  value={fileId}
-                  onChange={(event) => setFileId(event.target.value)}
-                >
-                  <option value="">Choose a file</option>
-                  {linkable.map((file) => (
-                    <option key={file.id} value={file.id}>
-                      {file.name}
-                    </option>
-                  ))}
-                </select>
-              </>
-            ) : null}
-            <label className="sr-only" htmlFor={`${id}-words`}>
-              {asking.kind === "WAIVE"
-                ? "Why it does not apply"
-                : asking.kind === "LINK"
-                  ? "Why the file serves it"
-                  : asking.kind === "UNLINK"
-                    ? "Why it no longer serves it"
-                    : "What is missing"}
-            </label>
-            <input
-              id={`${id}-words`}
-              value={words}
-              maxLength={
-                asking.kind === "LINK" || asking.kind === "UNLINK" ? 500 : 1000
-              }
-              placeholder={
-                asking.kind === "WAIVE"
-                  ? "Why this does not apply (scope, control, or methodology)"
-                  : asking.kind === "LINK"
-                    ? "Why this file serves it, e.g. the procedure covers the whole year"
-                    : asking.kind === "UNLINK"
-                      ? `Why ${asking.file.name} no longer serves it`
-                      : "What is missing or needs a follow-up"
-              }
-              onChange={(event) => setWords(event.target.value)}
-            />
-            <button
-              type="submit"
-              className="btn-sm"
-              disabled={
-                action.pending ||
-                (asking.kind === "LINK" && fileId === "") ||
-                words.trim().length < (asking.kind === "WAIVE" ? 10 : 3)
-              }
-            >
-              {asking.kind === "LINK"
-                ? "Link"
-                : asking.kind === "UNLINK"
-                  ? "Unlink"
-                  : "Save"}
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => setAsking(null)}
-            >
-              Cancel
-            </button>
-          </form>
-        ) : null}
+        {changeBlock}
+        {askForm}
       </div>
       <div className="ep-side">
         {bare ? null : (

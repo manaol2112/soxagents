@@ -48,7 +48,8 @@
   --text-strong: #0b1220;
   --text: #1d2433;
   --text-secondary: #4f596b;
-  --text-tertiary: #667085;
+  /* Muted text at 4.5:1 or more on every surface and tinted row (WCAG 1.4.3). */
+  --text-tertiary: #5d6779;
   --text-disabled: #a3aab8;
   --text-on-accent: #ffffff;
   /* Text on a solid status fill (a count, a step mark). */
@@ -58,6 +59,8 @@
   --border: #e3e7ee;
   --border-strong: #cfd5df;
   --border-subtle: #eef0f4;
+  /* A form field's edge, which identifies it: 3:1 on every surface (WCAG 1.4.11). */
+  --border-control: #7b8597;
 
   /* Brand and primary action */
   --accent: #3b5bdb;
@@ -71,10 +74,10 @@
   --accent-hover: var(--accent-strong);
 
   /* Status: each has a strong tone for text and icons, a soft fill, and a border */
-  --success: #15803d;
+  --success: #127436;
   --success-soft: #ecfdf3;
   --success-border: #bfe3cf;
-  --warning: #b45309;
+  --warning: #a14808;
   --warning-soft: #fff7e8;
   --warning-border: #f3d9a4;
   --danger: #c42b2b;
@@ -103,6 +106,8 @@
   --font-ui:
     var(--font-inter), ui-sans-serif, -apple-system, BlinkMacSystemFont,
     "Segoe UI", sans-serif;
+  --font-display:
+    var(--font-serif), "Iowan Old Style", "Source Serif Pro", Georgia, serif;
   --font-mono:
     ui-monospace, "SFMono-Regular", "Cascadia Code", Menlo, Consolas,
     monospace;
@@ -130,7 +135,9 @@
   --shadow-pop:
     0 0 0 1px rgb(16 24 40 / 6%), 0 4px 8px rgb(16 24 40 / 6%),
     0 16px 32px rgb(16 24 40 / 8%);
-  --ring: 0 0 0 3px rgb(59 91 219 / 22%);
+  /* The focus ring: a gap of the surface, then a solid 2px ring at 3:1 or more against
+     what surrounds it (WCAG 1.4.11 and 2.4.7); the 22% tint it replaces was 1.3:1. */
+  --ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
 
   /* Layout */
   --page-gutter: 1.5rem;
@@ -177,7 +184,7 @@
   --text-strong: #f3f6fb;
   --text: #dce3ee;
   --text-secondary: #aab5c6;
-  --text-tertiary: #8794a8;
+  --text-tertiary: #9ca8ba;
   --text-disabled: #566176;
   --text-on-accent: #ffffff;
   --text-on-status: #0b1220;
@@ -185,6 +192,7 @@
   --border: #24324a;
   --border-strong: #33435f;
   --border-subtle: #1b263b;
+  --border-control: #6f7d96;
 
   /* The fill keeps white text at AA; text in the accent color uses the lighter tone. */
   --accent: #4361ee;
@@ -200,14 +208,14 @@
   --warning: #f5b544;
   --warning-soft: rgb(245 181 68 / 13%);
   --warning-border: rgb(245 181 68 / 32%);
-  --danger: #f87171;
+  --danger: #fb8a8a;
   --danger-soft: rgb(248 113 113 / 13%);
   --danger-border: rgb(248 113 113 / 32%);
   --neutral: #aab5c6;
   --neutral-soft: rgb(148 163 184 / 12%);
   --neutral-border: rgb(148 163 184 / 26%);
 
-  --ai: #b49cff;
+  --ai: #c2afff;
   --ai-soft: rgb(167 139 250 / 14%);
   --ai-border: rgb(167 139 250 / 34%);
 
@@ -221,7 +229,7 @@
   --shadow-pop:
     0 0 0 1px rgb(255 255 255 / 6%), 0 4px 8px rgb(0 0 0 / 30%),
     0 16px 32px rgb(0 0 0 / 45%);
-  --ring: 0 0 0 3px rgb(99 128 255 / 40%);
+  --ring: 0 0 0 2px var(--surface), 0 0 0 4px #7d93ff;
 }
 
 /* The light theme in the workspace (product owner, 26 October 2026: "the same premium
@@ -253,7 +261,7 @@
   --glow-c: rgb(16 185 129 / 12%);
 
   --text-secondary: #485266;
-  --text-tertiary: #5d6779;
+  --text-tertiary: #525c6e;
 
   --shadow-xs: 0 1px 2px rgb(15 23 42 / 5%);
   --shadow-sm:
@@ -1149,8 +1157,10 @@ button:hover,
   border-color: var(--accent-strong);
 }
 
-button:focus-visible,
-.btn:focus-visible {
+/* Stronger than a component's resting `box-shadow: none` (ghost and quiet buttons
+   among them), which removed the ring from every one of them (WCAG 2.4.7). */
+button:focus-visible:not(:disabled),
+.btn:focus-visible:not(:disabled) {
   outline: 0;
   box-shadow: var(--ring);
 }
@@ -2340,7 +2350,7 @@ select {
   min-width: 0;
   color: var(--text);
   background-color: var(--surface);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius);
   box-shadow: var(--shadow-xs);
   font-family: inherit;
@@ -3460,7 +3470,7 @@ a.pill:hover {
   align-items: center;
   margin-top: auto;
   padding-top: 0.25rem;
-  color: var(--ink);
+  color: var(--accent-text);
   font-size: var(--fs-sm);
   font-weight: 500;
 }
@@ -3728,7 +3738,7 @@ label.check {
   align-items: center;
   gap: 0.75rem;
   margin: 0 0 0.875rem;
-  color: var(--ink);
+  color: var(--accent-text);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.09em;
@@ -4081,6 +4091,12 @@ input[type="file"] {
   background: none;
   border: 0;
   box-shadow: none;
+}
+
+/* It keeps a focus ring, which the reset above removed (WCAG 2.4.7). */
+input[type="file"]:focus-visible {
+  border-radius: 6px;
+  box-shadow: var(--ring);
 }
 
 .file-picker {
@@ -16510,7 +16526,7 @@ button.sys-more-clear:hover {
 }
 
 .closeout-list a {
-  color: var(--ink);
+  color: var(--accent-text);
 }
 
 .closeout-history ul {
@@ -18273,6 +18289,11 @@ button.answer-done:hover {
   left: 0;
 }
 
+.row-menu-list.is-up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
 .row-menu-list a,
 .row-menu-list button {
   display: flex;
@@ -19384,88 +19405,7 @@ button.answer-done:hover {
   line-height: 1.5;
 }
 
-/* The agent itself. */
-.ab-halo {
-  fill: var(--ai-soft);
-}
-
-.ab-antenna {
-  stroke: var(--ai-border);
-  stroke-width: 3;
-  stroke-linecap: round;
-}
-
-.ab-tip {
-  fill: var(--ai);
-  animation: ab-glow 2.4s ease-in-out infinite;
-}
-
-.ab-ear {
-  fill: var(--accent-soft);
-  stroke: var(--ai-border);
-  stroke-width: 2;
-}
-
-.ab-head {
-  fill: var(--surface-hover);
-  stroke: var(--ai-border);
-  stroke-width: 2;
-}
-
-.ab-visor {
-  fill: var(--navy);
-  stroke: var(--accent-border);
-  stroke-width: 1.5;
-}
-
-.ab-eye {
-  fill: var(--bot-eye);
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: ab-blink 5s ease-in-out infinite;
-}
-
-.ab-smile {
-  fill: none;
-  stroke: var(--bot-eye);
-  stroke-width: 3;
-  stroke-linecap: round;
-}
-
-.ab-body {
-  animation: ab-float 4s ease-in-out infinite;
-}
-
-@keyframes ab-float {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-3px);
-  }
-}
-
-@keyframes ab-blink {
-  0%,
-  94%,
-  100% {
-    transform: scaleY(1);
-  }
-  97% {
-    transform: scaleY(0.12);
-  }
-}
-
-@keyframes ab-glow {
-  0%,
-  100% {
-    opacity: 0.55;
-  }
-  50% {
-    opacity: 1;
-  }
-}
+/* The agent itself is the shared one (agent-avatar.tsx, agent-avatar.css). */
 
 @media (max-width: 1240px) {
   .oc ol {
@@ -20342,4 +20282,33 @@ button.answer-done:hover {
   .sa {
     animation: none;
   }
+}
+
+/* ==========================================================================
+   Form fields' edges at 3:1 (WCAG 2.2 1.4.11; product owner, 2 November 2026): one
+   rule over the components' own field borders, so every bordered text field, dropdown
+   and text area shows --border-control. Focused, disabled and invalid fields keep their
+   own look, as does the breadcrumb's dropdown, which is drawn as text. Specific enough
+   (each :not() a real condition) to stand over a component's resting border.
+   ========================================================================== */
+:is(
+    input:not(
+        [type="checkbox"],
+        [type="radio"],
+        [type="file"],
+        [type="range"],
+        [type="hidden"],
+        [type="color"],
+        [type="submit"],
+        [type="button"]
+      ),
+    select,
+    textarea
+  ):not(:focus):not(:disabled):not([aria-invalid="true"]):not(.crumb-select *) {
+  border-color: var(--border-control);
+}
+
+/* Search boxes whose border is drawn by the box around the field. */
+:is(.ec-search, .lb-search, .cpg-search):not(:focus-within) {
+  border-color: var(--border-control);
 }

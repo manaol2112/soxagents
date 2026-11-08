@@ -12,6 +12,7 @@ are opened, and secret-looking values are redacted from the text that is kept.
 import csv
 import io
 import re
+import sys
 import zipfile
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time
@@ -59,6 +60,10 @@ class Extraction:
     # PNG images still to be read by OCR, in page order.
     images: tuple[bytes, ...]
     note: str
+    # The real page of each image (1-based, parallel to `images`), so OCR text is
+    # labelled with the page it came from, not its place among the scans. Empty when
+    # the images are not pages (a screenshot, a document's pictures).
+    image_pages: tuple[int, ...] = ()
 
 
 def extract(content: bytes, file_name: str, content_type: str) -> Extraction:
@@ -132,8 +137,7 @@ def with_ocr(extraction: Extraction, texts: list[str], note: str = "") -> Extrac
     if extraction.file_kind == "image":
         combined = found[0] if found else ""
     elif extraction.file_kind == "pdf":
-        pages = [f"[Page {index + 1}, read by OCR]\n{text}" for index, text in enumerate(read)]
-        combined = "\n\n".join(part for part in (extraction.text, *pages) if part.strip())
+        combined = _pdf_pages_in_order(extraction.text, read, extraction.image_pages)
     else:
         images = [f"[Image {index + 1}, read by OCR]\n{text}" for index, text in enumerate(read)]
         combined = "\n\n".join(part for part in (extraction.text, *images) if part.strip())
@@ -142,6 +146,7 @@ def with_ocr(extraction: Extraction, texts: list[str], note: str = "") -> Extrac
             extraction,
             status="UNREADABLE",
             images=(),
+            image_pages=(),
             method="OCR",
             note=_join(notes, "OCR found no text. A person reviews the file."),
         )
@@ -158,15 +163,42 @@ def with_ocr(extraction: Extraction, texts: list[str], note: str = "") -> Extrac
         truncated=cleaned.truncated or extraction.truncated,
         redacted=cleaned.redacted or extraction.redacted,
         images=(),
+        image_pages=(),
         note=notes[:300],
     )
 
 
+_PAGE_MARK = re.compile(r"^\[Page (\d+)\]\n?", re.M)
+
+
+def _pdf_pages_in_order(text: str, ocr_texts: list[str], image_pages: tuple[int, ...]) -> str:
+    """A PDF's text pages and its OCR'd pages in page order, each labelled with its real
+    page, so a passage's location is the page a person opens. Images without a page
+    number (an extraction made before the numbers were kept) follow the text pages,
+    numbered by their order among the scans."""
+    parts: list[tuple[int, int, str]] = []
+    pieces = _PAGE_MARK.split(text)
+    if pieces[0].strip():
+        parts.append((0, len(parts), pieces[0].strip()))
+    for number, body in zip(pieces[1::2], pieces[2::2], strict=False):
+        if body.strip():
+            parts.append((int(number), len(parts), f"[Page {number}]\n{body.strip()}"))
+    for index, chunk in enumerate(ocr_texts):
+        if index < len(image_pages):
+            page = image_pages[index]
+            parts.append((page, len(parts), f"[Page {page}, read by OCR]\n{chunk}"))
+        else:
+            parts.append((sys.maxsize, len(parts), f"[Page {index + 1}, read by OCR]\n{chunk}"))
+    parts.sort(key=lambda item: (item[0], item[1]))
+    return "\n\n".join(part for _page, _order, part in parts if part.strip())
+
+
 def without_ocr(extraction: Extraction, note: str) -> Extraction:
     """No OCR engine could read the images. Keep any text, and say a person must read it."""
+    notes = _join(extraction.note, note)
     if extraction.text.strip():
-        return replace(extraction, status="PARTIAL", images=(), note=_join(extraction.note, note))
-    return replace(extraction, status="NEEDS_OCR", images=(), note=_join(extraction.note, note))
+        return replace(extraction, status="PARTIAL", images=(), image_pages=(), note=notes)
+    return replace(extraction, status="NEEDS_OCR", images=(), image_pages=(), note=notes)
 
 
 # Readers
@@ -207,13 +239,21 @@ def _pdf(content: bytes) -> Extraction:
         if len(text.strip()) >= SCANNED_PAGE_CHARS
     )
     images: list[bytes] = []
+    image_pages: list[int] = []
+    unread: list[int] = []
     if scanned:
         for index in scanned[:MAX_OCR_IMAGES]:
             image = _page_image(pages[index])
             if image is not None:
                 images.append(image)
+                image_pages.append(index + 1)
+            elif _page_has_images(pages[index]):
+                # A scan whose image could not be taken; a blank page is passed over.
+                unread.append(index + 1)
         if len(scanned) > MAX_OCR_IMAGES:
             note = _join(note, f"Only the first {MAX_OCR_IMAGES} scanned pages are read by OCR.")
+        if unread and (images or readable):
+            note = _join(note, _unread_pages_note(unread))
     cleaned = clean_text(readable, MAX_TEXT)
     if images:
         status: Status = "NEEDS_OCR"
@@ -233,7 +273,22 @@ def _pdf(content: bytes) -> Extraction:
         columns=(),
         images=tuple(images),
         note=note,
+        image_pages=tuple(image_pages),
     )
+
+
+def _unread_pages_note(pages: list[int]) -> str:
+    shown = ", ".join(str(page) for page in pages[:5]) + (", ..." if len(pages) > 5 else "")
+    if len(pages) == 1:
+        return f"Page {shown} is a scan whose image could not be read."
+    return f"Pages {shown} are scans whose images could not be read."
+
+
+def _page_has_images(page: Any) -> bool:
+    try:
+        return len(list(page.images)[:1]) > 0
+    except Exception:
+        return False
 
 
 def _page_image(page: Any) -> bytes | None:

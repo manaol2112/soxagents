@@ -306,6 +306,22 @@ def register_control_context(
 
         return run(request, work)
 
+    @app.post(f"{control}/attributes/decide-many")
+    def decide_many(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: control_attributes.AttributeChoices,
+        request: Request,
+    ) -> ContextBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            control_attributes.decide_many(c, organization_id, project_id, control_id, p.id, body)
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
     @app.post(f"{control}/attributes/generate")
     def generate(
         organization_id: UUID, project_id: UUID, control_id: UUID, request: Request

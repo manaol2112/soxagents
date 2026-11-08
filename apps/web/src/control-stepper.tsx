@@ -83,16 +83,18 @@ export function ControlStepper({
   planPending?: boolean;
 }) {
   const done = completion(journey);
-  const more = agent !== null || blockers.length > 0;
   return (
     <div className="cw-guide">
       <nav className="cw-stepper" aria-label="Control workflow">
         <ol>
           {items.map((item, index) => {
-            // The state word shows on the open step and on one with work still going;
-            // a done or upcoming step says it by its mark, and to a screen reader.
+            // A done step and the open one say their state beside the name; an
+            // upcoming step says it to a screen reader (product owner's reference, 2
+            // November 2026).
             const spoken =
-              item.step === current || item.status === "working"
+              item.status === "done" ||
+              item.status === "current" ||
+              item.status === "working"
                 ? ""
                 : " sr-only";
             return (
@@ -113,17 +115,14 @@ export function ControlStepper({
                 >
                   <span className="cw-step-mark" aria-hidden="true">
                     {item.status === "done" ? (
-                      <UiIcon name="check" size={13} />
+                      <UiIcon name="check" size={16} />
                     ) : (
                       index + 1
                     )}
                   </span>
                   <span className="cw-step-copy">
                     <span className="cw-step-name">
-                      <span className="cw-step-no" aria-hidden="true">
-                        {index + 1}
-                      </span>
-                      <strong>{item.label}</strong>
+                      <strong>{STEP_NAME[item.step] ?? item.label}</strong>
                       <span
                         className={`cw-step-state is-${item.status}${spoken}`}
                       >
@@ -187,71 +186,15 @@ export function ControlStepper({
         )}
       </nav>
       {simple || !summary ? null : (
-        <section
-          className={`cw-needs${needs.mine ? " is-mine" : ""}`}
-          aria-labelledby="cw-needs-title"
-        >
-          <span className="cw-needs-icon" aria-hidden="true">
-            <UiIcon name={needs.mine ? "file" : "clock"} size={22} />
-          </span>
-          <div className="cw-needs-copy">
-            <p className="cw-needs-kicker" id="cw-needs-title">
-              {needs.mine
-                ? "Needs you"
-                : needs.waitsOn !== ""
-                  ? `Waits on ${needs.waitsOn}`
-                  : `Waits on ${needs.who.toLowerCase()}`}
-            </p>
-            <p className="cw-needs-title">{needs.title}</p>
-            {needs.reason !== "" ? (
-              <p className="cw-needs-reason">{needs.reason}</p>
-            ) : null}
-          </div>
-          {needs.mine && actionHref !== null ? (
-            <div className="cw-needs-actions">
-              <a className="btn" href={actionHref}>
-                Open
-                <UiIcon name="arrow" size={14} />
-              </a>
-            </div>
-          ) : null}
-          {more ? (
-            // The agent's note on this step and what is outstanding, on request: the
-            // banner keeps to the one thing that needs a person.
-            <details className="cw-needs-more">
-              <summary
-                aria-label="The agent's note and what is outstanding"
-                title="The agent's note and what is outstanding"
-              >
-                <UiIcon name="more" size={16} />
-              </summary>
-              <div className="cw-needs-drawer">
-                {agent !== null ? (
-                  <AgentSays says={agent} ids={ids} back={hrefs[current]} />
-                ) : null}
-                {blockers.length > 0 ? (
-                  <section
-                    className="cw-blockers"
-                    aria-labelledby="cw-blockers-title"
-                  >
-                    <h2 id="cw-blockers-title">Outstanding</h2>
-                    <ul>
-                      {blockers.map((item) => (
-                        <li
-                          key={item.text}
-                          className={item.holdsConclusion ? "is-holding" : ""}
-                        >
-                          <span>{item.text}</span>
-                          <a href={hrefs[item.step]}>{STEP_WORDS[item.step]}</a>
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                ) : null}
-              </div>
-            </details>
-          ) : null}
-        </section>
+        <NeedsBanner
+          needs={needs}
+          actionHref={actionHref}
+          agent={agent}
+          blockers={blockers}
+          hrefs={hrefs}
+          ids={ids}
+          current={current}
+        />
       )}
       {receipts.length > 0 ? (
         <section className="cw-receipts" aria-labelledby="cw-receipts-title">
@@ -280,11 +223,154 @@ export function ControlStepper({
   );
 }
 
+/** The one thing that needs a person and who that person is, with its action, and the
+ * agent's note and what is outstanding behind its "more" control. On the Overview tab
+ * (product owner's reference, 2 November 2026), and in the guided frame where asked. */
+export function NeedsBanner({
+  needs,
+  actionHref,
+  agent,
+  blockers,
+  hrefs,
+  ids = null,
+  current,
+}: {
+  needs: NeedsYou;
+  actionHref: string | null;
+  agent: Says | null;
+  blockers: Blocker[];
+  hrefs: Record<Step, string>;
+  ids?: { organizationId: string; projectId: string } | null;
+  current: Step;
+}) {
+  const more = agent !== null || blockers.length > 0;
+  return (
+    <section
+      className={`cw-needs${needs.mine ? " is-mine" : ""}`}
+      aria-labelledby="cw-needs-title"
+    >
+      <span className="cw-needs-icon" aria-hidden="true">
+        <UiIcon name={needs.mine ? "file" : "clock"} size={22} />
+      </span>
+      <div className="cw-needs-copy">
+        <p className="cw-needs-kicker" id="cw-needs-title">
+          {needs.mine
+            ? "Needs you"
+            : needs.waitsOn !== ""
+              ? `Waits on ${needs.waitsOn}`
+              : `Waits on ${needs.who.toLowerCase()}`}
+        </p>
+        <p className="cw-needs-title">{needs.title}</p>
+        {needs.reason !== "" ? (
+          <p className="cw-needs-reason">{needs.reason}</p>
+        ) : null}
+      </div>
+      {needs.mine && actionHref !== null ? (
+        <div className="cw-needs-actions">
+          <a className="btn" href={actionHref}>
+            Open
+            <UiIcon name="arrow" size={14} />
+          </a>
+        </div>
+      ) : null}
+      {more ? (
+        // The agent's note on this step and what is outstanding, on request: the
+        // banner keeps to the one thing that needs a person.
+        <details className="cw-needs-more">
+          <summary
+            aria-label="The agent's note and what is outstanding"
+            title="The agent's note and what is outstanding"
+          >
+            <UiIcon name="more" size={16} />
+          </summary>
+          <div className="cw-needs-drawer">
+            {agent !== null ? (
+              <AgentSays says={agent} ids={ids} back={hrefs[current]} />
+            ) : null}
+            {blockers.length > 0 ? (
+              <section
+                className="cw-blockers"
+                aria-labelledby="cw-blockers-title"
+              >
+                <h2 id="cw-blockers-title">Outstanding</h2>
+                <ul>
+                  {blockers.map((item) => (
+                    <li
+                      key={item.text}
+                      className={item.holdsConclusion ? "is-holding" : ""}
+                    >
+                      <span>{item.text}</span>
+                      <a href={hrefs[item.step]}>{STEP_WORDS[item.step]}</a>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+          </div>
+        </details>
+      ) : null}
+    </section>
+  );
+}
+
+/** The agent's note on the control and what is outstanding, folded (product owner, 2
+ * November 2026: the Needs-you banner left the Overview; these fold into AI insights).
+ * Nothing when there is neither. */
+export function AgentNotes({
+  agent,
+  blockers,
+  hrefs,
+  ids = null,
+  back,
+}: {
+  agent: Says | null;
+  blockers: Blocker[];
+  hrefs: Record<Step, string>;
+  ids?: { organizationId: string; projectId: string } | null;
+  back: string;
+}) {
+  if (agent === null && blockers.length === 0) {
+    return null;
+  }
+  return (
+    <details className="ov-notes">
+      <summary>
+        {agent !== null && blockers.length > 0
+          ? `The agent's note and ${blockers.length} outstanding`
+          : agent !== null
+            ? "The agent's note"
+            : `${blockers.length} outstanding`}
+        <UiIcon name="chevron" size={13} />
+      </summary>
+      <div className="cw-needs-drawer">
+        {agent !== null ? (
+          <AgentSays says={agent} ids={ids} back={back} />
+        ) : null}
+        {blockers.length > 0 ? (
+          <section className="cw-blockers" aria-label="Outstanding">
+            <ul>
+              {blockers.map((item) => (
+                <li
+                  key={item.text}
+                  className={item.holdsConclusion ? "is-holding" : ""}
+                >
+                  <span>{item.text}</span>
+                  <a href={hrefs[item.step]}>{STEP_WORDS[item.step]}</a>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
 /** A step's state in a word, under its name: the plan waiting for approval reads In
  * review; a step behind the control's with work still open, In progress. */
 function stepState(item: StepperItem, planPending: boolean): string {
   if (item.status === "done") {
-    return "Complete";
+    return "Completed";
   }
   if (item.status === "working") {
     return "In progress";
@@ -295,13 +381,19 @@ function stepState(item: StepperItem, planPending: boolean): string {
   return "Not started";
 }
 
-/** What each step is for, under its name (decided by the product owner). */
+/** What each step is for, under its name (product owner's reference, 2 November 2026). */
 const STEP_DETAIL: Record<Step, string> = {
   PLAN: "Define and approve the test plan",
   REQUEST: "Draft and send evidence requests",
   TEST: "Perform testing and evaluate",
-  CONCLUDE: "Document the conclusion",
+  CONCLUDE: "Conclude on control status",
   REVIEW: "Independent review",
+};
+
+/** The steps' names on the progress line, as the reference names them; the Conclude
+ * step reads Evaluate there. */
+const STEP_NAME: Partial<Record<Step, string>> = {
+  CONCLUDE: "Evaluate",
 };
 
 const STEP_WORDS: Record<Step, string> = {

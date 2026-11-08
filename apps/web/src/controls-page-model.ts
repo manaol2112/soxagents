@@ -277,6 +277,55 @@ export function tiles(rows: readonly PageRow[]) {
 
 export type ViewBy = "control" | "system" | "process";
 
+/** How the page lays the controls out: grouped by, table or cards, rows per page. */
+export type PageView = {
+  by: ViewBy;
+  layout: "table" | "cards";
+  size: number;
+};
+
+export const PAGE_SIZES = [25, 50, 100] as const;
+
+/** By system until the person chooses otherwise (product owner, 2 November 2026). */
+export const DEFAULT_PAGE_VIEW: PageView = {
+  by: "system",
+  layout: "table",
+  size: 50,
+};
+
+/** Where the person's choice is kept in their browser. */
+export const PAGE_VIEW_KEY = "controls-page-view";
+
+/** The person's saved view, read from storage; any part missing or not one of the
+ * choices falls back to the default. */
+export function readPageView(saved: string | null): PageView {
+  if (saved === null) {
+    return DEFAULT_PAGE_VIEW;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(saved);
+  } catch {
+    return DEFAULT_PAGE_VIEW;
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return DEFAULT_PAGE_VIEW;
+  }
+  const record = value as Record<string, unknown>;
+  const by = (["control", "system", "process"] as const).find(
+    (each) => each === record.by,
+  );
+  const layout = (["table", "cards"] as const).find(
+    (each) => each === record.layout,
+  );
+  const size = PAGE_SIZES.find((each) => each === record.size);
+  return {
+    by: by ?? DEFAULT_PAGE_VIEW.by,
+    layout: layout ?? DEFAULT_PAGE_VIEW.layout,
+    size: size ?? DEFAULT_PAGE_VIEW.size,
+  };
+}
+
 /** The rows in groups for the table, by system or process; one group for "control". */
 export function groupRows(
   rows: readonly PageRow[],
@@ -462,5 +511,88 @@ export function toPageRow(
     attention: work !== null && (work.exceptions || work.overdue),
     step,
     phaseLabels,
+  };
+}
+
+/** What a control's card shows in its one status pill: what it needs next (product
+ * owner, 2 November 2026, card reference). A plan awaiting approval first; then the
+ * testing, once it has started; else that it is in scope. */
+export function cardStatus(row: PageRow): {
+  label: string;
+  tone: "is-success" | "is-warning" | "is-info" | "is-danger" | "is-muted";
+  icon: "check" | "clock" | "activity" | "risk" | "minus" | "compose";
+} {
+  if (!row.included) {
+    return { label: "Out of scope", tone: "is-muted", icon: "minus" };
+  }
+  if (row.plan === "PENDING") {
+    return { label: "Plan to approve", tone: "is-warning", icon: "clock" };
+  }
+  if (row.plan === "DRAFT") {
+    return { label: "Plan in draft", tone: "is-muted", icon: "compose" };
+  }
+  if (row.testing === "EXCEPTIONS") {
+    return { label: "With exceptions", tone: "is-danger", icon: "risk" };
+  }
+  if (row.testing === "IN_PROGRESS") {
+    return { label: "Testing in progress", tone: "is-info", icon: "activity" };
+  }
+  if (row.testing === "COMPLETED") {
+    return { label: "Testing completed", tone: "is-success", icon: "check" };
+  }
+  return { label: "In scope", tone: "is-success", icon: "check" };
+}
+
+/** The icon on a control's card, from what the control is about; the area's when
+ * nothing in its words names a kind of control. First match wins. */
+const CONTROL_ICONS: ReadonlyArray<readonly [RegExp, CardIcon]> = [
+  [/terminat|leaver|remov|revok|deprovision/, "clock"],
+  [/password|authenticat|multi-factor|\bmfa\b|sign-in|login/, "shield"],
+  [/provision|new user|access request|grant/, "userPlus"],
+  [/privileged|administrator|\badmin|superuser/, "user"],
+  [/review|recertif|certification/, "eye"],
+  [/invoice|payment|purchase|three-way|vendor|payable|receivable/, "file"],
+  [/change|deploy|release|program|patch/, "flow"],
+  [/backup|restor|recovery|replicat/, "database"],
+  [/job|batch|schedul|interface/, "list"],
+  [/incident|problem|monitor|alert/, "bell"],
+  [/reconcil|journal|close|report/, "chart"],
+];
+
+export type CardIcon =
+  | "clock"
+  | "shield"
+  | "userPlus"
+  | "user"
+  | "eye"
+  | "flow"
+  | "database"
+  | "list"
+  | "bell"
+  | "chart"
+  | "file"
+  | "layers";
+
+export function controlIcon(row: PageRow): CardIcon {
+  // The title names the control best; its description only when the title is silent.
+  for (const words of [row.title, row.description]) {
+    const text = words.toLowerCase();
+    const found = CONTROL_ICONS.find(([pattern]) => pattern.test(text));
+    if (found !== undefined) {
+      return found[1];
+    }
+  }
+  return "layers";
+}
+
+/** How many of a group's in-scope controls have an approved plan, for its band. */
+export function groupProgress(rows: readonly PageRow[]): {
+  planned: number;
+  total: number;
+} {
+  const kept = rows.filter((row) => row.included);
+  return {
+    planned: kept.filter((row) => row.plan === "APPROVED").length,
+    total: kept.length,
   };
 }

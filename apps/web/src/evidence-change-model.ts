@@ -117,6 +117,7 @@ export type ChangeNotice =
   | "reading"
   | "review-signed"
   | "sample-drawn"
+  | "item-accepted"
   | "testing-signed"
   | "workpaper-prepared"
   | "same-file"
@@ -137,10 +138,12 @@ export const CHANGE_NOTICES: Record<ChangeNotice, string> = {
   "review-signed":
     "Its screenshot review is signed off, so the file stays. Reopen the review first.",
   "sample-drawn": "An approved sample was drawn from this file, so it stays.",
+  "item-accepted":
+    "An evidence item was accepted with this file, so the file stays. Change that decision first.",
   "testing-signed":
-    "The control's testing is signed off, so the file stays. Reopen the testing first, with a reason.",
+    "Signed-off testing used this file, so the file stays. Reopen the testing first, with a reason.",
   "workpaper-prepared":
-    "A workpaper for the control is prepared, so the file stays. Reopen the workpaper first.",
+    "A prepared workpaper cites this file, so the file stays. Reopen the workpaper first.",
   "same-file": "That is the same file. Choose the corrected one.",
   "was-replaced":
     "This file was replaced. Withdraw its newer version to use this one again.",
@@ -174,6 +177,9 @@ export function changeNoticeFor(
     if (why.includes("approved sample")) {
       return "sample-drawn";
     }
+    if (why.includes("was accepted with it")) {
+      return "item-accepted";
+    }
     if (why.includes("testing for")) {
       return "testing-signed";
     }
@@ -195,6 +201,13 @@ export function changeNoticeFor(
     return "invalid";
   }
   return "unavailable";
+}
+
+/** Whether a change route answers with the notice as JSON, for a form that withdraws in
+ * place (31 Oct 2026: a refusal sent by page reload landed in a closed section, unseen),
+ * rather than reloading the page with it. */
+export function answersInPlace(accept: string | null): boolean {
+  return (accept ?? "").includes("application/json");
 }
 
 const DONE = new Set<ChangeNotice>(["withdrawn", "restored", "replaced"]);

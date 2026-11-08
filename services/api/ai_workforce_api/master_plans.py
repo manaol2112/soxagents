@@ -825,7 +825,11 @@ def _names_attribute(
     return any(_normal(text) == wanted or _filled_only(name, text) for text in texts)
 
 
-def findings_of(plan: _Plan) -> list[Finding]:
+def findings_of(plan: _Plan, procedure_links: bool = False) -> list[Finding]:
+    """What in the plan does not link up. Attributes need not be mapped to procedures
+    (product owner, 31 October 2026: "I don't need to map attributes to any procedures"),
+    so a missing procedure link is not a finding; the rules' tidy-up of a library plan
+    asks for it (procedure_links) to link what the standard links."""
     found: list[Finding] = []
     approved = {item["id"] for item in plan.attributes}
     active_requirements = [item for item in plan.requirements if item["status"] != "WAIVED"]
@@ -838,7 +842,8 @@ def findings_of(plan: _Plan) -> list[Finding]:
     for phase in ("INTERIM", "ROLLFORWARD"):
         mine = [item for item in plan.procedures if item["phase"] == phase]
         if (
-            phase in applies
+            procedure_links
+            and phase in applies
             and mine
             and not any(
                 plan.procedure_attributes.get(item["id"], set()) & approved for item in mine
@@ -856,7 +861,7 @@ def findings_of(plan: _Plan) -> list[Finding]:
     }  # fmt: skip
     for item in plan.attributes:
         code = item["code"]
-        if item["id"] not in tested:
+        if procedure_links and item["id"] not in tested:
             found.append(Finding(
                 kind="ATTRIBUTE_WITHOUT_PROCEDURE", code=code,
                 detail=f"{code} is not tested by any procedure.",
@@ -2278,7 +2283,7 @@ def settle_library_attributes(
         rules = {item["code"] for item in plan.requirements if item["origin"] == "RULES"}
         untidy = any(
             (f.kind in gaps and f.code in library) or (f.kind == stray and f.code in rules)
-            for f in findings_of(plan)
+            for f in findings_of(plan, procedure_links=True)
         )
         if changed or untidy:
             generate(

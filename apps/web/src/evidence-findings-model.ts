@@ -9,7 +9,7 @@ import type { EvidenceCitation } from "./evidence-preview-model.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export type FindingSource = "READER" | "RULES" | "MAPPING";
+export type FindingSource = "READER" | "RULES" | "MAPPING" | "TRACE";
 
 export type FindingKind =
   | "GAP"
@@ -20,7 +20,10 @@ export type FindingKind =
   | "PERIOD"
   | "MISSING"
   | "CONFLICT"
-  | "CONCERN";
+  | "CONCERN"
+  | "LATE"
+  | "NOT_TRACED"
+  | "ACTIVITY";
 
 export const FINDING_STATUSES = [
   "PROPOSED",
@@ -129,12 +132,16 @@ export const FINDING_KIND_LABELS: Record<FindingKind, string> = {
   MISSING: "Record missing",
   CONFLICT: "Conflicting evidence",
   CONCERN: "Kept apart for review",
+  LATE: "Later than the limit",
+  NOT_TRACED: "Sample not traced",
+  ACTIVITY: "Activity after the event",
 };
 
 export const FINDING_SOURCE_LABELS: Record<FindingSource, string> = {
   READER: "The evidence reader",
   RULES: "The standard checks",
   MAPPING: "The evidence mapping",
+  TRACE: "The sample trace",
 };
 
 /** Open: a person still has something to do with it. */

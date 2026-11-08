@@ -57,7 +57,7 @@ export function AddEvidenceMenu({
       ) : (
         <RowMenu
           label={`Add evidence for ${itemTitle}`}
-          trigger={{ label: "Add evidence", icon: "plus" }}
+          trigger={{ label: "Add or link evidence", icon: "paperclip" }}
           items={[
             { label: "Upload files", icon: "upload", onSelect: pick },
             {

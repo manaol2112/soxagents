@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from support import Database, approve_evidence_plans
-from test_evidence_analysis import _classification, _no_ocr, _Provider
+from test_evidence_analysis import _classification, _covering, _no_ocr, _Provider
 from test_onboarding import _base as _setup_base
 from test_onboarding import _complete_setup, _new_engagement
 from test_outbound import migrated
@@ -210,7 +210,7 @@ def test_an_unclear_file_waits_for_a_person_who_files_and_moves_it(migrated: Dat
         run_analysis(
             connection,
             _settings(migrated),
-            _Provider([_classification("population")]),
+            _Provider([_covering("population")]),
             scheduler.analyses[-1],
             _no_ocr,
         )
@@ -225,7 +225,7 @@ def test_an_unclear_file_waits_for_a_person_who_files_and_moves_it(migrated: Dat
         run_analysis(
             connection,
             _settings(migrated),
-            _Provider([_classification("population")]),
+            _Provider([_covering("population")]),
             scheduler.analyses[-1],
             _no_ocr,
         )
@@ -282,7 +282,7 @@ def test_a_file_added_on_a_request_is_filed_to_it_without_matching(
     assert (row["state"], row["filed_by"]) == ("FILED", "PERSON")
     assert row["control"]["control_ref"] == "ITGC-OP-01"
     assert row["match_reason"] == "Added on its evidence request."
-    provider = _Provider([_classification("population")])
+    provider = _Provider([_covering("population")])
     with connect(migrated.url) as connection:
         run_analysis(connection, _settings(migrated), provider, scheduler.analyses[0], _no_ocr)
     # Only the classification ran: no matching call.

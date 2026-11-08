@@ -1,0 +1,625 @@
+/* ==========================================================================
+   The agent (agent-avatar.tsx; product owner, 2 November 2026): a sculpted character
+   whose motion and antenna colour say what it is doing. The character's own colours
+   are fixed (it is lit the same in both themes); its glow takes the state's colour.
+   ========================================================================== */
+.aa {
+  --aa-accent: #8b7cf6;
+  --aa-eye: #5ee7ff;
+  --aa-eye-deep: #1597c9;
+  display: inline-block;
+  flex: none;
+  overflow: visible;
+  vertical-align: middle;
+}
+
+.aa.is-thinking {
+  --aa-accent: #b794ff;
+}
+
+.aa.is-working {
+  --aa-accent: #22d3ee;
+}
+
+.aa.is-done {
+  --aa-accent: #34d399;
+  --aa-eye: #6ef0c0;
+}
+
+.aa.is-attention {
+  --aa-accent: #fbbf24;
+}
+
+/* Parts that move turn about their own centre. */
+.aa-float,
+.aa-eyes,
+.aa-eye,
+.aa-shadow,
+.aa-badge,
+.aa-twinkle,
+.aa-orb-glow {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.aa-shadow {
+  fill: rgb(40 30 110 / 32%);
+  animation: aa-shadow 3.8s ease-in-out infinite;
+}
+
+/* On dark, a shadow disappears: the agent floats over a soft glow of its colour. */
+:root[data-theme="dark"] .aa-shadow {
+  fill: var(--aa-accent);
+  opacity: 0.45;
+}
+
+.aa-float {
+  animation: aa-float 3.8s ease-in-out infinite;
+}
+
+.aa-antenna line {
+  stroke: #a9a2ea;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.aa-orb-glow {
+  fill: var(--aa-accent);
+  opacity: 0.55;
+  animation: aa-pulse 2.4s ease-in-out infinite;
+}
+
+.aa-spec {
+  fill: #ffffff;
+  opacity: 0.8;
+}
+
+.aa-visor {
+  stroke: #2f376e;
+  stroke-width: 1;
+}
+
+.aa-visor-shine {
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  opacity: 0.32;
+}
+
+.aa-eye-glow rect {
+  fill: var(--aa-eye);
+  opacity: 0.85;
+}
+
+.aa-eye {
+  animation: aa-blink 5.6s ease-in-out infinite;
+}
+
+.aa-glint {
+  fill: #ffffff;
+  opacity: 0.9;
+}
+
+.aa-cheek {
+  fill: #ff9fc4;
+  opacity: 0.38;
+}
+
+/* Idle: it glances about now and then. */
+.aa.is-idle .aa-eyes {
+  animation: aa-glance 8s ease-in-out infinite;
+}
+
+/* Thinking: eyes up and to the side while sparks circle it. */
+.aa.is-thinking .aa-eyes {
+  animation: aa-ponder 2.6s ease-in-out infinite;
+}
+
+.aa.is-thinking .aa-orb-glow {
+  animation-duration: 1.2s;
+}
+
+.aa-orbit {
+  transform-box: view-box;
+  transform-origin: 60px 60px;
+  animation: aa-spin 3.2s linear infinite;
+}
+
+.aa-spark {
+  fill: var(--aa-accent);
+  filter: drop-shadow(0 0 3px var(--aa-accent));
+}
+
+.aa-spark.is-2 {
+  fill: #5ee7ff;
+}
+
+.aa-spark.is-3 {
+  fill: #ff9fc4;
+}
+
+/* Working: a scan crosses the visor inside a turning ring; the eyes narrow to read. */
+.aa.is-working .aa-eyes {
+  animation: aa-read 1.6s ease-in-out infinite;
+}
+
+.aa.is-working .aa-orb-glow {
+  animation-duration: 0.9s;
+}
+
+.aa-scan {
+  fill: #9df3ff;
+  opacity: 0.35;
+  animation: aa-scan 1.5s ease-in-out infinite;
+}
+
+.aa-ring {
+  fill: none;
+  stroke: var(--aa-accent);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-dasharray: 70 276;
+  opacity: 0.8;
+  transform-box: view-box;
+  transform-origin: 60px 60px;
+  animation: aa-spin 1.2s linear infinite;
+}
+
+/* Done: a smile, a check and a little sparkle. */
+.aa-happy path {
+  fill: none;
+  stroke: var(--aa-eye);
+  stroke-width: 3.6;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 2.5px var(--aa-eye));
+}
+
+.aa.is-done .aa-float {
+  animation-name: aa-hop;
+  animation-duration: 2.4s;
+}
+
+.aa-badge circle:first-child {
+  stroke: #ffffff;
+  stroke-width: 2.5;
+}
+
+.aa-badge.is-done circle:first-child {
+  fill: #12a46f;
+}
+
+.aa-badge.is-attention circle:first-child {
+  fill: #d97706;
+}
+
+.aa-badge path {
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 2.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.aa-badge.is-attention circle + path + circle {
+  fill: #ffffff;
+}
+
+.aa-badge {
+  animation: aa-pop 0.5s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+
+.aa.is-attention .aa-badge {
+  animation:
+    aa-pop 0.5s cubic-bezier(0.2, 1.4, 0.4, 1) both,
+    aa-nudge 2.2s ease-in-out 0.6s infinite;
+}
+
+.aa-twinkle {
+  fill: #ffd76a;
+  animation: aa-twinkle 1.8s ease-in-out infinite;
+}
+
+.aa-twinkle.is-2 {
+  fill: #6ef0c0;
+  animation-delay: 0.6s;
+}
+
+/* Needing the person: it waves. */
+.aa.is-attention .aa-hand.is-right {
+  transform-box: view-box;
+  transform-origin: 98px 102px;
+  animation: aa-wave 1.8s ease-in-out infinite;
+}
+
+.aa.is-attention .aa-orb-glow {
+  animation-duration: 1s;
+}
+
+@keyframes aa-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-3.5px);
+  }
+}
+
+@keyframes aa-hop {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+  }
+
+  30% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes aa-shadow {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+
+  50% {
+    opacity: 0.65;
+    transform: scaleX(0.86);
+  }
+}
+
+@keyframes aa-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.9);
+  }
+
+  50% {
+    opacity: 0.85;
+    transform: scale(1.15);
+  }
+}
+
+@keyframes aa-blink {
+  0%,
+  44%,
+  50%,
+  100% {
+    transform: scaleY(1);
+  }
+
+  47% {
+    transform: scaleY(0.12);
+  }
+}
+
+@keyframes aa-glance {
+  0%,
+  30%,
+  100% {
+    transform: translate(0, 0);
+  }
+
+  40%,
+  55% {
+    transform: translate(2.5px, 0);
+  }
+
+  65%,
+  80% {
+    transform: translate(-2.5px, 0.5px);
+  }
+}
+
+@keyframes aa-ponder {
+  0%,
+  100% {
+    transform: translate(2.5px, -3px);
+  }
+
+  50% {
+    transform: translate(-1.5px, -3.5px);
+  }
+}
+
+@keyframes aa-read {
+  0%,
+  100% {
+    transform: translateX(-2.5px) scaleY(0.8);
+  }
+
+  50% {
+    transform: translateX(2.5px) scaleY(0.8);
+  }
+}
+
+@keyframes aa-scan {
+  0% {
+    transform: translateX(0);
+  }
+
+  100% {
+    transform: translateX(72px);
+  }
+}
+
+@keyframes aa-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes aa-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes aa-nudge {
+  0%,
+  70%,
+  100% {
+    transform: translateY(0);
+  }
+
+  80% {
+    transform: translateY(-3px);
+  }
+
+  90% {
+    transform: translateY(0.5px);
+  }
+}
+
+@keyframes aa-twinkle {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.6) rotate(0deg);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.1) rotate(20deg);
+  }
+}
+
+@keyframes aa-wave {
+  0%,
+  60%,
+  100% {
+    transform: rotate(0deg);
+  }
+
+  10%,
+  30% {
+    transform: rotate(-24deg) translateY(-6px);
+  }
+
+  20%,
+  40% {
+    transform: rotate(10deg) translateY(-6px);
+  }
+}
+
+/* ==========================================================================
+   The agent, clicked (agent-avatar.tsx, AgentAvatar): a button that tilts toward the
+   pointer, whose eyes follow it, that reacts to a click and says what it is doing.
+   ========================================================================== */
+.aa-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+/* Not the app's filled button: the agent is the whole of it. */
+.aa-hit,
+.aa-hit:hover {
+  display: inline-grid;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  place-items: center;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: 30%;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.aa-hit .aa {
+  transition: transform 150ms ease;
+}
+
+.aa-hit:hover .aa {
+  transform: rotate(-4deg) scale(1.05);
+}
+
+.aa-hit:active .aa {
+  transform: scale(0.94);
+}
+
+.aa-look {
+  transform: translate(var(--aa-look-x, 0), var(--aa-look-y, 0));
+  transition: transform 120ms ease-out;
+}
+
+/* The reactions, in turn. */
+.aa.is-react-hop .aa-float {
+  animation: aa-r-hop 0.9s cubic-bezier(0.3, 1.5, 0.5, 1);
+}
+
+.aa.is-react-spin .aa-float {
+  animation: aa-r-spin 0.9s cubic-bezier(0.5, 0, 0.3, 1);
+}
+
+.aa.is-react-wink .aa-eye.is-right,
+.aa.is-react-wink .aa-eye-glow .is-right {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: aa-r-wink 0.9s ease-in-out;
+}
+
+.aa.is-react-wink .aa-glint.is-right {
+  opacity: 0;
+}
+
+.aa.is-react-love .aa-cheek {
+  opacity: 0.8;
+  transition: opacity 150ms ease;
+}
+
+.aa-heart {
+  fill: #ff5c93;
+  filter: drop-shadow(0 0 2px rgb(255 92 147 / 60%));
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: aa-r-heart 1.1s ease-out both;
+}
+
+.aa-heart.is-2 {
+  animation-delay: 0.15s;
+}
+
+.aa[class*="is-react-"] .aa-orb-glow {
+  animation: aa-pulse 0.45s ease-in-out 2;
+}
+
+/* What it is doing, beside it, for a few seconds. */
+.aa-bubble {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 10px);
+  z-index: 30;
+  width: max-content;
+  max-width: 260px;
+  padding: 0.5rem 0.75rem;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: normal;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%) scale(0.92);
+  transform-origin: left center;
+  transition:
+    opacity 150ms ease,
+    transform 200ms ease;
+}
+
+.aa-bubble:empty {
+  padding: 0;
+  border: 0;
+}
+
+.aa-bubble.is-on {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+}
+
+.aa-bubble.is-on::before {
+  position: absolute;
+  top: 50%;
+  left: -6px;
+  width: 10px;
+  height: 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  transform: translateY(-50%) rotate(45deg);
+  content: "";
+}
+
+@keyframes aa-r-hop {
+  0% {
+    transform: translateY(0) scale(1, 1);
+  }
+
+  25% {
+    transform: translateY(2px) scale(1.06, 0.92);
+  }
+
+  55% {
+    transform: translateY(-12px) scale(0.96, 1.05);
+  }
+
+  80% {
+    transform: translateY(1px) scale(1.04, 0.95);
+  }
+
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+}
+
+@keyframes aa-r-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes aa-r-wink {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+
+  20%,
+  75% {
+    transform: scaleY(0.12);
+  }
+}
+
+@keyframes aa-r-heart {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.4);
+  }
+
+  30% {
+    opacity: 1;
+    transform: translateY(0) scale(1.1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(-16px) scale(0.9);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aa,
+  .aa *,
+  .aa-hit .aa {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .aa-bubble,
+  .aa-look {
+    transition: none;
+  }
+}

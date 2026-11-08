@@ -15,6 +15,7 @@ from test_evidence_intake import _client, _engagement, _Scheduler
 from test_outbound import migrated
 from test_testing_engine import _base
 
+from ai_workforce_api.control_context import Issue, raise_issues
 from ai_workforce_api.db import connect
 from ai_workforce_api.process_narrative import (
     DRAFT_TOKENS,
@@ -25,6 +26,7 @@ from ai_workforce_api.process_narrative import (
     run_narrative,
 )
 from ai_workforce_api.process_understanding import SECTIONS, ReviewBody, Section, Step
+from ai_workforce_api.question_review import INTERVIEW_PROMPT
 
 __all__ = ["migrated"]
 
@@ -184,6 +186,16 @@ def test_the_reviewer_fixes_the_draft_and_the_gaps_become_questions(migrated: Da
     assert "Returned to the requester" in second.requests[0].prompt
     passed = _context(client, team, cid)["understanding"]
     assert passed["review"]["passed"] is True
+    # A question on the attributes is not one on the narrative: it does not hold approval
+    # as if the review had not stood (4 November 2026, when these began carrying questions).
+    with connect(migrated.url) as connection:
+        raise_issues(
+            connection.cursor(), team["org"], team["project"], UUID(cid),
+            [Issue("ATTRIBUTES", "AMBIGUOUS", "Contractors", "Unclear.", "", "",
+                   question="Are contractors in scope?", proposal="They are.",
+                   proposal_basis="TYPICAL")],
+            "AGENT",
+        )  # fmt: skip
     approved = client.put(
         f"{_base(team)}/controls/{cid}/process",
         json={
@@ -299,7 +311,10 @@ def test_a_review_the_agent_did_not_finish_is_flagged_to_run_again(migrated: Dat
     provider = _Provider([draft, None])
     assert _ask(migrated, team, cid)
     assert _run(migrated, provider, cid) == "REVIEWED"
-    assert [r.max_tokens for r in provider.requests] == [DRAFT_TOKENS, REVIEW_TOKENS]
+    # The drafter and the reviewer have their room; then the waiting question's wording is
+    # checked (question_review.py, product owner, 4 November 2026).
+    assert [r.max_tokens for r in provider.requests[:2]] == [DRAFT_TOKENS, REVIEW_TOKENS]
+    assert [r.system for r in provider.requests[2:]] == [INTERVIEW_PROMPT]
     review = _context(client, team, cid)["understanding"]["review"]
     assert (review["passed"], review["incomplete"], review["findings"]) == (False, True, [])
     assert review["questions"] == 1

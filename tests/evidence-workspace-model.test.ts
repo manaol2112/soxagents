@@ -15,6 +15,7 @@ import {
 import {
   evidenceSummary,
   evidenceTotal,
+  fileCardMeta,
   fileServes,
   focusPhase,
   linkableFiles,
@@ -629,5 +630,31 @@ describe("each phase's request, once, with its items", () => {
     const shown =
       [...grouped.byPhase.values()].flat().length + grouped.other.length;
     assert.equal(shown, rows.length);
+  });
+});
+
+describe("an item's file card", () => {
+  it("says when the file was uploaded, its size, and how it serves the item", () => {
+    const held = { createdAt: "2026-10-29T04:40:32Z", sizeBytes: 13_312 };
+    assert.equal(
+      fileCardMeta(held, { via: "REQUEST", linkedBy: null, sharedFrom: null }),
+      "Uploaded Oct 29, 2026 • 13 KB",
+    );
+    assert.equal(
+      fileCardMeta(held, { via: "LINK", linkedBy: "Robert", sharedFrom: null }),
+      "Uploaded Oct 29, 2026 • 13 KB • Linked by Robert",
+    );
+    assert.equal(
+      fileCardMeta(undefined, {
+        via: "SHARED",
+        linkedBy: null,
+        sharedFrom: "ITGC-AC-01 (Oracle)",
+      }),
+      "Shared from ITGC-AC-01 (Oracle)",
+    );
+    assert.equal(
+      fileCardMeta({}, { via: "REQUEST", linkedBy: null, sharedFrom: null }),
+      "",
+    );
   });
 });

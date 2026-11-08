@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-
+import { AgentAvatar } from "./agent-avatar";
 import { PANE_COUNT_EVENT } from "./controls-guide-model";
 import {
   DESCRIPTION_KINDS,
@@ -1458,7 +1458,7 @@ function ReferenceCard({
         >
           {working ? (
             <>
-              <span className="ng-orb is-small" aria-hidden="true" />
+              <AgentAvatar size={20} state="working" />
               Agent analysing
             </>
           ) : reference.runStatus === "FAILED" ? (

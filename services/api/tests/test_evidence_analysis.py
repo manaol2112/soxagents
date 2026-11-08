@@ -504,6 +504,16 @@ def _classification(kind: str) -> dict[str, Any]:
     }
 
 
+def _covering(kind: str) -> dict[str, Any]:
+    """A model answer that says the file covers the request's first item: what a request
+    needs to read as received now that each item counts by its own evidence (31 Oct 2026;
+    an answer listing no items leaves the item not covered, so the request partly received)."""
+    answer = _classification(kind)
+    covered = {"index": 0, "coverage": "COVERED", "note": "The file is the item requested."}
+    answer["items"] = [covered]
+    return answer
+
+
 def _settings(database: Database) -> Settings:
     return Settings(database_url=database.url)
 

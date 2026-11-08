@@ -14,6 +14,7 @@ import {
   QUEUES,
 } from "./engagement-model";
 import { parseChangeNotice } from "./evidence-change-model";
+import { parseInstances } from "./evidence-dialog-model";
 import { parseFindings } from "./evidence-findings-model";
 import { parseEvidenceMapping } from "./evidence-mapping-model";
 import { parseRegister } from "./evidence-model";
@@ -87,6 +88,8 @@ export async function loadEngagement(
     workpaperVersion?: string | null;
     ev?: string | null;
     request?: string | null;
+    /** A file to open in the evidence dialog (?file=). */
+    file?: string | null;
     /** The queue filter on Home (?filter=). */
     filter?: string | null;
   },
@@ -161,6 +164,7 @@ export async function loadEngagement(
     phaseProgress,
     evidenceMapping,
     evidenceFindings,
+    walkthroughInstances,
     exportsListed,
   ] = await Promise.all([
     wanted.dashboard || wanted.agentWork
@@ -225,6 +229,13 @@ export async function loadEngagement(
     // The evidence workspace's findings (docs/evidence-intelligence.md, increment 2).
     open
       ? apiGet(`${base}/controls/${query.control}/evidence-findings`, session)
+      : null,
+    // The walkthrough instances picked in the evidence dialog (31 October 2026).
+    open
+      ? apiGet(
+          `${base}/controls/${query.control}/walkthrough-instances`,
+          session,
+        )
       : null,
     wanted.exports ? apiGet(`${base}/exports`, session) : null,
   ]);
@@ -312,6 +323,10 @@ export async function loadEngagement(
       ok(evidenceFindings) === undefined
         ? null
         : parseFindings(ok(evidenceFindings)),
+    walkthroughInstances:
+      ok(walkthroughInstances) === undefined
+        ? null
+        : parseInstances(ok(walkthroughInstances)),
     automation:
       ok(automation) === undefined ? null : parseAutomation(ok(automation)),
     work: ok(work) === undefined ? null : parseQueue(ok(work)),
@@ -367,6 +382,8 @@ export async function loadEngagement(
       evidenceView:
         query.ev != null && /^[a-z]{1,20}$/.test(query.ev) ? query.ev : null,
       request: focus,
+      focusFile:
+        query.file != null && UUID.test(query.file) ? query.file : null,
       group: query.group === "area" ? "area" : "application",
       sort: SORTS.find((sort) => sort === query.sort) ?? "control",
       layout: query.layout === "table" ? "table" : "applications",

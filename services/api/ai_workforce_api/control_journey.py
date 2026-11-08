@@ -793,6 +793,12 @@ def _phase_blockers(
             )
         else:
             blockers.append("Evidence requests not yet sent")
+    elif state == "REQUESTED" and not outstanding and requirements.get("INCOMPLETE", 0):
+        incomplete = requirements["INCOMPLETE"]
+        blockers.append(
+            f"{incomplete} evidence item{' is' if incomplete == 1 else 's are'} not complete: "
+            "accept each once its evidence is in, or mark it not applicable"
+        )
     elif state == "RELEASED" and not requests:
         planned = requirements.get("PLANNED", 0)
         blockers.append(
@@ -918,6 +924,10 @@ def journey_of(
         state = _phase_state(control, phase, status, requests, rounds)
         if state is None:
             continue
+        if state == "RECEIVED" and counts.get(phase, {}).get("INCOMPLETE", 0):
+            # Every request is in, but an item is not complete: the phase still waits on
+            # its evidence, or on a person to accept it or mark it not applicable.
+            state = "REQUESTED"
         held = _phase_blockers(
             control, phase, state, status, requests, counts.get(phase, {}), rounds
         )
@@ -979,6 +989,15 @@ def journey_of(
     register = STEP_OF_PROGRESS.get(control.progress, "REQUEST")
     if control.progress == "RESULTS_TO_CONFIRM" and control.sheet_status == "SIGNED_OFF":
         register = "CONCLUDE"
+    if (
+        control.progress == "EVIDENCE_RECEIVED"
+        and step == "REQUEST"
+        and step_phase is not None
+        and counts.get(step_phase, {}).get("INCOMPLETE", 0)
+    ):
+        # Evidence came in, but an item of the phase is not complete: the register's
+        # "evidence received" and the journey's Request step say the same thing.
+        register = "REQUEST"
     if register != step:
         where = f" ({_LABELS[step_phase].lower()})" if step_phase is not None else ""
         conflicts.append(

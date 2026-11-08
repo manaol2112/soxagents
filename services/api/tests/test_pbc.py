@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -12,7 +13,9 @@ from ai_workforce_api.main import create_app
 from ai_workforce_api.migrate import apply_migrations, migrations_dir
 from ai_workforce_api.settings import Settings
 
-_DUE = "2026-11-01T00:00:00Z"
+# Always ahead: a fixed date here expired on 1 November 2026, and a request past its due date
+# cannot be submitted, which failed every test built on an approved request.
+_DUE = (datetime.now(UTC) + timedelta(days=60)).strftime("%Y-%m-%dT00:00:00Z")
 
 
 def test_a_pbc_request_follows_its_status_path(migrated: Database) -> None:

@@ -1,0 +1,1529 @@
+/* ==========================================================================
+   A control's guided setup (product owner, 2 November 2026), laid out to the owner's
+   reference: an icon tile beside the title, the steps on the left with what the setup
+   gives, and on the right the step with its progress, one question per card, and Back
+   and Save & continue. Tokens only, so both themes follow.
+   ========================================================================== */
+
+.cs-resume {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 36px;
+  padding: 0 0.85rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: none;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.cs-resume.is-mine {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent-border, var(--accent));
+}
+
+.cs-resume:hover {
+  border-color: var(--accent-border, var(--accent));
+}
+
+/* Pinned near the top, so the introduction and the steps open in the same place. Only
+   where the backdrop keeps its margin: at 960px and below the dialog fills the screen,
+   and a top margin there pushed Back and Continue below the bottom edge. */
+@media (min-width: 961px) {
+  .record-backdrop:has(> .cs-dialog) {
+    place-items: start center;
+    padding-top: max(2rem, 5vh);
+  }
+}
+
+/* The dialog: a soft tile beside the title, as the owner's dialogs carry. */
+.record-dialog.cs-dialog {
+  width: min(1120px, 100%);
+  /* A tint over the solid surface: the soft accent is translucent in the dark theme,
+     and mixed alone it let the page show through. */
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--accent-soft) 18%, transparent),
+      color-mix(in srgb, var(--accent-soft) 18%, transparent)
+    ),
+    var(--surface);
+}
+
+/* One size for every step (product owner, 2 November 2026): the frame never grows or
+   shrinks with the step. A long step scrolls inside its card; the title, the steps, and
+   Back and Continue stay where they are. */
+.record-dialog.cs-dialog:not(.cs-intro) {
+  height: min(880px, calc(100dvh - 4rem));
+}
+
+.cs-dialog:not(.cs-intro) .rd-body {
+  grid-template-rows: minmax(0, 1fr);
+  align-content: stretch;
+  overflow: hidden;
+}
+
+.rd-icon {
+  display: inline-grid;
+  flex: none;
+  width: 64px;
+  height: 64px;
+  place-items: center;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 16px;
+}
+
+.cs-dialog .rd-head {
+  align-items: center;
+  gap: 1.25rem;
+  padding: 1.6rem 1.75rem 1.25rem;
+  background: transparent;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+}
+
+.cs-dialog .rd-eyebrow {
+  color: var(--text-secondary);
+  letter-spacing: 0.06em;
+}
+
+.cs-dialog .rd-head h2 {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.cs-dialog.is-ready .rd-icon {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.cs-dialog .rd-body {
+  padding: 0;
+  background: transparent;
+}
+
+.cs-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+}
+
+/* The steps, numbered and joined by a line, and what the setup gives. */
+.cs-rail {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 1.5rem;
+  min-height: 0;
+  padding: 1.5rem 1.25rem 1.5rem 1.5rem;
+  overflow-y: auto;
+  border-right: 1px solid var(--border-subtle, var(--border));
+  scrollbar-width: thin;
+}
+
+.cs-steps {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cs-steps li {
+  position: relative;
+}
+
+/* The line between one step's mark and the next. */
+.cs-steps li:not(:last-child)::after {
+  position: absolute;
+  top: calc(0.8rem + 36px);
+  bottom: calc(-0.8rem + 2px);
+  left: calc(0.85rem + 17px);
+  width: 2px;
+  background: var(--border);
+  content: "";
+}
+
+.cs-steps li.is-done:not(:last-child)::after {
+  background: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.cs-steps button {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.9rem;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  margin: 0.45rem 0;
+  white-space: normal;
+  padding: 0.8rem 0.85rem;
+  color: var(--text-secondary);
+  font-size: 16px;
+  line-height: 1.3;
+  font-weight: 600;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 12px;
+  box-shadow: none;
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+
+.cs-steps button:hover:not(:disabled) {
+  background: var(--surface-muted);
+}
+
+.cs-steps button:disabled {
+  cursor: default;
+}
+
+/* The current step keeps its highlight under the pointer too. */
+.cs-steps .is-on button,
+.cs-steps .is-on button:hover:not(:disabled) {
+  color: var(--text-strong);
+  background: var(--accent-soft);
+}
+
+.cs-step-mark {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: 999px;
+}
+
+.cs-steps .is-on .cs-step-mark {
+  color: var(--text-on-accent, #fff);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.cs-steps .is-done .cs-step-mark {
+  color: var(--accent-text);
+  background: var(--surface);
+  border-color: var(--accent);
+}
+
+.cs-step-name {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.cs-step-name small {
+  line-height: 1.3;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+
+/* On the current step's tint the tertiary text fell to 4.49:1 in the dark theme. */
+.cs-steps .is-on .cs-step-name small {
+  color: var(--text-secondary);
+}
+
+.cs-gets {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1.1rem 1.15rem;
+  background: var(--accent-soft);
+  border-radius: 14px;
+}
+
+.cs-gets h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 700;
+}
+
+.cs-gets h3 svg {
+  color: var(--accent-text);
+}
+
+.cs-gets ul {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cs-gets li {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.cs-gets li svg {
+  flex: none;
+  color: var(--accent-text);
+}
+
+/* The step: its progress, its card, and the way on. The card fills the fixed frame and
+   scrolls on its own, its links held at the bottom; progress and actions never move. */
+.cs-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  min-width: 0;
+  min-height: 0;
+  padding: 1.5rem 1.75rem 1.5rem;
+}
+
+.cs-main > .cs-progress,
+.cs-main > .cs-actions {
+  flex: none;
+}
+
+.cs-main > .cs-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  /* Clipped sideways: the links' ground reaches past the padding below, and on its own
+     that gave a long step a horizontal scrollbar. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  /* A field reached by Tab scrolls clear of the pinned links (WCAG 2.2, 2.4.11). */
+  scroll-padding-bottom: 6rem;
+}
+
+.cs-main > .cs-card > * {
+  flex: none;
+}
+
+/* The card's links stay on its bottom edge with their rule, so a long step scrolls under
+   a clean line instead of being cut at the border. */
+.cs-main > .cs-card:has(> .cs-card-foot) {
+  padding-bottom: 0;
+}
+
+.cs-main > .cs-card > .cs-card-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin-top: auto;
+  padding-bottom: 1.1rem;
+  background: var(--surface);
+}
+
+/* Its ground also covers the card's side padding (below its rule), so nothing scrolling
+   underneath shows beside the links; the card clips what reaches past its edge. */
+.cs-main > .cs-card > .cs-card-foot::before {
+  position: absolute;
+  inset: 1px -2rem 0;
+  z-index: -1;
+  background: var(--surface);
+  content: "";
+}
+
+/* A soft shadow over the rule while more of the step lies below it; none at the end,
+   and none on a step that fits. Deeper in the dark theme, where a light one vanishes. */
+:root[data-theme="dark"] .cs-dialog {
+  --cs-more-shade: rgb(0 0 0 / 60%);
+}
+
+@supports (animation-timeline: scroll()) {
+  .cs-main > .cs-card > .cs-card-foot {
+    animation: cs-more linear both;
+    animation-timeline: scroll(nearest block);
+  }
+
+  @keyframes cs-more {
+    0%,
+    96% {
+      box-shadow: 0 -14px 18px -14px var(--cs-more-shade, rgb(16 24 40 / 22%));
+    }
+
+    100% {
+      box-shadow: none;
+    }
+  }
+}
+
+.cs-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.cs-progress ol {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cs-progress li {
+  width: 64px;
+  height: 7px;
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.cs-progress li.is-done {
+  background: color-mix(in srgb, var(--accent) 45%, var(--surface));
+}
+
+.cs-progress li.is-on {
+  background: var(--accent);
+}
+
+.cs-card {
+  display: grid;
+  gap: 0.9rem;
+  min-width: 0;
+  padding: 1.6rem 1.75rem 1.1rem;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 16px;
+  box-shadow: 0 1px 3px rgb(16 24 40 / 5%);
+}
+
+.cs-card h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.cs-help {
+  margin: -0.3rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  line-height: 1.55;
+}
+
+.cs-kicker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.cs-done,
+.cs-optional,
+.cs-waiting {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+}
+
+.cs-done {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.cs-optional {
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+}
+
+.cs-waiting {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.cs-required {
+  padding: 0.1rem 0.5rem;
+  color: var(--accent-text);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 650;
+  background: var(--accent-soft);
+  border-radius: 999px;
+}
+
+.cs-source {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+}
+
+/* Above the question: what it is about. */
+.cs-topic {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+/* Why it is asked opens on request. */
+.cs-why {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cs-why summary {
+  width: fit-content;
+  color: var(--accent-text);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.cs-why p {
+  margin: 0.4rem 0 0;
+}
+
+/* Where the answer already chosen comes from. */
+.cs-tag {
+  flex: none;
+  margin-left: auto;
+  padding: 0.1rem 0.55rem;
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 650;
+  background: var(--accent-soft);
+  border-radius: 999px;
+}
+
+/* The summary before anything is confirmed. */
+.cs-summary {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cs-summary li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.2rem 1rem;
+  align-items: start;
+  padding: 0.8rem 0;
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+.cs-summary li:first-child {
+  border-top: 0;
+}
+
+.cs-summary small {
+  grid-column: 1;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cs-summary strong {
+  grid-column: 1;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.cs-summary p {
+  grid-column: 1;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cs-summary .cs-link {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+}
+
+.cs-unchecked {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* The answers as large pill options, two to a row. */
+.cs-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  min-width: 0;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  border: 0;
+}
+
+/* Full statements and quotes read better one to a row. */
+.cs-options.is-long {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.cs-option {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 56px;
+  padding: 0.75rem 1.1rem;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 500;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.cs-option:hover {
+  border-color: var(--accent-border, var(--accent));
+}
+
+.cs-option.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.cs-option input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.cs-other {
+  width: 100%;
+  min-height: 46px;
+  font-size: var(--fs-md);
+  border-radius: 12px;
+}
+
+.cs-card-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-top: 0.4rem;
+  padding-top: 1rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+.cs-card-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+}
+
+.cs-link {
+  padding: 0;
+  color: var(--accent-text);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  text-decoration: none;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.cs-link:hover {
+  text-decoration: underline;
+}
+
+.cs-panel {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+/* The questions that name the governing policy, answered from a linked document. */
+.cs-docq {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.cs-docq-item {
+  display: grid;
+  gap: 0.6rem;
+  min-width: 0;
+  margin: 0;
+  padding: 1rem 1.1rem;
+  background: var(--surface-muted, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.cs-docq-item legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  float: left;
+  width: 100%;
+  margin: 0 0 0.1rem;
+  padding: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 650;
+}
+
+.cs-docq-item legend + * {
+  clear: both;
+}
+
+.cs-docq .cs-option {
+  min-height: 48px;
+  overflow-wrap: anywhere;
+}
+
+.cs-docq .cs-option svg {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.cs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.cs-actions .btn,
+.cs-actions .btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-width: 104px;
+  min-height: 48px;
+  padding: 0 1.4rem;
+  font-size: var(--fs-md);
+  border-radius: 12px;
+}
+
+/* The test plan to approve. */
+.cs-plan {
+  display: grid;
+  gap: 1rem;
+}
+
+.cs-plan-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.cs-plan-facts > div {
+  padding: 0.65rem 0.8rem;
+  background: var(--surface-muted);
+  border-radius: 10px;
+}
+
+.cs-plan-facts dt {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.cs-plan-facts dd {
+  margin: 0.15rem 0 0;
+  color: var(--text-strong);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.cs-empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cs-holds {
+  padding: 0.75rem 0.9rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  background: var(--warning-soft);
+  border-radius: 10px;
+}
+
+.cs-holds p {
+  margin: 0 0 0.35rem;
+  font-weight: 650;
+}
+
+.cs-holds ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+/* Ready for evidence. */
+.cs-ready {
+  justify-items: start;
+  align-items: flex-start;
+}
+
+.cs-ready-mark {
+  display: inline-grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  color: var(--text-on-accent, #fff);
+  background: var(--success);
+  border-radius: 999px;
+}
+
+.cs-ready-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cs-ready-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.cs-ready-list svg {
+  color: var(--success);
+}
+
+.cs-ready-list small {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+@media (max-width: 900px) {
+  .cs-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .cs-rail {
+    padding: 1rem 1rem 0;
+    overflow: visible;
+    border-right: 0;
+  }
+
+  /* The steps as a row of marks; the current step's name is in the progress line. */
+  .cs-steps {
+    display: flex;
+    gap: 0.4rem;
+    overflow-x: auto;
+  }
+
+  .cs-steps li:not(:last-child)::after,
+  .cs-step-name,
+  .cs-gets {
+    display: none;
+  }
+
+  .cs-steps button {
+    margin: 0;
+    padding: 0.25rem;
+  }
+
+  .cs-main {
+    padding: 1rem;
+  }
+}
+
+@media (max-width: 640px) {
+  /* The whole screen, measured by what is visible above the phone's browser bar. */
+  .record-dialog.cs-dialog:not(.cs-intro) {
+    height: 100dvh;
+    max-height: 100dvh;
+  }
+
+  .rd-icon {
+    width: 48px;
+    height: 48px;
+  }
+
+  .cs-dialog .rd-head {
+    padding: 1.1rem 1rem 1rem;
+  }
+
+  .cs-dialog .rd-head h2 {
+    font-size: 21px;
+  }
+
+  .cs-card {
+    padding: 1.1rem 1rem 0.9rem;
+  }
+
+  .cs-card h3 {
+    font-size: 18px;
+  }
+
+  .cs-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cs-progress li {
+    width: 28px;
+  }
+
+  /* The bars on their own line on every step, so a longer step name never pushes the
+     card down (it moved 15px between steps when it wrapped on some). */
+  .cs-progress {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .cs-plan-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cs-actions .btn,
+  .cs-actions .btn-secondary {
+    flex: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cs-resume,
+  .cs-steps button,
+  .cs-option {
+    transition: none;
+  }
+}
+
+/* ==========================================================================
+   The introduction before the guided setup (product owner, 2 November 2026):
+   the agent's tile and name with Setup required, the title and the control's
+   context, what the setup gives, what is asked, and the steps it covers.
+   ========================================================================== */
+/* Lit from the top right, behind the illustration; solid underneath. */
+.record-dialog.cs-dialog.cs-intro {
+  position: relative;
+  width: min(1000px, 100%);
+  background:
+    radial-gradient(
+      55% 45% at 88% 4%,
+      color-mix(in srgb, var(--accent) 16%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      35% 35% at 100% 40%,
+      color-mix(in srgb, #8b5cf6 12%, transparent),
+      transparent 70%
+    ),
+    linear-gradient(
+      color-mix(in srgb, var(--accent-soft) 18%, transparent),
+      color-mix(in srgb, var(--accent-soft) 18%, transparent)
+    ),
+    var(--surface);
+}
+
+.cs-intro .rd-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.35rem 1rem;
+  align-items: center;
+  padding: 1.6rem 1.9rem 0.25rem;
+  border-bottom: 0;
+}
+
+.cs-intro .rd-head-text {
+  display: contents;
+}
+
+.cs-intro .rd-icon {
+  grid-row: 1;
+  grid-column: 1;
+  width: 64px;
+  height: 64px;
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--accent) 12%, var(--surface)),
+    color-mix(in srgb, #8b5cf6 16%, var(--surface))
+  );
+  border-radius: 18px;
+}
+
+.cs-intro .rd-eyebrow {
+  display: flex;
+  flex-wrap: wrap;
+  grid-row: 1;
+  grid-column: 2;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.cs-setup-badge {
+  padding: 0.15rem 0.65rem;
+  color: var(--accent-text);
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 999px;
+}
+
+.cs-intro .rd-close {
+  grid-row: 1;
+  grid-column: 3;
+  align-self: start;
+}
+
+/* The headline in the display serif, with a short accent rule under it. */
+.cs-intro .rd-head h2 {
+  grid-row: 2;
+  grid-column: 1 / -1;
+  max-width: 62%;
+  margin: 0.9rem 0 0;
+  font-family: var(--font-display);
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.015em;
+}
+
+.cs-intro .rd-head h2::after {
+  display: block;
+  width: 56px;
+  height: 4px;
+  margin-top: 1rem;
+  background: var(--accent);
+  border-radius: 4px;
+  content: "";
+}
+
+.cs-intro .rd-desc {
+  grid-row: 3;
+  grid-column: 1 / -1;
+  max-width: 66%;
+  margin: 0.6rem 0 0;
+  color: var(--text-secondary);
+  font-size: 15.5px;
+  line-height: 1.6;
+}
+
+/* The illustration: the system on stacked glass cards, and a shield with a check. */
+.cs-intro-hero {
+  position: absolute;
+  top: 58px;
+  right: 64px;
+  width: 240px;
+  height: 180px;
+  pointer-events: none;
+}
+
+.cs-hero-card {
+  position: absolute;
+  border: 1px solid rgb(255 255 255 / 85%);
+  border-radius: 22px;
+  box-shadow:
+    0 22px 44px -18px rgb(59 70 190 / 38%),
+    inset 0 1px 0 rgb(255 255 255 / 95%);
+  background: linear-gradient(
+    150deg,
+    rgb(255 255 255 / 96%),
+    rgb(232 236 255 / 78%)
+  );
+}
+
+.cs-hero-card.is-back {
+  top: 0;
+  right: 0;
+  width: 150px;
+  height: 108px;
+  background: linear-gradient(
+    150deg,
+    rgb(226 222 255 / 85%),
+    rgb(205 212 255 / 60%)
+  );
+  transform: rotate(9deg);
+}
+
+.cs-hero-card.is-mid {
+  top: 14px;
+  right: 18px;
+  width: 156px;
+  height: 112px;
+  transform: rotate(4deg);
+}
+
+.cs-hero-card.is-front {
+  top: 44px;
+  left: 6px;
+  display: grid;
+  width: 168px;
+  height: 118px;
+  place-content: center;
+  justify-items: center;
+  gap: 0.35rem;
+  color: var(--accent-text);
+  transform: rotate(-6deg);
+}
+
+.cs-hero-card.is-front small {
+  max-width: 140px;
+  overflow: hidden;
+  color: #1d2433;
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.cs-hero-shield {
+  position: absolute;
+  right: 22px;
+  bottom: 2px;
+  display: grid;
+  width: 72px;
+  height: 72px;
+  place-items: center;
+  color: #ffffff;
+  background: linear-gradient(150deg, #6f8dff, #3b5bdb);
+  border: 2px solid rgb(255 255 255 / 85%);
+  border-radius: 22px;
+  box-shadow: 0 18px 34px -12px rgb(59 91 219 / 60%);
+}
+
+.cs-hero-shield svg {
+  grid-area: 1 / 1;
+}
+
+.cs-hero-shield svg + svg {
+  margin-top: -1px;
+  stroke-width: 3;
+}
+
+:root[data-theme="dark"] .cs-hero-card {
+  border-color: rgb(255 255 255 / 14%);
+  background: linear-gradient(
+    150deg,
+    rgb(255 255 255 / 14%),
+    rgb(255 255 255 / 4%)
+  );
+  box-shadow: 0 22px 44px -18px rgb(0 0 0 / 60%);
+}
+
+:root[data-theme="dark"] .cs-hero-card.is-front small {
+  color: #f3f6fb;
+}
+
+@media (max-width: 900px) {
+  .cs-intro-hero {
+    display: none;
+  }
+
+  .cs-intro .rd-head h2,
+  .cs-intro .rd-desc {
+    max-width: none;
+  }
+}
+
+.cs-intro-body {
+  display: grid;
+  gap: 1.25rem;
+  padding: 1.25rem 1.9rem 1.5rem;
+}
+
+.cs-intro-gets {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cs-intro-gets li {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  min-height: 72px;
+  padding: 1rem 1.25rem;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 650;
+  line-height: 1.35;
+  background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface));
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 16px;
+  box-shadow: var(--shadow-xs);
+}
+
+.cs-intro-gets-icon {
+  display: grid;
+  flex: none;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  color: var(--accent-text);
+  background: var(--surface);
+  border-radius: 999px;
+  box-shadow: 0 4px 10px -4px rgb(40 50 140 / 30%);
+}
+
+.cs-intro-note {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 1.05rem 1.25rem;
+  background: color-mix(in srgb, var(--accent-soft) 60%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 16px;
+}
+
+.cs-intro-note-icon {
+  display: grid;
+  flex: none;
+  align-self: center;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  color: var(--accent-text);
+  border: 1.5px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 999px;
+}
+
+.cs-intro-note p {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding-left: 1.1rem;
+  border-left: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+}
+
+.cs-intro-note strong {
+  color: var(--text-strong);
+  font-weight: 650;
+}
+
+.cs-intro-plan h3 {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  font-weight: 650;
+}
+
+/* The steps across, each a mark joined to the next by a line. */
+.cs-intro-steps {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: 1rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The mark, then the card filling the rest, so every card in the row is as tall. */
+.cs-intro-steps li {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-width: 0;
+}
+
+.cs-intro-steps li:not(:last-child)::after {
+  position: absolute;
+  top: 23px;
+  left: calc(50% + 30px);
+  width: calc(100% + 1rem - 60px);
+  height: 2px;
+  background: var(--border);
+  border-radius: 2px;
+  content: "";
+}
+
+.cs-intro-steps li.is-done:not(:last-child)::after {
+  background: color-mix(in srgb, var(--success) 65%, transparent);
+}
+
+.cs-intro-mark {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-self: center;
+  width: 46px;
+  height: 46px;
+  /* Above its card, not on it: the line between the marks runs in the clear. */
+  margin-bottom: 0.6rem;
+  place-items: center;
+  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--surface));
+  border: 3px solid var(--surface);
+  border-radius: 999px;
+  box-shadow: 0 4px 12px -4px rgb(40 50 140 / 30%);
+}
+
+.cs-intro-steps li.is-done .cs-intro-mark {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success-soft) 85%, var(--surface));
+}
+
+/* A column, so the chip settles at the bottom of every card in the row. */
+.cs-intro-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-height: 118px;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-xs);
+}
+
+.cs-intro-steps li.is-done .cs-intro-card {
+  background: color-mix(in srgb, var(--success-soft) 55%, var(--surface));
+  border-color: var(--success-border);
+}
+
+.cs-intro-steps strong {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 650;
+}
+
+.cs-intro-steps small {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.cs-intro-chip {
+  align-self: flex-start;
+  margin-top: auto;
+  padding: 0.2rem 0.65rem;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 999px;
+}
+
+.cs-intro-steps li.is-done .cs-intro-chip {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success-soft) 80%, var(--surface));
+  border-color: var(--success-border);
+}
+
+.cs-intro-more {
+  display: grid;
+  gap: 0.6rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.cs-intro-more ul {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cs-intro-more li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+}
+
+.cs-intro-more li svg {
+  flex: none;
+  color: var(--accent-text);
+}
+
+.cs-intro-more p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* Kept in view at the foot of the dialog, so the choice stays at hand when the
+   details are open. */
+.cs-intro-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.1rem 1.9rem 1.4rem;
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--accent-soft) 18%, transparent),
+      color-mix(in srgb, var(--accent-soft) 18%, transparent)
+    ),
+    var(--surface);
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+.cs-intro-foot > .cs-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.cs-intro-foot > .cs-link[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.cs-intro-foot > .cs-link svg {
+  transition: transform 150ms ease;
+}
+
+@media (max-width: 760px) {
+  .cs-intro .rd-head {
+    padding: 1.25rem 1.1rem 0.25rem;
+  }
+
+  .cs-intro .rd-icon {
+    width: 52px;
+    height: 52px;
+  }
+
+  /* The agent sized to the smaller tile, not drawn past its edge. */
+  .cs-intro .rd-icon svg.aa {
+    width: 48px;
+    height: 48px;
+  }
+
+  .cs-intro .rd-head h2 {
+    font-size: 24px;
+  }
+
+  .cs-intro .rd-desc {
+    font-size: var(--fs-md);
+  }
+
+  .cs-intro-body {
+    padding: 1rem 1.1rem 1.25rem;
+  }
+
+  .cs-intro-gets {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.6rem;
+  }
+
+  .cs-intro-gets li {
+    min-height: 0;
+  }
+
+  /* The steps down the screen, the mark beside each step's words. */
+  .cs-intro-steps {
+    grid-auto-flow: row;
+    gap: 0.9rem;
+  }
+
+  .cs-intro-steps li {
+    grid-template-columns: 46px minmax(0, 1fr);
+    column-gap: 0.85rem;
+  }
+
+  .cs-intro-mark {
+    align-self: start;
+    margin: 0.5rem 0 0;
+  }
+
+  .cs-intro-card {
+    min-height: 0;
+    padding: 0.85rem 1rem;
+  }
+
+  .cs-intro .rd-head h2 {
+    font-size: 30px;
+  }
+
+  .cs-intro-steps li:not(:last-child)::after {
+    display: none;
+  }
+
+  /* Not pinned on a phone: stacked, it would cover a third of the screen. */
+  .cs-intro-foot {
+    position: static;
+    flex-direction: column-reverse;
+    align-items: stretch;
+    padding: 1rem 1.1rem 1.25rem;
+  }
+
+  .cs-intro-actions {
+    flex-direction: column-reverse;
+  }
+
+  .cs-intro-actions .btn,
+  .cs-intro-actions .btn-secondary {
+    width: 100%;
+  }
+
+  .cs-intro-foot > .cs-link {
+    justify-content: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cs-intro-foot > .cs-link svg {
+    transition: none;
+  }
+}

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { ReactNode } from "react";
 import { agentSays, reviewForStep, sheetForStep } from "./agent-says-model";
 import { analysisFor, reviewFor } from "./analysis-model";
@@ -19,11 +20,11 @@ import {
   currentStep,
   needsYou,
   phaseItems,
-  STEP_TABS,
   STEPS,
-  stepForTab,
+  type Step,
   stepperItems,
 } from "./control-journey-model";
+import { ControlOverview, type OverviewFile } from "./control-overview";
 import { PhasePanel, type PhaseState, PhaseStep } from "./control-phases";
 import {
   type AssistantAction,
@@ -33,7 +34,6 @@ import {
   EvidenceSummaryCard,
   GoverningDocumentsCard,
   PlanVersionsCard,
-  RecordMenu,
 } from "./control-rail";
 import {
   activitiesOn,
@@ -44,12 +44,25 @@ import {
   governingDocuments,
   lowestConfidence,
   nextBestActions,
-  openSection,
-  type RecordSection,
   relatedControls,
-  stepPosition,
 } from "./control-rail-model";
-import { ControlStepper } from "./control-stepper";
+import { RiskScoping, RiskSummary } from "./control-risk";
+import { ControlSetup } from "./control-setup";
+import { SETUP_HOLDS } from "./control-setup-model";
+import { AgentNotes, ControlStepper } from "./control-stepper";
+import {
+  approvalRows,
+  attributeInsight,
+  attributeLines,
+  fileStatus,
+  insightTone,
+  nextActionButton,
+  STEP_TAB,
+  scopeSummary,
+  WORKSPACE_TABS,
+  type WorkspaceTab,
+  workspaceTab,
+} from "./control-tabs-model";
 import {
   ActivityTimeline,
   ControlHistory,
@@ -167,7 +180,7 @@ import {
   planningHref,
   planVersions,
 } from "./planning-model";
-import { PlanReview, type PlanWorkspace } from "./planning-view";
+import { PlanReview, type PlanWorkspace, ReviewActions } from "./planning-view";
 import { ControlPriorYear } from "./references-view";
 import { RequestReview } from "./request-review";
 import {
@@ -185,6 +198,7 @@ import { sheetFor } from "./sheet-model";
 import { TestSheetCard } from "./sheet-view";
 import type { ShellModel } from "./shell-model";
 import { canManageProjects } from "./shell-model";
+import { receiptText, reopenText } from "./signoff-model";
 import { TestBasisCard } from "./test-basis-view";
 import { testFor } from "./testing-model";
 import { TestPlanCard } from "./testing-view";
@@ -199,6 +213,19 @@ type Ready = Extract<ShellModel, { status: "ready" }>;
 type Keep = Record<string, string | string[] | null>;
 
 const SEVERITY_LABEL: Record<string, string> = Object.fromEntries(SEVERITIES);
+// The step each tab holds the work of; the others show the control's own step.
+const TAB_STEPS: Partial<Record<WorkspaceTab, Step>> = {
+  design: "PLAN",
+  evidence: "REQUEST",
+  testing: "TEST",
+  findings: "CONCLUDE",
+  approvals: "REVIEW",
+};
+const ENVIRONMENT_LABEL: Record<string, string> = {
+  PRODUCTION: "Production",
+  NON_PRODUCTION: "Non-production",
+  BOTH: "Production and non-production",
+};
 const FINDING_STATUS: Record<string, string> =
   Object.fromEntries(DEFICIENCY_STATUSES);
 const CATEGORY_LABEL: Record<string, string> = Object.fromEntries(CATEGORIES);
@@ -1069,18 +1096,19 @@ function ControlRecord({
   // the API's journey or from ?step=; an older link's ?tab= opens the step that holds
   // that tab's work, and ?tab=activity opens the activity record below the steps.
   const journey = control.journey ?? null;
-  const legacyTab =
+  const guided = true;
+  // One row of tabs (product owner's reference, 2 November 2026): ?step= names the tab,
+  // and an earlier link to a step or a classic tab opens the tab that holds its work.
+  // The steps above the tabs show where the control stands.
+  const tab = workspaceTab(
+    engagement.filters.step,
     engagement.filters.tab === null
       ? null
-      : detailTab(control, engagement.filters.tab);
-  const guided = true;
-  const step = currentStep(
-    journey,
-    engagement.filters.step ??
-      (legacyTab === null ? null : stepForTab(legacyTab).toLowerCase()),
+      : detailTab(control, engagement.filters.tab),
   );
-  const tab = STEP_TABS[step];
-  const showActivity = legacyTab === "activity";
+  const journeyStep = currentStep(journey, null);
+  const step: Step = TAB_STEPS[tab] ?? journeyStep;
+  const showActivity = tab === "history";
   const tasks = (engagement.plan?.tasks ?? []).filter(
     (task) => task.controlId === control.id,
   );
@@ -1206,23 +1234,29 @@ function ControlRecord({
           }
         : item,
   );
-  const tabHrefs = Object.fromEntries(
-    DETAIL_TABS.map((key) => [
-      key,
-      href(model, { ...keep, control: control.id, tab: key }),
-    ]),
-  ) as Record<DetailTab, string>;
-  // The guided workspace's steps; a step link carries no classic tab.
-  const stepHrefs = Object.fromEntries(
-    STEPS.map((key) => [
+  // Each tab's address: ?step= names it; the Overview needs none.
+  const wsHrefs = Object.fromEntries(
+    WORKSPACE_TABS.map(({ key }) => [
       key,
       href(model, {
         ...keep,
         control: control.id,
-        tab: null,
-        step: key.toLowerCase(),
+        step: key === "overview" ? null : key,
       }),
     ]),
+  ) as Record<WorkspaceTab, string>;
+  // The classic tabs and the steps, as the tabs that hold their work now.
+  const tabHrefs: Record<DetailTab, string> = {
+    overview: wsHrefs.overview,
+    design: wsHrefs.design,
+    evidence: wsHrefs.evidence,
+    testing: wsHrefs.testing,
+    findings: wsHrefs.findings,
+    review: wsHrefs.approvals,
+    activity: wsHrefs.history,
+  };
+  const stepHrefs = Object.fromEntries(
+    STEPS.map((key) => [key, wsHrefs[STEP_TAB[key]]]),
   ) as Record<(typeof STEPS)[number], string>;
   // Milestone 1c: the agent block for the open step and the trace rail, both read from
   // the records above; nothing here decides or derives state.
@@ -1700,16 +1734,6 @@ function ControlRecord({
         ? "Client"
         : "";
   const objective = context?.testing?.objective ?? "";
-  const section = openSection(engagement.filters.step, showActivity);
-  const sectionHrefs: Record<RecordSection, string> = {
-    OVERVIEW: href(model, { ...keep, control: control.id }),
-    PLAN: stepHrefs.PLAN,
-    REQUEST: stepHrefs.REQUEST,
-    TEST: stepHrefs.TEST,
-    CONCLUDE: stepHrefs.CONCLUDE,
-    REVIEW: stepHrefs.REVIEW,
-    HISTORY: `${href(model, { ...keep, control: control.id, tab: "activity" })}#activity`,
-  };
   const askHref = sectionHref(model, "console");
   // The policies, procedures, narratives and diagrams the control cites, its own or
   // through its system or process (0112).
@@ -1776,7 +1800,7 @@ function ControlRecord({
     {
       label: "See the history",
       icon: "clock",
-      href: sectionHrefs.HISTORY,
+      href: wsHrefs.history,
     },
     {
       label: "Back to the controls",
@@ -1784,6 +1808,88 @@ function ControlRecord({
       href: href(model, {}, "register"),
     },
   ];
+  // What needs a person now, and where it is done.
+  const needs = needsYou({
+    nextStep: control.nextStep,
+    actor: control.actor,
+    yours: control.yours,
+    journey,
+    decideImpact,
+    assignees: control.assignees,
+  });
+  const needsHref = decideImpact
+    ? `${wsHrefs.approvals}#cw-work`
+    : nextAction.primary !== null
+      ? (nextAction.primary.href ??
+        `${tabHrefs[nextAction.primary.tab]}#cw-work`)
+      : null;
+  const masterHere =
+    engagement.masterPlan != null &&
+    engagement.masterPlan.controlId === control.id
+      ? engagement.masterPlan
+      : null;
+  const requirements = (evidencePlan?.phases ?? []).flatMap(
+    (phase) => phase.requirements,
+  );
+  const requirementIds = new Set(requirements.map((item) => item.id));
+  // Each attribute's evidence: through the plan's evidence items where they are the
+  // plan's requirements, else through the requirements' own attribute codes.
+  const overviewAttributes = attributeLines(
+    masterHere !== null
+      ? masterHere.attributes.map((item) => ({
+          code: item.code,
+          text: item.text,
+        }))
+      : control.testAttributes.map((text, index) => ({
+          code: `A${index + 1}`,
+          text,
+        })),
+    masterHere?.evidence.some((item) => requirementIds.has(item.id))
+      ? masterHere.evidence.map((item) => ({
+          id: item.id,
+          attributeCodes: item.attributeCodes,
+        }))
+      : requirements.map((item) => ({
+          id: item.id,
+          attributeCodes: item.attributes,
+        })),
+    requirements.map((item) => ({
+      id: item.id,
+      state: item.state,
+      files: item.files.length,
+    })),
+    trace?.rows ?? [],
+  );
+  const servedBy = requirements.map((item) => ({
+    state: item.state,
+    fileIds: item.files.map((file) => file.fileId),
+  }));
+  const overviewFiles: OverviewFile[] = (engagement.files?.files ?? []).map(
+    (file) => ({
+      id: file.id,
+      name: file.fileName,
+      kind: file.kindLabel ?? "",
+      sizeBytes: file.sizeBytes,
+      status: fileStatus(file.id, file.readStatus, servedBy),
+      href: `${wsHrefs.evidence}&file=${file.id}`,
+    }),
+  );
+  const approvals = approvalRows({
+    planStatus: evidencePlan?.status ?? null,
+    approvedRevision: evidencePlan?.approvedRevision ?? null,
+    requestsToApprove: control.requests.filter(
+      (request) => request.status === "APPROVAL_PENDING",
+    ).length,
+    sheetStatus: control.sheetStatus,
+    sheetSignedBy: sheet?.signedBy ?? "",
+    reviewStatus: control.reviewStatus,
+    reviewSignedBy: review?.signedBy ?? "",
+    conclusion: control.conclusion,
+  });
+  const contextEdit =
+    control.applicationId !== null
+      ? `${href(model, {})}&pane=systems&system=${control.applicationId}`
+      : null;
   const statusClass = `cr-status cw-stage is-${control.progress.toLowerCase()}${control.yours ? " is-yours" : ""}`;
   return (
     <div className="page record-page cx cw">
@@ -1794,7 +1900,7 @@ function ControlRecord({
         title={control.title}
         status={stage.label}
         statusClass={statusClass}
-        step={stepPosition(step)}
+        step={WORKSPACE_TABS.find((item) => item.key === tab)?.label ?? ""}
         actions={
           <RowMenu
             label={`Actions for ${control.controlRef}`}
@@ -1807,23 +1913,34 @@ function ControlRecord({
         <div className="cw-hero-id">
           <nav className="cw-crumbs" aria-label="Where this control sits">
             <a href={href(model, {}, "register")}>Controls</a>
+            {CATEGORY_LABEL[control.category] ? (
+              <>
+                <UiIcon name="chevron" size={12} />
+                <span>{CATEGORY_LABEL[control.category]}</span>
+              </>
+            ) : null}
             {control.applicationName !== "" &&
             control.applicationId !== null ? (
               <>
-                <span aria-hidden="true">/</span>
-                <a
-                  href={`${href(model, {})}&pane=systems&system=${control.applicationId}`}
-                >
-                  {control.applicationName}
-                </a>
+                <UiIcon name="chevron" size={12} />
+                <span>
+                  System:{" "}
+                  <a
+                    href={`${href(model, {})}&pane=systems&system=${control.applicationId}`}
+                  >
+                    {control.applicationName}
+                  </a>
+                </span>
               </>
             ) : null}
-            <span aria-hidden="true">/</span>
-            <span aria-current="page">{control.controlRef}</span>
           </nav>
           <h1>
             <span className="cw-ref">{control.controlRef}</span>
             <span className="cw-title">{control.title}</span>
+            <span className={statusClass}>
+              <span className="sr-only">Status: </span>
+              {stage.label}
+            </span>
             {source !== "" ? <span className="cw-source">{source}</span> : null}
           </h1>
           {objective !== "" ? (
@@ -1831,10 +1948,161 @@ function ControlRecord({
           ) : null}
         </div>
         <div className="cw-hero-actions">
-          <span className={statusClass}>
-            <span className="sr-only">Status: </span>
-            {stage.label}
-          </span>
+          {context !== null ? (
+            // The guided setup until the control is ready for evidence (product owner,
+            // 2 November 2026): its Resume setup button, and the wizard itself.
+            <ControlSetup
+              key={control.id}
+              ids={ids}
+              controlRef={control.controlRef}
+              issues={context.issues}
+              input={{
+                slots: (context.design?.slots ?? [])
+                  .filter((slot) => !slot.automatic)
+                  .map((slot) => ({
+                    key: slot.key,
+                    value: slot.value,
+                    blocks: slot.blocks,
+                    document: slot.document,
+                  })),
+                processRequired: context.processRequired,
+                processPending: definitionWork(context).process,
+                approvedAttributes: context.approved.length,
+                proposedAttributes: context.proposed.length,
+                openQuestions: context.issues.filter(
+                  (item) => item.status === "OPEN",
+                ).length,
+                documents: context.documents.length,
+                unreviewedDocuments: context.documents.filter(
+                  (item) => !item.reviewed,
+                ).length,
+                plan: {
+                  exists:
+                    masterHere !== null &&
+                    !["NOT_STARTED", "ANALYZING"].includes(masterHere.state),
+                  approved:
+                    masterHere !== null &&
+                    masterHere.state === "APPROVED" &&
+                    !masterHere.revisedSinceApproval,
+                  pendingReview:
+                    masterHere !== null &&
+                    ["PENDING_REVIEW", "DRAFT_READY"].includes(
+                      masterHere.state,
+                    ),
+                },
+                canAct,
+                canApprove: masterHere?.viewerCanDecide ?? false,
+              }}
+              readinessBlocked={(SETUP_HOLDS as readonly string[]).includes(
+                context.readiness?.state ?? "",
+              )}
+              holds={(context.readiness?.checks ?? [])
+                .filter(
+                  (check) =>
+                    check.status === "BLOCKED" &&
+                    check.key !== "evidence" &&
+                    check.key !== "scope" &&
+                    check.key !== "plan",
+                )
+                .flatMap((check) => check.blockers.map((item) => item.detail))}
+              slots={(context.design?.slots ?? [])
+                .filter((slot) => !slot.automatic)
+                .map((slot) => ({
+                  key: slot.key,
+                  question: slot.question,
+                  label: slot.label,
+                  value: slot.value,
+                  blocks: slot.blocks,
+                  options: slot.options,
+                  hint: slot.hint,
+                  document: slot.document,
+                }))}
+              documents={walkthrough.documents}
+              controlTitle={control.title}
+              systemName={control.applicationName}
+              systemLayer={control.applicationLayer}
+              panels={{
+                process: (
+                  <ProcessPanel
+                    ids={ids}
+                    context={context}
+                    canAct={canAct}
+                    showQuestions={false}
+                  />
+                ),
+                attributes: (
+                  <AttributesPanel
+                    ids={ids}
+                    context={context}
+                    canAct={canAct}
+                    showQuestions={false}
+                  />
+                ),
+                documents: (
+                  <DocumentsPanel
+                    ids={ids}
+                    context={context}
+                    canAct={canAct}
+                    controls={(engagement.controls ?? [])
+                      .filter((item) => item.included)
+                      .map((item) => ({
+                        id: item.id,
+                        label: item.label || item.controlRef,
+                      }))}
+                  />
+                ),
+                plan:
+                  masterHere === null ||
+                  ["NOT_STARTED", "ANALYZING"].includes(masterHere.state) ? (
+                    <p className="cs-empty">
+                      The planning agent is drafting the test plan from the
+                      control's understanding. It appears here to review once
+                      drafted.
+                    </p>
+                  ) : (
+                    <div className="cs-plan">
+                      <dl className="cs-plan-facts">
+                        <div>
+                          <dt>Procedures</dt>
+                          <dd>{masterHere.procedures.length}</dd>
+                        </div>
+                        <div>
+                          <dt>Attributes</dt>
+                          <dd>{masterHere.attributes.length}</dd>
+                        </div>
+                        <div>
+                          <dt>Evidence items</dt>
+                          <dd>{masterHere.evidence.length}</dd>
+                        </div>
+                        <div>
+                          <dt>Revision</dt>
+                          <dd>{masterHere.revision}</dd>
+                        </div>
+                      </dl>
+                      <ReviewActions
+                        ids={{
+                          organizationId: ids.organizationId,
+                          projectId: ids.projectId,
+                          section: "testing",
+                        }}
+                        plan={masterHere}
+                      />
+                    </div>
+                  ),
+              }}
+              hrefs={{
+                evidence: wsHrefs.evidence,
+                design: wsHrefs.design,
+                risk: wsHrefs.risk,
+              }}
+            />
+          ) : null}
+          {needs.mine && needsHref !== null ? (
+            <a className="cw-needs-badge" href={needsHref} title={needs.title}>
+              <UiIcon name="info" size={15} />
+              Needs you
+            </a>
+          ) : null}
           {stage.ai ? (
             <span
               className="cw-ai"
@@ -1893,40 +2161,23 @@ function ControlRecord({
             journey={journey}
             items={stepperItems(journey)}
             phases={phaseItems(journey)}
-            current={step}
+            current={journeyStep}
             hrefs={stepHrefs}
             ids={{
               organizationId: ids.organizationId,
               projectId: ids.projectId,
             }}
-            needs={needsYou({
-              nextStep: control.nextStep,
-              actor: control.actor,
-              yours: control.yours,
-              journey,
-              decideImpact,
-              assignees: control.assignees,
-            })}
-            // Open lands on the work itself, below the summary, so the same
-            // Needs-you card is not the first thing seen again.
-            actionHref={
-              decideImpact
-                ? `${stepHrefs.PLAN}#cw-work`
-                : nextAction.primary !== null
-                  ? (nextAction.primary.href ??
-                    `${tabHrefs[nextAction.primary.tab]}#cw-work`)
-                  : null
-            }
+            needs={needs}
+            actionHref={needsHref}
             blockers={blockersOf(journey)}
-            receipts={engagement.signoffs ?? []}
-            activityHref="#activity"
+            receipts={[]}
+            activityHref={wsHrefs.history}
             agent={agent}
-            // The Test step draws the trace in its workspace, under its heading.
-            trace={step === "TEST" ? null : trace}
-            simple={step === "PLAN" && planHere}
-            // The Request step's list says what waits and where each request stands, so
-            // the summary blocks are not repeated above it (product owner, 27 October 2026).
-            summary={step !== "REQUEST"}
+            trace={null}
+            // The steps show progress; what needs a person, the agent's note and the
+            // sign-offs are on the Overview and Approvals tabs (2 November 2026).
+            simple
+            summary={false}
             planPending={
               engagement.masterPlan != null &&
               engagement.masterPlan.controlId === control.id &&
@@ -1937,27 +2188,168 @@ function ControlRecord({
           />
         ) : null}
       </section>
-      {/* The Request step's list of requests and its detail panel take the page's width
-          (product owner's reference, 27 October 2026). */}
+      <nav className="cw-tabs" aria-label="Control workspace">
+        <ul>
+          {WORKSPACE_TABS.map((item) => {
+            return (
+              <li key={item.key}>
+                <Link
+                  href={wsHrefs[item.key]}
+                  scroll={false}
+                  className={tab === item.key ? "is-on" : undefined}
+                  aria-current={tab === item.key ? "page" : undefined}
+                >
+                  <UiIcon name={item.icon} size={15} />
+                  {item.label}
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
+      {tab === "risk" ? (
+        <RiskSummary
+          risk={control.risk}
+          {...scopeSummary({
+            included: control.included,
+            nature: sentence(natureText(control)),
+            phases: evidencePlan?.phases ?? [],
+          })}
+        />
+      ) : null}
+      {/* The tabs other than Design & Implementation and Risk & Scoping take the page's
+          width; those two keep the assistant or the control's context beside them. */}
       <div
-        className={`cw-layout${
-          tab === "evidence" &&
-          evidencePlan !== null &&
-          evidencePlan.status !== "NOT_PLANNED"
-            ? " is-wide"
-            : ""
+        className={`cw-layout is-tabbed${
+          tab === "design" || tab === "risk" ? "" : " is-wide"
         }`}
       >
-        <RecordMenu open={section} hrefs={sectionHrefs} />
         <div className="cw-main">
           <div className="record-tab cw-body" id="cw-work">
+            {tab === "overview" ? (
+              <ControlOverview
+                // The viewer's next action as a bar (product owner's reference, 2
+                // November 2026); the agent's note and what is outstanding fold under
+                // the AI insight.
+                next={
+                  needs.mine && needsHref !== null
+                    ? {
+                        title: needs.title,
+                        detail: needs.reason,
+                        href: needsHref,
+                        button: nextActionButton(needsHref, needs.title),
+                      }
+                    : null
+                }
+                notes={
+                  <AgentNotes
+                    agent={agent}
+                    blockers={blockersOf(journey)}
+                    hrefs={stepHrefs}
+                    ids={{
+                      organizationId: ids.organizationId,
+                      projectId: ids.projectId,
+                    }}
+                    back={wsHrefs.overview}
+                  />
+                }
+                summary={{
+                  objective,
+                  type: [CATEGORY_LABEL[control.category] ?? "", control.area]
+                    .filter((part) => part !== "")
+                    .join(" – "),
+                  frequency: sentence(frequencyText(control)),
+                  owner: control.ownerName || control.ownerEmail,
+                  keyControl: control.keyControl,
+                  editHref: contextEdit,
+                }}
+                attributes={overviewAttributes}
+                attributesHref={wsHrefs.design}
+                proceduresHref={wsHrefs.design}
+                procedures={(masterHere?.procedures ?? []).map((item) => ({
+                  code: item.code,
+                  text: item.text,
+                  phase: item.phase,
+                }))}
+                files={overviewFiles}
+                evidenceHref={wsHrefs.evidence}
+                insight={attributeInsight(overviewAttributes)}
+                insightTone={insightTone(overviewAttributes)}
+                actions={nextBestActions(nextAction, tabHrefs)}
+                askHref={askHref}
+              />
+            ) : null}
+            {tab === "risk" ? (
+              <RiskScoping
+                risk={control.risk}
+                objective={objective}
+                statement={control.activity}
+                scope={[
+                  [
+                    {
+                      label: "Scope",
+                      value: control.included ? "In scope" : "Out of scope",
+                    },
+                    {
+                      label: "Nature",
+                      value: sentence(natureText(control)) || "Not stated",
+                    },
+                  ],
+                  [
+                    {
+                      label: "Key control",
+                      value: control.keyControl ? "Yes" : "No",
+                    },
+                    {
+                      label: "Testing phases",
+                      value:
+                        (evidencePlan?.phases ?? [])
+                          .filter(
+                            (phase) => phase.applicability !== "NOT_APPLICABLE",
+                          )
+                          .map((phase) => phase.label)
+                          .join(", ") || "Set with the test plan",
+                    },
+                  ],
+                  [
+                    {
+                      label: "System",
+                      value: control.applicationName || "None",
+                    },
+                    {
+                      label: "Sample size",
+                      value:
+                        control.sampleSize !== null &&
+                        control.sampleSize !== undefined
+                          ? String(control.sampleSize)
+                          : "Set with the test plan",
+                    },
+                  ],
+                  [
+                    {
+                      label: "Environment",
+                      value:
+                        ENVIRONMENT_LABEL[
+                          control.applicationEnvironment ?? ""
+                        ] || "Not stated",
+                    },
+                  ],
+                  [
+                    {
+                      label: "Frequency",
+                      value: sentence(frequencyText(control)) || "Not stated",
+                    },
+                  ],
+                ]}
+                phases={(evidencePlan?.phases ?? []).map((phase) => ({
+                  phase: phase.phase,
+                  label: phase.label,
+                  rationale: phase.rationale,
+                }))}
+              />
+            ) : null}
             {tab === "design" ? (
               <>
-                <ImpactPanel
-                  assessments={impact}
-                  ids={ids}
-                  hrefs={{ test: stepHrefs.TEST, review: stepHrefs.REVIEW }}
-                />
                 {engagement.masterPlan != null &&
                 engagement.masterPlan.controlId === control.id ? (
                   // The plan is reviewed and approved here, with the one review component
@@ -2051,6 +2443,30 @@ function ControlRecord({
                     ) : null}
                   </>
                 )}
+                {stages.find((item) => item.key === "design")?.status !==
+                "not_applicable" ? (
+                  <PhasePanel
+                    number={1}
+                    title="Design and walkthrough"
+                    summary="Understand the control design and perform a walkthrough."
+                    state={lifeState("design")}
+                  >
+                    <PhaseStep
+                      number={1}
+                      title="Walkthrough and design workpaper"
+                      state={paperState("DESIGN")}
+                      waits="Starts when design evidence has been read"
+                      keepOpen={keepWorkpaper}
+                      plain
+                    >
+                      <WorkpapersTab
+                        compact
+                        {...workpaperProps}
+                        stage="DESIGN"
+                      />
+                    </PhaseStep>
+                  </PhasePanel>
+                ) : null}
               </>
             ) : null}
             {tab === "evidence" ? (
@@ -2097,8 +2513,13 @@ function ControlRecord({
                       : [],
                   controlTitle: control.title,
                   askHref,
-                  focusFile: null,
+                  focusFile: engagement.filters.focusFile ?? null,
+                  openAdd: engagement.filters.evidenceView === "add",
                   findings: engagement.evidenceFindings ?? null,
+                  tests: (engagement.tests ?? []).filter(
+                    (entry) => entry.controlId === control.id,
+                  ),
+                  instances: engagement.walkthroughInstances ?? null,
                 }}
                 files={(engagement.files?.files ?? []).map((file) => ({
                   id: file.id,
@@ -2108,6 +2529,8 @@ function ControlRecord({
                   // Only when the coordinator could not tell; a file still being read
                   // has no tag yet, and one on an instance's request takes its application.
                   applicationUnknown: file.applicationScope === "UNKNOWN",
+                  createdAt: file.createdAt,
+                  sizeBytes: file.sizeBytes,
                 }))}
                 applications={engagement.files?.applications ?? []}
                 system={
@@ -2195,36 +2618,12 @@ function ControlRecord({
                       {pendingImpact === 1
                         ? "These results await a reviewer's impact decision: the test plan changed after they were signed off."
                         : `${pendingImpact} signed-off results await a reviewer's impact decision.`}
-                      <a href={stepHrefs.PLAN}>Open the assessment</a>
+                      <a href={wsHrefs.approvals}>Open the assessment</a>
                     </span>
                   </p>
                 ) : null}
-                {stages.find((item) => item.key === "design")?.status !==
-                "not_applicable" ? (
-                  <PhasePanel
-                    number={1}
-                    title="Design and walkthrough"
-                    summary="Understand the control design and perform a walkthrough."
-                    state={lifeState("design")}
-                  >
-                    <PhaseStep
-                      number={1}
-                      title="Walkthrough and design workpaper"
-                      state={paperState("DESIGN")}
-                      waits="Starts when design evidence has been read"
-                      keepOpen={keepWorkpaper}
-                      plain
-                    >
-                      <WorkpapersTab
-                        compact
-                        {...workpaperProps}
-                        stage="DESIGN"
-                      />
-                    </PhaseStep>
-                  </PhasePanel>
-                ) : null}
                 <PhasePanel
-                  number={2}
+                  number={1}
                   title="Interim testing"
                   summary="Test control operating effectiveness for the interim period."
                   state={lifeState("interim")}
@@ -2362,7 +2761,7 @@ function ControlRecord({
                 {stages.find((item) => item.key === "rollforward")?.status !==
                 "not_applicable" ? (
                   <PhasePanel
-                    number={3}
+                    number={2}
                     title="Roll-forward and retests"
                     summary="Perform roll-forward procedures and any required retesting."
                     state={lifeState("rollforward")}
@@ -2460,8 +2859,61 @@ function ControlRecord({
                 </section>
               </>
             ) : null}
-            {tab === "review" ? (
+            {tab === "approvals" ? (
               <>
+                <section
+                  className="cw-plain ws-section"
+                  aria-labelledby="ws-approvals"
+                >
+                  <h2 id="ws-approvals">Approvals and sign-offs</h2>
+                  <ul className="ws-approvals">
+                    {approvals.map((row) => (
+                      <li key={row.key} className={`is-${row.state}`}>
+                        <span className="ws-approval-mark" aria-hidden="true">
+                          <UiIcon
+                            name={
+                              row.state === "done"
+                                ? "check"
+                                : row.state === "waiting"
+                                  ? "clock"
+                                  : "minus"
+                            }
+                            size={13}
+                          />
+                        </span>
+                        <span className="ws-approval-text">
+                          <strong>{row.title}</strong>
+                          <small>{row.detail}</small>
+                        </span>
+                        {row.tab !== "approvals" ? (
+                          <Link href={wsHrefs[row.tab]} scroll={false}>
+                            Open
+                          </Link>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                  {(engagement.signoffs ?? []).length > 0 ? (
+                    <>
+                      <h3 className="ws-subhead">On record</h3>
+                      <ul className="ws-receipts">
+                        {(engagement.signoffs ?? []).map((item) => (
+                          <li key={item.id}>
+                            {receiptText(item)} · {formatDate(item.signedAt)}
+                            {item.reopenedAt !== null ? (
+                              <small>{reopenText(item)}</small>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : null}
+                </section>
+                <ImpactPanel
+                  assessments={impact}
+                  ids={ids}
+                  hrefs={{ test: stepHrefs.TEST, review: stepHrefs.REVIEW }}
+                />
                 <PhasePanel
                   number={1}
                   title="Independent review"
@@ -2512,7 +2964,7 @@ function ControlRecord({
                     <span>
                       The results this review covers await a reviewer's impact
                       decision.
-                      <a href={stepHrefs.PLAN}>Open the assessment</a>
+                      <a href={wsHrefs.approvals}>Open the assessment</a>
                     </span>
                   </p>
                 ) : null}
@@ -2565,6 +3017,9 @@ function ControlRecord({
           {/* The audit trail opens from History (the section menu, or a control's link
               in the Controls list); it is not repeated under every step (product owner,
               26 October 2026), and the Plan step keeps it in its History tab. */}
+          {showActivity && masterHere !== null ? (
+            <PlanVersionsCard versions={planVersions(masterHere)} />
+          ) : null}
           {showActivity ? (
             <details className="cw-fold cw-activity" id="activity" open>
               <summary>
@@ -2583,94 +3038,94 @@ function ControlRecord({
             </details>
           ) : null}
         </div>
-        <aside className="cw-rail" aria-label="Assistant and context">
-          <ControlAssistant
-            controlRef={control.controlRef}
-            title={control.title}
-            counts={
-              engagement.masterPlan != null &&
-              engagement.masterPlan.controlId === control.id
-                ? {
-                    procedures: engagement.masterPlan.procedures.length,
-                    attributes: engagement.masterPlan.attributes.length,
-                    evidence: engagement.masterPlan.evidence.length,
+        {tab === "design" || tab === "risk" ? (
+          <aside className="cw-rail" aria-label="Assistant and context">
+            {tab === "design" ? (
+              <>
+                <ControlAssistant
+                  controlRef={control.controlRef}
+                  title={control.title}
+                  counts={
+                    engagement.masterPlan != null &&
+                    engagement.masterPlan.controlId === control.id
+                      ? {
+                          procedures: engagement.masterPlan.procedures.length,
+                          attributes: engagement.masterPlan.attributes.length,
+                          evidence: engagement.masterPlan.evidence.length,
+                        }
+                      : null
                   }
-                : null
-            }
-            answers={exampleAnswers(design)}
-            related={relatedControls(
-              design,
-              engagement.controls ?? [],
-              control.applicationName,
-            ).map((item) => ({
-              ref: item.ref,
-              href:
-                item.id === null
-                  ? null
-                  : href(model, { ...keep, control: item.id }),
-            }))}
-            askHref={askHref}
-            system={control.applicationName}
-            documents={governing}
-            contradictions={(context?.issues ?? [])
-              .filter(
-                (item) => item.status === "OPEN" && item.kind === "CONFLICT",
-              )
-              .map((item) => item.topic)}
-            nextActions={
-              step === "TEST" ? testActions : planHere ? planActions : []
-            }
-          />
-          {engagement.masterPlan != null &&
-          engagement.masterPlan.controlId === control.id ? (
-            <>
-              <EvidenceSummaryCard
-                counts={planEvidenceSummary(engagement.masterPlan)}
-              />
-              <PlanVersionsCard
-                versions={planVersions(engagement.masterPlan)}
-              />
-            </>
-          ) : null}
-          <ControlContextCard
-            editHref={
-              control.applicationId !== null
-                ? `${href(model, {})}&pane=systems&system=${control.applicationId}`
-                : null
-            }
-            rows={contextRows({
-              applicationName: control.applicationName,
-              category: control.category,
-              categoryLabel: CATEGORY_LABEL[control.category] ?? "",
-              area: control.area,
-              ownerName: control.ownerName,
-              ownerEmail: control.ownerEmail,
-              environment: control.applicationEnvironment ?? "",
-              frequencyLabel: sentence(frequencyText(control)),
-              keyControl: control.keyControl,
-            })}
-          />
-          <GoverningDocumentsCard
-            documents={documentCard.governing}
-            supporting={documentCard.supporting}
-            manageHref={`${href(model, {})}&pane=policies`}
-            actions={
-              context !== null && planHere ? (
-                <DocumentActions
-                  ids={ids}
-                  context={context}
-                  canAct={canAct}
-                  controls={(engagement.controls ?? [])
-                    .filter((item) => item.included)
-                    .map((item) => ({
-                      id: item.id,
-                      label: item.label || item.controlRef,
-                    }))}
+                  answers={exampleAnswers(design)}
+                  related={relatedControls(
+                    design,
+                    engagement.controls ?? [],
+                    control.applicationName,
+                  ).map((item) => ({
+                    ref: item.ref,
+                    href:
+                      item.id === null
+                        ? null
+                        : href(model, { ...keep, control: item.id }),
+                  }))}
+                  askHref={askHref}
+                  system={control.applicationName}
+                  documents={governing}
+                  contradictions={(context?.issues ?? [])
+                    .filter(
+                      (item) =>
+                        item.status === "OPEN" && item.kind === "CONFLICT",
+                    )
+                    .map((item) => item.topic)}
+                  nextActions={
+                    step === "TEST" ? testActions : planHere ? planActions : []
+                  }
                 />
-              ) : null
-            }
-          />
-        </aside>
+                {masterHere !== null ? (
+                  <EvidenceSummaryCard
+                    counts={planEvidenceSummary(masterHere)}
+                  />
+                ) : null}
+              </>
+            ) : (
+              <>
+                <ControlContextCard
+                  editHref={contextEdit}
+                  rows={contextRows({
+                    applicationName: control.applicationName,
+                    category: control.category,
+                    categoryLabel: CATEGORY_LABEL[control.category] ?? "",
+                    area: control.area,
+                    ownerName: control.ownerName,
+                    ownerEmail: control.ownerEmail,
+                    environment: control.applicationEnvironment ?? "",
+                    frequencyLabel: sentence(frequencyText(control)),
+                    keyControl: control.keyControl,
+                  })}
+                />
+                <GoverningDocumentsCard
+                  documents={documentCard.governing}
+                  supporting={documentCard.supporting}
+                  manageHref={`${href(model, {})}&pane=policies`}
+                  actions={
+                    context !== null && planHere ? (
+                      <DocumentActions
+                        ids={ids}
+                        context={context}
+                        canAct={canAct}
+                        controls={(engagement.controls ?? [])
+                          .filter((item) => item.included)
+                          .map((item) => ({
+                            id: item.id,
+                            label: item.label || item.controlRef,
+                          }))}
+                      />
+                    ) : null
+                  }
+                />
+              </>
+            )}
+          </aside>
+        ) : null}
       </div>
     </div>
   );

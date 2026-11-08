@@ -132,6 +132,7 @@ export default async function Home({ searchParams }: HomeProps) {
       workpaperVersion: firstParam(params.wpversion),
       ev: firstParam(params.ev),
       request: firstParam(params.request),
+      file: firstParam(params.file),
       filter: firstParam(params.filter),
     }),
     loadConsole(loaded, firstParam(params.notice), firstParam(params.thread)),

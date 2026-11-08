@@ -17,7 +17,13 @@ from test_outbound import migrated
 from test_testing_engine import _add, _base, _Citing, _read_all, _year
 
 from ai_workforce_api.context_routes import review_control
-from ai_workforce_api.control_context import context_package
+from ai_workforce_api.control_attributes import SYSTEM_PROMPT
+from ai_workforce_api.control_context import (
+    AnswerIssue,
+    Source,
+    checked_issues,
+    context_package,
+)
 from ai_workforce_api.db import connect
 from ai_workforce_api.pbc_drafting import load_context
 from ai_workforce_api.readiness import resume_testing
@@ -517,6 +523,185 @@ def test_a_narrative_added_later_proposes_and_never_overwrites(migrated: Databas
     again = _context(client, team, first["id"])
     assert again["attributes"]["proposed"] == []
     assert [i["status"] for i in again["issues"]] == ["RESOLVED"]
+
+
+def test_an_attribute_gap_arrives_with_its_answer_and_is_not_asked_again(
+    migrated: Database,
+) -> None:
+    """Asked in Control understanding (product owner, 4 November 2026): the agent's statement
+    and alternatives reach the person, and what is settled reaches the agent."""
+    team, client, _scheduler = _engagement(migrated, "ctx-asked")
+    cid = _new_control(client, team, control_ref="REV-31", domain="ORDER_TO_CASH")["id"]
+    answer = {
+        "attributes": [],
+        "issues": [
+            {"kind": "AMBIGUOUS", "topic": "Contractors in scope", "detail": "Unclear.",
+             "why": "It sets the population.", "resolve": "Ask the owner.", "quotes": [],
+             "question": "Are contractors in scope?",
+             "proposal": "Contractors are in scope.", "proposal_basis": "TYPICAL",
+             "suggestions": ["Contractors are out of scope.", "  "]},
+            # A conflict carries no statement: a person chooses between its sources.
+            {"kind": "CONFLICT", "topic": "Approver", "detail": "Who approves is unclear.",
+             "why": "", "resolve": "", "quotes": [],
+             "question": "Who approves?", "proposal": "The manager.",
+             "proposal_basis": "SOURCES", "suggestions": ["The owner."]},
+            # A secret never reaches the person's screen as a suggestion.
+            {"kind": "MISSING", "topic": "Service account", "detail": "No account named.",
+             "why": "", "resolve": "", "quotes": [],
+             "question": "Which account?", "proposal": "password=hunter2secret",
+             "proposal_basis": "TYPICAL", "suggestions": []},
+        ],
+    }  # fmt: skip
+    with connect(migrated.url) as connection:
+        review_control(connection, _Provider([answer]), team["org"], team["project"], UUID(cid),
+                       team["owner_id"])  # fmt: skip
+    opened = {i["topic"]: i for i in _context(client, team, cid)["issues"]}
+    gap = opened["Contractors in scope"]
+    assert gap["origin"] == "ATTRIBUTES"
+    assert (gap["question"], gap["proposal"], gap["proposal_basis"], gap["suggestions"]) == (
+        "Are contractors in scope?", "Contractors are in scope.", "TYPICAL",
+        ["Contractors are out of scope."],
+    )  # fmt: skip
+    conflict = opened["Approver"]
+    # No source was quoted, so it is unclear rather than a conflict, and may be asked.
+    assert conflict["kind"] == "AMBIGUOUS"
+    secret = opened["Service account"]
+    assert (secret["question"], secret["proposal"]) == ("", "")
+
+    resolved = client.post(
+        f"{_base(team)}/controls/{cid}/issues/{gap['id']}/resolve",
+        json={"status": "RESOLVED", "note": "Contractors are out of scope.",
+              "version": gap["version"]},
+    )  # fmt: skip
+    assert resolved.status_code == 200, resolved.text
+    dismissed = client.post(
+        f"{_base(team)}/controls/{cid}/issues/{secret['id']}/resolve",
+        json={"status": "DISMISSED", "note": "No account is used.",
+              "version": secret["version"]},
+    )  # fmt: skip
+    assert dismissed.status_code == 200, dismissed.text
+    with connect(migrated.url) as connection:
+        loaded = load_context(connection, team["project"], UUID(cid))
+        package = context_package(
+            connection, team["project"], UUID(cid), loaded, ["BUSINESS_PROCESS"]
+        )
+    assert package["answered_questions"] == [
+        {"question": "Are contractors in scope?", "answer": "Contractors are out of scope."},
+        {"question": "Service account", "answer": "Not applicable: No account is used."},
+    ]
+    assert "answered_questions" in SYSTEM_PROMPT
+
+
+def test_a_conflict_with_quotes_carries_no_statement_to_prefer() -> None:
+    sources = [Source("control", "RCM", "RCM", "Access is removed within 3 days.")]
+    raw = AnswerIssue.model_validate(
+        {
+            "kind": "CONFLICT",
+            "topic": "Deadline",
+            "detail": "The sources disagree.",
+            "quotes": [{"source": "control", "quote": "within 3 days"}],
+            "question": "Which deadline?",
+            "proposal": "Three days.",
+            "proposal_basis": "SOURCES",
+            "suggestions": ["One day."],
+        }
+    )
+    [issue] = checked_issues([raw], sources, "ATTRIBUTES")
+    assert issue.kind == "CONFLICT"
+    assert (issue.question, issue.proposal, issue.proposal_basis, issue.suggestions) == (
+        "", "", "", (),
+    )  # fmt: skip
+
+
+def test_several_attributes_are_decided_as_one(migrated: Database) -> None:
+    team, client, _scheduler = _engagement(migrated, "ctx-many")
+    control = _control(client, team, "ITGC-AC-01")
+    before = _context(client, team, control["id"])["attributes"]["approved"]
+    answer = {
+        "attributes": [
+            {"action": "ADD", "replaces": "", "basis": "INFERRED", "source": "", "quote": "",
+             "note": "", "text": "The removal is logged with the date and the person."},
+            {"action": "ADD", "replaces": "", "basis": "INFERRED", "source": "", "quote": "",
+             "note": "", "text": "Shared accounts are reviewed every quarter."},
+        ],
+        "issues": [],
+    }  # fmt: skip
+    with connect(migrated.url) as connection:
+        review_control(connection, _Provider([answer]), team["org"], team["project"],
+                       UUID(control["id"]), team["owner_id"])  # fmt: skip
+    proposed = {
+        a["text"]: a for a in _context(client, team, control["id"])["attributes"]["proposed"]
+    }
+    logged = proposed["The removal is logged with the date and the person."]
+    shared = proposed["Shared accounts are reviewed every quarter."]
+    path = f"{_base(team)}/controls/{control['id']}/attributes/decide-many"
+
+    def unchanged() -> None:
+        now = _context(client, team, control["id"])["attributes"]
+        assert [(a["id"], a["version"]) for a in now["approved"]] == [
+            (a["id"], a["version"]) for a in before
+        ]
+        assert {a["id"] for a in now["proposed"]} == {logged["id"], shared["id"]}
+
+    # One stale item: nothing applies, not even the items before it.
+    stale = client.post(path, json={"items": [
+        {"attribute_id": logged["id"], "decision": "APPROVE", "version": logged["version"]},
+        {"attribute_id": shared["id"], "decision": "REJECT", "version": shared["version"] + 4},
+    ]})  # fmt: skip
+    assert stale.status_code == 409, stale.text
+    unchanged()
+    twice = client.post(path, json={"items": [
+        {"attribute_id": logged["id"], "decision": "APPROVE", "version": logged["version"]},
+        {"attribute_id": logged["id"], "decision": "REJECT", "version": logged["version"]},
+    ]})  # fmt: skip
+    assert twice.status_code == 409
+    # Retiring every approved attribute breaks the rule for the last one: none retires.
+    every = client.post(path, json={"items": [
+        {"attribute_id": a["id"], "decision": "RETIRE", "version": a["version"]} for a in before
+    ]})  # fmt: skip
+    assert every.status_code == 409
+    unchanged()
+    assert client.post(path, json={"items": []}).status_code == 422
+    # Another engagement cannot reach the control.
+    other, theirs, _other = _engagement(migrated, "ctx-many-other")
+    foreign = (f"/organizations/{other['org']}/projects/{other['project']}"
+               f"/controls/{control['id']}/attributes/decide-many")  # fmt: skip
+    refused = theirs.post(foreign, json={"items": [
+        {"attribute_id": logged["id"], "decision": "APPROVE", "version": logged["version"]},
+    ]})  # fmt: skip
+    assert refused.status_code == 404
+    unchanged()
+    # The retirement is listed first: proposals are still decided before it.
+    decided = client.post(path, json={"items": [
+        {"attribute_id": before[0]["id"], "decision": "RETIRE", "version": before[0]["version"]},
+        {"attribute_id": logged["id"], "decision": "APPROVE", "version": logged["version"]},
+        {"attribute_id": shared["id"], "decision": "REJECT", "version": shared["version"]},
+    ]})  # fmt: skip
+    assert decided.status_code == 200, decided.text
+    body = decided.json()["attributes"]
+    assert [a["text"] for a in body["approved"]] == [a["text"] for a in before[1:]] + [
+        logged["text"]
+    ]
+    assert body["proposed"] == []
+    history = {a["id"]: a["status"] for a in body["history"]}
+    assert history[before[0]["id"]] == "RETIRED" and history[shared["id"]] == "REJECTED"
+    with connect(migrated.url) as connection:
+        events = connection.execute(
+            "SELECT action, target_type, target_id::text, payload FROM audit_events "
+            "WHERE project_id = %s AND action IN ('attribute.approved', 'attribute.rejected', "
+            "'attribute.retired', 'attributes.decided') ORDER BY created_at, action",
+            (team["project"],),
+        ).fetchall()
+    # Each attribute keeps its own record, and the group is one decision on the control.
+    assert [(str(e[0]), str(e[2])) for e in events[:3]] == [
+        ("attribute.approved", logged["id"]),
+        ("attribute.rejected", shared["id"]),
+        ("attribute.retired", before[0]["id"]),
+    ]
+    group = events[3]
+    assert (group[0], group[1], group[2]) == ("attributes.decided", "engagement_control",
+                                              control["id"])  # fmt: skip
+    assert [i["decision"] for i in group[3]["items"]] == ["APPROVE", "REJECT", "RETIRE"]
 
 
 # 13: records from before

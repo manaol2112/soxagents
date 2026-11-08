@@ -24,8 +24,8 @@ The workspace is dark by default, with a light theme chosen in the account menu 
 | Group | Tokens | Use |
 |---|---|---|
 | Surfaces | `--canvas`, `--surface`, `--surface-muted`, `--surface-sunken`, `--surface-hover`, `--surface-glass` | Page background, cards, table headers, wells, row hover, translucent bars |
-| Text | `--text-strong`, `--text`, `--text-secondary`, `--text-tertiary`, `--text-disabled` | Headings, body, supporting copy, metadata, disabled. All but disabled meet WCAG 2.2 AA (4.5:1) on `--surface` |
-| Lines | `--border`, `--border-strong`, `--border-subtle` | Card edges, input edges, dividers inside cards |
+| Text | `--text-strong`, `--text`, `--text-secondary`, `--text-tertiary`, `--text-disabled` | Headings, body, supporting copy, metadata, disabled. All but disabled meet WCAG 2.2 AA (4.5:1) in both themes on every ground (`--canvas`, `--surface`, `--surface-hover`, `--surface-muted`) and every tint (`--accent-soft`, `--success-soft`, `--warning-soft`, `--danger-soft`, `--ai-soft`), and each status colour on its own tint; `tests/theme.test.ts` checks it. Text in the accent colour uses `--accent-text`, never `--accent` (a fill: 3.4:1 as text on dark) |
+| Lines | `--border`, `--border-strong`, `--border-subtle`, `--border-control` | Card edges and dividers inside cards; `--border-control` is every form field's edge (text field, dropdown, text area, or the box drawing a search field), at 3:1 on every surface (WCAG 1.4.11), set over the components' own field borders by one rule at the end of `globals.css` |
 | Primary | `--accent`, `--accent-hover`, `--accent-text`, `--accent-strong`, `--accent-soft`, `--accent-border` | The one primary action per area (`--accent` is the fill, `--accent-hover` its hover), accent-colored text and links (`--accent-text`, `--accent-strong`), selection, focus |
 | Status | `--success*`, `--warning*`, `--danger*`, `--info*`, `--neutral*`, `--text-on-status`, `--highlight` | Each has a strong tone (text, icons), `-soft` (fill), and `-border`; text on a solid status fill uses `--text-on-status`; a quoted passage is marked with `--highlight` |
 | Agent output | `--ai`, `--ai-soft`, `--ai-border` | Something an agent proposed that no person has decided yet |
@@ -50,7 +50,9 @@ The workspace is dark by default, with a light theme chosen in the account menu 
 - **Empty is quiet.** A list with nothing in it, such as Waiting on you or a review not yet started, is one line, not a card-sized empty state.
 - **Pages are built around their main task.** A form that is not the page's main job, such as logging a deficiency, changing a milestone date, or editing a settled contact, opens on request. The project plan opens on the phases under way.
 - **Phones.** Where the controls list is under 640px wide, each control becomes a small stack, and the register's menus open as a sheet along the bottom. Tab strips scroll sideways without a scrollbar. A page never scrolls sideways.
-- **Focus.** Buttons and inputs show `--ring` on keyboard focus; links show an outline.
+- **Focus.** Buttons and inputs show `--ring` on keyboard focus; links show an outline. `--ring` is a gap of the surface, then a solid 2px accent ring (3:1 or more, WCAG 1.4.11); a component's resting `box-shadow: none` never removes it (`button:focus-visible:not(:disabled)`).
+- **Modal dialogs.** Keyboard focus stays inside the open dialog (`useFocusTrap`, `focus-trap.ts`): Tab wraps around its controls, a dialog opened over another keeps the focus, and Escape closes only the topmost (`isTopmostDialog`), returning focus to what opened it.
+- **Multi-step dialogs keep one size** (product owner, 2 November 2026). A wizard's frame has a fixed height on every step and never follows the step's content: the header, the step list, and Back and Continue stay in place, and a long step scrolls inside its card under the card's pinned links, with a soft shadow while more lies below. The card keeps `scroll-padding-bottom` so a control reached by Tab is never hidden under the pinned links (WCAG 2.2, 2.4.11). On phones the dialog fills the screen (`100dvh`). Reference: the control setup (`control-setup.css`).
 
 ## Product standards (decided by the product owner, 23 October 2026)
 

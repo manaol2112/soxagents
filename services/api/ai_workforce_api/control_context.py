@@ -282,6 +282,11 @@ class IssueBody(BaseModel):
     # Where the statement comes from (0121): SOURCES, the client's records and answers;
     # TYPICAL, the usual practice for a control of its kind; "" when asked open.
     proposal_basis: str = ""
+    # The reviewer agent wrote its interview and the checks cleared it (0140, 0141,
+    # question_review.py): steps of a short question, answers of a few words, and what each
+    # answer means.
+    wording_reviewed: bool = False
+    interview: list[dict[str, Any]] = []
 
 
 @dataclass(frozen=True)
@@ -293,6 +298,12 @@ class Issue:
     why: str
     resolve: str
     quotes: tuple[Citation, ...] = ()
+    # The fact asked as one question, the agent's best understanding of it to confirm, where
+    # that comes from, and other answers to pick (columns of 0117, 0118, 0121).
+    question: str = ""
+    proposal: str = ""
+    proposal_basis: str = ""
+    suggestions: tuple[str, ...] = ()
 
 
 def fingerprint(issue: Issue) -> str:
@@ -327,9 +338,10 @@ def raise_issues(
             """
             INSERT INTO control_context_issues (
                 organization_id, project_id, engagement_control_id, origin, kind, topic,
-                detail, why, resolve, quotes, fingerprint, raised_by, model_call_id
+                detail, why, resolve, quotes, fingerprint, raised_by, model_call_id,
+                question, proposal, proposal_basis, suggestions
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 organization_id,
@@ -345,6 +357,10 @@ def raise_issues(
                 mark,
                 raised_by,
                 call_id,
+                line(issue.question, 400),
+                line(issue.proposal, 400),
+                issue.proposal_basis,
+                Json(list(issue.suggestions)),
             ),
         )
         raised += 1
@@ -395,12 +411,17 @@ def issues_for(connection: psycopg.Connection[Any], control_id: UUID) -> list[Is
             round=int(row[17]),
             point_kind=str(row[18]),
             proposal_basis=str(row[19]),
+            wording_reviewed=bool(row[20]),
+            interview=[item for item in row[21] if isinstance(item, dict)]
+            if isinstance(row[21], list)
+            else [],
         )
         for row in connection.execute(
             """
             SELECT id, origin, kind, topic, detail, why, resolve, quotes, raised_by, status,
                    resolution_note, version, question, suggestions, proposal,
-                   narrative_section, attribute_codes, point_round, point_kind, proposal_basis
+                   narrative_section, attribute_codes, point_round, point_kind, proposal_basis,
+                   wording_reviewed, interview
             FROM control_context_issues
             WHERE engagement_control_id = %s AND status <> 'SUPERSEDED'
             ORDER BY CASE status WHEN 'OPEN' THEN 0 ELSE 1 END, created_at
@@ -702,6 +723,12 @@ def context_package(
         "WHERE engagement_control_id = %s AND status = 'OPEN' ORDER BY created_at",
         (control_id,),
     ).fetchall()
+    settled_issues = connection.execute(
+        "SELECT question, topic, status, resolution_note FROM control_context_issues "
+        "WHERE engagement_control_id = %s AND status IN ('RESOLVED', 'DISMISSED') "
+        "ORDER BY resolved_at",
+        (control_id,),
+    ).fetchall()
     evidence = connection.execute(
         """
         SELECT count(*) FILTER (WHERE a.status = 'READY'),
@@ -756,6 +783,14 @@ def context_package(
         "open_issues": [
             {"kind": str(row[0]), "topic": str(row[1]), "detail": str(row[2])}
             for row in open_issues
+        ],
+        # Settled by the team: facts to work from, and not to be asked again.
+        "answered_questions": [
+            {
+                "question": str(row[0]) or str(row[1]),
+                "answer": str(row[3]) if row[2] == "RESOLVED" else f"Not applicable: {row[3]}",
+            }
+            for row in settled_issues
         ],
         "evidence": {
             "files_read": 0 if evidence is None else int(evidence[0] or 0),
@@ -843,6 +878,11 @@ class AnswerIssue(BaseModel):
     why: str = ""
     resolve: str = ""
     quotes: list[_IssueQuote] = []
+    # For a missing or unclear fact, when the agent's schema asks for them.
+    question: str = ""
+    proposal: str = ""
+    proposal_basis: Literal["", "SOURCES", "TYPICAL"] = ""
+    suggestions: list[str] = []
 
 
 def checked_issues(
@@ -862,6 +902,15 @@ def checked_issues(
             kind = "AMBIGUOUS"
         if not line(item.detail, 600):
             continue
+        # A conflict is settled by choosing between its sources, so it carries no statement.
+        asks = kind != "CONFLICT" and not contains_secret(
+            {
+                "question": item.question,
+                "proposal": item.proposal,
+                "suggestions": " ".join(item.suggestions),
+            }
+        )
+        proposal = line(item.proposal, 400) if asks else ""
         found.append(
             Issue(
                 # Filed under the run that raised it, so the next run supersedes it.
@@ -872,6 +921,14 @@ def checked_issues(
                 why=item.why,
                 resolve=item.resolve,
                 quotes=quotes,
+                question=line(item.question, 400) if asks else "",
+                proposal=proposal,
+                proposal_basis=(item.proposal_basis or "TYPICAL") if proposal else "",
+                suggestions=tuple(
+                    text for text in (line(value, 200) for value in item.suggestions[:3]) if text
+                )
+                if asks
+                else (),
             )
         )
     return found

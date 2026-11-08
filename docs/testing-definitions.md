@@ -17,7 +17,7 @@ Each control's statement records what its design documentation should contain: i
 - Attributes by confidence: high 198, moderate 35, low 41, not established 2
 - Register entries that block automated testing: 27
 - Control statements: 82
-- Client values to fill at setup: 318, of which 38 hold testing until filled
+- Client values to fill at setup: 318, of which 34 hold testing until filled
 - Combined version 2 controls split: 4, into 9 controls (each original keeps its ID)
 
 High and moderate attributes are tested. Low and not-established attributes are proposed in each engagement with their question and are not tested until a person approves them. Those marked as blocking hold the control's testing until a person answers them, because without the answer testing would leave out a condition the control description requires (a review's precision, an approval matrix, a policy's deadline); the others can be taken up later without holding testing.
@@ -1666,7 +1666,7 @@ Evidence suite (version 4):
 - Evidence: The conflict report with its production date, each conflict's removal record or mitigation approval, the sign-off, and the ruleset change log.
 - Client value: the role that administers user access (role; does not hold testing). The operator: who grants, changes, and removes access.
 - Client value: the segregation-of-duties tool (system; does not hold testing). Where the rules run.
-- Client value: the segregation-of-duties ruleset (text; testing waits for it). The population: which combinations count as conflicts.
+- Client value: the segregation-of-duties ruleset (text; does not hold testing). The population: which combinations count as conflicts.
 - Client value: the role that reviews conflicts and approves rule changes (role; does not hold testing). The operator.
 - Client value: the control owner for user access (role; does not hold testing). Accountable for the control's design and operation.
 
@@ -2534,7 +2534,7 @@ Evidence suite (version 4):
 - Information used: Approval workflow configuration: Release strategy, Amount bands, Approver roles
 - Relies on: ITGC-AC-01, ITGC-AC-02, ITGC-AC-03, ITGC-AC-04, ITGC-CM-01, ITGC-CM-03, ITGC-CM-04
 - Evidence: The workflow configuration shown from the system, its change history, and one order showing the approvals the system required.
-- Client value: the delegation of authority for purchase orders (text; testing waits for it). The criterion the routing is judged against.
+- Client value: the delegation of authority for purchase orders (text; does not hold testing). The criterion the routing is judged against.
 - Client value: the control owner for procure to pay (role; does not hold testing). Accountable for the control's design and operation.
 
 Procedures:
@@ -2591,7 +2591,7 @@ Evidence suite (version 4):
 - Information used: Invoice routing configuration: Routing rules, Cost center owners, Amount bands
 - Relies on: ITGC-AC-01, ITGC-AC-02, ITGC-AC-03, ITGC-AC-04, ITGC-CM-01, ITGC-CM-03, ITGC-CM-04
 - Evidence: The routing configuration shown from the system, its change history, and one invoice showing the approval the system required.
-- Client value: the approval matrix for invoices without a purchase order (text; testing waits for it). The criterion the routing is judged against.
+- Client value: the approval matrix for invoices without a purchase order (text; does not hold testing). The criterion the routing is judged against.
 - Client value: the control owner for accounts payable (role; does not hold testing). Accountable for the control's design and operation.
 
 Procedures:
@@ -3640,7 +3640,7 @@ Retired from version 2:
 - Evidence: The credit memo with its reason, the original invoice, and the approval dated before issue.
 - Client value: the financial system (system; does not hold testing). Where the transactions are recorded.
 - Client value: the credit memo threshold (amount; testing waits for it). Which memos need approval.
-- Client value: the credit memo approval matrix (text; testing waits for it). Who may approve which amount.
+- Client value: the credit memo approval matrix (text; does not hold testing). Who may approve which amount.
 - Client value: the control owner for credit memos (role; does not hold testing). Accountable for the control's design and operation.
 
 Procedures:

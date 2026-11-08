@@ -47,7 +47,7 @@ documentation the brief asks for; the decisions are summarised in `phase-plan.md
 
 ### Increment 1 — the workspace on the data that exists (no schema change)
 
-Status: **built 30 October 2026, awaiting review.**
+Status: **built 30 October 2026, reviewed and committed (15b2eb3, 30 October 2026).**
 
 - `evidence-intelligence-model.ts` (pure, tested): the navigator (phases, items, files,
   what needs a person), and for the selected file an *insight*: its reading status, the
@@ -72,7 +72,7 @@ Status: **built 30 October 2026, awaiting review.**
 
 ### Increment 2 — findings as records, and the resolution loop (schema change)
 
-Status: **built 30 October 2026, awaiting review.** Migration 0137, `evidence_findings.py`, `evidence-findings-model.ts`, `evidence-findings-view.tsx`, the `/workspace/evidence-findings` route; tests `test_evidence_findings.py` (8, in the critical tier) and `tests/evidence-findings-model.test.ts` (9). Checked end to end on the review stack: a draft policy with placeholders uploaded through the navigator, read live, gave ten findings (three from the checks, seven from the reader with their questions and passages); one accepted, composed and sent as a message on the request, with its history on the finding.
+Status: **built 30 October 2026, reviewed and committed (15b2eb3, 30 October 2026).** Migration 0137, `evidence_findings.py`, `evidence-findings-model.ts`, `evidence-findings-view.tsx`, the `/workspace/evidence-findings` route; tests `test_evidence_findings.py` (8, in the critical tier) and `tests/evidence-findings-model.test.ts` (9). Checked end to end on the review stack: a draft policy with placeholders uploaded through the navigator, read live, gave ten findings (three from the checks, seven from the reader with their questions and passages); one accepted, composed and sent as a message on the request, with its history on the finding.
 
 - Migration: `evidence_findings` (one per finding: the file, analysis and requirement it
   comes from, the attribute, kind, title, observation, citation, proposed question,
@@ -123,9 +123,15 @@ Status: **built 30 October 2026, awaiting review.** Migration 0137, `evidence_fi
 - Still open: a restored file does not clear the stale mark its withdrawal set (a person
   decides the finding either way); the OCR page numbering defect (increment 3).
 
+### 31 October 2026 — the three panels become a dialog
+
+The product owner replaced the three-panel Evidence tab with the evidence dialog (evidence.md, "The evidence dialog"): the Evidence list is the first view, and a file is added and reviewed in a dialog whose right side holds the reader's classification, the suggested next step, and this document's analysis panels (coverage, findings, decisions, follow-up). The navigator and the document column are gone; their records and the findings are unchanged. Increment 3's inline assistant now belongs in the dialog's right side.
+
 ### Increment 3 — the assistant in the workspace
 
-Status: planned.
+Status: **planned, awaiting the product owner's approval; nothing built.** The detailed
+plan (architecture, UI, dependencies, cost controls, safeguards, acceptance tests and
+increments 3A–3D) is [evidence-intelligence-increment-3.md](evidence-intelligence-increment-3.md).
 
 - An inline thread on the control's console (the existing `/console/messages` API and
   polling), persistent per control, with the suggested questions and action previews

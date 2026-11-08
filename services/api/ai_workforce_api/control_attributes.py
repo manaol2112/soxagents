@@ -50,6 +50,7 @@ from ai_workforce_api.library_definitions import DefinitionBody, definition_body
 from ai_workforce_api.model_providers import call_note
 from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
+from ai_workforce_api.question_review import review_open_questions
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,17 @@ class AttributeDecision(BaseModel):
 
 class VersionOnly(BaseModel):
     version: int = Field(ge=1)
+
+
+class AttributeChoice(BaseModel):
+    attribute_id: UUID
+    # APPROVE and REJECT decide a proposal; RETIRE retires an approved attribute.
+    decision: Literal["APPROVE", "REJECT", "RETIRE"]
+    version: int = Field(ge=1)
+
+
+class AttributeChoices(BaseModel):
+    items: list[AttributeChoice] = Field(min_length=1, max_length=100)
 
 
 def _normal(text: str) -> str:
@@ -382,6 +394,51 @@ def decide(
                {"proposal": proposal, "reworded": body.text is not None})  # fmt: skip
 
 
+def decide_many(
+    connection: psycopg.Connection[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID,
+    body: AttributeChoices,
+) -> None:
+    """A person decides several attributes as one decision: proposals approved or rejected,
+    approved attributes retired. Each goes through the same rules as on its own and leaves
+    its own record, and the group is recorded as one decision. Either every one applies or,
+    when any is stale or breaks a rule, none does.
+
+    Proposals are decided before retirements, so approving an addition and retiring the
+    attribute it supersedes in the same decision keeps the control's last attribute."""
+    chosen = [item.attribute_id for item in body.items]
+    if len(set(chosen)) != len(chosen):
+        raise ContextState("an attribute is listed twice")
+    ordered = sorted(body.items, key=lambda item: item.decision == "RETIRE")
+    with transaction(connection) as cursor:
+        for item in ordered:
+            if item.decision == "RETIRE":
+                retire_attribute(
+                    connection, organization_id, project_id, control_id, item.attribute_id,
+                    actor, VersionOnly(version=item.version),
+                )  # fmt: skip
+            else:
+                decide(
+                    connection, organization_id, project_id, control_id, item.attribute_id,
+                    actor, AttributeDecision(decision=item.decision, version=item.version),
+                )  # fmt: skip
+        cursor.execute(
+            """
+            INSERT INTO audit_events (
+                organization_id, project_id, actor_user_id, action, target_type, target_id,
+                payload
+            )
+            VALUES (%s, %s, %s, 'attributes.decided', 'engagement_control', %s, %s)
+            """,
+            (organization_id, project_id, actor, control_id,
+             Json({"items": [{"attribute": str(i.attribute_id), "decision": i.decision}
+                             for i in ordered]})),
+        )  # fmt: skip
+
+
 # The agent
 
 SYSTEM_PROMPT = """You define the test attributes of one SOX control for an audit team. An \
@@ -408,14 +465,22 @@ as the precision of a management review). For RETIRE leave them empty and false.
 ambiguous (who reviews is unclear), or contradictory (two sources disagree on frequency or \
 approver). Say why it matters to testing and what would resolve it, quoting the sources.
 - Raise at most five issues, only those that would change how the control is tested. \
-Do not raise one that open_issues already lists, in any wording.
-- For a missing or ambiguous fact, also give question, the fact asked as one short \
-question; proposal, your best understanding of it stated as a plain fact to confirm, from \
-the sources or, where they say nothing, as a control of this kind usually runs in the \
-systems already named, never inventing a name, a document title or a figure; and \
-proposal_basis, SOURCES or TYPICAL. Leave all three empty for a conflict.
+Do not raise one that open_issues already lists or answered_questions already settles, in \
+any wording. answered_questions are the team's answers about this client: work from them.
+- For a missing or ambiguous fact, also give question, one open question of one sentence \
+(who, what, which, how, when or where, never yes or no, since the answers are statements); \
+proposal, your best understanding of it stated as a plain fact to confirm, in complete \
+sentences, from the sources or, where they say nothing, as a control of this kind usually runs \
+in the systems already named, never inventing a name, a document title or a figure; \
+proposal_basis, SOURCES or TYPICAL; and suggestions, up to three other answers the client might \
+give, each a complete sentence in the same form as the proposal that answers the same question, \
+or none when there is no real alternative. Leave all four empty for a conflict. Write why as \
+one sentence telling the auditor how the answer changes the test, naming no agent, narrative or \
+attribute code.
 - A document the sources cite but do not include (a policy, a list of roles, a standard) is \
-not an issue: the control's evidence requests obtain it.
+not an issue: the control's evidence requests obtain it. A client answer of "No formal \
+document" means the client has none and the control runs on established practice: test that \
+practice, and do not raise the document's absence as an issue.
 - When the control context has approved_process_narrative (source "process-narrative"), it \
 is how this control operates at this client, approved by the audit team. Test the control as \
 it operates there: where an attribute does not match it (another approver, system, record or \
@@ -435,8 +500,15 @@ def _with_statements(schema: dict[str, Any]) -> dict[str, Any]:
         "question": {"type": "string", "maxLength": 400},
         "proposal": {"type": "string", "maxLength": 400},
         "proposal_basis": {"type": "string", "enum": ["", "SOURCES", "TYPICAL"]},
+        "suggestions": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {"type": "string", "maxLength": 200},
+        },
     }
-    items["required"] = [*items["required"], "question", "proposal", "proposal_basis"]
+    items["required"] = [
+        *items["required"], "question", "proposal", "proposal_basis", "suggestions",
+    ]  # fmt: skip
     return {**schema, "items": items}
 
 
@@ -498,15 +570,9 @@ class _Proposal(BaseModel):
     judgment_required: bool = False
 
 
-class _Issue(AnswerIssue):
-    question: str = ""
-    proposal: str = ""
-    proposal_basis: Literal["", "SOURCES", "TYPICAL"] = ""
-
-
 class _Answer(BaseModel):
     attributes: list[_Proposal] = Field(max_length=MAX_ATTRIBUTES)
-    issues: list[_Issue] = []
+    issues: list[AnswerIssue] = []
 
 
 def generate(
@@ -677,6 +743,10 @@ def generate(
         review_note = line(
             f"The reviewer agent kept none of the drafted attributes. {fixes[0]}", 300
         )
+    review_open_questions(
+        connection, provider, organization_id, project_id, control_id, requester, package,
+        sources,
+    )  # fmt: skip
     return kept, review_note
 
 

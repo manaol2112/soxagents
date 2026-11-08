@@ -140,6 +140,18 @@ class Statement:
         return {match for value in fields for match in SLOT.findall(value)}
 
 
+# A client without a formal document says so, on the record (product owner, 4 November 2026:
+# "There are companies that don't have a formal policy so this should be optional"). The answer
+# is kept in these words for the audit file, and the control's wording reads as the second.
+NO_DOCUMENT = "No formal document"
+NO_DOCUMENT_READS = "the client's established practice"
+
+
+def shown(value: str) -> str:
+    """A slot's value as the control's wording reads it."""
+    return NO_DOCUMENT_READS if value == NO_DOCUMENT else value
+
+
 def render(text: str, values: dict[str, str], labels: dict[str, str]) -> str:
     """A statement with each slot's value, or its label in brackets until it is filled."""
 
@@ -147,7 +159,7 @@ def render(text: str, values: dict[str, str], labels: dict[str, str]) -> str:
         key = match.group(1)
         value = values.get(key, "").strip()
         if value:
-            return value
+            return shown(value)
         # The system is the one the control instance is for; it reads as such until named.
         return "the system" if key == "system" else f"[{labels.get(key, key)}]"
 

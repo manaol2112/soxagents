@@ -14,6 +14,7 @@ import {
   readingBlocks,
 } from "./evidence-preview-model";
 import { UiIcon } from "./ui-icon";
+import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
 
 type PreviewFile = { id: string; fileName: string };
 
@@ -115,6 +116,7 @@ function PreviewDialog({
       : null,
   );
   const dialog = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialog);
   const file = files.find((item) => item.id === fileId) ?? files[0];
   const mine = citations.filter((item) => item.fileId === file?.id);
   const query = fileQuery(organizationId, projectId);
@@ -123,7 +125,7 @@ function PreviewDialog({
     const previous = document.activeElement as HTMLElement | null;
     dialog.current?.focus();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && isTopmostDialog(dialog.current)) {
         onClose();
       }
     };
@@ -445,10 +447,23 @@ function PdfViewer({
   const [state, setState] = useState<PdfState>({ status: "loading" });
   const [page, setPage] = useState(focused?.page ?? citations[0]?.page ?? 1);
   const [boxes, setBoxes] = useState<Array<{ box: Box; index: number }>>([]);
-  const quotes = useMemo(
-    () => citations.map((item, index) => ({ item, index })),
-    [citations],
+  // The passages to mark, by their content: the parent passes a new array on each of its
+  // renders, and a new array alone must not draw the page again.
+  const marks = JSON.stringify(
+    citations.map((item) => ({ quote: item.quote, page: item.page })),
   );
+  const quotes = useMemo(
+    () =>
+      (JSON.parse(marks) as Array<{ quote: string; page: number | null }>).map(
+        (item, index) => ({ item, index }),
+      ),
+    [marks],
+  );
+  // The draw in progress, and which call is the latest: pdf.js refuses two draws on one
+  // canvas at once, and a draw a later one overtook must not set the boxes.
+  // biome-ignore lint/suspicious/noExplicitAny: pdf.js types load with the library.
+  const drawing = useRef<any>(null);
+  const latest = useRef(0);
 
   useEffect(() => {
     if (focused?.page != null) {
@@ -495,6 +510,7 @@ function PdfViewer({
   }, [url]);
 
   const render = useCallback(async () => {
+    const run = ++latest.current;
     const current = doc.current;
     const target = canvas.current;
     if (current === null || target === null || state.status !== "ready") {
@@ -504,6 +520,16 @@ function PdfViewer({
     const pdfPage = await loaded.getPage(
       Math.min(Math.max(page, 1), state.pages),
     );
+    // A draw still going on this canvas stops first (31 October 2026: a second draw on the
+    // same canvas threw and took the workspace down).
+    const previous = drawing.current;
+    if (previous !== null) {
+      previous.cancel();
+      await previous.promise.catch(() => undefined);
+    }
+    if (run !== latest.current) {
+      return;
+    }
     const width = holder.current?.clientWidth ?? 800;
     const base = pdfPage.getViewport({ scale: 1 });
     const scale = Math.min(5, Math.max(0.3, ((width - 8) / base.width) * zoom));
@@ -518,10 +544,30 @@ function PdfViewer({
       return;
     }
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    await pdfPage.render({ canvas: target, canvasContext: context, viewport })
-      .promise;
+    const task = pdfPage.render({
+      canvas: target,
+      canvasContext: context,
+      viewport,
+    });
+    drawing.current = task;
+    try {
+      await task.promise;
+    } catch {
+      // Cancelled by a later draw, or the page could not be drawn: nothing to mark.
+      return;
+    } finally {
+      if (drawing.current === task) {
+        drawing.current = null;
+      }
+    }
+    if (run !== latest.current) {
+      return;
+    }
     // The cited passages on this page, as boxes over the text runs they cover.
     const text = await pdfPage.getTextContent();
+    if (run !== latest.current) {
+      return;
+    }
     const runs = (
       text.items as Array<{
         str?: string;
@@ -568,7 +614,12 @@ function PdfViewer({
   }, [page, quotes, state, zoom]);
 
   useEffect(() => {
-    void render();
+    render().catch(() => undefined);
+    return () => {
+      // A draw for a page or zoom no longer shown stops, and its result is dropped.
+      latest.current++;
+      drawing.current?.cancel();
+    };
   }, [render]);
 
   if (state.status === "failed") {

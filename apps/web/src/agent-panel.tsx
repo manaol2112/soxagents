@@ -1,5 +1,7 @@
 "use client";
 
+import { AgentAvatar } from "./agent-avatar";
+import type { AgentState } from "./agent-avatar-model";
 import {
   type FactsBase,
   OPEN_GUIDE_EVENT,
@@ -39,46 +41,25 @@ function blankFacts(base: FactsBase): GuideFacts {
   };
 }
 
-/** The setup agent: a visor with two lit eyes, a smile, and an antenna. Drawn in the
- * agent's tokens; it floats and blinks, and stays still under reduced motion. */
-export function AgentBot({ size = 92 }: { size?: number }) {
+/** The setup agent: the shared agent (agent-avatar.tsx), in the state of its task. */
+export function AgentBot({
+  size = 92,
+  state = "idle",
+  label = "Setup agent",
+  says,
+}: {
+  size?: number;
+  state?: AgentState;
+  label?: string;
+  says?: string;
+}) {
   return (
-    <svg
-      className="ab-bot"
-      width={size}
-      height={size}
-      viewBox="0 0 120 120"
-      aria-hidden="true"
-    >
-      <circle className="ab-halo" cx="60" cy="64" r="54" />
-      <g className="ab-body">
-        <line className="ab-antenna" x1="60" y1="14" x2="60" y2="28" />
-        <circle className="ab-tip" cx="60" cy="12" r="5" />
-        <rect className="ab-ear" x="14" y="52" width="12" height="22" rx="6" />
-        <rect className="ab-ear" x="94" y="52" width="12" height="22" rx="6" />
-        <rect
-          className="ab-head"
-          x="22"
-          y="28"
-          width="76"
-          height="66"
-          rx="28"
-        />
-        <rect
-          className="ab-visor"
-          x="32"
-          y="42"
-          width="56"
-          height="34"
-          rx="17"
-        />
-        <g className="ab-eyes">
-          <ellipse className="ab-eye" cx="49" cy="57" rx="5.5" ry="6.5" />
-          <ellipse className="ab-eye" cx="71" cy="57" rx="5.5" ry="6.5" />
-        </g>
-        <path className="ab-smile" d="M51 67 Q60 73 69 67" />
-      </g>
-    </svg>
+    <AgentAvatar
+      size={size}
+      state={state}
+      label={label}
+      {...(says !== undefined ? { says } : {})}
+    />
   );
 }
 

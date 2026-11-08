@@ -6,10 +6,14 @@ sent moves as if the owner had replied, and its open follow-ups stop. A request 
 never sent (a draft, or awaiting approval) is marked as provided directly, and its pending
 send approval is withdrawn, so the request never goes out.
 
-Each move is recorded on the filing, so changing a file to another control can put the
-request back while nothing else has moved it since.
+Each move is recorded on a filing. When a file leaves the request (withdrawn, or moved to
+another control) the request follows the evidence left on it: received while every item
+still has evidence, partly received while some does, and back to where it was before any
+evidence came once none is left (31 Oct 2026: withdrawing one of two items' files left the
+request received).
 """
 
+from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import UUID
 
@@ -22,6 +26,8 @@ ReceiptStatus = Literal["PARTIALLY_RECEIVED", "RECEIVED"]
 _ANSWERED = frozenset({"SENT", "WAITING_FOR_RESPONSE", "OVERDUE", "ESCALATED"})
 _UNSENT = frozenset({"DRAFT", "APPROVAL_PENDING"})
 _SEND_ACTION = "mail.pbc"
+# The statuses evidence moves a request to.
+_EVIDENCE = frozenset({"PARTIALLY_RECEIVED", "RECEIVED"})
 
 
 def covered(cursor: psycopg.Cursor[Any], project_id: UUID, request_id: UUID) -> bool:
@@ -50,7 +56,12 @@ def covered(cursor: psycopg.Cursor[Any], project_id: UUID, request_id: UUID) -> 
         items = draft[0].get("items", [])
         wanted = min(len(items), 8) if isinstance(items, list) else 0
     if wanted == 0:
-        return True
+        # No drafted list to count against: a request sent from the evidence plan skips
+        # its draft. Each requested item counts by its own evidence, as the plan shows
+        # it (31 Oct 2026: one item's file marked such a request received, so its other
+        # items read received with nothing of their own). A request with no planned
+        # items is received by any file, as before.
+        return not planned or _every_item_served(cursor, request_id)
     rows = cursor.execute(
         """
         SELECT a.classification FROM evidence_file_links l
@@ -74,6 +85,36 @@ def covered(cursor: psycopg.Cursor[Any], project_id: UUID, request_id: UUID) -> 
     return all(index in found for index in range(wanted))
 
 
+def _every_item_served(cursor: psycopg.Cursor[Any], request_id: UUID) -> bool:
+    """Whether each requested item of the request has evidence of its own: a file on the
+    request that serves it (filed for it, or for the request as a whole and not read as
+    missing it), a file a sibling control shares for it, or a file a person linked to it.
+    The same test the evidence plan uses for an item's state (evidence_plans._requirements)."""
+    from ai_workforce_api.evidence_plans import request_file_serves, shared_from_sibling
+
+    row = cursor.execute(
+        """
+        SELECT count(*) FROM evidence_requirements q
+        WHERE q.pbc_request_id = %s AND q.status = 'REQUESTED'
+          AND NOT EXISTS (
+              SELECT 1 FROM evidence_file_links l
+              LEFT JOIN evidence_analyses a ON a.evidence_file_id = l.evidence_file_id
+              WHERE l.pbc_request_id = q.pbc_request_id AND {SERVES})
+          AND NOT EXISTS ({SHARED})
+          AND NOT EXISTS (
+              SELECT 1 FROM evidence_requirement_files ef
+              JOIN evidence_file_links l
+                ON l.evidence_file_id = ef.evidence_file_id
+               AND l.engagement_control_id = ef.engagement_control_id
+              WHERE ef.requirement_id = q.id AND ef.status = 'LINKED')
+        """.replace("{SERVES}", request_file_serves("l.evidence_file_id")).replace(
+            "{SHARED}", shared_from_sibling("1")
+        ),
+        (request_id,),
+    ).fetchone()
+    return row is not None and int(row[0]) == 0
+
+
 def apply_receipt(
     cursor: psycopg.Cursor[Any],
     organization_id: UUID,
@@ -91,9 +132,11 @@ def apply_receipt(
     if row is None:
         return None
     before = str(row[0])
-    target: ReceiptStatus = (
-        "RECEIVED" if covered(cursor, project_id, request_id) else "PARTIALLY_RECEIVED"
-    )
+    # A request whose every item a person accepted is received, as when the last item is
+    # accepted (evidence_plans._received_when_accepted): a file restored to it puts it back
+    # where its withdrawal found it.
+    whole = covered(cursor, project_id, request_id) or _every_item_accepted(cursor, request_id)
+    target: ReceiptStatus = "RECEIVED" if whole else "PARTIALLY_RECEIVED"
     if before in ("RECEIVED", "CLOSED", "CANCELLED") or before == target:
         return None
     if before not in _ANSWERED and before not in _UNSENT and before != "PARTIALLY_RECEIVED":
@@ -141,52 +184,91 @@ def apply_receipt(
     return target
 
 
-def undo_receipt(
-    cursor: psycopg.Cursor[Any],
-    organization_id: UUID,
-    project_id: UUID,
-    match_id: UUID,
-    actor_id: UUID,
-) -> None:
-    """Put the request back when its only filed file moves away, if nothing else moved it."""
+@dataclass(frozen=True)
+class Released:
+    """The receipt a filing recorded, taken off it as its file leaves the request."""
+
+    request_id: UUID
+    # The request's status before evidence moved it, as this filing recorded it.
+    before: str | None
+
+
+def release_receipt(cursor: psycopg.Cursor[Any], match_id: UUID) -> Released | None:
+    """Take the receipt record off a filing whose file is leaving its request."""
     row = cursor.execute(
-        """
-        SELECT receipt_request_id, receipt_status_before, receipt_status_set, evidence_file_id
-        FROM evidence_matches WHERE id = %s FOR UPDATE
-        """,
+        "SELECT receipt_request_id, receipt_status_before FROM evidence_matches "
+        "WHERE id = %s FOR UPDATE",
         (match_id,),
     ).fetchone()
     if row is None or row[0] is None:
-        return
-    request_id, before, set_to, file_id = UUID(str(row[0])), str(row[1]), str(row[2]), row[3]
+        return None
     cursor.execute(
         "UPDATE evidence_matches SET receipt_request_id = NULL, receipt_status_before = NULL, "
         "receipt_status_set = NULL, version = version + 1 WHERE id = %s",
         (match_id,),
     )
-    others = cursor.execute(
-        "SELECT 1 FROM evidence_file_links WHERE pbc_request_id = %s AND evidence_file_id <> %s",
-        (request_id, file_id),
+    return Released(UUID(str(row[0])), None if row[1] is None else str(row[1]))
+
+
+def follow_evidence(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    request_id: UUID,
+    actor_id: UUID,
+    before: str | None = None,
+) -> None:
+    """After a file left the request, move the request to what the evidence left on it
+    shows. Called once the file is off the request (withdrawn, or filed elsewhere), with
+    the status `before` its filing recorded, if it recorded one. A request evidence never
+    moved, or one moved on since (closed, cancelled), is left alone."""
+    row = cursor.execute(
+        "SELECT status FROM pbc_requests WHERE id = %s AND project_id = %s FOR UPDATE",
+        (request_id, project_id),
     ).fetchone()
-    if others is not None:
+    if row is None or str(row[0]) not in _EVIDENCE:
         return
-    # A withdrawn approval does not come back, so an unsent request returns to draft.
-    restored = "DRAFT" if before in _UNSENT else before
-    moved = cursor.execute(
-        """
-        UPDATE pbc_requests
-        SET status = %s,
-            provided_directly = CASE WHEN %s THEN false ELSE provided_directly END,
-            escalation_state = CASE WHEN %s = 'ESCALATED' THEN 'ESCALATED' ELSE 'NONE' END,
-            received_at = NULL,
-            updated_at = clock_timestamp(),
-            version = version + 1
-        WHERE id = %s AND project_id = %s AND status = %s
-        RETURNING id
-        """,
-        (restored, before in _UNSENT, restored, request_id, project_id, set_to),
-    ).fetchone()
-    if moved is not None:
+    status = str(row[0])
+    records = [
+        (UUID(str(found[0])), None if found[1] is None else str(found[1]))
+        for found in cursor.execute(
+            "SELECT id, receipt_status_before FROM evidence_matches "
+            "WHERE receipt_request_id = %s ORDER BY id FOR UPDATE",
+            (request_id,),
+        ).fetchall()
+    ]
+    if before is None and not records:
+        return
+    # Where the request was before any evidence came: the first recorded status that is
+    # not itself a receipt.
+    origins = [
+        value
+        for value in [before, *(record[1] for record in records)]
+        if value is not None and value not in _EVIDENCE
+    ]
+    origin = origins[0] if origins else None
+    if _evidence_left(cursor, request_id):
+        whole = covered(cursor, project_id, request_id) or _every_item_accepted(cursor, request_id)
+        target = "RECEIVED" if whole else "PARTIALLY_RECEIVED"
+    elif origin is not None:
+        # A withdrawn send approval does not come back, so an unsent request returns to draft.
+        target = "DRAFT" if origin in _UNSENT else origin
+    else:
+        return
+    if target != status:
+        cursor.execute(
+            """
+            UPDATE pbc_requests
+            SET status = %s,
+                provided_directly = CASE WHEN %s = 'DRAFT' THEN false ELSE provided_directly END,
+                escalation_state = CASE WHEN %s = 'ESCALATED' THEN 'ESCALATED' ELSE 'NONE' END,
+                received_at = CASE WHEN %s = 'RECEIVED' THEN received_at ELSE NULL END,
+                updated_at = clock_timestamp(),
+                version = version + 1
+            WHERE id = %s AND project_id = %s
+            """,
+            (target, target, target, target, request_id, project_id),
+        )
         _audit(
             cursor,
             organization_id,
@@ -194,8 +276,88 @@ def undo_receipt(
             actor_id,
             request_id,
             "pbc.receipt_undone",
-            {"status": restored, "from": set_to},
+            {"status": target, "from": status},
         )
+    if target not in _EVIDENCE:
+        cursor.execute(
+            "UPDATE evidence_matches SET receipt_request_id = NULL, receipt_status_before = NULL, "
+            "receipt_status_set = NULL, version = version + 1 WHERE receipt_request_id = %s",
+            (request_id,),
+        )
+        return
+    # Keep the record that puts the request back when its last file leaves.
+    if records:
+        cursor.execute(
+            "UPDATE evidence_matches SET receipt_status_set = %s, version = version + 1 "
+            "WHERE receipt_request_id = %s",
+            (target, request_id),
+        )
+        if origin is not None and not any(record[1] == origin for record in records):
+            cursor.execute(
+                "UPDATE evidence_matches SET receipt_status_before = %s WHERE id = %s",
+                (origin, records[0][0]),
+            )
+    elif origin is not None:
+        cursor.execute(
+            """
+            UPDATE evidence_matches
+            SET receipt_request_id = %s, receipt_status_before = %s, receipt_status_set = %s,
+                version = version + 1
+            WHERE id = (
+                SELECT m.id FROM evidence_matches m
+                JOIN evidence_file_links l
+                  ON l.evidence_file_id = m.evidence_file_id
+                 AND l.pbc_request_id = m.pbc_request_id
+                WHERE m.pbc_request_id = %s AND m.receipt_request_id IS NULL
+                ORDER BY m.id LIMIT 1
+            )
+            """,
+            (request_id, origin, target, request_id),
+        )
+
+
+def undo_receipt(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    match_id: UUID,
+    actor_id: UUID,
+) -> None:
+    """Put the request right once the filing's file is already off it."""
+    released = release_receipt(cursor, match_id)
+    if released is not None:
+        follow_evidence(
+            cursor, organization_id, project_id, released.request_id, actor_id, released.before
+        )
+
+
+def _evidence_left(cursor: psycopg.Cursor[Any], request_id: UUID) -> bool:
+    """Whether any file is still on the request, or linked by a person to one of its items."""
+    row = cursor.execute(
+        """
+        SELECT EXISTS (SELECT 1 FROM evidence_file_links WHERE pbc_request_id = %s)
+            OR EXISTS (
+                SELECT 1 FROM evidence_requirement_files ef
+                JOIN evidence_requirements q ON q.id = ef.requirement_id
+                JOIN evidence_file_links l
+                  ON l.evidence_file_id = ef.evidence_file_id
+                 AND l.engagement_control_id = ef.engagement_control_id
+                WHERE q.pbc_request_id = %s AND q.status = 'REQUESTED' AND ef.status = 'LINKED')
+        """,
+        (request_id, request_id),
+    ).fetchone()
+    return row is not None and bool(row[0])
+
+
+def _every_item_accepted(cursor: psycopg.Cursor[Any], request_id: UUID) -> bool:
+    """Whether a person accepted every requested item: such a request stays received
+    (evidence_plans._received_when_accepted)."""
+    row = cursor.execute(
+        "SELECT count(*), count(*) FILTER (WHERE sufficiency = 'ACCEPTED') "
+        "FROM evidence_requirements WHERE pbc_request_id = %s AND status = 'REQUESTED'",
+        (request_id,),
+    ).fetchone()
+    return row is not None and int(row[0]) > 0 and int(row[0]) == int(row[1])
 
 
 def _withdraw_send(

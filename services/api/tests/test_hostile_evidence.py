@@ -211,8 +211,13 @@ def test_the_console_obeys_no_instruction_in_the_evidence_and_stays_in_its_engag
         ).fetchone()
         assert found is not None
         hostile_file = str(found[0])
+        # A request still open, so the console's attempt to mark it received would show.
+        # (Picking any request let the one the fixture's upload had already received be
+        # chosen, by row order, and the assertion below then failed with nothing changed.)
         open_request = connection.execute(
-            "SELECT id FROM pbc_requests WHERE project_id = %s LIMIT 1", (team["project"],)
+            "SELECT id FROM pbc_requests WHERE project_id = %s AND status <> 'RECEIVED' "
+            "ORDER BY id LIMIT 1",
+            (team["project"],),
         ).fetchone()
     assert open_request is not None
     before = protected(migrated, team)

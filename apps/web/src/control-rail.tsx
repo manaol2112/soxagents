@@ -446,8 +446,8 @@ export function ControlAssistant({
   return (
     <section className="cw-assist" aria-labelledby="cw-assist-title">
       <div className="cw-assist-head">
-        <span className="cw-assist-bot" aria-hidden="true">
-          <AgentBot />
+        <span className="cw-assist-bot">
+          <AgentBot label="AI assistant" />
         </span>
         <div>
           <h2 id="cw-assist-title">
@@ -848,6 +848,7 @@ export function GoverningDocumentsCard({
     <section className="cw-context cw-docs" aria-labelledby="cw-docs-title">
       <header className="cw-card-head">
         <h2 id="cw-docs-title">
+          <UiIcon name="file" size={17} />
           Governing documents <span>({documents.length})</span>
         </h2>
         <a href={manageHref}>Manage</a>
@@ -883,7 +884,10 @@ export function ControlContextCard({
   return (
     <section className="cw-context" aria-labelledby="cw-context-title">
       <header className="cw-card-head">
-        <h2 id="cw-context-title">Control context</h2>
+        <h2 id="cw-context-title">
+          <UiIcon name="info" size={17} />
+          Control context
+        </h2>
         {editHref !== null ? (
           <a className="btn-secondary btn-sm" href={editHref}>
             <UiIcon name="compose" size={13} />

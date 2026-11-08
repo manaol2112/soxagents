@@ -60,6 +60,7 @@ from ai_workforce_api.process_understanding import (
     composed,
 )
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
+from ai_workforce_api.question_review import review_open_questions
 from ai_workforce_api.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -294,16 +295,20 @@ the period it covers (never only "periodically", "regularly" or "timely"); who p
 and who approves; the system; and the record it leaves. Where the sources do not say, raise \
 it as a point, with the usual practice as the proposal.
 - A document the process relies on (a policy, a list of roles, a standard) is named in the \
-narrative. One not among the sources is never a point: the evidence requests obtain it.
+narrative. One not among the sources is never a point: the evidence requests obtain it. An \
+answer of "No formal document" means the client has none and the control runs on established \
+practice: never ask for that document, and do not treat its absence as a gap.
 - The person answering confirms a statement or picks an answer; never make them write one. \
-For each point give: the topic; the section it serves; the attribute codes it serves; why \
-the narrative needs it; proposal, your best understanding stated as a plain fact to confirm \
-(for example "Role owners sign the access listing in ServiceNow, and it is kept with the \
-review ticket."); proposal_basis, SOURCES when the sources, the statement or the client's \
-answers say it, otherwise TYPICAL; suggestions, up to three other answers common for a \
-control of this kind, each a short phrase (for example "A system-enforced workflow in \
-ServiceNow"), or none when there is no real alternative; and question, the same fact asked \
-as one short question of one sentence.
+For each point give: the topic; the section it serves; the attribute codes it serves; why, \
+one sentence telling the auditor how the answer changes the test, naming no agent, narrative \
+or attribute code; proposal, your best understanding stated as a plain fact to confirm, in \
+complete sentences (for example "Role owners sign the access listing in ServiceNow, and it is \
+kept with the review ticket."); proposal_basis, SOURCES when the sources, the statement or \
+the client's answers say it, otherwise TYPICAL; suggestions, up to three other answers common \
+for a control of this kind, each a complete sentence in the same form as the proposal that \
+answers the same question, or none when there is no real alternative; and question, one open \
+question of one sentence (who, what, which, how, when or where, never yes or no, since the \
+answers are statements) that the proposal and the suggestions all answer.
 - Always give a proposal. Where the sources say nothing, state how a control of this kind \
 usually runs in the systems already named (TYPICAL). Name people by role, never by a name \
 the sources do not give, and never invent a document title, a threshold or a figure: where \
@@ -706,6 +711,12 @@ def run_narrative(
             cursor, organization_id, project_id, control_id, questions, int(inputs["round"]),
             codes,
         )  # fmt: skip
+    # Before the run reads as finished: a person never sees these before they are checked.
+    review_open_questions(
+        connection, provider, organization_id, project_id, control_id, requester,
+        inputs["package"], inputs["sources"],
+    )  # fmt: skip
+    with transaction(connection) as cursor:
         cursor.execute(
             """
             UPDATE process_narrative_runs

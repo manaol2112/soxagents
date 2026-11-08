@@ -27,6 +27,9 @@ type Props = {
   start?: "replace" | "withdraw";
   /** Cancel closes the form (the menu's caller hides it) instead of showing the buttons. */
   onCancel?: () => void;
+  /** Withdraw in place: a refusal shows in the form, and a withdrawal is handed to the
+   * caller, which confirms it where the person acted. Without it the page reloads. */
+  onDone?: (notice: ChangeNotice) => void;
 };
 
 function Hidden({
@@ -35,7 +38,7 @@ function Hidden({
   fileId,
   controlId,
   keep,
-}: Omit<Props, "fileName" | "blocked" | "start" | "onCancel">) {
+}: Omit<Props, "fileName" | "blocked" | "start" | "onCancel" | "onDone">) {
   return (
     <>
       <input type="hidden" name="organization_id" value={organizationId} />
@@ -150,6 +153,39 @@ export function FileChanges(props: Props) {
     router.refresh();
   }
 
+  async function withdraw(event: FormEvent<HTMLFormElement>) {
+    const done = props.onDone;
+    if (done === undefined) {
+      // The page's own form post: it reloads with the notice.
+      return;
+    }
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setSending(true);
+    setProblem(null);
+    let notice: ChangeNotice = "unavailable";
+    try {
+      const response = await fetch("/workspace/evidence-change", {
+        method: "POST",
+        headers: { accept: "application/json" },
+        body: form,
+      });
+      const body = (await response.json()) as { notice?: unknown };
+      if (typeof body.notice === "string" && body.notice in CHANGE_NOTICES) {
+        notice = body.notice as ChangeNotice;
+      }
+    } catch {
+      notice = "unavailable";
+    }
+    setSending(false);
+    if (notice !== "withdrawn") {
+      setProblem(CHANGE_NOTICES[notice]);
+      return;
+    }
+    done(notice);
+    router.refresh();
+  }
+
   return (
     <div className="file-changes">
       {mode === "idle" ? (
@@ -258,6 +294,7 @@ export function FileChanges(props: Props) {
           className="change-form"
           method="post"
           action="/workspace/evidence-change"
+          onSubmit={withdraw}
         >
           <Hidden {...props} />
           <input type="hidden" name="intent" value="withdraw" />
@@ -268,11 +305,35 @@ export function FileChanges(props: Props) {
             It comes off its request, testing, and workpapers. The file and who
             withdrew it stay on record, and it can be restored.
           </p>
+          {problem !== null ? (
+            <p className="change-problem" role="alert">
+              {problem}
+            </p>
+          ) : null}
           <div className="file-changes-actions">
-            <button type="submit" className="btn-sm btn-danger">
-              Withdraw
+            <button
+              type="submit"
+              className="btn-sm btn-danger"
+              disabled={sending}
+            >
+              {sending ? (
+                <>
+                  <span className="spinner small" aria-hidden="true" />{" "}
+                  Withdrawing…
+                </>
+              ) : (
+                "Withdraw"
+              )}
             </button>
-            <button type="button" className="btn-ghost btn-sm" onClick={cancel}>
+            <button
+              type="button"
+              className="btn-ghost btn-sm"
+              onClick={() => {
+                setProblem(null);
+                cancel();
+              }}
+              disabled={sending}
+            >
               Cancel
             </button>
           </div>

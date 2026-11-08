@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { browserUrl } from "../../../src/browser-url";
 import {
+  answersInPlace,
   type ChangeNotice,
   changeNoticeFor,
   changeNoticeParam,
@@ -10,8 +11,11 @@ import {
 } from "../../../src/evidence-change-model";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 
-/** A person withdraws an evidence file, with a reason, or restores a withdrawn one. */
+/** A person withdraws an evidence file, with a reason, or restores a withdrawn one. A form
+ * that asks for JSON gets the notice back, to show where the person acted; otherwise the
+ * page is reloaded with it. */
 export async function POST(request: Request) {
+  const inPlace = answersInPlace(request.headers.get("accept"));
   const form = await request.formData();
   const fields: Record<string, string> = {};
   for (const [key, value] of form.entries()) {
@@ -21,7 +25,9 @@ export async function POST(request: Request) {
   }
   const write = changeWrite(fields);
   if ("error" in write) {
-    return back(request, fields, "invalid");
+    return inPlace
+      ? NextResponse.json({ notice: "invalid" })
+      : back(request, fields, "invalid");
   }
   const session = sessionToken((await cookies()).get("aw_session")?.value);
   let notice: ChangeNotice = "unavailable";
@@ -45,7 +51,9 @@ export async function POST(request: Request) {
   } catch {
     notice = "unavailable";
   }
-  return back(request, fields, notice);
+  return inPlace
+    ? NextResponse.json({ notice })
+    : back(request, fields, notice);
 }
 
 async function detailOf(response: Response): Promise<string> {
@@ -79,6 +87,8 @@ function back(
     destination.searchParams.set("section", "controls");
     destination.searchParams.set("control", target.control);
     destination.searchParams.set("tab", "evidence");
+    // The notice shows with the control's files: open them.
+    destination.searchParams.set("ev", "files");
   } else {
     destination.searchParams.set("section", "evidence");
     for (const [key, value] of Object.entries(target.keep)) {

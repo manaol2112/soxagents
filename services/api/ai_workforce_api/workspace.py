@@ -1280,6 +1280,30 @@ def _controls(
         (project_id,),
     ).fetchall():
         requirements.setdefault(control_id, {}).setdefault(str(phase), {})[str(status)] = int(count)
+    # Requested items not complete yet: no person accepted them, and the reader found no
+    # file that covers them in full ("covers it in part" is not complete). A phase whose
+    # items are not all complete is not ready for testing (31 Oct 2026).
+    for control_id, phase, count in connection.execute(
+        """
+        SELECT q.engagement_control_id, q.phase, count(*) FROM evidence_requirements q
+        WHERE q.project_id = %s AND q.status = 'REQUESTED' AND q.sufficiency <> 'ACCEPTED'
+          AND NOT EXISTS (
+              SELECT 1 FROM evidence_file_links l
+              JOIN evidence_analyses a
+                ON a.evidence_file_id = l.evidence_file_id AND a.status = 'READY'
+              CROSS JOIN LATERAL jsonb_array_elements(
+                  CASE WHEN jsonb_typeof(a.classification -> 'items') = 'array'
+                       THEN a.classification -> 'items' ELSE '[]'::jsonb END) AS item
+              WHERE l.pbc_request_id = q.pbc_request_id
+                AND item ->> 'requirement_id' = q.id::text
+                AND item ->> 'coverage' = 'COVERED')
+        GROUP BY 1, 2
+        """,
+        (project_id,),
+    ).fetchall():
+        requirements.setdefault(control_id, {}).setdefault(str(phase), {})["INCOMPLETE"] = int(
+            count
+        )
     started = connection.execute(
         "SELECT kicked_off_at IS NOT NULL FROM engagement_settings WHERE project_id = %s",
         (project_id,),

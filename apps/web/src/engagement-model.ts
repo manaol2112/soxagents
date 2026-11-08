@@ -1,6 +1,7 @@
 import type { EvidenceAnalysis, EvidenceReview } from "./analysis-model.ts";
 import type { ActivityItem } from "./control-workspace-model.ts";
 import type { ChangeNotice } from "./evidence-change-model.ts";
+import type { WalkthroughInstance } from "./evidence-dialog-model.ts";
 import type { EvidenceFinding } from "./evidence-findings-model.ts";
 import type { EvidenceMappingRun } from "./evidence-mapping-model.ts";
 import type { RegisterApplication, RegisterFile } from "./evidence-model.ts";
@@ -655,6 +656,8 @@ export type EngagementState = {
   evidenceMapping?: EvidenceMappingRun | null;
   /** The open control's evidence findings (increment 2); null when not loaded. */
   evidenceFindings?: EvidenceFinding[] | null;
+  /** The walkthrough instances picked for the open control's design items. */
+  walkthroughInstances?: WalkthroughInstance[] | null;
   /** The engagement's journey and what waits on the team (next_steps.py), for Home. */
   nextSteps?: NextSteps | null;
   notice: EngagementNotice | null;
@@ -674,6 +677,8 @@ export type EngagementState = {
     /** The Evidence tab's view (?ev=) and the request opened in it (?request=). */
     evidenceView?: string | null;
     request?: string | null;
+    /** A file opened in the evidence dialog (?file=), and ?ev=add opens Add evidence. */
+    focusFile?: string | null;
     group: Grouping;
     /** The register's order: control ID, stage in the work, what needs attention, owner,
      * application, or the next evidence due date. */

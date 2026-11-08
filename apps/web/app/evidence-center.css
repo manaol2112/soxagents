@@ -453,8 +453,10 @@
   cursor: pointer;
 }
 
+/* A column heading, not a filled button: no fill on hover (31 October 2026). */
 .ec-sort:hover {
   color: var(--text);
+  background: none;
 }
 
 .ec-request {

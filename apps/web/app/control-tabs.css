@@ -1,0 +1,1156 @@
+/* ==========================================================================
+   The control workspace as one row of tabs (product owner's reference, 2 November
+   2026): the header with the type and system above the ID, title and status; the steps
+   as progress; one tab row; and the Overview's cards. Tokens only, so both themes follow.
+   ========================================================================== */
+
+/* The header: type and system above, the status beside the title. */
+.cw-hero .cw-crumbs {
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.cw-hero .cw-crumbs > span[aria-hidden="true"] {
+  color: var(--border-strong, var(--border));
+}
+
+.cw-hero h1 .cr-status {
+  align-self: center;
+  padding: 0.2rem 0.65rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  border-radius: 999px;
+}
+
+.cw-needs-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 36px;
+  padding: 0 0.85rem;
+  color: var(--warning);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  text-decoration: none;
+  background: var(--warning-soft);
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
+  border-radius: var(--radius);
+  transition: background-color 120ms ease;
+}
+
+.cw-needs-badge:hover {
+  background: color-mix(in srgb, var(--warning-soft) 70%, var(--warning) 12%);
+}
+
+/* The tab row. */
+.cw-tabs {
+  border-bottom: 1px solid var(--border);
+}
+
+.cw-tabs ul {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  overflow-x: auto;
+  list-style: none;
+  scrollbar-width: thin;
+}
+
+.cw-tabs a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: -1px;
+  padding: 0.75rem 0.9rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.cw-tabs a:hover {
+  color: var(--text-strong);
+}
+
+.cw-tabs a.is-on {
+  color: var(--accent-text);
+  border-bottom-color: var(--accent);
+}
+
+/* Two columns where a tab keeps its side column; one elsewhere. */
+.cw-layout.is-tabbed {
+  grid-template-columns: minmax(0, 1fr) 320px;
+}
+
+.cw-layout.is-tabbed.is-wide {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* --- The Overview (product owner's reference, 2 November 2026) ---------------------- */
+
+.ov {
+  display: grid;
+  gap: 1.25rem;
+}
+
+/* The viewer's next action across the page. */
+.ov-next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1.25rem;
+  padding: 0.9rem 1.25rem;
+  background: color-mix(in srgb, var(--accent-soft) 40%, var(--surface));
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 14px;
+  box-shadow: var(--shadow-xs, 0 1px 2px rgb(16 24 40 / 4%));
+}
+
+.ov-next > svg {
+  color: var(--accent-text);
+}
+
+.ov-next-label {
+  color: var(--accent-text);
+  font-size: var(--fs-md);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.ov-next-title {
+  color: var(--text-strong);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.ov-next-detail {
+  flex: 1 1 16rem;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.ov-next-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.ov-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 1.25rem;
+}
+
+.ov-col {
+  display: grid;
+  gap: 1.25rem;
+  min-width: 0;
+}
+
+.ov-card {
+  display: grid;
+  gap: 0.9rem;
+  min-width: 0;
+  padding: 1.1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 14px;
+  box-shadow: var(--shadow-xs, 0 1px 2px rgb(16 24 40 / 4%));
+}
+
+.ov-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+}
+
+.ov-head h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.ov-head h2 > svg {
+  color: var(--text-secondary);
+}
+
+.ov-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.ov-link:hover {
+  text-decoration: underline;
+}
+
+.ov-more {
+  justify-self: start;
+}
+
+.ov-details {
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.ov-empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.ov-plain {
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.ov-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0.2rem 0.65rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  border-radius: 999px;
+}
+
+.ov-chip.is-blue {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.ov-chip.is-quiet {
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+}
+
+/* The control in one row, a rule between its facts. */
+.ov-summary {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1.1fr) minmax(10rem, 1fr) auto auto auto;
+  margin: 0;
+}
+
+.ov-summary > div {
+  min-width: 0;
+  padding: 0 1rem;
+  border-left: 1px solid var(--border);
+}
+
+.ov-summary > div:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.ov-summary > div:last-child {
+  padding-right: 0;
+}
+
+.ov-summary dt {
+  margin-bottom: 0.45rem;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.ov-summary dd {
+  margin: 0;
+}
+
+/* A long type wraps inside its chip rather than run into the next fact. */
+.ov-summary .ov-chip {
+  white-space: normal;
+  border-radius: 10px;
+}
+
+.ov-summary-objective dd {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+/* The activities, filtered by phase. */
+.ov-phases {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.ov-phases button {
+  padding: 0.35rem 0.85rem;
+  color: var(--text-strong);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: none;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.ov-phases button:hover {
+  border-color: var(--accent-border, var(--accent));
+}
+
+.ov-phases button.is-on {
+  color: var(--text-on-accent, #fff);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.ov-rows {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ov-rows li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+}
+
+.ov-num {
+  display: inline-grid;
+  min-width: 30px;
+  height: 30px;
+  place-items: center;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  background: var(--surface-muted);
+  border-radius: 8px;
+}
+
+.ov-row-text {
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.ov-row-open {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  color: var(--text-secondary);
+  border-radius: 6px;
+  transition: background-color 120ms ease;
+}
+
+.ov-row-open:hover {
+  color: var(--text-strong);
+  background: var(--surface-muted);
+}
+
+/* The attributes. */
+.ov-attrs {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ov-attrs li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+}
+
+.ov-attrs li:last-child {
+  border-bottom: 0;
+}
+
+.ov-code {
+  display: inline-grid;
+  min-width: 34px;
+  height: 28px;
+  place-items: center;
+  color: var(--text-strong);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  background: var(--surface-muted);
+  border-radius: 7px;
+}
+
+.ov-attr-text {
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.ov-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.6rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  border-radius: 999px;
+}
+
+.ov-status.is-ready,
+.ov-status.is-verified {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.ov-status.is-in_progress {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.ov-status.is-not_started,
+.ov-status.is-reading {
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+}
+
+.ov-status.is-exception {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.ov-status.is-review {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+/* The evidence, a card per file. */
+.ov-files {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ov-files li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 12px;
+}
+
+.ov-file-text {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.ov-file-name {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.ov-file-name:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+.ov-file-text small {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+/* The agent's insight: one row that opens what is behind it. */
+.ov-insight-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  padding: 0.8rem 0.9rem;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 12px;
+  box-shadow: none;
+  cursor: pointer;
+  transition: border-color 120ms ease;
+}
+
+.ov-insight-row > span {
+  min-width: 0;
+}
+
+.ov-insight-row:hover {
+  border-color: var(--accent-border, var(--accent));
+}
+
+.ov-insight-row > svg:first-child {
+  color: var(--text-secondary);
+}
+
+.ov-insight-row.is-good > svg:first-child {
+  color: var(--success);
+}
+
+.ov-insight-row.is-warn > svg:first-child {
+  color: var(--danger);
+}
+
+.ov-insight-row > svg:last-child {
+  color: var(--text-secondary);
+  transition: transform 150ms ease;
+}
+
+.ov-insight-row[aria-expanded="true"] > svg:last-child {
+  transform: rotate(90deg);
+}
+
+.ov-insights .ov-head h2 > svg {
+  color: var(--accent-text);
+}
+
+.ov-insight-details {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.ov-actions {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ov-actions a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.55rem 0.7rem;
+  color: var(--text-strong);
+  text-decoration: none;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 10px;
+  transition: border-color 120ms ease;
+}
+
+.ov-actions a:hover {
+  border-color: var(--accent-border, var(--accent));
+}
+
+.ov-actions span {
+  display: grid;
+  min-width: 0;
+}
+
+.ov-actions strong {
+  font-size: var(--fs-sm);
+}
+
+.ov-actions small {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.ov-notes summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+
+.ov-notes summary::-webkit-details-marker {
+  display: none;
+}
+
+.ov-notes[open] summary svg {
+  transform: rotate(180deg);
+}
+
+.ov-notes .cw-needs-drawer {
+  margin-top: 0.6rem;
+}
+
+/* The header: the breadcrumb with its chevrons. */
+.cw-hero .cw-crumbs > svg {
+  color: var(--text-tertiary);
+}
+
+/* The steps as a progress line: a mark, the step's name and state, what it is for. */
+
+.cw .cw-stepper > ol {
+  --cw-mark: 30px;
+  padding: 1rem 1.5rem 0.9rem;
+  border-radius: 14px;
+}
+
+.cw .cw-stepper > ol > li:not(:last-child)::after {
+  top: calc(4px + var(--cw-mark) / 2 - 3px);
+  right: 2px;
+  background: linear-gradient(90deg, var(--cw-line-from), var(--cw-line-to)) left
+    center / calc(100% - 2px) 1px no-repeat;
+}
+
+/* The arrowhead where the line meets the next step. */
+.cw .cw-stepper > ol > li:not(:last-child)::before {
+  position: absolute;
+  top: calc(4px + var(--cw-mark) / 2 - 3px);
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-top: 1px solid var(--cw-line-to);
+  border-right: 1px solid var(--cw-line-to);
+  transform: rotate(45deg);
+  pointer-events: none;
+  content: "";
+}
+
+.cw .cw-stepper > ol a {
+  gap: 0.55rem;
+}
+
+.cw .cw-step-mark {
+  box-shadow: none;
+}
+
+.cw .cw-stepper .is-done .cw-step-mark {
+  border: 0;
+  box-shadow: none;
+}
+
+.cw .cw-stepper .is-current .cw-step-mark {
+  border: 0;
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.cw .cw-stepper .is-working .cw-step-mark {
+  box-shadow: none;
+}
+
+.cw .cw-step-copy {
+  gap: 0.15rem;
+}
+
+.cw .cw-step-copy strong {
+  font-size: 15px;
+}
+
+.cw .cw-step-copy small {
+  font-size: 12.5px;
+}
+
+/* --- Risk & Scoping and Approvals -------------------------------------------------- */
+
+.ws-section h2 {
+  margin: 0 0 0.75rem;
+}
+
+.ws-approvals {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ws-approvals li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 0;
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+.ws-approvals li:first-child {
+  border-top: 0;
+}
+
+.ws-approval-mark {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 999px;
+}
+
+.ws-approvals .is-done .ws-approval-mark {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.ws-approvals .is-waiting .ws-approval-mark {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.ws-approvals .is-todo .ws-approval-mark {
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+}
+
+.ws-approval-text {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.ws-approval-text strong {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+}
+
+.ws-approval-text small {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.ws-approvals a {
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.ws-subhead {
+  margin: 1rem 0 0.4rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ws-receipts {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  list-style: none;
+}
+
+.ws-receipts small {
+  display: block;
+  color: var(--text-secondary);
+}
+
+/* --- Risk & Scoping (product owner's reference, 2 November 2026) ------------------- */
+
+.cw-context .cw-card-head h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.cw-context .cw-card-head h2 > svg {
+  color: var(--text-secondary);
+}
+
+.rs-head {
+  display: grid;
+  grid-template-columns: auto minmax(14rem, 0.9fr) minmax(0, 2.4fr);
+  align-items: center;
+  gap: 1rem 1.25rem;
+  padding: 1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 14px;
+  box-shadow: var(--shadow-xs, 0 1px 2px rgb(16 24 40 / 4%));
+}
+
+.rs-head-mark {
+  display: inline-grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 12px;
+}
+
+.rs-head-text {
+  min-width: 0;
+}
+
+.rs-head-text h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.rs-head-text p {
+  margin: 0.2rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.rs-head-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+}
+
+.rs-head-facts > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.7rem;
+  min-width: 0;
+  padding: 0.2rem 1.1rem;
+  border-left: 1px solid var(--border);
+}
+
+.rs-head-facts > div > svg {
+  margin-top: 0.15rem;
+  color: var(--accent-text);
+}
+
+.rs-head-facts span {
+  display: grid;
+  min-width: 0;
+}
+
+.rs-head-facts dt {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.rs-head-facts dd {
+  display: -webkit-box;
+  margin: 0.1rem 0 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.rs-card {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  padding: 1.15rem 1.35rem;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 14px;
+  box-shadow: var(--shadow-xs, 0 1px 2px rgb(16 24 40 / 4%));
+}
+
+.rs-card h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.rs-card h2 > svg {
+  color: var(--text-secondary);
+}
+
+/* Risk and objective: each label a pill beside its text. */
+.rs-rows {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.rs-rows > div {
+  display: grid;
+  grid-template-columns: 10rem minmax(0, 1fr);
+  align-items: start;
+  gap: 1rem;
+}
+
+.rs-rows dt {
+  justify-self: start;
+  padding: 0.4rem 0.9rem;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  background: var(--accent-soft);
+  border-radius: 10px;
+}
+
+.rs-rows dd {
+  margin: 0.35rem 0 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+
+/* Scope: columns of facts with a rule between them. */
+.rs-scope {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.rs-scope > dl {
+  display: grid;
+  align-content: start;
+  gap: 0.85rem;
+  margin: 0;
+  padding: 0 1.1rem;
+  border-left: 1px solid var(--border);
+}
+
+.rs-scope > dl:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.rs-scope dt {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 650;
+}
+
+.rs-scope dd {
+  margin: 0.15rem 0 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+/* Why each phase applies: the phase as a pill, a rule, then why. */
+.rs-why {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rs-why li {
+  display: grid;
+  grid-template-columns: 17rem minmax(0, 1fr);
+  align-items: center;
+  gap: 1.1rem;
+  padding: 0.65rem 0;
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+.rs-why li:first-child {
+  border-top: 0;
+}
+
+.rs-phase {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 0.55rem;
+  padding: 0.45rem 0.9rem;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  background: var(--accent-soft);
+  border-radius: 10px;
+}
+
+.rs-phase > svg {
+  color: var(--accent-text);
+}
+
+.rs-reason {
+  padding-left: 1.1rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  border-left: 1px solid var(--border);
+}
+
+@media (max-width: 1100px) {
+  .rs-head {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .rs-head-facts {
+    grid-column: 1 / -1;
+  }
+
+  .rs-head-facts > div:first-child {
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .rs-head-facts {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem;
+  }
+
+  .rs-head-facts > div {
+    padding: 0;
+    border-left: 0;
+  }
+
+  .rs-head-facts dd {
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+  }
+
+  .rs-rows > div,
+  .rs-why li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.4rem;
+  }
+
+  .rs-rows dd {
+    margin-top: 0;
+  }
+
+  .rs-reason {
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .rs-scope {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 0.85rem;
+  }
+
+  .rs-scope > dl,
+  .rs-scope > dl:first-child {
+    padding: 0;
+    border-left: 0;
+  }
+}
+
+@media (max-width: 1280px) {
+  .cw-layout.is-tabbed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 1100px) {
+  .ov-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .ov-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.85rem;
+  }
+
+  .ov-summary > div,
+  .ov-summary > div:first-child {
+    padding: 0;
+    border-left: 0;
+  }
+
+  .ov-summary-objective {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 640px) {
+  .ov-card {
+    padding: 1rem;
+  }
+
+  /* Five steps across a phone: the marks and short names, each in its own room. */
+  .cw .cw-stepper > ol {
+    gap: 0 4px;
+    padding: 0.85rem 0.6rem 0.75rem;
+  }
+
+  .cw .cw-step-copy strong {
+    font-size: 11.5px;
+    letter-spacing: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .ov-chip {
+    white-space: normal;
+  }
+
+  .ov-next-title,
+  .ov-next-detail {
+    flex-basis: 100%;
+  }
+
+  .ov-next-go {
+    flex-basis: 100%;
+    justify-content: center;
+    margin-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cw-tabs a,
+  .ov-phases button,
+  .ov-insight-row,
+  .ov-insight-row > svg,
+  .ov-actions a,
+  .cw-needs-badge {
+    transition: none;
+  }
+}

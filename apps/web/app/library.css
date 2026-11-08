@@ -164,9 +164,9 @@
 }
 
 .lb-categories a > span {
+  color: var(--text-tertiary);
   font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
-  opacity: 0.75;
 }
 
 .lb-search {

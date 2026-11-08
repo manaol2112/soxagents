@@ -222,6 +222,9 @@ export type DesignSlot = {
   question: string;
   /** How to answer it, for whoever fills it in (slot_questions.hint_for). */
   hint: string;
+  /** A governing document's name, answered from a document linked to the control
+   * (slot_questions.asks_for_document). */
+  document: boolean;
 };
 
 /** The control's design, as its documentation states it, with the client's values. */
@@ -274,6 +277,22 @@ export const FREQUENCY_LABELS: Record<string, string> = {
   EVENT_DRIVEN: "Each occurrence",
 };
 
+export type InterviewStep = {
+  key: string;
+  question: string;
+  why: string;
+  /** The label the records or usual practice point to; "" when none does. */
+  usual: string;
+  basis: string;
+  answers: Array<{
+    label: string;
+    /** The full sentence this answer means: what the audit file records. */
+    says: string;
+    /** The next step's key; "" ends the interview. */
+    next: string;
+  }>;
+};
+
 export type ContextIssue = {
   id: string;
   origin: "ATTRIBUTES" | "PROCESS" | "SOURCES";
@@ -302,6 +321,10 @@ export type ContextIssue = {
   /** Where the statement comes from (0121): the client's records and answers, or the
    * usual practice for a control of its kind; "" when asked open. */
   proposalBasis: "" | "SOURCES" | "TYPICAL";
+  /** The reviewer agent wrote its interview and the checks cleared it (0140, 0141). */
+  wordingReviewed?: boolean;
+  /** The question as short steps, each answer leading on or ending it; [] until written. */
+  interview?: InterviewStep[];
 };
 
 export type SupportingDocument = {
@@ -847,6 +870,104 @@ export const SOURCE_LABELS: Record<Attribute["sourceKind"], string> = {
   DOCUMENT: "Supporting document",
 };
 
+/** The longest wording an attribute takes (the API's limit). */
+export const ATTRIBUTE_MAX = 300;
+
+/** An attribute's place in the test, as the list letters it: A, B, … Z, then AA. */
+export function attributeLetter(index: number): string {
+  const first = Math.floor(index / 26);
+  const letter = String.fromCharCode(65 + (index % 26));
+  return first === 0 ? letter : `${String.fromCharCode(64 + first)}${letter}`;
+}
+
+/** Where the wording came from, inside a sentence. */
+const SOURCE_PHRASES: Record<Attribute["sourceKind"], string> = {
+  LIBRARY: "the control library",
+  RCM: "the client's RCM",
+  MANUAL: "the team",
+  AGENT: "the agent",
+  DOCUMENT: "supporting documents",
+};
+
+function listed(items: string[]): string {
+  return items.length <= 1
+    ? (items[0] ?? "")
+    : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+/** The recommendation above the attributes: what is approved and where it came from, and
+ * what waits on a decision. Neutral, and only what the records say. */
+export function attributesSummary(context: {
+  approved: Attribute[];
+  proposed: Attribute[];
+}): string {
+  const approved = context.approved.length;
+  const waiting = context.proposed.length;
+  const sources = [
+    ...new Set(context.approved.map((item) => SOURCE_PHRASES[item.sourceKind])),
+  ];
+  const parts: string[] = [];
+  if (approved > 0) {
+    parts.push(
+      `${approved} approved testing attribute${approved === 1 ? "" : "s"}, from ${listed(sources)}.`,
+    );
+  }
+  if (waiting > 0) {
+    parts.push(
+      `${waiting} proposed change${waiting === 1 ? " waits" : "s wait"} on a decision.`,
+    );
+  }
+  return parts.length > 0
+    ? parts.join(" ")
+    : "No testing attributes yet. Propose them with the agent, or add one.";
+}
+
+export type AttributeDecisionKind = "APPROVE" | "REJECT" | "RETIRE";
+
+/** What a selection of attributes can do as one decision: decide the selected proposals,
+ * or retire the selected approved attributes. A control keeps at least one attribute. */
+export function selectionPlan(
+  selected: ReadonlySet<string>,
+  context: { approved: Attribute[]; proposed: Attribute[] },
+): {
+  proposals: Attribute[];
+  approved: Attribute[];
+  retireBlocked: boolean;
+} {
+  const proposals = context.proposed.filter((item) => selected.has(item.id));
+  const approved = context.approved.filter((item) => selected.has(item.id));
+  return {
+    proposals,
+    approved,
+    retireBlocked:
+      approved.length > 0 && approved.length >= context.approved.length,
+  };
+}
+
+/** The confirmation once the server has applied a decision. */
+export function decidedNote(
+  decision: AttributeDecisionKind,
+  count: number,
+): string {
+  const noun =
+    decision === "RETIRE"
+      ? `attribute${count === 1 ? "" : "s"}`
+      : `proposal${count === 1 ? "" : "s"}`;
+  const verb =
+    decision === "APPROVE"
+      ? "approved"
+      : decision === "REJECT"
+        ? "rejected"
+        : "retired";
+  const kept =
+    decision === "RETIRE"
+      ? count === 1
+        ? " It stays in the history."
+        : " They stay in the history."
+      : "";
+  return `${count} ${noun} ${verb}.${kept}`;
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SECRET =
   /(?:api[_-]?key|secret|token|password|passwd|pwd)\s*[:=]\s*\S|sk-[A-Za-z0-9]{10,}/i;
@@ -1010,6 +1131,7 @@ function parseDesign(value: unknown): Design | null {
         options: strings(item.options).slice(0, 6),
         question: str(item.question),
         hint: str(item.hint),
+        document: item.document === true,
       })),
     missing: strings(value.missing),
   };
@@ -1199,6 +1321,19 @@ export function parseContext(value: unknown): ControlContext | null {
         ["", "SOURCES", "TYPICAL"] as const,
         "",
       ),
+      wordingReviewed: item.wording_reviewed === true,
+      interview: records(item.interview).map((step) => ({
+        key: str(step.key),
+        question: str(step.question),
+        why: str(step.why),
+        usual: str(step.usual),
+        basis: str(step.basis),
+        answers: records(step.answers).map((answer) => ({
+          label: str(answer.label),
+          says: str(answer.says),
+          next: str(answer.next),
+        })),
+      })),
     })),
     documents: records(value.documents).map((item) => ({
       id: str(item.id),
@@ -1263,6 +1398,7 @@ export type ContextIntent =
   | "attribute-edit"
   | "attribute-retire"
   | "attribute-decide"
+  | "attributes-decide"
   | "attributes-generate"
   | "library-adopt"
   | "values-set"
@@ -1378,6 +1514,33 @@ export function contextWrite(fields: Fields): ContextWrite {
         version: at,
         ...(wording !== "" ? { text: wording } : {}),
       });
+    }
+    case "attributes-decide": {
+      // Several attributes as one decision (decide-many): every item checked here.
+      const raw = Array.isArray(fields.items) ? fields.items : [];
+      const items = raw.flatMap((item) => {
+        if (!isRecord(item)) {
+          return [];
+        }
+        const at = Number(item.version);
+        const decision = item.decision;
+        return typeof item.attribute_id === "string" &&
+          UUID.test(item.attribute_id) &&
+          Number.isInteger(at) &&
+          at >= 1 &&
+          (decision === "APPROVE" ||
+            decision === "REJECT" ||
+            decision === "RETIRE")
+          ? [{ attribute_id: item.attribute_id, decision, version: at }]
+          : [];
+      });
+      const distinct = new Set(items.map((item) => item.attribute_id));
+      return items.length > 0 &&
+        items.length === raw.length &&
+        items.length <= 100 &&
+        distinct.size === items.length
+        ? ok("POST", `${control}/attributes/decide-many`, { items })
+        : { error: "invalid" };
     }
     case "attributes-generate":
       return ok("POST", `${control}/attributes/generate`, {}, true);
@@ -1621,6 +1784,12 @@ export function contextProblem(status: number, detail = ""): string | null {
   if (status === 409) {
     const known: Record<string, string> = {
       "attribute exists": "That attribute is already on the control.",
+      "attribute changed":
+        "An attribute changed while you were working. Nothing was saved; refresh and try again.",
+      "the attribute it replaces changed":
+        "The attribute a proposal replaces has changed. Nothing was saved; refresh and try again.",
+      "an attribute is listed twice":
+        "An attribute was chosen twice. Nothing was saved; choose again.",
       "a control keeps at least one attribute":
         "A control keeps at least one attribute. Add its replacement first.",
       "mark the step where the control operates":

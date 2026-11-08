@@ -7,7 +7,7 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from support import Database
-from test_evidence_analysis import _classification, _no_ocr, _Provider
+from test_evidence_analysis import _covering, _no_ocr, _Provider
 from test_evidence_intake import (
     POPULATION,
     _base,
@@ -45,7 +45,7 @@ def _register(client: TestClient, team: dict[str, Any]) -> dict[str, Any]:
 
 
 def _read(database: Database, analysis_id: Any) -> None:
-    provider = _Provider([_classification("population")])
+    provider = _Provider([_covering("population")])
     with connect(database.url) as connection:
         run_analysis(connection, _settings(database), provider, analysis_id, _no_ocr)
 

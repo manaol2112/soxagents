@@ -9,7 +9,7 @@ import {
   useState,
   useTransition,
 } from "react";
-
+import { AgentAvatar } from "./agent-avatar";
 import {
   moveOutcome,
   nextStage,
@@ -401,7 +401,11 @@ export function DemoGuide({
         aria-busy={busy}
       >
         <header className="dg-head">
-          <span className="dg-orb" aria-hidden="true" />
+          <AgentAvatar
+            size={40}
+            label="Guide"
+            state={busy ? "working" : "idle"}
+          />
           <div className="dg-head-text">
             <strong>Guided tour</strong>
             <span className="dg-progress-label">{progressLabel(stage)}</span>

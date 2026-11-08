@@ -12,6 +12,7 @@ import {
 import { createPortal } from "react-dom";
 
 import { UiIcon } from "./ui-icon";
+import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
 
 /**
  * A record opened over the page (Milestone 8.17), as a template preview is: the page
@@ -27,8 +28,12 @@ export function RecordDialog({
   children,
   className,
   onClose,
+  icon = null,
 }: {
-  eyebrow: string;
+  /** A tile beside the title, as the product owner's dialogs carry (2 November 2026). */
+  icon?: ReactNode;
+  /** Text, or a line with a badge of its own (the setup's introduction). */
+  eyebrow: ReactNode;
   title: string;
   description?: string;
   closeHref: string;
@@ -41,6 +46,7 @@ export function RecordDialog({
 }) {
   const router = useRouter();
   const dialog = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialog);
   const [pending, startTransition] = useTransition();
   const [mounted, setMounted] = useState(false);
   // Read through a ref so a new callback each render never re-runs the focus effect.
@@ -69,10 +75,7 @@ export function RecordDialog({
     dialog.current?.focus();
     const onKey = (event: KeyboardEvent) => {
       // A confirmation open inside the record closes first, on its own.
-      if (
-        event.key === "Escape" &&
-        document.querySelector("dialog[open]") === null
-      ) {
+      if (event.key === "Escape" && isTopmostDialog(dialog.current)) {
         close();
       }
     };
@@ -113,6 +116,7 @@ export function RecordDialog({
         tabIndex={-1}
       >
         <header className="rd-head">
+          {icon !== null ? <span className="rd-icon">{icon}</span> : null}
           <div className="rd-head-text">
             <p className="rd-eyebrow">{eyebrow}</p>
             <h2 id="record-dialog-title">{title}</h2>

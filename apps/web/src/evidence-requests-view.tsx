@@ -13,11 +13,9 @@ import { AddEvidenceMenu } from "./add-evidence-menu";
 import { ControlSend } from "./control-send";
 import type { ActivityItem } from "./control-workspace-model";
 import { centerHref, DEFAULT_QUERY } from "./evidence-center-model";
+import { type DialogOpen, EvidenceDialog } from "./evidence-dialog";
 import { RequestUpload } from "./evidence-intake";
-import {
-  EvidenceIntelligence,
-  type Intelligence,
-} from "./evidence-intelligence-view";
+import type { Intelligence } from "./evidence-intelligence-view";
 import type { EvidencePlan } from "./evidence-plan-model";
 import { PHASE_SHORT } from "./evidence-plan-model";
 import { Problem, RequirementRow, usePlanAction } from "./evidence-plan-view";
@@ -67,7 +65,7 @@ import { UiIcon } from "./ui-icon";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
 
-type View = "evidence" | "list" | "groups" | "attributes" | "procedures";
+type View = "list" | "groups" | "attributes" | "procedures";
 type PanelTab = "items" | "attributes" | "procedures" | "guidance" | "activity";
 
 /**
@@ -117,10 +115,15 @@ export function EvidenceRequests({
     () => evidenceRequests(plan, rows, master),
     [plan, rows, master],
   );
-  // The workspace opens on the evidence (the product owner's reference, 30 October
-  // 2026); a link to one request opens that request's list.
-  const [view, setView] = useState<View>(
-    focusRequest !== null || intelligence === null ? "list" : "evidence",
+  // The list of requests comes first (product owner, 31 October 2026); evidence is
+  // added and reviewed in the evidence dialog, opened on a file a link names.
+  const [view, setView] = useState<View>("list");
+  const [dialog, setDialog] = useState<DialogOpen | null>(() =>
+    intelligence?.focusFile != null
+      ? { mode: "review", fileId: intelligence.focusFile }
+      : intelligence?.openAdd === true
+        ? { mode: "add", itemId: null }
+        : null,
   );
   // Policies on file the agent proposes for the items (28 October 2026).
   const policies = usePolicyEvidence(ids);
@@ -222,9 +225,6 @@ export function EvidenceRequests({
   const coverage = attributeCoverage(requests, master);
   const uncovered = coverage.filter((a) => !a.covered).length;
   const tabs: Array<[View, string, ReactNode]> = [
-    ...(intelligence !== null
-      ? [["evidence", "Evidence", null] as [View, string, ReactNode]]
-      : []),
     ["list", "Evidence list", null],
     [
       "groups",
@@ -287,14 +287,23 @@ export function EvidenceRequests({
                 icon: "inbox",
                 href: centerHref(ids, DEFAULT_QUERY, { q: controlRef }),
               },
+              ...(canAct && master !== null
+                ? [
+                    {
+                      label: "Add an evidence item to the plan",
+                      icon: "plus" as const,
+                      onSelect: () => setAdding(true),
+                    },
+                  ]
+                : []),
             ]}
           />
-          {canAct && master !== null ? (
+          {canAct && intelligence !== null ? (
             <button
               type="button"
               className="btn btn-secondary btn-sm"
-              aria-expanded={adding}
-              onClick={() => setAdding((value) => !value)}
+              aria-haspopup="dialog"
+              onClick={() => setDialog({ mode: "add", itemId: null })}
             >
               <UiIcon name="plus" size={14} />
               Add evidence
@@ -318,31 +327,32 @@ export function EvidenceRequests({
           />
         </div>
       ) : null}
+      {dialog !== null && intelligence !== null ? (
+        <EvidenceDialog
+          key={
+            dialog.mode === "review"
+              ? dialog.fileId
+              : `add-${dialog.itemId ?? ""}`
+          }
+          open={dialog}
+          onClose={() => setDialog(null)}
+          ids={ids}
+          plan={plan}
+          register={intelligence.register}
+          mapping={intelligence.mapping}
+          attributes={intelligence.attributes}
+          controlRef={controlRef}
+          canAct={canAct}
+          findings={intelligence.findings}
+          tests={intelligence.tests ?? null}
+          instances={intelligence.instances ?? null}
+        />
+      ) : null}
       <div
         id={`${id}-view`}
         role="tabpanel"
         aria-labelledby={`${id}-tab-${view}`}
       >
-        {view === "evidence" && intelligence !== null ? (
-          <EvidenceIntelligence
-            ids={ids}
-            plan={plan}
-            register={intelligence.register}
-            mapping={intelligence.mapping}
-            attributes={intelligence.attributes}
-            controlRef={controlRef}
-            controlTitle={intelligence.controlTitle}
-            canAct={canAct}
-            held={files}
-            applications={applications}
-            system={system}
-            policies={policies.evidence}
-            onPolicyDecided={policies.reload}
-            askHref={intelligence.askHref}
-            focusFile={intelligence.focusFile}
-            findings={intelligence.findings}
-          />
-        ) : null}
         {view === "list" ? (
           <div className={`er-layout${open !== null ? " has-panel" : ""}`}>
             <div className="er-main" ref={main}>
@@ -435,6 +445,7 @@ export function EvidenceRequests({
                   onPolicyDecided={policies.reload}
                   onClose={() => setSelected(null)}
                   onMapping={() => setView("attributes")}
+                  onDialog={intelligence === null ? null : setDialog}
                 />
               </div>
             ) : null}
@@ -602,6 +613,7 @@ function RequestPanel({
   onPolicyDecided,
   onClose,
   onMapping,
+  onDialog,
 }: {
   ids: Ids;
   request: EvidenceRequest;
@@ -615,6 +627,8 @@ function RequestPanel({
   onPolicyDecided: () => void;
   onClose: () => void;
   onMapping: () => void;
+  /** Opens the evidence dialog, to add evidence or review a file. */
+  onDialog: ((open: DialogOpen) => void) | null;
 }) {
   const id = useId();
   const [tab, setTab] = useState<PanelTab>("items");
@@ -713,6 +727,7 @@ function RequestPanel({
                 onClick={onMapping}
               >
                 View mapping
+                <UiIcon name="external" size={14} />
               </button>
             </div>
             <ol className="er-items">
@@ -731,6 +746,7 @@ function RequestPanel({
                   policies={policies}
                   onPolicyDecided={onPolicyDecided}
                   onMapping={onMapping}
+                  onDialog={onDialog}
                 />
               ))}
             </ol>
@@ -835,6 +851,7 @@ function ItemCard({
   policies,
   onPolicyDecided,
   onMapping,
+  onDialog,
 }: {
   ids: Ids;
   number: number;
@@ -848,6 +865,7 @@ function ItemCard({
   policies: PolicyEvidence;
   onPolicyDecided: () => void;
   onMapping: () => void;
+  onDialog: ((open: DialogOpen) => void) | null;
 }) {
   const { item } = entry;
   const onFile = proposalsFor(policies, item.id);
@@ -960,7 +978,13 @@ function ItemCard({
                     ids={ids}
                     itemId={item.id}
                     itemTitle={item.title}
-                    pick={pick}
+                    // Upload files opens the evidence dialog on this item, where the
+                    // agent classifies the file (31 October 2026).
+                    pick={
+                      onDialog === null
+                        ? pick
+                        : () => onDialog({ mode: "add", itemId: item.id })
+                    }
                     running={running}
                     documents={choosable(policies, item.id)}
                     held={linkableFiles(item, files)}
@@ -979,8 +1003,8 @@ function ItemCard({
               />
             ) : null
           }
-          fileLine={(file, form, setForm) =>
-            fileLine(
+          fileLine={(file, form, setForm) => {
+            const line = fileLine(
               ids,
               file,
               files.find((held) => held.id === file.fileId),
@@ -988,8 +1012,26 @@ function ItemCard({
               applications,
               form,
               setForm,
-            )
-          }
+            );
+            // A file opens in the evidence dialog: its preview, what the agent found,
+            // and what to do with it (31 October 2026).
+            return onDialog === null
+              ? line
+              : {
+                  ...line,
+                  name: (
+                    <button
+                      type="button"
+                      className="ep-file-name ep-file-open"
+                      onClick={() =>
+                        onDialog({ mode: "review", fileId: file.fileId })
+                      }
+                    >
+                      {file.name}
+                    </button>
+                  ),
+                };
+          }}
         />
       </ul>
       {/* The policy on file the agent relates to the item: filed only once a person

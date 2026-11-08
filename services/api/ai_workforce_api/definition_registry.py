@@ -351,6 +351,7 @@ def _cell(text: str) -> str:
 
 def _statement_summary() -> list[str]:
     from ai_workforce_api.controls import SPLITS
+    from ai_workforce_api.slot_questions import holds_testing
     from ai_workforce_api.statement_registry import STATEMENTS
 
     slots = [slot for item in STATEMENTS.values() for slot in item.slots if slot.key != "system"]
@@ -358,7 +359,7 @@ def _statement_summary() -> list[str]:
     return [
         f"- Control statements: {len(STATEMENTS)}",
         f"- Client values to fill at setup: {len(slots)}, of which "
-        f"{sum(1 for slot in slots if slot.blocks)} hold testing until filled",
+        f"{sum(1 for slot in slots if holds_testing(slot))} hold testing until filled",
         f"- Combined version 2 controls split: {len(SPLITS)}, into {len(SPLITS) + parts} "
         "controls (each original keeps its ID)",
     ]
@@ -367,6 +368,7 @@ def _statement_summary() -> list[str]:
 def _statement_lines(library_key: str) -> list[str]:
     """A control's statement (8.9), with each client value shown as its label."""
     from ai_workforce_api.control_statements import ASSERTION_LABELS, render
+    from ai_workforce_api.slot_questions import holds_testing
     from ai_workforce_api.statement_registry import statement_for
 
     statement = statement_for(library_key)
@@ -412,7 +414,7 @@ def _statement_lines(library_key: str) -> list[str]:
     for slot in statement.slots:
         if slot.key == "system":
             continue
-        waits = "testing waits for it" if slot.blocks else "does not hold testing"
+        waits = "testing waits for it" if holds_testing(slot) else "does not hold testing"
         lines.append(f"- Client value: {slot.label} ({slot.kind.lower()}; {waits}). {slot.why}")
     return lines
 

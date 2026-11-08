@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  type Attribute,
+  attributeLetter,
+  attributesSummary,
   clock,
   contextProblem,
   contextWrite,
+  decidedNote,
   documentUploadTarget,
   type NarrativeReview,
   type NarrativeRun,
@@ -14,6 +18,7 @@ import {
   REVIEW_ACTION_LABELS,
   reviewActions,
   reviewHeadline,
+  selectionPlan,
   showsReadiness,
 } from "../apps/web/src/control-context-model.ts";
 
@@ -1021,5 +1026,139 @@ describe("updating the test plan from the approved narrative", () => {
       evidenceFallback: false,
       note: "Done.",
     });
+  });
+});
+
+// The attributes step (owner's reference, 2 November 2026): one list with a selection
+// decided as one decision.
+function attribute(id: string, overrides: Partial<Attribute> = {}): Attribute {
+  return {
+    id,
+    position: 0,
+    text: `Attribute ${id}`,
+    status: "APPROVED",
+    basis: "DOCUMENTED",
+    sourceKind: "LIBRARY",
+    sourceDocumentId: null,
+    sourceTitle: "",
+    sourceQuote: "",
+    note: "",
+    proposal: null,
+    replacesId: null,
+    decidedBy: null,
+    version: 1,
+    definition: null,
+    ...overrides,
+  };
+}
+
+describe("testing attributes", () => {
+  const A = "01a13300-0000-7000-8000-00000000000a";
+  const B = "01a13300-0000-7000-8000-00000000000b";
+  const P = "01a13300-0000-7000-8000-00000000000c";
+
+  it("letters past Z", () => {
+    assert.deepEqual([0, 2, 25, 26, 27].map(attributeLetter), [
+      "A",
+      "C",
+      "Z",
+      "AA",
+      "AB",
+    ]);
+  });
+
+  it("summarizes only what the records say, in a neutral voice", () => {
+    const one = attributesSummary({ approved: [attribute(A)], proposed: [] });
+    assert.equal(
+      one,
+      "1 approved testing attribute, from the control library.",
+    );
+    const mixed = attributesSummary({
+      approved: [
+        attribute(A),
+        attribute(B, { sourceKind: "MANUAL" }),
+        attribute(OTHER, { sourceKind: "RCM" }),
+      ],
+      proposed: [attribute(P, { status: "PROPOSED", sourceKind: "AGENT" })],
+    });
+    assert.equal(
+      mixed,
+      "3 approved testing attributes, from the control library, the team and the client's RCM. 1 proposed change waits on a decision.",
+    );
+    const none = attributesSummary({ approved: [], proposed: [] });
+    assert.match(none, /^No testing attributes yet/);
+    for (const text of [one, mixed, none]) {
+      assert.doesNotMatch(text, /\b(I|I've|my|we)\b/);
+    }
+  });
+
+  it("splits a selection into proposals to decide and attributes to retire", () => {
+    const context = {
+      approved: [attribute(A), attribute(B)],
+      proposed: [attribute(P, { status: "PROPOSED", proposal: "ADD" })],
+    };
+    const some = selectionPlan(new Set([A, P]), context);
+    assert.deepEqual(
+      [some.proposals.map((a) => a.id), some.approved.map((a) => a.id)],
+      [[P], [A]],
+    );
+    assert.equal(some.retireBlocked, false);
+    // A control keeps at least one attribute.
+    assert.equal(selectionPlan(new Set([A, B]), context).retireBlocked, true);
+    assert.equal(selectionPlan(new Set([P]), context).retireBlocked, false);
+  });
+
+  it("confirms what the server applied", () => {
+    assert.equal(decidedNote("APPROVE", 2), "2 proposals approved.");
+    assert.equal(decidedNote("REJECT", 1), "1 proposal rejected.");
+    assert.equal(
+      decidedNote("RETIRE", 1),
+      "1 attribute retired. It stays in the history.",
+    );
+    assert.equal(
+      decidedNote("RETIRE", 2),
+      "2 attributes retired. They stay in the history.",
+    );
+  });
+
+  it("sends a group decision only when every item checks out", () => {
+    const items = [
+      { attribute_id: A, decision: "RETIRE", version: 2 },
+      { attribute_id: P, decision: "APPROVE", version: 1 },
+    ];
+    const write = contextWrite({ ...IDS, intent: "attributes-decide", items });
+    assert.deepEqual(write, {
+      intent: "attributes-decide",
+      method: "POST",
+      path: `${BASE}/controls/${CONTROL}/attributes/decide-many`,
+      body: { items },
+      slow: false,
+    });
+    const refused = [
+      [],
+      [{ attribute_id: "nope", decision: "APPROVE", version: 1 }],
+      [{ attribute_id: A, decision: "DELETE", version: 1 }],
+      [{ attribute_id: A, decision: "APPROVE", version: 0 }],
+      [items[0], { ...items[0], decision: "APPROVE" }],
+      [...items, "junk"],
+    ];
+    for (const bad of refused) {
+      assert.deepEqual(
+        contextWrite({ ...IDS, intent: "attributes-decide", items: bad }),
+        { error: "invalid" },
+        JSON.stringify(bad),
+      );
+    }
+  });
+
+  it("says nothing was saved when a group decision is stale", () => {
+    assert.match(
+      contextProblem(409, "attribute changed") ?? "",
+      /Nothing was saved/,
+    );
+    assert.match(
+      contextProblem(409, "an attribute is listed twice") ?? "",
+      /chosen twice/,
+    );
   });
 });

@@ -343,15 +343,29 @@ describe("one place for each part of the Plan step", () => {
     assert.ok(plan.includes("workspace?.classification"));
   });
 
-  it("leaves the Request step to its own list, without the summary blocks or the drafts line", () => {
+  // Rewritten 2 November 2026 for the product owner's tabbed workspace. Before: the
+  // steps carried Needs you, the trace and the sign-offs, and only the Request step left
+  // out the summary blocks (summary={step !== "REQUEST"}). Now: the steps show progress on
+  // every tab (summary={false}), and the sign-offs are on Approvals. The Request list
+  // still has no drafts line. The same day the product owner removed the Needs-you
+  // banner from the Overview ("I don't need this"): the header's Needs you opens the
+  // action, and the agent's note and what is outstanding fold into AI insights
+  // (AgentNotes).
+  it("keeps the steps to progress and folds the agent's note into the Overview", () => {
     const view = readFileSync("apps/web/src/controls-view.tsx", "utf8");
     const stepper = readFileSync("apps/web/src/control-stepper.tsx", "utf8");
-    assert.ok(view.includes('summary={step !== "REQUEST"}'));
+    assert.ok(view.includes("summary={false}"));
+    assert.ok(!view.includes("<NeedsBanner"));
+    assert.ok(view.includes("<AgentNotes"));
+    assert.ok(view.includes('className="cw-needs-badge"'));
+    assert.ok(stepper.includes("export function AgentNotes("));
+    assert.ok(view.includes("receiptText(item)"));
     assert.ok(
       !view.includes("Nothing goes to the owner until a person approves it."),
     );
-    // Needs you (with the agent's note and the outstanding items behind its "more"
-    // control since 30 October 2026) and the trace each give way; the sign-offs stay.
+    // The banner keeps the agent's note and the outstanding items behind its "more"
+    // control (30 October 2026); the frame can still show it, the trace and sign-offs.
+    assert.ok(stepper.includes("export function NeedsBanner("));
     assert.ok(stepper.includes("{simple || !summary ? null : ("));
     assert.ok(stepper.includes("{trace !== null && !simple && summary ? ("));
     assert.ok(stepper.includes('<details className="cw-needs-more">'));

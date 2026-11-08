@@ -2,7 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-
+import { AgentAvatar } from "./agent-avatar";
+import { agentStateOf } from "./agent-avatar-model";
 import { WALK_ASK_EVENT, WALK_POINTS_EVENT } from "./client-walkthrough";
 import {
   clock,
@@ -919,7 +920,7 @@ function NarrativeProgress({ run }: { run: NarrativeRun }) {
   return (
     <div className="pn-progress" role="status" aria-live="polite">
       <header>
-        <span className="ng-orb is-small" aria-hidden="true" />
+        <AgentAvatar size={24} state={agentStateOf(run.status)} />
         <strong>
           {run.mode === "PLAN"
             ? `Updating the test plan from the approved narrative${run.status === "PENDING" ? "…" : `: ${(active?.label ?? "working").toLowerCase()}…`}`

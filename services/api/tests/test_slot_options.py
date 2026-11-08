@@ -92,3 +92,18 @@ def test_every_value_says_how_to_answer_it() -> None:
     # A role is answered with a role, not a person; a policy with the document's name.
     assert "not a person's name" in hint_for(slots["review-owner"])
     assert "document's title" in hint_for(slots["access-policy"])
+
+
+def test_a_policy_name_is_answered_from_a_linked_document() -> None:
+    # The value that names the governing policy or procedure is a document's name; a
+    # setting the policy requires is not, though its question mentions the policy.
+    from ai_workforce_api.slot_questions import asks_for_document, question_for
+
+    slots = _slots()
+    assert asks_for_document(slots["access-policy"])
+    assert asks_for_document(slots["security-policy"])
+    assert asks_for_document(slots["incident-procedure"])
+    assert "policy" in question_for(slots["auth-settings"])
+    assert not asks_for_document(slots["auth-settings"])
+    assert not asks_for_document(slots["review-owner"])
+    assert not asks_for_document(slots["removal-days"])

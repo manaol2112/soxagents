@@ -1,52 +1,31 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
-
-import { AddEvidenceMenu } from "./add-evidence-menu";
-import { AgentBot } from "./agent-panel";
+import { useState } from "react";
 import { AnalysisPanel } from "./analysis-view";
-import { AutoRefresh } from "./auto-refresh";
-import { askAbout } from "./control-rail-model";
 import type { ControlFiles } from "./engagement-model";
-import { FileChanges } from "./evidence-change";
+import type { WalkthroughInstance } from "./evidence-dialog-model";
 import {
   type EvidenceFinding,
-  findingsForFile,
   SENDABLE_STATUSES,
 } from "./evidence-findings-model";
 import {
   FindingRecords,
   FollowUpComposer,
-  useFindingsAction,
+  type useFindingsAction,
 } from "./evidence-findings-view";
-import { RequestUpload } from "./evidence-intake";
 import {
   COVERAGE_STATE_LABELS,
   COVERAGE_STATE_TONES,
   type FileInsight,
   type Finding,
-  fileMeta,
-  filterNavigator,
-  firstFile,
   followUpNote,
-  insightOf,
-  type NavFile,
   type NavItem,
-  navigatorFiles,
-  navigatorOf,
-  phaseCounts,
 } from "./evidence-intelligence-model";
 import type { EvidenceMappingRun } from "./evidence-mapping-model";
-import type { EvidencePlan, Phase } from "./evidence-plan-model";
-import { requirementStatus } from "./evidence-plan-model";
-import { Problem, usePlanAction } from "./evidence-plan-view";
-import { EvidenceViewer } from "./evidence-preview";
+import { Problem, type usePlanAction } from "./evidence-plan-view";
 import type { EvidenceCitation } from "./evidence-preview-model";
-import { fileQuery } from "./evidence-preview-model";
-import { type HeldFile, linkableFiles } from "./evidence-workspace-model";
 import { formatBytes, formatDate } from "./format";
-import { choosable, type PolicyEvidence } from "./policy-evidence-model";
-import { RowMenu } from "./row-menu";
+import type { ControlTest } from "./testing-model";
 import { type IconName, UiIcon } from "./ui-icon";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
@@ -59,17 +38,15 @@ export type Intelligence = {
   controlTitle: string;
   askHref: string;
   focusFile: string | null;
+  /** Opens the dialog on Add evidence on arrival (a link's ?ev=add). */
+  openAdd?: boolean;
   /** The control's findings on record (increment 2); null before the API answered. */
   findings: EvidenceFinding[] | null;
+  /** The control's sample plans, for the evidence dialog (31 October 2026). */
+  tests?: ControlTest[] | null;
+  /** The walkthrough instances picked for the control's design items. */
+  instances?: WalkthroughInstance[] | null;
 };
-
-type Tab = "analysis" | "details" | "trace";
-
-const TABS: Array<[Tab, string, IconName]> = [
-  ["analysis", "AI analysis", "sparkles"],
-  ["details", "Details", "file"],
-  ["trace", "Traceability", "flow"],
-];
 
 const KIND_ICON: Record<Finding["kind"], IconName> = {
   GAP: "help",
@@ -87,498 +64,7 @@ const SOURCE_WORDS: Record<Finding["source"], string> = {
   REVIEW: "The screenshot review",
 };
 
-/**
- * The Evidence Intelligence Workspace (docs/evidence-intelligence.md, increment 1): the
- * control's evidence in three panels. Left, the items by phase with their files and the
- * drop zone; centre, the document; right, what the agent found for it, its details, and
- * its trace to the approved attributes. Below, the questions to ask the agent. Every
- * figure and passage here is read from the records; the decisions (accept, follow up,
- * insufficient) go through the existing sufficiency endpoint.
- */
-export function EvidenceIntelligence({
-  ids,
-  plan,
-  register,
-  mapping,
-  attributes,
-  controlRef,
-  controlTitle,
-  canAct,
-  held,
-  applications,
-  system,
-  policies,
-  onPolicyDecided,
-  askHref,
-  focusFile,
-  findings,
-}: {
-  ids: Ids;
-  plan: EvidencePlan;
-  register: ControlFiles | null;
-  mapping: EvidenceMappingRun | null;
-  /** The approved attributes in the mapping's order, for their codes. */
-  attributes: ReadonlyArray<{ code: string; text: string }>;
-  controlRef: string;
-  controlTitle: string;
-  canAct: boolean;
-  held: HeldFile[];
-  applications: Array<{ id: string; name: string }>;
-  system: string | null;
-  policies: PolicyEvidence;
-  onPolicyDecided: () => void;
-  /** The agent console, where a question about this control is asked. */
-  askHref: string;
-  /** The file a link names (?file=), opened on arrival. */
-  focusFile: string | null;
-  /** The control's findings on record (increment 2); null before the API answered. */
-  findings: EvidenceFinding[] | null;
-}) {
-  const id = useId();
-  const action = usePlanAction(ids);
-  const findingsAction = useFindingsAction(ids);
-  const [pickedRecords, setPickedRecords] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const phases = useMemo(() => navigatorOf(plan, register), [plan, register]);
-  const [phase, setPhase] = useState<Phase | "all">("all");
-  const [typed, setTyped] = useState("");
-  const [search, setSearch] = useState("");
-  useEffect(() => {
-    const timer = window.setTimeout(() => setSearch(typed), 150);
-    return () => window.clearTimeout(timer);
-  }, [typed]);
-  const shown = useMemo(
-    () => filterNavigator(phases, { phase, search }),
-    [phases, phase, search],
-  );
-  const [selectedFile, setSelectedFile] = useState<string | null>(
-    () => firstFile(phases, focusFile)?.id ?? null,
-  );
-  const [selectedItem, setSelectedItem] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("analysis");
-  const [focused, setFocused] = useState<EvidenceCitation | null>(null);
-  const [changing, setChanging] = useState<"replace" | "withdraw" | null>(null);
-  const [picked, setPicked] = useState<Set<string>>(() => new Set());
-  const all = navigatorFiles(phases);
-  const file = all.find((entry) => entry.id === selectedFile) ?? null;
-  const insight = useMemo(
-    () =>
-      file === null
-        ? null
-        : insightOf(file.id, phases, register, mapping, attributes, controlRef),
-    [file, phases, register, mapping, attributes, controlRef],
-  );
-  // The item evidence is added for: the one chosen, else the open file's, else the first
-  // that still needs evidence.
-  const items = phases.flatMap((entry) => entry.items);
-  const uploadItem =
-    items.find((item) => item.requirement.id === selectedItem) ??
-    items.find((item) => item.requirement.id === file?.requirementId) ??
-    items.find(
-      (item) => item.files.length === 0 && item.requirement.requestId !== null,
-    ) ??
-    items.find((item) => item.requirement.requestId !== null) ??
-    null;
-  const reading = all.some((entry) => entry.read === "reading");
-  const counts = phaseCounts(phases);
-  const query = fileQuery(ids.organizationId, ids.projectId);
-  const heldFile = held.find((entry) => entry.id === file?.id) ?? null;
-  const records =
-    findings === null || file === null
-      ? null
-      : findingsForFile(findings, file.id);
-
-  const open = (next: NavFile) => {
-    setSelectedFile(next.id);
-    setSelectedItem(next.requirementId);
-    setFocused(null);
-    setChanging(null);
-    setPicked(new Set());
-    setPickedRecords(new Set());
-  };
-  const show = (citation: EvidenceCitation | null) => {
-    if (citation === null) {
-      return;
-    }
-    if (citation.fileId !== selectedFile) {
-      setSelectedFile(citation.fileId);
-    }
-    setFocused(citation);
-  };
-  const ask = (question: string) => {
-    const url = new URL(askHref, window.location.origin);
-    url.searchParams.set(
-      "ask",
-      askAbout(controlRef, controlTitle, question).slice(0, 1500),
-    );
-    window.location.assign(url.toString());
-  };
-
-  return (
-    <section className="ei" aria-label="Evidence workspace">
-      {reading ? <AutoRefresh /> : null}
-      {/* Each sticky panel sits in its own cell, so it stays within its row and never
-          slides over the assistant below (sticky is bounded by its containing block). */}
-      <div className="ei-col ei-col-nav">
-        <aside className="ei-nav" aria-label="Evidence navigator">
-          <header className="ei-nav-head">
-            <h3>Evidence for this control</h3>
-            <span
-              className="ei-count"
-              title="Files on the items of this control"
-            >
-              {all.length}
-            </span>
-          </header>
-          <div className="ei-phases" role="tablist" aria-label="Testing phase">
-            {counts.map((entry) => (
-              <button
-                key={entry.phase}
-                type="button"
-                role="tab"
-                aria-selected={phase === entry.phase}
-                className={phase === entry.phase ? "is-on" : undefined}
-                onClick={() => setPhase(entry.phase)}
-              >
-                {entry.label}
-                <span className="ei-chip-count">{entry.files}</span>
-                {entry.attention > 0 ? (
-                  <span
-                    className="ei-attention"
-                    title={`${entry.attention} need${entry.attention === 1 ? "s" : ""} a person`}
-                  >
-                    {entry.attention}
-                  </span>
-                ) : null}
-              </button>
-            ))}
-          </div>
-          <label className="ei-search">
-            <UiIcon name="search" size={14} />
-            <span className="sr-only">Search items and files</span>
-            <input
-              type="search"
-              value={typed}
-              placeholder="Search items and files…"
-              onChange={(event) => setTyped(event.target.value)}
-            />
-          </label>
-          {canAct && uploadItem?.requirement.requestId ? (
-            <div className="ei-upload">
-              <RequestUpload
-                organizationId={ids.organizationId}
-                projectId={ids.projectId}
-                requestId={uploadItem.requirement.requestId}
-                requirementId={uploadItem.requirement.id}
-                label={uploadItem.requirement.title}
-                variant="panel"
-                systems={
-                  uploadItem.requirement.categories.includes(
-                    "PROCESS_DOCUMENTATION",
-                  )
-                    ? applications
-                    : []
-                }
-                system={system}
-                chooser={(pick, running) => (
-                  <AddEvidenceMenu
-                    ids={ids}
-                    itemId={uploadItem.requirement.id}
-                    itemTitle={uploadItem.requirement.title}
-                    pick={pick}
-                    running={running}
-                    documents={choosable(policies, uploadItem.requirement.id)}
-                    held={linkableFiles(uploadItem.requirement, held)}
-                    onLink={(fileId, reason) =>
-                      action.run(`link-${uploadItem.requirement.id}`, {
-                        intent: "link",
-                        requirement_id: uploadItem.requirement.id,
-                        file_id: fileId,
-                        reason,
-                        version: uploadItem.requirement.version,
-                      })
-                    }
-                    onFiled={onPolicyDecided}
-                  />
-                )}
-              />
-              <p className="ei-upload-for">
-                For <strong>{uploadItem.requirement.title}</strong>. Choose
-                another item below to change it.
-              </p>
-            </div>
-          ) : null}
-          {shown.length === 0 ? (
-            <p className="ei-empty">
-              {all.length === 0 && items.length === 0
-                ? "No evidence is planned for this control yet."
-                : "Nothing matches."}
-            </p>
-          ) : (
-            shown.map((entry) => (
-              <section
-                key={entry.phase}
-                className="ei-phase"
-                aria-label={entry.label}
-              >
-                {phase === "all" ? (
-                  <h4>
-                    {entry.label}
-                    <span>{entry.fileCount}</span>
-                  </h4>
-                ) : null}
-                <ol className="ei-items">
-                  {entry.items.map((item) => (
-                    <NavItemRow
-                      key={item.requirement.id}
-                      item={item}
-                      awaiting={false}
-                      selectedFile={selectedFile}
-                      chosen={
-                        uploadItem?.requirement.id === item.requirement.id
-                      }
-                      onFile={open}
-                      onItem={() => {
-                        setSelectedItem(item.requirement.id);
-                        const first = item.files[0];
-                        if (first !== undefined && first.id !== selectedFile) {
-                          open(first);
-                        }
-                      }}
-                    />
-                  ))}
-                </ol>
-              </section>
-            ))
-          )}
-        </aside>
-      </div>
-
-      <section className="ei-doc" aria-label="Document">
-        {file === null || insight === null ? (
-          <div className="ei-doc-empty">
-            <UiIcon name="file" size={28} />
-            <strong>No file open</strong>
-            <p>
-              {all.length === 0
-                ? "Upload evidence, or add a policy on file, and it is read against the request's items."
-                : "Choose a file in the navigator to review it here."}
-            </p>
-          </div>
-        ) : (
-          <>
-            <header className="ei-doc-head">
-              <FileBadge name={file.fileName} />
-              <div className="ei-doc-title">
-                <strong title={file.fileName}>{file.fileName}</strong>
-                <small>
-                  {[
-                    insight.kindLabel,
-                    fileMeta(file, formatBytes, formatDate),
-                    insight.analysis?.pages
-                      ? `${insight.analysis.pages} page${insight.analysis.pages === 1 ? "" : "s"}`
-                      : "",
-                  ]
-                    .filter((part) => part !== "" && part !== null)
-                    .join(" · ")}
-                </small>
-              </div>
-              <div className="ei-doc-tools">
-                <a
-                  className="btn-ghost btn-sm"
-                  href={`/workspace/evidence-files/${file.id}?${query}`}
-                >
-                  <UiIcon name="upload" size={14} />
-                  Download
-                </a>
-                {canAct && heldFile !== null && !heldFile.blocked ? (
-                  <button
-                    type="button"
-                    className="btn-secondary btn-sm"
-                    aria-expanded={changing === "replace"}
-                    onClick={() =>
-                      setChanging(changing === "replace" ? null : "replace")
-                    }
-                  >
-                    <UiIcon name="retry" size={14} />
-                    Replace
-                  </button>
-                ) : null}
-                {canAct && heldFile !== null ? (
-                  <RowMenu
-                    label={`More for ${file.fileName}`}
-                    items={[
-                      {
-                        label: "Withdraw the file",
-                        icon: "x",
-                        danger: true,
-                        unavailable: heldFile.blocked ?? null,
-                        onSelect: () => setChanging("withdraw"),
-                      },
-                      ...(file.requestId === null
-                        ? []
-                        : [
-                            {
-                              label: "Open the request",
-                              icon: "mail" as const,
-                              href: `?${new URLSearchParams({
-                                organization: ids.organizationId,
-                                project: ids.projectId,
-                                section: "controls",
-                                control: ids.controlId,
-                                step: "request",
-                                request: file.requestId,
-                              }).toString()}`,
-                            },
-                          ]),
-                    ]}
-                  />
-                ) : null}
-              </div>
-            </header>
-            {changing !== null && heldFile !== null ? (
-              <div className="ei-doc-change">
-                <FileChanges
-                  organizationId={ids.organizationId}
-                  projectId={ids.projectId}
-                  fileId={file.id}
-                  fileName={file.fileName}
-                  blocked={heldFile.blocked ?? null}
-                  controlId={ids.controlId}
-                  keep={{ step: "request" }}
-                  start={changing}
-                  onCancel={() => setChanging(null)}
-                />
-              </div>
-            ) : null}
-            <EvidenceViewer
-              organizationId={ids.organizationId}
-              projectId={ids.projectId}
-              file={{ id: file.id, fileName: file.fileName }}
-              citations={citationsOf(insight, focused)}
-              focused={focused}
-            />
-          </>
-        )}
-      </section>
-
-      <div className="ei-col ei-col-ai">
-        <aside className="ei-ai" aria-label="AI evidence analysis">
-          <div className="ei-tabs" role="tablist" aria-label="Analysis views">
-            {TABS.map(([key, label, icon]) => (
-              <button
-                key={key}
-                type="button"
-                role="tab"
-                id={`${id}-tab-${key}`}
-                aria-selected={tab === key}
-                aria-controls={`${id}-panel`}
-                className={tab === key ? "is-on" : undefined}
-                onClick={() => setTab(key)}
-              >
-                <UiIcon name={icon} size={14} />
-                {label}
-              </button>
-            ))}
-          </div>
-          <div
-            id={`${id}-panel`}
-            role="tabpanel"
-            aria-labelledby={`${id}-tab-${tab}`}
-            className="ei-panel"
-          >
-            {insight === null ? (
-              <p className="ei-empty">
-                Open a file to see what the agent found.
-              </p>
-            ) : tab === "analysis" ? (
-              <Analysis
-                insight={insight}
-                items={items}
-                canAct={canAct}
-                action={action}
-                picked={picked}
-                onPick={(key, on) =>
-                  setPicked((current) => {
-                    const next = new Set(current);
-                    if (on) {
-                      next.add(key);
-                    } else {
-                      next.delete(key);
-                    }
-                    return next;
-                  })
-                }
-                onShow={show}
-                focused={focused}
-                records={records}
-                findingsAction={findingsAction}
-                pickedRecords={pickedRecords}
-                onPickRecord={(key, on) =>
-                  setPickedRecords((current) => {
-                    const next = new Set(current);
-                    if (on) {
-                      next.add(key);
-                    } else {
-                      next.delete(key);
-                    }
-                    return next;
-                  })
-                }
-                controlRef={controlRef}
-                controlTitle={controlTitle}
-              />
-            ) : tab === "details" ? (
-              <Details insight={insight} ids={ids} canAct={canAct} />
-            ) : (
-              <Trace
-                insight={insight}
-                ids={ids}
-                onShow={show}
-                focused={focused}
-              />
-            )}
-          </div>
-        </aside>
-      </div>
-
-      <section className="ei-ask" aria-label="Ask the AI assistant">
-        <span className="ei-ask-bot" aria-hidden="true">
-          <AgentBot size={40} />
-        </span>
-        <div className="ei-ask-body">
-          <div className="ei-ask-head">
-            <strong>Ask the AI assistant</strong>
-            <small>
-              A question opens in the agent console with this control and its
-              evidence in context.
-            </small>
-          </div>
-          {insight !== null && insight.questions.length > 0 ? (
-            <div className="ei-chips">
-              {insight.questions.map((question) => (
-                <button
-                  key={question}
-                  type="button"
-                  className="ei-chip"
-                  onClick={() => ask(question)}
-                >
-                  {question}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          <AskForm onAsk={ask} />
-        </div>
-      </section>
-    </section>
-  );
-}
-
-/** The citations the viewer marks: the file's passages on record, and the one focused
- * (it may come from a finding the mapping located). */
-function citationsOf(
+export function citationsOf(
   insight: FileInsight,
   focused: EvidenceCitation | null,
 ): EvidenceCitation[] {
@@ -589,117 +75,9 @@ function citationsOf(
   return list;
 }
 
-function NavItemRow({
-  item,
-  awaiting,
-  selectedFile,
-  chosen,
-  onFile,
-  onItem,
-}: {
-  item: NavItem;
-  awaiting: boolean;
-  selectedFile: string | null;
-  chosen: boolean;
-  onFile: (file: NavFile) => void;
-  onItem: () => void;
-}) {
-  const status = requirementStatus(item.requirement.state, awaiting);
-  return (
-    <li
-      className={`ei-item${chosen ? " is-chosen" : ""}${item.waits ? " is-waiting" : ""}`}
-    >
-      <button
-        type="button"
-        className="ei-item-head"
-        aria-pressed={chosen}
-        onClick={onItem}
-      >
-        <span className="ei-item-title">{item.requirement.title}</span>
-        <span className={`ei-state ${status.tone}`} title={status.title}>
-          {status.label}
-        </span>
-      </button>
-      {item.files.length === 0 ? (
-        <p className="ei-none">No file yet</p>
-      ) : (
-        <ul className="ei-files">
-          {item.files.map((file) => (
-            <li key={file.id}>
-              <button
-                type="button"
-                className={`ei-file${file.id === selectedFile ? " is-on" : ""}`}
-                aria-current={file.id === selectedFile ? "true" : undefined}
-                onClick={() => onFile(file)}
-              >
-                <FileBadge name={file.fileName} small />
-                <span className="ei-file-text">
-                  <span className="ei-file-name" title={file.fileName}>
-                    {file.fileName}
-                  </span>
-                  <small>{fileMeta(file, formatBytes, formatDate)}</small>
-                </span>
-                <FileDot file={file} />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </li>
-  );
-}
+export { FileBadge } from "./file-badge";
 
-/** Where the file stands, as one mark: read and covering, in part, not, reading, or
- * needing a person. The title says it in words. */
-function FileDot({ file }: { file: NavFile }) {
-  const [tone, title] =
-    file.read === "reading"
-      ? ["is-reading", "Being read"]
-      : file.attention
-        ? ["is-attention", "Needs a person"]
-        : file.coverage === "COVERED"
-          ? ["is-ok", "Covers the item"]
-          : file.coverage === "PARTIAL"
-            ? ["is-part", "Covers the item in part"]
-            : file.coverage === "NOT_COVERED"
-              ? ["is-no", "Does not cover the item"]
-              : ["is-idle", "Not assessed"];
-  return (
-    <span className={`ei-dot ${tone}`} title={title}>
-      <span className="sr-only">{title}</span>
-    </span>
-  );
-}
-
-const EXT_KIND: Record<string, string> = {
-  pdf: "PDF",
-  doc: "DOC",
-  docx: "DOC",
-  xls: "XLS",
-  xlsx: "XLS",
-  csv: "XLS",
-  png: "IMG",
-  jpg: "IMG",
-  jpeg: "IMG",
-  gif: "IMG",
-  webp: "IMG",
-  zip: "ZIP",
-};
-
-function FileBadge({ name, small = false }: { name: string; small?: boolean }) {
-  const ext = name.toLowerCase().split(".").pop() ?? "";
-  const kind = EXT_KIND[ext] ?? "FILE";
-  return (
-    <span
-      className={`ei-badge kind-${kind.toLowerCase()}${small ? " is-small" : ""}`}
-      aria-hidden="true"
-    >
-      {kind}
-    </span>
-  );
-}
-
-function Analysis({
+export function Analysis({
   insight,
   items,
   canAct,
@@ -1184,7 +562,7 @@ function DecisionBar({
   );
 }
 
-function Details({
+export function Details({
   insight,
   ids,
   canAct,
@@ -1245,7 +623,7 @@ function Details({
   );
 }
 
-function Trace({
+export function Trace({
   insight,
   ids,
   onShow,
@@ -1325,38 +703,5 @@ function Trace({
         ))}
       </ul>
     </>
-  );
-}
-
-function AskForm({ onAsk }: { onAsk: (question: string) => void }) {
-  const [text, setText] = useState("");
-  return (
-    <form
-      className="ei-ask-form"
-      autoComplete="off"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (text.trim() !== "") {
-          onAsk(text);
-        }
-      }}
-    >
-      <input
-        type="text"
-        value={text}
-        maxLength={1000}
-        placeholder="Ask a question about this evidence or request follow-up from the client…"
-        aria-label="Ask the AI assistant"
-        onChange={(event) => setText(event.target.value)}
-      />
-      <button
-        type="submit"
-        className="btn"
-        aria-label="Ask"
-        disabled={text.trim() === ""}
-      >
-        <UiIcon name="arrow" size={14} />
-      </button>
-    </form>
   );
 }

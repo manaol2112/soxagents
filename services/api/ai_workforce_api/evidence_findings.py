@@ -48,10 +48,10 @@ from ai_workforce_api.db import transaction
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.settings import Settings
 
-Source = Literal["READER", "RULES", "MAPPING"]
+Source = Literal["READER", "RULES", "MAPPING", "TRACE"]
 Kind = Literal[
     "GAP", "PARTIAL", "NOT_COVERED", "PLACEHOLDER", "VERSION", "PERIOD",
-    "MISSING", "CONFLICT", "CONCERN",
+    "MISSING", "CONFLICT", "CONCERN", "LATE", "NOT_TRACED", "ACTIVITY",
 ]  # fmt: skip
 Status = Literal[
     "PROPOSED", "ACCEPTED", "DISMISSED", "SENT", "ANSWERED", "RESOLVED",
@@ -621,6 +621,7 @@ def _record_drafts(
     request_id: UUID | None,
     plan_revision: int | None,
     digest: str,
+    instance_id: UUID | None = None,
 ) -> list[UUID]:
     created: list[UUID] = []
     for draft in drafts:
@@ -631,11 +632,11 @@ def _record_drafts(
                 analysis_id, mapping_run_id, requirement_id, pbc_request_id, attribute_index,
                 attribute_id, attribute_code,
                 source, kind, fingerprint, title, observation, question, expected, citation,
-                plan_revision, file_sha256
+                plan_revision, file_sha256, walkthrough_instance_id
             )
             VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s
+                %s, %s
             )
             ON CONFLICT (engagement_control_id, fingerprint) DO NOTHING
             RETURNING id
@@ -662,6 +663,7 @@ def _record_drafts(
                 None if draft.citation is None else Json(draft.citation),
                 plan_revision,
                 digest,
+                instance_id,
             ),  # fmt: skip
         ).fetchone()
         if row is None:
@@ -669,13 +671,15 @@ def _record_drafts(
         finding_id = UUID(str(row[0]))
         _event(
             cursor, finding_id, organization_id, project_id, "PROPOSED",
-            "AGENT" if draft.source != "RULES" else "SYSTEM", None, "PROPOSED", "PROPOSED",
+            "AGENT" if draft.source in ("READER", "MAPPING") else "SYSTEM", None, "PROPOSED",
+            "PROPOSED",
             note="", question=draft.question,
             points_at={
                 k: v
                 for k, v in (
                     ("analysis_id", None if analysis_id is None else str(analysis_id)),
                     ("run_id", None if mapping_run_id is None else str(mapping_run_id)),
+                    ("walkthrough_instance_id", None if instance_id is None else str(instance_id)),
                 )
                 if v is not None
             },
