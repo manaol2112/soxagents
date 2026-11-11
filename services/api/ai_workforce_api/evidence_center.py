@@ -543,6 +543,8 @@ class _Facts:
     supports: dict[UUID, list[str]] = field(default_factory=dict)
     # The (control, phase) pairs a person released (phase_release.py).
     released: set[tuple[UUID, str]] = field(default_factory=set)
+    # The controls whose D&I conclusion is signed off effective (B0).
+    designed: set[UUID] = field(default_factory=set)
     # Each request's items: how many, provided, accepted (evidence_status.py).
     progress: dict[UUID, Any] = field(default_factory=dict)
 
@@ -598,6 +600,9 @@ def _facts(connection: psycopg.Connection[Any], project_id: UUID) -> _Facts:
             (project_id,),
         ).fetchall()
     }
+    # A withdrawn file keeps its filing but is off the request, as the links view and the
+    # item progress leave it out (bug hunt, 9 November 2026: it was still counted, and
+    # could keep the request reading as being read).
     for row in connection.execute(
         """
         SELECT m.pbc_request_id, count(*),
@@ -605,6 +610,9 @@ def _facts(connection: psycopg.Connection[Any], project_id: UUID) -> _Facts:
         FROM evidence_matches m
         LEFT JOIN evidence_analyses a ON a.evidence_file_id = m.evidence_file_id
         WHERE m.project_id = %s AND m.status = 'FILED' AND m.pbc_request_id IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM evidence_withdrawals w
+              WHERE w.evidence_file_id = m.evidence_file_id AND w.restored_at IS NULL)
         GROUP BY m.pbc_request_id
         """,
         (project_id,),
@@ -665,6 +673,9 @@ def _facts(connection: psycopg.Connection[Any], project_id: UUID) -> _Facts:
             (project_id,),
         ).fetchall()
     }
+    from ai_workforce_api.design_conclusions import effective_controls
+
+    facts.designed = effective_controls(connection, project_id)
     facts.names = {item.email: item.name for item in contacts(connection, project_id)}
     facts.labels = {item.request_type: item.label for item in request_types(connection)}
     from ai_workforce_api.evidence_status import progress
@@ -757,6 +768,10 @@ def _row(
         plan = facts.plans.get(pbc.engagement_control_id)
         if plan is None:
             held_reason = "Held for planning"
+        elif pbc.testing_phase == "DESIGN":
+            # D&I evidence follows its own release, never the plan's approval (B1).
+            if (pbc.engagement_control_id, "DESIGN") not in facts.released:
+                held_reason = "Awaiting the D&I release"
         elif plan not in ("APPROVED", "CHANGES_PROPOSED"):
             held_reason = "Awaiting plan approval"
         elif (
@@ -766,10 +781,26 @@ def _row(
             held_reason = "Awaiting attributes"
         elif (
             pbc.testing_phase in ("INTERIM", "ROLLFORWARD")
+            and pbc.engagement_control_id not in facts.designed
+        ):
+            held_reason = "Awaiting the D&I sign-off"
+        elif (
+            pbc.testing_phase in ("INTERIM", "ROLLFORWARD")
             and not pbc.operation_key.startswith(("kickoff-", "scope-"))
             and (pbc.engagement_control_id, pbc.testing_phase) not in facts.released
         ):
             held_reason = "Awaiting phase release"
+    if (
+        not held_reason
+        and pbc.engagement_control_id is not None
+        and pbc.status in _UNSENT
+        and pbc.testing_phase in ("INTERIM", "ROLLFORWARD")
+        and pbc.engagement_control_id not in facts.designed
+    ):
+        # No OE request goes for approval before the D&I sign-off, whoever drafted it, as
+        # the send path holds it (request_details.held_of, B0). Bug hunt, 9 November 2026:
+        # the list held only the agent's drafts.
+        held_reason = "Awaiting the D&I sign-off"
     if held_reason and stage == "READY_FOR_REVIEW":
         # Not ready for anyone's review until the plan (or attributes) let it go.
         stage = "DRAFT"

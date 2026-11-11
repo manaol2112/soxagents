@@ -17,7 +17,8 @@ from typing import Literal
 from pydantic import BaseModel
 
 from ai_workforce_api.control_instances import control_label
-from ai_workforce_api.controls import KINDS, Kind, kind_for_domain, sample_size
+from ai_workforce_api.controls import KINDS, Kind, kind_for_domain
+from ai_workforce_api.methodology import PLATFORM_DEFAULT, Rules
 
 TEMPLATES_VERSION = 2
 
@@ -610,6 +611,10 @@ class PreviewControl:
     frequency_label: str = ""
     nature_label: str = ""
     custom_fields: tuple[tuple[str, str], ...] = ()
+    # The engagement's testing methodology (methodology.py): the sample it plans, and the
+    # version's name, which the workpaper records as the sample's basis.
+    rules: Rules = PLATFORM_DEFAULT
+    methodology: str = ""
 
 
 def summary(template: WorkpaperTemplate) -> TemplateSummary:
@@ -723,13 +728,13 @@ def sample_plan(control: PreviewControl, period: str) -> tuple[int, str]:
     if period == "rollforward":
         from ai_workforce_api.test_rounds import rollforward_size
 
-        method, size = rollforward_size(control.frequency, control.nature)
+        method, size = rollforward_size(control.frequency, control.nature, control.rules)
         return size, (
             "One instance from current evidence"
             if method == "TEST_OF_ONE"
             else "Random across the period remaining after interim testing"
         )
-    size = sample_size(control.frequency, control.nature)
+    size = control.rules.sample_size(control.frequency, control.nature)
     return size, ("One instance" if size == 1 else "Random across the period")
 
 
@@ -757,6 +762,11 @@ def _section(
             PreviewField(label="Frequency", value=FREQUENCY_LABELS.get(control.frequency, "")),
             PreviewField(label="Sample size", value=str(size)),
             PreviewField(label="Selection method", value=method),
+            *(
+                [PreviewField(label="Sample basis", value=control.methodology)]
+                if control.methodology
+                else []
+            ),
         ]
     elif section.kind == "matrix":
         if period == "design":

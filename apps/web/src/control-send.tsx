@@ -21,6 +21,7 @@ import {
   type SendResult,
   type SentReport,
   sendBody,
+  sendProblem,
   sentReport,
   withTitles,
 } from "./control-send-model";
@@ -76,7 +77,7 @@ export function ControlSend({
     preview: boolean,
     named: { name: string; email: string } | null,
     routing: readonly Routing[] = [],
-  ): Promise<{ result: SendResult | null; detail: string }> {
+  ): Promise<{ result: SendResult | null; title: string; summary: string }> {
     try {
       const response = await fetch("/workspace/control-send", {
         method: "POST",
@@ -96,26 +97,23 @@ export function ControlSend({
       const parsed = parseSendResult(answer.result);
       return {
         result: parsed === null ? null : withTitles(parsed, titles),
-        detail:
-          answer.status === 403
-            ? "Only the engagement's managers can approve and send requests."
-            : answer.status === 422
-              ? (answer.detail ?? "Check the owner and try again.")
-              : "The requests could not be checked. Try again.",
+        ...sendProblem(
+          preview,
+          typeof answer.status === "number" ? answer.status : 0,
+          typeof answer.detail === "string" ? answer.detail : "",
+        ),
       };
     } catch {
-      return {
-        result: null,
-        detail: "The requests could not be checked. Try again.",
-      };
+      // No answer: a check can be tried again; a send's outcome is not known.
+      return { result: null, ...sendProblem(preview, 0, "") };
     }
   }
 
   async function check(named: { name: string; email: string } | null) {
     setStep({ kind: "checking" });
-    const { result, detail } = await call(true, named);
+    const { result, title, summary } = await call(true, named);
     if (result === null) {
-      setStep({ kind: "done", title: "Not checked", summary: detail });
+      setStep({ kind: "done", title, summary });
     } else if (result.needsOwner) {
       setStep({ kind: "owner", info: result });
     } else if (result.targets.length === 0) {
@@ -135,10 +133,10 @@ export function ControlSend({
     routing: readonly Routing[] = [],
   ) {
     setStep({ kind: "sending" });
-    const { result, detail } = await call(false, named, routing);
+    const { result, title, summary } = await call(false, named, routing);
     setStep(
       result === null
-        ? { kind: "done", title: "Not sent", summary: detail }
+        ? { kind: "done", title, summary }
         : { kind: "sent", report: sentReport(result) },
     );
     startTransition(() => router.refresh());

@@ -303,3 +303,58 @@ def test_a_memo_naming_no_one_is_not_a_point_but_another_leavers_ticket_is() -> 
     # Columns read as words.
     ad = next(entry for entry in body.files if entry.file_name == "ad.csv")
     assert [when.label for when in ad.dates] == ["When changed", "Last logon date"]
+
+
+def _confirmed(listing: str = "00000000-0000-0000-0000-000000000001") -> Picked:
+    return Picked(
+        instance_id=UUID("00000000-0000-0000-0000-0000000000cc"),
+        file_id=listing,
+        row_number=1,
+        columns=[],
+        values=[],
+        origin="PICKED",
+        named_in=None,
+        by="Ava Lin",
+        at="2026-11-09T10:00:00+00:00",
+    )
+
+
+def test_a_trace_that_cannot_judge_the_removal_is_never_ready() -> None:
+    """Bug hunt, 9 November 2026: an account still enabled gave no finding, and a removal
+    with no limit or no event to count from left the trace ready."""
+    # Farah's account is still enabled: the extract lists her with no removal date.
+    enabled = AD.replace(
+        "fnavarro,Farah Navarro,False,01/13/2026", "fnavarro,Farah Navarro,True,01/13/2026"
+    )
+    listings = _listings()
+    listings[1] = Listing(listings[1].file_id, "ad.csv", _table(enabled), "Active Directory")
+    body, _subject = build(ITEM, listings, [_ticket()], (3, "3 business days"), _confirmed())
+    assert body.status == "CONFIRMED"
+    titles = [o.title for o in body.observations if o.kind == "NOT_TRACED"]
+    assert "No removal recorded for Farah Navarro (101398) in ad.csv" in titles
+    # The listing that gives the event is not expected to show a removal.
+    assert not any("in hr.csv" in title for title in titles)
+    assert body.ready is False
+
+    # No limit stated: the removal cannot be judged as timely.
+    body, _subject = build(ITEM, _listings(), [_ticket()], (None, ""), _confirmed())
+    assert body.event is not None
+    limit = [o for o in body.observations if o.title.startswith("No time limit")]
+    assert len(limit) == 1 and limit[0].kind == "NOT_TRACED"
+    assert "Please confirm the time limit" in limit[0].question
+    assert body.ready is False
+
+    # No event date anywhere: the removal cannot be timed.
+    ticket = "".join(
+        line for line in TICKET.splitlines(keepends=True) if not line.startswith("Termination")
+    )
+    without_hr = _listings()[1:]
+    body, _subject = build(
+        ITEM, without_hr, [_ticket(ticket)], (3, "3 business days"),
+        _confirmed("00000000-0000-0000-0000-000000000002"),
+    )  # fmt: skip
+    assert body.status == "CONFIRMED" and body.event is None
+    assert any(o.title == "No event date for Farah Navarro" for o in body.observations), [
+        o.title for o in body.observations
+    ]
+    assert body.ready is False

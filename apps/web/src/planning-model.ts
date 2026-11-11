@@ -1732,7 +1732,7 @@ export function planningWrite(fields: Fields): PlanningWrite {
     const controls = listed.filter(
       (item): item is string => typeof item === "string" && UUID.test(item),
     );
-    return (phase === "INTERIM" || phase === "ROLLFORWARD") &&
+    return isReleased(phase) &&
       controls.length > 0 &&
       controls.length <= 200 &&
       controls.length === listed.length &&
@@ -1820,8 +1820,7 @@ export function planningWrite(fields: Fields): PlanningWrite {
     case "phase-release": {
       const phase = text(fields, "phase");
       const reason = text(fields, "reason");
-      return (phase === "INTERIM" || phase === "ROLLFORWARD") &&
-        clean(reason, 0, 1000)
+      return isReleased(phase) && clean(reason, 0, 1000)
         ? ok(`${control}/phases/${phase}/release`, { reason })
         : { error: "invalid" };
     }
@@ -2179,8 +2178,8 @@ export type ControlPhases = {
 
 export type PhaseProgress = {
   controls: ControlPhases[];
-  ready: { INTERIM: number; ROLLFORWARD: number };
-  released: { INTERIM: number; ROLLFORWARD: number };
+  ready: { DESIGN: number; INTERIM: number; ROLLFORWARD: number };
+  released: { DESIGN: number; INTERIM: number; ROLLFORWARD: number };
   recommendation: string;
   viewerCanRelease: boolean;
 };
@@ -2221,10 +2220,12 @@ export function parsePhaseProgress(value: unknown): PhaseProgress | null {
   return {
     controls: records(value.controls).map(parseControlPhases),
     ready: {
+      DESIGN: count(value.ready, "DESIGN"),
       INTERIM: count(value.ready, "INTERIM"),
       ROLLFORWARD: count(value.ready, "ROLLFORWARD"),
     },
     released: {
+      DESIGN: count(value.released, "DESIGN"),
       INTERIM: count(value.released, "INTERIM"),
       ROLLFORWARD: count(value.released, "ROLLFORWARD"),
     },
@@ -2246,14 +2247,33 @@ export function releaseIsEarly(status: PhaseStatus): boolean {
   return status.step !== "READY";
 }
 
-/** Whether the phase can be released at all now: it applies, the plan is approved, and it
- * is not released or complete yet. */
+/** Whether the phase can be released at all now: it applies, what it needs first is in
+ * place (a plan for the D&I evidence, the approved plan for an operating phase), and it is
+ * not released or complete yet. The D&I evidence has its own release (B1). */
 export function releasable(status: PhaseStatus | null): boolean {
   return (
-    status !== null &&
-    status.phase !== "DESIGN" &&
-    (status.step === "READY" || status.step === "WAITING")
+    status !== null && (status.step === "READY" || status.step === "WAITING")
   );
+}
+
+/** The phases a person releases, in the audit's order. */
+export const RELEASED_PHASES = ["DESIGN", "INTERIM", "ROLLFORWARD"] as const;
+export type Released = (typeof RELEASED_PHASES)[number];
+
+function isReleased(value: string): value is Released {
+  return (RELEASED_PHASES as readonly string[]).includes(value);
+}
+
+/** A phase's name inside a sentence: "D&I" keeps its capitals, the others are lower case. */
+export function phaseWord(phase: Phase): string {
+  return phase === "DESIGN" ? "D&I" : PHASE_SHORT[phase].toLowerCase();
+}
+
+/** What releasing a phase does, in a line. */
+export function releaseNote(phase: Released): string {
+  return phase === "DESIGN"
+    ? "Releasing drafts the D&I evidence requests. Each still needs an approver before it is sent."
+    : "Releasing lets the phase's prepared requests go for approval. Nothing is sent.";
 }
 
 /** The phase a reviewer releases next: the first, in the audit's order, that can be

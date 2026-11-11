@@ -1,14 +1,20 @@
-"""Phase-based release (master test plans, milestone E).
+"""Phase-based release (master test plans, milestone E; D&I release, B1).
 
-Every applicable phase's evidence is planned, and drafted, in advance. Requests are released
-progressively: design and implementation with the test plan's approval; interim and the
-roll-forward by a person's release of that phase for the control (`phase_releases`,
-migration 0081). The agents never release a phase.
+Every applicable phase's evidence is planned in advance. Requests are released
+progressively, each phase by a person's release of it for the control (`phase_releases`,
+migrations 0081 and 0145). The agents never release a phase.
 
-The platform recommends a release when the earlier phase is complete: interim once the
-design workpaper is prepared, the roll-forward once interim testing is signed off (or, where
-interim does not apply, once design is). A reviewer may release a phase before then, for one
-control, with the reason recorded (decided by the product owner).
+- Design and implementation (D&I): its own release, once Control Understanding is complete
+  (decided by the product owner on 8 November 2026). It does not wait for the test plan's
+  approval, and revising the plan does not hold it. Releasing it requests the Design phase's
+  evidence items.
+- Interim and the roll-forward: on an approved test plan, once the D&I conclusion is signed
+  off effective (B0); the roll-forward once interim testing is signed off (or, where interim
+  does not apply, once D&I is). Their requests are prepared in advance and go for approval
+  once released.
+
+The platform recommends a release when what comes before it is complete. A person may
+release a phase before then, for one control, with the reason recorded.
 
 A released phase only lets its requests go for approval: each request is still approved,
 and sent, by a person. Releasing never sends anything.
@@ -34,12 +40,14 @@ from ai_workforce_api.authorization import (
 )
 from ai_workforce_api.db import transaction
 from ai_workforce_api.evidence_planning import PHASE_LABELS
-from ai_workforce_api.evidence_plans import PlanState, _audit
+from ai_workforce_api.evidence_plans import GATE_DESIGN_RELEASE, PlanState, _audit
 from ai_workforce_api.settings import Settings
 
-Released = Literal["INTERIM", "ROLLFORWARD"]
-RELEASED_PHASES: tuple[Released, ...] = ("INTERIM", "ROLLFORWARD")
+Released = Literal["DESIGN", "INTERIM", "ROLLFORWARD"]
+RELEASED_PHASES: tuple[Released, ...] = ("DESIGN", "INTERIM", "ROLLFORWARD")
+_OPERATING: tuple[str, ...] = ("INTERIM", "ROLLFORWARD")
 GATE_RELEASE: dict[str, str] = {
+    "DESIGN": GATE_DESIGN_RELEASE,
     "INTERIM": "release the interim phase first",
     "ROLLFORWARD": "release the roll-forward phase first",
 }
@@ -99,6 +107,68 @@ def released_phases(connection: psycopg.Connection[Any], project_id: UUID) -> se
     }
 
 
+def understanding_waits(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID | None = None
+) -> dict[UUID, str]:
+    """What each control's understanding still waits for, in a sentence; a control missing
+    from the result is understood. Control Understanding is complete when every client value
+    the control's statement asks is answered, no question on the control is open, and, for
+    a business process control, its process understanding is confirmed (as the workflow's
+    Control Understanding step reads it)."""
+    from ai_workforce_api.control_context import (
+        classifications_of,
+        needs_process_understanding,
+    )
+    from ai_workforce_api.control_design import unanswered_values
+
+    one = control_id is not None
+    params = {"p": project_id, "c": control_id}
+    which = "c.id = %(c)s" if one else "c.included"
+    rows = connection.execute(
+        f"""
+        SELECT c.id, c.classifications, c.domain, c.nature, u.status
+        FROM engagement_controls c
+        LEFT JOIN process_understandings u ON u.engagement_control_id = c.id
+        WHERE c.project_id = %(p)s AND {which}
+        """,
+        params,
+    ).fetchall()
+    questions = {
+        UUID(str(row[0])): int(row[1])
+        for row in connection.execute(
+            "SELECT engagement_control_id, count(*) FROM control_context_issues "
+            "WHERE project_id = %(p)s AND status = 'OPEN' GROUP BY 1",
+            params,
+        ).fetchall()
+    }
+    missing = unanswered_values(connection, project_id)
+    waits: dict[UUID, str] = {}
+    for cid, classifications, domain, nature, understanding in rows:
+        control = UUID(str(cid))
+        if missing.get(control):
+            count = missing[control]
+            waits[control] = (
+                f"Control Understanding is not complete: {count} question"
+                f"{' is' if count == 1 else 's are'} not answered."
+            )
+        elif questions.get(control):
+            count = questions[control]
+            waits[control] = (
+                f"Control Understanding is not complete: {count} question"
+                f"{' is' if count == 1 else 's are'} open."
+            )
+        elif (
+            needs_process_understanding(
+                classifications_of(classifications, str(domain), str(nature or ""))
+            )
+            and understanding != "CONFIRMED"
+        ):
+            waits[control] = (
+                "Control Understanding is not complete: the process understanding is not confirmed."
+            )
+    return waits
+
+
 class PhaseStatus(BaseModel):
     phase: Literal["DESIGN", "INTERIM", "ROLLFORWARD"]
     label: str
@@ -154,14 +224,11 @@ def _statuses(
             params,
         ).fetchall()
     }
-    designed = {
-        UUID(str(row[0]))
-        for row in connection.execute(
-            f"SELECT engagement_control_id FROM workpapers WHERE {scope} AND stage = 'DESIGN' "
-            "AND status = 'PREPARED'",
-            params,
-        ).fetchall()
-    }
+    # D&I is complete once its conclusion is signed off effective (B0, 8 November 2026).
+    from ai_workforce_api.design_conclusions import effective_controls
+
+    designed = effective_controls(connection, project_id, control_id if one else None)
+    waits = understanding_waits(connection, project_id, control_id if one else None)
     tested = {
         UUID(str(row[0]))
         for row in connection.execute(
@@ -228,12 +295,13 @@ def _statuses(
                 status.step = "NOT_APPLICABLE"
             elif complete[phase]:
                 status.step = "COMPLETE"
-            elif phase == "DESIGN":
-                status.step = "RELEASED" if approved else "AWAITING_PLAN"
-                if not approved:
-                    status.waiting_for = "Approve the test plan."
             elif release is not None:
                 status.step = "RELEASED"
+            elif phase == "DESIGN":
+                # Its own release, once the control is understood (B1); never the plan's.
+                wait = waits.get(control)
+                status.step = "READY" if wait is None else "WAITING"
+                status.waiting_for = wait or ""
             elif not approved:
                 status.step, status.waiting_for = "AWAITING_PLAN", "Approve the test plan."
             else:
@@ -243,6 +311,8 @@ def _statuses(
             status.step_label = (
                 "Released early"
                 if status.step == "RELEASED" and status.early
+                else "Waiting for understanding"
+                if status.step == "WAITING" and phase == "DESIGN"
                 else STEP_LABELS[status.step]
             )
             phases.append(status)
@@ -268,7 +338,7 @@ def _earlier(
 ) -> str | None:
     """What the phase waits for before its release is recommended, or None when ready."""
     if not complete["DESIGN"]:
-        return "Design and implementation testing is not complete."
+        return "The D&I conclusion is not signed off as effective."
     if phase == "ROLLFORWARD" and applicability.get((control, "INTERIM")) in _APPLIES:
         if not complete["INTERIM"]:
             return "Interim testing is not signed off."
@@ -296,7 +366,13 @@ def progress(connection: psycopg.Connection[Any], project_id: UUID) -> PhaseProg
             if item.phase in released and item.step in ("RELEASED", "COMPLETE"):
                 released[item.phase] += 1
     recommendation = ""
-    if ready["INTERIM"]:
+    if ready["DESIGN"]:
+        count = ready["DESIGN"]
+        recommendation = (
+            f"Control Understanding is complete for {count} control"
+            f"{'' if count == 1 else 's'}. The D&I evidence is ready to release."
+        )
+    elif ready["INTERIM"]:
         count = ready["INTERIM"]
         recommendation = (
             f"Design and implementation testing has been completed for {count} control"
@@ -343,15 +419,20 @@ def release(
     body: ReleaseBody,
 ) -> bool:
     """A person releases the control's phase. Idempotent: a released phase stays as it was.
-    Returns whether this call released it."""
+    Returns whether this call released it. The D&I evidence needs a plan, not its approval;
+    an operating phase needs the approved plan and the D&I conclusion signed off effective."""
     reason = " ".join(body.reason.split())
     with transaction(connection) as cursor:
         plan = cursor.execute(
-            "SELECT status, revision FROM evidence_plans WHERE project_id = %s "
+            "SELECT status, revision, run_status FROM evidence_plans WHERE project_id = %s "
             "AND engagement_control_id = %s FOR UPDATE",
             (project_id, control_id),
         ).fetchone()
-        if plan is None or str(plan[0]) not in _APPROVED:
+        if plan is None:
+            raise PlanState("plan the evidence first")
+        if phase == "DESIGN" and str(plan[2]) in ("PENDING", "WORKING"):
+            raise PlanState("The planner is still drafting the plan.")
+        if phase != "DESIGN" and str(plan[0]) not in _APPROVED:
             raise PlanState("approve the test plan first")
         if (
             cursor.execute(
@@ -369,6 +450,12 @@ def release(
         )
         if current is None or current.step == "NOT_APPLICABLE":
             raise PlanState(f"the test plan says the {phase_word(phase)} phase does not apply")
+        if phase in _OPERATING:
+            from ai_workforce_api.design_conclusions import oe_gate_reason
+
+            gated = oe_gate_reason(cursor.connection, control_id)
+            if gated is not None:
+                raise PlanState(gated)
         early = current.step != "READY"
         if early and len(reason) < 20:
             raise PlanState(
@@ -392,7 +479,25 @@ def release(
 
 
 def phase_word(phase: str) -> str:
-    return "roll-forward" if phase == "ROLLFORWARD" else phase.lower()
+    return {"DESIGN": "D&I", "ROLLFORWARD": "roll-forward"}.get(phase, phase.lower())
+
+
+def request_released(
+    connection: psycopg.Connection[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    phase: str,
+    actor: UUID,
+) -> list[UUID]:
+    """After a D&I release, request the Design phase's evidence items and queue their drafts
+    (evidence_plans.release). Each draft still goes for a person's approval before it is
+    sent. An operating phase's requests are prepared already: nothing to request."""
+    if phase != "DESIGN":
+        return []
+    from ai_workforce_api.evidence_plans import release as request_allowed
+
+    return request_allowed(connection, organization_id, project_id, control_id, actor)
 
 
 # Routes
@@ -418,8 +523,20 @@ class BatchReleased(BaseModel):
     released: int
 
 
-def register_phase_release(app: FastAPI, settings: Settings) -> None:
+def register_phase_release(app: FastAPI, settings: Settings, scheduler: Any = None) -> None:
     base = "/organizations/{organization_id}/projects/{project_id}"
+
+    def requested(
+        connection: psycopg.Connection[Any], organization_id: UUID, project_id: UUID,
+        control_id: UUID, phase: str, actor: UUID,
+    ) -> None:  # fmt: skip
+        """A D&I release requests the Design items; their drafts go to the background."""
+        from ai_workforce_api.pbc_drafting import schedule
+
+        schedule(
+            scheduler,
+            request_released(connection, organization_id, project_id, control_id, phase, actor),
+        )
 
     def run[T](request: Request, work: Callable[[psycopg.Connection[Any], Principal], T]) -> T:
         principal = _session_principal(request)
@@ -481,6 +598,7 @@ def register_phase_release(app: FastAPI, settings: Settings) -> None:
             allowed(c, p, organization_id, project_id, Action.PROJECT_UPDATE)
             in_scope(c, project_id, control_id)
             release(c, organization_id, project_id, control_id, phase, p.id, body)
+            requested(c, organization_id, project_id, control_id, phase, p.id)
             found = phases_of(c, project_id, control_id)
             assert found is not None
             return found
@@ -512,6 +630,8 @@ def register_phase_release(app: FastAPI, settings: Settings) -> None:
                         detail=error.detail,
                     ))  # fmt: skip
                     continue
+                if done:
+                    requested(c, organization_id, project_id, control_id, body.phase, p.id)
                 outcomes.append(ReleaseOutcome(
                     control_id=control_id, control_ref=ref, released=done,
                     detail="" if done else "Already released.",

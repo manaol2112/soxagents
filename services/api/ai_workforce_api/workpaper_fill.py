@@ -217,6 +217,8 @@ def gather(connection: psycopg.Connection[Any], project_id: UUID, control_id: UU
         frequency_label=loaded.frequency_label,
         nature_label=loaded.nature_label,
         custom_fields=loaded.custom_fields,
+        rules=loaded.rules,
+        methodology=loaded.methodology,
     )
     plan = _plan(connection, project_id, control_id, None)
     sheet = _sheet_of(connection, project_id, control_id, None)

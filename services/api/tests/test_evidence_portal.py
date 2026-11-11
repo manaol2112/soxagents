@@ -4,6 +4,8 @@ which files it to the request's control."""
 
 import hashlib
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from uuid import uuid4
 
@@ -15,7 +17,13 @@ from test_outbound import _session, migrated
 
 from ai_workforce_api.db import connect
 from ai_workforce_api.evidence_analysis import run_analysis
-from ai_workforce_api.evidence_portal import CODE_TRIES, CODES_PER_HOUR, LINK_PLACEHOLDER
+from ai_workforce_api.evidence_portal import (
+    CODE_TRIES,
+    CODES_PER_HOUR,
+    LINK_PLACEHOLDER,
+    TooMany,
+    send_code,
+)
 from ai_workforce_api.main import create_app
 from ai_workforce_api.settings import Settings
 
@@ -147,6 +155,50 @@ def test_codes_expire_lock_after_five_tries_and_are_rate_limited(migrated: Datab
     assert limited.status_code == 429
 
 
+def test_codes_asked_for_at_once_stay_within_the_hourly_limit(migrated: Database) -> None:
+    # Bug hunt, 9 November 2026: the hourly count was read, the email sent, and only then
+    # the code stored, with nothing held, so codes asked for at once all passed the limit.
+    sent = _sent(migrated, "codes-at-once")
+    token = sent["token"]
+    with connect(migrated.url) as connection:
+        link = connection.execute(
+            "SELECT id FROM evidence_portal_links WHERE token_hash = %s",
+            (hashlib.sha256(token.encode()).hexdigest(),),
+        ).fetchone()
+        assert link is not None
+        for _earlier in range(CODES_PER_HOUR - 1):
+            connection.execute(
+                "INSERT INTO evidence_portal_codes (link_id, code_hash, expires_at, delivery) "
+                "VALUES (%s, %s, clock_timestamp() + interval '10 minutes', 'SENT')",
+                (link[0], "0" * 64),
+            )
+    settings = Settings(database_url=migrated.url, session_cookie_secure=False)
+
+    class _SlowMailbox:
+        def send(self, **_message: Any) -> None:
+            # Slow enough for every caller to read the count before any code is stored.
+            time.sleep(0.4)
+
+    def ask() -> str:
+        with connect(migrated.url) as connection:
+            try:
+                send_code(connection, settings, token, lambda *_args: _SlowMailbox())  # type: ignore[arg-type,return-value]
+            except TooMany:
+                return "limited"
+            return "sent"
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        outcomes = list(pool.map(lambda _n: ask(), range(4)))
+    with connect(migrated.url) as connection:
+        stored = connection.execute(
+            "SELECT count(*), count(*) FILTER (WHERE delivery = 'SENT') "
+            "FROM evidence_portal_codes WHERE link_id = %s",
+            (link[0],),
+        ).fetchone()
+    assert sorted(outcomes) == ["limited", "limited", "limited", "sent"]
+    assert stored == (CODES_PER_HOUR, CODES_PER_HOUR)
+
+
 def test_a_link_stops_when_revoked_past_due_or_cancelled(migrated: Database) -> None:
     sent = _sent(migrated, "stops")
     public = _public(migrated)
@@ -182,6 +234,39 @@ def test_a_link_stops_when_revoked_past_due_or_cancelled(migrated: Database) -> 
     assert public.get(f"/public/evidence-portal/links/{token}").json()["state"] == "REVOKED"
     assert public.get("/public/evidence-portal/session", headers=session).status_code == 404
     assert public.post(f"/public/evidence-portal/links/{token}/code").status_code == 409
+
+
+def test_a_team_message_sends_no_new_link_to_a_revoked_recipient(migrated: Database) -> None:
+    # Bug hunt, 9 November 2026: a team message minted a fresh working link for an
+    # address whose links a manager had revoked, and emailed it there.
+    sent = _sent(migrated, "revoked-reply")
+    team, client = sent["team"], sent["client"]
+    base = f"/organizations/{team['org']}/projects/{team['project']}"
+    revoked = client.post(f"{base}/evidence-portal/revoke", json={"recipient": sent["recipient"]})
+    assert revoked.status_code == 200, revoked.text
+    reply = client.post(
+        f"{base}/pbc-requests/{sent['request_id']}/messages",
+        json={"body": "Please also send the listing."},
+    )
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["notified"] is False
+    with connect(migrated.url) as connection:
+        active = connection.execute(
+            "SELECT count(*) FROM evidence_portal_links WHERE project_id = %s "
+            "AND revoked_at IS NULL",
+            (team["project"],),
+        ).fetchone()
+        mailed = connection.execute(
+            "SELECT count(*) FROM mailbox_messages WHERE body LIKE '%%also send the listing%%'"
+        ).fetchone()
+        kept = connection.execute(
+            "SELECT count(*) FROM request_messages WHERE pbc_request_id = %s",
+            (sent["request_id"],),
+        ).fetchone()
+    assert active == (0,)
+    assert mailed == (0,)
+    # The team's message is still recorded on the request.
+    assert kept == (1,)
 
 
 def test_the_owner_reaches_only_their_own_open_requests(migrated: Database) -> None:
@@ -244,7 +329,11 @@ def test_preview_links_exist_only_with_the_mock_mailbox_and_for_the_team(
 def _sent(database: Database, slug: str, phase: str = "INTERIM") -> dict[str, Any]:
     """An active engagement whose ITGC-AC-01 request for the phase (interim unless said)
     has been approved and sent."""
-    team, _client, _scheduler = _engagement(database, f"portal-{slug}-{uuid4().hex[:4]}")
+    # A design request is sent while D&I is still under way: no D&I conclusion in the setup
+    # (B0); an interim one follows the D&I sign-off.
+    team, _client, _scheduler = _engagement(
+        database, f"portal-{slug}-{uuid4().hex[:4]}", design=phase != "DESIGN"
+    )
     client = _session(database, team["owner_id"], email_mock_inbound_enabled=True)
     admin = _session(database, team["reviewer_id"])
     base = f"/organizations/{team['org']}/projects/{team['project']}"

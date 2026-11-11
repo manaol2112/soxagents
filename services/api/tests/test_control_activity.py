@@ -111,9 +111,12 @@ def test_only_a_signed_off_review_concludes_a_control(migrated: Database) -> Non
     # behind it is complete (workflow integrity W1). Here nothing was tested: the
     # register says what is outstanding instead of reading the control as concluded.
     assert row["final"] is False and row["progress"] != "CONCLUDED"
+    # Rewritten 9 November 2026: the shared setup records each control's D&I conclusion
+    # (support.sign_off_design, B0), which prepares the design workpaper, so design is no
+    # longer outstanding here. Before, the list also named "Design and implementation testing
+    # outstanding". What testing is outstanding is still listed, and the control not final.
     assert [item["text"] for item in row["not_final"]] == [
         "Interim testing outstanding",
-        "Design and implementation testing outstanding",
         "Roll-forward testing outstanding",
     ]
     assert row["next_step"] == "Interim testing outstanding"

@@ -278,6 +278,50 @@ def test_a_closed_request_is_listed_to_look_back_at_but_takes_nothing(
     assert message.status_code == 409
 
 
+def test_the_same_file_for_a_second_request_is_linked_to_it_or_the_owner_is_told(
+    migrated: Database,
+) -> None:
+    # Bug hunt, 9 November 2026: the same file uploaded to a second request was found as a
+    # duplicate of the first and nothing was linked, while the owner read "already
+    # received". One file serves several requests by a link, never a move.
+    sent = _sent(migrated, "twice")
+    public = _public(migrated)
+    session = _verify(public, sent["token"], _code(public, sent["token"]))
+    design = _request(migrated, sent["team"], "ITGC-AC-01", "DESIGN")
+    _send(migrated, sent, design)
+    content = b"User ID,Granted\nu0001,2027-01-10\n"
+    first = _upload(public, session, sent["request_id"], "grants.csv", content, 1)
+    assert first.status_code == 200, first.text
+    assert first.json()["duplicate"] is False
+    # On the second request's item, the file the engagement holds is linked to that item.
+    again = _upload(public, session, design["id"], "grants.csv", content, 1)
+    assert again.status_code == 200, again.text
+    assert again.json()["duplicate"] is True
+    with connect(migrated.url) as connection:
+        linked = connection.execute(
+            "SELECT l.origin, l.status FROM evidence_requirement_files l "
+            "JOIN evidence_requirements q ON q.id = l.requirement_id "
+            "JOIN evidence_files f ON f.id = l.evidence_file_id "
+            "WHERE q.pbc_request_id = %s AND f.file_name = 'grants.csv'",
+            (design["id"],),
+        ).fetchall()
+        files = connection.execute(
+            "SELECT count(*) FROM evidence_files WHERE file_name = 'grants.csv'"
+        ).fetchone()
+        audit = connection.execute(
+            "SELECT count(*) FROM audit_events WHERE action = 'evidence.portal_linked'"
+        ).fetchone()
+    assert linked == [("OWNER", "LINKED")]
+    assert files == (1,)
+    assert audit == (1,)
+    # Repeating it changes nothing more.
+    assert _upload(public, session, design["id"], "grants.csv", content, 1).status_code == 200
+    # With no item to link it to, the owner is told where the file is held.
+    unplaced = _upload(public, session, design["id"], "grants.csv", content, None)
+    assert unplaced.status_code == 409
+    assert "another request" in unplaced.json()["detail"]
+
+
 # Helpers
 
 

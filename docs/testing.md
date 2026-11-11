@@ -194,7 +194,7 @@ The sampling frame is every row dated in the period, or every row when there is 
 
 ### Selection
 
-The sample size comes from the control's frequency and nature (for example 25 for an event-driven manual control, 2 for a quarterly one). Samples are drawn at random from the frame with a recorded seed. The same file, frame, size, and seed always give the same rows, so a reviewer can redraw them. When the frame is smaller than the sample size, every item is tested.
+The sample size comes from the engagement's testing methodology (below), by the control's frequency and nature (for example 25 for an event-driven manual control, 2 for a quarterly one). Samples are drawn at random from the frame with a recorded seed. The same file, frame, size, and seed always give the same rows, so a reviewer can redraw them. When the frame is smaller than the sample size, every item is tested.
 
 The plan explains the selection in plain words: how many items, from which file and sheet, with which seed, and why that size.
 
@@ -278,6 +278,18 @@ The testing tabs carry the section **AI-Proposed Testing Rationale — Pending A
 **Download the workbook** on a control's Workpapers tab downloads every tab of its records as one `.xlsx` with a sheet per tab (`GET …/workpapers/export.xlsx?control_id=`); a record on its own downloads too. **Export workpapers** on the controls page downloads the engagement binder: an index sheet linking to one sheet per tab. Cell values that start with `=`, `+`, `-`, or `@` are written as text, so nothing in a workpaper runs as a formula.
 
 Every draft, edit, preparation, and reopening is in the audit trail.
+
+## The firm's testing methodology (migration 0142)
+
+Decided by the product owner on 8 November 2026. The rules that size and conclude testing are the firm's methodology: no auditing standard prescribes them (AS 2315.38 gives factors, not a table; AS 2201.48 allows a control to be effective with a deviation). So the firm owns them, in versions (`methodology.py`):
+
+- **One methodology per firm, in numbered versions.** Version 1 is the platform default, today's rules exactly, labelled "platform default, not approved by the firm" until the firm approves a version of its own. Nothing waits on that approval.
+- **Two people.** An Owner or Admin proposes a version with the reason for it (the section of the firm's methodology manual, for example); a different Owner or Admin approves or rejects it, a rejection with its reason. The proposer may withdraw it. Only one proposal waits at a time. With independent review off in development, one person may decide their own proposal, and the page and the audit record say so.
+- **Pinned.** An engagement keeps the version in force when it launched; one already running when the methodology arrived keeps the version current the first time its rules were read, so nothing it planned changes. Moving a running engagement to another approved version is a recorded decision with a reason, and tests already sized keep their size.
+- **Recorded.** Each test plan (`control_tests`) and round (`test_rounds`) records the version that sized it, and the workpaper's sample section names it as the sample's basis.
+- **Frozen.** A version's rules never change once written (a database trigger); a change is a new version. An engagement can follow only an approved version of its own firm's methodology (another trigger).
+
+This version holds the sample sizes by frequency (interim, roll-forward, and remediation retest with its minimum days of operation). The deviation rule is zero tolerance and automated controls are tested once: allowing deviations needs an expanded sample (increment 2), and benchmarking or other rules for automated controls need the control's risk rating (increment 3). The page is Settings, Testing methodology; the engagement profile's "methodology" is the audit framework (external ICFR audit, management's 404 assessment, internal audit), a different thing.
 
 ## Roll-forward and remediation (8.4)
 

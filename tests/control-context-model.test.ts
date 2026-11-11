@@ -19,7 +19,6 @@ import {
   reviewActions,
   reviewHeadline,
   selectionPlan,
-  showsReadiness,
 } from "../apps/web/src/control-context-model.ts";
 
 const ORG = "01a13253-ec1a-7604-8944-a06dd7633ce0";
@@ -497,25 +496,6 @@ describe("control context", () => {
       ),
       null,
     );
-  });
-
-  it("explains failures and shows readiness only when it stops testing", () => {
-    assert.equal(contextProblem(200), null);
-    assert.match(
-      contextProblem(409, "attribute exists") ?? "",
-      /already on the control/,
-    );
-    assert.match(
-      contextProblem(409, "mark the step where the control operates") ?? "",
-      /Mark the step/,
-    );
-    assert.match(contextProblem(409) ?? "", /changed/);
-    assert.match(contextProblem(413) ?? "", /5 MB/);
-    assert.match(contextProblem(403) ?? "", /role/);
-    assert.equal(showsReadiness("CONFLICT_REQUIRES_REVIEW"), true);
-    assert.equal(showsReadiness("PROCESS_UNDERSTANDING_INCOMPLETE"), true);
-    assert.equal(showsReadiness("EVIDENCE_PENDING"), false);
-    assert.equal(showsReadiness("READY"), false);
   });
 });
 
@@ -1160,5 +1140,23 @@ describe("testing attributes", () => {
       contextProblem(409, "an attribute is listed twice") ?? "",
       /chosen twice/,
     );
+  });
+});
+
+// Kept from the case that also covered the retired readiness panel (cleanup, 9 November 2026).
+describe("a context change's problem", () => {
+  it("explains each failure in the page's words", () => {
+    assert.equal(contextProblem(200), null);
+    assert.match(
+      contextProblem(409, "attribute exists") ?? "",
+      /already on the control/,
+    );
+    assert.match(
+      contextProblem(409, "mark the step where the control operates") ?? "",
+      /Mark the step/,
+    );
+    assert.match(contextProblem(409) ?? "", /changed/);
+    assert.match(contextProblem(413) ?? "", /5 MB/);
+    assert.match(contextProblem(403) ?? "", /role/);
   });
 });

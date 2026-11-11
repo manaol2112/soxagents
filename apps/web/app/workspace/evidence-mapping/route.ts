@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { browserUrl } from "../../../src/browser-url";
+import { browserUrl, localPath } from "../../../src/browser-url";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -59,7 +59,7 @@ export async function POST(request: Request) {
 }
 
 function redirect(request: Request, back: string, outcome: string) {
-  const safe = back.startsWith("/") && !back.startsWith("//") ? back : "/";
+  const safe = localPath(back) ?? "/";
   const destination = browserUrl(safe, request);
   destination.searchParams.set("mapping", outcome);
   return NextResponse.redirect(destination, 303);

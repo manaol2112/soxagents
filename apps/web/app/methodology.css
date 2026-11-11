@@ -1,0 +1,269 @@
+/* Settings › Testing methodology (methodology-view.tsx): the version in force, a proposal and
+   its decision, this engagement's version, and the history. Shared tokens only. */
+
+.tm-card {
+  max-width: 980px;
+}
+
+.tm-head h2 {
+  margin: 0.15rem 0 0;
+}
+
+.tm-head .pill {
+  flex: none;
+  height: auto;
+  min-height: 24px;
+  padding: 0.2rem 0.55rem;
+  white-space: normal;
+}
+
+.tm-lead {
+  max-width: 62ch;
+  margin: 0.35rem 0 0;
+  color: var(--text-secondary);
+}
+
+.tm-page .card-body {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.tm-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid;
+  border-radius: var(--radius-md, 10px);
+}
+
+.tm-notice p {
+  margin: 0;
+  color: var(--text);
+}
+
+.tm-notice svg {
+  flex: none;
+  margin-top: 0.15rem;
+}
+
+.tm-section {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.tm-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.tm-section-head h3,
+.tm-engagement h3 {
+  margin: 0;
+  font-size: var(--fs-md, 15px);
+}
+
+.tm-provenance,
+.tm-count {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.tm-rationale {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* A wide table scrolls on its own on a phone, never the page. */
+.tm-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md, 10px);
+}
+
+.tm-table {
+  min-width: 560px;
+}
+
+/* A row's frequency reads as a label, not as the table's column heading style. */
+.tm-table th[scope="row"] {
+  height: auto;
+  color: var(--text);
+  font-size: inherit;
+  font-weight: 600;
+  letter-spacing: normal;
+  text-align: left;
+  text-transform: none;
+  background: transparent;
+}
+
+.tm-table th small {
+  display: block;
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.tm-table .tm-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-num.is-changed {
+  color: var(--accent-text);
+  font-weight: 700;
+  background: var(--accent-soft);
+}
+
+.tm-table input {
+  width: 4.75rem;
+  min-height: 32px;
+  padding: 0.2rem 0.4rem;
+  text-align: right;
+}
+
+.tm-fixed {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.tm-fixed div {
+  padding: 0.75rem 0.9rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md, 10px);
+}
+
+.tm-fixed dt {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.tm-fixed dd {
+  margin: 0.25rem 0 0;
+  color: var(--text);
+}
+
+.tm-fixed small {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.tm-propose {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.tm-propose label {
+  display: grid;
+  gap: 0.1rem;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.tm-propose label small {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+}
+
+.tm-propose textarea,
+.tm-propose select {
+  width: 100%;
+}
+
+.tm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.tm-problems {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.tm-pending {
+  padding: 1rem;
+  border: 1px solid var(--info-border, var(--border));
+  border-radius: var(--radius-md, 10px);
+}
+
+.tm-engagement {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md, 10px);
+}
+
+.tm-engagement-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.tm-engagement-head p {
+  margin: 0.2rem 0 0;
+  color: var(--text-secondary);
+}
+
+.tm-done {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  color: var(--success);
+  font-weight: 600;
+}
+
+.tm-history summary {
+  width: fit-content;
+  color: var(--accent-text);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tm-history ul {
+  display: grid;
+  gap: 0;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tm-history li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.75rem;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.tm-history li .tm-provenance {
+  flex: 1 1 22rem;
+}
+
+@media (max-width: 640px) {
+  .tm-fixed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tm-head {
+    flex-direction: column;
+  }
+}

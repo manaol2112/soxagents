@@ -73,18 +73,6 @@ export const STATE_LABELS: Record<ReadinessState, string> = {
   CONCLUDED: "Concluded",
 };
 
-export const STATE_TONES: Record<ReadinessState, string> = {
-  READY: "tone-success",
-  NEEDS_INFORMATION: "tone-danger",
-  PLAN_NOT_APPROVED: "tone-warning",
-  PROCESS_UNDERSTANDING_INCOMPLETE: "tone-warning",
-  EVIDENCE_PENDING: "tone-info",
-  CONFLICT_REQUIRES_REVIEW: "tone-danger",
-  IMPACT_PENDING: "tone-warning",
-  READY_FOR_REVIEW: "tone-info",
-  CONCLUDED: "tone-success",
-};
-
 export type CheckStatus =
   | "OK"
   | "BLOCKED"
@@ -1820,9 +1808,4 @@ export function contextProblem(status: number, detail = ""): string | null {
     return "Check the entry: it needs some text, within the length limits, and no credential.";
   }
   return "That could not be saved. Try again.";
-}
-
-/** Whether a register row should show its readiness: only when it stops testing. */
-export function showsReadiness(state: string): boolean {
-  return BLOCKING_STATES.some((item) => item === state);
 }

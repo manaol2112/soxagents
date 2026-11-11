@@ -29,6 +29,7 @@ from ai_workforce_api.console import ConsoleScheduler, console_runner, register_
 from ai_workforce_api.consolidation import register_consolidation
 from ai_workforce_api.context_routes import register_control_context
 from ai_workforce_api.control_challenges import register_control_challenges
+from ai_workforce_api.control_conclusions import register_control_conclusions
 from ai_workforce_api.control_reviews import register_control_reviews, review_runner
 from ai_workforce_api.control_send import register_control_send
 from ai_workforce_api.control_tests import register_control_tests
@@ -36,6 +37,7 @@ from ai_workforce_api.db import connect
 from ai_workforce_api.demo import register_demo
 from ai_workforce_api.demo_requests import register_demo_requests, register_library_summary
 from ai_workforce_api.demo_tour import register_demo_tour
+from ai_workforce_api.design_conclusions import register_design_conclusions
 from ai_workforce_api.engagement_close import (
     register_closed_engagements,
     register_engagement_close,
@@ -72,6 +74,7 @@ from ai_workforce_api.library_matching import register_library_matching
 from ai_workforce_api.mailbox import live_send_enabled, register_mailbox
 from ai_workforce_api.manager import register_manager
 from ai_workforce_api.master_plans import register_master_plans
+from ai_workforce_api.methodology import register_methodology
 from ai_workforce_api.models import ModelProvider, register_models
 from ai_workforce_api.next_steps import register_next_steps
 from ai_workforce_api.onboarding import register_onboarding
@@ -224,6 +227,11 @@ def create_app(
     register_evidence_findings(app, resolved)
     register_walkthrough_instances(app, resolved)
     register_sample_traces(app, resolved)
+    register_methodology(app, resolved)
+    register_control_conclusions(app, resolved)
+    register_design_conclusions(
+        app, resolved, drafts if isinstance(drafts, TestScheduler) else None
+    )
     register_control_tests(app, resolved)
     register_control_context(app, resolved, drafts if isinstance(drafts, TestScheduler) else None)
     register_test_sheets(app, resolved, drafts if isinstance(drafts, TestScheduler) else None)
@@ -260,7 +268,7 @@ def create_app(
     register_next_steps(app, resolved)
     register_queue(app, resolved)
     register_plan_impact(app, resolved)
-    register_phase_release(app, resolved)
+    register_phase_release(app, resolved, drafts)
     scans = drafts if isinstance(drafts, SystemScanScheduler) else None
     register_rcm_uploads(app, resolved, scans)
     register_workspace(app, resolved)

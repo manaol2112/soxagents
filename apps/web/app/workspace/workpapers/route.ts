@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { browserUrl } from "../../../src/browser-url";
+import { returnStep } from "../../../src/control-workflow-model";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 import {
   workpaperNoticeFor,
@@ -9,7 +10,8 @@ import {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** A change to a control's workpapers, back to its Workpapers tab. */
+/** A change to a control's workpapers, back to the step it was made on (else the step that
+ * holds the workpapers). */
 export async function POST(request: Request) {
   const form = await request.formData();
   const fields: Record<string, string> = {};
@@ -53,7 +55,12 @@ export async function POST(request: Request) {
       destination.searchParams.set(param, value);
     }
   }
-  destination.searchParams.set("tab", "workpapers");
+  const step = returnStep(fields.step);
+  if (step !== null) {
+    destination.searchParams.set("step", step);
+  } else {
+    destination.searchParams.set("tab", "workpapers");
+  }
   destination.searchParams.set("notice", notice);
   return NextResponse.redirect(destination, 303);
 }

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from support import Database, approve_control_plan
+from support import Database, approve_control_plan, sign_off_design
 from test_evidence_analysis import _Provider
 from test_evidence_intake import _accept_population, _engagement, _request
 from test_manual_controls import _body
@@ -190,6 +190,8 @@ def test_a_business_control_is_tested_on_alternative_documentation(migrated: Dat
     team, client, scheduler = _engagement(migrated, "ctx-bp")
     control = _new_control(client, team, control_ref="REV-21", domain="ORDER_TO_CASH")
     cid = control["id"]
+    # A control added after the setup has its own D&I conclusion before OE testing (B0).
+    sign_off_design(migrated, team["project"], [cid])
     context = _context(client, team, cid)
     assert context["classifications"] == ["BUSINESS_PROCESS"] and context["process_required"]
     assert context["readiness"]["state"] == "PROCESS_UNDERSTANDING_INCOMPLETE"
@@ -783,6 +785,8 @@ def test_a_pass_stands_only_on_cited_evidence(migrated: Database) -> None:
     team, client, scheduler = _engagement(migrated, "ctx-pass")
     control = _new_control(client, team, control_ref="REV-25", domain="ITAC", nature="AUTOMATED",
                            application_id=_app(client, team))  # fmt: skip
+    # A control added after the setup has its own D&I conclusion before OE testing (B0).
+    sign_off_design(migrated, team["project"], [control["id"]])
     _add(client, team, "REV-25 configuration.txt", "Three-way match tolerance: 0%.",
          _request(migrated, team, "REV-25")["id"])  # fmt: skip
     _read_all(migrated, scheduler)
@@ -809,6 +813,8 @@ def test_the_tester_waits_until_the_control_is_ready(migrated: Database) -> None
     control = _new_control(client, team, control_ref="REV-26", domain="ORDER_TO_CASH",
                            nature="AUTOMATED")  # fmt: skip
     cid = control["id"]
+    # A control added after the setup has its own D&I conclusion before OE testing (B0).
+    sign_off_design(migrated, team["project"], [cid])
     assert _context(client, team, cid)["classifications"] == [
         "AUTOMATED_APPLICATION", "BUSINESS_PROCESS",
     ]  # fmt: skip

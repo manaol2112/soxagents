@@ -25,6 +25,8 @@ export const SECTIONS = [
   "library",
   "reports",
   "settings",
+  // Settings › Testing methodology: the firm's rules, reached through its tab only.
+  "methodology",
 ] as const;
 
 export type SectionId = (typeof SECTIONS)[number];
@@ -100,12 +102,14 @@ export const REPORT_TAB_LABELS: Record<ReportTab, string> = {
 export const SETTINGS_TABS = [
   "engagement",
   "tasks",
+  "methodology",
   "workforce",
   "trial",
 ] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 export const SETTINGS_TAB_LABELS: Record<SettingsTab, string> = {
   engagement: "Engagement setup",
+  methodology: "Testing methodology",
   workforce: "AI workforce",
   tasks: "Tasks",
   trial: "Free trial",
@@ -113,7 +117,7 @@ export const SETTINGS_TAB_LABELS: Record<SettingsTab, string> = {
 /** The tab shown only to a firm on the free trial (Step 6). */
 export const TRIAL_TAB: SettingsTab = "trial";
 /** The first tab that is the firm's rather than this engagement's. */
-export const SETTINGS_FIRM_FROM: SettingsTab = "workforce";
+export const SETTINGS_FIRM_FROM: SettingsTab = "methodology";
 
 /** The page a destination's tab renders: the section that existed before. */
 const REPORT_PAGES: Record<ReportTab, SectionId> = {
@@ -124,6 +128,7 @@ const REPORT_PAGES: Record<ReportTab, SectionId> = {
 };
 const SETTINGS_PAGES: Record<SettingsTab, SectionId> = {
   engagement: "setup",
+  methodology: "methodology",
   workforce: "agents",
   tasks: "tasks",
   trial: "settings",

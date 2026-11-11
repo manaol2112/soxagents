@@ -142,3 +142,61 @@ def _onboarding(team: dict[str, Any]) -> str:
 
 def _roles(snapshot: dict[str, Any], user_id: str) -> list[str]:
     return sorted(m["engagement_role"] for m in snapshot["team"] if m["user_id"] == user_id)
+
+
+def test_a_preparer_made_reviewer_never_decides_or_clears_a_note_on_their_own_work(
+    migrated: Database,
+) -> None:
+    """Security sweep, 9 November 2026: the person who signed off the testing, given the
+    reviewer role through the team page (by themselves here), adds and answers notes on that
+    work but never decides or clears one; before, they could clear their own answer. The
+    independent reviewer decides and clears them."""
+    team, client, _sheet, _ticket = _prepared_control(migrated, "self-reviewer", "DISMISS")
+    base = _base(team)
+    review = client.get(f"{base}/reviews").json()[0]
+    with connect(migrated.url) as connection:
+        assert run_reperformance(connection, None, UUID(review["id"])) == "DONE"
+    made = client.post(
+        f"/organizations/{team['org']}/projects/{team['project']}/onboarding/team",
+        json={"user_id": str(team["owner_id"]), "engagement_role": "REVIEWER"},
+    )
+    assert made.status_code == 200, made.text
+    review = client.get(f"{base}/reviews").json()[0]
+    assert review["viewer_is_reviewer"] is True and review["viewer_prepared"] is True
+    path = f"{base}/reviews/{review['id']}"
+    proposed = next(n for n in review["notes"] if n["status"] == "PROPOSED")
+    own = client.post(
+        f"{path}/notes/{proposed['id']}/decide",
+        json={"version": review["version"], "action": "DISMISS", "reason": "Mine to dismiss."},
+    )
+    assert own.status_code == 409 and "another reviewer decides" in own.json()["detail"]
+    # Adding a note on the work stays open to them: it only adds scrutiny.
+    added_own = client.post(
+        f"{path}/notes", json={"version": review["version"], "text": "Check the approver."}
+    )
+    assert added_own.status_code == 200, added_own.text
+    reviewer = _session(migrated, team["reviewer_id"])
+    added = reviewer.post(
+        f"{path}/notes",
+        json={"version": added_own.json()["version"], "text": "Show the approval date."},
+    )
+    assert added.status_code == 200, added.text
+    note = next(n for n in added.json()["notes"] if n["text"] == "Show the approval date.")
+    assert note["status"] == "OPEN"
+    answered = client.post(
+        f"{path}/notes/{note['id']}/respond",
+        json={"version": added.json()["version"], "response": "The ticket shows it."},
+    )
+    assert answered.status_code == 200, answered.text
+    cleared_own = client.post(
+        f"{path}/notes/{note['id']}/clear",
+        json={"version": answered.json()["version"], "action": "CLEAR"},
+    )
+    assert cleared_own.status_code == 409
+    assert "another reviewer decides" in cleared_own.json()["detail"]
+    cleared = reviewer.post(
+        f"{path}/notes/{note['id']}/clear",
+        json={"version": answered.json()["version"], "action": "CLEAR"},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert next(n for n in cleared.json()["notes"] if n["id"] == note["id"])["status"] == "CLEARED"

@@ -5,7 +5,7 @@ import logging
 import re
 import secrets
 from typing import Any, Literal
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from uuid import UUID
 
 import psycopg
@@ -55,6 +55,17 @@ LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 # The attempt row keeps which provider started it, so a Google state cannot finish
 # an Entra login or the other way round.
 FLOW_PROVIDER_KEY = "aw_provider"
+# A sign-in finishes only in the browser that started it (security sweep, 9 November 2026):
+# the start sets a short-lived cookie whose hash the attempt keeps, and the callback needs it.
+# Without it, a person sent to a callback link someone else started would be signed in to
+# that other person's account (login CSRF).
+LOGIN_COOKIE = "aw_login"
+LOGIN_COOKIE_PATH = "/auth"
+FLOW_BINDING_KEY = "aw_binding"
+# Cookies belong to a host name, so a sign-in started on this machine as 127.0.0.1 whose
+# provider returns to localhost (or the other way round) moves to the callback's name first,
+# once (the query flag stops a second move).
+LOGIN_HOP = "aw_hop"
 # Mailbox domains that say nothing about the firm. A workspace made for such an
 # address is named after the person instead.
 PUBLIC_MAIL_DOMAINS = frozenset(
@@ -229,20 +240,38 @@ def _begin_login(
 ) -> Response:
     if provider is None:
         raise HTTPException(status_code=503, detail="authentication is not configured")
+    hop = _callback_host(request, redirect_uri)
+    if hop is not None:
+        return RedirectResponse(hop, status_code=302)
     # A network address starts only so many sign-ins in a window (Step 7); the count is
     # kept with the login attempts, failing open if it cannot be kept.
     if settings.database_url != "" and _throttled(settings, "login", client_address(request)):
         return _login_failed(settings, "throttled")
+    binding = secrets.token_urlsafe(32)
     try:
         started = provider.begin(redirect_uri=redirect_uri)
-        _save_attempt(settings, started.state, {**started.flow, FLOW_PROVIDER_KEY: issuer})
+        _save_attempt(
+            settings,
+            started.state,
+            {**started.flow, FLOW_PROVIDER_KEY: issuer, FLOW_BINDING_KEY: token_hash(binding)},
+        )
     except IdentityError:
         logger.warning("oidc login could not start: %s", issuer)
         raise HTTPException(status_code=503, detail="authentication is not configured") from None
     except psycopg.Error:
         logger.warning("login persistence failed")
         raise HTTPException(status_code=503, detail="authentication unavailable") from None
-    return RedirectResponse(started.authorization_url, status_code=302)
+    response: Response = RedirectResponse(started.authorization_url, status_code=302)
+    response.set_cookie(
+        LOGIN_COOKIE,
+        binding,
+        httponly=True,
+        secure=settings.session_cookie_secure,
+        samesite="lax",
+        max_age=settings.login_attempt_ttl_seconds,
+        path=LOGIN_COOKIE_PATH,
+    )
+    return response
 
 
 def _finish_login(
@@ -265,6 +294,9 @@ def _finish_login(
         logger.warning("login attempt lookup failed")
         raise HTTPException(status_code=503, detail="authentication unavailable") from None
     if flow is None or flow.pop(FLOW_PROVIDER_KEY, None) != issuer:
+        return _login_failed(settings, "failed")
+    if not _same_browser(flow.pop(FLOW_BINDING_KEY, None), request.cookies.get(LOGIN_COOKIE)):
+        logger.warning("oidc callback from another browser: %s", issuer)
         return _login_failed(settings, "failed")
     callback_values = {key: request.query_params[key] for key in request.query_params}
     try:
@@ -291,7 +323,40 @@ def _finish_login(
     else:
         response = JSONResponse({"status": "authenticated"})
     _set_session_cookie(response, settings, raw_token)
+    _clear_login_cookie(response, settings)
     return response
+
+
+def _callback_host(request: Request, redirect_uri: str) -> str | None:
+    """The same start on the callback's host, when this machine was reached under another
+    loopback name; None to start here. Only loopback names move, and only once."""
+    target = urlsplit(redirect_uri)
+    if (
+        request.url.hostname not in LOOPBACK_HOSTS
+        or target.scheme not in ("http", "https")
+        or target.netloc == ""
+        or request.url.netloc.lower() == target.netloc.lower()
+        or LOGIN_HOP in request.query_params
+    ):
+        return None
+    return f"{target.scheme}://{target.netloc}{request.url.path}?{LOGIN_HOP}=1"
+
+
+def _same_browser(kept: object, presented: str | None) -> bool:
+    """Whether the callback came from the browser that started the attempt."""
+    if not isinstance(kept, str) or kept == "" or presented is None or presented == "":
+        return False
+    return secrets.compare_digest(kept, token_hash(presented))
+
+
+def _clear_login_cookie(response: Response, settings: Settings) -> None:
+    response.delete_cookie(
+        LOGIN_COOKIE,
+        path=LOGIN_COOKIE_PATH,
+        secure=settings.session_cookie_secure,
+        httponly=True,
+        samesite="lax",
+    )
 
 
 def _login_failed(settings: Settings, failure: LoginFailure) -> Response:
@@ -299,7 +364,9 @@ def _login_failed(settings: Settings, failure: LoginFailure) -> Response:
     if settings.app_base_url != "":
         base = settings.app_base_url.rstrip("/")
         query = urlencode({"notice": failure})
-        return RedirectResponse(f"{base}/sign-in?{query}", status_code=303)
+        response: Response = RedirectResponse(f"{base}/sign-in?{query}", status_code=303)
+        _clear_login_cookie(response, settings)
+        return response
     raise HTTPException(status_code=FAILURE_STATUS[failure], detail=FAILURE_DETAIL[failure])
 
 

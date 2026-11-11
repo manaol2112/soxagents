@@ -26,7 +26,7 @@ export const VIEW_LABELS: Record<TestingView, string> = {
 export const VIEW_NOTES: Record<TestingView, string> = {
   plans: "Each control's master test plan, reviewed and approved by a person.",
   phases:
-    "Release the interim and roll-forward phases once their plans are approved.",
+    "Release each control's D&I evidence once it is understood, and the interim and roll-forward phases once their plans are approved.",
   results:
     "Where each control's testing stands, with its result and the step that moves it.",
   review: "The independent reviews: their notes, re-performance and sign-off.",

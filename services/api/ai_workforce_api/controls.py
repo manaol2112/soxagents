@@ -1689,7 +1689,8 @@ def library_problems() -> list[str]:
 
 
 def sample_size(frequency: str, nature: str) -> int:
-    """How many instances a tester selects. An automated control is tested once."""
+    """How many instances a tester selects under the platform's default methodology. An
+    engagement sizes its testing by the version it follows (methodology.rules_for)."""
     if nature == "AUTOMATED":
         return 1
     return SAMPLE_SIZES.get(frequency, 25)

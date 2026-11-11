@@ -52,7 +52,7 @@ from ai_workforce_api.control_reviews import (
     review_states,
     round_review_states,
 )
-from ai_workforce_api.controls import DOMAIN_LABELS, ITGC_DOMAINS, sample_size
+from ai_workforce_api.controls import DOMAIN_LABELS, ITGC_DOMAINS
 from ai_workforce_api.db import transaction
 from ai_workforce_api.evidence_plans import (
     ATTRIBUTES_SETTLED_SQL,
@@ -61,6 +61,7 @@ from ai_workforce_api.evidence_plans import (
     unplanned_controls,
     unrequested_controls,
 )
+from ai_workforce_api.methodology import rules_for
 from ai_workforce_api.profile_checks import period_state
 from ai_workforce_api.readiness import readiness_states
 from ai_workforce_api.scenario import scenario_today
@@ -1155,6 +1156,7 @@ def _controls(
     project_id: UUID,
 ) -> list[ControlRow]:
     _authorize(connection, principal, organization_id, project_id, Action.TASK_READ)
+    rules = rules_for(connection, project_id)
     rows = connection.execute(
         """
         SELECT c.id, c.control_ref, c.title, c.activity, c.domain, c.domain_label, c.frequency,
@@ -1409,7 +1411,7 @@ def _controls(
                     None if row[21] is None else str(row[21]),
                     None if row[24] is None else str(row[24]),
                 ),
-                sample_size=sample_size(str(row[6]), str(row[8])),
+                sample_size=rules.sample_size(str(row[6]), str(row[8])),
                 # The lifecycle reads CONCLUDED only for a final conclusion.
                 stage=_stage(stage_body, conclusion if fin.final else "NOT_CONCLUDED"),
                 stages=stage_body,
@@ -1777,7 +1779,10 @@ def step_of(control: ControlRow, stages: StageBody, now: datetime | None = None)
         )
     if control.reconcile and unsent:
         return Step("Reconcile the kickoff draft with the evidence plan", "PREPARER")
-    # The planning gate: nothing is requested from a plan no person has approved.
+    # D&I evidence has its own release, once the control is understood (B1).
+    if control.release_ready == "DESIGN" and unsent:
+        return Step("Release the D&I evidence", "APPROVER")
+    # The planning gate: nothing operating is requested from a plan no person has approved.
     if control.evidence_plan == "PROPOSED" and control.plan_changes_requested:
         return Step("Revise the test plan as the reviewer asked", "PREPARER")
     if control.evidence_plan == "PROPOSED" and unsent:
@@ -1805,7 +1810,7 @@ def step_of(control: ControlRow, stages: StageBody, now: datetime | None = None)
     # which completes design and makes the interim ready to release (phase_release).
     if control.design_step is not None and "INTERIM" not in control.released_phases:
         return Step(control.design_step, control.design_by)
-    if control.release_ready is not None and control.evidence_plan == "PLANNED":
+    if control.release_ready in ("INTERIM", "ROLLFORWARD") and control.evidence_plan == "PLANNED":
         word = "roll-forward" if control.release_ready == "ROLLFORWARD" else "interim"
         return Step(f"Release the {word} phase", "APPROVER")
     operating = any(request.phase in ("INTERIM", "ROLLFORWARD") for request in evidence)

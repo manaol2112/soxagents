@@ -469,3 +469,79 @@ def test_a_controls_planned_evidence_is_requested_on_request(migrated: Database)
     body = _list(owner, team, phase="INTERIM", size=25)
     assert len(body["matching"]) == body["total"]
     assert body["controls"] and body["types"]
+
+
+def test_a_persons_operating_request_waits_for_the_d_and_i_sign_off(migrated: Database) -> None:
+    # Bug hunt, 9 November 2026: the list held an OE request for the D&I sign-off only
+    # when the agent drafted it; the send path (request_details.held_of) holds every one.
+    from test_evidence_intake import _engagement
+
+    from ai_workforce_api.design_conclusions import effective_controls
+
+    # No D&I conclusion is signed off on this engagement.
+    team, owner, _scheduler = _engagement(migrated, "ec-oegate", design=False)
+
+    with connect(migrated.url) as connection:
+        designed = effective_controls(connection, team["project"])
+        found = connection.execute(
+            "SELECT id, control_ref FROM engagement_controls WHERE project_id = %s "
+            "AND included AND NOT (id = ANY(%s)) ORDER BY control_ref LIMIT 1",
+            (team["project"], list(designed)),
+        ).fetchone()
+    # A control whose D&I conclusion is not signed off effective.
+    assert found is not None
+    control, control_ref = str(found[0]), str(found[1])
+    created = owner.post(
+        f"{_project(team)}/pbc-requests",
+        json={
+            "operation_key": f"manual-{uuid4().hex[:8]}",
+            "control_ref": control_ref,
+            "recipient": "iam@client.example",
+            "due_at": (datetime.now(UTC) + timedelta(days=9)).isoformat(),
+            "evidence_description": "Please provide the quarterly access review.",
+            "engagement_control_id": control,
+            "testing_phase": "INTERIM",
+            "title": "Quarterly access review for the OE gate",
+        },
+    )
+    assert created.status_code in (200, 201), created.text
+    made = created.json()
+    assert made["drafted_by"] == "PERSON"
+    row = next(item for item in _all(owner, team) if item["id"] == made["id"])
+    assert row["held"] is True
+    assert row["held_reason"] == "Awaiting the D&I sign-off"
+
+
+def test_a_withdrawn_file_is_not_counted_on_its_request(migrated: Database) -> None:
+    # Bug hunt, 9 November 2026: the list counted files from their filings, and a
+    # withdrawn file keeps its filing, so it still counted (and could read as being read).
+    from test_evidence_intake import POPULATION, _engagement
+    from test_evidence_intake import _base as _intake_base
+    from test_evidence_intake import _request as _intake_request
+    from test_evidence_versions import _read
+
+    team, client, scheduler = _engagement(migrated, "ec-withdrawn")
+    request = _intake_request(migrated, team, "ITGC-OP-01")
+    added = client.post(
+        f"{_intake_base(team)}/evidence-uploads",
+        params={"batch_id": str(uuid4()), "name": "jobs.csv", "request_id": request["id"]},
+        content=POPULATION,
+        headers={"content-type": "text/csv"},
+    )
+    assert added.status_code == 200, added.text
+
+    def files() -> int:
+        listed = client.get(f"{_intake_base(team)}/evidence-requests", params={"size": 200})
+        assert listed.status_code == 200, listed.text
+        found = next(row for row in listed.json()["rows"] if row["id"] == request["id"])
+        return int(found["files"])
+
+    assert files() == 1
+    # The reading finishes first, as a file still being read cannot be withdrawn.
+    _read(migrated, scheduler.analyses[0])
+    withdrawn = client.post(
+        f"{_intake_base(team)}/evidence-files/{added.json()['file_id']}/withdraw",
+        json={"reason": "Uploaded the wrong period"},
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+    assert files() == 0

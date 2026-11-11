@@ -633,6 +633,8 @@ export function ControlsPage({
     const apply = (event: Event) => {
       const next = (event as CustomEvent<ControlsFor | null>).detail ?? null;
       setPage(1);
+      // The filters start again, the search with them: the box shows what the list uses.
+      setTyped("");
       setFiltersNow(
         next === null
           ? NO_FILTERS

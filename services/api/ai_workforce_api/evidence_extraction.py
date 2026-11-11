@@ -44,6 +44,12 @@ _IMAGE_SUFFIX = re.compile(r"(?i)\.(png|jpe?g|gif|bmp|tiff?|webp)$")
 _TEXT_SUFFIX = re.compile(r"(?i)\.(txt|log|text|md)$")
 _CSV_SUFFIX = re.compile(r"(?i)\.(csv|tsv)$")
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# What opening a hostile archive can raise besides BadZipFile: an entry flagged as UTF-8
+# whose name is not (UnicodeDecodeError, a ValueError), a truncated or unreadable
+# directory, or a compression the reader lacks. Each means the file is not readable, and
+# sniffing such a file finds no workbook or document in it (bug hunt, 9 November 2026: a
+# bad entry name raised out of extract and read_table, which promise never to).
+_ZIP_ERRORS = (zipfile.BadZipFile, ValueError, OSError, EOFError, NotImplementedError)
 
 
 @dataclass(frozen=True)
@@ -111,7 +117,7 @@ def sniff(content: bytes, file_name: str, content_type: str) -> FileKind:
         try:
             with zipfile.ZipFile(io.BytesIO(content)) as archive:
                 names = set(archive.namelist()[:MAX_ENTRIES])
-        except zipfile.BadZipFile:
+        except _ZIP_ERRORS:
             return "other"
         if "xl/workbook.xml" in names:
             return "workbook"
@@ -606,7 +612,7 @@ def _check_archive(content: bytes) -> None:
     try:
         with zipfile.ZipFile(io.BytesIO(content)) as archive:
             entries = archive.infolist()
-    except zipfile.BadZipFile as error:
+    except _ZIP_ERRORS as error:
         raise _Unreadable("The file is not a readable archive.") from error
     if len(entries) > MAX_ENTRIES or sum(item.file_size for item in entries) > MAX_UNZIPPED:
         raise _Unreadable("The file expands to more than can be read safely.")

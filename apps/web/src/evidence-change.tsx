@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { type FormEvent, useRef, useState } from "react";
 
+import { returnStep } from "./control-workflow-model";
 import {
   CHANGE_NOTICES,
   type ChangeNotice,
@@ -22,6 +23,8 @@ type Props = {
   blocked: string | null;
   /** A control's Evidence tab to come back to; otherwise the evidence page. */
   controlId?: string;
+  /** The control's workflow step the change is made on, to come back to. */
+  step?: string | null;
   keep?: Record<string, string>;
   /** Open on this form, as a menu choice does, instead of on the two buttons. */
   start?: "replace" | "withdraw";
@@ -37,6 +40,7 @@ function Hidden({
   projectId,
   fileId,
   controlId,
+  step,
   keep,
 }: Omit<Props, "fileName" | "blocked" | "start" | "onCancel" | "onDone">) {
   return (
@@ -46,6 +50,9 @@ function Hidden({
       <input type="hidden" name="file_id" value={fileId} />
       {controlId !== undefined ? (
         <input type="hidden" name="control_id" value={controlId} />
+      ) : null}
+      {controlId !== undefined && step ? (
+        <input type="hidden" name="step" value={step} />
       ) : null}
       {Object.entries(keep ?? {}).map(([key, value]) => (
         <input key={key} type="hidden" name={key} value={value} />
@@ -139,7 +146,13 @@ export function FileChanges(props: Props) {
     if (controlId !== undefined) {
       params.set("section", "controls");
       params.set("control", controlId);
-      params.set("tab", "evidence");
+      // Back to the step the file was replaced on: D&I Evidence or OE Evidence.
+      const step = returnStep(props.step);
+      if (step !== null) {
+        params.set("step", step);
+      } else {
+        params.set("tab", "evidence");
+      }
     } else {
       params.set("section", "evidence");
       for (const [key, value] of Object.entries(props.keep ?? {})) {

@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   agentStatus,
   applicationLabel,
+  applicationNoticeFor,
   applicationWrite,
   byApplicationOf,
   byControl,
@@ -479,6 +480,20 @@ describe("evidence register model", () => {
     assert.equal(parseFilingNotice(filingNoticeParam("stale")), "stale");
     assert.equal(parseFilingNotice("stale"), null);
     assert.equal(parseFilingNotice("invalid"), null);
+  });
+
+  it("names each outcome of setting a file's application for that action", () => {
+    // Bug hunt 9 November 2026: every failure but a conflict read "Choose a control first."
+    // and a success read as a filing to a control.
+    assert.equal(applicationNoticeFor(200), "applied");
+    assert.equal(applicationNoticeFor(409), "stale");
+    assert.equal(applicationNoticeFor(403), "denied");
+    assert.equal(applicationNoticeFor(404), "denied");
+    assert.equal(applicationNoticeFor(0), "unavailable");
+    assert.equal(applicationNoticeFor(503), "unavailable");
+    assert.equal(applicationNoticeFor(422), "unchosen");
+    assert.equal(applicationNoticeFor(null), "unchosen");
+    assert.equal(parseFilingNotice(filingNoticeParam("applied")), "applied");
   });
 });
 

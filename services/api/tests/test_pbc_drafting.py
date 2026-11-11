@@ -622,3 +622,157 @@ def test_the_local_worker_runs_as_many_jobs_at_once_as_configured() -> None:
         assert default.workers == 6
     finally:
         default.shutdown()
+
+
+# Bug hunt, 9 November 2026
+
+
+def test_a_person_who_rewords_a_request_while_it_is_drafted_keeps_their_wording(
+    migrated: Database,
+) -> None:
+    """Before, the drafted wording replaced the request's whenever it was still a draft,
+    so a person's rewording during the model call was overwritten without a trace."""
+    team, _owner, _base_path = _started(migrated, "reworded", RecordingScheduler())
+    draft_id, request_id = _first_draft(migrated, team["project"])
+    mine = "Please send the full list of new SAP users for the year, with approvals."
+
+    class Rewording(FakeProvider):
+        def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
+            # The person saves their wording while the agent is still drafting.
+            with connect(migrated.url) as other:
+                other.execute(
+                    "UPDATE pbc_requests SET evidence_description = %s, version = version + 1 "
+                    "WHERE id = %s",
+                    (mine, request_id),
+                )
+            return super().complete(request, config)
+
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, Rewording(_valid_output()), draft_id) == "SKIPPED"
+        wording = connection.execute(
+            "SELECT evidence_description FROM pbc_requests WHERE id = %s", (request_id,)
+        ).fetchone()
+        draft = connection.execute(
+            "SELECT status, note, content FROM pbc_drafts WHERE id = %s", (draft_id,)
+        ).fetchone()
+        audit = connection.execute(
+            "SELECT count(*) FROM audit_events WHERE action = 'pbc.draft_superseded' "
+            "AND target_id = %s",
+            (request_id,),
+        ).fetchone()
+    assert wording == (mine,)
+    assert draft == (
+        "SKIPPED",
+        "The request was reworded while it was drafted; that wording stays.",
+        None,
+    )
+    assert audit == (1,)
+
+
+def test_a_draft_still_applies_when_only_other_fields_changed_meanwhile(
+    migrated: Database,
+) -> None:
+    team, _owner, _base_path = _started(migrated, "duechanged", RecordingScheduler())
+    draft_id, request_id = _first_draft(migrated, team["project"])
+
+    class Redating(FakeProvider):
+        def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
+            with connect(migrated.url) as other:
+                other.execute(
+                    "UPDATE pbc_requests SET due_at = due_at + interval '1 day', "
+                    "version = version + 1 WHERE id = %s",
+                    (request_id,),
+                )
+            return super().complete(request, config)
+
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, Redating(_valid_output()), draft_id) == "DRAFTED"
+        wording = connection.execute(
+            "SELECT evidence_description FROM pbc_requests WHERE id = %s", (request_id,)
+        ).fetchone()
+    assert wording is not None and "SAP table USR02" in str(wording[0])
+
+
+def test_every_reply_of_a_paused_search_turn_is_counted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Before, a turn the model paused (a long web search) was billed for each reply but
+    recorded with the last reply's tokens only."""
+    import anthropic
+    from anthropic.types import Message, TextBlock, ToolUseBlock, Usage
+
+    from ai_workforce_api.model_providers import AnthropicModelProvider, tier_config
+    from ai_workforce_api.models import complete
+
+    replies = [
+        Message(
+            id="msg_p", type="message", role="assistant", model="m",
+            content=[TextBlock(type="text", text="Searching.")], stop_reason="pause_turn",
+            stop_sequence=None, usage=Usage(input_tokens=1000, output_tokens=50),
+        ),
+        Message(
+            id="msg_q", type="message", role="assistant", model="m",
+            content=[ToolUseBlock(id="toolu_9", type="tool_use", name="record_output",
+                                  input=_valid_output())],
+            stop_reason="tool_use", stop_sequence=None,
+            usage=Usage(input_tokens=1400, output_tokens=300),
+        ),
+    ]  # fmt: skip
+    sent: list[dict[str, Any]] = []
+
+    class Messages:
+        def create(self, **kwargs: Any) -> Any:
+            sent.append(kwargs)
+            return replies[len(sent) - 1]
+
+    class FakeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+            self.messages = Messages()
+
+    monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
+    provider = AnthropicModelProvider("test-key-not-real", "")
+    config = tier_config(Settings(model_provider="anthropic", model_api_key="k"), "BALANCED")
+    request = ModelRequest(
+        operation="generate", prompt="Find the vendor's SOC 1 report.",
+        output_schema=DRAFT_SCHEMA, allowed_tool_ids=(), timeout_seconds=30, cancelled=False,
+        system="You are the researcher.", web_search=2,
+    )  # fmt: skip
+    status, raw = complete(provider, request, config)
+    assert status == "SUCCEEDED"
+    assert len(sent) == 2
+    assert (raw.input_tokens, raw.output_tokens) == (2400, 350)
+
+
+def test_a_failed_temporal_draft_attempt_gives_its_claim_up_for_the_retry(
+    migrated: Database,
+) -> None:
+    """Before, the retry found the draft still claimed and skipped it: the workflow ended
+    as if it had drafted, and the draft stayed DRAFTING."""
+    import asyncio
+
+    from ai_workforce_api.durable import activities_for
+
+    team, _owner, _base_path = _started(migrated, "temporalretry", RecordingScheduler())
+    draft_id, _request_id = _first_draft(migrated, team["project"])
+
+    def crashing(claimed: UUID) -> str:
+        with connect(migrated.url) as connection:
+            connection.execute(
+                "UPDATE pbc_drafts SET status = 'DRAFTING', attempts = attempts + 1, "
+                "lease_until = clock_timestamp() + interval '5 minutes' WHERE id = %s",
+                (claimed,),
+            )
+        raise RuntimeError("the worker broke mid-draft")
+
+    activity = next(
+        item for item in activities_for(migrated.url, draft=crashing)
+        if item.__name__ == "draft_pbc_request"
+    )  # fmt: skip
+    with pytest.raises(RuntimeError):
+        asyncio.run(activity(str(draft_id)))
+    with connect(migrated.url) as connection:
+        status = connection.execute(
+            "SELECT status, lease_until FROM pbc_drafts WHERE id = %s", (draft_id,)
+        ).fetchone()
+        assert status == ("PENDING", None)
+        # The retry claims it and drafts.
+        assert run_draft(connection, None, draft_id) == "DRAFTED"

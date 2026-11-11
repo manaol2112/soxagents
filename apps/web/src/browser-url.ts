@@ -1,3 +1,22 @@
+/**
+ * A path on this app, or null. Browsers read a backslash as a slash and drop tabs and line
+ * breaks in an address, so "/\evil.example" or "/<tab>/evil.example" would leave the app:
+ * only a path that starts with a single "/" and holds no backslash, whitespace or control
+ * character is kept (security sweep, 9 November 2026).
+ */
+export function localPath(value: string): string | null {
+  if (value.length > 2000 || !value.startsWith("/") || /^.[/\\]/.test(value)) {
+    return null;
+  }
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code < 0x20 || code === 0x7f || char === "\\" || /\s/.test(char)) {
+      return null;
+    }
+  }
+  return value;
+}
+
 // A host name with an optional port, or a bracketed IPv6 address with one.
 const HOST = /^(?:[A-Za-z0-9.-]{1,253}|\[[0-9A-Fa-f:.]{2,45}\])(?::\d{1,5})?$/;
 

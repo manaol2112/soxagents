@@ -278,6 +278,7 @@ def load_facts(
         attribute_keys=keyed,
         statement=statement_fields(connection, control_id),
         **narrative_facts(connection, control_id),
+        rules=context.rules,
     )
 
 
@@ -603,7 +604,7 @@ def persist(
     changes = _merge_requirements(
         cursor, organization_id, project_id, plan_id, control_id,
         _as_decided(cursor, plan_id, output, facts), periods, origin,
-        approved=person_approved,
+        approved=person_approved, released=_released_phases(cursor, control_id),
     )  # fmt: skip
     if not person_approved:
         derive_requirement_procedures(cursor, organization_id, project_id, plan_id, control_id)
@@ -1181,6 +1182,20 @@ def _as_decided(
     return output.model_copy(update={"phases": phases})
 
 
+def _released_phases(cursor: psycopg.Cursor[Any], control_id: UUID) -> frozenset[str]:
+    """The phases whose items a person approved by releasing them: the D&I evidence (B1),
+    which has its own release in place of the plan's approval. An operating phase's release
+    follows the approved plan, which already holds its items."""
+    return frozenset(
+        str(row[0])
+        for row in cursor.execute(
+            "SELECT phase FROM phase_releases WHERE engagement_control_id = %s "
+            "AND phase = 'DESIGN'",
+            (control_id,),
+        ).fetchall()
+    )
+
+
 def _merge_requirements(
     cursor: psycopg.Cursor[Any],
     organization_id: UUID,
@@ -1191,7 +1206,11 @@ def _merge_requirements(
     periods: dict[str, Any],
     origin: str,
     approved: bool,
+    released: frozenset[str] = frozenset(),
 ) -> Changes:
+    """Merge a run's requirements into the plan. Under a plan a person approved, or in a
+    phase a person released (the D&I evidence, B1), the run's changes are proposed to a
+    person rather than applied: the agent never extends what a person approved."""
     changes = Changes([], [], [], [], [])
     rows = cursor.execute(
         """
@@ -1209,6 +1228,7 @@ def _merge_requirements(
     planned_keys: set[tuple[str, str]] = set()
     for phase_plan in output.phases:
         period = periods[phase_plan.phase]
+        held = approved or phase_plan.phase in released
         for requirement in phase_plan.requirements:
             key = (phase_plan.phase, requirement.key)
             planned_keys.add(key)
@@ -1216,8 +1236,9 @@ def _merge_requirements(
             content = _content(requirement)
             row = existing.get(key)
             if row is None:
-                # Added to a plan a person approved: proposed to them, not planned, until
-                # they accept it (decide_change). The agent never extends an approved plan.
+                # Added to a plan a person approved (or a phase a person released): proposed
+                # to them, not planned, until they accept it (decide_change). The agent never
+                # extends an approved plan.
                 inserted = cursor.execute(
                     """
                     INSERT INTO evidence_requirements (
@@ -1241,11 +1262,11 @@ def _merge_requirements(
                         period.as_of, requirement.population_kind,
                         requirement.sample_selection, requirement.depends_on,
                         "AWAITING_DEPENDENCY" if requirement.depends_on else "PLANNED",
-                        origin, approved, Json({"add": True}) if approved else None,
+                        origin, held, Json({"add": True}) if held else None,
                     ),
                 ).fetchone()  # fmt: skip
                 assert inserted is not None
-                if not approved:
+                if not held:
                     _sync_named_links(
                         cursor, organization_id, project_id, control_id,
                         UUID(str(inserted[0])), list(requirement.attributes), origin,
@@ -1273,7 +1294,7 @@ def _merge_requirements(
             )
             # The attributes it supports are part of an approved master test plan.
             named = [str(item) for item in row[13]] if isinstance(row[13], list) else []
-            if approved and (
+            if held and (
                 sorted(named) != sorted(content["attributes"])
                 or (row[14], row[15]) != (content["objective"], content["sample_selection"])
             ):
@@ -1286,7 +1307,7 @@ def _merge_requirements(
                 # A person removed it: no run brings it back or proposes it again (product
                 # owner, 26 October 2026). A person restores it.
                 continue
-            if status == "REMOVED" and approved:
+            if status == "REMOVED" and held:
                 # Planned again on a plan a person approved: proposed to them.
                 cursor.execute(
                     "UPDATE evidence_requirements SET pending_change = %s, needs_review = true, "
@@ -1308,7 +1329,7 @@ def _merge_requirements(
                 )  # fmt: skip
                 changes.added.append(label)
                 continue
-            if material and (locked or approved):
+            if material and (locked or held):
                 cursor.execute(
                     "UPDATE evidence_requirements SET pending_change = %s, needs_review = true, "
                     "version = version + 1 WHERE id = %s",
@@ -1354,7 +1375,7 @@ def _merge_requirements(
             continue
         label = f"{known[0].lower()}:{known[1]}"
         locked = status == "REQUESTED" and request_status not in ("DRAFT", "CANCELLED")
-        if locked or approved:
+        if locked or approved or known[0] in released:
             cursor.execute(
                 "UPDATE evidence_requirements SET pending_change = %s, needs_review = true, "
                 "version = version + 1 WHERE id = %s",
@@ -1858,6 +1879,9 @@ def queue_drafts(
 
 GATE_PLAN = "approve the test plan first"
 GATE_ATTRIBUTES = "settle the control's attributes first"
+# D&I evidence has its own release (B1, migration 0145): the test plan's approval gates only
+# the operating phases.
+GATE_DESIGN_RELEASE = "release the D&I evidence first"
 _APPROVED_PLAN = ("APPROVED", "CHANGES_PROPOSED")
 _OPERATING = ("INTERIM", "ROLLFORWARD")
 # SQL: the control (aliased c) has approved attributes, none proposed, and no open
@@ -1895,14 +1919,28 @@ def gate_reason(
         if plan_status in _APPROVED_PLAN and phase in _OPERATING
         else True
     )
-    return gate_reason_from(plan_status, settled, phase)
+    released = (
+        phase == "DESIGN"
+        and connection.execute(
+            "SELECT 1 FROM phase_releases WHERE engagement_control_id = %s AND phase = 'DESIGN'",
+            (control_id,),
+        ).fetchone()
+        is not None
+    )
+    return gate_reason_from(plan_status, settled, phase, released)
 
 
-def gate_reason_from(plan_status: str | None, settled: bool, phase: str | None) -> str | None:
-    """gate_reason from the plan's status and whether the attributes are settled: the one
-    rule, whether read for one control or for an engagement at once."""
+def gate_reason_from(
+    plan_status: str | None, settled: bool, phase: str | None, design_released: bool
+) -> str | None:
+    """gate_reason from the plan's status, whether the attributes are settled, and whether
+    the D&I evidence is released: the one rule, whether read for one control or for an
+    engagement at once. The Design phase follows its own release, never the test plan's
+    approval, so revising the plan does not hold D&I requests (B1)."""
     if plan_status is None:
         return "plan the evidence first"
+    if phase == "DESIGN":
+        return None if design_released else GATE_DESIGN_RELEASE
     if plan_status not in _APPROVED_PLAN:
         return GATE_PLAN
     if phase in _OPERATING and not settled:
@@ -3237,6 +3275,18 @@ def held_for_planning(connection: psycopg.Connection[Any], request_id: UUID) -> 
         """,
         (request_id,),
     ).fetchone()
+    operating = connection.execute(
+        "SELECT engagement_control_id FROM pbc_requests WHERE id = %s "
+        "AND engagement_control_id IS NOT NULL AND testing_phase IN ('INTERIM', 'ROLLFORWARD') "
+        "AND status IN ('DRAFT', 'APPROVAL_PENDING')",
+        (request_id,),
+    ).fetchone()
+    if operating is not None:
+        from ai_workforce_api.design_conclusions import oe_gate_reason
+
+        gated = oe_gate_reason(connection, UUID(str(operating[0])))
+        if gated is not None:
+            return gated
     if row is not None and row[3]:
         if not row[2]:
             return "plan the evidence first"
@@ -3271,6 +3321,28 @@ def held_for_planning(connection: psycopg.Connection[Any], request_id: UUID) -> 
     from ai_workforce_api.phase_release import release_reason
 
     if held[2]:
+        # A kickoff draft kept against the plan asks for the phases of the plan items linked
+        # to it, and each phase's gate holds it (bug hunt, 9 November 2026): D&I evidence
+        # waits for its release, operating evidence for the settled attributes and an
+        # effective D&I sign-off. Before, the plan's approval alone let it through.
+        phases = {
+            str(item[0])
+            for item in connection.execute(
+                "SELECT DISTINCT phase FROM evidence_requirements WHERE pbc_request_id = %s "
+                "AND status NOT IN ('WAIVED', 'REMOVED')",
+                (request_id,),
+            ).fetchall()
+        }
+        for linked in ("DESIGN", "INTERIM", "ROLLFORWARD"):
+            if linked not in phases:
+                continue
+            reason = gate_reason(connection, control, linked)
+            if reason is None and linked in _OPERATING:
+                from ai_workforce_api.design_conclusions import oe_gate_reason
+
+                reason = oe_gate_reason(connection, control)
+            if reason is not None:
+                return reason
         return None
     return release_reason(connection, control, phase)
 
@@ -3436,16 +3508,27 @@ def unrequested_controls(connection: psycopg.Connection[Any], project_id: UUID) 
               AND p.status = 'ACTIVE'
               AND q.phase IN ('DESIGN', 'INTERIM') AND q.status = 'PLANNED'
               AND q.depends_on IS NULL AND ph.applicability = 'APPLICABLE'
+              -- As issue(): an addition proposed by the planner and not yet accepted is not
+              -- part of the plan (bug hunt, 9 November 2026; before, it kept the control
+              -- listed as unrequested for good).
+              AND NOT coalesce((q.pending_change ->> 'add')::boolean, false)
               AND NOT EXISTS (
                   SELECT 1 FROM pbc_requests r
                   WHERE r.engagement_control_id = c.id AND r.status = 'DRAFT'
                     AND (r.operation_key LIKE 'kickoff-%%' OR r.operation_key LIKE 'scope-%%')
               )
-              -- As issue(): only what the planning gate allows.
-              AND EXISTS (SELECT 1 FROM evidence_plans ep
-                          WHERE ep.engagement_control_id = c.id
-                            AND ep.status IN ('APPROVED', 'CHANGES_PROPOSED'))
-              AND (q.phase = 'DESIGN' OR ({ATTRIBUTES_SETTLED_SQL}))
+              -- As issue(): only what the planning gate allows. D&I evidence follows its
+              -- own release (B1); interim follows the approved plan and settled attributes.
+              AND (
+                  (q.phase = 'DESIGN'
+                   AND EXISTS (SELECT 1 FROM phase_releases pr
+                               WHERE pr.engagement_control_id = c.id AND pr.phase = 'DESIGN'))
+                  OR (q.phase = 'INTERIM'
+                      AND EXISTS (SELECT 1 FROM evidence_plans ep
+                                  WHERE ep.engagement_control_id = c.id
+                                    AND ep.status IN ('APPROVED', 'CHANGES_PROPOSED'))
+                      AND ({ATTRIBUTES_SETTLED_SQL}))
+              )
               -- As issue(): a file the control holds already serves it.
               AND NOT (
                   q.sufficiency IN ('NOT_REVIEWED', 'UNDER_REVIEW', 'ACCEPTED')

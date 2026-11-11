@@ -17,6 +17,7 @@ import {
   reviewPlan,
   routingOf,
   sendBody,
+  sendProblem,
   sentReport,
   shortTitle,
   withTitles,
@@ -486,5 +487,55 @@ describe("changing who a request goes to in the review (28 October 2026)", () =>
       "utf8",
     );
     assert.match(route, /send\.routing = rest\.routing/);
+  });
+});
+
+describe("sendProblem", () => {
+  // Bug hunt 9 November 2026: every failed send read "The requests could not be checked",
+  // a timeout included, though the requests may have gone out.
+  it("says a send that did not answer has an unknown outcome, to refresh before retrying", () => {
+    const problem = sendProblem(false, 0, "");
+    assert.equal(problem.title, "Outcome not known");
+    assert.match(problem.summary, /not known/);
+    assert.match(problem.summary, /Refresh/);
+    assert.doesNotMatch(problem.summary, /checked/);
+  });
+
+  it("shows the server's reason for a refused send", () => {
+    for (const status of [409, 402, 422]) {
+      const problem = sendProblem(
+        false,
+        status,
+        "The request changed since it was checked.",
+      );
+      assert.equal(problem.title, "Not sent");
+      assert.equal(
+        problem.summary,
+        "The request changed since it was checked.",
+      );
+    }
+    assert.equal(sendProblem(false, 409, "").title, "Not sent");
+    assert.match(sendProblem(false, 409, "").summary, /not sent/);
+  });
+
+  it("uses send wording for the send and check wording for the check", () => {
+    assert.doesNotMatch(sendProblem(false, 500, "").summary, /checked/);
+    assert.match(sendProblem(false, 500, "").summary, /Refresh/);
+    assert.match(sendProblem(false, 403, "").summary, /managers/);
+    assert.deepEqual(sendProblem(true, 500, ""), {
+      title: "Not checked",
+      summary: "The requests could not be checked. Try again.",
+    });
+    assert.equal(
+      sendProblem(true, 422, "Name the owner.").summary,
+      "Name the owner.",
+    );
+    assert.match(sendProblem(true, 403, "").summary, /managers/);
+  });
+
+  it("says a send the server confirmed but whose result could not be read went out", () => {
+    const problem = sendProblem(false, 200, "");
+    assert.match(problem.summary, /sent/);
+    assert.match(problem.summary, /Refresh/);
   });
 });

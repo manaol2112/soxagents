@@ -54,6 +54,7 @@ import {
   related,
   releasable,
   releaseIsEarly,
+  releaseNote,
   standardStepsHref,
   statementParts,
   TAB_LABELS,
@@ -640,8 +641,8 @@ describe("phase release", () => {
         ],
       },
     ],
-    ready: { INTERIM: 1, ROLLFORWARD: 0 },
-    released: { INTERIM: 0 },
+    ready: { DESIGN: 0, INTERIM: 1, ROLLFORWARD: 0 },
+    released: { DESIGN: 1, INTERIM: 0 },
     recommendation:
       "Design and implementation testing has been completed for 1 control.",
     viewer_can_release: true,
@@ -651,6 +652,7 @@ describe("phase release", () => {
     assert.ok(progress !== null);
     assert.equal(progress.ready.INTERIM, 1);
     assert.equal(progress.released.ROLLFORWARD, 0);
+    assert.equal(progress.released.DESIGN, 1);
     assert.equal(progress.viewerCanRelease, true);
     assert.equal(parsePhaseProgress({}), null);
     const row = progress.controls[0];
@@ -662,8 +664,17 @@ describe("phase release", () => {
     // Waiting for interim testing: it can be released, early, with a reason.
     assert.equal(releasable(roll), true);
     assert.equal(releaseIsEarly(roll), true);
-    // Design follows the plan's approval: it is never released by hand.
+    // Rewritten 9 November 2026 (B1, product owner: D&I evidence has its own approval).
+    // Before, design followed the plan's approval and was never released by hand; now it
+    // is released by a person, and a completed design is not released again.
     assert.equal(releasable(phaseStatus(row, "DESIGN")), false);
+    assert.equal(
+      releasable({
+        ...(phaseStatus(row, "DESIGN") as PhaseStatus),
+        step: "READY",
+      }),
+      true,
+    );
   });
 
   it("builds the release calls, and refuses what the API would refuse", () => {
@@ -679,12 +690,25 @@ describe("phase release", () => {
       one.path,
       `${BASE}/controls/${CONTROL}/phases/INTERIM/release`,
     );
+    // The D&I evidence is released the same way (B1; before, refused as invalid).
+    const design = planningWrite({
+      ...IDS,
+      intent: "phase-release",
+      control_id: CONTROL,
+      phase: "DESIGN",
+      reason: "",
+    });
+    assert.ok(!("error" in design));
+    assert.equal(
+      design.path,
+      `${BASE}/controls/${CONTROL}/phases/DESIGN/release`,
+    );
     assert.deepEqual(
       planningWrite({
         ...IDS,
         intent: "phase-release",
         control_id: CONTROL,
-        phase: "DESIGN",
+        phase: "SETUP",
         reason: "",
       }),
       { error: "invalid" },
@@ -739,6 +763,19 @@ describe("the evidence release strip", () => {
     reason: "",
     waitingFor: "",
     ...extra,
+  });
+
+  it("offers the D&I release first, once the control is understood (B1)", () => {
+    assert.equal(
+      nextRelease([
+        status("DESIGN", "READY"),
+        status("INTERIM", "WAITING"),
+        status("ROLLFORWARD", "WAITING"),
+      ])?.phase,
+      "DESIGN",
+    );
+    assert.match(releaseNote("DESIGN"), /approver before it is sent/);
+    assert.match(releaseNote("INTERIM"), /Nothing is sent/);
   });
 
   it("offers the first phase that can be released, in the audit's order", () => {

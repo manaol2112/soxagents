@@ -3,8 +3,8 @@
 A file filed against a request moves it to received, or to partly received while an item
 the request asked for is still not covered by any file filed to it. A request that was
 sent moves as if the owner had replied, and its open follow-ups stop. A request that was
-never sent (a draft, or awaiting approval) is marked as provided directly, and its pending
-send approval is withdrawn, so the request never goes out.
+never sent (a draft, or awaiting approval) is marked as provided directly, and its send
+approval, pending or approved and not yet used, is withdrawn, so the request never goes out.
 
 Each move is recorded on a filing. When a file leaves the request (withdrawn, or moved to
 another control) the request follows the evidence left on it: received while every item
@@ -316,21 +316,6 @@ def follow_evidence(
         )
 
 
-def undo_receipt(
-    cursor: psycopg.Cursor[Any],
-    organization_id: UUID,
-    project_id: UUID,
-    match_id: UUID,
-    actor_id: UUID,
-) -> None:
-    """Put the request right once the filing's file is already off it."""
-    released = release_receipt(cursor, match_id)
-    if released is not None:
-        follow_evidence(
-            cursor, organization_id, project_id, released.request_id, actor_id, released.before
-        )
-
-
 def _evidence_left(cursor: psycopg.Cursor[Any], request_id: UUID) -> bool:
     """Whether any file is still on the request, or linked by a person to one of its items."""
     row = cursor.execute(
@@ -392,6 +377,42 @@ def _withdraw_send(
                 actor_id,
                 approval_id,
                 Json({"decision": "EXPIRED", "reason": "evidence provided directly"}),
+            ),
+        )
+    # An approved send not yet used is withdrawn too: recorded as never executed, so the
+    # approval can no longer send the request. One whose send is in flight (its outcome
+    # pending or unknown) is left to its reconciliation, which finds the message sent or
+    # refuses it now that the request is received (outbound._verified). Bug hunt, 9
+    # November 2026: an approved send stayed live after the evidence came directly.
+    approved = cursor.execute(
+        """
+        UPDATE approvals a
+        SET execution_status = 'REFUSED', version = version + 1
+        WHERE a.organization_id = %s AND a.project_id = %s AND a.action_id = %s
+          AND a.decision = 'APPROVED' AND a.execution_status = 'NOT_STARTED'
+          AND a.parameters ->> 'request_ref' LIKE %s
+          AND NOT EXISTS (
+              SELECT 1 FROM outbound_messages o
+              WHERE o.approval_id = a.id AND o.status IN ('PENDING', 'UNKNOWN'))
+        RETURNING a.id
+        """,
+        (organization_id, project_id, _SEND_ACTION, f"pbc/{request_id}/%"),
+    ).fetchall()
+    for (approval_id,) in approved:
+        cursor.execute(
+            """
+            INSERT INTO audit_events (
+                organization_id, project_id, actor_user_id, action, target_type, target_id,
+                payload
+            )
+            VALUES (%s, %s, %s, 'approval.withdrawn', 'approval', %s, %s)
+            """,
+            (
+                organization_id,
+                project_id,
+                actor_id,
+                approval_id,
+                Json({"execution_status": "REFUSED", "reason": "evidence provided directly"}),
             ),
         )
 

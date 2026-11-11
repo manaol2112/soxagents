@@ -67,24 +67,9 @@ describe("phone layout", () => {
   });
 });
 
-describe("the governing documents card stays inside its column (28 October 2026)", () => {
-  // Found by the product owner: a long file name widened the list past the card. The layout
-  // was checked in a browser at the rail's width; this keeps the rules from being dropped.
-  const plan = readFileSync("apps/web/app/control-plan.css", "utf8");
-  const rule = (selector: string) => {
-    const at = plan.indexOf(`${selector} {`);
-    return at < 0 ? "" : plan.slice(at, plan.indexOf("}", at));
-  };
-
-  it("holds one column no wider than the card, and long names wrap or end in an ellipsis", () => {
-    assert.match(
-      rule(".cw-docs-list"),
-      /grid-template-columns: minmax\(0, 1fr\)/,
-    );
-    assert.match(rule(".cw-docs-list strong"), /overflow-wrap: anywhere/);
-    assert.match(rule(".cw-docs-list small"), /text-overflow: ellipsis/);
-  });
-});
+// Retired 9 November 2026: the governing documents card in the assistant rail (its
+// .cw-docs-list rules) was removed with the rail; the governing documents are asked in
+// Control Understanding's documents step instead.
 
 describe("the control bar hides what scrolls under it (28 October 2026)", () => {
   // Found by the product owner: through the glass bar, the question's text scrolling under

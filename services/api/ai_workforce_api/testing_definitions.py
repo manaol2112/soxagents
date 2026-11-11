@@ -399,9 +399,6 @@ class Definition:
             None,
         )
 
-    def evidence_item(self, key: str) -> EvidenceDef | None:
-        return next((item for item in self.evidence if item.key == key), None)
-
     def procedure_for(self, action: str) -> ProcedureDef | None:
         """The procedure whose action a plan's procedure text is, ignoring case and spacing."""
         wanted = _normal(action)

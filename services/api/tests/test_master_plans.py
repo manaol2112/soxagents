@@ -8,7 +8,7 @@ from uuid import UUID
 
 import psycopg
 import pytest
-from support import Database
+from support import Database, sign_off_design
 from test_evidence_plans import _Planner
 from test_execution import _add_project_member, _add_user
 from test_outbound import _session, migrated
@@ -17,7 +17,13 @@ from test_planning_gate import _control, _launched, _plan, _project, _rows
 from ai_workforce_api.control_attributes import _write_list
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.evidence_planning import rules_plan
-from ai_workforce_api.evidence_plans import GATE_PLAN, gate_reason, generate, load_facts
+from ai_workforce_api.evidence_plans import (
+    GATE_DESIGN_RELEASE,
+    GATE_PLAN,
+    gate_reason,
+    generate,
+    load_facts,
+)
 from ai_workforce_api.master_plans import Settled, changes_since, settle_library_attributes
 from ai_workforce_api.readiness import NotReady, assess, require_testable
 
@@ -300,7 +306,10 @@ def test_requesting_changes_withdraws_approval_until_a_revision_is_approved(
     assert body["decisions"][0]["decision"] == "CHANGES_REQUESTED"
     assert body["decisions"][0]["comment"] == "Test the timeliness of provisioning."
     with connect(migrated.url) as connection:
-        assert gate_reason(connection, UUID(control), "DESIGN") == GATE_PLAN
+        # Rewritten 9 November 2026 (B1): before, the design evidence waited for the plan
+        # (GATE_PLAN); it follows its own release, and the operating evidence the plan.
+        assert gate_reason(connection, UUID(control), "DESIGN") == GATE_DESIGN_RELEASE
+        assert gate_reason(connection, UUID(control), "INTERIM") == GATE_PLAN
     assert _control(team, "ITGC-AC-01")["next_step"] == "Revise the test plan as the reviewer asked"
     # The preparer says what was done before it goes back for review.
     bare = team["owner"].post(f"{path}/submit", json={"version": body["version"], "note": ""})
@@ -352,11 +361,18 @@ def test_a_material_change_sends_an_approved_plan_back_for_review(migrated: Data
     )
     # Nothing downstream runs on it: requests are held, testing waits.
     with connect(migrated.url) as connection:
-        assert gate_reason(connection, UUID(control), "DESIGN") == GATE_PLAN
+        # Rewritten 9 November 2026 (B1): before, the design evidence was held by the plan's
+        # revision too; it follows its own release, and the operating evidence the plan.
+        assert gate_reason(connection, UUID(control), "DESIGN") == GATE_DESIGN_RELEASE
+        assert gate_reason(connection, UUID(control), "INTERIM") == GATE_PLAN
         readiness = assess(connection, team["project"], UUID(control))
         assert readiness is not None and readiness.state == "PLAN_NOT_APPROVED"
         with pytest.raises(NotReady):
             require_testable(connection, team["project"], UUID(control))
+    # Rewritten 9 November 2026 (B1): the control's requests are now its operating ones (the
+    # design request follows its own release), and an operating request waits first for the
+    # D&I sign-off (B0). With it recorded, the plan's revision is what holds the request.
+    sign_off_design(migrated, team["project"], [control])
     held = owner.post(
         f"{_project(team)}/pbc-requests/{requests[0][0]}/approve",
         json={"version": requests[0][1]},
@@ -677,6 +693,18 @@ def test_the_planner_never_extends_an_approved_plan(migrated: Database) -> None:
             json={"decision": "DISMISS", "version": plan["version"]},
         )
     _approve(team, control)
+    # Rewritten 9 November 2026 (B1): before, approving the plan requested the accepted design
+    # item; the design evidence now follows its own release, which requests it.
+    assert _rows(
+        migrated,
+        "SELECT pbc_request_id IS NOT NULL FROM evidence_requirements WHERE id = %s",
+        requirement_id,
+    ) == [(False,)]
+    released = team["owner"].post(
+        f"{_project(team)}/controls/{control}/phases/DESIGN/release",
+        json={"reason": "Released for the test: the walkthrough is scheduled this week."},
+    )
+    assert released.status_code == 200, released.text
     assert _rows(
         migrated,
         "SELECT pbc_request_id IS NOT NULL FROM evidence_requirements WHERE id = %s",

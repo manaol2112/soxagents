@@ -275,6 +275,121 @@ def test_an_automated_control_is_not_sampled(migrated: Database) -> None:
     assert _tests(client, team) == []
 
 
+def test_a_replacement_comes_from_the_sampling_frame(migrated: Database) -> None:
+    """Bug hunt, 9 November 2026: a replacement row was checked only against the file's
+    length, so a row dated outside the period could replace a sample."""
+    team, client, request = _sent_engagement_request(migrated, "replace-frame", "ITGC-AC-01")
+    with connect(migrated.url) as connection:
+        found = connection.execute(
+            "SELECT period_end FROM engagement_settings WHERE project_id = %s", (team["project"],)
+        ).fetchone()
+    assert found is not None
+    year = found[0].year
+    lines = ["User ID,Name,Date granted"]
+    lines += [f"u{n:04d},Demo User {n},{year}-{(n % 12) + 1:02d}-10" for n in range(1, 31)]
+    # Row 31 is dated before the period; row 32 has no readable date.
+    lines += [f"u9998,Demo Early,{year - 1}-06-01", "u9999,Demo Undated,soon"]
+    analysis_id = _store(client, team, request, ("\n".join(lines) + "\n").encode(), "pop.csv")
+    with connect(migrated.url) as connection:
+        run_analysis(
+            connection, Settings(database_url=migrated.url), None, analysis_id, _no_engines
+        )
+    test = _tests(client, team)[0]
+    assert test["frame_rows"] == 30
+    base = f"{_base(team['org'], team['project'])}/control-tests/{test['id']}"
+    for row in (31, 32):
+        outside = client.post(
+            f"{base}/samples/1/replace",
+            json={
+                "version": test["version"],
+                "row_number": row,
+                "selection": "TARGETED",
+                "reason": "Test this grant specifically.",
+            },
+        )
+        assert outside.status_code == 409, outside.text
+        assert "outside the sampling frame" in outside.json()["detail"]
+    selected = {sample["row_number"] for sample in test["samples"]}
+    spare = next(row for row in range(1, 31) if row not in selected)
+    inside = client.post(
+        f"{base}/samples/1/replace",
+        json={
+            "version": test["version"],
+            "row_number": spare,
+            "selection": "TARGETED",
+            "reason": "Test this grant specifically.",
+        },
+    )
+    assert inside.status_code == 200, inside.text
+    assert inside.json()["samples"][0]["row_number"] == spare
+
+
+def test_completeness_is_judged_on_the_rows_in_the_period() -> None:
+    """Bug hunt, 9 November 2026: the count compared every row in the file, a daily
+    control had no expected count, and a frame smaller than the sample was not flagged."""
+    columns = ("Review ID", "Date performed")
+    # A monthly review over two years: 22 rows in the file, enough for a year, but only
+    # 10 in the period.
+    rows = [[f"MR-A{n}", f"2026-{n + 1:02d}-28"] for n in range(12)]
+    rows += [[f"MR-B{n}", f"2027-{n + 1:02d}-28"] for n in range(10)]
+    frame = build_frame(_table(rows, columns), date(2027, 12, 31), "MONTHLY")
+    by_check = {check.check: check for check in frame.checks}
+    assert len(frame.rows) == 10
+    assert by_check["rows"].result == "ISSUE"
+    assert by_check["rows"].detail.startswith("10 rows in the period")
+    daily = build_frame(
+        _table([[f"D-{n}", f"2027-03-{n + 1:02d}"] for n in range(28)], columns),
+        date(2027, 12, 31),
+        "DAILY",
+    )
+    rows_check = next(check for check in daily.checks if check.check == "rows")
+    assert rows_check.result == "ISSUE" and "about 250" in rows_check.detail
+    # An event-driven control has no expected count.
+    driven = build_frame(_table(rows, columns), date(2027, 12, 31), "EVENT_DRIVEN")
+    assert next(c for c in driven.checks if c.check == "rows").result == "OK"
+    # The planned sample size is known at proposal: a smaller frame is a check to look at.
+    small = build_frame(_table(rows, columns), date(2027, 12, 31), "MONTHLY", size=25)
+    size = next(check for check in small.checks if check.check == "size")
+    assert size.result == "ISSUE"
+    assert "10 items in the sampling frame, fewer than the sample size of 25" in size.detail
+    enough = build_frame(_table(rows, columns), date(2027, 12, 31), "MONTHLY", size=2)
+    assert not any(check.check == "size" for check in enough.checks)
+
+
+def test_a_day_first_column_is_read_day_first_throughout() -> None:
+    """Bug hunt, 9 November 2026: every slashed date was read month first, so a dd/mm
+    column was missed as a date column or misread (05/01 as 1 May)."""
+    assert parse_date("05/01/2027", "dmy") == date(2027, 1, 5)
+    assert parse_date("05/01/2027") == date(2027, 5, 1)
+    columns = ("Ticket", "Date granted")
+    rows = [[f"REQ-{n}", f"{day:02d}/{month:02d}/2027"] for n, (day, month) in enumerate(
+        [(5, 1), (25, 1), (13, 2), (3, 4), (28, 6), (9, 9), (30, 11), (1, 12)]
+    )]  # fmt: skip
+    rows.append(["REQ-early", "15/12/2026"])
+    frame = build_frame(_table(rows, columns), date(2027, 12, 31), "EVENT_DRIVEN")
+    assert frame.date_column == 1
+    assert frame.rows == tuple(range(8))
+    assert frame.covered_to == date(2027, 12, 1)
+    period = next(check for check in frame.checks if check.check == "period")
+    assert "runs from 2026-12-15 to 2027-12-01" in period.detail
+    # A date column whose values cannot be read is an issue, not a population without dates.
+    unread = build_frame(
+        _table([["REQ-1", "2027.03.04"], ["REQ-2", "2027.05.06"]], columns),
+        date(2027, 12, 31),
+        "EVENT_DRIVEN",
+    )
+    check = next(check for check in unread.checks if check.check == "period")
+    assert check.result == "ISSUE"
+    assert "'Date granted' looks like a date column" in check.detail
+    # A column merely named like a date, holding no dates, stays information.
+    names = build_frame(
+        _table([["REQ-1", "Clerk"], ["REQ-2", "Manager"]], ("Ticket", "Role granted")),
+        date(2027, 12, 31),
+        "EVENT_DRIVEN",
+    )
+    assert next(c for c in names.checks if c.check == "period").result == "INFO"
+
+
 # Helpers
 
 

@@ -8,16 +8,142 @@ class Database:
         return "Database(<redacted>)"
 
 
-def release_interim(database: Database, project_id: object) -> None:
-    """Release the interim phase of every control whose plan is approved, as a reviewer may
-    before design testing is complete (phase_release.py: early, with the reason recorded).
-    Tests of what follows the release use it; tests of the release itself do not."""
+DESIGN_RELEASE_REASON = "Released in the test setup: the D&I release is not what this test covers."
+
+
+def release_design(
+    database: Database, project_id: object, controls: list[object] | None = None
+) -> list[object]:
+    """Release the D&I evidence of the engagement's planned controls (or those named), as the
+    engagement's owner would, and request it (phase_release.request_released). D&I evidence
+    has its own release since B1 (product owner, 8 November 2026), so tests of what follows it
+    use this; tests of the D&I release itself do not. Returns the drafts queued."""
+    from uuid import UUID
+
+    from ai_workforce_api.db import connect
+    from ai_workforce_api.evidence_plans import PlanState
+    from ai_workforce_api.phase_release import ReleaseBody, release, request_released
+
+    queued: list[object] = []
+    with connect(database.url) as connection:
+        rows = connection.execute(
+            """
+            SELECT p.organization_id, p.engagement_control_id, j.owner_user_id
+            FROM evidence_plans p JOIN projects j ON j.id = p.project_id
+            WHERE p.project_id = %s
+              AND (%s::uuid[] IS NULL OR p.engagement_control_id = ANY(%s::uuid[]))
+            ORDER BY p.created_at
+            """,
+            (project_id, controls, controls),
+        ).fetchall()
+        project = UUID(str(project_id))
+        for organization, control, owner in rows:
+            try:
+                done = release(
+                    connection, organization, project, control, "DESIGN", owner,
+                    ReleaseBody(reason=DESIGN_RELEASE_REASON),
+                )  # fmt: skip
+            except PlanState:
+                continue
+            if done:
+                queued += request_released(
+                    connection, organization, project, control, "DESIGN", owner
+                )
+    return queued
+
+
+def sign_off_design(
+    database: Database, project_id: object, controls: list[object] | None = None
+) -> None:
+    """Record an effective D&I conclusion for the engagement's controls (or those named), as a
+    reviewer signs it once the design workpaper is prepared (design_conclusions.py). OE work
+    starts only after it (B0, product owner, 8 November 2026), so tests of what follows D&I
+    use it; tests of the D&I conclusion and of the OE gate do not. A design workpaper not yet
+    prepared is marked prepared at its current version."""
+    from ai_workforce_api.db import connect
+
+    with connect(database.url) as connection:
+        rows = connection.execute(
+            """
+            SELECT c.id, c.organization_id, j.owner_user_id, c.template_key
+            FROM engagement_controls c JOIN projects j ON j.id = c.project_id
+            WHERE c.project_id = %s AND (%s::uuid[] IS NULL OR c.id = ANY(%s::uuid[]))
+            """,
+            (project_id, controls, controls),
+        ).fetchall()
+        for control, organization, owner, template in rows:
+            standing = connection.execute(
+                "SELECT 1 FROM design_conclusions WHERE engagement_control_id = %s "
+                "AND reopened_at IS NULL",
+                (control,),
+            ).fetchone()
+            if standing is not None:
+                continue
+            # The design workpaper as the service opens and drafts it (no model: its records),
+            # so a prepared design workpaper has content, as a person's has.
+            from uuid import UUID as _UUID
+
+            from ai_workforce_api.db import transaction
+            from ai_workforce_api.workpaper_service import ensure, run_draft
+
+            with transaction(connection) as cursor:
+                opened = ensure(
+                    cursor, organization, _UUID(str(project_id)), control, owner, ("DESIGN",)
+                )
+            for paper_id in opened:
+                run_draft(connection, None, paper_id)
+            paper = connection.execute(
+                """
+                UPDATE workpapers
+                SET status = 'PREPARED', prepared_by = coalesce(prepared_by, requested_by),
+                    prepared_at = coalesce(prepared_at, clock_timestamp()),
+                    prepared_version = coalesce(prepared_version, greatest(current_version, 1)),
+                    draft_status = 'IDLE', started_at = coalesce(started_at, clock_timestamp())
+                WHERE project_id = %s AND engagement_control_id = %s AND stage = 'DESIGN'
+                RETURNING id, prepared_version
+                """,
+                (project_id, control),
+            ).fetchone()
+            if paper is None:
+                paper = connection.execute(
+                    """
+                    INSERT INTO workpapers (
+                        organization_id, project_id, engagement_control_id, stage, template_key,
+                        status, draft_status, requested_by, prepared_by, prepared_at,
+                        prepared_version, started_at
+                    )
+                    VALUES (%s, %s, %s, 'DESIGN', %s, 'PREPARED', 'IDLE', %s, %s,
+                            clock_timestamp(), 1, clock_timestamp())
+                    RETURNING id, prepared_version
+                    """,
+                    (organization, project_id, control, template or "design", owner, owner),
+                ).fetchone()
+            assert paper is not None
+            connection.execute(
+                """
+                INSERT INTO design_conclusions (
+                    organization_id, project_id, engagement_control_id, workpaper_id,
+                    workpaper_version, verdict, signed_by, signoff_note
+                )
+                VALUES (%s, %s, %s, %s, %s, 'EFFECTIVE', %s, 'Signed off in the test setup.')
+                """,
+                (organization, project_id, control, paper[0], paper[1], owner),
+            )
+
+
+def release_interim(database: Database, project_id: object, design: bool = True) -> None:
+    """Release the interim phase of every control whose plan is approved. OE starts only once
+    the D&I conclusion is signed off effective (B0), so the setup records that sign-off first
+    (sign_off_design). Tests of what follows the release use it; tests of the release itself
+    do not."""
     from uuid import UUID
 
     from ai_workforce_api.db import connect
     from ai_workforce_api.evidence_plans import PlanState
     from ai_workforce_api.phase_release import ReleaseBody, release
 
+    if design:
+        sign_off_design(database, project_id)
     with connect(database.url) as connection:
         rows = connection.execute(
             """
@@ -39,12 +165,19 @@ def release_interim(database: Database, project_id: object) -> None:
 
 
 def approve_evidence_plans(
-    database: Database, project_id: object, settle: bool = True, release: bool = True
+    database: Database,
+    project_id: object,
+    settle: bool = True,
+    release: bool = True,
+    design: bool = True,
+    design_release: bool = True,
 ) -> list[object]:
     """Approve every launched control's evidence plan that still waits for a person, as the
     engagement's owner would, and request what the planning gate then allows for every
     control (evidence_plans.release), as settling the attributes does in the app. Returns
-    the drafts queued, which the test runs or schedules."""
+    the drafts queued, which the test runs or schedules. Without design, no D&I conclusion
+    is recorded, so nothing of OE is released (B0): for tests of the design work itself.
+    Without design_release, the D&I evidence is not released (B1): for tests of that release."""
     from uuid import UUID
 
     from ai_workforce_api.db import connect
@@ -53,7 +186,7 @@ def approve_evidence_plans(
 
     if settle:
         settle_attributes(database, project_id)
-    queued: list[object] = []
+    queued: list[object] = release_design(database, project_id) if design_release else []
     with connect(database.url) as connection:
         rows = connection.execute(
             """
@@ -80,7 +213,7 @@ def approve_evidence_plans(
                 connection, organization, UUID(str(project_id)), control, owner
             )
     if release:
-        release_interim(database, project_id)
+        release_interim(database, project_id, design)
     return queued
 
 
@@ -96,6 +229,12 @@ def approve_plans_over_api(client: object, organization_id: object, project_id: 
     for row in rows:
         if not row.get("included"):
             continue
+        # D&I evidence has its own release (B1), through the route that hands its drafts to
+        # the background; a control not planned yet is skipped by the route.
+        client.post(  # type: ignore[attr-defined]
+            f"{base}/controls/{row['id']}/phases/DESIGN/release",
+            json={"reason": DESIGN_RELEASE_REASON},
+        )
         plan = client.get(f"{base}/controls/{row['id']}/evidence-plan")  # type: ignore[attr-defined]
         if plan.status_code != 200 or plan.json().get("status") != "PROPOSED":
             continue
@@ -181,7 +320,9 @@ def approve_control_plan(database: Database, control_id: object) -> list[object]
         control = UUID(str(control_id))
         if status == "PROPOSED":
             approve(connection, organization, project, control, owner, VersionBody(version=version))
-        return list(release(connection, organization, project, control, owner))
+    queued = release_design(database, project, [control])
+    with connect(database.url) as connection:
+        return queued + list(release(connection, organization, project, control, owner))
 
 
 def unrestricted(cursor: object, organization_id: object) -> None:

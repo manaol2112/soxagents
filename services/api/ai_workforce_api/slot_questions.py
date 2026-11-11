@@ -36,7 +36,7 @@ QUESTIONS: dict[str, str] = {
     "access-tool": "Where are access requests raised and approved?",
     "account-reviewer": "Who reviews shared, generic, and service accounts?",
     "admin-role": "Who grants, changes, and removes user access in the system?",
-    "auth-settings": "What password and sign-in settings does the policy require?",
+    "auth-settings": "How do users sign in, and what settings does the policy require?",
     "data-admin": "Who is allowed to change data directly in the database?",
     "deploy-reviewer": "Who reviews who can deploy changes to production?",
     "facilities-reviewer": "Who reviews access to the data center or server room?",

@@ -53,7 +53,6 @@ from ai_workforce_api.controls import (
     SYSTEM_DOMAINS,
     TESTER_KEYS,
     runs_on_a_system,
-    sample_size,
 )
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.evidence_plans import plan_and_issue
@@ -70,6 +69,7 @@ from ai_workforce_api.invitations import (
 )
 from ai_workforce_api.library_definitions import link_definitions
 from ai_workforce_api.mailbox import live_send_enabled
+from ai_workforce_api.methodology import PLATFORM_DEFAULT, Rules, for_project, pin, rules_for
 from ai_workforce_api.model_providers import live_model
 from ai_workforce_api.pbc_drafting import DraftScheduler, queue_kickoff_drafts, schedule
 from ai_workforce_api.profile_checks import PeriodState, period_state
@@ -1493,13 +1493,14 @@ def _controls(connection: psycopg.Connection[Any], project_id: UUID) -> list[Con
             (project_id,),
         ).fetchall()
     }
-    controls = [_control(row) for row in rows]
+    rules = rules_for(connection, project_id)
+    controls = [_control(row, rules) for row in rows]
     for control in controls:
         control.tested = control.control_ref.upper() in tested
     return controls
 
 
-def _control(row: tuple[Any, ...]) -> ControlBody:
+def _control(row: tuple[Any, ...], rules: Rules = PLATFORM_DEFAULT) -> ControlBody:
     return ControlBody(
         id=row[0],
         library_key=str(row[1]),
@@ -1519,7 +1520,7 @@ def _control(row: tuple[Any, ...]) -> ControlBody:
         pbc_items=[str(item) for item in row[15]],
         template_key=str(row[16]),
         agent_key=str(row[17]),
-        sample_size=sample_size(str(row[7]), str(row[8])),
+        sample_size=rules.sample_size(str(row[7]), str(row[8])),
         version=int(row[18]),
         source=str(row[19]),
         domain_label=str(row[20]),
@@ -3345,6 +3346,7 @@ def _preview(
     ).fetchone()
     names = {app.id: app.name for app in _applications(connection, project_id)}
     settings = _settings(connection, project_id)
+    applied = for_project(connection, project_id)
     return preview(
         resolve_template(connection, project_id, template_key),
         PreviewControl(
@@ -3360,6 +3362,8 @@ def _preview(
             frequency_label=control.frequency_label,
             nature_label=control.nature_label,
             custom_fields=tuple((item.label, item.value) for item in control.custom_fields),
+            rules=applied.rules,
+            methodology=applied.label,
         ),
         "" if project is None else str(project[0]),
         settings.period_end,
@@ -3658,6 +3662,8 @@ def approve_plan(
             """,
             (project_id, organization_id),
         )
+        # The engagement keeps the firm's methodology version it launched on.
+        pin(cursor, organization_id, project_id)
         task_ids: dict[str, UUID] = {}
         for item in items:
             row = cursor.execute(
@@ -3791,8 +3797,14 @@ def _launch_summary(connection: psycopg.Connection[Any], project_id: UUID) -> La
         FROM pbc_requests r
         LEFT JOIN evidence_plans p ON p.engagement_control_id = r.engagement_control_id
         CROSS JOIN LATERAL (
+            -- D&I requests follow their own release (B1); the rest, the approved plan.
             SELECT r.engagement_control_id IS NOT NULL
-                   AND coalesce(p.status, '') <> 'APPROVED' AS held
+                   AND CASE WHEN r.testing_phase = 'DESIGN'
+                            THEN NOT EXISTS (
+                                SELECT 1 FROM phase_releases pr
+                                WHERE pr.engagement_control_id = r.engagement_control_id
+                                  AND pr.phase = 'DESIGN')
+                            ELSE coalesce(p.status, '') <> 'APPROVED' END AS held
         ) h
         WHERE r.project_id = %s
         """,

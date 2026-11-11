@@ -150,7 +150,8 @@ export function EvidenceFiles({
         <Banner
           tone={
             workflow.filingNotice === "filed" ||
-            workflow.filingNotice === "unfiled"
+            workflow.filingNotice === "unfiled" ||
+            workflow.filingNotice === "applied"
               ? "info"
               : "warning"
           }

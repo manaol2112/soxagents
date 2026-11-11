@@ -1868,6 +1868,14 @@ def _verified(
         )
         if not _remindable(connection, pbc) or follow_up.status != "APPROVAL_PENDING":
             return None, "request_resolved"
+    elif outbound.template_id != "pbc-group" and not _still_to_send(
+        connection, organization_id, project_id, outbound
+    ):
+        # A request goes out only while it still awaits this send: not once evidence came
+        # directly (received), it went back to draft, or another approval took over. Bug
+        # hunt, 9 November 2026: a send resumed after an unknown outcome delivered a
+        # request already received.
+        return None, "request_resolved"
     try:
         message = _message_for(connection, organization_id, project_id, outbound)
     except ValueError:
@@ -1875,6 +1883,35 @@ def _verified(
     if message.content_sha256 != _content(connection, outbound.id):
         return None, "invalid_message"
     return message, ""
+
+
+def _still_to_send(
+    connection: psycopg.Connection[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    outbound: OutboundBody,
+) -> bool:
+    """Whether the request still awaits this send: it is awaiting approval, and the
+    outbound's approval is its latest send approval, approved and not yet executed."""
+    pbc = _read_pbc(connection, organization_id, project_id, outbound.pbc_request_id)
+    if pbc.status != "APPROVAL_PENDING":
+        return False
+    row = connection.execute(
+        """
+        SELECT id, decision::text, execution_status FROM approvals
+        WHERE organization_id = %s AND project_id = %s AND action_id = %s
+          AND parameters ->> 'request_ref' LIKE %s
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (organization_id, project_id, ACTION_ID, f"pbc/{outbound.pbc_request_id}/%"),
+    ).fetchone()
+    return (
+        row is not None
+        and row[0] == outbound.approval_id
+        and row[1] == "APPROVED"
+        and row[2] == "NOT_STARTED"
+    )
 
 
 def _content(connection: psycopg.Connection[Any], outbound_id: UUID) -> str:

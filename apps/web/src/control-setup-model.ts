@@ -747,15 +747,6 @@ export const STEP_BRIEF: Record<SetupStepKey, string> = {
   plan: "Approve procedures and evidence requests.",
 };
 
-/** The questions still to answer: those not on record, the governing documents not yet
- * named, and what the agents raised from the records. */
-export function questionsLeft(input: SetupInput): number {
-  return (
-    input.slots.filter((slot) => slot.value.trim() === "").length +
-    input.openQuestions
-  );
-}
-
 const WORDS = [
   "zero",
   "one",
@@ -773,17 +764,4 @@ const WORDS = [
 /** A small count in words ("four quick questions"); larger ones as digits. */
 export function countWord(count: number): string {
   return WORDS[count] ?? String(count);
-}
-
-/** The introduction's headline: what the person is asked to do. */
-export function introHeadline(questions: number): string {
-  return questions > 0
-    ? `Answer ${countWord(questions)} quick question${questions === 1 ? "" : "s"} to help prepare a client-specific setup.`
-    : "Review what the agent prepared to complete a client-specific setup.";
-}
-
-/** Where this browser remembers that the person began a control's setup, so the
- * introduction gives way to the wizard on later visits. */
-export function setupBegunKey(controlId: string): string {
-  return `control-setup-begun:${controlId}`;
 }

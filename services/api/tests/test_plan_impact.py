@@ -247,9 +247,9 @@ def test_a_reviewer_documents_that_a_signed_review_covers_later_work(migrated: D
     control = sheet["control_id"]
     review = client.get(f"{base}/reviews").json()[0]
     signed = _sign_review(migrated, client, team, review["id"])
-    # The design workpaper is prepared after the review signed: the review does not cover
-    # it, and the conclusion waits.
-    _prepare_design(migrated, team, control)
+    # The design workpaper is prepared again after the review signed: the review does not
+    # cover it, and the conclusion waits.
+    _reprepare_design(client, team, control)
     row = _controls(client, team)[control]
     assert row["final"] is False
     assert any(
@@ -287,3 +287,30 @@ def test_a_reviewer_documents_that_a_signed_review_covers_later_work(migrated: D
             )
         connection.rollback()
     assert decision == "COVERS" and "DESIGN" in versions
+
+
+def _reprepare_design(client: Any, team: dict[str, Any], control: str) -> None:
+    """The design workpaper reopened after the review, changed and prepared again: work the
+    signed review does not cover. Since B0 the design workpaper is prepared before OE, so the
+    later design work is a re-preparation (before, it was prepared for the first time)."""
+    base = f"{_base(team)}/workpapers"
+    design = next(
+        w for w in client.get(base, params={"control_id": control}).json() if w["stage"] == "DESIGN"
+    )
+    reopened = client.post(
+        f"{base}/{design['id']}/reopen",
+        json={"version": design["version"], "reason": "Updated after the review."},
+    )
+    assert reopened.status_code == 200, reopened.text
+    design = reopened.json()
+    key = "understanding-of-the-control"
+    saved = client.post(
+        f"{base}/{design['id']}/sections/{key}",
+        json={"based_on": design["current_version"], "text": "Updated after the review."},
+    )
+    assert saved.status_code == 200, saved.text
+    current = next(
+        w for w in client.get(base, params={"control_id": control}).json() if w["stage"] == "DESIGN"
+    )
+    prepared = client.post(f"{base}/{current['id']}/prepare", json={"version": current["version"]})
+    assert prepared.status_code == 200, prepared.text

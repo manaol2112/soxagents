@@ -870,8 +870,57 @@ def _trace(
     )
 
 
+def _timing(body: TraceBody, label: str) -> list[ObservationBody]:
+    """A removal the trace cannot time: no event to count from, or no limit stated to
+    count against. Either is a point to settle before the trace is ready (bug hunt, 9
+    November 2026)."""
+    removed = next(
+        ((entry, when) for entry in body.files for when in entry.dates if when.role == "REMOVAL"),
+        None,
+    )
+    if removed is None:
+        return []
+    entry, when = removed
+    event = body.event
+    if event is None:
+        return [
+            ObservationBody(
+                kind="NOT_TRACED", file_id=entry.file_id,
+                title=clean_line(f"No event date for {label}", 200),
+                observation=(
+                    f"{entry.file_name} shows {when.label} {when.date:%d %b %Y}, but no file "
+                    f"gives the date of the event for {label}, such as a termination, so the "
+                    "removal cannot be timed."
+                ),
+                question=(
+                    f"Please provide the date of the event for {label} that required the "
+                    "removal, such as the termination date, with its record."
+                ),
+                expected="The event date and its record",
+            )
+        ]  # fmt: skip
+    if body.limit_days is None:
+        return [
+            ObservationBody(
+                kind="NOT_TRACED", file_id=entry.file_id,
+                title=clean_line(f"No time limit to judge the removal in {entry.file_name}", 200),
+                observation=(
+                    f"{event.label} {event.date:%d %b %Y}; {entry.file_name} shows {when.label} "
+                    f"{when.date:%d %b %Y}. The control states no time limit for the removal, "
+                    "so its timeliness cannot be judged."
+                ),
+                question=(
+                    "Please confirm the time limit within which access is removed after the "
+                    f"{event.label.lower()}."
+                ),
+                expected="The time limit the control applies",
+            )
+        ]  # fmt: skip
+    return []
+
+
 def _observations(body: TraceBody, label: str) -> list[ObservationBody]:
-    out: list[ObservationBody] = []
+    out: list[ObservationBody] = _timing(body, label)
     event = body.event
     for entry in body.files:
         if entry.state == "NOT_FOUND":
@@ -920,6 +969,32 @@ def _observations(body: TraceBody, label: str) -> list[ObservationBody]:
         if event is None:
             continue
         removals = [when for when in entry.dates if when.role == "REMOVAL"]
+        if (
+            entry.listing
+            and entry.state == "FOUND"
+            and not removals
+            and not any(when.role == "EVENT" for when in entry.dates)
+        ):
+            # The sample is in the system's listing with no removal date: the account may
+            # still be active (bug hunt, 9 November 2026).
+            out.append(
+                ObservationBody(
+                    kind="NOT_TRACED", file_id=entry.file_id,
+                    title=clean_line(f"No removal recorded for {label} in {entry.file_name}", 200),
+                    observation=(
+                        f"{entry.file_name}"
+                        + (f" ({entry.system})" if entry.system else "")
+                        + f" lists {label} with no removal date after the "
+                        f"{event.label.lower()} on {event.date:%d %b %Y}."
+                    ),
+                    question=(
+                        f"Please confirm whether {label}'s access "
+                        + (f"in {entry.system}" if entry.system else f"shown in {entry.file_name}")
+                        + " was removed; if so, provide the record of its removal with its date."
+                    ),
+                    expected="The removal record with its date, or the reason access remains",
+                )
+            )  # fmt: skip
         latest = max(removals, key=lambda when: when.date) if removals else None
         if latest is not None and latest.over:
             out.append(

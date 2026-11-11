@@ -369,3 +369,27 @@ def _app(database: Database, *, entra: Any = None, app_base_url: str = "") -> An
         display_name="Dana Ruiz",
     )
     return create_app(settings, entra, google_identity_provider=FakeProvider(identity))
+
+
+def test_a_sign_in_started_on_another_local_name_moves_to_the_callback_host_first(
+    migrated: Database,
+) -> None:
+    """The web's sign-in button opens the API as 127.0.0.1 while Google returns to localhost
+    (the local setup). The browser-binding cookie belongs to one host name, so the start moves
+    to the callback's host once, and the sign-in completes there (9 November 2026)."""
+    client = TestClient(_app(migrated))
+    first = client.get("http://127.0.0.1:8000/auth/google/login", follow_redirects=False)
+    assert first.status_code == 302
+    assert first.headers["location"] == "http://localhost:8000/auth/google/login?aw_hop=1"
+    assert "aw_login" not in first.headers.get("set-cookie", "")
+    started = client.get(first.headers["location"], follow_redirects=False)
+    assert started.status_code == 302 and "aw_login=" in started.headers["set-cookie"]
+    finished = client.get(
+        "http://localhost:8000/auth/google/callback?code=good-code&state=google-state",
+        follow_redirects=False,
+    )
+    assert finished.status_code == 200, finished.text
+    # It moves once only, even if the host still differs; a host that is not this machine
+    # never moves (every other sign-in test starts on one).
+    again = client.get("http://127.0.0.1:8000/auth/google/login?aw_hop=1", follow_redirects=False)
+    assert again.headers["location"].startswith("https://accounts.google.com/")

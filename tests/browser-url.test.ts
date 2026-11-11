@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { browserUrl } from "../apps/web/src/browser-url.ts";
+import { browserUrl, localPath } from "../apps/web/src/browser-url.ts";
 
 function request(url: string, headers: Record<string, string>): Request {
   return new Request(url, { headers });
@@ -42,5 +42,29 @@ describe("redirects go where the browser came from", () => {
       "x-forwarded-host": "evil.example/path?x=1",
     });
     assert.equal(browserUrl("/", odd).host, "127.0.0.1:3000");
+  });
+});
+
+describe("a redirect back stays on this app (security sweep, 9 November 2026)", () => {
+  it("keeps a path on this app, and refuses what a browser would send elsewhere", () => {
+    assert.equal(localPath("/?section=controls"), "/?section=controls");
+    assert.equal(localPath("/welcome"), "/welcome");
+    for (const away of [
+      "//evil.example",
+      "/\\evil.example",
+      "/\\/evil.example",
+      "/\t/evil.example",
+      "/\n/evil.example",
+      "https://evil.example",
+      "evil.example",
+      "",
+      `/${"a".repeat(2001)}`,
+    ]) {
+      assert.equal(localPath(away), null, JSON.stringify(away));
+    }
+    // What it keeps resolves on this app's own host.
+    const back = localPath("/?section=controls") ?? "/";
+    const at = browserUrl(back, new Request("http://localhost:3000/x"));
+    assert.equal(at.host, "localhost:3000");
   });
 });

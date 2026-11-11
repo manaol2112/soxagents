@@ -14,7 +14,7 @@ import {
 import { AutoRefresh } from "./auto-refresh";
 import { ChoiceForm } from "./choice-form";
 import { ClientsTable } from "./clients-table";
-import { ConfirmAction } from "./confirm-action";
+import { ConfirmAction, OnceForm } from "./confirm-action";
 import {
   type ConsoleState,
   EMPTY_CONSOLE,
@@ -107,6 +107,7 @@ import type { EvidenceCenterState } from "./load-evidence-center";
 import type { LibraryPageState } from "./load-library";
 import type { PlanningPageState } from "./load-planning";
 import { LoadingScreen } from "./loading-screen";
+import { MethodologyMain } from "./methodology-view";
 import { NavScroll } from "./nav-scroll";
 import { EMPTY_SETUP, type SetupState, uniqueKeys } from "./onboarding-model";
 import { PlanMissingButton } from "./plan-missing";
@@ -1090,6 +1091,12 @@ function WorkspaceMain({
         {page === "settings" ? (
           <TrialUsageMain
             usage={model.trialUsage}
+            organizationName={model.organization.name}
+          />
+        ) : page === "methodology" ? (
+          <MethodologyMain
+            organizationId={model.organization.id}
+            projectId={model.selectedProject?.id ?? null}
             organizationName={model.organization.name}
           />
         ) : page === "agents" ? (
@@ -3105,12 +3112,9 @@ function ApprovalCard({
           You asked for this action, so another approver must decide.
         </p>
       ) : (
-        <form
-          autoComplete="off"
-          method="post"
-          action="/workspace/approvals"
-          className="decision-form"
-        >
+        // Posts once: a second press while the decision is on its way is dropped, and the
+        // decision shows as recorded only when the page comes back from the server.
+        <OnceForm action="/workspace/approvals" className="decision-form">
           <input
             type="hidden"
             name="organization_id"
@@ -3145,7 +3149,10 @@ function ApprovalCard({
               <UiIcon name="x" size={15} /> Reject
             </button>
           </div>
-        </form>
+          <span className="launch-wait" role="status">
+            Recording the decision…
+          </span>
+        </OnceForm>
       )}
     </li>
   );

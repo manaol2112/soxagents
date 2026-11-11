@@ -17,7 +17,6 @@ import {
   evidenceTotal,
   fileCardMeta,
   fileServes,
-  focusPhase,
   linkableFiles,
   matchesStatus,
   phaseDigest,
@@ -284,46 +283,6 @@ describe("the evidence workspace", () => {
       ],
     );
     assert.equal(listed[0]?.phaseLabel, "Interim");
-  });
-
-  it("opens the first phase that is not signed off", () => {
-    const phase = (
-      key: "DESIGN" | "INTERIM" | "ROLLFORWARD",
-      state: "NOT_GENERATED" | "COMPLETE" | "NOT_APPLICABLE",
-      testingComplete = false,
-    ) => ({
-      phase: key,
-      applicability:
-        state === "NOT_APPLICABLE"
-          ? ("NOT_APPLICABLE" as const)
-          : ("APPLICABLE" as const),
-      state,
-      testingComplete,
-    });
-    assert.equal(
-      focusPhase([
-        phase("DESIGN", "NOT_GENERATED"),
-        phase("INTERIM", "NOT_GENERATED"),
-        phase("ROLLFORWARD", "NOT_GENERATED"),
-      ]),
-      "DESIGN",
-    );
-    assert.equal(
-      focusPhase([
-        phase("DESIGN", "COMPLETE", true),
-        phase("INTERIM", "NOT_GENERATED"),
-        phase("ROLLFORWARD", "NOT_GENERATED"),
-      ]),
-      "INTERIM",
-    );
-    assert.equal(
-      focusPhase([
-        phase("DESIGN", "COMPLETE", true),
-        phase("INTERIM", "NOT_APPLICABLE"),
-        phase("ROLLFORWARD", "NOT_GENERATED"),
-      ]),
-      "ROLLFORWARD",
-    );
   });
 
   it("filters the requirements by phase and status, and keeps removed items out", () => {

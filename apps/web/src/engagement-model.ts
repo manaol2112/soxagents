@@ -1,5 +1,13 @@
 import type { EvidenceAnalysis, EvidenceReview } from "./analysis-model.ts";
+import type {
+  ConclusionNotice,
+  ControlConclusion,
+} from "./control-conclusion-model.ts";
 import type { ActivityItem } from "./control-workspace-model.ts";
+import type {
+  DesignConclusion,
+  DesignConclusionNotice,
+} from "./design-conclusion-model.ts";
 import type { ChangeNotice } from "./evidence-change-model.ts";
 import type { WalkthroughInstance } from "./evidence-dialog-model.ts";
 import type { EvidenceFinding } from "./evidence-findings-model.ts";
@@ -626,6 +634,12 @@ export type EngagementState = {
   workpapers: Workpaper[] | null;
   workpaperNotice: WorkpaperNotice | null;
   workpaperViewing: { id: string; version: number } | null;
+  /** The open control's D&I conclusion, signed by a reviewer (migration 0143). */
+  designConclusion: DesignConclusion | null;
+  designConclusionNotice: DesignConclusionNotice | null;
+  /** The open control's proposed conclusion and its deficiencies' ratings (migration 0144). */
+  controlConclusion: ControlConclusion | null;
+  controlConclusionNotice: ConclusionNotice | null;
   /** The independent reviews (9.1), for every control. */
   reviews: ControlReview[] | null;
   reviewNotice: ReviewNotice | null;
@@ -707,6 +721,10 @@ export const EMPTY_ENGAGEMENT: EngagementState = {
   workpapers: null,
   workpaperNotice: null,
   workpaperViewing: null,
+  designConclusion: null,
+  designConclusionNotice: null,
+  controlConclusion: null,
+  controlConclusionNotice: null,
   reviews: null,
   reviewNotice: null,
   context: null,

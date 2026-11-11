@@ -1724,10 +1724,6 @@ def _by_lead_approval(connection: Any, approval_id: UUID) -> Stored | None:
     return found[0] if found else None
 
 
-def is_group_message(template_id: str) -> bool:
-    return template_id in (GROUP_TEMPLATE_ID, GROUP_REMINDER_TEMPLATE_ID)
-
-
 def message_for(
     connection: psycopg.Connection[Any],
     organization_id: UUID,

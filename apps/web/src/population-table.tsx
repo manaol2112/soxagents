@@ -40,6 +40,9 @@ export function DataTable({
   const [typed, setTyped] = useState("");
   const [search, setSearch] = useState("");
   const [row, setRow] = useState<number | null>(chosenRow);
+  // A failed page or search keeps the rows shown and the search and paging; Try again asks
+  // for the same page once more.
+  const [attempt, setAttempt] = useState(0);
   const limit = compact ? 8 : 25;
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -48,6 +51,7 @@ export function DataTable({
     }, 200);
     return () => window.clearTimeout(timer);
   }, [typed]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt asks for the same page again.
   useEffect(() => {
     // The latest request wins: an answer to an earlier page or search is dropped.
     let current = true;
@@ -67,7 +71,9 @@ export function DataTable({
         }
         const parsed =
           body.status === 200 ? parsePopulationPage(body.result) : null;
-        setPage(parsed);
+        if (parsed !== null) {
+          setPage(parsed);
+        }
         setFailed(parsed === null);
       })
       .catch(() => {
@@ -78,12 +84,33 @@ export function DataTable({
     return () => {
       current = false;
     };
-  }, [ids.organizationId, ids.projectId, fileId, offset, search, limit]);
+  }, [
+    ids.organizationId,
+    ids.projectId,
+    fileId,
+    offset,
+    search,
+    limit,
+    attempt,
+  ]);
 
-  if (failed) {
+  const retry = (
+    <button
+      type="button"
+      className="btn-ghost btn-sm"
+      onClick={() => {
+        setFailed(false);
+        setAttempt((count) => count + 1);
+      }}
+    >
+      Try again
+    </button>
+  );
+  if (failed && page === null) {
     return (
       <p className="ed-quiet">
-        The file could not be read as a table. Open the preview instead.
+        The file could not be read as a table. Try again, or open the preview
+        instead. {retry}
       </p>
     );
   }
@@ -122,6 +149,12 @@ export function DataTable({
           </small>
         </div>
       )}
+      {failed ? (
+        <p className="ed-quiet" role="status">
+          Those rows could not be loaded. The rows below are from before.{" "}
+          {retry}
+        </p>
+      ) : null}
       <div className="ed-table-wrap">
         <table className="ed-table">
           <thead>

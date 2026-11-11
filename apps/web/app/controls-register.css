@@ -572,23 +572,6 @@
   background: var(--cr-green);
 }
 
-.cr-flag,
-.cr-finding {
-  position: relative;
-  z-index: 1;
-}
-
-.cr-flag {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  color: var(--cr-amber);
-  font-size: 11.5px;
-  font-weight: 600;
-  white-space: nowrap;
-  cursor: help;
-}
-
 .cr-next {
   min-width: 0;
   font-size: 13px;

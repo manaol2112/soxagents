@@ -387,7 +387,6 @@
   }
 }
 
-
 .pl-crumbs {
   display: flex;
   flex-wrap: wrap;
@@ -526,7 +525,6 @@
   justify-content: flex-end;
 }
 
-
 .pl-review-compose {
   display: grid;
   gap: 0.6rem;
@@ -539,6 +537,31 @@
 .pl-decide {
   display: grid;
   gap: 0.4rem;
+}
+
+/* The D&I evidence's own release, on the D&I Evidence step (B1). */
+.pl-design-release {
+  display: grid;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.pl-design-release h3 {
+  margin: 0;
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+.pl-design-release > .pl-sub {
+  margin: 0;
+}
+
+.pl-design-done {
+  margin-bottom: 1rem;
 }
 
 .pl-decide label,
@@ -564,22 +587,6 @@
   border-radius: var(--radius);
   font: inherit;
   font-size: var(--fs-base);
-}
-
-/* Text fields are full width. A checkbox must stay a checkbox. */
-.pl input[type="checkbox"],
-.pl input[type="radio"] {
-  width: 15px;
-  height: 15px;
-  min-height: 0;
-  margin: 0;
-  padding: 0;
-  flex: 0 0 auto;
-  accent-color: var(--accent);
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
 }
 
 .pl-decide-buttons,
@@ -705,7 +712,6 @@
   text-align: center;
 }
 
-
 .pl-trace {
   display: flex;
   flex-wrap: wrap;
@@ -722,14 +728,6 @@
 .pl-panel {
   padding: 1.25rem 1.35rem 1.5rem;
   background: transparent;
-}
-
-
-.pl-summary {
-  margin: 0 0 1rem;
-  color: var(--text);
-  font-size: var(--fs-md);
-  line-height: 1.55;
 }
 
 .pl-lead-facts > div:not(.pl-lead-pair),
@@ -977,36 +975,6 @@
   }
 }
 
-.pl-facts {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--fs-base);
-}
-
-.pl-facts th,
-.pl-facts td {
-  padding: 0.5rem 0.6rem;
-  border-bottom: 1px solid var(--border-subtle);
-  text-align: left;
-  vertical-align: top;
-}
-
-.pl-facts thead th {
-  color: var(--text-tertiary);
-  font-size: var(--fs-xs);
-  font-weight: 600;
-}
-
-.pl-facts tbody th {
-  width: 13rem;
-  color: var(--text-secondary);
-  font-weight: 500;
-}
-
-.pl-facts tr.is-missing td:first-of-type {
-  color: var(--text-secondary);
-}
-
 .pl-question {
   display: block;
   margin-top: 0.2rem;
@@ -1080,19 +1048,6 @@ button.pl-answer-link:focus-visible {
   box-shadow: none;
 }
 
-.pl-source span {
-  display: block;
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
-  font-weight: 600;
-}
-
-.pl-source q {
-  display: block;
-  color: var(--text-tertiary);
-  font-size: var(--fs-sm);
-}
-
 .pl-understanding h3,
 .pl-phase h3 {
   margin: 1.25rem 0 0.5rem;
@@ -1108,28 +1063,6 @@ button.pl-answer-link:focus-visible {
 .pl-phase h3 .pl-sub {
   display: inline;
   font-weight: 400;
-}
-
-.pl-phases {
-  display: grid;
-  gap: 0.5rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.pl-phases li {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem 0.5rem;
-  align-items: center;
-}
-
-.pl-phases p {
-  flex-basis: 100%;
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
 }
 
 .pl-more {
@@ -1260,7 +1193,6 @@ button.pl-answer-link:focus-visible {
 .pl-item > .pl-flags {
   padding: 0 0.85rem 0.6rem 3.6rem;
 }
-
 
 .pl-code {
   min-width: 2.25rem;
@@ -1589,30 +1521,11 @@ a.pl-flag-action:focus-visible {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  /* Each fact becomes a small stack: its name, what it says, and its basis. */
-  .pl-facts thead {
-    display: none;
-  }
+  
 
-  .pl-facts,
-  .pl-facts tbody,
-  .pl-facts tr,
-  .pl-facts th,
-  .pl-facts td {
-    display: block;
-    width: auto;
-  }
+  
 
-  .pl-facts tr {
-    padding: 0.5rem 0;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-
-  .pl-facts tbody th,
-  .pl-facts td {
-    padding: 0.1rem 0;
-    border: 0;
-  }
+  
 
   .pl-shell-bar,
   .pl-shell-head,
@@ -1622,13 +1535,11 @@ a.pl-flag-action:focus-visible {
     padding-left: 0.875rem;
   }
 
-
   .pl-shell-head .pl-actions-buttons {
     grid-column: 1;
     grid-row: 2;
     justify-content: flex-start;
   }
-
 
   .pl-tabs,
   .pl-trace {
@@ -1676,6 +1587,31 @@ a.pl-flag-action:focus-visible {
   color: var(--text);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
+}
+
+.pl-release-phase .pl-noun {
+  display: none;
+}
+
+/* Three phases on a phone: the switch takes the row and drops the verb (B1). */
+@media (max-width: 640px) {
+  .pl-release-phase .pl-noun {
+    display: inline;
+  }
+
+  .pl-release-phase {
+    display: flex;
+    width: 100%;
+  }
+
+  .pl-release-phase button {
+    flex: 1 1 0;
+    padding: 0 0.4rem;
+  }
+
+  .pl-release-phase .pl-verb {
+    display: none;
+  }
 }
 
 .pl-recommend {
@@ -1819,17 +1755,38 @@ a.pl-flag-action:focus-visible {
   text-decoration: underline;
 }
 
+/* Six figures: a column per phase (D&I, interim, roll-forward), ready above released (B1). */
+.pl-phase-figures {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
 
+.pl-phase-figures .kpi:nth-child(3n + 1) {
+  border-left: 0;
+}
+
+.pl-phase-figures .kpi:nth-child(n + 4) {
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Narrow: a row per phase, ready beside released (filled column by column). */
 @media (max-width: 960px) {
   .pl-phase-figures {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(3, auto);
+    grid-auto-flow: column;
   }
 
-  .pl-phase-figures .kpi:nth-child(3) {
+  .pl-phase-figures .kpi,
+  .pl-phase-figures .kpi:nth-child(n + 4) {
+    border-top: 0;
     border-left: 0;
   }
 
-  .pl-phase-figures .kpi:nth-child(n + 3) {
+  .pl-phase-figures .kpi:nth-child(n + 4) {
+    border-left: 1px solid var(--border-subtle);
+  }
+
+  .pl-phase-figures .kpi:not(:nth-child(3n + 1)) {
     border-top: 1px solid var(--border-subtle);
   }
 }
@@ -2060,42 +2017,6 @@ a.pl-flag-action:focus-visible {
   scrollbar-gutter: stable;
 }
 
-.pl-value {
-  display: grid;
-  gap: 0.3rem;
-}
-
-.pl-value-label {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.4rem;
-  color: var(--text);
-  font-size: var(--fs-sm);
-  font-weight: 600;
-}
-
-.pl-value-flag {
-  padding: 0 0.4rem;
-  color: var(--warning);
-  font-size: var(--fs-2xs, 11px);
-  font-weight: 600;
-  background: var(--warning-soft);
-  border: 1px solid var(--warning-border);
-  border-radius: 999px;
-}
-
-.pl-value input {
-  width: 100%;
-  background-color: var(--surface);
-}
-
-.pl-value small {
-  color: var(--text-tertiary);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
 .pl-values-everywhere {
   display: flex;
   align-items: flex-start;
@@ -2163,12 +2084,6 @@ a.pl-flag-action:focus-visible {
 
 .pl-values-system h3 svg {
   color: var(--text-tertiary);
-}
-
-.pl-value-controls {
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 400;
 }
 
 /* Answered so far, at the top of the questions. */

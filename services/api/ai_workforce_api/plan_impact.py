@@ -305,18 +305,6 @@ def detect_everywhere(connection: psycopg.Connection[Any]) -> int:
     return count
 
 
-def pending_counts(connection: psycopg.Connection[Any], project_id: UUID) -> dict[UUID, int]:
-    """Per control: the assessments waiting for a reviewer."""
-    return {
-        UUID(str(row[0])): int(row[1])
-        for row in connection.execute(
-            "SELECT engagement_control_id, count(*) FROM plan_impact_assessments "
-            "WHERE project_id = %s AND status = 'PENDING' GROUP BY 1",
-            (project_id,),
-        ).fetchall()
-    }
-
-
 def _body(
     connection: psycopg.Connection[Any],
     project_id: UUID,

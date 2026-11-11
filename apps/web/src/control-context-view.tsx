@@ -44,10 +44,8 @@ import {
   NATURE_LABELS,
   PROCEDURE_PHASES,
   type ProcessStep,
-  type Readiness,
   SECTION_HEADINGS,
   SOURCE_LABELS,
-  STATE_TONES,
   selectionPlan,
   type Testing,
   TYPE_LABELS,
@@ -136,100 +134,6 @@ function Problem({ text }: { text: string | null }) {
 }
 
 // Readiness
-
-const STATE_EXPLAINED: Record<Readiness["state"], string> = {
-  READY:
-    "The prerequisites are in place. The tester proposes samples once the population is read, and approving them starts testing.",
-  NEEDS_INFORMATION: "Testing waits until the points below are settled.",
-  PLAN_NOT_APPROVED:
-    "Testing follows the approved test plan. It starts once a reviewer approves the plan's current revision.",
-  PROCESS_UNDERSTANDING_INCOMPLETE:
-    "This business process control is tested against its process. Confirm the process understanding to continue.",
-  EVIDENCE_PENDING:
-    "The control is defined and understood. Testing starts when its evidence arrives.",
-  CONFLICT_REQUIRES_REVIEW:
-    "Sources disagree. A person settles each conflict before testing.",
-  IMPACT_PENDING:
-    "The test plan changed after results were signed off, or the revision they were tested under is not recorded. A reviewer decides whether the results stand or the testing is re-performed; nothing relies on them until then.",
-  READY_FOR_REVIEW:
-    "Testing is signed off and waits for the independent review.",
-  CONCLUDED: "The control is concluded.",
-};
-
-const CHECK_WORD: Record<Readiness["checks"][number]["status"], string> = {
-  OK: "Done",
-  BLOCKED: "Blocked",
-  WARN: "Look at",
-  PENDING: "Waiting",
-  NOT_APPLICABLE: "Not needed",
-};
-
-/** Whether the control can be tested, in five separate checks, each saying what is in
- * the way, why it matters, and what resolves it. */
-export function ReadinessPanel({ readiness }: { readiness: Readiness | null }) {
-  if (readiness === null) {
-    return null;
-  }
-  return (
-    <section className="cc-readiness" aria-label="Readiness">
-      <header className="cc-readiness-head">
-        <span className={`cx-status ${STATE_TONES[readiness.state]}`}>
-          {readiness.label}
-        </span>
-        <p>{STATE_EXPLAINED[readiness.state]}</p>
-      </header>
-      <ol className="cc-checks">
-        {readiness.checks.map((check) => (
-          <li
-            key={check.key}
-            className={`cc-check is-${check.status.toLowerCase()}`}
-          >
-            <span className="cc-check-icon" aria-hidden="true">
-              <UiIcon
-                name={
-                  check.status === "OK"
-                    ? "check"
-                    : check.status === "BLOCKED"
-                      ? "risk"
-                      : check.status === "NOT_APPLICABLE"
-                        ? "info"
-                        : "clock"
-                }
-                size={13}
-              />
-            </span>
-            <div className="cc-check-body">
-              <div className="cc-check-line">
-                <strong>{check.title}</strong>
-                <span>{check.summary}</span>
-              </div>
-              {check.blockers.length > 0 ? (
-                <ul className="cc-blockers">
-                  {check.blockers.map((blocker) => (
-                    <li key={blocker.detail}>
-                      <p>{blocker.detail}</p>
-                      {blocker.why !== "" ? (
-                        <p className="cc-why">
-                          <span>Why it matters</span> {blocker.why}
-                        </p>
-                      ) : null}
-                      {blocker.resolve !== "" ? (
-                        <p className="cc-why">
-                          <span>To resolve</span> {blocker.resolve}
-                        </p>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </div>
-            <span className="cc-check-word">{CHECK_WORD[check.status]}</span>
-          </li>
-        ))}
-      </ol>
-    </section>
-  );
-}
 
 // Attributes
 
@@ -2141,69 +2045,6 @@ export function DocumentsPanel({
             </button>
           ) : null}
         </div>
-      ) : null}
-      {action.note !== "" && action.problem === null ? (
-        <p className="cc-note">{action.note}</p>
-      ) : null}
-      <Problem text={action.problem} />
-      {open ? (
-        <DocumentDialog
-          ids={ids}
-          controls={controls}
-          onClose={() => setOpen(false)}
-          onAdded={async () => {
-            setOpen(false);
-            await action.run("review", { intent: "review" });
-          }}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-/** The control's documents' own actions, for the assistant's documents card in the Plan
- * step (product owner, 26 October 2026): add documentation, and have the agent review the
- * control against the documents not yet reviewed. */
-export function DocumentActions({
-  ids,
-  context,
-  canAct,
-  controls,
-}: {
-  ids: Ids;
-  context: ControlContext;
-  canAct: boolean;
-  controls: ControlChoice[];
-}) {
-  const action = useAction(ids);
-  const [open, setOpen] = useState(false);
-  const unreviewed = context.documents.filter(
-    (document) => !document.reviewed,
-  ).length;
-  if (!canAct) {
-    return null;
-  }
-  return (
-    <div className="cw-docs-actions" aria-busy={action.pending}>
-      <button
-        type="button"
-        className="btn btn-secondary btn-sm"
-        onClick={() => setOpen(true)}
-      >
-        <UiIcon name="plus" size={13} /> Add
-      </button>
-      {unreviewed > 0 ? (
-        <button
-          type="button"
-          className="btn-sm"
-          disabled={action.pending}
-          onClick={() => action.run("review", { intent: "review" })}
-        >
-          <UiIcon name="sparkles" size={13} />{" "}
-          {action.busy === "review"
-            ? "Reviewing…"
-            : `Review ${unreviewed} new document${unreviewed === 1 ? "" : "s"}`}
-        </button>
       ) : null}
       {action.note !== "" && action.problem === null ? (
         <p className="cc-note">{action.note}</p>

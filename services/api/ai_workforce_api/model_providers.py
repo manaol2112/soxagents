@@ -225,6 +225,11 @@ class AnthropicModelProvider:
             "input_schema": request.output_schema,
         }
         max_tokens = request.max_tokens or (8192 if request.images else 4096)
+        # Every reply is billed, not only the last: a paused search turn takes up to three
+        # replies, and an attempt with search that fails is followed by one without it.
+        # Before, only the last reply's tokens were recorded and budgeted (bug hunt,
+        # 9 November 2026).
+        used = [0, 0]
 
         def ask(searching: bool) -> tuple[Any, list[Any]]:
             """Ask, and when the model pauses a long search turn, let it continue."""
@@ -247,6 +252,8 @@ class AnthropicModelProvider:
                     # the tool, and the caller rejects an answer that does not use it.
                     tool_choice={"type": "auto"},
                 )
+                used[0] += reply.usage.input_tokens
+                used[1] += reply.usage.output_tokens
                 blocks.extend(reply.content)
                 if reply.stop_reason != "pause_turn":
                     return reply, blocks
@@ -290,7 +297,7 @@ class AnthropicModelProvider:
             logger.info("model answer cut off at max_tokens; not used")
             output = None
         return ModelRaw(
-            output, (), message.usage.input_tokens, message.usage.output_tokens,
+            output, (), used[0], used[1],
             sources=tuple(dict.fromkeys(sources)), searched=searched,
         )  # fmt: skip
 

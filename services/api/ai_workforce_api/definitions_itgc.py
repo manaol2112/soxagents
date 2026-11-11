@@ -67,22 +67,6 @@ def _roll_sampled(what: str, attributes: tuple[str, ...]) -> ProcedureDef:
     )
 
 
-def _roll_config(setting: str, attributes: tuple[str, ...]) -> ProcedureDef:
-    return _p(
-        "rf-1",
-        "ROLLFORWARD",
-        "Conclude whether the setting stayed in place from the interim date to period end "
-        "(AS 2201.55-.56, .B29).",
-        f"Inspect the change history of {setting} for the remaining period. If it did not "
-        "change, inspect the setting as at period end and agree it to the interim result. If "
-        "it changed, test the change's approval and test the setting again as changed.",
-        (f"Change history of {setting} for the remaining period", "The setting at period end"),
-        attributes,
-        "A setting at period end shows nothing about the period before it without the change "
-        "history.",
-    )
-
-
 def _design(control: str, what: str, evidence: tuple[str, ...]) -> ProcedureDef:
     return _p(
         "d-1",

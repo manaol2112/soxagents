@@ -400,64 +400,11 @@
   text-align: right;
 }
 
-.eg-row {
-  color: var(--eg-text);
-  font-size: 13px;
-  text-decoration: none;
-  border-bottom: 1px solid var(--eg-line-soft);
-}
-
-.eg-list li:last-child .eg-row {
-  border-bottom: 0;
-}
-
-.eg-row:hover {
-  background: var(--surface-hover);
-}
-
-.eg-row[aria-current="true"] {
-  background: var(--eg-accent-soft);
-  box-shadow: inset 3px 0 0 var(--eg-accent);
-}
-
-.eg-row:focus-visible {
-  outline: none;
-  box-shadow: inset 0 0 0 2px var(--eg-accent);
-}
-
-.eg-row-client,
-.eg-row-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.eg-row-client {
-  color: var(--eg-ink);
-  font-weight: 620;
-}
-
-.eg-row-name {
-  color: var(--eg-text);
-}
-
 .eg-row-cell {
   overflow: hidden;
   color: var(--eg-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.eg-row .eg-num {
-  color: var(--eg-ink);
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-.eg-row .eg-num.is-warn {
-  color: var(--eg-amber);
-  font-weight: 620;
 }
 
 @media (max-width: 760px) {
@@ -472,26 +419,11 @@
     display: none;
   }
 
-  .eg-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.35rem 0.75rem;
-  }
+  
 
-  /* The client and its status on top, the engagement under them. */
-  .eg-row .eg-row-client {
-    grid-row: 1;
-    grid-column: 1;
-  }
+  
 
-  .eg-row > :nth-child(3) {
-    grid-row: 1;
-    grid-column: 2;
-  }
-
-  .eg-row .eg-row-name {
-    grid-row: 2;
-    grid-column: 1 / -1;
-  }
+  
 
   .eg-row-cell {
     grid-column: 1 / -1;
@@ -506,9 +438,7 @@
     content: attr(data-label);
   }
 
-  .eg-row .eg-num {
-    text-align: right;
-  }
+  
 }
 
 /* Engagements or clients (milestone 8.18): two views of one page. */

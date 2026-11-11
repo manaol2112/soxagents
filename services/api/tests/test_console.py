@@ -862,3 +862,234 @@ def test_a_turn_is_metered_recorded_and_stopped_by_the_budget(migrated: Database
     assert refused is not None and refused[0] == "BUDGET_EXCEEDED" and "limit a call" in refused[1]
     note = _thread(client, team)["messages"][-1]["note"]
     assert note == "The engagement's model budget is exhausted, so the agent did not answer."
+
+
+# Bug hunt, 9 November 2026
+
+
+def _submitted(client: TestClient, team: dict[str, Any], database: Database) -> str:
+    """A drafted request submitted for approval through the console, and its approval."""
+    draft = _draft_requests(database, team["project"])[0]
+    asked = _ask(client, team, "Submit the first draft.")
+    script = _Script([_reply("", _call("submit_request", request_id=draft)), _reply("Proposed.")])
+    with connect(database.url) as connection:
+        _turn(connection, database, script, asked)
+    base = f"{_base(team['org'], team['project'])}/console"
+    done = client.post(f"{base}/messages/{asked}/confirm").json()["messages"][-1]["actions"]
+    assert done[0]["status"] == "DONE", done
+    return str(done[0]["result"]["approval_id"])
+
+
+def test_a_turn_taken_up_again_after_proposing_steps_does_not_propose_them_twice(
+    migrated: Database,
+) -> None:
+    """Before, an attempt that raised after proposing steps was answered again from
+    scratch: the agent did not see its first steps, proposed them a second time, and
+    "Confirm all" ran both copies (two new requests)."""
+    team, client, _request = _sent_engagement_request(migrated, "twice", "ITGC-AC-01")
+    message_id = _ask(client, team, "Ask Dana for the Q1 access review.")
+    proposal = _call(
+        "draft_request", control_ref="ITGC-AC-01",
+        description="Please send the signed Q1 user access review for SAP ERP.",
+    )  # fmt: skip
+    first = _Script([_reply("", proposal), RuntimeError("the worker broke")])
+    with connect(migrated.url) as connection:
+        with pytest.raises(RuntimeError):
+            _turn(connection, migrated, first, message_id)
+        console.release_turn(connection, message_id)
+        second = _Script([_reply("", proposal), _reply("Proposed again.")])
+        assert _turn(connection, migrated, second, message_id) == "DONE"
+    assert len(second.replies) == 2, "the model was not asked again"
+    agent = _thread(client, team)["messages"][-1]
+    assert agent["status"] == "DONE"
+    assert agent["content"].startswith("I stopped before finishing that.")
+    assert [(a["tool"], a["status"]) for a in agent["actions"]] == [("draft_request", "PROPOSED")]
+    base = f"{_base(team['org'], team['project'])}/console"
+    confirmed = client.post(f"{base}/messages/{message_id}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    step = confirmed.json()["messages"][-1]["actions"][0]
+    assert step["status"] == "DONE"
+    with connect(migrated.url) as connection:
+        keys = connection.execute(
+            "SELECT operation_key FROM pbc_requests WHERE project_id = %s "
+            "AND evidence_description LIKE 'Please send the signed Q1%%'",
+            (team["project"],),
+        ).fetchall()
+    # One request, keyed by the step itself, so running the step again creates nothing.
+    assert keys == [(f"console-{UUID(step['id']).hex}",)]
+
+
+def test_a_failed_temporal_attempt_gives_the_turn_up_and_the_last_failure_settles_it(
+    migrated: Database,
+) -> None:
+    """Before, the activity's retry came while the first attempt's claim still held: it
+    skipped the turn, the workflow ended, and the message stayed WORKING for good."""
+    import asyncio
+
+    from ai_workforce_api.durable import activities_for
+
+    team, client, _request = _sent_engagement_request(migrated, "temporal", "ITGC-AC-01")
+    message_id = _ask(client, team, "Where is ITGC-AC-01?")
+    script = _Script([RuntimeError("the worker broke"), _reply("Here.")])
+
+    def converse(claimed: UUID) -> str:
+        with connect(migrated.url) as connection:
+            return _turn(connection, migrated, script, claimed)
+
+    activities = {item.__name__: item for item in activities_for(migrated.url, converse=converse)}
+    with pytest.raises(RuntimeError):
+        asyncio.run(activities["answer_console_turn"](str(message_id)))
+    assert _thread(client, team)["messages"][-1]["status"] == "PENDING"
+    assert asyncio.run(activities["answer_console_turn"](str(message_id))) == "DONE"
+    assert _thread(client, team)["messages"][-1]["content"] == "Here."
+    # Every attempt failing: the workflow's last step marks the turn failed.
+    again = _ask(client, team, "And ITGC-AC-02?")
+    for _ in range(console.MAX_ATTEMPTS):
+        script.replies = [RuntimeError("the worker broke")]
+        with pytest.raises(RuntimeError):
+            asyncio.run(activities["answer_console_turn"](str(again)))
+    asyncio.run(activities["fail_console_turn"](str(again)))
+    assert _thread(client, team)["messages"][-1]["status"] == "FAILED"
+
+
+def test_a_turn_abandoned_on_its_last_attempt_is_failed_on_resume(migrated: Database) -> None:
+    team, client, _request = _sent_engagement_request(migrated, "abandoned", "ITGC-AC-01")
+    message_id = _ask(client, team, "Where is ITGC-AC-01?")
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE console_messages SET status = 'WORKING', attempts = %s, "
+            "lease_until = clock_timestamp() - interval '1 minute' WHERE id = %s",
+            (console.MAX_ATTEMPTS, message_id),
+        )
+        connection.commit()
+        assert message_id not in console.open_turns(connection)
+    agent = _thread(client, team)["messages"][-1]
+    assert agent["status"] == "FAILED"
+    # The thread takes a new question again.
+    _ask(client, team, "And now?")
+
+
+def test_an_approval_step_shows_what_is_approved_and_checks_the_reason(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Before, the step read only "Approve: <the model's reason>", a blank reason passed,
+    and an approval that had expired was marked done."""
+    team, owner, _request = _sent_engagement_request(migrated, "approve", "ITGC-AC-01")
+    approval_id = _submitted(owner, team, migrated)
+    with connect(migrated.url) as connection:
+        approver_id = _add_user(
+            connection, team["org"], f"a-{uuid4().hex[:6]}@example.com", "ADMIN"
+        )
+        _add_project_member(connection, team["org"], team["project"], approver_id)
+        stored = connection.execute(
+            "SELECT parameters FROM approvals WHERE id = %s", (approval_id,)
+        ).fetchone()
+    assert stored is not None
+    parameters = stored[0]
+    approver = _client(migrated, approver_id)
+    asked = _ask(approver, team, "Approve the pending request.")
+    script = _Script([
+        _reply("", _call("decide_approval", approval_id=approval_id, decision="APPROVED",
+                         reason=" "),
+               _call("decide_approval", approval_id=approval_id, decision="APPROVED",
+                     reason="Checked the wording and the recipient.")),
+        _reply("Proposed."),
+    ])  # fmt: skip
+    with connect(migrated.url) as connection:
+        _turn(connection, migrated, script, asked)
+    results = script.seen[1][-1]["content"]
+    assert results[0]["is_error"] is True and "needs a reason" in results[0]["content"]
+    steps = _thread(approver, team)["messages"][-1]["actions"]
+    assert len(steps) == 1
+    summary = steps[0]["summary"]
+    assert summary.startswith("Approve “Send routine PBC request” to ")
+    assert parameters["recipient"] in summary and parameters["subject"][:40] in summary
+    assert summary.endswith("Reason: Checked the wording and the recipient.")
+    # The approval runs out before the person confirms (approvals are immutable, so its
+    # clock is what moves on): the step fails and says so.
+    from ai_workforce_api import approvals
+
+    monkeypatch.setattr(approvals, "_is_expired", lambda _cursor, _approval_id: True)
+    base = f"{_base(team['org'], team['project'])}/console"
+    ran = approver.post(f"{base}/actions/{steps[0]['id']}/confirm").json()
+    step = ran["messages"][-1]["actions"][0]
+    assert step["status"] == "FAILED"
+    assert "had expired" in step["error"]
+    with connect(migrated.url) as connection:
+        decided = connection.execute(
+            "SELECT decision FROM approvals WHERE id = %s", (approval_id,)
+        ).fetchone()
+    assert decided == ("EXPIRED",)
+
+
+def test_a_reviewer_cannot_have_the_console_draft_workpapers(migrated: Database) -> None:
+    """Before, draft_workpapers queued preparer drafting (and its model spend) for any role
+    that could open the console; the page's route needs the right to update tasks."""
+    from ai_workforce_api.authorization import Principal, PrincipalKind
+    from ai_workforce_api.console_tools import ToolContext, ToolFailed, execute
+
+    team, _owner, _request = _sent_engagement_request(migrated, "wpreviewer", "ITGC-AC-01")
+    with connect(migrated.url) as connection:
+        reviewer_id = _add_user(
+            connection, team["org"], f"r-{uuid4().hex[:6]}@example.com", "REVIEWER"
+        )
+        _add_project_member(connection, team["org"], team["project"], reviewer_id)
+        connection.commit()
+        context = ToolContext(
+            connection=connection,
+            settings=Settings(database_url=migrated.url),
+            principal=Principal(kind=PrincipalKind.USER, id=reviewer_id),
+            organization_id=team["org"],
+            project_id=team["project"],
+        )
+        papers = "SELECT id, version, updated_at FROM workpapers WHERE project_id = %s ORDER BY id"
+        before = connection.execute(papers, (team["project"],)).fetchall()
+        tool, parsed = parse("draft_workpapers", {"control_ref": "ITGC-AC-01"})
+        with pytest.raises(ToolFailed, match="Your role does not allow this"):
+            execute(tool, parsed, context)
+        # Nothing was opened or queued for drafting.
+        assert connection.execute(papers, (team["project"],)).fetchall() == before
+
+
+def test_a_step_left_claimed_by_a_stopped_process_can_be_closed(migrated: Database) -> None:
+    """Before, a confirmed step whose process stopped while it ran stayed claimed for good:
+    it could not be confirmed or cancelled, and "Confirm all" stopped at it."""
+    team, client, _request = _sent_engagement_request(migrated, "stuck", "ITGC-AC-01")
+    drafts = _draft_requests(migrated, team["project"])
+    message_id = _ask(client, team, "Submit two drafts.")
+    script = _Script([
+        _reply("", _call("submit_request", request_id=drafts[0]),
+               _call("submit_request", request_id=drafts[1])),
+        _reply("Proposed."),
+    ])  # fmt: skip
+    with connect(migrated.url) as connection:
+        _turn(connection, migrated, script, message_id)
+    steps = _thread(client, team)["messages"][-1]["actions"]
+    base = f"{_base(team['org'], team['project'])}/console"
+    with connect(migrated.url) as connection:
+        # The first step was claimed a minute ago and its process stopped.
+        connection.execute(
+            "UPDATE console_actions SET decided_by = %s, "
+            "decided_at = clock_timestamp() - interval '1 minute' WHERE id = %s",
+            (team["owner_id"], steps[0]["id"]),
+        )
+        connection.commit()
+    # Still possibly running: it can be neither closed nor run again.
+    assert client.post(f"{base}/actions/{steps[0]['id']}/cancel").status_code == 409
+    # The rest of the answer's steps are not held up by it.
+    rest = client.post(f"{base}/messages/{message_id}/confirm")
+    assert rest.status_code == 200, rest.text
+    assert [a["status"] for a in rest.json()["messages"][-1]["actions"]] == ["PROPOSED", "DONE"]
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE console_actions SET decided_at = clock_timestamp() - interval '20 minutes' "
+            "WHERE id = %s",
+            (steps[0]["id"],),
+        )
+        connection.commit()
+    closed = client.post(f"{base}/actions/{steps[0]['id']}/cancel")
+    assert closed.status_code == 200, closed.text
+    step = closed.json()["messages"][-1]["actions"][0]
+    assert step["status"] == "FAILED"
+    assert step["error"] == console.UNKNOWN_OUTCOME
+    assert "console.step_outcome_unknown" in _audit(migrated)

@@ -32,6 +32,7 @@ from ai_workforce_api.evidence_extraction import Table, read_table
 from ai_workforce_api.evidence_links import file_request
 from ai_workforce_api.evidence_withdrawn import is_withdrawn
 from ai_workforce_api.inbound import clean_line
+from ai_workforce_api.methodology import applied_on, rules_for
 from ai_workforce_api.sampling import (
     MAX_SAMPLE,
     build_frame,
@@ -43,7 +44,7 @@ from ai_workforce_api.sampling import (
 )
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import ObjectStore, StoreError, digest_of, open_store
-from ai_workforce_api.testing_engine import create_sample_sheet
+from ai_workforce_api.testing_engine import TooManyAttributes, create_sample_sheet
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,9 @@ def propose(
     window: tuple[date, date] | None = None,
 ) -> UUID | None:
     """Propose or redraw a test plan. An approved plan is never replaced."""
-    frame = build_frame(table, period_end, frequency, window=window)
+    # The size is judged against the frame too: a frame smaller than the sample is a check
+    # for a person to look at (bug hunt, 9 November 2026).
+    frame = build_frame(table, period_end, frequency, window=window, size=size)
     chosen_seed = new_seed() if seed is None else seed
     picked = select(frame.rows, size, chosen_seed)
     text = explanation(
@@ -107,9 +110,9 @@ def propose(
             organization_id, project_id, engagement_control_id, sample_size,
             population_file_id, population_sha256, population_rows, frame_rows, key_column,
             date_column, columns, checks, seed, explanation, proposed_by, test_round_id,
-            covered_to
+            covered_to, methodology_version_id
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT {conflict} DO UPDATE
         SET sample_size = EXCLUDED.sample_size,
             population_file_id = EXCLUDED.population_file_id,
@@ -119,6 +122,7 @@ def propose(
             columns = EXCLUDED.columns, checks = EXCLUDED.checks, seed = EXCLUDED.seed,
             explanation = EXCLUDED.explanation, proposed_by = EXCLUDED.proposed_by,
             covered_to = EXCLUDED.covered_to,
+            methodology_version_id = EXCLUDED.methodology_version_id,
             version = control_tests.version + 1, updated_at = clock_timestamp()
         WHERE control_tests.status = 'PROPOSED'
         RETURNING id
@@ -141,6 +145,7 @@ def propose(
             proposer,
             test_round_id,
             frame.covered_to,
+            applied_on(cursor, project_id).id,
         ),
     ).fetchone()
     if row is None:
@@ -190,7 +195,7 @@ def control_for_population(
 
     An automated control is tested once from its configuration, so it is not sampled.
     """
-    from ai_workforce_api.controls import BUSINESS_TESTER, DOMAIN_AGENTS, sample_size
+    from ai_workforce_api.controls import BUSINESS_TESTER, DOMAIN_AGENTS
 
     row = connection.execute(
         """
@@ -206,7 +211,7 @@ def control_for_population(
         row[0],
         str(row[1]),
         str(row[2]),
-        sample_size(str(row[1]), str(row[2])),
+        rules_for(connection, project_id).sample_size(str(row[1]), str(row[2])),
         DOMAIN_AGENTS.get(str(row[3]), BUSINESS_TESTER),
     )
 
@@ -582,10 +587,38 @@ def _replace(
         raise TestState("that row is not in the population")
     if any(sample.row_number == body.row_number for sample in current.samples):
         raise TestState("that row is already selected")
-    values = table.rows[body.row_number - 1]
     key_index = (
         table.columns.index(current.key_column) if current.key_column in table.columns else None
     )
+    # A replacement comes from the sampling frame, as the selection did: a row dated outside
+    # the period or the round's window, or without a readable date, is not in it (bug hunt,
+    # 9 November 2026). The frame is rebuilt from the plan's own date column; a plan read
+    # without one sampled every row.
+    if current.date_column and current.date_column in table.columns:
+        control = control_for_population(connection, project_id, current.engagement_control_id)
+        if control is None:
+            raise TestState("this control is not sampled")
+        window: tuple[date, date] | None = None
+        if current.test_round_id is not None:
+            from ai_workforce_api.test_rounds import round_of
+
+            found = round_of(connection, current.test_round_id)
+            if found is not None:
+                window = (found.window_start, found.window_end)
+        frame = build_frame(
+            table,
+            control[0],
+            control[1],
+            key=key_index,
+            when=table.columns.index(current.date_column),
+            window=window,
+        )
+        if body.row_number - 1 not in frame.rows:
+            raise TestState(
+                "that row is outside the sampling frame: its date is outside the period "
+                "sampled or cannot be read"
+            )
+    values = table.rows[body.row_number - 1]
     with transaction(connection) as cursor:
         locked = cursor.execute(
             "SELECT version FROM control_tests WHERE id = %s AND status = 'PROPOSED' FOR UPDATE",
@@ -653,6 +686,11 @@ def _approve(
         require_testable(connection, project_id, current.engagement_control_id)
     except NotReady as error:
         raise TestState(error.detail) from None
+    from ai_workforce_api.design_conclusions import oe_gate_reason
+
+    gated = oe_gate_reason(connection, current.engagement_control_id)
+    if gated is not None:
+        raise TestState(gated)
     if current.test_round_id is not None:
         # A round has prerequisites of its own: remediation before retesting, the
         # round's evidence received, the fixed control operated long enough (W4).
@@ -707,8 +745,13 @@ def _approve(
             test_id,
             {"samples": len(current.samples), "sample_request_drafted": request_id is not None},
         )
-        # The tester opens the test sheet: one item per approved sample.
-        create_sample_sheet(cursor, organization_id, project_id, test_id, principal.id)
+        # The tester opens the test sheet: one item per approved sample. More approved
+        # attributes than a sheet holds refuses the approval rather than testing part of
+        # them (bug hunt, 9 November 2026).
+        try:
+            create_sample_sheet(cursor, organization_id, project_id, test_id, principal.id)
+        except TooManyAttributes as error:
+            raise TestState(error.detail) from None
         if current.test_round_id is not None:
             from ai_workforce_api.test_rounds import mark_testing
 

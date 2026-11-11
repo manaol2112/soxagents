@@ -2,188 +2,22 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
-import type { Design } from "../apps/web/src/control-context-model.ts";
 import {
   activitiesOn,
   askAbout,
   contextRows,
-  controlDocuments,
-  exampleAnswers,
-  governingDocuments,
-  informationSources,
   lowestConfidence,
-  nextBestActions,
-  openSection,
-  parseChallenges,
-  relatedControls,
-  SECTION_MENU,
-  stepPosition,
 } from "../apps/web/src/control-rail-model.ts";
-import type {
-  AttentionItem,
-  NextAction,
-} from "../apps/web/src/control-workspace-model.ts";
 
 // The control workspace's side panels (decided by the product owner, 25 October 2026):
 // the section menu, the AI assistant's suggestions from the records, and the context.
 
-function design(extra: Partial<Design> = {}): Design {
-  return {
-    text: "",
-    risk: "",
-    itRisk: "",
-    principle: "",
-    assertions: [],
-    controlType: "",
-    nature: "",
-    frequency: "",
-    operator: "",
-    reviewer: "",
-    owner: "",
-    authority: "",
-    judgment: "",
-    judgmentNote: "",
-    precision: "",
-    investigation: "",
-    information: [
-      { name: "User access listing", kind: "REPORT", elements: [], ipe: "" },
-    ],
-    itgcs: ["ITGC-AC-01", "ITGC-CM-01", "ITGC-AC-01"],
-    evidence: "",
-    appliesWhen: "",
-    slots: [
-      {
-        key: "approver",
-        label: "approver",
-        kind: "ROLE",
-        why: "",
-        example: "",
-        blocks: true,
-        value: "",
-        automatic: false,
-        filledBy: null,
-        filledAt: "",
-        version: 1,
-        options: ["IT manager", "System owner"],
-        question: "Who approves access?",
-        hint: "",
-      },
-      {
-        key: "tool",
-        label: "tool",
-        kind: "TEXT",
-        why: "",
-        example: "",
-        blocks: false,
-        value: "",
-        automatic: false,
-        filledBy: null,
-        filledAt: "",
-        version: 1,
-        options: [],
-        question: "Where are requests raised?",
-        hint: "",
-      },
-    ],
-    missing: [],
-    ...extra,
-  };
-}
-
-describe("the control's section menu", () => {
-  it("lists the overview, the five steps, and the history", () => {
-    assert.deepEqual(
-      SECTION_MENU.map((item) => item.label),
-      [
-        "Overview",
-        "Test plan",
-        "Evidence requests",
-        "Test results",
-        "Conclusions",
-        "Review & sign-off",
-        "History",
-      ],
-    );
-  });
-
-  it("opens the step an address names, the history on request, else the overview", () => {
-    assert.equal(openSection(null, false), "OVERVIEW");
-    assert.equal(openSection("plan", false), "PLAN");
-    assert.equal(openSection("review", false), "REVIEW");
-    assert.equal(openSection("plan", true), "HISTORY");
-    assert.equal(openSection("history", false), "OVERVIEW");
-    assert.equal(openSection("nonsense", false), "OVERVIEW");
-  });
-
-  it("says which of the five steps the control is on, for the bar that stays in view", () => {
-    assert.equal(stepPosition("PLAN"), "Step 1 of 5 · Test plan");
-    assert.equal(stepPosition("review"), "Step 5 of 5 · Review & sign-off");
-    assert.equal(stepPosition("HISTORY"), "");
-    assert.equal(stepPosition(""), "");
-  });
-});
-
 describe("the AI assistant's suggestions from the records", () => {
-  it("names the information the control uses, then the RCM's evidence, once each", () => {
-    assert.deepEqual(
-      informationSources(design(), [
-        "Access request tickets",
-        "Access request tickets",
-      ]),
-      ["User access listing (report)", "Access request tickets"],
-    );
-    assert.deepEqual(informationSources(null, []), []);
-  });
-
-  it("gives the usual answers only for questions that have them", () => {
-    assert.deepEqual(exampleAnswers(design()), [
-      {
-        question: "Who approves access?",
-        answers: ["IT manager", "System owner"],
-      },
-    ]);
-  });
-
-  it("links the controls it relies on, the same system's first", () => {
-    const related = relatedControls(
-      design(),
-      [
-        { id: "other", controlRef: "ITGC-AC-01", applicationName: "Oracle" },
-        { id: "same", controlRef: "itgc-ac-01", applicationName: "SAP" },
-      ],
-      "SAP",
-    );
-    assert.deepEqual(related, [
-      { ref: "ITGC-AC-01", id: "same" },
-      { ref: "ITGC-CM-01", id: null },
-    ]);
-  });
-
   it("asks the agent about this control in plain words", () => {
     assert.equal(
       askAbout("ITGC-AC-01", "User access provisioning", "  Who approves? "),
       "About ITGC-AC-01 User access provisioning: Who approves?",
     );
-  });
-
-  it("reads the planning agent's challenges and says whether it drafted them", () => {
-    assert.deepEqual(
-      parseChallenges({
-        challenges: [{ title: "Listings", detail: "Incomplete." }, { x: 1 }],
-        source: "MODEL",
-        note: "Guidance only.",
-      }),
-      {
-        challenges: [{ title: "Listings", detail: "Incomplete." }],
-        drafted: true,
-        note: "Guidance only.",
-      },
-    );
-    assert.equal(
-      parseChallenges({ challenges: [], source: "NONE", note: "" })?.drafted,
-      false,
-    );
-    assert.equal(parseChallenges(null), null);
   });
 });
 
@@ -225,34 +59,6 @@ describe("the Plan step's figures and side cards", () => {
     assert.equal(lowestConfidence([]), null);
   });
 
-  it("lists the policies, procedures, narratives and diagrams, not other documents", () => {
-    assert.deepEqual(
-      governingDocuments([
-        {
-          id: "a",
-          kind: "POLICY",
-          title: "Information Security Policy",
-          fileName: "isp.pdf",
-        },
-        {
-          id: "b",
-          kind: "WALKTHROUGH",
-          title: "Walkthrough",
-          fileName: "w.docx",
-        },
-        { id: "c", kind: "FLOWCHART", title: "", fileName: "flow.png" },
-      ]),
-      [
-        {
-          id: "a",
-          title: "Information Security Policy",
-          detail: "Policy · isp.pdf",
-        },
-        { id: "c", title: "flow.png", detail: "Flow diagram · flow.png" },
-      ],
-    );
-  });
-
   it("adds the frequency and whether it is key when the page states them", () => {
     const rows = contextRows({
       applicationName: "SAP S/4HANA",
@@ -289,54 +95,16 @@ describe("the History figures", () => {
 // these here?"): the process understanding card and the Activity panel are gone, the
 // documents and their review move to the assistant's documents card.
 describe("one place for each part of the Plan step", () => {
-  it("lists every document, governing then supporting, with what waits for review", () => {
-    const card = controlDocuments([
-      {
-        id: "a",
-        kind: "POLICY",
-        title: "Access Standard",
-        fileName: "iss.pdf",
-        reviewed: false,
-      },
-      {
-        id: "b",
-        kind: "WALKTHROUGH",
-        title: "",
-        fileName: "notes.docx",
-        reviewed: true,
-      },
-      {
-        id: "c",
-        kind: "FLOWCHART",
-        title: "Flow",
-        fileName: "flow.png",
-        reviewed: true,
-      },
-    ]);
-    assert.deepEqual(
-      card.governing.map((item) => [item.id, item.reviewed]),
-      [
-        ["a", false],
-        ["c", true],
-      ],
-    );
-    assert.deepEqual(card.supporting, [
-      {
-        id: "b",
-        title: "notes.docx",
-        detail: "Walkthrough notes · notes.docx",
-        reviewed: true,
-      },
-    ]);
-    assert.equal(card.unreviewed, 1);
-  });
-
   it("shows the audit trail only from History, and the classification under the facts", () => {
     const view = readFileSync("apps/web/src/controls-view.tsx", "utf8");
     const plan = readFileSync("apps/web/src/planning-view.tsx", "utf8");
     assert.ok(view.includes("{showActivity ? ("));
     assert.ok(!view.includes("open={showActivity}"));
-    assert.ok(view.includes("<DocumentActions"));
+    // Rewritten 9 November 2026 (cleanup after the step panels). Before: the documents
+    // card's actions (<DocumentActions>) sat in the assistant rail beside the plan. Now the
+    // rail is retired and the governing documents are asked in Control Understanding's
+    // documents step, so the view no longer carries the card.
+    assert.ok(!view.includes("<GoverningDocumentsCard"));
     assert.ok(view.includes("classification: ("));
     // The plan no longer repeats the process understanding and the documents.
     assert.ok(!plan.includes("workspace.more"));
@@ -351,108 +119,27 @@ describe("one place for each part of the Plan step", () => {
   // banner from the Overview ("I don't need this"): the header's Needs you opens the
   // action, and the agent's note and what is outstanding fold into AI insights
   // (AgentNotes).
-  it("keeps the steps to progress and folds the agent's note into the Overview", () => {
+  // Rewritten 8 November 2026 for the product owner's workflow: "I only want the Node WF to
+  // be the main workspace and only the workspace for my controls". Before: the control page
+  // showed the steps (<ControlStepper ... summary={false}>) above the tabs, and the
+  // Overview folded the agent's note in (<AgentNotes>). Now: the 14-step workflow replaces
+  // both the steps and the tabs, each step showing where it stands and the next step
+  // marked; the stepper's own parts are unchanged and still checked below.
+  it("shows the workflow in place of the steps, with no banner", () => {
     const view = readFileSync("apps/web/src/controls-view.tsx", "utf8");
-    const stepper = readFileSync("apps/web/src/control-stepper.tsx", "utf8");
-    assert.ok(view.includes("summary={false}"));
+    // Rewritten 9 November 2026 (cleanup): the stepper (control-stepper.tsx) and its
+    // banner and agent notes are removed with it, so only the view is read. Before: the
+    // stepper's own parts were checked here too.
+    assert.ok(view.includes("<ControlWorkflow"));
+    assert.ok(!view.includes("<ControlStepper"));
     assert.ok(!view.includes("<NeedsBanner"));
-    assert.ok(view.includes("<AgentNotes"));
     assert.ok(view.includes('className="cw-needs-badge"'));
-    assert.ok(stepper.includes("export function AgentNotes("));
     assert.ok(view.includes("receiptText(item)"));
     assert.ok(
       !view.includes("Nothing goes to the owner until a person approves it."),
     );
-    // The banner keeps the agent's note and the outstanding items behind its "more"
-    // control (30 October 2026); the frame can still show it, the trace and sign-offs.
-    assert.ok(stepper.includes("export function NeedsBanner("));
-    assert.ok(stepper.includes("{simple || !summary ? null : ("));
-    assert.ok(stepper.includes("{trace !== null && !simple && summary ? ("));
-    assert.ok(stepper.includes('<details className="cw-needs-more">'));
-    assert.ok(stepper.includes("{receipts.length > 0 ? ("));
   });
 });
 
 // The Test step's next best actions (product owner's reference, 30 October 2026): the
 // viewer's next actions as the assistant lists them, each opening where it is done.
-describe("nextBestActions", () => {
-  const item = (over: Partial<AttentionItem>): AttentionItem => ({
-    key: "k",
-    title: "Do the thing",
-    detail: "",
-    owner: "You",
-    kind: "action",
-    tab: "testing",
-    anchor: "",
-    quick: null,
-    ...over,
-  });
-  const hrefs = { testing: "/?tab=testing", evidence: "/?tab=evidence" };
-
-  it("lists the primary first, then the viewer's others, then what waits on others", () => {
-    const next: NextAction = {
-      primary: item({
-        key: "sheet",
-        title: "Record the results",
-        anchor: "sheet",
-      }),
-      more: [
-        item({
-          key: "files",
-          title: "Read 2 files",
-          detail: "Two files arrived.",
-          tab: "evidence",
-        }),
-      ],
-      waiting: [
-        item({
-          key: "approve",
-          title: "Approve the samples",
-          owner: "Reviewer",
-          kind: "waiting",
-        }),
-      ],
-      calm: "clear",
-    };
-    const actions = nextBestActions(next, hrefs);
-    assert.deepEqual(
-      actions.map((action) => [action.key, action.href, action.waiting]),
-      [
-        ["sheet", "/?tab=testing#sheet", false],
-        ["files", "/?tab=evidence#cw-work", false],
-        ["approve", "/?tab=testing#cw-work", true],
-      ],
-    );
-    assert.equal(actions[0]?.icon, "table");
-    assert.equal(actions[1]?.icon, "inbox");
-    assert.equal(actions[1]?.detail, "Two files arrived.");
-    // Who it waits on is said in the line; a page outside the record keeps its link.
-    assert.equal(actions[2]?.detail, "Waits on the reviewer.");
-    const queue = nextBestActions(
-      { ...next, primary: item({ key: "q", href: "/approvals?x=1" }) },
-      hrefs,
-    );
-    assert.equal(queue[0]?.href, "/approvals?x=1");
-  });
-
-  it("keeps one entry per key and no more than the limit", () => {
-    const next: NextAction = {
-      primary: item({ key: "a" }),
-      more: [item({ key: "a" }), item({ key: "b" }), item({ key: "c" })],
-      waiting: [item({ key: "d", kind: "waiting", owner: "Preparer" })],
-      calm: "clear",
-    };
-    assert.deepEqual(
-      nextBestActions(next, hrefs).map((action) => action.key),
-      ["a", "b", "c", "d"],
-    );
-    assert.deepEqual(
-      nextBestActions(next, hrefs, 2).map((action) => action.key),
-      ["a", "b"],
-    );
-    assert.deepEqual(
-      nextBestActions({ ...next, primary: null, more: [], waiting: [] }, hrefs),
-      [],
-    );
-  });
-});

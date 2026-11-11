@@ -60,7 +60,8 @@ def _counts(database: Database, control_id: str) -> tuple[int, int, int]:
 
 
 def test_kickoff_plans_every_phase_of_every_control(migrated: Database) -> None:
-    team, client, _scheduler = _engagement(migrated, "plan-kickoff")
+    # The phases as planned at kickoff: no D&I conclusion in the setup.
+    team, client, _scheduler = _engagement(migrated, "plan-kickoff", design=False)
     with connect(migrated.url) as connection:
         plans = connection.execute(
             "SELECT count(*) FROM evidence_plans WHERE project_id = %s", (team["project"],)

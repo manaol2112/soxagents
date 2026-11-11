@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import { homeListsWork, isClosed, pausedNotice } from "./engagement-lifecycle";
 import {
-  CATEGORIES,
   type ControlRow,
   DEFICIENCY_STATUSES,
   type Deficiency,
@@ -15,7 +14,6 @@ import {
   type Plan,
   type PlanTask,
   SEVERITIES,
-  STAGES,
   timelineMonths,
   timelinePercent,
 } from "./engagement-model";
@@ -50,14 +48,12 @@ import {
 
 type Ready = Extract<ShellModel, { status: "ready" }>;
 
-const _STAGE_LABEL: Record<string, string> = Object.fromEntries(STAGES);
 const SEVERITY_LABEL: Record<string, string> = Object.fromEntries(SEVERITIES);
 const STATUS_LABEL: Record<string, string> =
   Object.fromEntries(DEFICIENCY_STATUSES);
 const LIKELIHOOD_LABEL: Record<string, string> =
   Object.fromEntries(LIKELIHOODS);
 const MAGNITUDE_LABEL: Record<string, string> = Object.fromEntries(MAGNITUDES);
-const _CATEGORY_LABEL: Record<string, string> = Object.fromEntries(CATEGORIES);
 
 const NOTICES: Record<EngagementNotice, string> = {
   saved: "Saved.",

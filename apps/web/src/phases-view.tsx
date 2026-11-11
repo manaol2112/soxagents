@@ -13,10 +13,14 @@ import {
   type PhaseStatus,
   phaseNote,
   phaseStatus,
+  phaseWord,
   planningHref,
   planningProblem,
+  RELEASED_PHASES,
+  type Released,
   releasable,
   releaseIsEarly,
+  releaseNote,
   STEP_TONES,
 } from "./planning-model";
 import { implementationName } from "./shared-plans-model";
@@ -28,7 +32,6 @@ type Ids = {
   /** The destination the page's links stay in (M2b); the Test plans page by default. */
   section?: "planning" | "testing";
 };
-type Released = "INTERIM" | "ROLLFORWARD";
 
 /** One call to the planning route; refreshes the page when it succeeds. */
 function useRelease(ids: Ids) {
@@ -148,7 +151,9 @@ export function PhasesView({
   const progress = state?.phases ?? null;
   const action = useRelease(ids);
   const reasonId = useId();
-  const [phase, setPhase] = useState<Released>("INTERIM");
+  const [phase, setPhase] = useState<Released>(
+    (state?.phases?.ready.DESIGN ?? 0) > 0 ? "DESIGN" : "INTERIM",
+  );
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [reason, setReason] = useState("");
@@ -200,7 +205,11 @@ export function PhasesView({
               className="btn btn-secondary btn-sm"
               onClick={() => {
                 const next: Released =
-                  progress.ready.INTERIM > 0 ? "INTERIM" : "ROLLFORWARD";
+                  progress.ready.DESIGN > 0
+                    ? "DESIGN"
+                    : progress.ready.INTERIM > 0
+                      ? "INTERIM"
+                      : "ROLLFORWARD";
                 setPhase(next);
                 setSelected(
                   new Set(
@@ -217,36 +226,50 @@ export function PhasesView({
         </section>
       ) : null}
       <div className="kpis pl-phase-figures">
-        {(
-          [
+        {
+          // Ready to release, then released, each in the audit's order: the grid sets
+          // them a column per phase (planning.css).
+          (
             [
-              "Interim ready to release",
-              progress.ready.INTERIM,
-              "Design testing complete",
-            ],
-            [
-              "Interim released",
-              progress.released.INTERIM,
-              "Requests may go for approval",
-            ],
-            [
-              "Roll-forward ready to release",
-              progress.ready.ROLLFORWARD,
-              "Interim testing complete",
-            ],
-            [
-              "Roll-forward released",
-              progress.released.ROLLFORWARD,
-              "Requests may go for approval",
-            ],
-          ] as const
-        ).map(([label, value, detail]) => (
-          <article key={label} className="kpi">
-            <span className="kpi-label">{label}</span>
-            <strong className="kpi-value">{value}</strong>
-            <span className="kpi-detail">{detail}</span>
-          </article>
-        ))}
+              [
+                "D&I ready to release",
+                progress.ready.DESIGN,
+                "Control understood",
+              ],
+              [
+                "Interim ready to release",
+                progress.ready.INTERIM,
+                "Design testing complete",
+              ],
+              [
+                "Roll-forward ready to release",
+                progress.ready.ROLLFORWARD,
+                "Interim testing complete",
+              ],
+              [
+                "D&I released",
+                progress.released.DESIGN,
+                "Requests drafted for approval",
+              ],
+              [
+                "Interim released",
+                progress.released.INTERIM,
+                "Requests may go for approval",
+              ],
+              [
+                "Roll-forward released",
+                progress.released.ROLLFORWARD,
+                "Requests may go for approval",
+              ],
+            ] as const
+          ).map(([label, value, detail]) => (
+            <article key={label} className="kpi">
+              <span className="kpi-label">{label}</span>
+              <strong className="kpi-value">{value}</strong>
+              <span className="kpi-detail">{detail}</span>
+            </article>
+          ))
+        }
       </div>
       {outcome === null ? null : (
         <p className="banner" role="status">
@@ -269,7 +292,7 @@ export function PhasesView({
           {can ? (
             <fieldset className="segmented pl-release-phase">
               <legend className="sr-only">Phase to release</legend>
-              {(["INTERIM", "ROLLFORWARD"] as const).map((item) => (
+              {RELEASED_PHASES.map((item) => (
                 <button
                   key={item}
                   type="button"
@@ -277,7 +300,10 @@ export function PhasesView({
                   className={phase === item ? "is-active" : undefined}
                   onClick={() => choose(item)}
                 >
-                  Release {PHASE_SHORT[item].toLowerCase()}
+                  {/* On a phone the word "Release" is dropped so the three fit;
+                      the legend still names the choice. */}
+                  <span className="pl-verb">Release {phaseWord(item)}</span>
+                  <span className="pl-noun">{PHASE_SHORT[item]}</span>
                 </button>
               ))}
             </fieldset>
@@ -292,8 +318,7 @@ export function PhasesView({
               {chosen.length} control{chosen.length === 1 ? "" : "s"} selected
             </strong>
             <span className="pl-batch-note">
-              Each is released on its own. Releasing never sends a request: each
-              still needs an approver.
+              Each is released on its own. {releaseNote(phase)}
             </span>
             <label htmlFor={reasonId} className="sr-only">
               Why the phase is released now
@@ -305,7 +330,9 @@ export function PhasesView({
               value={reason}
               placeholder={
                 early
-                  ? "Why release before the earlier phase is complete (required)"
+                  ? phase === "DESIGN"
+                    ? "Why release before Control Understanding is complete (required)"
+                    : "Why release before the earlier phase is complete (required)"
                   : "Reason (optional)"
               }
               onChange={(event) => setReason(event.target.value)}
@@ -339,7 +366,7 @@ export function PhasesView({
                       !item.released && item.detail !== "Already released.",
                   );
                   setOutcome(
-                    `Released ${PHASE_SHORT[phase].toLowerCase()} for ${answer.released ?? 0}.` +
+                    `Released ${phaseWord(phase)} for ${answer.released ?? 0}.` +
                       (refused.length > 0
                         ? ` Not released: ${refused.map((item) => `${item.control_ref} (${item.detail})`).join("; ")}`
                         : ""),
@@ -349,7 +376,7 @@ export function PhasesView({
                 }
               }}
             >
-              Release {PHASE_SHORT[phase].toLowerCase()} for {chosen.length}
+              Release {phaseWord(phase)} for {chosen.length}
             </button>
             <button
               type="button"
@@ -373,7 +400,7 @@ export function PhasesView({
                   {can && ready.length > 0 ? (
                     <input
                       type="checkbox"
-                      aria-label={`Select every control ready to release ${PHASE_SHORT[phase].toLowerCase()}`}
+                      aria-label={`Select every control ready to release ${phaseWord(phase)}`}
                       checked={ready.every((row) =>
                         selected.has(row.controlId),
                       )}
@@ -445,7 +472,7 @@ function PhaseLine({
         {can && releasable(target) ? (
           <input
             type="checkbox"
-            aria-label={`Select ${row.controlRef} to release ${PHASE_SHORT[phase].toLowerCase()}`}
+            aria-label={`Select ${row.controlRef} to release ${phaseWord(phase)}`}
             checked={selected}
             onChange={onToggle}
           />
@@ -555,8 +582,8 @@ export function PhaseStrip({
             onClick={() => start(next.phase)}
           >
             {next.step === "READY"
-              ? `Release ${PHASE_SHORT[next.phase].toLowerCase()}`
-              : `Release ${PHASE_SHORT[next.phase].toLowerCase()} early`}
+              ? `Release ${phaseWord(next.phase)}`
+              : `Release ${phaseWord(next.phase)} early`}
           </button>
         ) : null}
       </div>
@@ -597,7 +624,7 @@ export function PhaseStrip({
         <div className="pl-decide">
           <label htmlFor={reasonId}>
             {releaseIsEarly(target)
-              ? `${target.waitingFor} Why release the ${PHASE_SHORT[open].toLowerCase()} phase now (required)`
+              ? `${target.waitingFor} Why release the ${phaseWord(open)} phase now (required)`
               : "Reason (optional)"}
           </label>
           <textarea
@@ -627,7 +654,7 @@ export function PhaseStrip({
                 }
               }}
             >
-              Release {PHASE_SHORT[open].toLowerCase()}
+              Release {phaseWord(open)}
             </button>
             <button
               type="button"
@@ -636,13 +663,113 @@ export function PhaseStrip({
             >
               Cancel
             </button>
-            <span className="pl-sub">
-              Releasing lets the phase's prepared requests go for approval.
-              Nothing is sent.
-            </span>
+            <span className="pl-sub">{releaseNote(open)}</span>
           </div>
         </div>
       ) : null}
+      {action.problem ? (
+        <p className="pl-problem" role="alert">
+          {action.problem}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * The D&I evidence's own release, on the D&I Evidence step (B1; product owner, 8 November
+ * 2026): recommended once the control is understood. Before then a person may release it,
+ * with the reason recorded. Releasing drafts the requests; each is approved before it is sent.
+ */
+export function DesignRelease({
+  ids,
+  controlId,
+  status,
+  canRelease,
+}: {
+  ids: Ids;
+  controlId: string;
+  status: PhaseStatus | null;
+  canRelease: boolean;
+}) {
+  const action = useRelease(ids);
+  const titleId = useId();
+  const reasonId = useId();
+  const [reason, setReason] = useState("");
+  const [released, setReleased] = useState(false);
+  if (released) {
+    return (
+      <p className="banner pl-design-done" role="status">
+        <UiIcon name="check" size={16} />
+        <span>
+          D&amp;I evidence released. Its requests are drafted for approval.
+        </span>
+      </p>
+    );
+  }
+  if (status === null || !releasable(status)) {
+    return null;
+  }
+  const early = releaseIsEarly(status);
+  return (
+    <section
+      className="pl-design-release"
+      aria-labelledby={titleId}
+      aria-busy={action.pending}
+    >
+      <h3 id={titleId}>
+        {early
+          ? "D&I evidence not released yet"
+          : "D&I evidence ready to release"}
+      </h3>
+      <p className="pl-sub">
+        {early
+          ? status.waitingFor
+          : "Control Understanding is complete. The planned D&I evidence items are listed below."}
+      </p>
+      {canRelease ? (
+        <div className="pl-decide">
+          <label htmlFor={reasonId}>
+            {early ? "Why release it now (required)" : "Reason (optional)"}
+          </label>
+          <textarea
+            id={reasonId}
+            rows={2}
+            maxLength={1000}
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+          />
+          <div className="pl-decide-buttons">
+            <button
+              type="button"
+              className="btn-sm"
+              disabled={action.pending || (early && reason.trim().length < 20)}
+              onClick={async () => {
+                const done = await action.run({
+                  intent: "phase-release",
+                  control_id: controlId,
+                  phase: "DESIGN",
+                  reason,
+                });
+                if (done.ok) {
+                  setReleased(true);
+                }
+              }}
+            >
+              {action.pending
+                ? "Releasing…"
+                : early
+                  ? "Release early"
+                  : "Release the D&I evidence"}
+            </button>
+            <span className="pl-sub">{releaseNote("DESIGN")}</span>
+          </div>
+        </div>
+      ) : (
+        <p className="pl-sub">
+          An Owner, Admin or Project Manager releases the D&amp;I evidence.
+        </p>
+      )}
       {action.problem ? (
         <p className="pl-problem" role="alert">
           {action.problem}

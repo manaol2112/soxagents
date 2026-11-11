@@ -601,7 +601,13 @@ def test_taking_a_control_with_work_on_record_out_of_scope_needs_a_reason(
     _complete_setup(owner, team)
     _launch(owner, base)
     # Nothing is requested before a person approves each control's evidence plan.
-    approve_evidence_plans(migrated, project)
+    # Rewritten 10 November 2026 (full-suite run): the helper signs off each control's design
+    # by default since B0 (8 November), which records a prepared design workpaper, and a
+    # workpaper with content is work on record (material). Old: approve_evidence_plans(...)
+    # with its default, expecting material False. New: design=False, so the control holds only
+    # approved plans, open tasks and unsent requests, which is what "quiet" means here; the
+    # assertions are unchanged.
+    approve_evidence_plans(migrated, project, design=False)
     control_id = owner.get(base).json()["controls"][0]["id"]
     quiet = owner.get(f"{base}/scope-impact", params={"control_id": control_id}).json()
     assert quiet["controls"] == 1 and quiet["material"] is False

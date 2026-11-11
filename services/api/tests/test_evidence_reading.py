@@ -161,6 +161,30 @@ def test_an_archive_that_expands_too_far_is_refused_before_it_is_opened() -> Non
     assert "expands" in read.note
 
 
+def test_an_archive_whose_entry_name_does_not_decode_is_unreadable_not_an_error() -> None:
+    # Bug hunt, 9 November 2026: an entry flagged as UTF-8 whose name is not UTF-8 made
+    # the zip reader raise UnicodeDecodeError out of extract and read_table. Synthetic
+    # bytes only: a one-entry archive whose name is patched to invalid UTF-8.
+    import struct
+
+    from ai_workforce_api.evidence_extraction import read_table
+
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr("ab.txt", b"synthetic")
+    content = bytearray(output.getvalue().replace(b"ab.txt", b"\xff\xfe.txt"))
+    struct.pack_into("<H", content, 6, 0x0800)
+    struct.pack_into("<H", content, content.index(b"PK\x01\x02") + 8, 0x0800)
+    hostile = bytes(content)
+    with pytest.raises(UnicodeDecodeError):
+        zipfile.ZipFile(io.BytesIO(hostile))
+    for name in ("listing.xlsx", "memo.docx", "archive.zip"):
+        read = extract(hostile, name, "application/octet-stream")
+        assert read.status in ("UNSUPPORTED", "UNREADABLE")
+        assert read_table(hostile, name, "application/octet-stream") is None
+    assert sniff(hostile, "listing.xlsx", "application/octet-stream") == "other"
+
+
 def test_secret_looking_values_are_redacted_and_long_text_is_cut() -> None:
     read = extract(
         b"service account notes\npassword = Hunter2024x\napi_key: abcdefgh12345678\n",

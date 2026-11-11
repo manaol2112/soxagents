@@ -148,6 +148,22 @@ def test_effective_interim_testing_rolls_forward_to_period_end(migrated: Databas
         ).fetchone()
     assert frequency is not None
     assert rolled["sample_size"] == ROLLFORWARD_SIZES[str(frequency[0])]
+    # The interim sample and the round both record the methodology version that sized them:
+    # the engagement's own (methodology.py, migration 0142).
+    with connect(migrated.url) as connection:
+        recorded = connection.execute(
+            """
+            SELECT p.methodology_version_id,
+                   (SELECT array_agg(DISTINCT t.methodology_version_id) FROM control_tests t
+                    WHERE t.project_id = p.id),
+                   (SELECT array_agg(DISTINCT r.methodology_version_id) FROM test_rounds r
+                    WHERE r.project_id = p.id)
+            FROM projects p WHERE p.id = %s
+            """,
+            (team["project"],),
+        ).fetchone()
+    assert recorded is not None and recorded[0] is not None
+    assert recorded[1] == [recorded[0]] and recorded[2] == [recorded[0]]
     status, text = _request_row(migrated, rolled["request_id"])
     assert status == "DRAFT"
     assert text.startswith("Roll-forward for ITGC-AC-01")

@@ -301,6 +301,12 @@ def notify_owner_of_reply(
         return False
     reference = f"PBC-{request_id.hex[-8:].upper()}"
     with transaction(connection) as cursor:
+        # A recipient whose links the team revoked gets no new link from a team message:
+        # only a request sent after the revocation (an approved send) issues one again.
+        # The message stays recorded on the request; the owner is not emailed (bug hunt,
+        # 9 November 2026: a message mailed a working link to a revoked address).
+        if _revoked_since_issued(cursor, project_id, recipient):
+            return False
         token = mint_link(cursor, organization_id, project_id, recipient, None, actor)
     body = (
         f"Hello,\n\nThe audit team wrote to you about evidence request {reference}:\n\n"
@@ -321,6 +327,23 @@ def notify_owner_of_reply(
         logger.warning("the owner could not be told of the team's message")
         return False
     return True
+
+
+def _revoked_since_issued(cursor: psycopg.Cursor[Any], project_id: UUID, recipient: str) -> bool:
+    """Whether the address's links on the engagement were revoked and no link was issued
+    to it after the last revocation."""
+    row = cursor.execute(
+        """
+        SELECT max(revoked_at),
+               max(created_at) FILTER (WHERE revoked_at IS NULL)
+        FROM evidence_portal_links
+        WHERE project_id = %s AND lower(recipient::text) = %s
+        """,
+        (project_id, recipient.strip().lower()),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return False
+    return row[1] is None or row[1] <= row[0]
 
 
 def mask_email(address: str) -> str:
@@ -421,15 +444,32 @@ def send_code(
     if _state(connection, link) != "ACTIVE":
         raise PortalState("this link no longer opens any request")
     engagement, firm = _names(connection, link)
-    recent = connection.execute(
-        "SELECT count(*) FROM evidence_portal_codes WHERE link_id = %s "
-        "AND created_at > clock_timestamp() - interval '1 hour'",
-        (link.id,),
-    ).fetchone()
-    if recent is not None and int(recent[0]) >= CODES_PER_HOUR:
-        raise TooMany()
     code = f"{secrets.randbelow(1_000_000):06d}"
     code_id = uuid4()
+    # The hourly count and the code's record are one step under a lock on the link, so
+    # codes asked for at once cannot all pass the limit. The code is stored as not sent
+    # and committed before the email goes, and is usable only once the mailbox took it
+    # (bug hunt, 9 November 2026: the count was read, the email sent, then the code
+    # stored, with nothing held).
+    with transaction(connection) as cursor:
+        cursor.execute("SELECT 1 FROM evidence_portal_links WHERE id = %s FOR UPDATE", (link.id,))
+        recent = cursor.execute(
+            "SELECT count(*) FROM evidence_portal_codes WHERE link_id = %s "
+            "AND created_at > clock_timestamp() - interval '1 hour'",
+            (link.id,),
+        ).fetchone()
+        if recent is not None and int(recent[0]) >= CODES_PER_HOUR:
+            raise TooMany()
+        cursor.execute(
+            """
+            INSERT INTO evidence_portal_codes (id, link_id, code_hash, expires_at, delivery)
+            VALUES (%s, %s, %s, clock_timestamp() + make_interval(mins => %s), 'NOT_SENT')
+            """,
+            (code_id, link.id, _code_hash(link.id, code), CODE_MINUTES),
+        )
+    # The request's connection is one transaction: commit, so the lock is let go and the
+    # code counts for the next caller before the mailbox is called.
+    connection.commit()
     provider = mailbox(settings, connection, link.organization_id, link.project_id)
     delivery = "SENT"
     try:
@@ -451,13 +491,10 @@ def send_code(
         logger.warning("evidence portal code delivery failed")
         delivery = "NOT_SENT"
     with transaction(connection) as cursor:
-        cursor.execute(
-            """
-            INSERT INTO evidence_portal_codes (id, link_id, code_hash, expires_at, delivery)
-            VALUES (%s, %s, %s, clock_timestamp() + make_interval(mins => %s), %s)
-            """,
-            (code_id, link.id, _code_hash(link.id, code), CODE_MINUTES, delivery),
-        )
+        if delivery == "SENT":
+            cursor.execute(
+                "UPDATE evidence_portal_codes SET delivery = 'SENT' WHERE id = %s", (code_id,)
+            )
         _audit(cursor, link, "evidence_portal.code_sent", {"delivery": delivery})
     if delivery != "SENT":
         connection.commit()
@@ -868,6 +905,7 @@ def upload(
     digest = digest_of(content)
     existing = _existing(connection, link, digest, file_name)
     if existing is not None:
+        _serve_again(connection, link, existing, request_id, control_id, requirement)
         return PortalUploadBody(file_name=file_name, duplicate=True), None
     file_id = uuid4()
     key = f"evidence/{file_id}"
@@ -983,6 +1021,56 @@ def _item_requirement(
         (request_id, " ".join(found.title.lower().split())),
     ).fetchone()
     return None if match is None else (UUID(str(match[0])), UUID(str(match[1])))
+
+
+def _serve_again(
+    connection: psycopg.Connection[Any],
+    link: Link,
+    file_id: UUID,
+    request_id: UUID,
+    control_id: UUID,
+    requirement: tuple[UUID, UUID] | None,
+) -> None:
+    """The engagement holds this file already. On the same request nothing changes. On
+    another request of the same control, for an item with a planned requirement, the file
+    is linked to that item: one file serves several requests by a link, never a move.
+    Otherwise the owner is told the file is held on another request, rather than that it
+    was received here (bug hunt, 9 November 2026: the second request got nothing while the
+    owner read "already received"). A withdrawn file is left as it was."""
+    held = connection.execute(
+        "SELECT pbc_request_id, engagement_control_id FROM evidence_file_links "
+        "WHERE evidence_file_id = %s AND project_id = %s LIMIT 1",
+        (file_id, link.project_id),
+    ).fetchone()
+    if held is None or held[0] == request_id:
+        return
+    if requirement is None or requirement[1] != control_id or held[1] != control_id:
+        raise PortalState(
+            "this file was already received on another request, so it was not added to "
+            "this one; contact the audit team if it answers this request too"
+        )
+    with transaction(connection) as cursor:
+        saved = cursor.execute(
+            """
+            INSERT INTO evidence_requirement_files (
+                organization_id, project_id, engagement_control_id, requirement_id,
+                evidence_file_id, status, origin, reason
+            )
+            VALUES (%s, %s, %s, %s, %s, 'LINKED', 'OWNER', %s)
+            ON CONFLICT (requirement_id, evidence_file_id) DO NOTHING
+            RETURNING id
+            """,
+            (
+                link.organization_id, link.project_id, control_id, requirement[0], file_id,
+                "Uploaded again by the owner for this item through the secure link.",
+            ),
+        ).fetchone()  # fmt: skip
+        if saved is not None:
+            _audit(
+                cursor, link, "evidence.portal_linked",
+                {"request_id": str(request_id), "requirement_id": str(requirement[0])},
+                target_type="evidence_file", target_id=file_id,
+            )  # fmt: skip
 
 
 def _existing(

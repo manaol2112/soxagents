@@ -309,6 +309,35 @@ def test_a_file_added_on_a_request_is_filed_to_it_without_matching(
     assert len(scheduler.analyses) == 1
 
 
+def test_a_file_held_on_another_request_is_not_reported_as_added_to_this_one(
+    migrated: Database,
+) -> None:
+    # Bug hunt, 9 November 2026: the same file added on a second request, not on one of
+    # its items, answered "duplicate" and was filed nowhere new, so the second request
+    # silently got nothing. The person is told where the file is held instead.
+    team, client, _scheduler = _engagement(migrated, "heldelsewhere")
+    base = _base(team)
+    first = _request(migrated, team, "ITGC-OP-01")
+    second = _request(migrated, team, "ITGC-OP-01", "DESIGN")
+
+    def add(request_id: str) -> Any:
+        return client.post(
+            f"{base}/evidence-uploads",
+            params={"batch_id": str(uuid4()), "name": "jobs.csv", "request_id": request_id},
+            content=POPULATION,
+            headers={"content-type": "text/csv"},
+        )
+
+    added = add(first["id"])
+    assert added.status_code == 200, added.text
+    # Again on the same request: a duplicate, as before.
+    again = add(first["id"])
+    assert again.status_code == 200 and again.json()["duplicate"] is True
+    elsewhere = add(second["id"])
+    assert elsewhere.status_code == 409
+    assert "another request" in elsewhere.json()["detail"]
+
+
 def test_an_archived_engagement_takes_no_new_evidence(migrated: Database) -> None:
     team, client, scheduler = _engagement(migrated, "archived")
     filed = _upload(client, team, str(uuid4()), "users.csv", "ITGC-AC-01")
@@ -368,7 +397,7 @@ class _Scheduler:
 
 
 def _engagement(
-    database: Database, slug: str, settle: bool = True
+    database: Database, slug: str, settle: bool = True, design: bool = True
 ) -> tuple[dict[str, Any], TestClient, _Scheduler]:
     """A launched engagement whose evidence plans a person approved. With settle, the
     proposed attributes are decided too, so operating evidence is requested; without, the
@@ -384,7 +413,7 @@ def _engagement(
     )
     assert started.status_code == 200, started.text
     # Nothing is requested before a person approves each control's evidence plan.
-    approve_evidence_plans(database, team["project"], settle)
+    approve_evidence_plans(database, team["project"], settle, design=design)
     return team, client, scheduler
 
 

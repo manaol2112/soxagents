@@ -21,6 +21,7 @@ from test_evidence_review import _reviews as _evidence_reviews
 from test_execution import _add_project_member, _add_user, _seed_org
 from test_outbound import _session, migrated
 from test_phase_release import _prepare_design
+from test_plan_impact import _reprepare_design
 from test_round_reviews import _sign_review
 from test_test_rounds import _plans, _rounds, _sheets
 from test_testing_engine import _add, _base, _controls, _read_all, _year
@@ -172,10 +173,10 @@ def test_coverage_and_stopped_drafts_are_items_of_their_own(migrated: Database) 
     control = sheet["control_id"]
     review = client.get(f"{base}/reviews").json()[0]
     _sign_review(migrated, client, team, review["id"])
-    # The design workpaper is prepared after the review signed: the review's coverage
+    # The design workpaper is prepared again after the review signed: the review's coverage
     # of it is unassessed. One item, the reviewer's, on the signed review's record; the
     # control's next step (the same gap, in the journey's words) is not repeated.
-    _prepare_design(migrated, team, control)
+    _reprepare_design(client, team, control)
     # (The roll-forward round's drafted request is an obligation of its own, as before.)
     mine = [i for i in _items_on(_queue(client, team), control) if i["kind"] != "request-draft"]
     assert [item["kind"] for item in mine] == ["coverage"], [i["title"] for i in mine]

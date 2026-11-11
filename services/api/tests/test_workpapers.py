@@ -69,7 +69,14 @@ def _tested_control(
 def test_a_signed_off_test_becomes_a_drafted_effectiveness_workpaper(migrated: Database) -> None:
     team, client, sheet, ticket_file = _tested_control(migrated, "wp")
     base = f"{_base(team)}/workpapers"
-    listed = client.get(base, params={"control_id": sheet["control_id"]}).json()
+    # Rewritten 8 November 2026 (B0): OE follows an effective D&I sign-off, so a tested
+    # control has its design workpaper prepared. Before, the list held the effectiveness
+    # workpaper alone; the assertion now reads the effectiveness workpaper among them.
+    every = client.get(base, params={"control_id": sheet["control_id"]}).json()
+    assert [(w["stage"], w["status"]) for w in every if w["stage"] == "DESIGN"] == [
+        ("DESIGN", "PREPARED")
+    ]
+    listed = [w for w in every if w["stage"] == "EFFECTIVENESS"]
     assert [(w["stage"], w["drafting"], w["current_version"]) for w in listed] == [
         ("EFFECTIVENESS", True, 0)
     ]
@@ -89,7 +96,11 @@ def test_a_signed_off_test_becomes_a_drafted_effectiveness_workpaper(migrated: D
     with connect(migrated.url) as connection:
         assert run_draft(connection, provider, UUID(workpaper["id"])) == "DONE"
     assert "Draft these workpaper sections." in provider.requests[0].prompt
-    body = client.get(base, params={"control_id": sheet["control_id"]}).json()[0]
+    body = next(
+        w
+        for w in client.get(base, params={"control_id": sheet["control_id"]}).json()
+        if w["stage"] == "EFFECTIVENESS"
+    )
     assert (body["current_version"], body["drafting"]) == (1, False)
     content = body["content"]
     assert content["reference"] == "ITGC-AC-01-SE-TOE"
@@ -182,7 +193,11 @@ def test_a_signed_off_test_becomes_a_drafted_effectiveness_workpaper(migrated: D
     assert binder.status_code == 200
     workbook = load_workbook(BytesIO(binder.content))
     # One sheet per tab: design, then the interim and roll-forward tabs of the testing.
-    assert workbook.sheetnames == [
+    # Since B0 every control in the setup has a prepared design workpaper, so the binder
+    # holds theirs too; this control's sheets are read among them (rewritten 8 November 2026).
+    assert [
+        name for name in workbook.sheetnames if name == "Index" or name.startswith("ITGC-AC-01-")
+    ] == [
         "Index",
         "ITGC-AC-01-SE-TOD",
         "ITGC-AC-01-SE-TOE",
@@ -207,7 +222,8 @@ def test_a_signed_off_test_becomes_a_drafted_effectiveness_workpaper(migrated: D
 
 
 def test_an_effectiveness_workpaper_needs_signed_off_testing(migrated: Database) -> None:
-    team, client, _scheduler = _engagement(migrated, "wpearly")
+    # The design workpaper is drafted and prepared here: no D&I conclusion in the setup.
+    team, client, _scheduler = _engagement(migrated, "wpearly", design=False)
     base = f"{_base(team)}/workpapers"
     controls = client.get(f"{_base(team)}/workspace/controls").json()
     control = next(c for c in controls if c["control_ref"] == "ITGC-AC-02")
@@ -241,24 +257,35 @@ def test_the_testers_first_results_start_the_effectiveness_workpaper(
 
     team, client, sheet, _ticket = _tested_control(migrated, "wpprog", sign=False)
     base = f"{_base(team)}/workpapers"
+    # Rewritten 8 November 2026 (B0): OE follows an effective D&I sign-off, so a tested
+    # control has its design workpaper prepared. Before, the list held the effectiveness
+    # workpaper alone; the assertion now reads the effectiveness workpaper among them.
     assert sheet["status"] == "OPEN" and sheet["run_state"] == "IDLE"
-    assert client.get(base, params={"control_id": sheet["control_id"]}).json() == []
+    listed = client.get(base, params={"control_id": sheet["control_id"]}).json()
+    assert [w for w in listed if w["stage"] == "EFFECTIVENESS"] == []
     with connect(migrated.url) as connection:
         queued = draft_effectiveness_after_run(connection, UUID(sheet["id"]))
         assert len(queued) == 1
         # Later runs do not queue it again.
         assert draft_effectiveness_after_run(connection, UUID(sheet["id"])) == []
     listed = client.get(base, params={"control_id": sheet["control_id"]}).json()
-    assert [(w["stage"], w["drafting"], w["draft_state"]) for w in listed] == [
-        ("EFFECTIVENESS", True, "QUEUED")
-    ]
+    assert [
+        (w["stage"], w["drafting"], w["draft_state"])
+        for w in listed
+        if w["stage"] == "EFFECTIVENESS"
+    ] == [("EFFECTIVENESS", True, "QUEUED")]
     provider = _Provider([{"sections": [{"key": "population", "text": "Users were listed."}]}])
     with connect(migrated.url) as connection:
-        assert run_draft(connection, provider, UUID(listed[0]["id"])) == "DONE"
+        paper = next(item for item in listed if item["stage"] == "EFFECTIVENESS")
+        assert run_draft(connection, provider, UUID(paper["id"])) == "DONE"
     request = provider.requests[0]
     assert '"status": "OPEN"' in request.prompt
     assert "proposals that no person has confirmed" in request.system
-    paper = client.get(base, params={"control_id": sheet["control_id"]}).json()[0]
+    paper = next(
+        w
+        for w in client.get(base, params={"control_id": sheet["control_id"]}).json()
+        if w["stage"] == "EFFECTIVENESS"
+    )
     assert (paper["draft_state"], paper["current_version"]) == ("IDLE", 1)
     sections = {s["key"]: s for s in paper["content"]["sections"]}
     assert sections["population"]["source"] == "AGENT"
@@ -274,8 +301,97 @@ def test_the_testers_first_results_start_the_effectiveness_workpaper(
         f"{_base(team)}/test-sheets/{sheet['id']}/sign-off", json={"version": sheet["version"]}
     )
     assert signed.status_code == 200, signed.text
-    paper = client.get(base, params={"control_id": sheet["control_id"]}).json()[0]
+    paper = next(
+        w
+        for w in client.get(base, params={"control_id": sheet["control_id"]}).json()
+        if w["stage"] == "EFFECTIVENESS"
+    )
     assert (paper["drafting"], paper["draft_state"]) == (True, "QUEUED")
+
+
+def test_the_effectiveness_workpaper_keeps_step_with_its_signed_off_testing(
+    migrated: Database,
+) -> None:
+    """Bug hunt, 9 November 2026: a redraft asked for while the agent drafted was lost; a
+    workpaper drafted before the latest sign-off could be prepared; and reopening the
+    testing left a prepared workpaper stating the old conclusion."""
+    from ai_workforce_api.models import ModelConfig, ModelRaw, ModelRequest
+    from ai_workforce_api.workpaper_service import fail_draft
+
+    team, client, sheet, _ticket = _tested_control(migrated, "wpstep")
+    base = f"{_base(team)}/workpapers"
+
+    def effectiveness() -> dict[str, Any]:
+        listed = client.get(base, params={"control_id": sheet["control_id"]}).json()
+        found: dict[str, Any] = next(w for w in listed if w["stage"] == "EFFECTIVENESS")
+        return found
+
+    class _AskedAgain(_Provider):
+        """Someone asks for a draft again while the agent is drafting."""
+
+        def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
+            if not self.requests:
+                again = client.post(f"{base}/draft", json={"control_id": sheet["control_id"]})
+                assert again.status_code == 200, again.text
+            return super().complete(request, config)
+
+    paper = effectiveness()
+    provider = _AskedAgain([{"sections": [{"key": "population", "text": "Users were listed."}]}])
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, provider, UUID(paper["id"])) == "DONE"
+    # The request made while drafting is drafted straight after, not lost.
+    assert len(provider.requests) == 2
+    paper = effectiveness()
+    assert (paper["drafting"], paper["current_version"]) == (False, 2)
+    prepared = client.post(
+        f"{base}/{paper['id']}/prepare",
+        json={"version": paper["version"], "rationale_reviewed": True},
+    )
+    assert prepared.status_code == 200, prepared.text
+
+    # The testing is reopened: the prepared workpaper opens again with it, on record.
+    current = _sheet(client, team)
+    reopened = client.post(
+        f"{_base(team)}/test-sheets/{current['id']}/reopen",
+        json={"version": current["version"], "reason": "A sample needs another look."},
+    )
+    assert reopened.status_code == 200, reopened.text
+    paper = effectiveness()
+    assert paper["status"] == "DRAFT"
+    with connect(migrated.url) as connection:
+        reason = connection.execute(
+            "SELECT payload FROM audit_events WHERE action = 'workpaper.reopened' "
+            "AND target_id = %s",
+            (paper["id"],),
+        ).fetchone()
+    assert reason is not None and reason[0]["because"] == "testing_reopened"
+
+    # Signed off again; the redraft it asks for fails, leaving the earlier draft. That draft
+    # predates the sign-off, so the workpaper is not prepared from it.
+    current = _sheet(client, team)
+    signed = client.post(
+        f"{_base(team)}/test-sheets/{current['id']}/sign-off", json={"version": current["version"]}
+    )
+    assert signed.status_code == 200, signed.text
+    with connect(migrated.url) as connection:
+        fail_draft(connection, UUID(paper["id"]))
+    paper = effectiveness()
+    stale = client.post(
+        f"{base}/{paper['id']}/prepare",
+        json={"version": paper["version"], "rationale_reviewed": True},
+    )
+    assert stale.status_code == 409
+    assert "drafted before the testing was last signed off" in stale.json()["detail"]
+    again = client.post(f"{base}/draft", json={"control_id": sheet["control_id"]})
+    assert again.status_code == 200, again.text
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, None, UUID(paper["id"])) == "DONE"
+    paper = effectiveness()
+    fresh = client.post(
+        f"{base}/{paper['id']}/prepare",
+        json={"version": paper["version"], "rationale_reviewed": True},
+    )
+    assert fresh.status_code == 200, fresh.text
 
 
 def test_no_effectiveness_draft_before_the_tester_has_results(migrated: Database) -> None:
@@ -306,6 +422,16 @@ def test_no_effectiveness_draft_before_the_tester_has_results(migrated: Database
 def test_walkthrough_cells_write_out_checked_citations(migrated: Database) -> None:
     team, client, sheet, ticket_file = _tested_control(migrated, "wpwalk")
     base = f"{_base(team)}/workpapers"
+    # Rewritten 8 November 2026 (B0): the design workpaper is prepared before OE, so it is
+    # reopened to be drafted again from the evidence testing read (before, it was drafted
+    # for the first time after testing).
+    listed = client.get(base, params={"control_id": sheet["control_id"]}).json()
+    design = next(w for w in listed if w["stage"] == "DESIGN")
+    reopened = client.post(
+        f"{base}/{design['id']}/reopen",
+        json={"version": design["version"], "reason": "The walkthrough is drafted again."},
+    )
+    assert reopened.status_code == 200, reopened.text
     assert client.post(f"{base}/draft", json={"control_id": sheet["control_id"]}).status_code == 200
     listed = client.get(base, params={"control_id": sheet["control_id"]}).json()
     design = next(w for w in listed if w["stage"] == "DESIGN")
@@ -340,7 +466,8 @@ def test_walkthrough_cells_write_out_checked_citations(migrated: Database) -> No
 def test_the_agent_waits_for_evidence_before_drafting(migrated: Database) -> None:
     """A model is configured, but the control has no read evidence and no signed-off
     testing: the records are filled, the model is not called, and the draft says why."""
-    team, client, _scheduler = _engagement(migrated, "wpwait")
+    # The design work itself: no D&I conclusion in the setup.
+    team, client, _scheduler = _engagement(migrated, "wpwait", design=False)
     base = f"{_base(team)}/workpapers"
     controls = client.get(f"{_base(team)}/workspace/controls").json()
     control = next(c for c in controls if c["control_ref"] == "ITGC-AC-02")
@@ -363,7 +490,8 @@ def test_the_agent_waits_for_evidence_before_drafting(migrated: Database) -> Non
 def test_the_first_read_file_opens_the_design_workpaper(migrated: Database) -> None:
     from ai_workforce_api.workpaper_service import draft_design_after_analysis
 
-    team, client, scheduler = _engagement(migrated, "wpfirst")
+    # The design work itself: no D&I conclusion in the setup.
+    team, client, scheduler = _engagement(migrated, "wpfirst", design=False)
     base = f"{_base(team)}/workpapers"
     kickoff = _request(migrated, team, "ITGC-AC-01")
     controls = client.get(f"{_base(team)}/workspace/controls").json()
@@ -412,9 +540,16 @@ def test_the_local_worker_starts_the_testing_workpaper_after_a_run(migrated: Dat
         worker._attempt_test(UUID(sheet["id"]))
     finally:
         worker.shutdown()
-    listed = client.get(
-        f"{_base(team)}/workpapers", params={"control_id": sheet["control_id"]}
-    ).json()
+    # Rewritten 8 November 2026 (B0): OE follows an effective D&I sign-off, so a tested
+    # control has its design workpaper prepared. Before, the list held the effectiveness
+    # workpaper alone; the assertion now reads the effectiveness workpaper among them.
+    listed = [
+        w
+        for w in client.get(
+            f"{_base(team)}/workpapers", params={"control_id": sheet["control_id"]}
+        ).json()
+        if w["stage"] == "EFFECTIVENESS"
+    ]
     assert [w["stage"] for w in listed] == ["EFFECTIVENESS"]
     # Queued after the first run; the second run found it open already.
     assert scheduled == [[UUID(listed[0]["id"])], []]

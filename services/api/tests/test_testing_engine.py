@@ -424,6 +424,134 @@ def test_the_console_can_decide_results_and_sign_off_testing(migrated: Database)
             call("sign_off_testing", control_ref="ITGC-AC-02")
 
 
+def _approved_samples(migrated: Database, slug: str) -> tuple[dict[str, Any], Any, Any, Any]:
+    """A sampled control with its population accepted and its test plan proposed."""
+    team, client, scheduler = _engagement(migrated, slug)
+    kickoff = _request(migrated, team, "ITGC-AC-01")
+    year = _year(migrated, team)
+    population = "User ID,Name,Date granted,Ticket\n" + "".join(
+        f"u000{n},Demo User {n},{year}-0{n}-10,REQ-{n}\n" for n in range(1, 4)
+    )
+    _add(client, team, "access population.csv", population, kickoff["id"])
+    _read_all(migrated, scheduler)
+    plan = client.get(f"{_base(team)}/control-tests").json()[0]
+    _accept_population(client, team, plan["engagement_control_id"])
+    return team, client, scheduler, plan
+
+
+def test_new_evidence_clears_a_persons_override_so_the_new_result_is_decided_again(
+    migrated: Database,
+) -> None:
+    """Bug hunt, 9 November 2026: an override made on the old evidence beat the tester's
+    result on the new evidence, so an exception stayed a pass and the sheet effective."""
+    team, client, scheduler, plan = _approved_samples(migrated, "override-stale")
+    base = _base(team)
+    approved = client.post(
+        f"{base}/control-tests/{plan['id']}/approve", json={"version": plan["version"]}
+    )
+    assert approved.status_code == 200, approved.text
+    sheet = _sheet(client, team)
+    labels = [item["label"] for item in sheet["items"]]
+    attributes = len(sheet["attributes"])
+    samples = approved.json()["sample_request_id"]
+    tickets = "ticket,user\n" + "".join(f"T-{n},{label}\n" for n, label in enumerate(labels))
+    _add(client, team, "approvals.csv", tickets, samples)
+    _add(client, team, "manager email.txt", "Approval given for the requested access.", samples)
+    _read_all(migrated, scheduler)
+    provider = _Citing(
+        [
+            _answer(["PASS"] * attributes),
+            _answer(["EXCEPTION"] + ["PASS"] * (attributes - 1)),
+            _answer(["PASS"] * attributes),
+            # The second item tested again on its new evidence: still an exception.
+            _answer(["EXCEPTION"] + ["PASS"] * (attributes - 1)),
+        ]
+    )
+    with connect(migrated.url) as connection:
+        assert run_sheet(connection, provider, UUID(sheet["id"])) == "DONE"
+    sheet = _sheet(client, team)
+    second = sheet["items"][1]
+    path = f"{base}/test-sheets/{sheet['id']}"
+    overridden = client.post(
+        f"{path}/items/{second['id']}/override",
+        json={
+            "version": second["version"],
+            "index": 0,
+            "result": "PASS",
+            "reason": "The approval was given by email; the email is to follow.",
+        },
+    )
+    assert overridden.status_code == 200, overridden.text
+    assert overridden.json()["proposed_conclusion"] == "EFFECTIVE"
+    # The evidence for the item changes: the email is linked to it, and it is tested again.
+    email = next(
+        e for e in overridden.json()["placements"] if e["file_name"] == "manager email.txt"
+    )
+    linked = client.post(
+        f"{path}/links",
+        json={
+            "file_id": email["file_id"],
+            "action": "LINK",
+            "item_id": second["id"],
+            "reason": "The email for this grant.",
+        },
+    )
+    assert linked.status_code == 200, linked.text
+    with connect(migrated.url) as connection:
+        assert run_sheet(connection, provider, UUID(sheet["id"])) == "DONE"
+    after = _sheet(client, team)
+    cell = after["items"][1]["cells"][0]
+    assert (cell["proposed"], cell["final"], cell["overridden_by"]) == (
+        "EXCEPTION",
+        "EXCEPTION",
+        None,
+    )
+    assert after["proposed_conclusion"] == "NOT_EFFECTIVE"
+    with connect(migrated.url) as connection:
+        cleared = connection.execute(
+            "SELECT payload FROM audit_events WHERE action = 'testing.overrides_cleared' "
+            "AND target_id = %s",
+            (sheet["id"],),
+        ).fetchall()
+    assert len(cleared) == 1
+    payload = cleared[0][0]
+    assert payload["item_id"] == second["id"]
+    assert [(o["index"], o["result"]) for o in payload["overrides"]] == [(0, "PASS")]
+    assert payload["overrides"][0]["reason"].startswith("The approval was given by email")
+
+
+def test_more_approved_attributes_than_a_sheet_holds_refuse_the_samples(
+    migrated: Database,
+) -> None:
+    """Bug hunt, 9 November 2026: a control with more than 12 approved attributes was
+    tested on the first 12 alone, the rest silently dropped."""
+    from ai_workforce_api.testing_engine import MAX_ATTRIBUTES, TooManyAttributes, _attributes
+
+    assert len(_attributes([f"Attribute {n}" for n in range(MAX_ATTRIBUTES)])) == MAX_ATTRIBUTES
+    with pytest.raises(TooManyAttributes):
+        _attributes([f"Attribute {n}" for n in range(MAX_ATTRIBUTES + 1)])
+    team, client, _scheduler, plan = _approved_samples(migrated, "too-many-attributes")
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE engagement_controls SET test_attributes = %s::jsonb WHERE id = %s",
+            (
+                "[" + ",".join(f'"Attribute {n}"' for n in range(MAX_ATTRIBUTES + 1)) + "]",
+                plan["engagement_control_id"],
+            ),
+        )
+        connection.commit()
+    # The changed attributes need the test plan approved again before samples are.
+    approve_plans_over_api(client, team["org"], team["project"])
+    plan = client.get(f"{_base(team)}/control-tests").json()[0]
+    refused = client.post(
+        f"{_base(team)}/control-tests/{plan['id']}/approve", json={"version": plan["version"]}
+    )
+    assert refused.status_code == 409, refused.text
+    assert "13 approved test attributes" in refused.json()["detail"]
+    assert client.get(f"{_base(team)}/test-sheets").json() == []
+    assert client.get(f"{_base(team)}/control-tests").json()[0]["status"] == "PROPOSED"
+
+
 # Helpers
 
 
@@ -832,3 +960,133 @@ def test_the_console_names_a_control_by_its_application(migrated: Database) -> N
             transaction(connection) as cursor,
         ):
             remove_application_everywhere(cursor, team["project"], UUID(oracle["application_id"]))
+
+
+# Bug hunt, 9 November 2026: a confirmed step decides on the record as the person saw it.
+
+
+def test_samples_drawn_again_after_their_approval_was_proposed_are_not_approved(
+    migrated: Database,
+) -> None:
+    """Before, approve_samples read the plan's version when the person confirmed it, so a
+    draw again (a routine step) in between had the person approve samples never shown."""
+    from test_console import _ask as _console_ask
+    from test_console import _call, _reply, _Script
+    from test_console import _thread as _console_thread
+
+    from ai_workforce_api.authorization import Principal, PrincipalKind
+    from ai_workforce_api.console import run_turn
+    from ai_workforce_api.console_tools import ToolContext, execute, parse
+
+    team, client, scheduler = _engagement(migrated, "pinsamples")
+    base = _base(team)
+    kickoff = _request(migrated, team, "ITGC-AC-01")
+    year = _year(migrated, team)
+    population = "User ID,Name,Date granted,Ticket\n" + "".join(
+        f"u000{n},Demo User {n},{year}-0{n}-10,REQ-{n}\n" for n in range(1, 4)
+    )
+    _add(client, team, "access population.csv", population, kickoff["id"])
+    _read_all(migrated, scheduler)
+    plan = client.get(f"{base}/control-tests").json()[0]
+    _accept_population(client, team, plan["engagement_control_id"])
+    asked = _console_ask(client, team, "Approve the samples for ITGC-AC-01.")
+    # Whatever the model says the pin is, the console sets it.
+    script = _Script([
+        _reply("", _call("approve_samples", control_ref="ITGC-AC-01", pinned="forged")),
+        _reply("Proposed."),
+    ])  # fmt: skip
+    with connect(migrated.url) as connection:
+        assert run_turn(connection, _settings(migrated), script, asked) == "DONE"
+    step = _console_thread(client, team)["messages"][-1]["actions"][0]
+    assert step["arguments"]["pinned"] == f"control_test:{plan['id']}@{plan['version']}"
+    with connect(migrated.url) as connection:
+        context = ToolContext(
+            connection=connection,
+            settings=_settings(migrated),
+            principal=Principal(kind=PrincipalKind.USER, id=team["owner_id"]),
+            organization_id=team["org"],
+            project_id=team["project"],
+        )
+        tool, parsed = parse("propose_samples", {"control_ref": "ITGC-AC-01"})
+        execute(tool, parsed, context)
+    console = f"{base}/console"
+    ran = client.post(f"{console}/actions/{step['id']}/confirm")
+    assert ran.status_code == 200, ran.text
+    failed = ran.json()["messages"][-1]["actions"][0]
+    assert failed["status"] == "FAILED"
+    assert failed["error"].startswith("The samples changed since this step was proposed")
+    assert client.get(f"{base}/control-tests").json()[0]["status"] == "PROPOSED"
+    # Asked again, the step is proposed on the samples as they are, and runs.
+    again = _console_ask(client, team, "Approve them now.")
+    script = _Script([
+        _reply("", _call("approve_samples", control_ref="ITGC-AC-01")), _reply("Proposed."),
+    ])  # fmt: skip
+    with connect(migrated.url) as connection:
+        run_turn(connection, _settings(migrated), script, again)
+    done = client.post(f"{console}/messages/{again}/confirm").json()["messages"][-1]["actions"]
+    assert done[0]["status"] == "DONE", done
+
+
+def test_a_confirmed_plan_carries_its_own_changes_and_stops_at_anyone_elses(
+    migrated: Database,
+) -> None:
+    """Results set and a sign-off proposed in one answer run together: each step's change
+    is one the person confirmed. A change made by anyone else after the steps were
+    proposed stops them."""
+    from test_console import _ask as _console_ask
+    from test_console import _call, _reply, _Script
+
+    from ai_workforce_api.authorization import Principal, PrincipalKind
+    from ai_workforce_api.console import run_turn
+    from ai_workforce_api.console_tools import ToolContext, execute, parse
+
+    team, client, scheduler = _engagement(migrated, "pinsheet")
+    _confirm_design(client, team, "ITGC-AC-05")
+    request = _request(migrated, team, "ITGC-AC-05")
+    _add(client, team, "settings.csv", "Setting,Value\nLockout,5 attempts\n", request["id"])
+    _read_all(migrated, scheduler)
+    with connect(migrated.url) as connection:
+        run_sheet(connection, None, UUID(_sheet(client, team)["id"]))
+    attributes = len(_sheet(client, team)["attributes"])
+    reason = "The settings file shows the configured value."
+
+    def plan() -> _Script:
+        return _Script([
+            _reply("", *[
+                _call("override_test_result", control_ref="ITGC-AC-05", item="SAP ERP",
+                      attribute_index=index, result="PASS", reason=reason)
+                for index in range(attributes)
+            ], _call("sign_off_testing", control_ref="ITGC-AC-05", note="Checked.")),
+            _reply("Proposed."),
+        ])  # fmt: skip
+
+    console = f"{_base(team)}/console"
+    first = _console_ask(client, team, "Pass every attribute and sign off ITGC-AC-05.")
+    with connect(migrated.url) as connection:
+        assert run_turn(connection, _settings(migrated), plan(), first) == "DONE"
+        # Someone else changes the sheet before the person confirms.
+        context = ToolContext(
+            connection=connection,
+            settings=_settings(migrated),
+            principal=Principal(kind=PrincipalKind.USER, id=team["owner_id"]),
+            organization_id=team["org"],
+            project_id=team["project"],
+        )
+        tool, parsed = parse(
+            "override_test_result",
+            {"control_ref": "ITGC-AC-05", "item": "SAP ERP", "attribute_index": 0,
+             "result": "PASS", "reason": "Seen again by someone else."},
+        )  # fmt: skip
+        execute(tool, parsed, context)
+    stopped = client.post(f"{console}/messages/{first}/confirm").json()["messages"][-1]["actions"]
+    assert stopped[0]["status"] == "FAILED"
+    assert stopped[0]["error"].startswith("The test sheet changed since this step was proposed")
+    assert all(step["status"] == "PROPOSED" for step in stopped[1:])
+    assert _sheet(client, team)["status"] == "OPEN"
+    # Proposed again on the sheet as it is: the results and the sign-off run in turn.
+    second = _console_ask(client, team, "Do it again on the sheet as it is now.")
+    with connect(migrated.url) as connection:
+        run_turn(connection, _settings(migrated), plan(), second)
+    ran = client.post(f"{console}/messages/{second}/confirm").json()["messages"][-1]["actions"]
+    assert [step["status"] for step in ran] == ["DONE"] * (attributes + 1), ran
+    assert ran[-1]["result"]["conclusion"] == "EFFECTIVE"

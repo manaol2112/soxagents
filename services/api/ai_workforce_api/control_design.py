@@ -31,6 +31,9 @@ from ai_workforce_api.testing_definitions import DEFINED_SINCE
 
 # Filled from the control's own system, never by hand.
 AUTOMATIC = ("system",)
+# The authentication control's settings, composed from how users sign in
+# (authentication_profile.TARGET): asked setting by setting, never typed.
+PROFILE_TARGET = "auth-settings"
 
 
 class SlotBody(BaseModel):
@@ -316,6 +319,40 @@ def missing_values(
     return found
 
 
+def unanswered_values(connection: psycopg.Connection[Any], project_id: UUID) -> dict[UUID, int]:
+    """Per control, how many of the client values its statement asks (not the automatic ones,
+    nor those a document answers) have no value: the count Control Understanding shows as
+    "N of M answered" (control-setup-model.ts). Wider than missing_values, which counts only
+    the values testing waits for."""
+    rows = connection.execute(
+        """
+        SELECT id, library_key FROM engagement_controls
+        WHERE project_id = %s AND library_key IS NOT NULL AND library_version >= %s
+        """,
+        (project_id, DEFINED_SINCE),
+    ).fetchall()
+    filled: dict[UUID, set[str]] = {}
+    for control_id, key in connection.execute(
+        "SELECT engagement_control_id, slot_key FROM control_parameters "
+        "WHERE project_id = %s AND btrim(value) <> ''",
+        (project_id,),
+    ).fetchall():
+        filled.setdefault(UUID(str(control_id)), set()).add(str(key))
+    found: dict[UUID, int] = {}
+    for control_id, library_key in rows:
+        statement = statement_for(str(library_key))
+        if statement is None:
+            continue
+        have = filled.get(UUID(str(control_id)), set())
+        unanswered = sum(
+            1 for slot in statement.slots
+            if slot.key not in AUTOMATIC and not asks_for_document(slot) and slot.key not in have
+        )  # fmt: skip
+        if unanswered:
+            found[UUID(str(control_id))] = unanswered
+    return found
+
+
 class ManyValuesItem(BaseModel):
     control_id: UUID
     values: dict[str, str] = Field(min_length=1, max_length=40)
@@ -511,9 +548,13 @@ def set_values(
     control_id: UUID,
     actor: UUID,
     body: ValuesBody,
+    *,
+    composed: bool = False,
 ) -> list[UUID]:
     """Fill slots on the control (and, when asked, on every control that uses them and has
-    no value yet). Returns every control changed."""
+    no value yet). Returns every control changed. The authentication control's required
+    settings are composed from how users sign in (authentication_profile, 10 November 2026):
+    only that composition (`composed`) writes them."""
     found = _statement(connection, control_id)
     if found is None:
         raise ContextState("this control has no statement to fill")
@@ -523,6 +564,10 @@ def set_values(
         slot = statement.slot(key)
         if slot is None or key in AUTOMATIC:
             raise ContextState("unknown value")
+        if key == PROFILE_TARGET and not composed:
+            raise ContextState(
+                "the required settings are recorded from how users sign in, setting by setting"
+            )
         value = clean_line(raw, 300).strip()
         if contains_secret({key: value}):
             raise ContextState("a value cannot hold a credential")
@@ -643,8 +688,14 @@ class CopyBody(BaseModel):
 
 
 def _questions_of(statement: Statement) -> dict[str, Any]:
-    """The questions a control asks the client, by key: the automatic ones are not asked."""
-    return {slot.key: slot for slot in statement.slots if slot.key not in AUTOMATIC}
+    """The questions a control asks the client, by key: the automatic ones are not asked,
+    nor the authentication control's composed settings, which copy as their own settings
+    (authentication_profile.copy_profile)."""
+    return {
+        slot.key: slot
+        for slot in statement.slots
+        if slot.key not in AUTOMATIC and slot.key != PROFILE_TARGET
+    }
 
 
 def _control_row(

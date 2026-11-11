@@ -3391,7 +3391,6 @@
     margin: 0 auto;
   }
 
-
   .lp-hero-app {
     grid-row: 3;
   }
@@ -3473,7 +3472,6 @@
   }
 
   /* On a phone the crystal stands alone; the agents are in Mission control below. */
-
 
   .lp-hero-actions .lp-btn {
     flex: 1 1 100%;

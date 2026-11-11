@@ -855,6 +855,12 @@ def create_single_sheet(
     ).fetchone()
     if control is None or not tested_once(cursor, project_id, control_id, kind):
         return None
+    try:
+        attributes = _attributes(control[0])
+    except TooManyAttributes as error:
+        # Reading the evidence goes on; the sheet opens once the attributes fit.
+        logger.warning("no test sheet opened: %s", error.detail)
+        return None
     created = cursor.execute(
         """
         INSERT INTO test_sheets (
@@ -865,7 +871,7 @@ def create_single_sheet(
         ON CONFLICT (project_id, engagement_control_id) WHERE test_round_id IS NULL DO NOTHING
         RETURNING id
         """,
-        (organization_id, project_id, control_id, Json(_attributes(control[0])), requester),
+        (organization_id, project_id, control_id, Json(attributes), requester),
     ).fetchone()
     if created is None:
         return None
@@ -893,6 +899,11 @@ def create_round_single_sheet(
     ).fetchone()
     if control is None:
         return None
+    try:
+        attributes = _attributes(control[0])
+    except TooManyAttributes as error:
+        logger.warning("no round test sheet opened: %s", error.detail)
+        return None
     created = cursor.execute(
         """
         INSERT INTO test_sheets (
@@ -903,7 +914,7 @@ def create_round_single_sheet(
         ON CONFLICT (test_round_id) WHERE test_round_id IS NOT NULL DO NOTHING
         RETURNING id
         """,
-        (organization_id, project_id, control_id, Json(_attributes(control[0])), requester,
+        (organization_id, project_id, control_id, Json(attributes), requester,
          round_id),
     ).fetchone()  # fmt: skip
     if created is None:
@@ -966,9 +977,22 @@ def sync_single_items(
         _single_items(cursor, sheet_id, apps)
 
 
+class TooManyAttributes(Exception):
+    """A control with more approved attributes than a sheet holds is not tested: dropping
+    the rest would conclude on part of the test (bug hunt, 9 November 2026)."""
+
+    def __init__(self, count: int) -> None:
+        self.detail = (
+            f"the control has {count} approved test attributes and a test sheet holds at "
+            f"most {MAX_ATTRIBUTES}; combine or remove attributes before testing"
+        )
+
+
 def _attributes(value: Any) -> list[str]:
     attributes = [clean_line(str(item), 300) for item in (value or []) if str(item).strip()]
-    return attributes[:MAX_ATTRIBUTES] or ["The control operated as described"]
+    if len(attributes) > MAX_ATTRIBUTES:
+        raise TooManyAttributes(len(attributes))
+    return attributes or ["The control operated as described"]
 
 
 def request_run(cursor: psycopg.Cursor[Any], sheet_id: UUID) -> UUID | None:
@@ -1428,7 +1452,6 @@ def _test_item(
     from ai_workforce_api.evidence_analysis import ocr_choice
     from ai_workforce_api.pbc_drafting import load_context
 
-    del requester
     item = connection.execute(
         """
         SELECT i.label, i.detail, i.version, s.id, s.version,
@@ -1589,15 +1612,48 @@ def _test_item(
         )
     with transaction(connection) as cursor:
         # Only if nothing changed the item meanwhile; a change asks for another run.
+        before = cursor.execute(
+            "SELECT overrides FROM test_items WHERE id = %s AND version = %s FOR UPDATE",
+            (item_id, version),
+        ).fetchone()
+        # An item is tested again only when its evidence changed or a person asked for a
+        # retest, so a person's override judged results that no longer stand. The new
+        # results replace it and a person decides again; the audit log names what was
+        # cleared (bug hunt, 9 November 2026).
         cursor.execute(
             """
             UPDATE test_items
             SET results = %s, source = %s, model_call_id = %s, tested_at = clock_timestamp(),
-                note = %s, needs_test = false, version = version + 1
+                note = %s, needs_test = false, overrides = '[]'::jsonb, version = version + 1
             WHERE id = %s AND version = %s
             """,
             (Json(results), source, call_id, note[:500], item_id, version),
         )
+        cleared = list(before[0]) if before is not None and isinstance(before[0], list) else []
+        if cleared:
+            _audit(
+                cursor,
+                organization_id,
+                project_id,
+                requester,
+                UUID(str(item[3])),
+                "testing.overrides_cleared",
+                {
+                    "item_id": str(item_id),
+                    "overrides": [
+                        {
+                            "index": entry.get("index"),
+                            "result": entry.get("result"),
+                            "reason": str(entry.get("reason", ""))[:500],
+                            "by": entry.get("by"),
+                            "at": entry.get("at"),
+                        }
+                        for entry in cleared
+                        if isinstance(entry, dict)
+                    ],
+                },
+                None if caller is None else caller.job.agent_instance_id,
+            )
     return True
 
 

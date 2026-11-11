@@ -166,6 +166,9 @@ class FinalityFacts:
     # A reviewer's coverage assessment (W3 follow-up) covers the current sheet and
     # workpaper versions, so the signed review stands for them.
     coverage_assessed: bool = False
+    # The standing D&I conclusion's verdict (design_conclusions), or None. Not effective
+    # means OE is not performed (B0): no interim testing or roll-forward is owed.
+    design_verdict: str | None = None
 
 
 _APPROVED_PLAN = ("APPROVED", "CHANGES_PROPOSED")
@@ -230,7 +233,21 @@ def finality(facts: FinalityFacts | None) -> Finality:
     if facts is None:
         return Finality(final=False, reasons=reasons)
     applies = {phase: facts.applicability.get(phase) in _APPLIES for phase in PHASES}
-    if applies["INTERIM"] or facts.sheet_status is not None:
+    # A design signed off as not effective concludes the control without OE (B0): the gate
+    # refuses interim testing and its rounds, so they are not owed, and the control's own
+    # review of the design is (bug hunt, 9 November 2026; before, such a control could never
+    # be final).
+    failed = facts.design_verdict == "NOT_EFFECTIVE"
+    if failed and facts.review_status != "SIGNED_OFF":
+        reasons.append(
+            NotFinal(
+                kind="REVIEW",
+                text="Independent review not signed off",
+                step="REVIEW",
+                phase="DESIGN",
+            )
+        )
+    if not failed and (applies["INTERIM"] or facts.sheet_status is not None):
         if facts.sheet_status != "SIGNED_OFF":
             reasons.append(
                 NotFinal(
@@ -376,7 +393,7 @@ def finality(facts: FinalityFacts | None) -> Finality:
                         phase=phase,  # type: ignore[arg-type]
                     )
                 )
-        elif kind == "ROLLFORWARD" and applies["ROLLFORWARD"]:
+        elif kind == "ROLLFORWARD" and applies["ROLLFORWARD"] and not failed:
             reasons.append(
                 NotFinal(
                     kind="ROUND",
@@ -519,6 +536,19 @@ def finality_facts(
         assessed.setdefault(control_id, []).append(
             (int(sheet_version), dict(versions) if isinstance(versions, dict) else {})
         )
+    # A not-effective D&I verdict, as the OE gate reads it (a sign-off out of date with its
+    # workpaper or deficiencies does not hold); the few such controls are read one by one.
+    from ai_workforce_api.design_conclusions import design_verdict
+
+    verdicts: dict[UUID, str] = {}
+    for (failed_control,) in connection.execute(
+        "SELECT engagement_control_id FROM design_conclusions "
+        "WHERE project_id = %s AND reopened_at IS NULL AND verdict = 'NOT_EFFECTIVE'",
+        (project_id,),
+    ).fetchall():
+        held = design_verdict(connection, project_id, failed_control)
+        if held is not None:
+            verdicts[failed_control] = held
     deficiencies: dict[UUID, list[str]] = {}
     for control_id, status in connection.execute(
         "SELECT engagement_control_id, status FROM deficiencies "
@@ -558,6 +588,7 @@ def finality_facts(
                 and papers_match(assessed_papers, papers.get(control_id, {}))
                 for version, assessed_papers in assessed.get(control_id, [])
             ),
+            design_verdict=verdicts.get(control_id),
         )
     return found
 

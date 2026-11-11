@@ -51,20 +51,26 @@ def test_a_pbc_request_follows_its_status_path(migrated: Database) -> None:
     jumped = _move(client, seeded, project_id, request_id, _draft(), "RECEIVED", pending["version"])
     assert jumped.status_code == 409
     assert jumped.json()["detail"] == "pbc status is not allowed"
-    missing = _move(client, seeded, project_id, request_id, _draft(), "SENT", pending["version"])
-    assert missing.status_code == 409
-    assert missing.json()["detail"] == "outbound message is required"
-    sent = _move(
-        client,
-        seeded,
-        project_id,
-        request_id,
-        _draft(),
-        "SENT",
-        pending["version"],
-        outbound_message_id=message.provider_message_id,
-        thread_id=message.thread_id,
-    )
+    # Rewritten 9 November 2026 (bug hunt): before, this route moved an awaiting-approval
+    # request to SENT given any message id in the project's mailbox, with no approval and no
+    # delivery of this request. Only delivering the approved message sends a request (outbound
+    # sets SENT itself), so the route refuses SENT even with a real message.
+    for extra in ({}, {"outbound_message_id": message.provider_message_id,
+                       "thread_id": message.thread_id}):  # fmt: skip
+        refused = _move(
+            client, seeded, project_id, request_id, _draft(), "SENT", pending["version"], **extra
+        )
+        assert refused.status_code == 409
+        assert refused.json()["detail"] == "pbc status is not allowed"
+    # Delivered as the send path records it; the response states follow on this route.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE pbc_requests SET status = 'SENT', outbound_message_id = %s, thread_id = %s, "
+            "version = version + 1 WHERE id = %s",
+            (message.provider_message_id, message.thread_id, request_id),
+        )
+        connection.commit()
+    sent = client.get(f"{_requests(seeded, project_id)}/{request_id}").json()
     assert sent["status"] == "SENT"
     assert sent["outbound_message_id"] == message.provider_message_id
     waiting = _move(

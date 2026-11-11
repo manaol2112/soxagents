@@ -7,7 +7,6 @@ import pytest
 from support import Database
 from test_evidence_analysis import _Provider
 from test_outbound import _session, migrated
-from test_phase_release import _prepare_design
 from test_testing_engine import _base, _controls, _sheet
 from test_workpapers import _tested_control
 
@@ -107,7 +106,9 @@ def test_preparing_the_effectiveness_workpaper_opens_the_review_and_proposes_not
     assert all(n["status"] == "PROPOSED" and n["raised_by"] == "AGENT" for n in notes)
     by_kind = {(n["target_kind"], n["severity"]) for n in notes}
     assert ("SAMPLE", "MUST_FIX") in by_kind  # 3 items where the frequency asks for 25
-    assert ("WORKPAPER", "SHOULD_FIX") in by_kind  # no design workpaper yet
+    # Rewritten 8 November 2026 (B0): the design workpaper is prepared before OE, so the
+    # note the agent raised for a missing one ("no design workpaper yet") no longer arises.
+    assert ("WORKPAPER", "SHOULD_FIX") not in by_kind
     labels = [item["label"] for item in sheet["items"]]
     disagreed = [n for n in notes if "reviewer_result" in n["target"]]
     assert [(n["severity"], n["target"]["reviewer_result"]) for n in disagreed] == [
@@ -122,7 +123,15 @@ def test_preparing_the_effectiveness_workpaper_opens_the_review_and_proposes_not
     # left for a person: testing_engine.supported), so the reviewer finds none uncited.
     uncited = [n for n in notes if "passed without a cited passage" in n["text"]]
     assert uncited == []
-    assert review["blocking"] == [f"{len(notes)} notes not cleared yet"]
+    # B3 (8 November 2026): the deficiency logged from testing is rated by a person
+    # before the review signs off; before, only the notes held it. Rewritten 9 November 2026
+    # (bug hunt): the severity proposed at logging waits for the reviewer, and so does the
+    # review; before, it could sign off with that decision open.
+    assert review["blocking"] == [
+        "1 deficiency not rated yet",
+        "1 deficiency change waiting for the reviewer's decision",
+        f"{len(notes)} notes not cleared yet",
+    ]
     row = _row(client, team, sheet["control_id"])
     assert (row["review_left"], row["next_step"]) == ("DECIDE", "Decide the reviewer's notes")
 
@@ -191,7 +200,8 @@ def test_the_reviewer_decides_notes_a_must_fix_reopens_the_work_and_signs_off(
     assert mine["reopened"][0] == "SHEET" and mine["reopened"][1].startswith("WORKPAPER:")
     assert _sheet(client, team)["status"] == "OPEN"
     papers = client.get(f"{base}/workpapers", params={"control_id": sheet["control_id"]}).json()
-    assert [p["status"] for p in papers] == ["DRAFT"]
+    # The effectiveness workpaper reopens; the design workpaper (prepared before OE, B0) stays.
+    assert [p["status"] for p in papers if p["stage"] == "EFFECTIVENESS"] == ["DRAFT"]
     assert "the testing is not signed off" in review["blocking"]
     blocked = reviewer.post(f"{path}/sign-off", json={"version": review["version"]})
     assert blocked.status_code == 409 and "not signed off" in blocked.json()["detail"]
@@ -245,10 +255,21 @@ def test_the_reviewer_decides_notes_a_must_fix_reopens_the_work_and_signs_off(
         json={"version": current["version"], "action": "LOG"},
     )
     assert logged.status_code == 200, logged.text
-    paper = client.get(f"{base}/workpapers", params={"control_id": sheet["control_id"]}).json()[0]
+
+    def effectiveness() -> dict[str, Any]:
+        # Since B0 the prepared design workpaper is listed beside it.
+        return next(
+            w
+            for w in client.get(
+                f"{base}/workpapers", params={"control_id": sheet["control_id"]}
+            ).json()
+            if w["stage"] == "EFFECTIVENESS"
+        )
+
+    paper = effectiveness()
     with connect(migrated.url) as connection:
         assert run_draft(connection, _Provider([{"sections": []}]), UUID(paper["id"])) == "DONE"
-    paper = client.get(f"{base}/workpapers", params={"control_id": sheet["control_id"]}).json()[0]
+    paper = effectiveness()
     prepared = client.post(
         f"{base}/workpapers/{paper['id']}/prepare",
         json={"version": paper["version"], "rationale_reviewed": True},
@@ -268,6 +289,54 @@ def test_the_reviewer_decides_notes_a_must_fix_reopens_the_work_and_signs_off(
                 f"{path}/notes/{note['id']}/decide",
                 json={"version": review["version"], "action": "DISMISS", "reason": "Noted."},
             ).json()
+    # B3: the logged deficiency is rated before the review signs off. Rewritten 9 November 2026
+    # (bug hunt): before, only the rating was listed and the review signed off with the
+    # significant deficiency proposed at logging still waiting; that decision is the
+    # reviewer's, and the review now waits for it too.
+    assert review["blocking"] == [
+        "1 deficiency not rated yet",
+        "1 deficiency change waiting for the reviewer's decision",
+    ]
+    with connect(migrated.url) as connection:
+        _rate_all(connection, team)
+        connection.commit()
+    review = client.get(f"{base}/reviews").json()[0]
+    assert review["blocking"] == ["1 deficiency change waiting for the reviewer's decision"]
+    _decide_changes(migrated, reviewer, base, team, "The effect is limited to this control.")
+    with connect(migrated.url) as connection:
+        _rate_all(connection, team)
+        connection.commit()
+    review = client.get(f"{base}/reviews").json()[0]
+    assert review["blocking"] == []
+    # A severity raised to a material weakness waits for the reviewer, and so does the review
+    # (bug hunt, 9 November 2026): before, the rating naming the waiting severity counted as
+    # rated and the review could sign off on the old severity with the decision still open.
+    with connect(migrated.url) as connection:
+        from ai_workforce_api.authorization import Principal, PrincipalKind
+        from ai_workforce_api.control_conclusions import RateBody, rate
+
+        found = connection.execute(
+            "SELECT id, version FROM deficiencies WHERE project_id = %s "
+            "AND engagement_control_id = %s AND status <> 'CLOSED'",
+            (team["project"], UUID(sheet["control_id"])),
+        ).fetchone()
+        assert found is not None
+        rate(
+            connection, Principal(kind=PrincipalKind.USER, id=team["owner_id"]), team["org"],
+            team["project"], UUID(sheet["control_id"]), found[0],
+            RateBody(severity="MATERIAL_WEAKNESS", version=found[1],
+                     rationale="The access reaches every financial system."),
+        )  # fmt: skip
+        connection.commit()
+    review = client.get(f"{base}/reviews").json()[0]
+    assert review["blocking"] == ["1 deficiency change waiting for the reviewer's decision"]
+    held = reviewer.post(f"{path}/sign-off", json={"version": review["version"]})
+    assert held.status_code == 409 and "waiting for the reviewer" in held.json()["detail"]
+    _decide_changes(migrated, reviewer, base, team, "A control deficiency, as rated.")
+    with connect(migrated.url) as connection:
+        _rate_all(connection, team)
+        connection.commit()
+    review = client.get(f"{base}/reviews").json()[0]
     assert review["blocking"] == []
     assert _row(client, team, sheet["control_id"])["review_left"] == "SIGN"
     # The dashboard and the inbox say where the review stands (9.2).
@@ -297,8 +366,10 @@ def test_the_reviewer_decides_notes_a_must_fix_reopens_the_work_and_signs_off(
     assert own.status_code == 409 and "another reviewer" in own.json()["detail"]
     # Design and implementation testing is applicable to the control: its workpaper is
     # prepared before the review signs off, or the conclusion cannot be final (workflow
-    # integrity W1, owner's decision 4).
-    _prepare_design(migrated, team, sheet["control_id"])
+    # integrity W1, owner's decision 4). Since B0 it is prepared before OE begins, so it is
+    # read here rather than prepared (rewritten 8 November 2026).
+    papers = client.get(f"{base}/workpapers", params={"control_id": sheet["control_id"]}).json()
+    assert [w["status"] for w in papers if w["stage"] == "DESIGN"] == ["PREPARED"]
     signed_off = reviewer.post(
         f"{path}/sign-off", json={"version": review["version"], "note": "Reviewed."}
     )
@@ -435,7 +506,20 @@ def test_the_console_reads_and_decides_a_review_for_the_person(migrated: Databas
         with pytest.raises(ToolFailed, match="reviewer role"):
             call(preparer, "clear_review_note", control_ref="ITGC-AC-01", note=mine["number"])
         cleared = call(reviewer, "clear_review_note", control_ref="ITGC-AC-01", note=mine["number"])
-        assert cleared["blocking"] == []
+        # B3 (8 November 2026): the logged deficiency's severity is rated by a person before
+        # the review signs off. Rewritten 9 November 2026 (bug hunt): before, only the rating
+        # held the review; the severity proposed when the deficiency was logged waits for the
+        # reviewer's decision too, and the review waits for it.
+        assert cleared["blocking"] == [
+            "1 deficiency not rated yet",
+            "1 deficiency change waiting for the reviewer's decision",
+        ]
+        connection.commit()
+        _decide_changes(
+            migrated, _session(migrated, team["reviewer_id"]), base, team, "As recorded."
+        )
+        _rate_all(connection, team)
+        assert call(reviewer, "get_review", control_ref="ITGC-AC-01")["blocking"] == []
         with pytest.raises(ToolFailed, match="another reviewer"):
             # The preparer, even as a reviewer, cannot sign off their own work.
             connection.execute(
@@ -458,6 +542,53 @@ def test_the_console_reads_and_decides_a_review_for_the_person(migrated: Databas
 # Helpers
 
 
+def _decide_changes(
+    migrated: Database, reviewer: Any, base: str, team: dict[str, Any], reason: str
+) -> None:
+    """The reviewer declines each deficiency change waiting on the engagement, so each keeps
+    its recorded severity (workspace._decide)."""
+    with connect(migrated.url) as connection:
+        rows = connection.execute(
+            "SELECT id, version FROM deficiencies WHERE project_id = %s "
+            "AND pending_change IS NOT NULL",
+            (team["project"],),
+        ).fetchall()
+    assert rows
+    for deficiency, version in rows:
+        decided = reviewer.post(
+            f"{base}/deficiencies/{deficiency}/changes/decide",
+            json={"version": version, "approve": False, "reason": reason},
+        )
+        assert decided.status_code == 200, decided.text
+
+
+def _rate_all(connection: Any, team: dict[str, Any]) -> None:
+    """A person rates each of the engagement's open deficiencies at its current severity
+    (control_conclusions.rate, B3), as the Control Conclusion step asks before the review."""
+    from ai_workforce_api.authorization import Principal, PrincipalKind
+    from ai_workforce_api.control_conclusions import RateBody, rate
+
+    rows = connection.execute(
+        "SELECT id, engagement_control_id, severity, version FROM deficiencies "
+        "WHERE project_id = %s AND status <> 'CLOSED'",
+        (team["project"],),
+    ).fetchall()
+    for deficiency, control, severity, version in rows:
+        rate(
+            connection,
+            Principal(kind=PrincipalKind.USER, id=team["owner_id"]),
+            team["org"],
+            team["project"],
+            control,
+            deficiency,
+            RateBody(
+                severity=severity,
+                version=version,
+                rationale="Rated at its recorded severity for the test.",
+            ),
+        )
+
+
 def _prepared_control(
     migrated: Database, slug: str, decision: str
 ) -> tuple[dict[str, Any], Any, dict[str, Any], str]:
@@ -471,13 +602,22 @@ def _prepared_control(
     )
     assert decided.status_code == 200, decided.text
     base = f"{_base(team)}/workpapers"
-    paper = client.get(base, params={"control_id": sheet["control_id"]}).json()[0]
+    # The effectiveness workpaper: since B0 the prepared design workpaper is listed too.
+    paper = next(
+        w
+        for w in client.get(base, params={"control_id": sheet["control_id"]}).json()
+        if w["stage"] == "EFFECTIVENESS"
+    )
     provider = _Provider(
         [{"sections": [{"key": "population", "text": "The population was the user listing."}]}]
     )
     with connect(migrated.url) as connection:
         assert run_draft(connection, provider, UUID(paper["id"])) == "DONE"
-    paper = client.get(base, params={"control_id": sheet["control_id"]}).json()[0]
+    paper = next(
+        w
+        for w in client.get(base, params={"control_id": sheet["control_id"]}).json()
+        if w["stage"] == "EFFECTIVENESS"
+    )
     prepared = client.post(
         f"{base}/{paper['id']}/prepare",
         json={"version": paper["version"], "rationale_reviewed": True},

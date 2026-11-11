@@ -717,10 +717,14 @@ def require_testable(
 def waiting_reason(connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID) -> str:
     """Why the tester waits for this control, or "" when it may test."""
     found = assess(connection, project_id, control_id)
-    if found is None or not found.blocking:
-        return ""
-    first = found.first_blocker()
-    return f"Testing waits: {found.label.lower()}." + (f" {first}" if first else "")
+    if found is not None and found.blocking:
+        first = found.first_blocker()
+        return f"Testing waits: {found.label.lower()}." + (f" {first}" if first else "")
+    # Then the OE gate (B0): the earlier blocker is named first, as the workflow runs.
+    from ai_workforce_api.design_conclusions import oe_gate_reason
+
+    gated = oe_gate_reason(connection, control_id)
+    return "" if gated is None else f"Testing waits: {gated}."
 
 
 def resume_testing(

@@ -102,6 +102,9 @@ export function SpotlightTour({
   seenKey,
   openEvent,
   finish = null,
+  auto = true,
+  launchLabel = "Guide me",
+  agent = "Setup agent",
   watch,
   onOpenChange,
   onStep,
@@ -113,6 +116,14 @@ export function SpotlightTour({
   openEvent: string;
   /** The last stop's main action, in place of closing; null closes with Done. */
   finish?: { label: string; onClick: () => void } | null;
+  /** Opens by itself on the first visit (the default). False: only when asked, as the
+   * control's "Show me around" (product owner, 10 November 2026: nothing pops up over the
+   * work). */
+  auto?: boolean;
+  /** The words on the button that opens the tour. */
+  launchLabel?: string;
+  /** The agent who gives the tour, by name. */
+  agent?: string;
   /** A value that, when it changes, may move what a step points at. */
   watch?: unknown;
   onOpenChange?: (open: boolean) => void;
@@ -143,12 +154,12 @@ export function SpotlightTour({
       setOpen(true);
     };
     document.addEventListener(openEvent, begin);
-    const timer = seen(seenKey) ? 0 : window.setTimeout(begin, 700);
+    const timer = !auto || seen(seenKey) ? 0 : window.setTimeout(begin, 700);
     return () => {
       document.removeEventListener(openEvent, begin);
       window.clearTimeout(timer);
     };
-  }, [openEvent, seenKey, setOpen]);
+  }, [openEvent, seenKey, setOpen, auto]);
 
   // The window's size places the card, with or without a spotlight (a phone docks it).
   useEffect(() => {
@@ -300,7 +311,7 @@ export function SpotlightTour({
         }}
       >
         <AgentAvatar size={20} />
-        Guide me
+        {launchLabel}
       </button>
       {mounted && open && current !== undefined
         ? createPortal(
@@ -330,9 +341,9 @@ export function SpotlightTour({
                 style={position}
               >
                 <div className="ng-head">
-                  <AgentAvatar size={40} label="Setup agent" />
+                  <AgentAvatar size={40} label={agent} />
                   <span className="ng-who">
-                    <strong>Setup agent</strong>
+                    <strong>{agent}</strong>
                     <small>
                       Step {index + 1} of {steps.length}
                     </small>

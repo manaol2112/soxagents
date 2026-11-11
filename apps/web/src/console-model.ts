@@ -672,7 +672,8 @@ export function safeHref(target: string): string | null {
   if (/^https?:\/\/[^\s]+$/i.test(value)) {
     return value;
   }
-  if (/^\/(?!\/)[^\s]*$/.test(value)) {
+  // A page of this app: one leading "/", and no backslash a browser would read as one.
+  if (/^\/(?![/\\])[^\s\\]*$/.test(value)) {
     return value;
   }
   return null;

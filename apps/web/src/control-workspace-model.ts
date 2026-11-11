@@ -36,41 +36,6 @@ export type RecordTab =
   | "review"
   | "activity";
 
-export const RECORD_TAB_LABELS: Record<RecordTab, string> = {
-  overview: "Overview",
-  design: "Control & design",
-  evidence: "Evidence",
-  testing: "Testing",
-  findings: "Findings",
-  review: "Review & conclusion",
-  activity: "Activity",
-};
-
-/** The record's four primary sections. Each keeps its tabs' own routes (`?tab=`), so a
- * bookmark or deep link to any tab still opens it; Activity sits outside them, reached
- * from the AI activity panel and its own link. */
-export type RecordSection = "overview" | "plan" | "work" | "conclusion";
-
-export const RECORD_SECTIONS: ReadonlyArray<{
-  key: RecordSection;
-  label: string;
-  tabs: readonly RecordTab[];
-}> = [
-  { key: "overview", label: "Overview", tabs: ["overview"] },
-  { key: "plan", label: "Test plan", tabs: ["design"] },
-  {
-    key: "work",
-    label: "Evidence & testing",
-    tabs: ["evidence", "testing", "findings"],
-  },
-  { key: "conclusion", label: "Conclusion", tabs: ["review"] },
-];
-
-/** The section a tab belongs to; null for Activity, which is reached on its own. */
-export function sectionOf(tab: RecordTab): RecordSection | null {
-  return RECORD_SECTIONS.find((item) => item.tabs.includes(tab))?.key ?? null;
-}
-
 export type StageStatus =
   | "not_started"
   | "ready"
@@ -450,39 +415,6 @@ export function lifecycleOf(input: WorkspaceInput): LifecycleStage[] {
     { key: "review", label: "Review", tab: "review", ...reviewStage },
     { key: "conclusion", label: "Conclusion", tab: "review", ...conclusion },
   ];
-}
-
-/** A stage's full name, for the line that says where the audit stands. */
-export const STAGE_TITLES: Record<LifecycleStage["key"], string> = {
-  design: "Design and walkthrough",
-  evidence: "Evidence collection",
-  interim: "Interim testing",
-  rollforward: "Roll-forward testing",
-  review: "Independent review",
-  conclusion: "Conclusion",
-};
-
-const UNDER_WAY: ReadonlySet<StageStatus> = new Set([
-  "ready",
-  "in_progress",
-  "waiting_evidence",
-  "awaiting_approval",
-  "blocked",
-]);
-
-/**
- * The stage the audit stands at: the first one under way, else the first not started.
- * A stage the plan says does not apply is never current. Null when every stage that
- * applies is done.
- */
-export function currentStage(
-  stages: readonly LifecycleStage[],
-): LifecycleStage | null {
-  return (
-    stages.find((stage) => UNDER_WAY.has(stage.status)) ??
-    stages.find((stage) => stage.status === "not_started") ??
-    null
-  );
 }
 
 /** The control's definition work that waits on a person, part by part. */

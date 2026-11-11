@@ -224,7 +224,8 @@ describe("walkthrough layout", () => {
     // break-word, not anywhere: "anywhere" let the next question shrink to a letter per
     // line beside its hint (product owner's screenshot, 26 October 2026).
     assert.match(css, /\n\.wt \{\n {2}overflow-wrap: break-word;/);
-    assert.match(rule(".wt-say .wt-next"), /display: block/);
+    // (Its ".wt-say .wt-next" rule went with the conversation view that used it, in the
+    // cleanup of 9 November 2026: no screen renders those classes.)
     // Scoped under .wt so it outranks the chips' own fixed height later in the file.
     const chips = rule(".wt .wt-chip,\n.wt .wt-choice");
     assert.match(chips, /white-space: normal/);

@@ -23,7 +23,6 @@ contradicts itself), so a tester's pass it cannot endorse becomes a proposed not
 """
 
 import copy
-import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -56,9 +55,9 @@ from ai_workforce_api.authorization import (
 )
 from ai_workforce_api.console_citations import find_quote
 from ai_workforce_api.control_instances import control_label
-from ai_workforce_api.controls import sample_size
 from ai_workforce_api.db import connect, independent_steps, transaction
 from ai_workforce_api.inbound import clean_line, clean_text
+from ai_workforce_api.methodology import PLATFORM_DEFAULT, Rules, rules_for
 from ai_workforce_api.model_providers import live_model, provider_for
 from ai_workforce_api.models import ModelImage, ModelProvider, ModelRequest
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor, record_outcome
@@ -338,10 +337,12 @@ def rules_findings(
     control: ControlFacts,
     workpapers: tuple[WorkpaperFacts, ...],
     deficiency_status: str | None,
+    rules: Rules = PLATFORM_DEFAULT,
 ) -> list[Finding]:
-    """What a reviewer checks before re-performing anything: reviewed rules in code."""
+    """What a reviewer checks before re-performing anything: reviewed rules in code. The
+    sample expected is the one the engagement's methodology sets."""
     findings: list[Finding] = []
-    expected = sample_size(control.frequency, control.nature)
+    expected = rules.sample_size(control.frequency, control.nature)
     if sheet.method == "SAMPLE" and len(sheet.items) < expected:
         findings.append(
             Finding(
@@ -668,6 +669,7 @@ def run_reperformance(
         control,
         _workpaper_facts(connection, project_id, control_id),
         None if deficiency_status is None else str(deficiency_status[0]),
+        rules_for(connection, project_id),
     )
     source = "RULES"
     note = ""
@@ -1154,17 +1156,51 @@ def _review(
     }
     prepared = (sheet is not None and sheet[3] == viewer) or any(p[4] == viewer for p in papers)
     blocking: list[str] = []
-    if sheet is None or sheet[0] != "SIGNED_OFF":
-        blocking.append("the testing is not signed off")
-    effectiveness = next((p for p in papers if p[1] == "EFFECTIVENESS"), None)
-    if effectiveness is None or effectiveness[2] != "PREPARED":
-        blocking.append("the effectiveness workpaper is not prepared")
-    if row[5] != "IDLE":
-        blocking.append("the reviewer agent is still re-performing the testing")
-    elif row[6] is None:
-        blocking.append("the testing has not been re-performed")
-    elif sheet is not None and row[9] is not None and int(sheet[2]) != int(row[9]):
-        blocking.append("the testing changed since it was re-performed")
+    # The control's own review rests on its D&I conclusion (B0/B3, 8 November 2026). A design
+    # signed off as not effective is reviewed without OE: nothing was tested to re-perform.
+    design = None
+    if row[15] is None:
+        from ai_workforce_api.design_conclusions import design_verdict
+
+        design = design_verdict(connection, project_id, control_id)
+    if design == "NOT_EFFECTIVE":
+        pass
+    else:
+        if row[15] is None and design is None:
+            blocking.append("the D&I conclusion is not signed off as effective")
+        if sheet is None or sheet[0] != "SIGNED_OFF":
+            blocking.append("the testing is not signed off")
+        effectiveness = next((p for p in papers if p[1] == "EFFECTIVENESS"), None)
+        if effectiveness is None or effectiveness[2] != "PREPARED":
+            blocking.append("the effectiveness workpaper is not prepared")
+        if row[5] != "IDLE":
+            blocking.append("the reviewer agent is still re-performing the testing")
+        elif row[6] is None:
+            blocking.append("the testing has not been re-performed")
+        elif sheet is not None and row[9] is not None and int(sheet[2]) != int(row[9]):
+            blocking.append("the testing changed since it was re-performed")
+    if row[15] is None:
+        # Each deficiency's severity is rated by a person before the review signs off.
+        from ai_workforce_api.control_conclusions import unrated
+
+        left = unrated(connection, project_id, control_id)
+        if left:
+            blocking.append(f"{left} deficienc{'y' if left == 1 else 'ies'} not rated yet")
+        # A change to a deficiency waiting for the reviewer (a severity raised to or from a
+        # significant deficiency, say) is decided before the review signs off (bug hunt,
+        # 9 November 2026): before, a rating naming the waiting severity counted as rated, so
+        # the review signed off on the old severity with the decision still open.
+        changes = connection.execute(
+            "SELECT count(*) FROM deficiencies WHERE project_id = %s "
+            "AND engagement_control_id = %s AND status <> 'CLOSED' AND pending_change IS NOT NULL",
+            (project_id, control_id),
+        ).fetchone()
+        waiting_changes = 0 if changes is None else int(changes[0])
+        if waiting_changes:
+            blocking.append(
+                f"{waiting_changes} deficiency change{'' if waiting_changes == 1 else 's'} "
+                "waiting for the reviewer's decision"
+            )
     waiting = counts["PROPOSED"] + counts["OPEN"] + counts["RESPONDED"]
     if waiting:
         blocking.append(f"{_count(waiting, 'note')} not cleared yet")
@@ -1965,6 +2001,11 @@ def _decide_note(
         note_status, severity, kind, target = _locked_note(cursor, review_id, note_id)
         if note_status != "PROPOSED":
             raise ReviewState("the note is already decided")
+        if current_prepared(cursor, project_id, review_id, principal.id):
+            raise ReviewState(
+                "you signed off the testing or prepared a workpaper; "
+                "another reviewer decides this note"
+            )
         reopened: list[str] = []
         if body.action == "ACCEPT" and severity == "MUST_FIX":
             text_row = cursor.execute(
@@ -2057,6 +2098,11 @@ def _clear_note(
         note_status, _severity, _kind, _target = _locked_note(cursor, review_id, note_id)
         if note_status not in ("OPEN", "RESPONDED"):
             raise ReviewState("the note is not open")
+        if current_prepared(cursor, project_id, review_id, principal.id):
+            raise ReviewState(
+                "you signed off the testing or prepared a workpaper; "
+                "another reviewer decides this note"
+            )
         if body.action == "RETURN":
             if note_status != "RESPONDED":
                 raise ReviewState("only an answered note can be returned")
@@ -2105,7 +2151,22 @@ def _sign_off(
         # What this review covered, recorded as it signs: the sheet at its version, the
         # round, and each workpaper at its prepared version (workflow integrity W2). A
         # later sign-off, round or workpaper is never covered by it.
+        from ai_workforce_api.control_conclusions import body_of
+
+        concluded = (
+            body_of(cursor.connection, project_id, control_id, principal)
+            if current.test_round_id is None
+            else None
+        )
         coverage = {
+            # The conclusion as proposed, and each deficiency's severity as rated (B3).
+            "conclusion": None if concluded is None else concluded.proposed,
+            "deficiencies": []
+            if concluded is None
+            else [
+                {"id": str(item.id), "reference": item.reference, "severity": item.severity}
+                for item in concluded.deficiencies
+            ],
             "sheet_id": None if current.sheet_id is None else str(current.sheet_id),
             "sheet_version": current.sheet_version,
             "test_round_id": None if current.test_round_id is None else str(current.test_round_id),
@@ -2162,6 +2223,18 @@ def _sign_off(
                {"notes": current.counts, "coverage": coverage})  # fmt: skip
         _update_completion(cursor, project_id, principal.id)
     return _result(connection, project_id, review_id, principal.id), []
+
+
+def current_prepared(
+    cursor: psycopg.Cursor[Any], project_id: UUID, review_id: UUID, viewer: UUID
+) -> bool:
+    """Whether the viewer signed off the testing or prepared a workpaper under review, with
+    independence required. Such a person adds notes and answers them, and never decides or
+    clears one, as they never sign off the review (security sweep, 9 November 2026: before,
+    a preparer given the reviewer role could clear their own answer to a note)."""
+    if not independence.required():
+        return False
+    return _review(cursor.connection, project_id, review_id, viewer, True).viewer_prepared
 
 
 def _reopen(
@@ -2258,11 +2331,12 @@ def _reopen_workpaper(
     workpaper_id: UUID | None,
     reason: str,
 ) -> list[str]:
+    from ai_workforce_api.design_conclusions import reopen_for_workpaper
     from ai_workforce_api.workpaper_service import _audit as audit_workpaper
 
     rows = cursor.execute(
         """
-        SELECT id, status FROM workpapers
+        SELECT id, status, stage FROM workpapers
         WHERE project_id = %s AND engagement_control_id = %s
           AND (%s::text IS NULL OR stage = %s) AND (%s::uuid IS NULL OR id = %s)
         FOR UPDATE
@@ -2270,7 +2344,7 @@ def _reopen_workpaper(
         (project_id, control_id, stage, stage, workpaper_id, workpaper_id),
     ).fetchall()
     reopened: list[str] = []
-    for paper_id, status in rows:
+    for paper_id, status, paper_stage in rows:
         if status != "PREPARED":
             continue
         cursor.execute(
@@ -2286,6 +2360,12 @@ def _reopen_workpaper(
             cursor, organization_id, project_id, principal.id, UUID(str(paper_id)),
             "workpaper.reopened", {"reason": reason},
         )  # fmt: skip
+        if paper_stage == "DESIGN":
+            # The D&I conclusion rests on the design workpaper and opens with it, as when a
+            # person reopens the workpaper (bug hunt, 9 November 2026). Before, it stayed
+            # signed off and came back unchanged once the workpaper was prepared again.
+            reopen_for_workpaper(cursor, organization_id, project_id, control_id,
+                                 principal.id, reason)  # fmt: skip
         reopened.append(f"WORKPAPER:{paper_id}")
     return reopened
 
@@ -2318,8 +2398,3 @@ def _audit(
             Json(payload),
         ),  # fmt: skip
     )
-
-
-def summary_json(body: ReviewBody) -> str:
-    """The review as the console and tests read it."""
-    return json.dumps(body.model_dump(mode="json"), ensure_ascii=False)

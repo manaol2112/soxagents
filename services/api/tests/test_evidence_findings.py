@@ -4,6 +4,7 @@ to the owner only when a person sends it; what comes back is attached and propos
 closed by an agent; a plan approved again or a replaced file marks findings stale; one
 firm never sees another's."""
 
+from datetime import date
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -27,6 +28,7 @@ from ai_workforce_api.evidence_findings import (
     draft_follow_up,
     mark_stale_for_control,
     mark_stale_for_file,
+    period_dates,
 )
 from ai_workforce_api.portal_workspace import MessageBody, post_owner_message, question_key
 
@@ -457,6 +459,16 @@ def test_dates_outside_the_interim_window_are_a_finding_but_design_evidence_is_n
         [_answer(kind="design", items=[], gaps=[], follow_ups=[], period="2025-01-10")],
     )
     assert len(_by_kind(_findings(client, team, control), "PERIOD")) == len(period)
+
+
+def test_a_date_that_does_not_exist_in_the_readers_period_is_skipped() -> None:
+    """Bug hunt, 9 November 2026: the reader's period text is the model's; 2025-02-29 raised
+    and lost the whole reading's findings."""
+    assert period_dates("Dates from 2025-02-29 to 2025-03-31, and 2025-13-01") == [
+        date(2025, 3, 31)
+    ]
+    assert period_dates("2024-02-29") == [date(2024, 2, 29)]
+    assert period_dates("no dates") == []
 
 
 def test_a_mapping_run_gives_findings_for_what_attributes_lack_and_what_conflicts(

@@ -36,7 +36,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
-from ai_workforce_api.controls import DOMAIN_LABELS, ITGC_DOMAINS, sample_size
+from ai_workforce_api.controls import DOMAIN_LABELS, ITGC_DOMAINS
+from ai_workforce_api.methodology import PLATFORM_DEFAULT, Rules
 
 Phase = Literal["DESIGN", "INTERIM", "ROLLFORWARD"]
 PHASES: tuple[Phase, ...] = ("DESIGN", "INTERIM", "ROLLFORWARD")
@@ -100,16 +101,6 @@ FREQUENCY_WORDS = {
     "EVENT_DRIVEN": "event-driven",
 }
 PERIODIC = ("ANNUAL", "QUARTERLY", "MONTHLY", "WEEKLY")
-# The approved update-sample table for the roll-forward period (test_rounds.py uses it too).
-ROLLFORWARD_SIZES = {
-    "ANNUAL": 1,
-    "QUARTERLY": 1,
-    "MONTHLY": 1,
-    "WEEKLY": 2,
-    "DAILY": 5,
-    "RECURRING": 10,
-    "EVENT_DRIVEN": 10,
-}
 
 _CONFIG_WORDS = re.compile(
     r"(?i)\b(?:configur\w*|enforc\w*|settings?|parameters?|multi-factor|mfa|passwords?|"
@@ -216,6 +207,8 @@ class PlanFacts:
     # a person approves one.
     narrative: tuple[tuple[str, str], ...] = ()
     narrative_steps: tuple[str, ...] = ()
+    # The engagement's testing methodology (methodology.py): the sizes it plans with.
+    rules: Rules = PLATFORM_DEFAULT
 
     def sources(self) -> tuple[str, ...]:
         """Every text the records give for the control: what a plan may quote, and where
@@ -1223,7 +1216,11 @@ def _population_requirements(
                 period_label=window,
             )
         )
-    size = ROLLFORWARD_SIZES.get(facts.frequency, 10) if roll else sample_size(facts.frequency, "")
+    size = (
+        facts.rules.rollforward(facts.frequency, "")[1]
+        if roll
+        else facts.rules.sample_size(facts.frequency, "")
+    )
     table = "roll-forward update-sample table" if roll else "sample-size table"
     selection = (
         f"The audit team selects {size} from the validated population at random, with a "
@@ -1552,9 +1549,9 @@ def _suite_requirements(
     sampled = population is not None and not traits.automated
     span = _span(period)
     size = (
-        ROLLFORWARD_SIZES.get(facts.frequency, 10)
+        facts.rules.rollforward(facts.frequency, "")[1]
         if phase == "ROLLFORWARD"
-        else sample_size(facts.frequency, "")
+        else facts.rules.sample_size(facts.frequency, "")
     )
     selection = (
         f"The audit team selects {size} from the validated population at random, with a "
@@ -2654,8 +2651,8 @@ def prompt_for(facts: PlanFacts) -> str:
             for c in facts.changes
         ],
         "sample_sizes": {
-            "interim": sample_size(facts.frequency, facts.nature),
-            "rollforward_update": ROLLFORWARD_SIZES.get(facts.frequency, 10),
+            "interim": facts.rules.sample_size(facts.frequency, facts.nature),
+            "rollforward_update": facts.rules.rollforward(facts.frequency, "")[1],
         },
         "decided_by_records": {
             phase: {

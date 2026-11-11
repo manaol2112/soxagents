@@ -214,12 +214,6 @@ def make_internal(cursor: psycopg.Cursor[Any], organization_id: UUID, reason: st
     )
 
 
-def require_writable(connection: Any, organization_id: UUID) -> None:
-    current = state(connection, organization_id)
-    if current is None or current not in WRITABLE:
-        raise SubscriptionInactive(current or "NONE")
-
-
 def require_capacity(
     cursor: psycopg.Cursor[Any],
     organization_id: UUID,

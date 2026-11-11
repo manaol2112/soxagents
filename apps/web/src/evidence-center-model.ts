@@ -887,6 +887,29 @@ export function bulkSummary(
   return `${n(result.done)} updated${result.refused > 0 ? `; ${result.refused} could not change` : ""}.`;
 }
 
+/**
+ * The selection after the list reloads: only requests still matching, each at the version
+ * the list now holds, so a change to many requests never sends a stale version. The same
+ * map comes back only when every id and version is unchanged.
+ */
+export function keepSelected(
+  current: Map<string, number>,
+  matching: ReadonlyMap<string, number>,
+): Map<string, number> {
+  const next = new Map<string, number>();
+  let same = true;
+  for (const [id, version] of current) {
+    const now = matching.get(id);
+    if (now === undefined) {
+      same = false;
+      continue;
+    }
+    if (now !== version) same = false;
+    next.set(id, now);
+  }
+  return same ? current : next;
+}
+
 export function parseBulkResult(
   value: unknown,
 ): { done: number; refused: number; outcomes: BulkOutcome[] } | null {

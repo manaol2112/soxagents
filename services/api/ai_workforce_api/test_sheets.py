@@ -45,7 +45,7 @@ from ai_workforce_api.testing_engine import (
     request_run,
     schedule_runs,
 )
-from ai_workforce_api.workpaper_service import ensure, schedule_drafts
+from ai_workforce_api.workpaper_service import ensure, reopen_for_testing, schedule_drafts
 from ai_workforce_api.workpaper_service import open_drafts as open_workpapers
 
 Severity = Literal["CONTROL_DEFICIENCY", "SIGNIFICANT_DEFICIENCY", "MATERIAL_WEAKNESS"]
@@ -516,6 +516,11 @@ def sign_off_work(body: SignOffBody) -> Work:
         blocked = gate_reason(cursor.connection, sheet[3], None)
         if blocked is not None:
             raise SheetState(blocked)
+        from ai_workforce_api.design_conclusions import oe_gate_reason
+
+        gated = oe_gate_reason(cursor.connection, sheet[3])
+        if gated is not None:
+            raise SheetState(gated)
         current = _sheet(cursor.connection, project_id, sheet[0])
         if current.running:
             raise SheetState("the tester is still testing")
@@ -654,6 +659,13 @@ def reopen_work(
         if round_row is None:
             # Interim testing is open again: the roll-forward waits for it once more.
             refresh_decisions(cursor, organization_id, project_id, sheet[3], principal.id)
+        # The prepared effectiveness workpaper states the signed-off conclusion, so it opens
+        # again with the testing and is redrafted at the next sign-off (bug hunt, 9 November
+        # 2026). A review note reopens it itself and reports it (control_reviews.py).
+        if source != "REVIEW_NOTE":
+            reopen_for_testing(
+                cursor, organization_id, project_id, sheet[3], principal.id, body.reason
+            )
         _audit(
             cursor,
             organization_id,

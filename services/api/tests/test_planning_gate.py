@@ -1,22 +1,23 @@
-"""The planning gate (decided by the product owner): no evidence is requested until a
-person approves the control's evidence plan. The plan waits either way, with a model or
-without. Design evidence follows that approval; operating evidence also waits for the
-control's attributes to be settled. The planner agent refines each launched control's
-plan in the background and still leaves it proposed. Requests drafted before the gate
-are held, not deleted."""
+"""The planning gate (decided by the product owner): no operating evidence is requested
+until a person approves the control's evidence plan. The plan waits either way, with a model
+or without. Operating evidence also waits for the control's attributes to be settled. Design
+(D&I) evidence follows its own release instead (B1, test_design_release.py). The planner
+agent refines each launched control's plan in the background and still leaves it proposed.
+Requests drafted before the gate are held, not deleted."""
 
 from typing import Any
 from uuid import UUID
 
 import psycopg
 import pytest
-from support import Database
+from support import Database, sign_off_design
 from test_onboarding import _base, _complete_setup, _new_engagement
 from test_outbound import migrated
 
 from ai_workforce_api.authorization import Principal, PrincipalKind
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.evidence_plans import (
+    GATE_DESIGN_RELEASE,
     GATE_PLAN,
     attention_of,
     fail_plan_run,
@@ -101,11 +102,12 @@ def test_a_plan_waits_for_a_person_at_launch(migrated: Database) -> None:
     ) == [(0,)]
     row = _control(team, "ITGC-AC-01")
     assert row["evidence_plan"] == "PROPOSED"
+    # Its questions are not all answered, so the D&I release is not recommended yet, and the
+    # next step is still to approve the test plan.
     assert row["next_step"] == "Approve the test plan"
     body = _plan(team, row["id"])
     assert body["approved_automatically"] is False and body["attention"] == []
-    # Approving it releases the design evidence. Every request still waits for an
-    # approver before it is sent.
+    # Approving the plan requests no design evidence: that follows its own release.
     approved = owner.post(
         f"{_project(team)}/controls/{row['id']}/evidence-plan/approve",
         json={"version": body["version"]},
@@ -113,13 +115,19 @@ def test_a_plan_waits_for_a_person_at_launch(migrated: Database) -> None:
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == "APPROVED"
     assert approved.json()["approved_by"]
-    design = _rows(
-        migrated,
+    design_query = (
         "SELECT count(*), count(*) FILTER (WHERE status NOT IN ('DRAFT', 'APPROVAL_PENDING')) "
-        "FROM pbc_requests WHERE engagement_control_id = %s AND testing_phase = 'DESIGN'",
-        UUID(row["id"]),
-    )[0]
-    assert design == (1, 0)
+        "FROM pbc_requests WHERE engagement_control_id = %s AND testing_phase = 'DESIGN'"
+    )
+    assert _rows(migrated, design_query, UUID(row["id"]))[0] == (0, 0)
+    # Releasing the D&I evidence requests it. Every request still waits for an approver
+    # before it is sent.
+    released = owner.post(
+        f"{_project(team)}/controls/{row['id']}/phases/DESIGN/release",
+        json={"reason": "Released early for the test: the walkthrough is this week."},
+    )
+    assert released.status_code == 200, released.text
+    assert _rows(migrated, design_query, UUID(row["id"]))[0] == (1, 0)
     # The other controls still wait, so nothing of theirs is requested.
     with connect(migrated.url) as connection:
         assert unrequested_controls(connection, team["project"]) == []
@@ -154,7 +162,11 @@ def test_a_plan_that_needs_judgment_waits_for_a_person(migrated: Database) -> No
         connection.commit()
         with transaction(connection) as cursor:
             assert settle_automatically(cursor, team["org"], team["project"], plan_id) is False
-        assert gate_reason(connection, UUID(control), "DESIGN") == GATE_PLAN
+        # Rewritten 9 November 2026 (B1, product owner: D&I evidence has its own approval).
+        # Before, the design evidence waited for the plan (GATE_PLAN); it waits for its own
+        # release, and the operating evidence for the plan.
+        assert gate_reason(connection, UUID(control), "DESIGN") == GATE_DESIGN_RELEASE
+        assert gate_reason(connection, UUID(control), "INTERIM") == GATE_PLAN
         assert attention_of(connection, plan_id) == [
             "Interim operating effectiveness: Is the control run monthly or quarterly?"
         ]
@@ -233,8 +245,10 @@ def test_approving_the_plan_releases_design_then_operating_evidence(
     ) == [(0,)]  # fmt: skip
     row = _control(team, "ITGC-AC-01")
     assert row["attributes_settled"] is False
-    # Deciding the attribute revises the plan; approving it then requests the design and
-    # the operating evidence together.
+    # Deciding the attribute revises the plan; approving it then requests the operating
+    # evidence. Rewritten 9 November 2026 (B1, product owner: D&I evidence has its own approval).
+    # Before, approving the plan requested the design evidence with it; the design evidence
+    # now follows its own release.
     attribute = _rows(
         migrated,
         "SELECT id, version FROM control_attributes WHERE engagement_control_id = %s "
@@ -263,6 +277,18 @@ def test_approving_the_plan_releases_design_then_operating_evidence(
         "ORDER BY 1",
         UUID(control),
     )
+    assert phases == [("INTERIM",)], phases
+    released = owner.post(
+        f"{_project(team)}/controls/{control}/phases/DESIGN/release",
+        json={"reason": "Released early for the test: the walkthrough is this week."},
+    )
+    assert released.status_code == 200, released.text
+    phases = _rows(
+        migrated,
+        "SELECT DISTINCT testing_phase FROM pbc_requests WHERE engagement_control_id = %s "
+        "ORDER BY 1",
+        UUID(control),
+    )
     assert phases == [("DESIGN",), ("INTERIM",)], phases
     # Approving again changes nothing: what was requested is not asked twice.
     count = _rows(
@@ -281,10 +307,15 @@ def test_approving_the_plan_releases_design_then_operating_evidence(
 
 
 def test_a_draft_made_before_the_plan_was_approved_is_held(migrated: Database) -> None:
+    # Rewritten 9 November 2026 (B1, product owner: D&I evidence has its own approval).
+    # Before, the held draft was the control's design request; design evidence no longer
+    # waits for the plan, so the held draft is its interim request, with its D&I conclusion
+    # signed off (B0) and, once the plan is approved, the interim phase released.
     team = _launched(migrated, "gate-held", agent=True)
     _finish_runs(migrated, team)
     owner = team["owner"]
     control = _control(team, "ITGC-AC-01")["id"]
+    sign_off_design(migrated, team["project"], [control])
     plan = _plan(team, control)
     approved = owner.post(
         f"{_project(team)}/controls/{control}/evidence-plan/approve",
@@ -306,7 +337,8 @@ def test_a_draft_made_before_the_plan_was_approved_is_held(migrated: Database) -
         connection.commit()
     request = _rows(
         migrated,
-        "SELECT id, version FROM pbc_requests WHERE engagement_control_id = %s LIMIT 1",
+        "SELECT id, version FROM pbc_requests WHERE engagement_control_id = %s "
+        "AND testing_phase = 'INTERIM' LIMIT 1",
         UUID(control),
     )[0]
     path = f"{_project(team)}/pbc-requests/{request[0]}"
@@ -325,12 +357,14 @@ def test_a_draft_made_before_the_plan_was_approved_is_held(migrated: Database) -
         json={"action": "APPROVE", "items": [{"id": str(request[0]), "version": request[1]}]},
     ).json()
     assert bulk["outcomes"][0]["detail"] == "Approve the control's test plan first."
-    # Nothing was deleted: approving the plan releases it.
+    # Nothing was deleted: approving the plan, then releasing the phase, lets it go.
     plan = _plan(team, control)
     owner.post(
         f"{_project(team)}/controls/{control}/evidence-plan/approve",
         json={"version": plan["version"]},
     )
+    phase = owner.post(f"{_project(team)}/controls/{control}/phases/INTERIM/release", json={})
+    assert phase.status_code == 200, phase.text
     released = owner.post(f"{path}/approve", json={"version": request[1]})
     assert released.status_code == 200, released.text
 

@@ -16,7 +16,13 @@ import {
   workpaperTabs,
 } from "./workpaper-model";
 
-type Ids = { organizationId: string; projectId: string; controlId: string };
+type Ids = {
+  organizationId: string;
+  projectId: string;
+  controlId: string;
+  /** The workflow step the forms post from, so the page comes back to it. */
+  step?: string | null;
+};
 
 function Hidden({
   ids,
@@ -35,6 +41,7 @@ function Hidden({
       <input type="hidden" name="project_id" value={ids.projectId} />
       <input type="hidden" name="control_id" value={ids.controlId} />
       <input type="hidden" name="intent" value={intent} />
+      {ids.step ? <input type="hidden" name="step" value={ids.step} /> : null}
       {paper !== undefined ? (
         <input type="hidden" name="workpaper_id" value={paper.id} />
       ) : null}

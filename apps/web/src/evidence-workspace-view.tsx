@@ -43,7 +43,13 @@ import {
 import { type MasterPlan, planningHref } from "./planning-model";
 import { UiIcon } from "./ui-icon";
 
-type Ids = { organizationId: string; projectId: string; controlId: string };
+type Ids = {
+  organizationId: string;
+  projectId: string;
+  controlId: string;
+  /** The workflow step the forms post from, so the page comes back to it. */
+  step?: string | null;
+};
 
 /**
  * The control's evidence on one page, without tabs: what the evidence reader proposes for a
@@ -55,12 +61,13 @@ type Ids = { organizationId: string; projectId: string; controlId: string };
  */
 export function EvidenceWorkspace({
   ids,
-  plan,
+  plan: wholePlan,
   canAct,
   summary,
   proposals,
   files,
-  requests,
+  requests: allRequests,
+  only = null,
   library,
   rcmItems,
   focus,
@@ -71,6 +78,9 @@ export function EvidenceWorkspace({
 }: {
   ids: Ids;
   plan: EvidencePlan | null;
+  /** The phases one workflow step shows (product owner, 8 November 2026: D&I Evidence shows
+   * the Design phase, OE Evidence the interim and roll-forward ones); null shows them all. */
+  only?: readonly string[] | null;
   /** The evidence workspace's records (docs/evidence-intelligence.md). */
   intelligence?: Intelligence | null;
   /** The test plan's codes and links, the control's activity, and its reference, for the
@@ -103,6 +113,27 @@ export function EvidenceWorkspace({
   /** The application of this instance of the control, if it is one application's. */
   system?: string | null;
 }) {
+  // One branch's evidence: its own phases and their requests. The planning basis (why each
+  // phase applies) is Test Design's, so it is not repeated under a branch.
+  const plan =
+    wholePlan === null || only === null
+      ? wholePlan
+      : {
+          ...wholePlan,
+          phases: wholePlan.phases.filter((phase) =>
+            only.includes(phase.phase),
+          ),
+        };
+  const designOnly = only?.every((phase) => phase === "DESIGN") ?? false;
+  const requests =
+    only === null
+      ? allRequests
+      : {
+          ...allRequests,
+          rows: allRequests.rows.filter(
+            (row) => row.phase !== null && only.includes(row.phase),
+          ),
+        };
   const [wanted, setWanted] = useState<EvidenceView>(
     focus.request !== null
       ? "requests"
@@ -124,7 +155,7 @@ export function EvidenceWorkspace({
   const r = summary.requests;
   const f = summary.files;
   const basis =
-    plan !== null && plan.status !== "NOT_PLANNED" ? (
+    plan !== null && plan.status !== "NOT_PLANNED" && only === null ? (
       <EvidenceFold
         title="Planning basis"
         line="Why each phase applies, missing information, and changes to the control"
@@ -217,7 +248,9 @@ export function EvidenceWorkspace({
           }
         />
         {requests.head}
-        {planAwaitsApproval(plan) ? (
+        {/* The test plan's approval holds only the operating evidence; the D&I evidence
+            follows its own release (B1), shown above the D&I Evidence step's list. */}
+        {planAwaitsApproval(plan) && !designOnly ? (
           <div className="ew-proposed">
             <div>
               <strong>
@@ -228,8 +261,9 @@ export function EvidenceWorkspace({
                     : "The evidence plan awaits approval"}
               </strong>
               <p>
-                Nothing is requested until the test plan is approved; the
-                requests below are drafted then.
+                {only === null
+                  ? "The interim and roll-forward evidence is requested once the test plan is approved. The D&I evidence follows its own release."
+                  : "Nothing is requested until the test plan is approved; the requests below are drafted then."}
               </p>
             </div>
             <a
@@ -533,6 +567,7 @@ export function fileLine(
             fileName={file.name}
             blocked={blocked}
             controlId={ids.controlId}
+            step={ids.step ?? null}
             start={form}
             onCancel={() => setForm(null)}
             onDone={() =>
@@ -558,6 +593,9 @@ export function fileLine(
           <input type="hidden" name="project_id" value={ids.projectId} />
           <input type="hidden" name="control_id" value={ids.controlId} />
           <input type="hidden" name="file_id" value={file.fileId} />
+          {ids.step ? (
+            <input type="hidden" name="step" value={ids.step} />
+          ) : null}
           <label htmlFor={`ep-app-${file.fileId}`}>Application it shows</label>
           <select
             id={`ep-app-${file.fileId}`}
@@ -654,8 +692,9 @@ function RequirementsView({
           </strong>
           <p>
             The {liveRequirements(plan).length} planned evidence items are
-            reviewed with the test plan. Nothing is requested until the plan is
-            approved; the requests are drafted then.
+            reviewed with the test plan. The interim and roll-forward evidence
+            is requested once the plan is approved; the D&amp;I evidence follows
+            its own release.
           </p>
         </div>
         <a

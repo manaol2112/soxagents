@@ -142,11 +142,16 @@ def test_each_control_says_what_its_agents_are_doing(migrated: Database) -> None
             """,
             (org, team["project"], control_id, team["owner_id"]),
         )
+        # Rewritten 10 November 2026 (full-suite run): the fixture signs off the design since
+        # B0 (8 November), so the design workpaper is prepared and no longer drafting; the
+        # paper being drafted at this point is the operating-effectiveness one. Old: the
+        # DESIGN paper marked as given up. New: the EFFECTIVENESS paper. The assertion, that a
+        # draft that gave up is reported as stopped, is unchanged.
         with transaction(connection) as cursor:
-            ensure(cursor, org, team["project"], control_id, team["owner_id"], ("DESIGN",))
+            ensure(cursor, org, team["project"], control_id, team["owner_id"], ("EFFECTIVENESS",))
         connection.execute(
             "UPDATE workpapers SET draft_status = 'IDLE', draft_note = %s "
-            "WHERE engagement_control_id = %s",
+            "WHERE engagement_control_id = %s AND stage = 'EFFECTIVENESS'",
             (DRAFT_FAILED, control_id),
         )
         connection.execute(

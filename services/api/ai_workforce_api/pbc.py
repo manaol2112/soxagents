@@ -27,7 +27,10 @@ from ai_workforce_api.settings import Settings
 PbcStatus = str
 _TRANSITIONS: dict[str, frozenset[str]] = {
     "DRAFT": frozenset({"DRAFT", "APPROVAL_PENDING", "CANCELLED"}),
-    "APPROVAL_PENDING": frozenset({"APPROVAL_PENDING", "DRAFT", "SENT", "CANCELLED"}),
+    # Not SENT (bug hunt, 9 November 2026): a request is sent only by delivering its approved
+    # message (outbound and evidence_groups set SENT themselves). Before, this route marked a
+    # request SENT given any message id in the project's mailbox, with no approval.
+    "APPROVAL_PENDING": frozenset({"APPROVAL_PENDING", "DRAFT", "CANCELLED"}),
     "SENT": frozenset({"SENT", "WAITING_FOR_RESPONSE", "CANCELLED"}),
     "WAITING_FOR_RESPONSE": frozenset(
         {

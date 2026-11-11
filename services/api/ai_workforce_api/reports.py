@@ -99,10 +99,6 @@ class Report:
     landscape: bool = False
 
 
-def _when(value: str | None) -> str:
-    return "Not recorded" if not value else str(value)
-
-
 def _date(value: Any) -> str:
     return "Not recorded" if value in (None, "") else str(value)
 

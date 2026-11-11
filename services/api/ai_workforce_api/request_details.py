@@ -156,6 +156,18 @@ HELD_WORDS: dict[str, str] = {
     "settle the control's attributes first": (
         "Settle the control's attributes first: operating evidence follows them."
     ),
+    "sign off the D&I conclusion as effective first": (
+        "Sign off the control's D&I conclusion as effective first: operating effectiveness "
+        "evidence follows it."
+    ),
+    "the design is signed off as not effective, so operating effectiveness is not tested": (
+        "The design is signed off as not effective, so operating effectiveness evidence is "
+        "not requested."
+    ),
+    "release the D&I evidence first": (
+        "Release the control's D&I evidence first: its requests wait for a person to release "
+        "the design evidence once the control is understood."
+    ),
     "release the interim phase first": (
         "Release the interim phase for this control first: its requests are prepared and "
         "wait for design and implementation testing."
@@ -1623,7 +1635,7 @@ def draft_problems(
     for row in connection.execute(
         """
         SELECT pbc_request_id, title, categories, objective, rationale, necessity, status,
-               sufficiency
+               sufficiency, phase
         FROM evidence_requirements
         WHERE pbc_request_id = ANY(%s)
         ORDER BY pbc_request_id, created_at, id
@@ -1699,6 +1711,9 @@ def draft_problems(
     reconciles: dict[UUID, UUID | None] = {}
     plan_status, settled = gate_facts(connection, project_id)
     released = released_phases(connection, project_id)
+    from ai_workforce_api.design_conclusions import GATE_DESIGN, effective_controls
+
+    designed = effective_controls(connection, project_id)
 
     def held_of(pbc: PbcBody) -> str | None:
         control = pbc.engagement_control_id
@@ -1713,15 +1728,43 @@ def draft_problems(
                 reconciles[control] = None if info is None else info.request_id
             if reconciles[control] == pbc.id:
                 return "settle the kickoff draft against the plan first"
+        # No OE request goes for approval before the D&I sign-off, whoever drafted it (B0).
+        if (
+            pbc.testing_phase in ("INTERIM", "ROLLFORWARD")
+            and pbc.status in _UNSENT
+            and control not in designed
+        ):
+            return GATE_DESIGN
         gated = pbc.drafted_by == "AGENT" and (
             pbc.testing_phase in ("DESIGN", "INTERIM", "ROLLFORWARD") or kickoff
         )
         if not gated:
             return None
-        gate = gate_reason_from(plan_status.get(control), control in settled, pbc.testing_phase)
+        gate = gate_reason_from(
+            plan_status.get(control), control in settled, pbc.testing_phase,
+            (control, "DESIGN") in released,
+        )  # fmt: skip
         if gate is not None:
             return gate
         if kickoff:
+            # As evidence_plans.held_for_planning: each phase of the plan items linked to the
+            # kickoff draft holds it by that phase's gate (bug hunt, 9 November 2026).
+            linked = {
+                str(item[7])
+                for item in requirements.get(pbc.id, [])
+                if str(item[5]) not in ("WAIVED", "REMOVED")
+            }
+            for phase in ("DESIGN", "INTERIM", "ROLLFORWARD"):
+                if phase not in linked:
+                    continue
+                gate = gate_reason_from(
+                    plan_status.get(control), control in settled, phase,
+                    (control, "DESIGN") in released,
+                )  # fmt: skip
+                if gate is None and phase != "DESIGN" and control not in designed:
+                    gate = GATE_DESIGN
+                if gate is not None:
+                    return gate
             return None
         return release_reason_from(
             (control, pbc.testing_phase or "") in released, pbc.testing_phase

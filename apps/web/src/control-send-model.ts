@@ -236,6 +236,61 @@ export function reviewPlan(result: SendResult): {
   };
 }
 
+/**
+ * What the dialog says when the check (preview) or the send did not come back with a
+ * result, from the status the route kept. A send that did not answer (status 0) may have
+ * gone out, so its outcome is not known and the page is refreshed before sending again;
+ * a refused send shows the server's reason.
+ */
+export function sendProblem(
+  preview: boolean,
+  status: number,
+  detail: string,
+): { title: string; summary: string } {
+  const managers =
+    "Only the engagement's managers can approve and send requests.";
+  if (preview) {
+    return {
+      title: "Not checked",
+      summary:
+        status === 403
+          ? managers
+          : status === 422
+            ? detail || "Check the owner and try again."
+            : "The requests could not be checked. Try again.",
+    };
+  }
+  if (status === 0) {
+    return {
+      title: "Outcome not known",
+      summary:
+        "The send did not answer in time, so whether the requests went out is not known. Refresh the page and check each request's status before sending again.",
+    };
+  }
+  if (status === 200) {
+    return {
+      title: "Sent",
+      summary:
+        "The requests were sent, but the result could not be read. Refresh the page to see each request's status.",
+    };
+  }
+  if (status === 403) {
+    return { title: "Not sent", summary: managers };
+  }
+  if (status === 402 || status === 409 || status === 422) {
+    return {
+      title: "Not sent",
+      summary:
+        detail || "The requests were not sent. Refresh the page and try again.",
+    };
+  }
+  return {
+    title: "Not sent",
+    summary:
+      "The requests could not be sent. Refresh the page to check whether any went out before trying again.",
+  };
+}
+
 /** "1 request", "2 requests". */
 export function requests(count: number): string {
   return `${count} request${count === 1 ? "" : "s"}`;

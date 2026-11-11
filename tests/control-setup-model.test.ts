@@ -15,20 +15,17 @@ import {
   type InterviewStep,
   interviewAnswer,
   interviewShort,
-  introHeadline,
   longChoices,
   NO_DOCUMENT,
   nextScreen,
   ONE_SCREEN,
   type Prefill,
   prefillAnswers,
-  questionsLeft,
   type SetupInput,
   type SetupIssue,
   STEP_BRIEF,
   saveOne,
   screensFor,
-  setupBegunKey,
   setupDraftKey,
   setupState,
   setupSteps,
@@ -345,10 +342,6 @@ describe("the agents' questions in Control understanding", () => {
   it("gives long answers a row each and leaves short ones two to a row", () => {
     assert.equal(longChoices(["ServiceNow", "Jira"]), false);
     assert.equal(longChoices(["ServiceNow", "x".repeat(49)]), true);
-  });
-
-  it("counts them among the questions the introduction promises", () => {
-    assert.equal(questionsLeft({ ...fresh, openQuestions: 3 }), 5);
   });
 });
 
@@ -709,11 +702,6 @@ describe("the interview", () => {
     );
     assert.equal(choiceTag(slotRow({ source: "NONE" }), ""), "");
   });
-
-  it("keeps unconfirmed answers apart for each control", () => {
-    assert.notEqual(setupDraftKey("a"), setupDraftKey("b"));
-    assert.notEqual(setupDraftKey("a"), setupBegunKey("a"));
-  });
 });
 
 describe("the answers the agent pre-fills", () => {
@@ -946,46 +934,6 @@ describe("the governing policy, answered from a linked document", () => {
   });
 });
 
-describe("the introduction before the wizard", () => {
-  it("counts the questions left, the governing documents among them", () => {
-    assert.equal(
-      questionsLeft({
-        ...fresh,
-        slots: [
-          { key: "a", value: "x", blocks: true },
-          { key: "b", value: " ", blocks: true },
-          { key: "policy", value: "", blocks: false, document: true },
-        ],
-      }),
-      2,
-    );
-  });
-
-  it("says what is asked, in words for a small count", () => {
-    assert.equal(
-      introHeadline(4),
-      "Answer four quick questions to help prepare a client-specific setup.",
-    );
-    assert.equal(
-      introHeadline(1),
-      "Answer one quick question to help prepare a client-specific setup.",
-    );
-    assert.equal(countWord(12), "12");
-    assert.match(introHeadline(0), /^Review what the agent prepared/);
-  });
-
-  it("describes every step in a line and remembers a begun setup per control", () => {
-    for (const step of setupSteps({
-      ...fresh,
-      processRequired: true,
-      openQuestions: 1,
-    })) {
-      assert.ok(STEP_BRIEF[step.key].endsWith("."), step.key);
-    }
-    assert.equal(setupBegunKey("c1"), "control-setup-begun:c1");
-  });
-});
-
 // The owner's rule (2 November 2026): the setup dialog keeps one size on every step.
 describe("the setup dialog's frame", () => {
   const css = readFileSync("apps/web/app/control-setup.css", "utf8").replace(
@@ -1026,5 +974,27 @@ describe("the setup dialog's frame", () => {
         before.lastIndexOf("}\n\n"),
       "the pinned margin applies only above 960px",
     );
+  });
+});
+
+// Kept from the cases that also covered the retired pop-up's introduction (cleanup,
+// 9 November 2026).
+describe("the inline setup", () => {
+  it("keeps unconfirmed answers apart for each control", () => {
+    assert.notEqual(setupDraftKey("a"), setupDraftKey("b"));
+  });
+
+  it("writes a count in figures past a small number", () => {
+    assert.equal(countWord(12), "12");
+  });
+
+  it("describes every step in a line", () => {
+    for (const step of setupSteps({
+      ...fresh,
+      processRequired: true,
+      openQuestions: 1,
+    })) {
+      assert.ok(STEP_BRIEF[step.key].endsWith("."), step.key);
+    }
   });
 });

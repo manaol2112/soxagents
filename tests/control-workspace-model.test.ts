@@ -11,7 +11,6 @@ import {
   approachOf,
   attentionOf,
   attributeFoldLabel,
-  currentStage,
   definitionWork,
   figuresOf,
   filterActivity,
@@ -21,8 +20,6 @@ import {
   makeupText,
   nextActionOf,
   parseActivity,
-  RECORD_SECTIONS,
-  sectionOf,
   summaryMetrics,
   type WorkspaceInput,
   workpaperMakeup,
@@ -31,7 +28,6 @@ import {
   type ControlFiles,
   type ControlRequest,
   type ControlRow,
-  DETAIL_TABS,
   parseControls,
 } from "../apps/web/src/engagement-model.ts";
 import {
@@ -1269,74 +1265,6 @@ describe("a control whose test plan waits for approval", () => {
     assert.equal(
       held.find((stage) => stage.key === "design")?.status,
       "blocked",
-    );
-  });
-});
-
-describe("the record's sections", () => {
-  it("keeps every tab's route in one section, and Activity on its own", () => {
-    const tabs = RECORD_SECTIONS.flatMap((section) => section.tabs);
-    assert.deepEqual(
-      RECORD_SECTIONS.map((section) => section.label),
-      ["Overview", "Test plan", "Evidence & testing", "Conclusion"],
-    );
-    assert.equal(new Set(tabs).size, tabs.length);
-    assert.deepEqual(
-      [...tabs].sort(),
-      DETAIL_TABS.filter((tab) => tab !== "activity").sort(),
-    );
-    assert.equal(sectionOf("testing"), "work");
-    assert.equal(sectionOf("findings"), "work");
-    assert.equal(sectionOf("review"), "conclusion");
-    assert.equal(sectionOf("activity"), null);
-  });
-});
-
-describe("where the audit stands", () => {
-  const stage = (
-    key: LifecycleStage["key"],
-    status: LifecycleStage["status"],
-  ): LifecycleStage => ({
-    key,
-    label: key,
-    status,
-    note: "",
-    agent: false,
-    tab: "overview",
-  });
-
-  it("names the first stage under way, never one that does not apply", () => {
-    assert.equal(currentStage(lifecycleOf(input({})))?.key, "design");
-    assert.equal(
-      currentStage([
-        stage("design", "not_applicable"),
-        stage("evidence", "done"),
-        stage("interim", "awaiting_approval"),
-        stage("rollforward", "not_started"),
-        stage("review", "not_started"),
-        stage("conclusion", "not_started"),
-      ])?.key,
-      "interim",
-    );
-    // A roll-forward not started does not hold the review back as current.
-    assert.equal(
-      currentStage([
-        stage("design", "done"),
-        stage("evidence", "done"),
-        stage("interim", "done"),
-        stage("rollforward", "not_started"),
-        stage("review", "in_progress"),
-        stage("conclusion", "not_started"),
-      ])?.key,
-      "review",
-    );
-    assert.equal(
-      currentStage([
-        stage("design", "done"),
-        stage("rollforward", "not_applicable"),
-        stage("conclusion", "done"),
-      ]),
-      null,
     );
   });
 });

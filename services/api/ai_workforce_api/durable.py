@@ -13,7 +13,7 @@ from temporalio.client import Client
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.worker import Worker
 
-from ai_workforce_api.console import fail_turn, open_turns
+from ai_workforce_api.console import fail_turn, open_turns, release_turn
 from ai_workforce_api.control_reviews import fail_reperformance, open_reperformances
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.durable_workflow import (
@@ -50,7 +50,7 @@ from ai_workforce_api.durable_workflow import (
 )
 from ai_workforce_api.evidence_analysis import fail_analysis, open_analyses
 from ai_workforce_api.followups import advance, remindable_requests
-from ai_workforce_api.pbc_drafting import fail_draft, open_drafts
+from ai_workforce_api.pbc_drafting import fail_draft, open_drafts, reset_draft
 from ai_workforce_api.rcm_systems import fail_scan, open_scans
 from ai_workforce_api.setup_drafting import fail_draft as fail_setup
 from ai_workforce_api.setup_drafting import open_drafts as open_setups
@@ -771,8 +771,20 @@ def activities_for(
     async def draft_pbc_request(draft_id: str) -> str:
         if draft is None:
             return "SKIPPED"
+        write = draft
+
+        def drafted() -> str:
+            try:
+                return write(UUID(draft_id))
+            except Exception:
+                # As for a console turn: the retry must find the draft unclaimed, or it
+                # skips it and the draft stays DRAFTING (bug hunt, 9 November 2026).
+                with connect(database_url) as connection:
+                    reset_draft(connection, UUID(draft_id))
+                raise
+
         # Drafting calls the model and the database, so it runs off the event loop.
-        return await asyncio.to_thread(draft, UUID(draft_id))
+        return await asyncio.to_thread(drafted)
 
     @activity.defn(name="fail_pbc_draft")
     async def fail_pbc_draft(draft_id: str) -> None:
@@ -956,7 +968,22 @@ def activities_for(
     async def answer_console_turn(message_id: str) -> str:
         if converse is None:
             return "SKIPPED"
-        return await asyncio.to_thread(converse, UUID(message_id))
+        answer = converse
+
+        def answered() -> str:
+            try:
+                return answer(UUID(message_id))
+            except Exception:
+                # The retry comes about a second later, while this attempt's claim would
+                # still hold: without giving it up the retry skipped the turn, the
+                # workflow ended as if it had finished, and the message stayed WORKING
+                # (bug hunt, 9 November 2026). The last failure is marked by
+                # fail_console_turn.
+                with connect(database_url) as connection:
+                    release_turn(connection, UUID(message_id))
+                raise
+
+        return await asyncio.to_thread(answered)
 
     @activity.defn(name="fail_console_turn")
     async def fail_console_turn(message_id: str) -> None:

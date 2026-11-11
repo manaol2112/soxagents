@@ -714,22 +714,6 @@ button.sp-step-body:hover {
   font-size: var(--fs-2xs);
 }
 
-.as-pick {
-  display: grid;
-  gap: 0.6rem;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.as-pick legend {
-  margin-bottom: 0.4rem;
-  padding: 0;
-  color: var(--text-strong);
-  font-size: var(--fs-sm);
-  font-weight: 600;
-}
-
 .as-pick legend small,
 .as-hint {
   color: var(--text-tertiary);
@@ -738,35 +722,6 @@ button.sp-step-body:hover {
 }
 
 .as-hint {
-  margin: 0;
-}
-
-.as-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-}
-
-.as-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  padding: 0.35rem 0.7rem;
-  color: var(--text);
-  background: var(--surface-muted);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: var(--fs-sm);
-  cursor: pointer;
-}
-
-.as-chip:has(input:checked) {
-  color: var(--text-strong);
-  background: var(--accent-soft);
-  border-color: var(--accent-border);
-}
-
-.as-chip input {
   margin: 0;
 }
 
@@ -1564,52 +1519,6 @@ input.is-drafted {
   font-size: var(--fs-sm);
 }
 
-/* Review and finalize (SP6). */
-.fz-totals {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
-  gap: 0.75rem;
-}
-
-.fz-totals article {
-  display: grid;
-  gap: 0.15rem;
-  padding: 0.85rem 1rem;
-  background: var(--surface-muted);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-}
-
-.fz-totals strong {
-  color: var(--text-strong);
-  font-size: 26px;
-  font-weight: 700;
-}
-
-.fz-totals span {
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-}
-
-.fz-list {
-  display: grid;
-  gap: 0.3rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.fz-list li {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  font-size: var(--fs-sm);
-}
-
-.fz-list small {
-  color: var(--text-secondary);
-}
-
 .fz-notes h4 {
   margin: 0 0 0.4rem;
   color: var(--text-strong);
@@ -1662,31 +1571,7 @@ input.is-drafted {
     display: none;
   }
 
-  .fz-totals {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-/* A system's decided areas, above its scoping in the systems table. */
-.as-decided {
-  display: grid;
-  gap: 0.4rem;
-  padding: 0.85rem 1.15rem 0;
-}
-
-.as-decided p {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.4rem;
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
-}
-
-.as-decided strong {
-  margin-right: 0.2rem;
-  color: var(--text-strong);
+  
 }
 
 @keyframes as-in {
@@ -2812,16 +2697,6 @@ button.ry-link:hover {
   white-space: nowrap;
 }
 
-.sc-control {
-  display: grid;
-  gap: 0.1rem;
-}
-
-.sc-control strong {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-}
-
 /* The client's controls that match a firm standard (standard-matches.tsx). */
 .sm-card {
   display: grid;
@@ -2958,79 +2833,12 @@ button.ry-link:hover {
   gap: 0.5rem;
 }
 
-.sc-register {
-  display: grid;
-  gap: 1rem;
-}
-
-.sc-filter {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.6rem 0.9rem;
-  padding: 0.6rem 0.8rem;
-  border: 1px solid var(--accent-soft);
-  border-radius: 12px;
-  background: var(--accent-soft);
-}
-
-.sc-filter-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.2rem 0.3rem 0.2rem 0.6rem;
-  color: var(--text-strong);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: var(--fs-sm);
-}
-
-.sc-filter-chip button {
-  display: inline-grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  min-height: 0;
-  padding: 0;
-  color: var(--text-secondary);
-  background: none;
-  border: 0;
-  border-radius: 999px;
-  cursor: pointer;
-}
-
-.sc-filter-chip button:hover {
-  color: var(--text-strong);
-  background: var(--surface-muted);
-}
-
-.sc-filter-count {
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-}
-
-.sc-filter-clear {
-  padding: 0;
-  color: var(--accent-text);
-  background: none;
-  border: 0;
-  font-size: var(--fs-sm);
-  cursor: pointer;
-}
-
-.sc-filter-select {
-  margin-left: auto;
-}
-
 @media (max-width: 760px) {
   .ss-counts {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .sc-filter-select {
-    margin-left: 0;
-  }
+  
 }
 
 /* The References tab (26 October 2026): narratives and diagrams, then the prior year. */

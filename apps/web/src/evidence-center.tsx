@@ -27,6 +27,7 @@ import {
   KPI_LABELS,
   KPIS,
   type Kpi,
+  keepSelected,
   PAGE_SIZES,
   PHASE_LABELS,
   parseBulkResult,
@@ -111,15 +112,13 @@ export function EvidenceCenter({
     [list],
   );
   useEffect(() => {
-    setSelected((current) => {
-      const next = new Map<string, number>();
-      for (const [id] of current) {
-        const version = matching.get(id);
-        if (version !== undefined) next.set(id, version);
-      }
-      return next.size === current.size ? current : next;
-    });
+    setSelected((current) => keepSelected(current, matching));
   }, [matching]);
+  // A confirmed change to many requests stays on screen after the selection clears.
+  const [bulkDone, setBulkDone] = useState<{
+    summary: string;
+    left: BulkOutcome[];
+  } | null>(null);
   if (list === null) {
     return (
       <p className="banner banner-warning" role="status">
@@ -173,10 +172,19 @@ export function EvidenceCenter({
           selected={selected}
           contacts={state.contacts}
           onClear={() => setSelected(new Map())}
-          onDone={() => {
+          onStart={() => setBulkDone(null)}
+          onDone={(summary, left) => {
+            setBulkDone({ summary, left });
             setSelected(new Map());
             refresh();
           }}
+        />
+      ) : null}
+      {bulkDone !== null ? (
+        <BulkDone
+          summary={bulkDone.summary}
+          left={bulkDone.left}
+          onDismiss={() => setBulkDone(null)}
         />
       ) : null}
       <RequestTable
@@ -1100,6 +1108,7 @@ function BulkBar({
   selected,
   contacts,
   onClear,
+  onStart,
   onDone,
 }: {
   ids: Ids;
@@ -1107,7 +1116,10 @@ function BulkBar({
   selected: Map<string, number>;
   contacts: Contact[];
   onClear: () => void;
-  onDone: () => void;
+  /** A new check begins: an earlier confirmed result no longer applies. */
+  onStart: () => void;
+  /** The server confirmed the change: its summary and each request not done, with why. */
+  onDone: (summary: string, left: BulkOutcome[]) => void;
 }) {
   const id = useId();
   const [action, setAction] = useState<BulkAction | null>(null);
@@ -1118,7 +1130,6 @@ function BulkBar({
   const [checked, setChecked] = useState<BulkOutcome[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
-  const [left, setLeft] = useState<BulkOutcome[]>([]);
   const items = [...selected].map(([itemId, version]) => ({
     id: itemId,
     version,
@@ -1147,6 +1158,7 @@ function BulkBar({
   async function check() {
     setBusy(true);
     setResult(null);
+    onStart();
     const answer = await post(ids, { ...fields(), items, preview: true });
     setBusy(false);
     const parsed = parseBulkResult(answer.body);
@@ -1171,10 +1183,11 @@ function BulkBar({
     if (answer.status === 200 && parsed !== null && action !== null) {
       setChecked(null);
       setAction(null);
-      setResult(bulkSummary(action, parsed));
       // Each request that did not go all the way, with why: an approval kept unsent too.
-      setLeft(parsed.outcomes.filter((item) => !item.ok));
-      onDone();
+      onDone(
+        bulkSummary(action, parsed),
+        parsed.outcomes.filter((item) => !item.ok),
+      );
     } else {
       setResult(reviewProblem(answer.status, answer.detail));
     }
@@ -1343,7 +1356,35 @@ function BulkBar({
           {result}
         </p>
       ) : null}
-      {result !== null && left.length > 0 ? (
+    </section>
+  );
+}
+
+/** The confirmed result of a change to many requests, kept until dismissed. */
+function BulkDone({
+  summary,
+  left,
+  onDismiss,
+}: {
+  summary: string;
+  left: BulkOutcome[];
+  onDismiss: () => void;
+}) {
+  return (
+    <section className="ec-bulk" aria-label="Result of the change">
+      <div className="ec-bulk-row">
+        <p className="ec-result" role="status">
+          {summary}
+        </p>
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          onClick={onDismiss}
+        >
+          Dismiss
+        </button>
+      </div>
+      {left.length > 0 ? (
         <ul className="ec-bulk-review" aria-label="Requests not done">
           {left.slice(0, 50).map((item) => (
             <li key={item.id}>

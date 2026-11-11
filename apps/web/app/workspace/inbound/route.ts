@@ -28,7 +28,7 @@ export async function POST(request: Request) {
       headers,
       body: JSON.stringify(write.body),
       cache: "no-store",
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(15000),
     });
     status = response.status;
   } catch {

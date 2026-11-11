@@ -1,7 +1,12 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { browserUrl } from "../../../src/browser-url";
-import { applicationWrite } from "../../../src/evidence-model";
+import { returnStep } from "../../../src/control-workflow-model";
+import {
+  applicationNoticeFor,
+  applicationWrite,
+  filingNoticeParam,
+} from "../../../src/evidence-model";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -54,15 +59,17 @@ export async function POST(request: Request) {
     }
   }
   if (UUID.test(control)) {
-    destination.searchParams.set("tab", "evidence");
+    // Back to the step the file was set on: D&I Evidence or OE Evidence.
+    const step = returnStep(fields.step);
+    if (step !== null) {
+      destination.searchParams.set("step", step);
+    } else {
+      destination.searchParams.set("tab", "evidence");
+    }
   }
   destination.searchParams.set(
     "notice",
-    status === 200
-      ? "filing-filed"
-      : status === 409
-        ? "filing-stale"
-        : "filing-invalid",
+    filingNoticeParam(applicationNoticeFor("error" in write ? null : status)),
   );
   return NextResponse.redirect(destination, 303);
 }

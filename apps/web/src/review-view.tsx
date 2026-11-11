@@ -88,6 +88,8 @@ export function ReviewTab({
   const waiting = openNotes(review);
   const relaxed = !review.independenceRequired;
   const decides = canAct && review.viewerIsReviewer && review.status === "OPEN";
+  // The preparer of this work adds notes and answers them; another reviewer decides them.
+  const ownWork = review.viewerPrepared && review.independenceRequired;
   const answers = canAct && review.status === "OPEN";
   const itemLabel = (note: ReviewNote): string => {
     const item = sheet?.items.find((entry) => entry.id === note.itemId);
@@ -204,7 +206,7 @@ export function ReviewTab({
             <dd>
               {review.viewerIsReviewer
                 ? review.viewerPrepared && review.independenceRequired
-                  ? "You prepared this work; another reviewer signs it off"
+                  ? "You prepared this work; another reviewer decides its notes and signs it off"
                   : "You"
                 : "A team member with the reviewer role"}
             </dd>
@@ -295,7 +297,7 @@ export function ReviewTab({
                     Returned: {note.clearReason}
                   </p>
                 ) : null}
-                {decides && note.status === "PROPOSED" ? (
+                {decides && !ownWork && note.status === "PROPOSED" ? (
                   <div className="review-actions">
                     <form
                       autoComplete="off"
@@ -362,6 +364,7 @@ export function ReviewTab({
                   </form>
                 ) : null}
                 {decides &&
+                !ownWork &&
                 (note.status === "RESPONDED" || note.status === "OPEN") ? (
                   <div className="review-actions">
                     <form

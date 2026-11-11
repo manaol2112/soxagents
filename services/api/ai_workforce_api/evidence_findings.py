@@ -202,6 +202,19 @@ def _plan_revision(cursor: psycopg.Cursor[Any], control_id: UUID) -> int | None:
     return None if row is None or row[0] is None else int(row[0])
 
 
+def period_dates(period: str) -> list[date]:
+    """The dates written in the reader's period text. The text is the model's: a date that
+    does not exist (2025-02-29) is skipped, never an error that loses the reading (bug hunt,
+    9 November 2026)."""
+    found: list[date] = []
+    for year, month, day in _DATE.findall(period):
+        try:
+            found.append(date(int(year), int(month), int(day)))
+        except ValueError:
+            continue
+    return found
+
+
 def derive_from_analysis(
     cursor: psycopg.Cursor[Any],
     organization_id: UUID,
@@ -340,11 +353,7 @@ def derive_from_analysis(
             )
         )
     period = str(classification.get("period") or "")
-    dates = [
-        date(int(y), int(m), int(d))
-        for y, m, d in _DATE.findall(period)
-        if 1 <= int(m) <= 12 and 1 <= int(d) <= 31
-    ]
+    dates = period_dates(period)
     if dates:
         for requirement_id, (title, phase, start, end) in requirements.items():
             if phase == "DESIGN" or start is None or end is None:

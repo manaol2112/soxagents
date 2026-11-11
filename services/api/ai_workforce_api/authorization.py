@@ -45,6 +45,9 @@ class Action(StrEnum):
     TASK_UPDATE = "task.update"
     AGENT_READ = "agent.read"
     AGENT_UPDATE = "agent.update"
+    # Propose, approve, and apply the firm's testing methodology (methodology.py): Owner and
+    # Admin only, as every action not granted to the other roles.
+    METHODOLOGY_MANAGE = "methodology.manage"
 
 
 class PrincipalKind(StrEnum):

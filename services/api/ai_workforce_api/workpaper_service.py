@@ -228,6 +228,12 @@ def ensure(
                                     THEN 'PENDING' ELSE workpapers.draft_status END,
                 attempts = CASE WHEN workpapers.draft_status = 'WORKING'
                                 THEN workpapers.attempts ELSE 0 END,
+                -- Asked again while the agent drafts (the testing signed off meanwhile):
+                -- the version moves on, so the running draft drafts again when it ends
+                -- instead of the request being lost (bug hunt, 9 November 2026).
+                version = CASE WHEN workpapers.status = 'DRAFT'
+                                    AND workpapers.draft_status = 'WORKING'
+                               THEN workpapers.version + 1 ELSE workpapers.version END,
                 template_key = CASE WHEN workpapers.status = 'DRAFT'
                                          AND workpapers.started_at IS NULL
                                     THEN EXCLUDED.template_key
@@ -444,6 +450,23 @@ def run_draft(
     workpaper_id: UUID,
     settings: Settings | None = None,
 ) -> str:
+    """Draft the workpaper. A draft asked for while this one ran drafts again straight
+    after, from the records as they then stand; one still asked for after that waits for
+    the next resume."""
+    result = "SKIPPED"
+    for _ in range(MAX_ATTEMPTS):
+        result = _draft_once(connection, provider, workpaper_id, settings)
+        if result != "AGAIN":
+            return result
+    return "DONE"
+
+
+def _draft_once(
+    connection: psycopg.Connection[Any],
+    provider: ModelProvider | None,
+    workpaper_id: UUID,
+    settings: Settings | None = None,
+) -> str:
     independent_steps(connection)
     with transaction(connection) as cursor:
         claimed = cursor.execute(
@@ -458,7 +481,7 @@ def run_draft(
                       requested_by, current_version,
                       (SELECT c.template_key FROM engagement_controls c
                        WHERE c.id = workpapers.engagement_control_id),
-                      started_at IS NOT NULL, template_snapshot
+                      started_at IS NOT NULL, template_snapshot, version
             """,
             (LEASE_MINUTES, workpaper_id, MAX_ATTEMPTS),
         ).fetchone()
@@ -466,7 +489,7 @@ def run_draft(
         return "SKIPPED"
     (
         organization_id, project_id, control_id, stage, opened, requester, current, template,
-        started, snapshot,
+        started, snapshot, claimed_version,
     ) = claimed  # fmt: skip
     records = gather(connection, project_id, control_id)
     old = _content(connection, workpaper_id, int(current))
@@ -547,14 +570,16 @@ def run_draft(
                 testing_rationale(connection, project_id, control_id, interim_tab(content)),
             )
         _save(cursor, workpaper_id, content, source, None, note)
-        cursor.execute(
-            "UPDATE workpapers SET draft_status = 'IDLE', lease_until = NULL, attempts = 0, "
-            "draft_note = %s, version = version + 1 WHERE id = %s",
-            (note[:500], workpaper_id),
-        )
+        # A draft asked for while this one ran (its version moved on) is drafted next.
+        finished = cursor.execute(
+            "UPDATE workpapers SET draft_status = CASE WHEN version = %s THEN 'IDLE' "
+            "ELSE 'PENDING' END, lease_until = NULL, attempts = 0, "
+            "draft_note = %s, version = version + 1 WHERE id = %s RETURNING draft_status",
+            (int(claimed_version), note[:500], workpaper_id),
+        ).fetchone()
         _audit(cursor, organization_id, project_id, requester, workpaper_id, "workpaper.drafted",
                {"source": source}, agent_instance)  # fmt: skip
-    return "DONE"
+    return "AGAIN" if finished is not None and finished[0] == "PENDING" else "DONE"
 
 
 def _apply(
@@ -1167,6 +1192,24 @@ def _prepare(
             ).fetchone()
             if signed is None:
                 raise WorkpaperState("sign off the control's testing first")
+            # The workpaper is drafted from the testing as signed off: a draft from the
+            # records or the agent after the latest sign-off (bug hunt, 9 November 2026).
+            fresh = cursor.execute(
+                """
+                SELECT 1 FROM test_sheets s
+                WHERE s.project_id = %s AND s.engagement_control_id = %s
+                  AND s.test_round_id IS NULL AND s.status = 'SIGNED_OFF'
+                  AND EXISTS (SELECT 1 FROM workpaper_versions v
+                              WHERE v.workpaper_id = %s AND v.source <> 'PERSON'
+                                AND v.created_at >= s.signed_at)
+                """,
+                (project_id, control_id, workpaper_id),
+            ).fetchone()
+            if fresh is None:
+                raise WorkpaperState(
+                    "the workpaper was drafted before the testing was last signed off; "
+                    "draft it again from the signed-off testing"
+                )
             # The AI-proposed testing rationale is reviewed by a person before the
             # workpaper is prepared (M3c closure): an explicit confirmation, recorded.
             content = _content(connection, workpaper_id, int(current))
@@ -1217,6 +1260,54 @@ def _prepare(
     return _body(connection, project_id, workpaper_id), queued
 
 
+def _reopen_prepared(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    actor_id: UUID,
+    workpaper_id: UUID,
+    payload: dict[str, Any],
+) -> None:
+    """A prepared workpaper back to draft, on record."""
+    cursor.execute(
+        """
+        UPDATE workpapers
+        SET status = 'DRAFT', prepared_by = NULL, prepared_at = NULL,
+            prepared_version = NULL, version = version + 1
+        WHERE id = %s
+        """,
+        (workpaper_id,),
+    )
+    _audit(cursor, organization_id, project_id, actor_id, workpaper_id, "workpaper.reopened",
+           payload)  # fmt: skip
+
+
+def reopen_for_testing(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor_id: UUID,
+    reason: str,
+) -> UUID | None:
+    """The control's testing is open again: its prepared effectiveness workpaper, whose
+    conclusion is the signed-off testing's, opens again with it. Signing the testing off
+    again redrafts it from the new results (bug hunt, 9 November 2026)."""
+    row = cursor.execute(
+        "SELECT id FROM workpapers WHERE project_id = %s AND engagement_control_id = %s "
+        "AND stage = 'EFFECTIVENESS' AND status = 'PREPARED' FOR UPDATE",
+        (project_id, control_id),
+    ).fetchone()
+    if row is None:
+        return None
+    workpaper_id = UUID(str(row[0]))
+    _reopen_prepared(
+        cursor, organization_id, project_id, actor_id, workpaper_id,
+        {"reason": clean_line(reason, 500), "because": "testing_reopened"},
+    )  # fmt: skip
+    return workpaper_id
+
+
 def _reopen(
     connection: psycopg.Connection[Any],
     principal: Principal,
@@ -1227,20 +1318,21 @@ def _reopen(
 ) -> WorkpaperBody:
     _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
     with transaction(connection) as cursor:
-        status, _drafting, _current, _org, _control, _stage, version = _locked(
+        status, _drafting, _current, org, control, stage, version = _locked(
             cursor, project_id, workpaper_id
         )
         if status != "PREPARED" or int(version) != body.version:
             raise WorkpaperState("the workpaper changed")
-        cursor.execute(
-            """
-            UPDATE workpapers
-            SET status = 'DRAFT', prepared_by = NULL, prepared_at = NULL,
-                prepared_version = NULL, version = version + 1
-            WHERE id = %s
-            """,
-            (workpaper_id,),
-        )
-        _audit(cursor, organization_id, project_id, principal.id, workpaper_id,
-               "workpaper.reopened", {"reason": clean_line(body.reason, 500)})  # fmt: skip
+        if stage == "DESIGN":
+            # The D&I conclusion rests on the prepared design workpaper: it opens again too.
+            from ai_workforce_api.design_conclusions import reopen_for_workpaper
+
+            reopen_for_workpaper(
+                cursor, UUID(str(org)), project_id, UUID(str(control)), principal.id,
+                body.reason,
+            )  # fmt: skip
+        _reopen_prepared(
+            cursor, organization_id, project_id, principal.id, workpaper_id,
+            {"reason": clean_line(body.reason, 500)},
+        )  # fmt: skip
     return _body(connection, project_id, workpaper_id)

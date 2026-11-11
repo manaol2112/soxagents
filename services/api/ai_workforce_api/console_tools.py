@@ -24,8 +24,9 @@ from uuid import UUID, uuid4
 
 import psycopg
 from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
-from ai_workforce_api.authorization import NotVisible, Principal
+from ai_workforce_api.authorization import Action, NotVisible, Principal, authorize
 from ai_workforce_api.control_instances import (
     FAMILY_FILES,
     control_label,
@@ -57,6 +58,9 @@ class ToolContext:
     # Changes this turn has already proposed to a request (its wording, its recipient), so
     # a later step in the same plan is checked against the request as it will be.
     planned: dict[UUID, dict[str, str]] = field(default_factory=dict)
+    # The confirmed step being run, so a step that creates a record does so once however
+    # often it runs (bug hunt, 9 November 2026).
+    step: UUID | None = None
 
 
 # The longest message body an evidence request email may have (outbound._compose), with room
@@ -82,6 +86,11 @@ class Tool:
     check: Callable[[ToolContext, Any], None] | None = None
     # What a proposed step will change, kept for the checks of the steps after it.
     plans: Callable[[ToolContext, Any], None] | None = None
+    # The record a step decides on and its version, taken when the step is proposed and
+    # checked again when it is confirmed, so a person never approves samples, a sign-off
+    # or a decision on a record that changed after they saw it (bug hunt, 9 November
+    # 2026). Before, a confirmed step read the record's version as it was at confirmation.
+    pin: Callable[[ToolContext, Any], str] | None = None
 
     def chat_tool(self) -> ChatTool:
         schema = self.arguments.model_json_schema()
@@ -99,6 +108,12 @@ class Tool:
 
 class NoArgs(BaseModel):
     pass
+
+
+class Pinned(BaseModel):
+    # Set by the console when the step is proposed, never by the model: whatever the model
+    # sends here is replaced. Hidden from the schema the model sees.
+    pinned: SkipJsonSchema[str | None] = Field(default=None, max_length=200)
 
 
 class ControlArgs(BaseModel):
@@ -261,6 +276,10 @@ class FileArgs(BaseModel):
     evidence_file_id: UUID
 
 
+class SamplesArgs(ControlArgs, Pinned):
+    pass
+
+
 class ProposeArgs(BaseModel):
     control_ref: str = Field(min_length=1, max_length=60)
     evidence_file_id: UUID | None = Field(
@@ -274,7 +293,7 @@ class ApprovalArgs(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
-class ReplaceArgs(BaseModel):
+class ReplaceArgs(Pinned):
     control_ref: str = Field(min_length=1, max_length=60)
     position: int = Field(ge=1, le=200)
     row_number: int = Field(ge=1)
@@ -298,14 +317,14 @@ class KindArgs(BaseModel):
     note: str = Field(default="", max_length=500)
 
 
-class SignOffArgs(BaseModel):
+class SignOffArgs(Pinned):
     evidence_file_id: UUID
     decision: Literal["ACCEPTED", "OVERRIDDEN"]
     conclusion: Literal["NO_EXCEPTION", "EXCEPTION", "CANNOT_CONCLUDE"] | None = None
     note: str = Field(default="", max_length=1000)
 
 
-class TestResultArgs(BaseModel):
+class TestResultArgs(Pinned):
     control_ref: str = Field(min_length=1, max_length=60)
     item: str = Field(
         min_length=1, max_length=200, description="The sample's key as the test sheet shows it."
@@ -318,7 +337,7 @@ class TestResultArgs(BaseModel):
     reason: str = Field(min_length=3, max_length=500)
 
 
-class TestLinkArgs(BaseModel):
+class TestLinkArgs(Pinned):
     control_ref: str = Field(min_length=1, max_length=60)
     evidence_file_id: UUID
     action: Literal["LINK", "UNLINK", "EXCLUDE"] = Field(
@@ -329,12 +348,12 @@ class TestLinkArgs(BaseModel):
     reason: str = Field(default="", max_length=300)
 
 
-class TestSignOffArgs(BaseModel):
+class TestSignOffArgs(Pinned):
     control_ref: str = Field(min_length=1, max_length=60)
     note: str = Field(default="", max_length=1000)
 
 
-class TestDeficiencyArgs(BaseModel):
+class TestDeficiencyArgs(Pinned):
     control_ref: str = Field(min_length=1, max_length=60)
     action: Literal["LOG", "DISMISS"]
     reason: str = Field(default="", max_length=500, description="Required to dismiss.")
@@ -411,14 +430,14 @@ class RequestStatusArgs(BaseModel):
     reason: str = Field(default="", max_length=500, description="Needed to cancel.")
 
 
-class ReviewNoteArgs(BaseModel):
+class ReviewNoteArgs(Pinned):
     control_ref: str = Field(min_length=1, max_length=60)
     note: int = Field(ge=1, le=10_000, description="The note's number on the review.")
     action: Literal["ACCEPT", "DISMISS"]
     reason: str = Field(default="", max_length=500)
 
 
-class RaiseNoteArgs(BaseModel):
+class RaiseNoteArgs(Pinned):
     control_ref: str = Field(min_length=1, max_length=60)
     text: str = Field(min_length=3, max_length=2000)
     severity: Literal["MUST_FIX", "SHOULD_FIX", "OBSERVATION"] = "SHOULD_FIX"
@@ -426,20 +445,20 @@ class RaiseNoteArgs(BaseModel):
     item: str | None = Field(default=None, max_length=200, description="The sample or application.")
 
 
-class RespondNoteArgs(BaseModel):
+class RespondNoteArgs(Pinned):
     control_ref: str = Field(min_length=1, max_length=60)
     note: int = Field(ge=1, le=10_000)
     response: str = Field(min_length=3, max_length=2000)
 
 
-class ClearNoteArgs(BaseModel):
+class ClearNoteArgs(Pinned):
     control_ref: str = Field(min_length=1, max_length=60)
     note: int = Field(ge=1, le=10_000)
     action: Literal["CLEAR", "RETURN"] = "CLEAR"
     reason: str = Field(default="", max_length=500)
 
 
-class ReviewSignOffArgs(BaseModel):
+class ReviewSignOffArgs(Pinned):
     control_ref: str = Field(min_length=1, max_length=60)
     note: str = Field(default="", max_length=1000)
 
@@ -1309,6 +1328,16 @@ def _draft_workpapers(context: ToolContext, args: ControlArgs) -> dict[str, Any]
     from ai_workforce_api.db import transaction
     from ai_workforce_api.workpaper_service import ensure, schedule_drafts
 
+    # Drafting workpapers is preparer work with model spend: the same right as the page's
+    # draft route. Before, any role that could open the console could start it (bug hunt,
+    # 9 November 2026).
+    authorize(
+        context.connection,
+        principal=context.principal,
+        action=Action.TASK_UPDATE,
+        organization_id=context.organization_id,
+        project_id=context.project_id,
+    )
     control_id, ref = _control(context, args.control_ref)
     with transaction(context.connection) as cursor:
         queued = ensure(
@@ -1528,10 +1557,22 @@ def _send(context: ToolContext, args: RequestArgs) -> dict[str, Any]:
     return {"delivery": sent.status, "request_id": str(args.request_id)}
 
 
+def _check_approval(_context: ToolContext, args: ApprovalArgs) -> None:
+    """The decision route's checks on the reason (approvals.py): it is not blank and
+    holds no secret. Before, the console skipped them (bug hunt, 9 November 2026)."""
+    from ai_workforce_api.actions import contains_secret
+
+    if args.reason.strip() == "":
+        raise ToolFailed("A decision needs a reason.")
+    if contains_secret({"reason": args.reason}):
+        raise ToolFailed("The reason looks like it holds a password or key. Leave it out.")
+
+
 def _decide_approval(context: ToolContext, args: ApprovalArgs) -> dict[str, Any]:
     from ai_workforce_api.approvals import ApprovalDecision
     from ai_workforce_api.approvals import _decide as decide
 
+    _check_approval(context, args)
     body = decide(
         context.connection,
         context.principal,
@@ -1540,7 +1581,79 @@ def _decide_approval(context: ToolContext, args: ApprovalArgs) -> dict[str, Any]
         args.approval_id,
         ApprovalDecision(decision=args.decision, reason=args.reason),
     )
+    if body.decision == "EXPIRED":
+        # The approval ran out before it was decided: it is recorded as expired, and the
+        # step did not do what the person confirmed (bug hunt, 9 November 2026).
+        raise ToolFailed(
+            "The approval had expired, so it was not decided. Submit the request again for "
+            "a new approval."
+        )
     return {"decision": body.decision}
+
+
+def _approval_summary(context: ToolContext, args: ApprovalArgs) -> str | None:
+    """What the approver decides on: the action, its recipient and its subject, from the
+    approval's stored parameters. Before, the step showed only the model's reason (bug
+    hunt, 9 November 2026)."""
+    from ai_workforce_api.actions import find_action
+
+    row = context.connection.execute(
+        "SELECT action_id, parameters FROM approvals WHERE id = %s AND project_id = %s",
+        (args.approval_id, context.project_id),
+    ).fetchone()
+    if row is None:
+        return None
+    action = find_action(str(row[0]))
+    parameters = row[1] if isinstance(row[1], dict) else {}
+    verb = "Approve" if args.decision == "APPROVED" else "Reject"
+    text = f"{verb} \u201c{action.name if action is not None else row[0]}\u201d"
+    recipient = str(parameters.get("recipient") or "").strip()
+    subject = str(parameters.get("subject") or "").strip()
+    if recipient:
+        text += f" to {_short(recipient, 120)}"
+    if subject:
+        text += f", subject \u201c{_short(subject, 140)}\u201d"
+    return f"{text}. Reason: {_short(args.reason, 150)}"
+
+
+# Pins: the record a step decides on, as "kind:id@version".
+
+
+def _pin_samples(context: ToolContext, args: Any) -> str:
+    # A draw again (propose_samples) bumps the version, so a new seed is a new pin.
+    test_id, version = _test_for(context, args.control_ref)
+    return f"control_test:{test_id}@{version}"
+
+
+def _pin_sheet(context: ToolContext, args: Any) -> str:
+    # The sheet's own version moves with a person's change; the tester's results move each
+    # item's version, so they are part of the pin too.
+    sheet_id, sheet = _sheet_for(context, args.control_ref)
+    items = sum(int(item.version) for item in sheet.items)
+    return f"test_sheet:{sheet_id}@{sheet.version}.{len(sheet.items)}.{items}"
+
+
+def _pin_review(context: ToolContext, args: Any) -> str:
+    review = _review_for(context, args.control_ref)
+    return f"control_review:{review.id}@{review.version}"
+
+
+def _pin_screenshot(context: ToolContext, args: Any) -> str:
+    row = context.connection.execute(
+        "SELECT id, version FROM evidence_reviews WHERE evidence_file_id = %s AND project_id = %s",
+        (args.evidence_file_id, context.project_id),
+    ).fetchone()
+    if row is None:
+        raise ToolFailed("That file has no screenshot review to sign off.")
+    return f"evidence_review:{row[0]}@{row[1]}"
+
+
+_PINNED_THINGS = {
+    "control_test": "samples",
+    "test_sheet": "test sheet",
+    "control_review": "review",
+    "evidence_review": "screenshot review",
+}
 
 
 def _test_for(context: ToolContext, control_ref: str) -> tuple[UUID, int]:
@@ -1556,7 +1669,7 @@ def _test_for(context: ToolContext, control_ref: str) -> tuple[UUID, int]:
     return UUID(str(row[0])), int(row[1])
 
 
-def _approve_samples(context: ToolContext, args: ControlArgs) -> dict[str, Any]:
+def _approve_samples(context: ToolContext, args: SamplesArgs) -> dict[str, Any]:
     from ai_workforce_api.control_tests import VersionBody, _approve
 
     test_id, version = _test_for(context, args.control_ref)
@@ -1900,7 +2013,9 @@ def _draft_request(context: ToolContext, args: DraftRequestArgs) -> dict[str, An
         context.organization_id,
         context.project_id,
         PbcCreate(
-            operation_key=f"console-{uuid4().hex}",
+            # One request per confirmed step, however often the step runs: the key is the
+            # step's own. Before, every run drew a random key (bug hunt, 9 November 2026).
+            operation_key=f"console-{(context.step or uuid4()).hex}",
             control_ref=str(latest[2]) if latest is not None else ref,
             recipient=recipient,
             due_at=datetime.combine(due, time(23, 59), tzinfo=UTC),
@@ -2019,16 +2134,17 @@ TOOLS: tuple[Tool, ...] = (
          "Approve or reject a pending approval as the signed-in person. Nobody can approve "
          "their own request.",
          "CONFIRM", ApprovalArgs, _decide_approval,
-         lambda a: f"{'Approve' if a.decision == 'APPROVED' else 'Reject'}: {_short(a.reason)}"),
+         lambda a: f"{'Approve' if a.decision == 'APPROVED' else 'Reject'}: {_short(a.reason)}",
+         _check_approval),
     Tool("approve_samples", "Approve samples",
          "Approve a control's proposed samples. This drafts the sample evidence request.",
-         "CONFIRM", ControlArgs, _approve_samples,
-         lambda a: f"Approve the samples for {a.control_ref}"),
+         "CONFIRM", SamplesArgs, _approve_samples,
+         lambda a: f"Approve the samples for {a.control_ref}", pin=_pin_samples),
     Tool("replace_sample", "Replace a sample",
          "Replace one selected sample with another population row, with a reason.",
          "CONFIRM", ReplaceArgs, _replace_sample,
          lambda a: f"Replace sample {a.position} of {a.control_ref} with row {a.row_number}: "
-         f"{_short(a.reason, 60)}"),
+         f"{_short(a.reason, 60)}", pin=_pin_samples),
     Tool("confirm_evidence_kind", "Confirm evidence kind",
          "Confirm what kind of evidence a stored file is.", "CONFIRM", KindArgs, _confirm_kind,
          lambda a: f"Confirm the file as {a.kind.replace('_', ' ')}"),
@@ -2038,7 +2154,7 @@ TOOLS: tuple[Tool, ...] = (
          "CONFIRM", SignOffArgs, _sign_off,
          lambda a: "Accept the screenshot review"
          if a.decision == "ACCEPTED"
-         else f"Override the screenshot review: {_short(a.note, 60)}"),
+         else f"Override the screenshot review: {_short(a.note, 60)}", pin=_pin_screenshot),
     Tool("draft_workpapers", "Draft workpapers",
          "Open a control's design and effectiveness workpapers, filled from the records, and "
          "have the agent draft their narratives with citations. Sections a person wrote stay.",
@@ -2052,24 +2168,24 @@ TOOLS: tuple[Tool, ...] = (
          "with the reason, for example after checking the evidence.",
          "CONFIRM", TestResultArgs, _override_result,
          lambda a: f"Set {a.control_ref} {a.item}, attribute {a.attribute_index + 1}, to "
-         f"{a.result.replace('_', ' ').lower()}: {_short(a.reason, 50)}"),
+         f"{a.result.replace('_', ' ').lower()}: {_short(a.reason, 50)}", pin=_pin_sheet),
     Tool("link_test_evidence", "Link test evidence",
          "Put an evidence file on a sample of a control's test sheet, take it off, or set it "
          "aside as not test evidence.",
          "CONFIRM", TestLinkArgs, _link_evidence,
          lambda a: f"{a.action.capitalize()} a file on {a.control_ref}"
-         + (f" {a.item}" if a.item else "")),
+         + (f" {a.item}" if a.item else ""), pin=_pin_sheet),
     Tool("sign_off_testing", "Sign off testing",
          "Sign off a control's test sheet. The conclusion follows the results, with zero "
          "tolerance; exceptions draft a deficiency.",
          "CONFIRM", TestSignOffArgs, _sign_off_testing,
-         lambda a: f"Sign off the testing of {a.control_ref}"),
+         lambda a: f"Sign off the testing of {a.control_ref}", pin=_pin_sheet),
     Tool("decide_test_deficiency", "Log or dismiss a proposed deficiency",
          "Log the deficiency the tester drafted from a control's exceptions, or dismiss it with "
          "a reason.",
          "CONFIRM", TestDeficiencyArgs, _decide_test_deficiency,
          lambda a: f"{'Log' if a.action == 'LOG' else 'Dismiss'} the proposed deficiency on "
-         f"{a.control_ref}"),
+         f"{a.control_ref}", pin=_pin_sheet),
     Tool("log_deficiency", "Log a deficiency",
          "Log a deficiency on a control. Severity follows likelihood and magnitude; a "
          "significant deficiency or material weakness still needs the reviewer.",
@@ -2103,28 +2219,28 @@ TOOLS: tuple[Tool, ...] = (
          "about) or dismiss it with a reason. Only the engagement reviewer can.",
          "CONFIRM", ReviewNoteArgs, _decide_review_note,
          lambda a: f"{'Accept' if a.action == 'ACCEPT' else 'Dismiss'} review note #{a.note} on "
-         f"{a.control_ref}"),
+         f"{a.control_ref}", pin=_pin_review),
     Tool("raise_review_note", "Raise a review note",
          "Raise a review note on a control's testing, sample, workpaper, or deficiency. A "
          "must-fix note reopens the work it is about. Only the engagement reviewer can.",
          "CONFIRM", RaiseNoteArgs, _raise_review_note,
          lambda a: f"Raise a {a.severity.replace('_', ' ').lower()} note on {a.control_ref}: "
-         f"{_short(a.text, 60)}"),
+         f"{_short(a.text, 60)}", pin=_pin_review),
     Tool("respond_review_note", "Answer a review note",
          "Answer an open review note as the preparer, saying what was done about it.",
          "CONFIRM", RespondNoteArgs, _respond_review_note,
-         lambda a: f"Answer review note #{a.note} on {a.control_ref}"),
+         lambda a: f"Answer review note #{a.note} on {a.control_ref}", pin=_pin_review),
     Tool("clear_review_note", "Clear or return a review note",
          "Clear an answered review note, or return it with what is still missing. Only the "
          "engagement reviewer can.",
          "CONFIRM", ClearNoteArgs, _clear_review_note,
          lambda a: f"{'Clear' if a.action == 'CLEAR' else 'Return'} review note #{a.note} on "
-         f"{a.control_ref}"),
+         f"{a.control_ref}", pin=_pin_review),
     Tool("sign_off_control_review", "Sign off a control review",
          "Sign off a control's independent review once every note is cleared. Only the "
          "engagement reviewer can, and never on work they prepared.",
          "CONFIRM", ReviewSignOffArgs, _sign_off_review,
-         lambda a: f"Sign off the review of {a.control_ref}"),
+         lambda a: f"Sign off the review of {a.control_ref}", pin=_pin_review),
     Tool("update_phase", "Change phase dates", "Change a phase's planned dates.",
          "CONFIRM", PhaseArgs, _update_phase,
          lambda a: f"Move {a.phase_key} to {a.planned_start} – {a.planned_end}"),
@@ -2140,7 +2256,9 @@ def describe(tool: Tool, arguments: BaseModel, context: ToolContext) -> str:
     summary = tool.summary(arguments)
     request_id = getattr(arguments, "request_id", None)
     file_id = getattr(arguments, "evidence_file_id", None)
-    if request_id is not None:
+    if isinstance(arguments, ApprovalArgs):
+        summary = _approval_summary(context, arguments) or summary
+    elif request_id is not None:
         row = context.connection.execute(
             "SELECT control_ref, left(evidence_description, 80) FROM pbc_requests "
             "WHERE id = %s AND project_id = %s",
@@ -2199,6 +2317,50 @@ def planned(tool: Tool, arguments: BaseModel, context: ToolContext) -> None:
     """Remember what a proposed step will change, for the checks of the steps after it."""
     if tool.plans is not None:
         tool.plans(context, arguments)
+
+
+def pin(tool: Tool, arguments: BaseModel, context: ToolContext) -> BaseModel:
+    """The step's arguments with the record it decides on as it is now, set when the step
+    is proposed. What the model sent as the pin is replaced."""
+    if tool.pin is None:
+        return arguments
+    return arguments.model_copy(update={"pinned": _pinned_now(tool, arguments, context)})
+
+
+def verify_pin(tool: Tool, arguments: BaseModel, context: ToolContext) -> str | None:
+    """Before a confirmed step runs: the record it decides on is still as it was when the
+    step was proposed. Returns the pin, or None for a step that decides on no record."""
+    if tool.pin is None:
+        return None
+    expected = getattr(arguments, "pinned", None)
+    current = _pinned_now(tool, arguments, context)
+    if expected != current:
+        thing = _PINNED_THINGS.get(current.split(":", 1)[0], "record")
+        raise ToolFailed(
+            f"The {thing} changed since this step was proposed, so it did not run. Ask "
+            "again to see it as it is now."
+        )
+    return current
+
+
+def pinned_after(tool: Tool, arguments: BaseModel, context: ToolContext) -> str | None:
+    """The pinned record as a step that ran has left it, or None when it is gone."""
+    if tool.pin is None:
+        return None
+    try:
+        return _pinned_now(tool, arguments, context)
+    except ToolFailed:
+        return None
+
+
+def _pinned_now(tool: Tool, arguments: BaseModel, context: ToolContext) -> str:
+    assert tool.pin is not None
+    try:
+        return tool.pin(context, arguments)
+    except ToolFailed:
+        raise
+    except Exception as error:
+        raise _failed(tool, error) from None
 
 
 def _failed(tool: Tool, error: Exception) -> ToolFailed:

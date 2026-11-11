@@ -432,7 +432,9 @@ def test_a_request_is_received_when_a_person_accepts_its_last_item(migrated: Dat
     settled before."""
     from pathlib import Path
 
-    team, client, scheduler = _engagement(migrated, "ews-settle")
+    # The D&I work itself (the design workpaper is drafted from the accepted items): no D&I
+    # conclusion in the setup (B0).
+    team, client, scheduler = _engagement(migrated, "ews-settle", design=False)
     control = _control(migrated, team, "ITGC-AC-01")
     base = f"{_base(team)}/controls/{control}"
     design = _phase(_plan(client, team, control), "DESIGN")

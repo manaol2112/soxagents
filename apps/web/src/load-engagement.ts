@@ -1,7 +1,15 @@
 import { cookies } from "next/headers";
 import { parseAnalyses, parseReviews } from "./analysis-model";
+import {
+  parseConclusionNotice,
+  parseControlConclusion,
+} from "./control-conclusion-model";
 import { parseContext } from "./control-context-model";
 import { parseActivity } from "./control-workspace-model";
+import {
+  parseDesignConclusion,
+  parseDesignConclusionNotice,
+} from "./design-conclusion-model";
 import type { ControlFiles } from "./engagement-model";
 import {
   EMPTY_ENGAGEMENT,
@@ -166,6 +174,8 @@ export async function loadEngagement(
     evidenceFindings,
     walkthroughInstances,
     exportsListed,
+    designConclusion,
+    controlConclusion,
   ] = await Promise.all([
     wanted.dashboard || wanted.agentWork
       ? apiGet(`${base}/workspace/dashboard`, session)
@@ -238,6 +248,14 @@ export async function loadEngagement(
         )
       : null,
     wanted.exports ? apiGet(`${base}/exports`, session) : null,
+    // The D&I conclusion a reviewer signs, which clears OE (migration 0143).
+    open
+      ? apiGet(`${base}/design-conclusions/${query.control}`, session)
+      : null,
+    // The control's proposed conclusion and its deficiencies' ratings (migration 0144).
+    open
+      ? apiGet(`${base}/control-conclusions/${query.control}`, session)
+      : null,
   ]);
   // The request opened on the control's Evidence tab, with its details for review.
   const focus =
@@ -293,6 +311,18 @@ export async function loadEngagement(
     workpapers: withVersion(ok(papers), ok(shownPaper)),
     workpaperNotice: open ? parseWorkpaperNotice(query.notice) : null,
     workpaperViewing: viewing,
+    designConclusion:
+      ok(designConclusion) === undefined
+        ? null
+        : parseDesignConclusion(ok(designConclusion)),
+    designConclusionNotice: open
+      ? parseDesignConclusionNotice(query.notice)
+      : null,
+    controlConclusion:
+      ok(controlConclusion) === undefined
+        ? null
+        : parseControlConclusion(ok(controlConclusion)),
+    controlConclusionNotice: open ? parseConclusionNotice(query.notice) : null,
     reviews: parsedReviews,
     reviewNotice:
       section === "controls" ? parseReviewNotice(query.notice) : null,
@@ -368,10 +398,11 @@ export async function loadEngagement(
         /^[a-z]{1,20}$/.test(query.tab)
           ? query.tab
           : null,
+      // A workflow step's key (control-workflow-model.STEPS), the longest "understanding".
       step:
         query.step !== null &&
         query.step !== undefined &&
-        /^[a-z]{1,10}$/.test(query.step)
+        /^[a-z]{1,24}$/.test(query.step)
           ? query.step
           : null,
       workFilter:

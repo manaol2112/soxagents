@@ -460,6 +460,20 @@ def _store_upload(
             # The file is held already: it serves this item too.
             _serve_item(connection, principal, organization_id, project_id, target[1],
                         requirement_id, existing)  # fmt: skip
+        elif target is not None:
+            # Added on a request as a whole, a file held on another request is not filed
+            # here too (a file is filed once, and linked to items): the person is told
+            # where it is, rather than that it was added (bug hunt, 9 November 2026).
+            held = connection.execute(
+                "SELECT pbc_request_id FROM evidence_file_links "
+                "WHERE evidence_file_id = %s AND project_id = %s LIMIT 1",
+                (existing, project_id),
+            ).fetchone()
+            if held is not None and held[0] is not None and held[0] != target[0]:
+                raise IntakeState(
+                    "this file is already held on another request; add it on an item of "
+                    "this request to link it there"
+                )
         return UploadBody(
             file_id=existing, file_name=file_name, folder_path=folder, duplicate=True
         ), None

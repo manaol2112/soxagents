@@ -41,33 +41,23 @@ from ai_workforce_api.authorization import (
 )
 from ai_workforce_api.db import transaction
 from ai_workforce_api.inbound import clean_line
+from ai_workforce_api.methodology import (
+    PLATFORM_DEFAULT,
+    RETEST_RULES,
+    ROLLFORWARD_SIZES,
+    Rules,
+    applied_on,
+)
+
+# The size tables live in the firm's methodology now; these names are kept for their readers.
+__all__ = ["RETEST_RULES", "ROLLFORWARD_SIZES"]
 from ai_workforce_api.schedule import interim_cutoff
 from ai_workforce_api.settings import Settings
 
 RoundKind = Literal["ROLLFORWARD", "RETEST"]
 
 # Roll-forward: an update sample for the months left after interim testing.
-ROLLFORWARD_SIZES = {
-    "ANNUAL": 1,
-    "QUARTERLY": 1,
-    "MONTHLY": 1,
-    "WEEKLY": 2,
-    "DAILY": 5,
-    "RECURRING": 10,
-    "EVENT_DRIVEN": 10,
-}
-
-# Remediation retest: the sample size, and how many days the fixed control must have
-# operated before it can be tested (two quarters, two months, five weeks, 20 days...).
-RETEST_RULES: dict[str, tuple[int, int]] = {
-    "ANNUAL": (1, 0),
-    "QUARTERLY": (2, 180),
-    "MONTHLY": (2, 60),
-    "WEEKLY": (5, 35),
-    "DAILY": (20, 28),
-    "RECURRING": (25, 20),
-    "EVENT_DRIVEN": (25, 30),
-}
+# The size tables are the firm's methodology now (methodology.py); these names are kept.
 
 OPEN = ("REQUESTED", "TESTING")
 # The testing phase each kind of round request serves.
@@ -127,18 +117,17 @@ class RoundBody(BaseModel):
     version: int = 1
 
 
-def rollforward_size(frequency: str, nature: str) -> tuple[str, int]:
-    if nature == "AUTOMATED":
-        return "TEST_OF_ONE", 1
-    return "SAMPLE", ROLLFORWARD_SIZES.get(frequency, 10)
+def rollforward_size(
+    frequency: str, nature: str, rules: Rules = PLATFORM_DEFAULT
+) -> tuple[str, int]:
+    return rules.rollforward(frequency, nature)
 
 
-def retest_rule(frequency: str, nature: str) -> tuple[str, int, int]:
+def retest_rule(
+    frequency: str, nature: str, rules: Rules = PLATFORM_DEFAULT
+) -> tuple[str, int, int]:
     """Method, sample size, and minimum days of operation before the retest."""
-    if nature == "AUTOMATED":
-        return "TEST_OF_ONE", 1, 0
-    size, days = RETEST_RULES.get(frequency, (25, 30))
-    return "SAMPLE", size, days
+    return rules.retest_rule(frequency, nature)
 
 
 def _control(cursor: psycopg.Cursor[Any], project_id: UUID, control_id: UUID) -> tuple[Any, ...]:
@@ -294,9 +283,9 @@ def _insert_round(
         INSERT INTO test_rounds (
             organization_id, project_id, engagement_control_id, kind, number, method,
             window_start, window_end, test_from, sample_size, deficiency_id, requested_by,
-            basis
+            basis, methodology_version_id
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT DO NOTHING
         RETURNING id, number
         """,
@@ -314,6 +303,7 @@ def _insert_round(
             deficiency_id,
             requester,
             Json(basis_of(cursor, control_id)),
+            applied_on(cursor, project_id).id,
         ),
     ).fetchone()
     return None if row is None else (UUID(str(row[0])), int(row[1]))
@@ -491,7 +481,9 @@ def start_rollforward(
     window = rollforward_window(cursor, sheet_id, control[7])
     if window is None:
         return None
-    method, size = rollforward_size(str(control[2]), str(control[3]))
+    method, size = rollforward_size(
+        str(control[2]), str(control[3]), applied_on(cursor, project_id).rules
+    )
     created = _insert_round(
         cursor, organization_id, project_id, control_id, "ROLLFORWARD", method, window,
         window[0], size, None, requester,
@@ -626,7 +618,9 @@ def start_retest(
     if row is None or row[1] is None:
         return None
     control = _control(cursor, project_id, row[1])
-    method, size, days = retest_rule(str(control[2]), str(control[3]))
+    method, size, days = retest_rule(
+        str(control[2]), str(control[3]), applied_on(cursor, project_id).rules
+    )
     test_from = remediated_on + timedelta(days=days)
     period_end: date | None = control[7]
     window_end = max(test_from, period_end) if period_end is not None else test_from

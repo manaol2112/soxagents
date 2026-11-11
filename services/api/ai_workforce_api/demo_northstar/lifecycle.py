@@ -218,14 +218,23 @@ def _plans(ctx: Context) -> None:
 
 
 def _requests(ctx: Context) -> None:
-    """Release each plan's requests, give the drafts their prepared words, prepare the
-    design workpaper, and release the interim phase."""
+    """Release each control's D&I evidence and its plan's requests, give the drafts their
+    prepared words, prepare the design workpaper, and release the interim phase."""
     from ai_workforce_api.evidence_plans import release
     from ai_workforce_api.phase_release import ReleaseBody
     from ai_workforce_api.phase_release import release as release_phase
 
     requests = 0
     for ref, control_id in ctx.controls.items():
+        # D&I evidence has its own release (B1): Dana releases it, then the requests follow.
+        try:
+            release_phase(
+                ctx.connection, ctx.organization_id, ctx.project_id, control_id, "DESIGN",
+                ctx.team["dana"],
+                ReleaseBody(reason="Released after the walkthrough with the control owner."),
+            )  # fmt: skip
+        except Exception as error:  # noqa: BLE001 - a phase the plan does not apply is fine
+            logger.info("D&I release skipped for %s: %s", ref, error)
         release(ctx.connection, ctx.organization_id, ctx.project_id, control_id, ctx.team["dana"])
         rows = ctx.cursor.execute(
             """
@@ -268,6 +277,7 @@ def _requests(ctx: Context) -> None:
             requests += 1
             _ = phase
         _design_workpaper(ctx, ref, control_id)
+        _design_conclusion(ctx, control_id)
         try:
             release_phase(
                 ctx.connection, ctx.organization_id, ctx.project_id, control_id, "INTERIM",
@@ -313,6 +323,23 @@ def _design_workpaper(ctx: Context, ref: str, control_id: UUID) -> None:
     _prepare(
         ctx.connection, ctx.principal("morgan"), ctx.organization_id, ctx.project_id,
         workpaper_id, PrepareBody(version=version, note="Design evaluated from the control's description and the client's configuration."),
+    )  # fmt: skip
+
+
+def _design_conclusion(ctx: Context, control_id: UUID) -> None:
+    """The reviewer signs off the D&I conclusion the records propose, as OE follows it (B0,
+    8 November 2026). Riley reviews; Morgan prepared the design workpaper."""
+    from ai_workforce_api.design_conclusions import SignOffBody, read, sign_off
+
+    riley = ctx.principal("riley")
+    found = read(ctx.connection, riley, ctx.organization_id, ctx.project_id, control_id)
+    paper = found.workpaper
+    if found.proposed is None or paper is None or paper.prepared_version is None:
+        return
+    sign_off(
+        ctx.connection, riley, ctx.organization_id, ctx.project_id, control_id,
+        SignOffBody(verdict=found.proposed, workpaper_version=paper.prepared_version,
+                    note="Design and implementation reviewed (prepared with the demo)."),
     )  # fmt: skip
 
 
@@ -1554,6 +1581,11 @@ def _reviews(ctx: Context, sheets: dict[str, Sheet]) -> None:
             None, [],
         )  # fmt: skip
         if ref in REVIEW_SIGNED:
+            # The reviewer decides each severity waiting on the control's deficiencies, then
+            # each is rated, before the review signs off (B3; bug hunt, 9 November 2026: a
+            # review no longer signs off over an open severity decision).
+            _decide_pending(ctx, sheet.control_id)
+            _rate_deficiencies(ctx, sheet.control_id)
             try:
                 _sign_off(
                     ctx.connection, riley, ctx.organization_id, ctx.project_id, review_id,
@@ -1564,6 +1596,43 @@ def _reviews(ctx: Context, sheets: dict[str, Sheet]) -> None:
                 logger.info("review for %s stays pending: %s", ref, error)
     ctx.summary["reviews_signed"] = signed
     ctx.summary["review_notes"] = notes
+
+
+def _decide_pending(ctx: Context, control_id: UUID) -> None:
+    """The reviewer approves each severity the lead proposed for the control's deficiencies,
+    as the remediation step did before the review had to wait for it."""
+    from ai_workforce_api.workspace import ChangeDecision, _decide
+
+    for (deficiency_id,) in ctx.cursor.execute(
+        "SELECT id FROM deficiencies WHERE project_id = %s AND engagement_control_id = %s "
+        "AND status <> 'CLOSED' AND pending_change IS NOT NULL",
+        (ctx.project_id, control_id),
+    ).fetchall():
+        _decide(
+            ctx.connection, ctx.principal("riley"), ctx.organization_id, ctx.project_id,
+            UUID(str(deficiency_id)),
+            ChangeDecision(version=_version(ctx, "deficiencies", UUID(str(deficiency_id))), approve=True, reason="A key control over financial system access with two exceptions in 25: the severity is right."),
+        )  # fmt: skip
+
+
+def _rate_deficiencies(ctx: Context, control_id: UUID) -> None:
+    """The preparer rates each of the control's deficiencies at the severity it was logged
+    with (a requested significant deficiency stays with the reviewer), as the Control
+    Conclusion step asks before the review (B3, 8 November 2026)."""
+    from ai_workforce_api.control_conclusions import RateBody, rate
+
+    rows = ctx.cursor.execute(
+        "SELECT id, severity, pending_change ->> 'severity', version FROM deficiencies "
+        "WHERE project_id = %s AND engagement_control_id = %s AND status <> 'CLOSED'",
+        (ctx.project_id, control_id),
+    ).fetchall()
+    for deficiency_id, severity, requested, version in rows:
+        rate(
+            ctx.connection, ctx.principal("morgan"), ctx.organization_id, ctx.project_id,
+            control_id, UUID(str(deficiency_id)),
+            RateBody(severity=str(requested or severity), version=int(version),  # type: ignore[arg-type]
+                     rationale="Rated from the exceptions found and their effect (prepared with the demo)."),
+        )  # fmt: skip
 
 
 def _re_sign(ctx: Context, sheet: Sheet) -> None:

@@ -168,6 +168,68 @@ def test_a_timeout_before_delivery_sends_once_on_retry(migrated: Database) -> No
     assert _count(migrated, "mailbox_messages") == 1
 
 
+def test_a_send_left_unknown_is_not_delivered_once_the_request_was_received(
+    migrated: Database,
+) -> None:
+    # Bug hunt, 9 November 2026: a send whose outcome was unknown, resumed after the
+    # evidence was filed directly (the request received), still delivered the request.
+    seeded, project_id, owner, admin = _team(migrated, "unknown-received")
+    request_id, approval_id = _approved_request(migrated, seeded, project_id, owner, admin)
+
+    def times_out(
+        settings: Settings, connection: psycopg.Connection[Any], org: UUID, project: UUID
+    ) -> Any:
+        return _TimesOut(migrated.url, org, project, deliver=False)
+
+    first = _send_direct(migrated, seeded, project_id, request_id, approval_id, times_out)
+    assert first.status == "UNKNOWN"
+    with connect(migrated.url) as connection:
+        # As evidence filed directly moves it (evidence_receipts.apply_receipt).
+        connection.execute(
+            "UPDATE pbc_requests SET status = 'RECEIVED', provided_directly = true, "
+            "received_at = clock_timestamp() WHERE id = %s",
+            (request_id,),
+        )
+    retried = owner.post(_send(seeded, project_id, request_id), json={"approval_id": approval_id})
+    assert retried.status_code == 200, retried.text
+    assert (retried.json()["status"], retried.json()["error_code"]) == (
+        "FAILED",
+        "request_resolved",
+    )
+    assert _count(migrated, "mailbox_messages") == 0
+
+
+def test_evidence_provided_directly_withdraws_an_approved_send(migrated: Database) -> None:
+    # Bug hunt, 9 November 2026: only a pending send approval was withdrawn when evidence
+    # was provided directly; an approved one not yet used stayed live and could send.
+    from ai_workforce_api.evidence_receipts import _withdraw_send
+
+    seeded, project_id, owner, admin = _team(migrated, "withdraw-approved")
+    request_id, approval_id = _approved_request(migrated, seeded, project_id, owner, admin)
+    with connect(migrated.url) as connection:
+        with connection.cursor() as cursor:
+            _withdraw_send(
+                cursor, seeded["organization_id"], project_id, UUID(request_id), seeded["user_id"]
+            )
+        connection.commit()
+        state = connection.execute(
+            "SELECT decision::text, execution_status FROM approvals WHERE id = %s",
+            (approval_id,),
+        ).fetchone()
+        audit = connection.execute(
+            "SELECT count(*) FROM audit_events WHERE action = 'approval.withdrawn' "
+            "AND target_id = %s",
+            (approval_id,),
+        ).fetchone()
+    # The approval is kept as approved, and recorded as never executed.
+    assert state == ("APPROVED", "REFUSED")
+    assert audit == (1,)
+    refused = owner.post(_send(seeded, project_id, request_id), json={"approval_id": approval_id})
+    assert refused.status_code == 409
+    assert _count(migrated, "mailbox_messages") == 0
+    assert _count(migrated, "outbound_messages") == 0
+
+
 def test_an_in_flight_send_is_not_started_twice(migrated: Database) -> None:
     seeded, project_id, owner, admin = _team(migrated, "inflight")
     request_id, approval_id = _approved_request(migrated, seeded, project_id, owner, admin)

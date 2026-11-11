@@ -43,11 +43,13 @@ VAGUE = re.compile(
 FRAMEWORK_UNCERTAINTIES: tuple[Uncertainty, ...] = (
     Uncertainty(
         "All",
-        "Sample sizes (controls.SAMPLE_SIZES and the roll-forward and retest tables)",
+        "Sample sizes (the firm's testing methodology, methodology.py: the sample, "
+        "roll-forward, and retest tables; version 1 is the platform default)",
         "AS 2315.38 sizes samples from tolerable and expected deviation rates and risk; it "
         "gives no table. The table is firm methodology.",
         "The methodology owner's approval of the table, and whether risk changes the size.",
-        "Confirm or replace the table; label it in workpapers as firm methodology.",
+        "Approve or replace it in Settings, Testing methodology (an Owner or Admin proposes, "
+        "another approves); workpapers name the version as the sample's basis.",
         False,
         "Does the firm approve this sample size table for management's testing, and should "
         "higher-risk controls use larger samples?",

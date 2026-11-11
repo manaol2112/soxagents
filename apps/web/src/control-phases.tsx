@@ -170,26 +170,3 @@ export function PhaseStep({
     </section>
   );
 }
-
-/** The state a lifecycle value stands for, for a phase or step. */
-export function stateOf(value: string | null | undefined): PhaseState {
-  if (value === "SUCCEEDED" || value === "RECEIVED" || value === "SIGNED") {
-    return "done";
-  }
-  if (value === "FAILED" || value === "OVERDUE" || value === "BLOCKED") {
-    return "issue";
-  }
-  if (
-    value === "RUNNING" ||
-    value === "QUEUED" ||
-    value === "WAITING" ||
-    value === "REVIEW" ||
-    value === "REQUESTED" ||
-    value === "PARTIAL" ||
-    value === "DRAFTED" ||
-    value === "READY"
-  ) {
-    return "active";
-  }
-  return "todo";
-}

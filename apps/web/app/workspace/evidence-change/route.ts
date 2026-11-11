@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { browserUrl } from "../../../src/browser-url";
+import { returnStep } from "../../../src/control-workflow-model";
 import {
   answersInPlace,
   type ChangeNotice,
@@ -86,7 +87,13 @@ function back(
   if (target.to === "control") {
     destination.searchParams.set("section", "controls");
     destination.searchParams.set("control", target.control);
-    destination.searchParams.set("tab", "evidence");
+    // Back to the step the file was changed on: D&I Evidence or OE Evidence.
+    const step = returnStep(fields.step);
+    if (step !== null) {
+      destination.searchParams.set("step", step);
+    } else {
+      destination.searchParams.set("tab", "evidence");
+    }
     // The notice shows with the control's files: open them.
     destination.searchParams.set("ev", "files");
   } else {

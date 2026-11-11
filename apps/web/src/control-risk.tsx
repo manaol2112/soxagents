@@ -8,56 +8,6 @@ const PHASE_ICON: Record<string, IconName> = {
   ROLLFORWARD: "retry",
 };
 
-/** The Risk & Scoping tab's summary across the page (product owner's reference, 2
- * November 2026): what the tab is for, then the risk, the scope and the phases. */
-export function RiskSummary({
-  risk,
-  scope,
-  phases,
-}: {
-  risk: string;
-  scope: string;
-  phases: string;
-}) {
-  return (
-    <section className="rs-head" aria-labelledby="rs-head-title">
-      <span className="rs-head-mark" aria-hidden="true">
-        <UiIcon name="target" size={22} />
-      </span>
-      <div className="rs-head-text">
-        <h2 id="rs-head-title">Risk &amp; Scoping</h2>
-        <p>
-          The risk, control objective, scope, and why each phase applies for
-          this control.
-        </p>
-      </div>
-      <dl className="rs-head-facts">
-        <div>
-          <UiIcon name="shield" size={20} />
-          <span>
-            <dt>Risk</dt>
-            <dd title={risk}>{risk || "Not recorded"}</dd>
-          </span>
-        </div>
-        <div>
-          <UiIcon name="layers" size={20} />
-          <span>
-            <dt>Scope</dt>
-            <dd>{scope}</dd>
-          </span>
-        </div>
-        <div>
-          <UiIcon name="chart" size={20} />
-          <span>
-            <dt>Testing phases</dt>
-            <dd>{phases}</dd>
-          </span>
-        </div>
-      </dl>
-    </section>
-  );
-}
-
 type Fact = { label: string; value: string };
 
 /** The tab's main column: the risk and objective, the scope, and why each phase applies. */

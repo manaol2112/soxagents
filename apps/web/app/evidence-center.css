@@ -547,10 +547,6 @@
   color: var(--ai);
 }
 
-.ec-table td.ec-actions {
-  text-align: right;
-}
-
 .ec-unassigned {
   color: var(--warning);
   font-weight: 600;

@@ -10,6 +10,7 @@ import {
   DEFAULT_QUERY,
   exportHref,
   filtered,
+  keepSelected,
   parseBulkResult,
   parseCenterList,
   parseCenterQuery,
@@ -472,5 +473,51 @@ describe("a sent request's progress", () => {
     );
     assert.equal(progressLine({ ...row, status: "DRAFT" }), "");
     assert.equal(progressLine({ ...row, itemsTotal: 0 }), "");
+  });
+});
+
+describe("keepSelected", () => {
+  it("takes the reloaded version when a selected request changed but the count did not", () => {
+    // Bug hunt 9 November 2026: the selection was kept whenever its size was unchanged,
+    // so a change to many requests sent the version from before the reload.
+    const current = new Map([
+      ["a", 1],
+      ["b", 4],
+    ]);
+    const next = keepSelected(
+      current,
+      new Map([
+        ["a", 2],
+        ["b", 4],
+        ["c", 1],
+      ]),
+    );
+    assert.notEqual(next, current);
+    assert.deepEqual(
+      [...next],
+      [
+        ["a", 2],
+        ["b", 4],
+      ],
+    );
+  });
+
+  it("drops requests no longer matching and keeps the same map when nothing changed", () => {
+    const current = new Map([
+      ["a", 1],
+      ["b", 4],
+    ]);
+    assert.deepEqual(
+      [...keepSelected(current, new Map([["a", 1]]))],
+      [["a", 1]],
+    );
+    const same = keepSelected(
+      current,
+      new Map([
+        ["a", 1],
+        ["b", 4],
+      ]),
+    );
+    assert.equal(same, current);
   });
 });

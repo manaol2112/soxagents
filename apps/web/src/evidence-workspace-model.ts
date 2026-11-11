@@ -9,7 +9,6 @@ import type { ControlFiles, ControlRequest } from "./engagement-model.ts";
 import {
   type Assessment,
   type EvidencePlan,
-  PHASES,
   type Phase,
   type PlanPhase,
   type PlanRequirement,
@@ -26,13 +25,6 @@ export const EVIDENCE_VIEWS = [
   "plan",
 ] as const;
 export type EvidenceView = (typeof EVIDENCE_VIEWS)[number];
-
-export const EVIDENCE_VIEW_LABELS: Record<EvidenceView, string> = {
-  requirements: "Evidence plan",
-  requests: "Requests",
-  files: "Files",
-  plan: "Planning basis",
-};
 
 const OUT = new Set([
   "SENT",
@@ -223,14 +215,6 @@ export type RequirementStatusFilter =
   | "waiting"
   | "accepted";
 
-export const STATUS_FILTER_LABELS: Record<RequirementStatusFilter, string> = {
-  all: "All statuses",
-  decide: "To judge",
-  gaps: "Gaps",
-  waiting: "Waiting",
-  accepted: "Accepted",
-};
-
 export function matchesStatus(
   requirement: PlanRequirement,
   filter: RequirementStatusFilter,
@@ -259,32 +243,6 @@ export type PhaseGroup = {
   phase: PlanPhase;
   items: PlanRequirement[];
 };
-
-/** The phase to open: the first that is not signed off, in audit order. Design until
- * it is confirmed, then interim, then roll-forward. A phase that does not apply is skipped. */
-export function focusPhase(
-  phases: ReadonlyArray<
-    Pick<PlanPhase, "phase" | "applicability" | "state" | "testingComplete">
-  >,
-): Phase {
-  const later = [...PHASES];
-  for (const key of later) {
-    const phase = phases.find((item) => item.phase === key);
-    if (phase === undefined) {
-      return key;
-    }
-    if (
-      phase.applicability === "NOT_APPLICABLE" ||
-      phase.state === "NOT_APPLICABLE" ||
-      phase.state === "COMPLETE" ||
-      phase.testingComplete
-    ) {
-      continue;
-    }
-    return key;
-  }
-  return later[later.length - 1] ?? "DESIGN";
-}
 
 /** The requirements by phase, in audit order, filtered. A phase the plan says does not
  * apply is kept, with no items, so its reason stays in view. */
@@ -468,27 +426,6 @@ export function evidenceViewOf(value: string): EvidenceView {
 
 function plural(count: number, one: string): string {
   return `${count} ${count === 1 ? one : `${one}s`}`;
-}
-
-/** The plan requirements a request carries, with why each is needed, for its review. */
-export function carriedBy(
-  plan: EvidencePlan | null,
-  requestId: string,
-): Array<{
-  phase: string;
-  title: string;
-  rationale: string;
-  necessity: string;
-}> {
-  return (plan?.phases ?? [])
-    .flatMap((phase) => phase.requirements)
-    .filter((q) => q.requestId === requestId && q.state !== "REMOVED")
-    .map((q) => ({
-      phase: q.phase,
-      title: q.title,
-      rationale: q.rationale,
-      necessity: q.necessity,
-    }));
 }
 
 /** A phase of the evidence in one line: how many items, how many a person accepted, and

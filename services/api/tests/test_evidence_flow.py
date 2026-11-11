@@ -7,13 +7,21 @@ from typing import Any
 from uuid import UUID
 
 import pytest
-from support import Database, approve_evidence_plans, settle_attributes
+from support import (
+    Database,
+    approve_evidence_plans,
+    release_design,
+    settle_attributes,
+    sign_off_design,
+)
 from test_execution import _add_project_member, _add_user
 from test_onboarding import _base, _complete_setup, _new_engagement
 from test_outbound import _session, migrated
 
 from ai_workforce_api import onboarding
 from ai_workforce_api.db import connect
+from ai_workforce_api.design_conclusions import GATE_DESIGN
+from ai_workforce_api.evidence_plans import GATE_DESIGN_RELEASE
 
 __all__ = ["migrated"]
 
@@ -213,6 +221,9 @@ def test_replacing_the_kickoff_draft_keeps_it_on_record(
     assert reason is not None and "The plan asks better." in str(reason[0])
     assert made and all(row[0] == "DRAFT" for row in made)
     assert audit is not None and audit[0]["action"] == "REPLACE"
+    # Rewritten 9 November 2026 (B1): before, the plan's approval also drafted the design
+    # request, so the next step was to submit it. The design evidence follows its own release.
+    release_design(migrated, team["project"], [UUID(control_id)])
     row = _row(owner, team, control_id)
     assert row["reconcile"] is False
     assert row["next_step"] == "Submit the evidence request"
@@ -241,10 +252,29 @@ def test_keeping_the_kickoff_draft_links_the_plan_items_without_rewording_it(
     assert _row(owner, team, control_id)["next_step"] == "Submit the evidence request"
     again = owner.post(f"{path}/reconcile", json={"action": "KEEP", "request_version": 1})
     assert again.status_code == 409
-    # Settled, and its operating evidence follows settled attributes: the kept draft goes
-    # for approval like any other.
+    # Settled, and its operating evidence follows settled attributes. Rewritten 9 November
+    # 2026 (bug hunt): before, the kept draft then went for approval on the plan's approval
+    # alone, although it holds D&I items (which follow their own release, B1) and interim
+    # items (which wait for an effective D&I sign-off, B0). Each phase it holds gates it now.
     settle_attributes(migrated, team["project"])
-    submitted = owner.post(f"{_project(team)}/pbc-requests/{legacy}/submit", json={"version": 1})
+    submit = f"{_project(team)}/pbc-requests/{legacy}/submit"
+    held = owner.post(submit, json={"version": 1})
+    assert held.status_code == 409 and held.json()["detail"] == GATE_DESIGN_RELEASE
+    release_design(migrated, team["project"], [UUID(control_id)])
+    # Its interim items wait for an effective D&I sign-off: with the conclusion reopened, the
+    # draft is held for it (the setup had signed it off).
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE design_conclusions SET reopened_at = clock_timestamp(), reopened_by = %s, "
+            "reopen_reason = 'Reopened for the test.', reopened_from = 'PERSON' "
+            "WHERE engagement_control_id = %s AND reopened_at IS NULL",
+            (team["owner_id"], control_id),
+        )
+        connection.commit()
+    held = owner.post(submit, json={"version": 1})
+    assert held.status_code == 409 and held.json()["detail"] == GATE_DESIGN
+    sign_off_design(migrated, team["project"], [control_id])
+    submitted = owner.post(submit, json={"version": 1})
     assert submitted.status_code == 200, submitted.text
 
 

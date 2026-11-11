@@ -55,7 +55,15 @@ def test_templates_stay_confirmed_after_launch_and_still_change(migrated: Databa
 def test_a_started_workpaper_keeps_its_template(migrated: Database) -> None:
     team, client, sheet, _ticket = _tested_control(migrated, "tpl-pin")
     workpapers = f"{_base(team)}/workpapers"
-    started = client.get(workpapers, params={"control_id": sheet["control_id"]}).json()[0]
+    # Rewritten 9 November 2026 (bug hunt): before, the first workpaper listed was the
+    # effectiveness paper, not yet started. Since B0 (8 November) the design workpaper is listed
+    # first and is already prepared before OE begins, so the effectiveness paper is read by
+    # its stage; what the test checks, a started paper keeping its template, is unchanged.
+    started = next(
+        w
+        for w in client.get(workpapers, params={"control_id": sheet["control_id"]}).json()
+        if w["stage"] == "EFFECTIVENESS"
+    )
     assert _workpaper(migrated, started["id"])[1] is False
     # The agent writes in it: it starts, and keeps the template it began with.
     draft = {"sections": [{"key": "population", "text": "The population was the listing."}]}
@@ -64,7 +72,8 @@ def test_a_started_workpaper_keeps_its_template(migrated: Database) -> None:
     key, is_started, snapshot, _status = _workpaper(migrated, started["id"])
     assert is_started is True and key == "itgc"
     assert snapshot["key"] == "itgc" and snapshot["tabs"]
-    # Another control's workpaper is open but not started.
+    # Another control's workpaper is open but not started: its effectiveness paper (the
+    # design paper is prepared before OE begins since B0; rewritten 9 November 2026).
     with connect(migrated.url) as connection:
         other = connection.execute(
             "SELECT id FROM engagement_controls WHERE project_id = %s AND domain = 'ACCESS' "
@@ -73,9 +82,13 @@ def test_a_started_workpaper_keeps_its_template(migrated: Database) -> None:
         ).fetchone()
         assert other is not None
         with transaction(connection) as cursor:
-            ensure(cursor, team["org"], team["project"], other[0], team["owner_id"], ("DESIGN",))
+            ensure(
+                cursor, team["org"], team["project"], other[0], team["owner_id"],
+                ("EFFECTIVENESS",),
+            )  # fmt: skip
         waiting = connection.execute(
-            "SELECT id FROM workpapers WHERE engagement_control_id = %s AND stage = 'DESIGN'",
+            "SELECT id FROM workpapers WHERE engagement_control_id = %s "
+            "AND stage = 'EFFECTIVENESS'",
             (other[0],),
         ).fetchone()
         assert waiting is not None
@@ -104,5 +117,9 @@ def test_a_started_workpaper_keeps_its_template(migrated: Database) -> None:
         )
         connection.commit()
         assert run_draft(connection, None, UUID(started["id"])) == "DONE"
-    body = client.get(workpapers, params={"control_id": sheet["control_id"]}).json()[0]
+    body = next(
+        w
+        for w in client.get(workpapers, params={"control_id": sheet["control_id"]}).json()
+        if w["stage"] == "EFFECTIVENESS"
+    )
     assert body["content"]["template_key"] == "itgc"

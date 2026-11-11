@@ -227,6 +227,11 @@ describe("agent console model", () => {
     assert.ok(line.parts.some((part) => part.text.includes("a trap")));
     assert.equal(safeHref("//evil.example"), null);
     assert.equal(safeHref("data:text/html,x"), null);
+    // A browser reads a backslash as a slash: "/\evil.example" would leave the app
+    // (security sweep, 9 November 2026).
+    assert.equal(safeHref("/\\evil.example/x"), null);
+    assert.equal(safeHref("/?section=a\\b"), null);
+    assert.equal(safeHref("/?section=controls"), "/?section=controls");
   });
 
   it("shows an answer still being written, an unfinished code block included", () => {

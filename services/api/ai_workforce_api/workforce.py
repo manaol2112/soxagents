@@ -275,11 +275,6 @@ def register_workforce(app: FastAPI, settings: Settings) -> None:
         )
 
 
-def is_reserved_key(agent_key: str) -> bool:
-    """Standard worker keys belong to the platform. A custom agent cannot take one."""
-    return agent_key in STANDARD_KEYS
-
-
 def sync_standard_workforce(connection: psycopg.Connection[Any]) -> SyncResult:
     """Make the database match the reviewed roster. Safe to run on every deploy."""
     problems = roster_problems()

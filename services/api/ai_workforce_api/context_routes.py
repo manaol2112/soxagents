@@ -16,12 +16,15 @@ from psycopg.types.json import Json
 from pydantic import BaseModel, Field
 
 from ai_workforce_api import (
+    authentication_profile,
     control_attributes,
     control_design,
+    control_details,
     library_definitions,
     prior_year,
     process_narrative,
     process_understanding,
+    understanding_chat,
 )
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.authorization import (
@@ -169,7 +172,7 @@ def register_control_context(
     ) -> None:
         schedule_runs(scheduler, resume_testing(connection, project_id, control_id))
         # Settled attributes open the planning gate for operating evidence: it is
-        # requested now (evidence_plans.release), if the plan is approved.
+        # requested now (evidence_plans.release), as far as the planning gate allows.
         from ai_workforce_api.evidence_plans import release
         from ai_workforce_api.pbc_drafting import DraftScheduler, schedule
 
@@ -381,6 +384,158 @@ def register_control_context(
             ):
                 changed(c, project_id, changed_id, p.id)
             return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    # Control Understanding as a conversation (9 November 2026,
+    # docs/control-understanding-conversation.md): a typed reply read, never saved; the
+    # same control on other systems; this control's answers copied to the ones chosen.
+
+    @app.post(f"{control}/understanding/interpret")
+    def interpret_reply(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: understanding_chat.InterpretBody,
+        request: Request,
+    ) -> understanding_chat.InterpretResult:
+        def work(c: psycopg.Connection[Any], p: Principal) -> understanding_chat.InterpretResult:
+            # Who may answer may have a reply read: it can spend the engagement's budget.
+            _allowed(c, p, organization_id, project_id, control_id)
+            return understanding_chat.interpret(
+                c, model(), organization_id, project_id, control_id, p.id, body
+            )
+
+        return run(request, work)
+
+    @app.post(f"{control}/understanding/notes")
+    def understanding_notes(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: understanding_chat.NotesBody,
+        request: Request,
+    ) -> understanding_chat.NotesResult:
+        def work(c: psycopg.Connection[Any], p: Principal) -> understanding_chat.NotesResult:
+            # Who may answer may have notes read: it can spend the engagement's budget.
+            _allowed(c, p, organization_id, project_id, control_id)
+            return understanding_chat.read_notes(
+                c, model(), organization_id, project_id, control_id, p.id, body
+            )
+
+        return run(request, work)
+
+    @app.get(f"{control}/understanding/review")
+    def understanding_review(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> understanding_chat.UnderstandingReviewBody:
+        def work(
+            c: psycopg.Connection[Any], p: Principal
+        ) -> understanding_chat.UnderstandingReviewBody:
+            _allowed(c, p, organization_id, project_id, control_id, Action.TASK_READ)
+            return understanding_chat.understanding_review(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.get(f"{control}/understanding/copy-targets")
+    def understanding_copy_targets(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> understanding_chat.CopyTargetsBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> understanding_chat.CopyTargetsBody:
+            _allowed(c, p, organization_id, project_id, control_id, Action.TASK_READ)
+            return understanding_chat.copy_targets(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/understanding/copy-out")
+    def understanding_copy_out(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: understanding_chat.CopyOutBody,
+        request: Request,
+    ) -> understanding_chat.CopyTargetsBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> understanding_chat.CopyTargetsBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            for changed_id in understanding_chat.copy_out(
+                c, organization_id, project_id, control_id, p.id, body
+            ):
+                changed(c, project_id, changed_id, p.id)
+            return understanding_chat.copy_targets(c, project_id, control_id)
+
+        return run(request, work)
+
+    # The authentication control's settings, asked by how users sign in (10 November 2026)
+
+    @app.get(f"{control}/authentication")
+    def authentication_read(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> authentication_profile.ProfileBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> authentication_profile.ProfileBody:
+            _allowed(c, p, organization_id, project_id, control_id, Action.TASK_READ)
+            return authentication_profile.profile(c, control_id)
+
+        return run(request, work)
+
+    @app.put(f"{control}/authentication")
+    def authentication_set(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: authentication_profile.ProfileSet,
+        request: Request,
+    ) -> authentication_profile.ProfileBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> authentication_profile.ProfileBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            for changed_id in authentication_profile.set_profile(
+                c, organization_id, project_id, control_id, p.id, body
+            ):
+                changed(c, project_id, changed_id, p.id)
+            return authentication_profile.profile(c, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/authentication/read-policy")
+    def authentication_read_policy(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> understanding_chat.NotesResult:
+        def work(c: psycopg.Connection[Any], p: Principal) -> understanding_chat.NotesResult:
+            # Who may answer may have the policy read: it can spend the engagement's budget.
+            _allowed(c, p, organization_id, project_id, control_id)
+            result: understanding_chat.NotesResult = authentication_profile.read_policy(
+                c, model(), organization_id, project_id, control_id, p.id
+            )
+            return result
+
+        return run(request, work)
+
+    # The control's RCM details, completed on its own system from step 01 (10 November 2026)
+
+    @app.get(f"{control}/details")
+    def control_details_read(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> control_details.DetailsBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> control_details.DetailsBody:
+            _allowed(c, p, organization_id, project_id, control_id, Action.TASK_READ)
+            return control_details.details(c, p, organization_id, project_id, control_id)
+
+        return run(request, work)
+
+    @app.put(f"{control}/details")
+    def control_details_set(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: control_details.DetailsSet,
+        request: Request,
+    ) -> control_details.DetailsBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> control_details.DetailsBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            for changed_id in control_details.set_details(
+                c, p, organization_id, project_id, control_id, body
+            ):
+                changed(c, project_id, changed_id, p.id)
+            return control_details.details(c, p, organization_id, project_id, control_id)
 
         return run(request, work)
 

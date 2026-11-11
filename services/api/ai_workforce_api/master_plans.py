@@ -19,9 +19,10 @@ A person decides each version: approve it, or request changes with a comment. Th
 decision is kept, unchangeable, with a hashed copy of the plan as the reviewer saw it
 (`plan_versions`, `plan_decisions`). Approving the plan approves the control's
 attributes with it (decided by the product owner). Nothing downstream runs on a plan no
-person approved: requests are drafted, approved, and sent, samples approved, and testing
-run and signed off only while the current revision is approved (`evidence_plans.gate_reason`,
-`readiness`). A material change to an approved plan sends it back for review; the
+person approved: operating requests are drafted, approved, and sent, samples approved, and
+testing run and signed off only while the current revision is approved
+(`evidence_plans.gate_reason`, `readiness`). D&I evidence follows its own release instead
+(`phase_release.py`, B1). A material change to an approved plan sends it back for review; the
 database refuses an approved plan whose approved revision is not its current one.
 
 The planner never approves its own plan, and a later run never changes an approved plan:

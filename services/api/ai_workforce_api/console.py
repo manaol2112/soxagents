@@ -40,8 +40,11 @@ from ai_workforce_api.console_tools import (
     describe,
     execute,
     parse,
+    pin,
+    pinned_after,
     planned,
     result_text,
+    verify_pin,
 )
 from ai_workforce_api.db import connect, independent_steps, transaction
 from ai_workforce_api.inbound import clean_text
@@ -70,6 +73,12 @@ RETRY_DELAYS: tuple[float, ...] = (2.0, 6.0)
 # How often the answer being written is saved for the chat to show, in seconds.
 LIVE_SECONDS = 0.25
 TurnRunner = Callable[[UUID], str]
+# Minutes after which a confirmed step that never reported back can no longer be running.
+STEP_RUN_MINUTES = 15
+UNKNOWN_OUTCOME = (
+    "This step started but did not report back, so whether it ran is not known. Check the "
+    "records before asking for it again."
+)
 
 
 def pause(seconds: float) -> None:
@@ -225,13 +234,37 @@ def run_turn(
             WHERE m.id = %s AND t.id = m.thread_id AND m.role = 'AGENT' AND m.attempts < %s
               AND (m.status = 'PENDING'
                    OR (m.status = 'WORKING' AND m.lease_until < clock_timestamp()))
-            RETURNING m.thread_id, t.organization_id, t.project_id, t.user_id
+            RETURNING m.thread_id, t.organization_id, t.project_id, t.user_id, m.attempts
             """,
             (LEASE_MINUTES, message_id, MAX_ATTEMPTS),
         ).fetchone()
+        # A turn picked up again after a failed or abandoned attempt that already ran
+        # routine steps or proposed steps is not answered from scratch: the agent would
+        # not see what it did (its transcript was never saved), so it would propose every
+        # step a second time and run its routine tools again. The answer settles with the
+        # steps it has; the person confirms them or retries, which skips the unconfirmed
+        # ones as that person (bug hunt, 9 November 2026).
+        prepared = (
+            claimed is not None
+            and int(claimed[4]) > 1
+            and cursor.execute(
+                "SELECT 1 FROM console_actions WHERE message_id = %s LIMIT 1", (message_id,)
+            ).fetchone()
+            is not None
+        )
     if claimed is None:
         return "SKIPPED"
-    thread_id, organization_id, project_id, user_id = claimed
+    thread_id, organization_id, project_id, user_id, _attempts = claimed
+    if prepared:
+        _finish(
+            connection,
+            message_id,
+            "I stopped before finishing that. The steps I prepared are below: confirm the "
+            "ones you want, or retry the question.",
+            [],
+            "The agent stopped part way.",
+        )
+        return "DONE"
     principal = Principal(kind=PrincipalKind.USER, id=user_id)
     if provider is None:
         _finish(
@@ -506,6 +539,8 @@ def _handle(
         return "Too many steps in one turn. Propose the rest in the next turn.", True
     try:
         check(tool, parsed, context)
+        # The record the step decides on, as the person is shown it now.
+        parsed = pin(tool, parsed, context)
     except ToolFailed as error:
         # A step that would fail is never offered; the agent says why and what is needed.
         return f"Not proposed, because it would fail: {error}", True
@@ -612,7 +647,33 @@ def fail_turn(connection: psycopg.Connection[Any], message_id: UUID) -> None:
         )
 
 
+def release_turn(connection: psycopg.Connection[Any], message_id: UUID) -> None:
+    """Give up the claim of an attempt that raised, so the next attempt can take the turn
+    at once instead of finding it still claimed and skipping it."""
+    with transaction(connection) as cursor:
+        cursor.execute(
+            "UPDATE console_messages SET status = 'PENDING', lease_until = NULL "
+            "WHERE id = %s AND status = 'WORKING'",
+            (message_id,),
+        )
+
+
 def open_turns(connection: psycopg.Connection[Any]) -> list[UUID]:
+    """Turns to resume after a restart. A turn whose last attempt was abandoned (its claim
+    ran out with no attempt left) is marked failed here, so its thread is not left busy
+    for good and the person can ask again (bug hunt, 9 November 2026)."""
+    with transaction(connection) as cursor:
+        cursor.execute(
+            """
+            UPDATE console_messages
+            SET status = 'FAILED', lease_until = NULL, note = 'The agent did not finish.',
+                content = 'Something went wrong while I worked on that. Please ask again.',
+                updated_at = clock_timestamp()
+            WHERE role = 'AGENT' AND attempts >= %s AND status = 'WORKING'
+              AND lease_until < clock_timestamp()
+            """,
+            (MAX_ATTEMPTS,),
+        )
     rows = connection.execute(
         """
         SELECT id FROM console_messages
@@ -862,8 +923,11 @@ def register_console(
             ids = [
                 UUID(str(row[0]))
                 for row in c.execute(
+                    # A step already claimed (running, or left by a stopped process) is
+                    # not confirmed again, and no longer stops the rest (bug hunt,
+                    # 9 November 2026).
                     "SELECT id FROM console_actions WHERE message_id = %s AND status = 'PROPOSED' "
-                    "ORDER BY position",
+                    "AND decided_by IS NULL ORDER BY position",
                     (message_id,),
                 ).fetchall()
             ]
@@ -1227,7 +1291,8 @@ def _confirm(
         with transaction(connection) as cursor:
             row = cursor.execute(
                 """
-                SELECT a.tool, a.arguments, a.status, m.thread_id, a.risk
+                SELECT a.tool, a.arguments, a.status, m.thread_id, a.risk, a.message_id,
+                       a.position
                 FROM console_actions a
                 JOIN console_messages m ON m.id = a.message_id
                 JOIN console_threads t ON t.id = m.thread_id
@@ -1256,15 +1321,40 @@ def _confirm(
             principal=principal,
             organization_id=organization_id,
             project_id=project_id,
+            step=action_id,
             **helpers,
         )
         status, result, error = "DONE", None, ""
+        before: str | None = None
+        after: str | None = None
         try:
             tool, parsed = parse(str(row[0]), dict(row[1]))
+            # The record the step decides on is as it was when the person saw it.
+            before = verify_pin(tool, parsed, context)
             result = execute(tool, parsed, context)
+            after = pinned_after(tool, parsed, context)
         except ToolFailed as failed:
             status, error = "FAILED", str(failed)
         with transaction(connection) as cursor:
+            if (
+                status == "DONE"
+                and before is not None
+                and after is not None
+                and after != before
+                and after.split("@", 1)[0] == before.split("@", 1)[0]
+            ):
+                # A later step of the same answer was proposed on the record as this step
+                # found it, and this step's change is one the person confirmed: it carries
+                # on from the record as this step left it.
+                cursor.execute(
+                    """
+                    UPDATE console_actions
+                    SET arguments = jsonb_set(arguments, '{pinned}', to_jsonb(%s::text))
+                    WHERE message_id = %s AND position > %s AND status = 'PROPOSED'
+                      AND decided_by IS NULL AND arguments->>'pinned' = %s
+                    """,
+                    (after, row[5], int(row[6]), before),
+                )
             cursor.execute(
                 """
                 UPDATE console_actions
@@ -1311,6 +1401,36 @@ def _cancel(
             """,
             (principal.id, action_id, principal.id, project_id),
         ).fetchone()
+        if row is None:
+            # A confirmed step whose run never reported back (the process stopped while
+            # it ran) stayed claimed for good: it could be neither confirmed nor cancelled
+            # (bug hunt, 9 November 2026). Once no run could still be going, the person can
+            # close it. It may or may not have run, so it is recorded as not known, never
+            # as skipped, and is to be checked against the records.
+            row = cursor.execute(
+                """
+                UPDATE console_actions a SET status = 'FAILED', error = %s,
+                    decided_at = clock_timestamp()
+                FROM console_messages m, console_threads t
+                WHERE a.id = %s AND m.id = a.message_id AND t.id = m.thread_id
+                  AND t.user_id = %s AND t.project_id = %s AND a.status = 'PROPOSED'
+                  AND a.risk = 'CONFIRM' AND a.decided_by IS NOT NULL
+                  AND a.decided_at < clock_timestamp() - make_interval(mins => %s)
+                RETURNING m.thread_id, a.tool
+                """,
+                (UNKNOWN_OUTCOME, action_id, principal.id, project_id, STEP_RUN_MINUTES),
+            ).fetchone()
+            if row is not None:
+                cursor.execute(
+                    """
+                    INSERT INTO audit_events (
+                        organization_id, project_id, actor_user_id, action, target_type,
+                        payload
+                    )
+                    VALUES (%s, %s, %s, 'console.step_outcome_unknown', 'console_action', %s)
+                    """,
+                    (organization_id, project_id, principal.id, Json({"tool": str(row[1])})),
+                )
     if row is None:
         raise ConsoleState("that step is not waiting for confirmation")
     return _thread_body(connection, settings, UUID(str(row[0])))

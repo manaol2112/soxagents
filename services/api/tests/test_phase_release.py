@@ -8,7 +8,7 @@ release a phase."""
 from typing import Any
 from uuid import UUID
 
-from support import Database, approve_evidence_plans
+from support import Database, approve_evidence_plans, sign_off_design
 from test_evidence_flow import _drafted, _project
 from test_execution import _add_project_member, _add_user
 from test_onboarding import _base, _complete_setup, _new_engagement
@@ -69,6 +69,12 @@ def _prepare_design(migrated: Database, team: dict[str, Any], control: str) -> N
                 prepared_version
             )
             VALUES (%s, %s, %s, 'DESIGN', 'itgc', 'PREPARED', 1, %s, %s, clock_timestamp(), 1)
+            ON CONFLICT (project_id, engagement_control_id, stage) DO UPDATE
+            SET status = 'PREPARED', prepared_by = EXCLUDED.prepared_by,
+                prepared_at = EXCLUDED.prepared_at,
+                prepared_version = coalesce(workpapers.prepared_version, 1),
+                current_version = greatest(workpapers.current_version, 1)
+            WHERE workpapers.status <> 'PREPARED'
             """,
             (team["org"], team["project"], control, team["owner_id"], team["owner_id"]),
         )
@@ -80,7 +86,34 @@ def test_interim_requests_wait_for_the_phase_to_be_released(migrated: Database) 
     owner = team["owner"]
     control, interim = _control_with(team, "INTERIM")
     _, design = _control_with(team, "DESIGN")
-    # Prepared in advance, held until the interim phase is released.
+    # Rewritten 8 November 2026 (B0; product owner: "OE can't start if design is failing").
+    # Before, an interim request was held only for the phase's release. It is now held first
+    # for an effective D&I sign-off, and only then for the release.
+    details = owner.get(f"{_project(team)}/pbc-requests/{interim['id']}/details").json()
+    planning = next(item for item in details["checks"] if item["key"] == "planning")
+    assert "D&I conclusion" in planning["detail"]
+    refused = owner.post(
+        f"{_project(team)}/pbc-requests/{interim['id']}/approve",
+        json={"version": interim["version"]},
+    )
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "sign off the D&I conclusion as effective first"
+    listed = owner.get(f"{_project(team)}/evidence-requests", params={"size": 200}).json()
+    row = next(item for item in listed["rows"] if item["id"] == interim["id"])
+    assert row["held"] is True and row["held_reason"] == "Awaiting the D&I sign-off"
+    # Design follows its own release (B1), which the setup made: it is not held.
+    design_row = next(item for item in listed["rows"] if item["id"] == design["id"])
+    assert design_row["held_reason"] not in ("Awaiting phase release", "Awaiting the D&I sign-off")
+    # D&I is not signed off: interim waits, and nothing is recommended yet.
+    body = _progress(team)
+    status = _phase(body, control, "INTERIM")
+    assert status["step"] == "WAITING"
+    assert status["waiting_for"] == "The D&I conclusion is not signed off as effective."
+    assert _phase(body, control, "DESIGN")["step"] == "RELEASED"
+    assert body["ready"]["INTERIM"] == 0 and body["recommendation"] == ""
+    assert body["viewer_can_release"] is True
+    # Once D&I is signed off effective, the request waits for the phase's release.
+    sign_off_design(migrated, team["project"], [control])
     details = owner.get(f"{_project(team)}/pbc-requests/{interim['id']}/details").json()
     planning = next(item for item in details["checks"] if item["key"] == "planning")
     assert "Release the interim phase" in planning["detail"]
@@ -93,17 +126,6 @@ def test_interim_requests_wait_for_the_phase_to_be_released(migrated: Database) 
     listed = owner.get(f"{_project(team)}/evidence-requests", params={"size": 200}).json()
     row = next(item for item in listed["rows"] if item["id"] == interim["id"])
     assert row["held"] is True and row["held_reason"] == "Awaiting phase release"
-    # Design follows the plan's approval: it is not held.
-    design_row = next(item for item in listed["rows"] if item["id"] == design["id"])
-    assert design_row["held_reason"] != "Awaiting phase release"
-    # Design testing is not complete: interim waits, and nothing is recommended yet.
-    body = _progress(team)
-    status = _phase(body, control, "INTERIM")
-    assert status["step"] == "WAITING"
-    assert status["waiting_for"] == "Design and implementation testing is not complete."
-    assert _phase(body, control, "DESIGN")["step"] == "RELEASED"
-    assert body["ready"]["INTERIM"] == 0 and body["recommendation"] == ""
-    assert body["viewer_can_release"] is True
 
 
 def test_design_completion_recommends_interim_and_a_person_releases_it(
@@ -113,6 +135,9 @@ def test_design_completion_recommends_interim_and_a_person_releases_it(
     owner = team["owner"]
     control, interim = _control_with(team, "INTERIM")
     _prepare_design(migrated, team, control)
+    # Since B0 D&I completes with its conclusion signed off effective, not the prepared
+    # design workpaper alone.
+    sign_off_design(migrated, team["project"], [control])
     # Its design request is settled (the evidence came in another way).
     with connect(migrated.url) as connection:
         connection.execute(
@@ -131,10 +156,11 @@ def test_design_completion_recommends_interim_and_a_person_releases_it(
     row = next(r for r in owner.get(f"{_project(team)}/workspace/controls").json()
                if r["id"] == control)  # fmt: skip
     assert row["next_step"] == "Release the interim phase"
-    # Nothing is released or sent on its own.
+    # Nothing is released or sent on its own. (Since B1 the setup releases the D&I evidence,
+    # so the count is of the interim releases; before, of all releases.)
     assert _rows(
-        migrated, "SELECT count(*) FROM phase_releases WHERE engagement_control_id = %s",
-        UUID(control),
+        migrated, "SELECT count(*) FROM phase_releases WHERE engagement_control_id = %s "
+        "AND phase = 'INTERIM'", UUID(control),
     ) == [(0,)]  # fmt: skip
     sent = _rows(
         migrated, "SELECT count(*) FROM mailbox_messages WHERE project_id = %s", team["project"]
@@ -156,12 +182,12 @@ def test_design_completion_recommends_interim_and_a_person_releases_it(
     again = owner.post(f"{_project(team)}/controls/{control}/phases/INTERIM/release", json={})
     assert again.status_code == 200
     assert _rows(
-        migrated, "SELECT count(*) FROM phase_releases WHERE engagement_control_id = %s",
-        UUID(control),
+        migrated, "SELECT count(*) FROM phase_releases WHERE engagement_control_id = %s "
+        "AND phase = 'INTERIM'", UUID(control),
     ) == [(1,)]  # fmt: skip
     audit = _rows(
         migrated, "SELECT payload FROM audit_events WHERE target_id = %s "
-        "AND action = 'phase.released'", UUID(control),
+        "AND action = 'phase.released' AND payload ->> 'phase' = 'INTERIM'", UUID(control),
     )  # fmt: skip
     assert len(audit) == 1 and audit[0][0]["early"] is False
 
@@ -169,26 +195,45 @@ def test_design_completion_recommends_interim_and_a_person_releases_it(
 def test_an_early_release_needs_a_reason_and_only_a_reviewer_releases(
     migrated: Database,
 ) -> None:
+    # Rewritten 8 November 2026 (B0; product owner: OE evidence and testing start only once
+    # D&I is concluded effective, with no early start). Before, interim could be released
+    # early with a reason; now interim is refused until the D&I sign-off, reason or not, and
+    # the early release with a reason applies to the roll-forward before interim testing.
     team = _launched(migrated, "release-early")
     owner = team["owner"]
     control, _ = _control_with(team, "INTERIM")
-    path = f"{_project(team)}/controls/{control}/phases/INTERIM/release"
+    interim = f"{_project(team)}/controls/{control}/phases/INTERIM/release"
+    reason = "Design and interim testing run together this year, as agreed with the client."
+    for body in ({}, {"reason": reason}):
+        refused = owner.post(interim, json=body)
+        assert refused.status_code == 409
+        assert refused.json()["detail"] == "sign off the D&I conclusion as effective first"
+    sign_off_design(migrated, team["project"], [control])
+    released = owner.post(interim, json={})
+    assert released.status_code == 200, released.text
+    status = next(item for item in released.json()["phases"] if item["phase"] == "INTERIM")
+    assert status["early"] is False
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE evidence_plan_phases SET applicability = 'APPLICABLE' "
+            "WHERE engagement_control_id = %s AND phase = 'ROLLFORWARD'",
+            (control,),
+        )
+        connection.commit()
+    path = f"{_project(team)}/controls/{control}/phases/ROLLFORWARD/release"
     bare = owner.post(path, json={})
     assert bare.status_code == 409
-    assert "Say why the interim phase is released now" in bare.json()["detail"]
+    assert "Say why the roll-forward phase is released now" in bare.json()["detail"]
     with connect(migrated.url) as connection:
         member = _add_user(connection, team["org"], "release-member@example.com", "CONTRIBUTOR")
         _add_project_member(connection, team["org"], team["project"], member)
-    reason = "Design and interim testing run together this year, as agreed with the client."
-    assert _session(migrated, member).post(path, json={"reason": reason}).status_code == 403
-    early = owner.post(path, json={"reason": reason})
+    early_reason = "The roll-forward runs now, as interim fieldwork overlaps year end."
+    assert _session(migrated, member).post(path, json={"reason": early_reason}).status_code == 403
+    early = owner.post(path, json={"reason": early_reason})
     assert early.status_code == 200, early.text
-    status = next(item for item in early.json()["phases"] if item["phase"] == "INTERIM")
-    assert status["early"] is True and status["step_label"] == "Released early"
-    assert status["reason"] == reason
-    # The roll-forward waits for interim testing even once interim is released.
     roll = next(item for item in early.json()["phases"] if item["phase"] == "ROLLFORWARD")
-    assert roll["step"] in ("WAITING", "NOT_APPLICABLE")
+    assert roll["early"] is True and roll["step_label"] == "Released early"
+    assert roll["reason"] == early_reason
 
 
 def test_where_interim_does_not_apply_the_roll_forward_follows_design(
@@ -212,6 +257,7 @@ def test_where_interim_does_not_apply_the_roll_forward_follows_design(
         )
         connection.commit()
     _prepare_design(migrated, team, control)
+    sign_off_design(migrated, team["project"], [control])
     body = _progress(team)
     assert _phase(body, control, "INTERIM")["step"] == "NOT_APPLICABLE"
     assert _phase(body, control, "ROLLFORWARD")["step"] == "READY"
@@ -228,15 +274,17 @@ def test_a_reviewer_releases_the_controls_they_select_one_by_one(migrated: Datab
     rows = team["owner"].get(f"{_project(team)}/workspace/controls").json()
     controls = [row["id"] for row in rows if row["included"]][:3]
     _prepare_design(migrated, team, controls[0])
+    sign_off_design(migrated, team["project"], [controls[0]])
     result = team["owner"].post(
         f"{_project(team)}/phases/release",
         json={"phase": "INTERIM", "control_ids": controls},
     )
     assert result.status_code == 200, result.text
     outcome = {item["control_id"]: item for item in result.json()["outcomes"]}
-    # The one whose design is complete is released; the others need a reason first.
+    # The one whose D&I is signed off is released; before B0 the others needed a reason,
+    # and now they wait for their own D&I sign-off (rewritten 8 November 2026).
     assert outcome[controls[0]]["released"] is True
     for other in controls[1:]:
         assert outcome[other]["released"] is False
-        assert "Say why" in outcome[other]["detail"]
+        assert outcome[other]["detail"] == "sign off the D&I conclusion as effective first"
     assert result.json()["released"] == 1

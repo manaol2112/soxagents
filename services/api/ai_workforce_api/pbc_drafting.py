@@ -35,8 +35,9 @@ from ai_workforce_api.authorization import (
     _session_principal,
     authorize,
 )
-from ai_workforce_api.controls import DOMAIN_LABELS, sample_size
+from ai_workforce_api.controls import DOMAIN_LABELS
 from ai_workforce_api.db import connect, independent_steps, transaction
+from ai_workforce_api.methodology import PLATFORM_DEFAULT, Rules, for_project
 from ai_workforce_api.model_providers import fallback_note, live_model, provider_for
 from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
@@ -315,10 +316,14 @@ class DraftContext:
     # control's evidence is planned by phase. Empty for a request from before planning.
     phase: str = ""
     planned: tuple[PlannedItem, ...] = ()
+    # The engagement's testing methodology (methodology.py): what it sizes samples with, and
+    # the version's name for the record.
+    rules: Rules = PLATFORM_DEFAULT
+    methodology: str = ""
 
     @property
     def samples(self) -> int:
-        return sample_size(self.frequency, self.nature)
+        return self.rules.sample_size(self.frequency, self.nature)
 
     @property
     def period(self) -> str:
@@ -757,9 +762,21 @@ def run_draft(
             """,
             (LEASE_MINUTES, draft_id, MAX_ATTEMPTS),
         ).fetchone()
+        # The wording the draft starts from: a person who rewords the request while the
+        # agent drafts keeps their wording (bug hunt, 9 November 2026). Only the wording
+        # is compared, since the draft writes nothing else: a changed recipient or due
+        # date still takes the drafted wording.
+        started = (
+            None
+            if claimed is None
+            else cursor.execute(
+                "SELECT evidence_description FROM pbc_requests WHERE id = %s", (claimed[2],)
+            ).fetchone()
+        )
     if claimed is None:
         return "SKIPPED"
     organization_id, project_id, request_id, control_id, requester = claimed
+    started_wording = None if started is None else str(started[0])
     context = with_plan(connection, load_context(connection, project_id, control_id), request_id)
     content: DraftContent | None = None
     source = "RULES"
@@ -822,12 +839,40 @@ def run_draft(
             SET evidence_description = CASE WHEN %s THEN evidence_description ELSE %s END,
                 version = version + 1, updated_at = clock_timestamp()
             WHERE id = %s AND project_id = %s AND status = 'DRAFT'
+              AND evidence_description IS NOT DISTINCT FROM %s
             RETURNING id
             """,
             # A draft holds every planned item, so the drafted wording always applies.
-            (False, text, request_id, project_id),
+            (False, text, request_id, project_id, started_wording),
         ).fetchone()
         final = "DRAFTED" if updated is not None else "SKIPPED"
+        skipped = "The request is no longer a draft."
+        if updated is None:
+            changed = cursor.execute(
+                "SELECT 1 FROM pbc_requests WHERE id = %s AND status = 'DRAFT'", (request_id,)
+            ).fetchone()
+            if changed is not None:
+                # Still a draft, so it was reworded while the agent drafted: before, the
+                # agent's wording overwrote that wording silently (bug hunt, 9 November
+                # 2026). It stays, and the record says why the draft was not used.
+                skipped = "The request was reworded while it was drafted; that wording stays."
+                cursor.execute(
+                    """
+                    INSERT INTO audit_events (
+                        organization_id, project_id, actor_user_id, actor_agent_instance_id,
+                        action, target_type, target_id, payload
+                    )
+                    VALUES (%s, %s, %s, %s, 'pbc.draft_superseded', 'pbc_request', %s, %s)
+                    """,
+                    (
+                        organization_id,
+                        project_id,
+                        requester,
+                        agent_instance,
+                        request_id,
+                        Json({"source": source, "agent": "evidence-coordinator"}),
+                    ),
+                )
         cursor.execute(
             """
             UPDATE pbc_drafts
@@ -840,7 +885,7 @@ def run_draft(
                 source if final == "DRAFTED" else None,
                 Json(content.model_dump()) if final == "DRAFTED" else None,
                 call_id,
-                (note if final == "DRAFTED" else "The request is no longer a draft.")[:200],
+                (note if final == "DRAFTED" else skipped)[:200],
                 draft_id,
             ),
         )
@@ -885,9 +930,20 @@ def fail_draft(connection: psycopg.Connection[Any], draft_id: UUID) -> None:
         )
 
 
+def reset_draft(connection: psycopg.Connection[Any], draft_id: UUID) -> None:
+    """Give up the claim of an attempt that raised, so the next attempt can take it."""
+    with transaction(connection) as cursor:
+        cursor.execute(
+            "UPDATE pbc_drafts SET status = 'PENDING', lease_until = NULL "
+            "WHERE id = %s AND status = 'DRAFTING'",
+            (draft_id,),
+        )
+
+
 def load_context(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
 ) -> DraftContext:
+    applied = for_project(connection, project_id)
     row = connection.execute(
         """
         SELECT p.name, s.period_end, c.control_ref, c.title, c.activity, c.risk, c.domain,
@@ -932,6 +988,8 @@ def load_context(
         ),
         applications=tuple(str(item) for item in row[18]),
         to_coordinator=_OWNER_EMAIL.fullmatch(str(row[17])) is None,
+        rules=applied.rules,
+        methodology=applied.label,
     )
 
 
@@ -1524,11 +1582,7 @@ class LocalDraftScheduler:
     def _reset(self, draft_id: UUID) -> None:
         try:
             with connect(self._settings.database_url) as connection:
-                connection.execute(
-                    "UPDATE pbc_drafts SET status = 'PENDING', lease_until = NULL "
-                    "WHERE id = %s AND status = 'DRAFTING'",
-                    (draft_id,),
-                )
+                reset_draft(connection, draft_id)
         except psycopg.Error:
             logger.warning("a draft could not be reset for retry")
 

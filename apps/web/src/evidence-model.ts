@@ -806,7 +806,9 @@ export type FilingNotice =
   | "stale"
   | "denied"
   | "invalid"
-  | "unavailable";
+  | "unavailable"
+  | "applied"
+  | "unchosen";
 
 export const FILING_NOTICES: Record<FilingNotice, string> = {
   filed:
@@ -816,7 +818,18 @@ export const FILING_NOTICES: Record<FilingNotice, string> = {
   denied: "That is not available to you.",
   invalid: "Choose a control first.",
   unavailable: "The evidence register could not be reached. Try again.",
+  applied: "Saved. The file is recorded against the application chosen.",
+  unchosen: "Choose the application the file shows.",
 };
+
+/** The outcome of setting which application a file shows: null when the form was not
+ * valid, else the API's status. */
+export function applicationNoticeFor(status: number | null): FilingNotice {
+  if (status === null || status === 422) {
+    return "unchosen";
+  }
+  return status === 200 ? "applied" : filingNoticeFor(status, false);
+}
 
 export function filingNoticeFor(
   status: number,
