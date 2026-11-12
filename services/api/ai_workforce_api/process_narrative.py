@@ -520,6 +520,19 @@ def _plan_from_narrative(
     changes, _drafts, evidence_note = plan_evidence(
         connection, provider, organization_id, project_id, control_id, requester
     )
+    # The reviewer agent reviews the set as it now stands, duplicates merged, before a
+    # person sees it: the same end as the run after Control Understanding (12 November
+    # 2026). The count of proposals is read again after it.
+    from ai_workforce_api.context_routes import reviewed_set
+
+    review_note = reviewed_set(
+        connection, provider, organization_id, project_id, control_id, requester
+    )
+    proposed = connection.execute(
+        "SELECT count(*) FROM control_attributes WHERE engagement_control_id = %s "
+        "AND status = 'PROPOSED'",
+        (control_id,),
+    ).fetchone()
     source = connection.execute(
         "SELECT source FROM evidence_plans WHERE engagement_control_id = %s", (control_id,)
     ).fetchone()
@@ -530,7 +543,9 @@ def _plan_from_narrative(
         "attributes": 0 if proposed is None else int(proposed[0]),
         "evidence": len(changes.added) + len(changes.updated) + len(changes.removed),
         "evidence_proposed": len(changes.flagged),
-        "note": line(" ".join(part for part in (attribute_note, evidence_note) if part), 600),
+        "note": line(
+            " ".join(part for part in (attribute_note, evidence_note, review_note) if part), 600
+        ),
     }
     with transaction(connection) as cursor:
         cursor.execute(

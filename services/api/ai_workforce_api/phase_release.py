@@ -218,7 +218,12 @@ def attribute_waits(
     criteria are worded by what they wait for: a person's acceptance (_CRITERIA_TO_ACCEPT_SQL),
     or tailoring. A narrative run holds the attributes while it waits, or works under a live
     lease (a WORKING run with no lease is held, as process_narrative never reclaims it); one
-    whose lease ran out was interrupted and is reclaimed, so it holds nothing."""
+    whose lease ran out was interrupted and is reclaimed, so it holds nothing. The plan's run
+    that follows the understanding (12 November 2026: it has a run_stage; it proposes,
+    tailors and reviews, evidence_plans.queue_for_understanding) reads the same way while
+    criteria are not owned, with the same lease rule; the planner's plain run, which only
+    plans evidence, never does: those attributes were waiting already, so the planner's run
+    changes what they are said to wait for and never holds attributes that were settled."""
     from ai_workforce_api.control_attributes import CRITERIA_OWNED_SQL
 
     one = control_id is not None
@@ -247,16 +252,22 @@ def attribute_waits(
                (SELECT count(*) FROM control_attributes a
                 WHERE a.engagement_control_id = c.id AND a.status = 'APPROVED'
                   AND NOT coalesce({CRITERIA_OWNED_SQL}, false)
-                  AND NOT coalesce({_CRITERIA_TO_ACCEPT_SQL}, false))
+                  AND NOT coalesce({_CRITERIA_TO_ACCEPT_SQL}, false)),
+               EXISTS (SELECT 1 FROM evidence_plans p
+                       WHERE p.engagement_control_id = c.id AND p.run_stage <> ''
+                         AND (p.run_status = 'PENDING'
+                              OR (p.run_status = 'WORKING'
+                                  AND (p.run_lease_until IS NULL
+                                       OR p.run_lease_until >= clock_timestamp()))))
         FROM engagement_controls c
         WHERE c.project_id = %(p)s AND {which}
         """,
         params,
     ).fetchall()
     waits: dict[UUID, str] = {}
-    for cid, approved, proposed, questions, working, to_accept, untailored in rows:
+    for cid, approved, proposed, questions, working, to_accept, untailored, planning in rows:
         control = UUID(str(cid))
-        if working:
+        if working or (planning and (int(to_accept) > 0 or int(untailored) > 0)):
             waits[control] = "The attributes are not settled: the agent is still updating them."
         elif int(proposed) > 0:
             waits[control] = (
@@ -288,6 +299,64 @@ def attribute_waits(
     return waits
 
 
+# A D&I evidence item that will be, or was, obtained (evidence_requirements as `q`): planned,
+# waiting for the item it depends on, or requested. Not a waived one (it will not be
+# obtained, so it evidences nothing), not a removed one, and not one that exists only as an
+# addition proposed on an approved plan, which a person has not accepted
+# (pending_change.add, as evidence_plans.issue reads it).
+_LIVE_REQUIREMENT_SQL = """
+    (q.status IN ('PLANNED', 'AWAITING_DEPENDENCY', 'REQUESTED')
+     AND NOT coalesce((q.pending_change ->> 'add')::boolean, false))
+"""
+
+
+def design_untraced(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID | None = None
+) -> dict[UUID, str]:
+    """The controls whose D&I evidence cannot be tested against their attributes, with why,
+    in a sentence: the control has approved attributes and D&I items, and no D&I item that
+    is live (_LIVE_REQUIREMENT_SQL: planned, waiting for its dependency, or requested; not
+    waived, removed, or only a proposed addition) is linked to any of them. D&I is a test
+    of one against the attributes, so a release from such a plan would request evidence
+    nobody could judge against them; it is not recommended, and it is an exception a
+    person sees (found on 12 November 2026: a re-plan left the walkthrough instance with
+    no attribute links, and the release still read as ready, "tested against 4
+    attributes"). The planner now puts every
+    attribute on the instance (evidence_planning._instance_against_every_attribute), so
+    planning the evidence again clears it. A control with no approved attribute is not
+    listed: the attributes hold it already (attribute_waits)."""
+    one = control_id is not None
+    which = "c.id = %(c)s" if one else "c.included"
+    rows = connection.execute(
+        f"""
+        SELECT c.id,
+               (SELECT count(*) FROM control_attributes a
+                WHERE a.engagement_control_id = c.id AND a.status = 'APPROVED')
+        FROM engagement_controls c
+        WHERE c.project_id = %(p)s AND {which}
+          AND EXISTS (SELECT 1 FROM control_attributes a
+                      WHERE a.engagement_control_id = c.id AND a.status = 'APPROVED')
+          AND EXISTS (SELECT 1 FROM evidence_requirements q
+                      WHERE q.engagement_control_id = c.id AND q.phase = 'DESIGN'
+                        AND q.status <> 'REMOVED')
+          AND NOT EXISTS (
+              SELECT 1 FROM evidence_requirement_attributes ra
+              JOIN evidence_requirements q ON q.id = ra.requirement_id
+              JOIN control_attributes a ON a.id = ra.attribute_id
+              WHERE q.engagement_control_id = c.id AND q.phase = 'DESIGN'
+                AND {_LIVE_REQUIREMENT_SQL} AND a.status = 'APPROVED')
+        """,
+        {"p": project_id, "c": control_id},
+    ).fetchall()
+    return {
+        UUID(str(cid)): (
+            "The D&I evidence is not planned against the attributes: no D&I item evidences "
+            f"any of the {_counted(int(count), 'approved attribute')}. Plan the evidence again."
+        )
+        for cid, count in rows
+    }
+
+
 def approved_attributes(connection: psycopg.Connection[Any], control_id: UUID) -> list[str]:
     """The control's approved attributes, in their order, as worded now."""
     return [
@@ -315,7 +384,9 @@ class PhaseStatus(BaseModel):
     waiting_for: str = ""
     # What the D&I release waits on, for the screens that point to it: Control
     # Understanding, or the attributes (11 November 2026). Empty otherwise.
-    waiting_on: Literal["", "UNDERSTANDING", "ATTRIBUTES"] = ""
+    # EVIDENCE (12 November 2026): no D&I item evidences any approved attribute, so the
+    # evidence could not be tested against them.
+    waiting_on: Literal["", "UNDERSTANDING", "ATTRIBUTES", "EVIDENCE"] = ""
 
 
 class ControlPhases(BaseModel):
@@ -364,6 +435,7 @@ def _statuses(
     designed = effective_controls(connection, project_id, control_id if one else None)
     waits = understanding_waits(connection, project_id, control_id if one else None)
     unsettled = attribute_waits(connection, project_id, control_id if one else None)
+    untraced = design_untraced(connection, project_id, control_id if one else None)
     tested = {
         UUID(str(row[0]))
         for row in connection.execute(
@@ -441,6 +513,9 @@ def _statuses(
                 elif control in unsettled:
                     status.step, status.waiting_on = "WAITING", "ATTRIBUTES"
                     status.waiting_for = unsettled[control]
+                elif control in untraced:
+                    status.step, status.waiting_on = "WAITING", "EVIDENCE"
+                    status.waiting_for = untraced[control]
                 else:
                     status.step = "READY"
             elif not approved:
@@ -456,6 +531,8 @@ def _statuses(
                 if status.waiting_on == "UNDERSTANDING"
                 else "Waiting for the attributes"
                 if status.waiting_on == "ATTRIBUTES"
+                else "Evidence not planned against the attributes"
+                if status.waiting_on == "EVIDENCE"
                 else STEP_LABELS[status.step]
             )
             phases.append(status)

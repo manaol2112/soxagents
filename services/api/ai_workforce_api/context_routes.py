@@ -6,7 +6,9 @@ inside the engagement the control belongs to. A change that clears a control's b
 asks its waiting test sheets to run again.
 """
 
+import logging
 from collections.abc import Callable
+from contextvars import ContextVar
 from typing import Any, Literal
 from uuid import UUID
 
@@ -63,6 +65,7 @@ from ai_workforce_api.control_context import (
     store_document,
 )
 from ai_workforce_api.db import transaction
+from ai_workforce_api.evidence_plans import attributes_run
 from ai_workforce_api.model_providers import live_model, provider_for
 from ai_workforce_api.models import ModelProvider
 from ai_workforce_api.pbc_drafting import load_context
@@ -87,6 +90,13 @@ class ContextBody(BaseModel):
     # Milestone 8.9: the control's statement with the client's values.
     design: control_design.DesignBody | None = None
     library_update: library_definitions.UpdateBody | None = None
+    # The agents are updating the attributes and their criteria now (the plan's run, or
+    # the approved narrative's): the Attributes step shows it working and reads again.
+    attributes_run: Literal["PENDING", "WORKING", "STOPPED", ""] = ""
+    # STOPPED: what happened to their last run and what a person does next.
+    attributes_run_note: str = ""
+    # What they are doing: proposing attributes, tailoring criteria, or reviewing the set.
+    attributes_stage: Literal["ATTRIBUTES", "CRITERIA", "REVIEW", ""] = ""
     note: str = ""
 
 
@@ -145,6 +155,23 @@ class UploadResult(BaseModel):
     linked: list[UUID] = []
 
 
+logger = logging.getLogger(__name__)
+
+# What a request hands to the background worker once it has committed (run, in
+# register_control_context). Outside a request there is nothing to wait for.
+_AFTER_COMMIT: ContextVar[list[Callable[[], None]] | None] = ContextVar(
+    "context_routes_after_commit", default=None
+)
+
+
+def _after_commit(handoff: Callable[[], None]) -> None:
+    waiting = _AFTER_COMMIT.get()
+    if waiting is None:
+        handoff()
+    else:
+        waiting.append(handoff)
+
+
 def register_control_context(
     app: FastAPI,
     settings: Settings,
@@ -161,17 +188,43 @@ def register_control_context(
 
     def run[T](request: Request, work: Callable[[psycopg.Connection[Any], Principal], T]) -> T:
         principal = _session_principal(request)
+        # Background work a request queues is handed to the worker only once the request
+        # has committed (12 November 2026). Handed over inside the request, the worker's
+        # claim ran against the rows as they were before it: a run just queued was not
+        # there to claim, was skipped, and then waited, queued, for nobody.
+        handoffs: list[Callable[[], None]] = []
+        token = _AFTER_COMMIT.set(handoffs)
         try:
-            return _call(settings, lambda connection: work(connection, principal))
+            result = _call(settings, lambda connection: work(connection, principal))
         except ContextState as error:
             raise HTTPException(status_code=409, detail=error.detail) from None
         except ValueError:
             raise HTTPException(status_code=422, detail="control context is invalid") from None
+        finally:
+            _AFTER_COMMIT.reset(token)
+        for handoff in handoffs:
+            # The request has committed: a worker that cannot be reached must not turn a
+            # recorded decision into an error (the person would retry and be refused), nor
+            # stop the handoffs after it. What was queued stays queued in the database and
+            # is picked up without this handoff: the local worker's start (resume, which
+            # reads open_plan_runs and the open drafts and tests), the workflow engine's
+            # start (durable.resume_plan_runs), and, for a run that follows the
+            # understanding, the person's "Run again" (the generate route hands a queued
+            # run over again).
+            try:
+                handoff()
+            except Exception as error:
+                logger.warning(
+                    "queued work could not be handed to the worker (%s); it stays queued",
+                    type(error).__name__,
+                )
+        return result
 
     def changed(
         connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, actor: UUID
     ) -> None:
-        schedule_runs(scheduler, resume_testing(connection, project_id, control_id))
+        sheets = resume_testing(connection, project_id, control_id)
+        _after_commit(lambda: schedule_runs(scheduler, sheets))
         # Settled attributes open the planning gate for operating evidence: it is
         # requested now (evidence_plans.release), as far as the planning gate allows.
         from ai_workforce_api.evidence_plans import release
@@ -185,17 +238,26 @@ def register_control_context(
         )
         # The background worker drafts them; with no worker they resume at the next start.
         drafts = scheduler if isinstance(scheduler, DraftScheduler) else None
-        schedule(drafts, released)
+        _after_commit(lambda: schedule(drafts, released))
         # An attribute approved after the plan was made gets its evidence now, by the planner
         # agent in the background. Only when a worker can run it and a model is configured:
         # a plan waiting for a run nobody starts could not be approved.
         plans = getattr(scheduler, "schedule_plan_runs", None)
         if plans is not None and model() is not None:
-            from ai_workforce_api.evidence_plans import replan_for_new_attributes
+            from ai_workforce_api.evidence_plans import (
+                queue_for_understanding,
+                replan_for_new_attributes,
+            )
 
-            planned = replan_for_new_attributes(connection, control_id)
+            # Control Understanding just became complete, or changed once complete: the
+            # attribute agent and the planner follow it in the same run, so the attributes
+            # and their criteria are prepared before a person opens the Attributes step
+            # (product owner, 12 November 2026). One run at a time for the control.
+            planned = queue_for_understanding(
+                connection, project_id, control_id
+            ) or replan_for_new_attributes(connection, control_id)
             if planned is not None:
-                plans([planned])
+                _after_commit(lambda: plans([planned]))
 
     @app.get(f"{control}/context")
     def read(
@@ -326,13 +388,62 @@ def register_control_context(
 
         return run(request, work)
 
+    @app.post(f"{control}/attributes/accept")
+    def accept_attributes(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: control_attributes.AttributesAccepted,
+        request: Request,
+    ) -> ContextBody:
+        """One decision per attribute, one call for the set: the agent's change is approved
+        and its criteria accepted together, by the person, each with its own record."""
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            control_attributes.accept_many(c, organization_id, project_id, control_id, p.id, body)
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
     @app.post(f"{control}/attributes/generate")
     def generate(
         organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
     ) -> ContextBody:
         def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
             _allowed(c, p, organization_id, project_id, control_id)
-            note = _generate(c, model(), organization_id, project_id, control_id, p.id)
+            # With a worker and a model the whole run is asked for, in the background:
+            # proposals, tailored criteria and the reviewer's review, as after Control
+            # Understanding (12 November 2026); the page shows it working and reads again.
+            # Otherwise the attribute agent alone answers here, as before.
+            plans = getattr(scheduler, "schedule_plan_runs", None)
+            if plans is not None and model() is not None:
+                from ai_workforce_api.evidence_plans import request_attributes_run
+
+                planned = request_attributes_run(c, project_id, control_id)
+                if planned is not None:
+                    _after_commit(lambda: plans([planned]))
+                    return _body(c, project_id, control_id)
+                state = attributes_run(c, control_id)[0]
+                if state == "PENDING":
+                    # Queued and waiting: handed to the worker again, in case the first
+                    # handoff did not reach it. The claim is atomic, so a run already
+                    # taken is skipped.
+                    waiting = c.execute(
+                        "SELECT id FROM evidence_plans WHERE engagement_control_id = %s "
+                        "AND run_status = 'PENDING'",
+                        (control_id,),
+                    ).fetchone()
+                    if waiting is not None:
+                        queued = UUID(str(waiting[0]))
+                        _after_commit(lambda: plans([queued]))
+                if state in ("PENDING", "WORKING"):
+                    return _body(
+                        c, project_id, control_id,
+                        "The agents are already updating the attributes.",
+                    )  # fmt: skip
+            note = generate_reviewed(c, model(), organization_id, project_id, control_id, p.id)
             return _body(c, project_id, control_id, note)
 
         return run(request, work)
@@ -1022,12 +1133,71 @@ def _generate(
             Source(NARRATIVE_SOURCE, "Approved process narrative", "NARRATIVE", narrative)
         )
     package = context_package(connection, project_id, control_id, context, found)
+    # The understanding the attributes follow (12 November 2026): the documented design with
+    # the client's values and the confirmed walkthrough answers, as the planner reads them.
+    # Data the client provided, as the control's other fields are.
+    from ai_workforce_api.evidence_plans import statement_fields
+
+    package["control_design_documented"] = dict(statement_fields(connection, control_id))
+    package["walkthrough_answers"] = [
+        {"question": question, "answer": answer}
+        for question, answer in walkthrough_answers.for_agents(connection, control_id)
+    ]
+    # Which approved attributes a person owns the criteria of: a duplicate of one is left
+    # out, never turned into a change of it (control_attributes.REVIEW_PROMPT).
+    owned = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT a.id FROM control_attributes a WHERE a.engagement_control_id = %s "
+            f"AND a.status = 'APPROVED' AND coalesce({control_attributes.CRITERIA_OWNED_SQL}, "
+            "false)",
+            (control_id,),
+        ).fetchall()
+    }
+    for item in package.get("approved_attributes", []):
+        if item["id"] in owned:
+            item["criteria_owned_by_a_person"] = True
     kept, note = control_attributes.generate(
         connection, provider, organization_id, project_id, control_id, actor, package, sources
     )
     if not note and kept == 0:
         note = "The agent found nothing to add: the approved attributes cover the sources."
     return note
+
+
+def reviewed_set(
+    connection: psycopg.Connection[Any],
+    provider: ModelProvider | None,
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID,
+) -> str:
+    """The reviewer agent's review of the control's attributes as they now stand
+    (attribute_review.review_set), which ends every path an agent proposes attributes on
+    (12 November 2026: what reaches the person is the reviewed final version, duplicates
+    merged, on every path). Without a model there is no reviewer, and no agent proposed
+    anything either. Returns the review's note: empty when it finished."""
+    if provider is None:
+        return ""
+    from ai_workforce_api.attribute_review import review_set
+
+    return review_set(connection, provider, organization_id, project_id, control_id, actor)
+
+
+def generate_reviewed(
+    connection: psycopg.Connection[Any],
+    provider: ModelProvider | None,
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID,
+) -> str:
+    """The attribute agent's proposals, then the reviewer's review of the set: the answer of
+    "Propose with the agent" when no background run can take it."""
+    note = _generate(connection, provider, organization_id, project_id, control_id, actor)
+    review = reviewed_set(connection, provider, organization_id, project_id, control_id, actor)
+    return " ".join(part for part in (note, review) if part)
 
 
 def _build(
@@ -1073,6 +1243,8 @@ def review_control(
 
     if needs_process_understanding(found):
         notes.append(_build(connection, provider, organization_id, project_id, control_id, actor))
+    # The set is reviewed before a person sees it, as on every path.
+    notes.append(reviewed_set(connection, provider, organization_id, project_id, control_id, actor))
     with transaction(connection) as cursor:
         cursor.execute(
             "UPDATE source_document_controls SET reviewed_at = clock_timestamp() "
@@ -1123,6 +1295,7 @@ def _body(
     derived = derived_classifications(str(row[1]), str(row[2]))
     current = classifications_of(row[0], str(row[1]), str(row[2]))
     readiness = assess(connection, project_id, control_id)
+    running, stage, run_note = attributes_run(connection, control_id)
     return ContextBody(
         control_id=control_id,
         classifications=current,
@@ -1139,6 +1312,9 @@ def _body(
         # The latest library version always applies (adopt_latest, with every deploy):
         # nobody is asked to adopt it.
         library_update=None,
+        attributes_run=running,
+        attributes_stage=stage,
+        attributes_run_note=run_note,
         note=note,
     )
 

@@ -187,6 +187,7 @@ def test_migrations_apply_once_on_an_empty_database(empty_database: Database) ->
         "0145_design_release",
         "0146_deficiency_rating_scope",
         "0147_walkthrough_answers",
+        "0148_attribute_run_review",
     ]
     assert second == []
     with connect(empty_database.url) as connection:
@@ -351,6 +352,7 @@ def test_migrations_upgrade_through_each_file(empty_database: Database, tmp_path
         ["0145_design_release"],
         ["0146_deficiency_rating_scope"],
         ["0147_walkthrough_answers"],
+        ["0148_attribute_run_review"],
     ]
     with connect(empty_database.url) as connection:
         organizations = connection.execute("SELECT to_regclass('public.organizations')").fetchone()

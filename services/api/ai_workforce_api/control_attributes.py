@@ -28,6 +28,13 @@ from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError
 
 from ai_workforce_api.actions import contains_secret
+from ai_workforce_api.attribute_review import (
+    ReviewMark,
+    ReviewSummary,
+    refused_criteria,
+    review_of,
+    write_detail,
+)
 from ai_workforce_api.control_context import (
     CONTROL_SOURCE,
     ISSUES_SCHEMA,
@@ -55,6 +62,12 @@ from ai_workforce_api.question_review import review_open_questions
 logger = logging.getLogger(__name__)
 
 MAX_ATTRIBUTES = 12
+# attributes/4 (12 November 2026): never a duplicate. A detail added to what an approved
+# attribute already tests is a CHANGE of that attribute, not an ADD.
+PROMPT_VERSION = "attributes/4"
+# attribute-review/2 (the same day): the reviewer of the drafts checks every ADD against the
+# approved attributes and the other drafts.
+REVIEW_PROMPT_VERSION = "attribute-review/2"
 # An approved attribute's criteria are tailored to the control and owned by a person (product
 # owner, 11 November 2026: the agents judge evidence against criteria "tailored on the control
 # environment but still guided by the requirements of the attributes"): a person wrote them,
@@ -106,12 +119,18 @@ class AttributeBody(BaseModel):
     criteria_accepted_by: str = ""
     criteria_accepted_at: Any = None
     criteria_owned: bool = False
+    # The reviewer agent's verdict on the attribute as it reads now (attribute_review.py):
+    # agent output, never a person's approval. None when it was not reviewed, or changed
+    # since.
+    review: ReviewMark | None = None
 
 
 class AttributesBody(BaseModel):
     approved: list[AttributeBody]
     proposed: list[AttributeBody]
     history: list[AttributeBody]
+    # The reviewer agent's latest review of the set, or None when there was none.
+    review_summary: ReviewSummary | None = None
 
 
 class AttributeAdd(BaseModel):
@@ -143,6 +162,17 @@ class AttributeChoice(BaseModel):
 
 class AttributeChoices(BaseModel):
     items: list[AttributeChoice] = Field(min_length=1, max_length=100)
+
+
+class AttributeAccepted(BaseModel):
+    attribute_id: UUID
+    version: int = Field(ge=1)
+
+
+class AttributesAccepted(BaseModel):
+    """The attributes a person accepts as the agent prepared them, as one decision."""
+
+    items: list[AttributeAccepted] = Field(min_length=1, max_length=100)
 
 
 def _normal(text: str) -> str:
@@ -203,10 +233,14 @@ def attributes(connection: psycopg.Connection[Any], control_id: UUID) -> Attribu
         )
         for row in rows
     ]
+    summary, marks = review_of(connection, control_id)
+    for body in bodies:
+        body.review = marks.get(body.id)
     return AttributesBody(
         approved=[item for item in bodies if item.status == "APPROVED"],
         proposed=[item for item in bodies if item.status == "PROPOSED"],
         history=[item for item in bodies if item.status not in ("APPROVED", "PROPOSED")],
+        review_summary=summary,
     )
 
 
@@ -485,6 +519,109 @@ def decide_many(
         )  # fmt: skip
 
 
+def accept_many(
+    connection: psycopg.Connection[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID,
+    body: AttributesAccepted,
+) -> None:
+    """A person accepts attributes as the agent prepared them, one decision per attribute
+    and one call for the set (product owner, 12 November 2026: "I don't want an extra click
+    by accepting the proposed"). For a proposal, the decision approves the change (decide:
+    an addition is appended, a rewording takes the place of the attribute it replaces, a
+    retirement retires it) and accepts the criteria it carries; for an approved attribute it
+    accepts the criteria the agent tailored. Nothing is approved before this call: until
+    then the agent's changes are proposals and its criteria the agent's.
+
+    Each item goes through the same rules as on its own, at the version the person saw, and
+    leaves its own records with the person as the actor (attribute.approved,
+    control_attribute.criteria_accepted); the group is recorded as one decision. All or
+    none. Additions and rewordings are decided before retirements, so a control keeps an
+    attribute throughout."""
+    from ai_workforce_api.evidence_plans import PlanState
+    from ai_workforce_api.master_plans import accept_one_criteria
+
+    chosen = [item.attribute_id for item in body.items]
+    if len(set(chosen)) != len(chosen):
+        raise ContextState("an attribute is listed twice")
+    with transaction(connection) as cursor:
+        found = {
+            UUID(str(row[0])): (str(row[1]), str(row[2] or "ADD"))
+            for row in cursor.execute(
+                "SELECT id, status, proposal FROM control_attributes "
+                "WHERE engagement_control_id = %s AND id = ANY(%s) FOR UPDATE",
+                (control_id, chosen),
+            ).fetchall()
+        }
+        if len(found) != len(chosen):
+            raise ContextState("attribute changed")
+
+        def order(item: AttributeAccepted) -> int:
+            status, proposal = found[item.attribute_id]
+            return 2 if status != "PROPOSED" else 1 if proposal == "RETIRE" else 0
+
+        recorded: list[dict[str, Any]] = []
+        for item in sorted(body.items, key=order):
+            status, proposal = found[item.attribute_id]
+            approved = False
+            if status == "PROPOSED":
+                decide(
+                    connection, organization_id, project_id, control_id, item.attribute_id,
+                    actor, AttributeDecision(decision="APPROVE", version=item.version),
+                )  # fmt: skip
+                approved = True
+            elif status != "APPROVED":
+                raise ContextState("attribute changed")
+            accepted = False
+            if not (approved and proposal == "RETIRE"):
+                # Criteria a person can accept: the agent's (or the demo's), stated in
+                # full, not accepted yet. A proposal's row keeps its criteria when approved.
+                waiting = cursor.execute(
+                    """
+                    SELECT a.version FROM control_attributes a
+                    WHERE a.id = %s AND a.status = 'APPROVED'
+                      AND a.criteria_origin IN ('AGENT', 'SEEDED')
+                      AND a.criteria_accepted_at IS NULL
+                      AND (a.judgment_required IS TRUE
+                           OR (a.condition <> '' AND a.pass_criteria <> ''
+                               AND a.fail_criteria <> ''))
+                    """,
+                    (item.attribute_id,),
+                ).fetchone()
+                if waiting is not None:
+                    if not approved and int(waiting[0]) != item.version:
+                        raise ContextState("attribute changed")
+                    try:
+                        accept_one_criteria(
+                            cursor, organization_id, project_id, control_id, actor,
+                            item.attribute_id, None,
+                        )  # fmt: skip
+                    except PlanState:
+                        raise ContextState("attribute changed") from None
+                    accepted = True
+            if not approved and not accepted:
+                raise ContextState("nothing to accept on this attribute")
+            recorded.append(
+                {
+                    "attribute": str(item.attribute_id),
+                    "change": proposal if approved else None,
+                    "criteria_accepted": accepted,
+                }
+            )
+        cursor.execute(
+            """
+            INSERT INTO audit_events (
+                organization_id, project_id, actor_user_id, action, target_type, target_id,
+                payload
+            )
+            VALUES (%s, %s, %s, 'attributes.accepted', 'engagement_control', %s, %s)
+            """,
+            (organization_id, project_id, actor, control_id, Json({"items": recorded})),
+        )
+
+
 # The agent
 
 SYSTEM_PROMPT = """You define the test attributes of one SOX control for an audit team. An \
@@ -501,6 +638,17 @@ thresholds, names, frequencies, or systems.
 - The approved attributes stand. Do not repeat one. To change one, propose CHANGE with its \
 id in replaces; to drop one, propose RETIRE with its id. Propose ADD for a new one. \
 Propose nothing when the approved set already covers the sources.
+- Never propose a duplicate. Before any ADD, compare it with every approved attribute and \
+with your other proposals. When it tests the same thing for the same sample as an approved \
+attribute and only adds a detail (who performed it, which record shows it, which account or \
+system), it is not a new attribute, and the attribute is not reworded to carry it: the \
+attribute says what is tested, its criteria say how it is tested at this client. Propose \
+CHANGE with that attribute's id in replaces, its approved wording copied exactly in text, \
+and the detail made specific in condition, pass_criteria and fail_criteria, which keep \
+everything the attribute already requires. Reword an attribute (CHANGE with another text) \
+only for a real difference in what is tested, such as another approver, system or timing. \
+At most one CHANGE for an attribute. Use ADD only for a condition no approved attribute \
+tests.
 - For each ADD or CHANGE, also give condition, what the tester checks for each sample, in \
 one sentence; pass_criteria and fail_criteria, what the tester sees for a pass and for a \
 fail, objective enough that two testers would agree and specific to this client's approvers, \
@@ -661,7 +809,7 @@ def generate(
             cancelled=False,
             system=SYSTEM_PROMPT,
         ),
-        "attributes/3",
+        PROMPT_VERSION,
         {"control": str(control_id), "sources": len(sources)},
     )
     status, raw, call_id = call.status, call.raw, call.call_id
@@ -676,6 +824,8 @@ def generate(
         sources, answer.attributes,
     )  # fmt: skip
     kept = 0
+    duplicates = 0
+    detailed = 0
     with transaction(connection) as cursor:
         approved = _approved(cursor, control_id)
         approved_ids = {str(i): t for i, t in approved}
@@ -699,6 +849,16 @@ def generate(
             ).fetchall()
         }
         seen = {_normal(t) for _i, t in approved} | pending
+        # The guard no caller can skip (12 November 2026: an agent never proposes an
+        # attribute that duplicates one already approved or proposed): besides a wording
+        # already there, an addition written from the library attribute that an attribute
+        # of the control already stands for (its definition_key) is that attribute again.
+        held = _held_definitions(cursor, control_id)
+        changed: set[str] = set()
+        # Everything the agent was given, for the figures a criterion may state.
+        from ai_workforce_api.evidence_planning import _normal as plain
+
+        known = plain(_json(package) + " " + source_blocks(sources))
         for item in proposals[:MAX_ATTRIBUTES]:
             text = line(item.text, 300)
             replaces = item.replaces.strip()
@@ -706,8 +866,43 @@ def generate(
                 continue
             if item.action == "RETIRE":
                 text = approved_ids[replaces]
-            elif not text or _normal(text) in seen or contains_secret({"text": text}):
+                # One proposal for an attribute, a change or a retirement: a second would
+                # be the same attribute twice, and could not be accepted with the first.
+                if replaces in changed:
+                    duplicates += 1
+                    continue
+                changed.add(replaces)
+            elif not text or contains_secret({"text": text}):
                 continue
+            elif item.action == "CHANGE" and _normal(text) == _normal(approved_ids[replaces]):
+                # The approved wording with more specific criteria: no rewording to decide.
+                # The detail goes into the attribute's tailored criteria, where an agent
+                # may write them, for a person to accept; otherwise it is left out.
+                stated = _criteria(item)
+                if (
+                    replaces not in changed
+                    and stated is not None
+                    # The same checks as the reviewer's criteria: stated in full, no link
+                    # or credential, no figure or citation the agent was not given.
+                    and refused_criteria(stated, known) is None
+                    and write_detail(cursor, control_id, UUID(replaces), stated)
+                ):
+                    changed.add(replaces)
+                    detailed += 1
+                else:
+                    duplicates += 1
+                continue
+            elif _normal(text) in seen or (
+                item.action == "ADD" and _definition_of(held[0], text) in held[1]
+            ):
+                duplicates += 1
+                continue
+            if item.action == "CHANGE":
+                # One change for an attribute: a second would be the same attribute twice.
+                if replaces in changed:
+                    duplicates += 1
+                    continue
+                changed.add(replaces)
             cited = check_quote(sources, item.source.strip(), item.quote)
             basis: Basis = item.basis if cited is not None else "INFERRED"
             note = line(item.note, 300)
@@ -757,6 +952,11 @@ def generate(
                 ),
             )
             seen.add(_normal(text))
+            # The library attribute this addition stands for is held now: a second
+            # addition written from it, in the same answer, is that attribute again.
+            standing = _definition_of(held[0], text) if item.action == "ADD" else ""
+            if standing:
+                held[1].add(standing)
             kept += 1
         supersede_agent_issues(cursor, control_id, "ATTRIBUTES")
         # Once the narrative is approved it is where the client's facts are settled
@@ -783,7 +983,8 @@ def generate(
                   item.proposal_basis or "TYPICAL", item.why) for item in late],
             )  # fmt: skip
         _audit(cursor, organization_id, project_id, requester, "attribute.proposed", control_id,
-               {"proposals": kept, "reviewed": review_note == "", "fixes": fixes[:12]})  # fmt: skip
+               {"proposals": kept, "reviewed": review_note == "", "fixes": fixes[:12],
+                "duplicates_left_out": duplicates, "criteria_detailed": detailed})  # fmt: skip
     if not review_note and kept == 0 and fixes:
         # The reviewer left out every draft: the team is told why, not that nothing was found.
         review_note = line(
@@ -793,7 +994,50 @@ def generate(
         connection, provider, organization_id, project_id, control_id, requester, package,
         sources,
     )  # fmt: skip
+    if detailed and not review_note and not duplicates:
+        review_note = (
+            f"The agent made the criteria of {detailed} attribute"
+            f"{'' if detailed == 1 else 's'} more specific, to accept."
+        )
+    if duplicates and not review_note:
+        review_note = (
+            f"{duplicates} proposed attribute{'' if duplicates == 1 else 's'} repeated one "
+            "the control already has and "
+            f"{'was' if duplicates == 1 else 'were'} left out."
+        )
     return kept, review_note
+
+
+def _held_definitions(cursor: psycopg.Cursor[Any], control_id: UUID) -> tuple[str, set[str]]:
+    """The control's library key, and the library attributes its approved and proposed
+    attributes already stand for (by their definition_key, or by their wording when they
+    carry none)."""
+    row = cursor.execute(
+        "SELECT coalesce(library_key, '') FROM engagement_controls WHERE id = %s", (control_id,)
+    ).fetchone()
+    library_key = "" if row is None else str(row[0])
+    held: set[str] = set()
+    for key, text in cursor.execute(
+        "SELECT definition_key, text FROM control_attributes WHERE engagement_control_id = %s "
+        "AND status IN ('APPROVED', 'PROPOSED')",
+        (control_id,),
+    ).fetchall():
+        found = str(key) if key else _definition_of(library_key, str(text))
+        if found:
+            held.add(found)
+    return library_key, held
+
+
+def _definition_of(library_key: str, text: str) -> str:
+    """The key of the library attribute this wording is (as written, or with its bracketed
+    values filled in), or "" when it is none."""
+    from ai_workforce_api.definition_registry import BY_LIBRARY_KEY
+
+    definition = BY_LIBRARY_KEY.get(library_key)
+    if definition is None:
+        return ""
+    found = definition.matching(text) or definition.filled_from(text)
+    return "" if found is None else found.key
 
 
 # The reviewer (product owner, 27 October 2026: "I want an agent to review the drafted
@@ -814,7 +1058,18 @@ specific to this client's approvers, systems, dates and records, never words suc
 appropriate, adequate, timely or properly; judgment_required only where the condition calls \
 for professional judgment;
 - be testable from a record the process leaves, so its evidence can be requested;
-- not repeat an approved attribute or another drafted one.
+- not repeat an approved attribute or another drafted one. Check every ADD against each \
+approved attribute (approved_attributes in the control context) and each other draft: when \
+it tests the same thing for the same sample and only adds a detail (who performed it, which \
+record shows it, which account or system), it is a duplicate. An attribute is never \
+reworded to carry a detail: return the duplicate as a CHANGE with the approved attribute's \
+id in replaces, that attribute's wording copied exactly in text, and the detail made \
+specific in condition, pass_criteria and fail_criteria, which keep everything the attribute \
+already requires; when a draft already changes that attribute, put the detail in that \
+draft's criteria, so no attribute has two changes. When the approved attribute says \
+criteria_owned_by_a_person, leave the duplicate out instead and say so in fixes. An ADD \
+stands only for a condition no attribute tests, and a CHANGE with another wording only for \
+a real difference in what is tested (another approver, system or timing).
 
 Return the corrected list in attributes, in the drafter's shape: keep a sound attribute as \
 it is, correct what you can from the facts given, and leave out one that cannot stand. Keep \
@@ -881,7 +1136,7 @@ def _review(
             cancelled=False,
             system=REVIEW_PROMPT,
         ),
-        "attribute-review/1",
+        REVIEW_PROMPT_VERSION,
         {"control": str(control_id), "drafted": len(drafted)},
     )
     unreviewed = "The reviewer agent did not finish, so the attributes are as drafted."

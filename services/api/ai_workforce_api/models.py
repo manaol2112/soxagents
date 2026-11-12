@@ -381,8 +381,16 @@ def outcome(provider: ModelProvider, request: ModelRequest, config: ModelConfig)
     answer keeps the raw output so a stricter caller may still read it."""
     status, raw, error, transient = _attempt(provider, request, config)
     if status == "SUCCEEDED" and request.operation == "generate":
-        if raw.output is None or not _matches(request.output_schema, raw.output):
+        if raw.output is None:
             return Outcome("MALFORMED", raw, "answer did not match the schema", False)
+        where = _mismatch(request.output_schema, raw.output)
+        if where is not None:
+            # Where it broke the schema is recorded with the call (12 November 2026: a
+            # planner answer was malformed and nothing said why). Only the schema's own
+            # property names and type names: never a word of the answer.
+            return Outcome(
+                "MALFORMED", raw, f"answer did not match the schema ({where})"[:500], False
+            )
     return Outcome(status, raw, error, transient)
 
 
@@ -783,41 +791,72 @@ def _schema_supported(schema: object, depth: int) -> bool:
 
 
 def _matches(schema: dict[str, Any], value: object) -> bool:
+    return _mismatch(schema, value) is None
+
+
+def _kind(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return "other"
+
+
+def _mismatch(schema: dict[str, Any], value: object, path: str = "answer") -> str | None:
+    """Where a value first breaks the schema's shape (types, required properties, no
+    unknown properties where the schema forbids them), or None when it fits. The place is
+    named by the schema's own property names and positions, and what was found by its type
+    only: nothing of the value is repeated."""
     kind = schema.get("type")
     if kind == "object":
         if not isinstance(value, dict):
-            return False
+            return f"{path}: expected object, got {_kind(value)}"
         properties = schema.get("properties", {})
         required = schema.get("required", [])
         if not isinstance(properties, dict) or not isinstance(required, list):
-            return False
+            return f"{path}: the schema is not usable"
         for name in required:
             if name not in value:
-                return False
+                return f"{path}.{name}: required, missing"
         additional = schema.get("additionalProperties", True)
         for key, item in value.items():
             if key in properties and isinstance(properties[key], dict):
-                if not _matches(properties[key], item):
-                    return False
+                found = _mismatch(properties[key], item, f"{path}.{key}")
+                if found is not None:
+                    return found
             elif additional is False:
-                return False
-        return True
-    if kind == "string":
-        return isinstance(value, str)
-    if kind == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
-    if kind == "number":
-        return isinstance(value, int | float) and not isinstance(value, bool)
-    if kind == "boolean":
-        return isinstance(value, bool)
+                return f"{path}: a property the schema does not have"
+        return None
     if kind == "array":
         if not isinstance(value, list):
-            return False
+            return f"{path}: expected array, got {_kind(value)}"
         items = schema.get("items")
         if not isinstance(items, dict):
-            return True
-        return all(_matches(items, item) for item in value)
-    return False
+            return None
+        for index, item in enumerate(value):
+            found = _mismatch(items, item, f"{path}[{index}]")
+            if found is not None:
+                return found
+        return None
+    fits = {
+        "string": isinstance(value, str),
+        "integer": isinstance(value, int) and not isinstance(value, bool),
+        "number": isinstance(value, int | float) and not isinstance(value, bool),
+        "boolean": isinstance(value, bool),
+    }
+    if fits.get(str(kind), False):
+        return None
+    return f"{path}: expected {kind}, got {_kind(value)}"
 
 
 def _fill(schema: dict[str, Any]) -> object:

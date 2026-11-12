@@ -48,7 +48,7 @@ from ai_workforce_api.authorization import (
     authorize,
 )
 from ai_workforce_api.controls import basis_of
-from ai_workforce_api.db import transaction
+from ai_workforce_api.db import independent_steps, transaction
 from ai_workforce_api.evidence_apps import tag_covers
 from ai_workforce_api.evidence_planning import (
     _MISSING_AS_REASON,
@@ -378,7 +378,9 @@ class Planned:
 # 2026).
 # 6: reads the walkthrough's confirmed answers as how the control operates here, for the
 # evidence and the criteria (11 November 2026).
-PLANNER_PROMPT_VERSION = "engagement-planner/6"
+# /7 (12 November 2026): the design item that shows the control performed once lists every
+# attribute (evidence_planning._instance_against_every_attribute enforces it).
+PLANNER_PROMPT_VERSION = "engagement-planner/7"
 # Room for a whole plan: three phases, their procedures and evidence. At the provider's
 # default of 4,096 a plan built on an approved narrative was cut off and the rules stood in
 # (26 October 2026).
@@ -2056,8 +2058,8 @@ def plan_and_issue(
         # The planner agent refines the rules' plan after the launch commits.
         cursor.execute(
             "UPDATE evidence_plans SET run_status = 'PENDING', run_attempts = 0, "
-            "run_lease_until = NULL, run_note = '' WHERE engagement_control_id = %s "
-            "AND status = 'PROPOSED'",
+            "run_lease_until = NULL, run_note = '', run_stage = '' "
+            "WHERE engagement_control_id = %s AND status = 'PROPOSED'",
             (control_id,),
         )
     # Only what the planning gate allows is requested: nothing from a plan that waits.
@@ -2080,7 +2082,8 @@ def queue_unrefined_plans(connection: psycopg.Connection[Any], project_id: UUID)
         rows = cursor.execute(
             """
             UPDATE evidence_plans
-            SET run_status = 'PENDING', run_lease_until = NULL, run_note = ''
+            SET run_status = 'PENDING', run_lease_until = NULL, run_note = '',
+                run_stage = ''
             WHERE project_id = %s AND status = 'PROPOSED' AND source = 'RULES'
               AND run_status = 'IDLE' AND run_attempts = 0
             RETURNING id
@@ -2095,13 +2098,19 @@ def replan_for_new_attributes(connection: psycopg.Connection[Any], control_id: U
     the plan back for approval (revise_evidence_plan), and the planner agent now plans it
     again in the background, so the attribute has its evidence and criteria before a person
     reviews the plan (product owner, 27 October 2026). Not asked twice while a run waits.
-    Returns the plan to run."""
+    Returns the plan to run.
+
+    A plain run: it clears the run's stage, as every queueing that is not a run following
+    the understanding does (the launch's, queue_unrefined_plans). A stage left by a failed
+    run of that kind would otherwise turn this one into a full attribute run (run_plan
+    reads the stage), and the attribute agent would replace proposals a person has pending.
+    Only a retry or a reclaim of the same run keeps its stage."""
     with transaction(connection) as cursor:
         row = cursor.execute(
             """
             UPDATE evidence_plans p
             SET run_status = 'PENDING', run_attempts = 0, run_lease_until = NULL,
-                run_note = ''
+                run_note = '', run_stage = ''
             WHERE p.engagement_control_id = %s AND p.status = 'PROPOSED'
               AND p.run_status NOT IN ('PENDING', 'WORKING')
               AND EXISTS (
@@ -2118,6 +2127,224 @@ def replan_for_new_attributes(connection: psycopg.Connection[Any], control_id: U
             (control_id,),
         ).fetchone()
     return None if row is None else UUID(str(row[0]))
+
+
+# The planner follows the understanding (product owner, 12 November 2026: "Shouldn't it
+# automatically update when the user has completed the control understanding?"). SQL over
+# evidence_plans as `p`.
+
+# When a person last changed what the control's understanding states: a client value of its
+# statement, or a confirmed walkthrough answer. Both tables keep updated_at by trigger, and
+# the same answer saved again writes nothing.
+_UNDERSTANDING_CHANGED_SQL = """
+    (SELECT max(changed.at) FROM (
+         SELECT max(v.updated_at) AS at FROM control_parameters v
+         WHERE v.engagement_control_id = p.engagement_control_id
+         UNION ALL
+         SELECT max(w.updated_at) FROM control_walkthrough_answers w
+         WHERE w.engagement_control_id = p.engagement_control_id
+           AND w.status = 'CONFIRMED'
+     ) AS changed)
+"""
+# An approved attribute the planner may write criteria for that has none a tester could
+# apply yet.
+_CRITERIA_MISSING_SQL = f"""
+    EXISTS (SELECT 1 FROM control_attributes a
+            WHERE a.engagement_control_id = p.engagement_control_id
+              AND {CRITERIA_WRITABLE_SQL}
+              AND a.judgment_required IS NOT TRUE
+              AND (a.condition = '' OR a.pass_criteria = '' OR a.fail_criteria = ''))
+"""
+# The agents that read the understanding are at work on the control, or about to be: its
+# plan run, or the approved narrative's planning run (which runs the same two agents). A
+# working run counts while its lease lives; one whose lease ran out was interrupted.
+_AGENTS_AT_WORK_SQL = """
+    (p.run_status = 'PENDING'
+     OR (p.run_status = 'WORKING' AND p.run_lease_until >= clock_timestamp())
+     OR EXISTS (SELECT 1 FROM process_narrative_runs r
+                WHERE r.engagement_control_id = p.engagement_control_id
+                  AND (r.run_status = 'PENDING'
+                       OR (r.run_status = 'WORKING'
+                           AND (r.run_lease_until IS NULL
+                                OR r.run_lease_until >= clock_timestamp())))))
+"""
+
+
+def understanding_due(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    control_id: UUID,
+    since: datetime | None = None,
+) -> bool:
+    """Whether the control's attributes and plan should follow its understanding now: Control
+    Understanding is complete (phase_release.understanding_waits), and the planner has not
+    read it as it stands. That is: a value or a confirmed walkthrough answer changed after
+    the plan was last generated (or after `since`, for a run checking what changed while it
+    worked), or the planner agent never ran on the plan and an approved attribute still has
+    no criteria. One rule for what is queued (queue_for_understanding) and for what a run
+    does (run_plan), so no flag is kept on the run. It stops by itself: a run generates the
+    plan again, and a planner that has run is not asked again until the understanding
+    changes."""
+    row = connection.execute(
+        f"""
+        SELECT coalesce({_UNDERSTANDING_CHANGED_SQL}
+                        > coalesce(%s::timestamptz, p.generated_at), false)
+               OR (%s::timestamptz IS NULL AND p.source = 'RULES' AND {_CRITERIA_MISSING_SQL})
+        FROM evidence_plans p
+        WHERE p.project_id = %s AND p.engagement_control_id = %s
+        """,
+        (since, since, project_id, control_id),
+    ).fetchone()
+    if row is None or not row[0]:
+        return False
+    from ai_workforce_api.phase_release import understanding_waits
+
+    return control_id not in understanding_waits(connection, project_id, control_id)
+
+
+def queue_for_understanding(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> UUID | None:
+    """Queue the control's plan run once its understanding is complete and the planner has
+    not read it (understanding_due): the run proposes the attributes the understanding calls
+    for, then plans again, so every attribute the planner may write gets criteria tailored to
+    the control and the evidence follows the walkthrough. Nothing approved changes: proposals
+    wait for a decision, criteria are the agent's to accept, and an approved plan gets its
+    changes proposed. Never while a run for the control waits or works (the plan's, or the
+    approved narrative's, which does the same), and not over a failed run, which a person
+    starts again. Returns the plan to run."""
+    if not understanding_due(connection, project_id, control_id):
+        return None
+    with transaction(connection) as cursor:
+        row = cursor.execute(
+            f"""
+            UPDATE evidence_plans p
+            SET run_status = 'PENDING', run_attempts = 0, run_lease_until = NULL,
+                run_note = '', run_stage = 'ATTRIBUTES'
+            WHERE p.project_id = %s AND p.engagement_control_id = %s
+              AND p.run_status = 'IDLE' AND NOT {_AGENTS_AT_WORK_SQL}
+            RETURNING p.id
+            """,
+            (project_id, control_id),
+        ).fetchone()
+    return None if row is None else UUID(str(row[0]))
+
+
+def request_attributes_run(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> UUID | None:
+    """A person asks for the attributes to be prepared again ("Run again"): the same run as
+    queue_for_understanding, whether or not anything changed, and over a run that failed or
+    stopped before it finished (its lease ran out). Not while a run waits or works. The run
+    is marked as one that starts with the attributes (run_stage), which run_plan reads.
+    Returns the plan to run, or None when there is no plan or a run is live."""
+    with transaction(connection) as cursor:
+        row = cursor.execute(
+            f"""
+            UPDATE evidence_plans p
+            SET run_status = 'PENDING', run_attempts = 0, run_lease_until = NULL,
+                run_note = '', run_stage = 'ATTRIBUTES'
+            WHERE p.project_id = %s AND p.engagement_control_id = %s
+              AND NOT {_AGENTS_AT_WORK_SQL}
+            RETURNING p.id
+            """,
+            (project_id, control_id),
+        ).fetchone()
+    return None if row is None else UUID(str(row[0]))
+
+
+STOPPED_NOTE = "The run stopped before it finished. Run again."
+UNUSABLE_NOTE = "The planner's answer could not be used. Run again."
+NOT_STARTED_NOTE = (
+    "The planner's last run failed, so the attributes were not updated from the "
+    "understanding. Run again."
+)
+
+
+def reclaim_interrupted_plan_runs(connection: psycopg.Connection[Any]) -> int:
+    """Plan runs a previous process left working, for the local worker's start (it runs in
+    the API process, one process, for local development: settings.local_worker_enabled). The
+    process that was working on them is gone (a restart, or a reload on a saved file), so
+    their leases protect nobody: they go back to waiting and resume at once, instead of
+    reading as working until a lease of many minutes runs out (12 November 2026). A run out
+    of attempts is marked failed with a note the page shows. Not for a worker that shares
+    the database with other workers: there a live lease is somebody's."""
+    with transaction(connection) as cursor:
+        cursor.execute(
+            "UPDATE evidence_plans SET run_status = 'FAILED', run_lease_until = NULL, "
+            "run_note = %s WHERE run_status = 'WORKING' AND run_attempts >= %s",
+            (STOPPED_NOTE, PLAN_RUN_ATTEMPTS),
+        )
+        waiting = cursor.execute(
+            "UPDATE evidence_plans SET run_status = 'PENDING', run_lease_until = NULL "
+            "WHERE run_status = 'WORKING' RETURNING id"
+        ).fetchall()
+    return len(waiting)
+
+
+AttributesRun = Literal["PENDING", "WORKING", "STOPPED", ""]
+AttributesStage = Literal["ATTRIBUTES", "CRITERIA", "REVIEW", ""]
+
+
+def attributes_run(
+    connection: psycopg.Connection[Any], control_id: UUID
+) -> tuple[AttributesRun, AttributesStage, str]:
+    """Whether the agents are updating the control's attributes and criteria now, what they
+    are doing, and a note when their last run did not finish, for the Attributes step: the
+    plan's run that follows the understanding, with its stage (migration 0148), or the
+    approved narrative's planning run with its own (ATTRIBUTES, then EVIDENCE, where the
+    planner tailors the criteria).
+
+    Only a run that has a stage is such a run. The planner's plain run (run_stage empty:
+    the launch's refinement, or the evidence planned for an attribute a person just
+    accepted, replan_for_new_attributes) changes no attribute and no accepted criteria, so
+    the Attributes step shows nothing for it and blocks nothing (product owner, 12 November
+    2026: "when I accepted all the attributes, it shows updating again? Why is that?").
+
+    Working never outlives the lease: a run whose lease ran out (its process died), one that
+    failed, and one whose planner answer could not be used (the rules planned instead) read
+    as STOPPED with what a person does next, never as working."""
+    row = connection.execute(
+        """
+        SELECT p.run_status, p.run_stage,
+               p.run_lease_until IS NOT NULL AND p.run_lease_until >= clock_timestamp(),
+               (SELECT r.stage FROM process_narrative_runs r
+                WHERE r.engagement_control_id = p.engagement_control_id
+                  AND r.stage IN ('ATTRIBUTES', 'EVIDENCE')
+                  AND r.run_status = 'WORKING'
+                  AND (r.run_lease_until IS NULL OR r.run_lease_until >= clock_timestamp())),
+               p.source, p.run_note, p.project_id
+        FROM evidence_plans p WHERE p.engagement_control_id = %s
+        """,
+        (control_id,),
+    ).fetchone()
+    if row is None:
+        return "", "", ""
+    status, stage, live, narrative = str(row[0]), str(row[1]), bool(row[2]), str(row[3] or "")
+    if stage != "":
+        if status == "PENDING":
+            return "PENDING", "", ""
+        if status == "WORKING" and live:
+            return (
+                "WORKING",
+                "ATTRIBUTES" if stage == "ATTRIBUTES"
+                else "CRITERIA" if stage == "CRITERIA"
+                else "REVIEW",
+                "",
+            )  # fmt: skip
+    if narrative != "":
+        return "WORKING", "ATTRIBUTES" if narrative == "ATTRIBUTES" else "CRITERIA", ""
+    if stage != "" and status in ("WORKING", "FAILED"):
+        return "STOPPED", "", STOPPED_NOTE
+    if status == "IDLE" and row[4] == "FALLBACK" and str(row[5]).startswith(UNUSABLE_NOTE):
+        return "STOPPED", "", UNUSABLE_NOTE
+    if status == "FAILED" and understanding_due(connection, UUID(str(row[6])), control_id):
+        # The planner's own run failed earlier (the launch's refinement, say), and the
+        # understanding has since been completed. Nothing is queued over a failed run, which
+        # a person starts again (queue_for_understanding), so the step says so instead of
+        # showing nothing: "Run again" starts the run that follows the understanding.
+        return "STOPPED", "", NOT_STARTED_NOTE
+    return "", "", ""
 
 
 def open_plan_runs(
@@ -2145,7 +2372,12 @@ def run_plan(
 ) -> str:
     """The planner agent plans one control again, from its records, over the rules' plan.
     The plan stays proposed until a person approves it. A plan a person approved
-    meanwhile is left as approved."""
+    meanwhile is left as approved.
+
+    Each step commits on its own (db.independent_steps), as every background job's does: the
+    claim and the stage are visible while the agents work, and no row of the control stays
+    locked during a model call, so a person can keep saving answers meanwhile."""
+    independent_steps(connection)
     with transaction(connection) as cursor:
         row = cursor.execute(
             """
@@ -2157,7 +2389,8 @@ def run_plan(
                    OR (run_status = 'WORKING' AND run_lease_until < clock_timestamp()))
             RETURNING organization_id, project_id, engagement_control_id, status,
                       coalesce(generated_by, (SELECT owner_user_id FROM projects
-                                              WHERE id = evidence_plans.project_id))
+                                              WHERE id = evidence_plans.project_id)),
+                      run_stage
             """,
             (PLAN_LEASE_MINUTES, plan_id, PLAN_RUN_ATTEMPTS),
         ).fetchone()
@@ -2169,25 +2402,107 @@ def run_plan(
         UUID(str(row[2])),
     )
     note = ""
-    if str(row[3]) == "PROPOSED":
-        if provider is not None:
-            _, _drafts, note = generate(
-                connection, provider, organization_id, project_id, control_id,
-                UUID(str(row[4])),
-            )  # fmt: skip
-        else:
+    if provider is None:
+        if str(row[3]) == "PROPOSED":
             note = "The rules' plan stands and waits for a person to approve it."
+    else:
+        requester = UUID(str(row[4]))
+        # A complete understanding the planner has not read: the attributes follow it
+        # first, and the plan is generated again whatever its status (an approved plan's
+        # changes are proposed, by persist). Otherwise only a proposed plan is refined.
+        # A run queued to start with the attributes (queue_for_understanding, a person's
+        # "Run again"), or interrupted in one of its stages, says so in run_stage.
+        follows = str(row[5]) != "" or understanding_due(connection, project_id, control_id)
+        if follows or str(row[3]) == "PROPOSED":
+            began = _now(connection)
+            note = _plan_pass(
+                connection, provider, organization_id, project_id, control_id, requester,
+                follows,
+            )  # fmt: skip
+            # An answer saved while the agents worked was not read: once more, and only
+            # once, so a run always ends.
+            if follows and understanding_due(connection, project_id, control_id, began):
+                note = _plan_pass(
+                    connection, provider, organization_id, project_id, control_id,
+                    requester, True,
+                )  # fmt: skip
     with transaction(connection) as cursor:
         cursor.execute(
             "UPDATE evidence_plans SET run_status = 'IDLE', run_lease_until = NULL, "
-            "run_note = %s WHERE id = %s",
+            "run_stage = '', run_note = %s WHERE id = %s",
             (note[:300], plan_id),
         )
     return "DONE"
 
 
+def _now(connection: psycopg.Connection[Any]) -> datetime:
+    row = connection.execute("SELECT clock_timestamp()").fetchone()
+    assert row is not None
+    found: datetime = row[0]
+    return found
+
+
+def _plan_pass(
+    connection: psycopg.Connection[Any],
+    provider: ModelProvider,
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    requester: UUID,
+    attributes_first: bool,
+) -> str:
+    """One pass of a plan run: the attribute agent's proposals from the understanding when
+    the run follows it (as the approved narrative's run does, process_narrative), then the
+    planner. The proposals stay proposed; the planner's criteria are the agent's."""
+    if not attributes_first:
+        _, _drafts, note = generate(
+            connection, provider, organization_id, project_id, control_id, requester
+        )
+        return note
+    from ai_workforce_api.attribute_review import review_set
+    from ai_workforce_api.context_routes import _generate
+
+    _run_stage(connection, control_id, "ATTRIBUTES")
+    attribute_note = _generate(
+        connection, provider, organization_id, project_id, control_id, requester
+    )
+    _run_stage(connection, control_id, "CRITERIA")
+    _, _drafts, note = generate(
+        connection, provider, organization_id, project_id, control_id, requester
+    )
+    fell_back = connection.execute(
+        "SELECT source = 'FALLBACK' FROM evidence_plans WHERE engagement_control_id = %s",
+        (control_id,),
+    ).fetchone()
+    if fell_back is not None and fell_back[0]:
+        # The planner's answer broke a rule after its corrections and the rules planned
+        # instead (plan_for): no criteria were tailored. Said first, in words the page
+        # shows; the run still ends, and a person runs it again.
+        attribute_note = f"{UNUSABLE_NOTE} {attribute_note}".strip()
+    # The independent reviewer reads the set as it now stands, before a person does.
+    _run_stage(connection, control_id, "REVIEW")
+    review_note = review_set(
+        connection, provider, organization_id, project_id, control_id, requester
+    )
+    return " ".join(part for part in (attribute_note, note, review_note) if part)
+
+
+def _run_stage(connection: psycopg.Connection[Any], control_id: UUID, stage: str) -> None:
+    """The stage a run that follows the understanding is in, for the Attributes step's
+    working state (migration 0148); each stage renews the lease."""
+    with transaction(connection) as cursor:
+        cursor.execute(
+            "UPDATE evidence_plans SET run_stage = %s, run_lease_until = clock_timestamp() "
+            "+ make_interval(mins => %s) WHERE engagement_control_id = %s "
+            "AND run_status = 'WORKING'",
+            (stage, PLAN_LEASE_MINUTES, control_id),
+        )
+
+
 def fail_plan_run(connection: psycopg.Connection[Any], plan_id: UUID) -> None:
-    """The agent could not plan: the rules' plan stands, and still waits for a person."""
+    """The agent could not plan: the rules' plan stands, and still waits for a person. The
+    run keeps its stage, which says it was one that follows the understanding
+    (attributes_run reads it as stopped); the next run sets it again."""
     with transaction(connection) as cursor:
         cursor.execute(
             "UPDATE evidence_plans SET run_status = 'FAILED', run_lease_until = NULL, "

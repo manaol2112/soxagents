@@ -913,7 +913,7 @@ def test_an_independent_agent_reviews_each_drafted_attribute_before_a_person_see
     blank = rows["Removals are reviewed."]
     assert blank[:4] == ("", "", "", None)
     assert "The criteria need a person" in str(blank[4])
-    assert {"attributes/3", "attribute-review/1"} <= agents
+    assert {"attributes/4", "attribute-review/2"} <= agents
     # When the reviewer keeps none, the team is told why, not that nothing was found.
     dropped = {"attributes": [], "fixes": ["Left out the draft: it repeats A1."]}
     with connect(migrated.url) as connection:

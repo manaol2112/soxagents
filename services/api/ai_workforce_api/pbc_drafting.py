@@ -1441,7 +1441,10 @@ class LocalDraftScheduler:
         from ai_workforce_api.console import open_turns
         from ai_workforce_api.control_reviews import open_reperformances
         from ai_workforce_api.evidence_analysis import open_analyses
-        from ai_workforce_api.evidence_plans import open_plan_runs
+        from ai_workforce_api.evidence_plans import (
+            open_plan_runs,
+            reclaim_interrupted_plan_runs,
+        )
         from ai_workforce_api.policy_evidence import open_runs as open_policies
         from ai_workforce_api.prior_year import open_runs as open_prior_year
         from ai_workforce_api.process_narrative import open_runs as open_narratives
@@ -1461,6 +1464,9 @@ class LocalDraftScheduler:
             setups = open_setups(connection)
             reviews = open_reperformances(connection)
             scopings = open_scopings(connection)
+            # This worker is the API process: a plan run still marked working belongs to
+            # the process that just ended, so it resumes now, not when its lease runs out.
+            reclaim_interrupted_plan_runs(connection)
             plans = open_plan_runs(connection)
             priors = open_prior_year(connection)
             narratives = open_narratives(connection)

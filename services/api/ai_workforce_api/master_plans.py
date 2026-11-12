@@ -2720,34 +2720,52 @@ def accept_criteria(
     with transaction(connection) as cursor:
         _plan_id(cursor, project_id, control_id)
         for item in body.attributes:
-            row = cursor.execute(
-                "SELECT version, status, criteria_origin, code FROM control_attributes "
-                "WHERE id = %s AND engagement_control_id = %s FOR UPDATE",
-                (item.id, control_id),
-            ).fetchone()
-            if row is None:
-                raise NotVisible()
-            if int(row[0]) != item.version:
-                raise PlanState("the attribute changed")
-            if row[1] != "APPROVED":
-                raise PlanState("decide the attribute first")
-            # A person accepts criteria proposed for them: an agent's, or those prepared with
-            # the demo (SEEDED, migration 0130); their own need no acceptance.
-            if row[2] not in ("AGENT", "SEEDED"):
-                raise PlanState("the criteria are not the agent's")
-            cursor.execute(
-                """
-                UPDATE control_attributes
-                SET criteria_accepted_by = %s, criteria_accepted_at = now(),
-                    version = version + 1
-                WHERE id = %s
-                """,
-                (actor, item.id),
+            accept_one_criteria(
+                cursor, organization_id, project_id, control_id, actor, item.id, item.version
             )
-            _audit(
-                cursor, organization_id, project_id, actor, "control_attribute.criteria_accepted",
-                "control_attribute", item.id, {"code": str(row[3] or "")},
-            )  # fmt: skip
+
+
+def accept_one_criteria(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID,
+    attribute_id: UUID,
+    version: int | None,
+) -> None:
+    """One attribute's criteria accepted by a person, inside the caller's transaction, with
+    its own audit record. `version` is the version the person saw; None only for a caller
+    that changed the row itself in the same transaction (control_attributes.accept_many,
+    which approves a proposal and accepts its criteria as one decision)."""
+    row = cursor.execute(
+        "SELECT version, status, criteria_origin, code FROM control_attributes "
+        "WHERE id = %s AND engagement_control_id = %s FOR UPDATE",
+        (attribute_id, control_id),
+    ).fetchone()
+    if row is None:
+        raise NotVisible()
+    if version is not None and int(row[0]) != version:
+        raise PlanState("the attribute changed")
+    if row[1] != "APPROVED":
+        raise PlanState("decide the attribute first")
+    # A person accepts criteria proposed for them: an agent's, or those prepared with
+    # the demo (SEEDED, migration 0130); their own need no acceptance.
+    if row[2] not in ("AGENT", "SEEDED"):
+        raise PlanState("the criteria are not the agent's")
+    cursor.execute(
+        """
+        UPDATE control_attributes
+        SET criteria_accepted_by = %s, criteria_accepted_at = now(),
+            version = version + 1
+        WHERE id = %s
+        """,
+        (actor, attribute_id),
+    )
+    _audit(
+        cursor, organization_id, project_id, actor, "control_attribute.criteria_accepted",
+        "control_attribute", attribute_id, {"code": str(row[3] or "")},
+    )  # fmt: skip
 
 
 # Routes

@@ -2123,7 +2123,7 @@ def check_plan(
         _check_links(item, allowed)
         for link in item.links:
             texts.append(link.procedure)
-        phases.append(item)
+        phases.append(_instance_against_every_attribute(item, facts))
     sources = check_sources(facts)
     for fact in plan.understanding.facts:
         # A fact said to come from the records quotes them; the quote must be there.
@@ -2219,12 +2219,50 @@ def _check_fabrication(texts: list[str], sources: str) -> None:
                 raise ValueError("plan states a threshold or deadline no record gives")
 
 
+def _instance_against_every_attribute(item: PhasePlan, facts: PlanFacts) -> PhasePlan:
+    """D&I is a test of one against the attributes (the product owner's methodology): the
+    design evidence that shows the control performed once, a walkthrough instance or example
+    (category CONTROL_EXECUTION), is read against every approved attribute, so it lists
+    them all. Enforced here, for the rules' plan and the model's alike, by repair: a planner
+    that listed fewer, or none, has the control's attributes put on the item, in the
+    control's order (found on 12 November 2026: the model's design example listed none, the
+    prompt asked for the attributes only in the operating phases, and nothing checked it, so
+    the D&I evidence could not be tested against the attributes). A policy or procedure
+    document keeps what the planner listed: it evidences only the attributes it states."""
+    wanted = [text for text in facts.attributes if text.strip()][:20]
+    if (
+        item.phase != "DESIGN"
+        or item.applicability not in ("APPLICABLE", "CONDITIONAL")
+        or not wanted
+    ):
+        return item
+    requirements = []
+    for requirement in item.requirements:
+        if "CONTROL_EXECUTION" in requirement.categories:
+            listed = {_normal(text) for text in requirement.attributes}
+            if any(_normal(text) not in listed for text in wanted):
+                requirement = requirement.model_copy(update={"attributes": wanted})
+        requirements.append(requirement)
+    return item.model_copy(update={"requirements": requirements})
+
+
 def _uncovered(phases: list[PhasePlan], facts: PlanFacts) -> list[str]:
     """The control's attributes an operating phase that applies has no evidence item for,
     as notes for the audit team (at most four)."""
     notes: list[str] = []
     for item in phases:
-        if item.phase == "DESIGN" or item.applicability not in ("APPLICABLE", "CONDITIONAL"):
+        if item.applicability not in ("APPLICABLE", "CONDITIONAL"):
+            continue
+        if item.phase == "DESIGN":
+            # The design is tested against the attributes from one instance of the control:
+            # a design phase none of whose items lists an attribute cannot be.
+            if any(text.strip() for text in facts.attributes) and not any(
+                requirement.attributes for requirement in item.requirements
+            ):
+                notes.append(
+                    "No design evidence item shows the control performed once, so the design "
+                    "cannot be tested against the attributes; add a walkthrough instance."
+                )
             continue
         listed = {_normal(text) for r in item.requirements for text in r.attributes}
         for attribute in facts.attributes:
@@ -2618,7 +2656,10 @@ needs the approver and the approval date; a grant needs who granted what and whe
 nothing an attribute or the phase's objective does not need.
 - Each record once per phase: when one record shows several details, it is one item, listing \
 every attribute it serves. In each operating phase, every attribute of the control is listed \
-by at least one item.
+by at least one item. In DESIGN, the item that shows the control performed once (a \
+walkthrough instance or example, category CONTROL_EXECUTION) lists every attribute of the \
+control: design and implementation is a test of one against the attributes. A policy or \
+procedure document lists only the attributes it states.
 - No audit terms in a title or description (population, completeness and accuracy, \
 attribute, control execution, assertion, ITGC, walkthrough): say "the full list of", "how \
 the list was produced", "one example". Why the item is needed belongs in rationale, the \
