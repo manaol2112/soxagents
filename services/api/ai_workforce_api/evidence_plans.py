@@ -186,6 +186,17 @@ class PlanState(Exception):
 
 # Facts
 
+# The approved attributes whose criteria the planner agent may write, over control_attributes
+# as `a`: none a person stated (complete or not), none prepared with the demo (SEEDED), none a
+# person accepted. One rule for the attributes the planner is asked to tailor (load_facts),
+# for whether a run on an approved plan changes them (_criteria_differ), and for what it
+# writes (_write_criteria), so the three cannot drift (review, 11 November 2026).
+CRITERIA_WRITABLE_SQL = """
+    (a.status = 'APPROVED'
+     AND coalesce(a.criteria_origin, '') NOT IN ('PERSON', 'SEEDED')
+     AND a.criteria_accepted_at IS NULL)
+"""
+
 
 def load_facts(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
@@ -197,6 +208,7 @@ def load_facts(
         needs_process_understanding,
     )
     from ai_workforce_api.pbc_drafting import load_context
+    from ai_workforce_api.walkthrough_answers import for_agents
 
     context = load_context(connection, project_id, control_id)
     row = connection.execute(
@@ -244,6 +256,14 @@ def load_facts(
             (control_id,),
         ).fetchall()
     )
+    writable = tuple(
+        str(text)
+        for (text,) in connection.execute(
+            "SELECT a.text FROM control_attributes a WHERE a.engagement_control_id = %s "
+            f"AND {CRITERIA_WRITABLE_SQL} ORDER BY a.position, a.created_at",
+            (control_id,),
+        ).fetchall()
+    )
     return PlanFacts(
         control_ref=context.control_ref,
         title=context.title,
@@ -256,6 +276,7 @@ def load_facts(
         owner_name=context.owner_name,
         applications=context.applications,
         attributes=context.test_attributes,
+        criteria_writable=writable,
         pbc_items=context.pbc_items,
         classifications=tuple(classes),
         process_required=needs_process_understanding(classes),
@@ -278,6 +299,7 @@ def load_facts(
         attribute_keys=keyed,
         statement=statement_fields(connection, control_id),
         **narrative_facts(connection, control_id),
+        walkthrough=for_agents(connection, control_id),
         rules=context.rules,
     )
 
@@ -352,7 +374,11 @@ class Planned:
 
 
 # The planner's prompt version, recorded on every call (Milestone 3a).
-PLANNER_PROMPT_VERSION = "engagement-planner/4"
+# 5: tailors every attribute's criteria to the control, guided by the standard's (11 November
+# 2026).
+# 6: reads the walkthrough's confirmed answers as how the control operates here, for the
+# evidence and the criteria (11 November 2026).
+PLANNER_PROMPT_VERSION = "engagement-planner/6"
 # Room for a whole plan: three phases, their procedures and evidence. At the provider's
 # default of 4,096 a plan built on an approved narrative was cut off and the rules stood in
 # (26 October 2026).
@@ -761,16 +787,19 @@ def _content_differs(cursor: psycopg.Cursor[Any], plan_id: UUID, proposed: dict[
 
 
 def _criteria_differ(cursor: psycopg.Cursor[Any], plan_id: UUID, proposed: dict[str, Any]) -> bool:
+    """Whether the run's criteria would change an attribute _write_criteria may write: the
+    same rows (CRITERIA_WRITABLE_SQL), matched by the same wording, compared on the same
+    fields. A library attribute's tailored criteria are a change; criteria for one a person
+    stated, accepted, or the demo prepared are not, since nothing would write them."""
     current = {
-        " ".join(str(row[0]).split()).lower(): (str(row[1]), str(row[2]), str(row[3]))
+        str(row[0]): (row[1], row[2], row[3], row[4], row[5])
         for row in cursor.execute(
-            """
-            SELECT a.text, a.condition, a.pass_criteria, a.fail_criteria
+            f"""
+            SELECT lower(regexp_replace(btrim(a.text), '\\s+', ' ', 'g')), a.condition,
+                   a.pass_criteria, a.fail_criteria, a.judgment_required, a.automatable
             FROM control_attributes a JOIN evidence_plans p
               ON p.engagement_control_id = a.engagement_control_id
-            WHERE p.id = %s AND a.status = 'APPROVED' AND a.definition_key IS NULL
-              AND a.criteria_origin IS DISTINCT FROM 'PERSON'
-              AND a.criteria_accepted_at IS NULL
+            WHERE p.id = %s AND {CRITERIA_WRITABLE_SQL}
             """,
             (plan_id,),
         ).fetchall()
@@ -781,6 +810,8 @@ def _criteria_differ(cursor: psycopg.Cursor[Any], plan_id: UUID, proposed: dict[
             item["condition"],
             item["pass_criteria"],
             item["fail_criteria"],
+            bool(item.get("judgment_required")),
+            item.get("automatable"),
         ):
             return True
     return False
@@ -942,21 +973,22 @@ def _write_procedure_links(
 def _write_criteria(
     cursor: psycopg.Cursor[Any], control_id: UUID, criteria: list[dict[str, Any]]
 ) -> None:
-    """The planner's criteria, only for an attribute the library does not define and no
-    person has stated or accepted criteria for (migration 0122). Marked as the agent's."""
+    """The planner's criteria, tailored to the control, for an approved attribute no person
+    has stated or accepted criteria for (migration 0122), the library's included since 11
+    November 2026: the standard's wording is the requirement, the tailored criteria are what
+    the tester applies. Marked as the agent's, for a person to accept. Only the attributes
+    CRITERIA_WRITABLE_SQL names: never a person's, an accepted, or the demo's."""
     for item in criteria:
         cursor.execute(
-            """
-            UPDATE control_attributes
+            f"""
+            UPDATE control_attributes a
             SET condition = %s, pass_criteria = %s, fail_criteria = %s,
                 judgment_required = %s, automatable = %s, criteria_origin = 'AGENT',
-                version = version + 1
-            WHERE engagement_control_id = %s AND status = 'APPROVED'
-              AND definition_key IS NULL
-              AND criteria_origin IS DISTINCT FROM 'PERSON'
-              AND criteria_accepted_at IS NULL
-              AND lower(regexp_replace(btrim(text), '\\s+', ' ', 'g')) = %s
-              AND (condition, pass_criteria, fail_criteria, judgment_required, automatable)
+                version = a.version + 1
+            WHERE a.engagement_control_id = %s AND {CRITERIA_WRITABLE_SQL}
+              AND lower(regexp_replace(btrim(a.text), '\\s+', ' ', 'g')) = %s
+              AND (a.condition, a.pass_criteria, a.fail_criteria, a.judgment_required,
+                   a.automatable)
                   IS DISTINCT FROM (%s, %s, %s, %s, %s)
             """,
             (

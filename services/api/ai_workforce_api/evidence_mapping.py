@@ -66,7 +66,9 @@ from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.testing_checks import line_of, untrusted_kind
 
-PROMPT_VERSION = "evidence-mapping/4"
+# 5: each attribute's criteria, tailored to the control and owned by a person, and the
+# standard's requirement (11 November 2026).
+PROMPT_VERSION = "evidence-mapping/5"
 AGENT_KEY = "evidence-coordinator"
 Status = Literal["MISSING", "INCOMPLETE", "CONTRADICTORY", "POTENTIALLY_SUFFICIENT", "UNKNOWN"]
 # What a mapping is stored as: an evidence status, or NOT_MAPPED when the model call did not
@@ -107,8 +109,11 @@ file's own words; a quote you cannot copy exactly is not a fact. Say what you in
 separately, as an inference.
 - If something cannot be read or related reliably, say it is unknown or missing. Never \
 invent a value, a date, a name, a page or a row.
-- A passage that supports an element of the attribute is a reference, with the file index \
-and the exact words. Two passages that cannot both hold are a conflict, with both quotes.
+- The attribute's elements are its tailored_criteria where it has them (its condition, and \
+what passes and fails at this client), checked against its standard_requirement where it \
+has one; otherwise its wording. A passage that supports an element of the attribute is a \
+reference, with the file index and the exact words. Two passages that cannot both hold are \
+a conflict, with both quotes.
 - The status is about the evidence on hand for this attribute: MISSING (no evidence that \
 bears on it), INCOMPLETE (evidence for some elements or some items but not all, or an \
 element with no approval, date or record where one is required), CONTRADICTORY (sources \
@@ -250,6 +255,10 @@ class Gathered:
     plan_revision: int
     requirements: tuple[Requirement, ...]
     files: tuple[Candidate, ...]
+    # Each attribute's criteria, by index: tailored to the control and owned by a person,
+    # and the standard's requirement where it has one (11 November 2026). The elements a
+    # passage supports are these criteria's, not the wording's alone.
+    criteria: tuple[dict[str, Any], ...] = ()
 
 
 class MappingBlocked(Exception):
@@ -339,6 +348,11 @@ def gather(connection: psycopg.Connection[Any], project_id: UUID, control_id: UU
             (control_id, project_id, project_id),
         ).fetchall()
     )
+    from ai_workforce_api.library_definitions import sheet_definitions
+    from ai_workforce_api.testing_engine import definition_prompt, tailored_criteria
+
+    tailored = tailored_criteria(connection, control_id, list(attributes))
+    standard = sheet_definitions(connection, control_id, list(attributes))
     return Gathered(
         control_id=control_id,
         control_ref=str(row[0]),
@@ -349,6 +363,11 @@ def gather(connection: psycopg.Connection[Any], project_id: UUID, control_id: UU
         plan_revision=int(row[6]),
         requirements=requirements,
         files=files,
+        criteria=tuple(
+            ({"tailored_criteria": own} if own else {})
+            | ({"standard_requirement": definition_prompt(found)} if found else {})
+            for own, found in zip(tailored, standard, strict=True)
+        ),
     )
 
 
@@ -729,7 +748,11 @@ def _joined(first: str, second: str) -> str:
 
 
 def prompt_for(
-    gathered: Gathered, attribute: str, requirements: list[Requirement], candidates: list[Candidate]
+    gathered: Gathered,
+    attribute: str,
+    requirements: list[Requirement],
+    candidates: list[Candidate],
+    criteria: dict[str, Any] | None = None,
 ) -> str:
     facts = {
         "control": {
@@ -739,6 +762,7 @@ def prompt_for(
             "audit_period_end": gathered.period_end,
         },
         "attribute": attribute[:400],
+        **(criteria or {}),
         "plan_requirements": [
             {"title": q.title[:200], "description": q.description[:600], "phase": q.phase}
             for q in requirements
@@ -851,7 +875,13 @@ def run_mapping(
             call = caller.generate(
                 ModelRequest(
                     operation="generate",
-                    prompt=prompt_for(gathered, attribute, requirements, candidates),
+                    prompt=prompt_for(
+                        gathered,
+                        attribute,
+                        requirements,
+                        candidates,
+                        gathered.criteria[index] if index < len(gathered.criteria) else None,
+                    ),
                     output_schema=MAPPING_SCHEMA,
                     allowed_tool_ids=(),
                     timeout_seconds=150,

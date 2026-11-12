@@ -55,6 +55,20 @@ from ai_workforce_api.question_review import review_open_questions
 logger = logging.getLogger(__name__)
 
 MAX_ATTRIBUTES = 12
+# An approved attribute's criteria are tailored to the control and owned by a person (product
+# owner, 11 November 2026: the agents judge evidence against criteria "tailored on the control
+# environment but still guided by the requirements of the attributes"): a person wrote them,
+# or a person accepted those the planner agent tailored (or the demo prepared, SEEDED). The
+# library's standard wording alone is the requirement, not the criteria. SQL on the
+# control_attributes row aliased a.
+CRITERIA_OWNED_SQL = """
+    (a.criteria_origin = 'PERSON'
+         AND (a.judgment_required IS TRUE
+              OR (a.condition <> '' AND a.pass_criteria <> '' AND a.fail_criteria <> '')))
+    OR (a.criteria_origin IN ('AGENT', 'SEEDED') AND a.criteria_accepted_at IS NOT NULL
+         AND (a.judgment_required IS TRUE
+              OR (a.condition <> '' AND a.pass_criteria <> '' AND a.fail_criteria <> '')))
+"""
 AttributeStatus = Literal["PROPOSED", "APPROVED", "REJECTED", "RETIRED", "SUPERSEDED"]
 SourceKind = Literal["LIBRARY", "RCM", "MANUAL", "AGENT", "DOCUMENT"]
 
@@ -75,8 +89,23 @@ class AttributeBody(BaseModel):
     decided_by: str | None
     decided_at: Any
     version: int
-    # How the attribute is tested, for a library control (library_definitions.py).
+    # How the attribute is tested, for a library control (library_definitions.py): the
+    # standard's requirement the tailored criteria must meet.
     definition: DefinitionBody | None = None
+    # The criteria tailored to this control (11 November 2026): what the tester judges
+    # against, with who stated them (PERSON, the planner AGENT, or the demo's SEEDED) and
+    # who accepted the agent's. Owned: a person wrote or accepted them (CRITERIA_OWNED_SQL).
+    objective: str = ""
+    condition: str = ""
+    pass_criteria: str = ""
+    fail_criteria: str = ""
+    judgment_required: bool | None = None
+    automatable: bool | None = None
+    phases: list[str] = Field(default_factory=list)
+    criteria_origin: str | None = None
+    criteria_accepted_by: str = ""
+    criteria_accepted_at: Any = None
+    criteria_owned: bool = False
 
 
 class AttributesBody(BaseModel):
@@ -126,11 +155,17 @@ def attributes(connection: psycopg.Connection[Any], control_id: UUID) -> Attribu
         SELECT a.id, a.position, a.text, a.status, a.basis, a.source_kind,
                a.source_document_id, coalesce(d.title, ''), a.source_quote, a.note,
                a.proposal, a.replaces_id, u.display_name, a.decided_at, a.version,
-               a.definition_key, c.library_key
+               a.definition_key, c.library_key, a.objective, a.condition, a.pass_criteria,
+               a.fail_criteria, a.judgment_required, a.automatable, a.phases,
+               a.criteria_origin, coalesce(k.display_name, ''), a.criteria_accepted_at,
+               coalesce("""
+        + CRITERIA_OWNED_SQL
+        + """, false)
         FROM control_attributes a
         JOIN engagement_controls c ON c.id = a.engagement_control_id
         LEFT JOIN source_documents d ON d.id = a.source_document_id
         LEFT JOIN users u ON u.id = a.decided_by
+        LEFT JOIN users k ON k.id = a.criteria_accepted_by
         WHERE a.engagement_control_id = %s
         ORDER BY a.position, a.created_at
         """,
@@ -154,6 +189,17 @@ def attributes(connection: psycopg.Connection[Any], control_id: UUID) -> Attribu
             decided_at=row[13],
             version=int(row[14]),
             definition=_definition(str(row[16]), row[15], str(row[2])),
+            objective=str(row[17] or ""),
+            condition=str(row[18] or ""),
+            pass_criteria=str(row[19] or ""),
+            fail_criteria=str(row[20] or ""),
+            judgment_required=row[21],
+            automatable=row[22],
+            phases=[str(item) for item in (row[23] or [])],
+            criteria_origin=None if row[24] is None else str(row[24]),
+            criteria_accepted_by=str(row[25]),
+            criteria_accepted_at=row[26],
+            criteria_owned=bool(row[27]),
         )
         for row in rows
     ]

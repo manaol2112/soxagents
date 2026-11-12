@@ -297,6 +297,99 @@ def settle_attributes(database: Database, project_id: object) -> None:
         connection.commit()
 
 
+WALKTHROUGH_TEXT = "As the control owner described it in the walkthrough."
+
+
+def walkthrough_value(item: object) -> str:
+    """A valid answer to a walkthrough question, as a test gives it: the first option of a
+    choice, "No" for a yes-or-no question, a plain sentence otherwise."""
+    from ai_workforce_api.walkthrough_questions import Question
+
+    assert isinstance(item, Question)
+    if item.kind in ("CHOICE", "MULTI"):
+        return item.options[0]
+    if item.kind == "YES_NO":
+        return "No"
+    return WALKTHROUGH_TEXT
+
+
+def answer_walkthrough(
+    database: Database, project_id: object, controls: list[object] | None = None
+) -> None:
+    """Answer every required walkthrough question asked for the engagement's controls (or
+    those named), as the engagement's owner would (walkthrough_answers.save): since 11
+    November 2026 Control Understanding is complete only once they are answered. A follow-up
+    an answer opens is answered too. Optional questions are left, as a person may."""
+    from uuid import UUID
+
+    from ai_workforce_api.db import connect
+    from ai_workforce_api.walkthrough_answers import (
+        AnswerIn,
+        AnswersBody,
+        answers_of,
+        questions_asked,
+        save,
+        stands,
+    )
+
+    with connect(database.url) as connection:
+        owner_row = connection.execute(
+            "SELECT organization_id, owner_user_id FROM projects WHERE id = %s", (project_id,)
+        ).fetchone()
+        assert owner_row is not None
+        organization, owner = owner_row
+        ids = [
+            UUID(str(row[0]))
+            for row in connection.execute(
+                "SELECT id FROM engagement_controls WHERE project_id = %s "
+                "AND (%s::uuid[] IS NULL OR id = ANY(%s::uuid[])) ORDER BY id",
+                (project_id, controls, controls),
+            ).fetchall()
+        ]
+        for control in ids:
+            # A follow-up appears once its parent is answered: a few rounds settle it.
+            for _round in range(5):
+                rows = answers_of(connection, control)
+                open_items = [
+                    item
+                    for item in questions_asked(connection, control, rows)
+                    if item.required and not stands(rows.get(item.key), item)
+                ]
+                if not open_items:
+                    break
+                save(
+                    connection, organization, UUID(str(project_id)), control, owner,
+                    AnswersBody(answers={
+                        item.key: AnswerIn(value=walkthrough_value(item))
+                        for item in open_items[:40]
+                    }),
+                )  # fmt: skip
+        connection.commit()
+
+
+def tailor_criteria(database: Database, project_id: object) -> None:
+    """State criteria for every approved attribute whose criteria no person owns yet, as the
+    engagement's owner would (11 November 2026): the D&I evidence is a test of one against
+    them, so its release waits for them (phase_release.attribute_waits)."""
+    from ai_workforce_api.control_attributes import CRITERIA_OWNED_SQL
+    from ai_workforce_api.db import connect
+
+    with connect(database.url) as connection:
+        connection.execute(
+            f"""
+            UPDATE control_attributes a
+            SET condition = 'As the attribute states, at this client: ' || left(a.text, 200),
+                pass_criteria = 'The evidence shows: ' || left(a.text, 200),
+                fail_criteria = 'The evidence shows it is not so: ' || left(a.text, 200),
+                criteria_origin = 'PERSON', version = a.version + 1
+            WHERE a.project_id = %s AND a.status = 'APPROVED'
+              AND NOT coalesce({CRITERIA_OWNED_SQL}, false)
+            """,
+            (project_id,),
+        )
+        connection.commit()
+
+
 def approve_control_plan(database: Database, control_id: object) -> list[object]:
     """Approve one control's proposed evidence plan as the engagement's owner, and request
     what the planning gate allows. Its attributes are left as they are."""

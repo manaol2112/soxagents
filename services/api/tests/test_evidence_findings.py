@@ -1004,3 +1004,33 @@ def test_a_finding_on_a_scanned_page_cites_the_real_page(migrated: Database) -> 
         assert finding["citation"]["page"] == 4, finding["citation"]
         assert finding["citation"]["location"] == "Page 4"
         assert finding["citation"]["found"] is True
+
+
+def test_the_mapping_reads_each_attribute_by_its_tailored_criteria() -> None:
+    """The evidence coordinator maps evidence to each attribute's criteria, tailored to the
+    control and owned by a person, beside the standard's requirement (11 November 2026),
+    not to the attribute's wording alone."""
+    import json
+    from uuid import uuid4
+
+    from ai_workforce_api.evidence_mapping import PROMPT_VERSION, SYSTEM_PROMPT, Gathered
+    from ai_workforce_api.evidence_mapping import prompt_for as mapping_prompt
+
+    gathered = Gathered(
+        control_id=uuid4(), control_ref="ITGC-AC-01", title="New user access is approved",
+        activity="", period_end="", attributes=("Approved before access",), plan_revision=1,
+        requirements=(), files=(),
+    )  # fmt: skip
+    criteria = {
+        "tailored_criteria": {"pass_when": "The manager approved in ServiceNow first."},
+        "standard_requirement": {"pass_when": "The required approvers approved."},
+    }
+    prompt = mapping_prompt(gathered, "Approved before access", [], [], criteria)
+    facts = json.loads(
+        prompt.split("<control_and_attribute>\n", 1)[1].split("\n</control_and_attribute>")[0]
+    )
+    assert facts["tailored_criteria"] == criteria["tailored_criteria"]
+    assert facts["standard_requirement"] == criteria["standard_requirement"]
+    assert "tailored_criteria" not in mapping_prompt(gathered, "Approved before access", [], [])
+    assert "The attribute's elements are its tailored_criteria" in SYSTEM_PROMPT
+    assert PROMPT_VERSION == "evidence-mapping/5"

@@ -5,9 +5,11 @@ progressively, each phase by a person's release of it for the control (`phase_re
 migrations 0081 and 0145). The agents never release a phase.
 
 - Design and implementation (D&I): its own release, once Control Understanding is complete
-  (decided by the product owner on 8 November 2026). It does not wait for the test plan's
-  approval, and revising the plan does not hold it. Releasing it requests the Design phase's
-  evidence items.
+  (decided by the product owner on 8 November 2026) and the control's attributes are settled
+  (11 November 2026: D&I is a test of one against the attributes, and the attributes decide
+  the evidence asked for). It does not wait for the rest of the test plan (scope, sampling),
+  and revising the plan does not hold it. Releasing it requests the Design phase's evidence
+  items, and the release's audit record keeps the attributes they were requested against.
 - Interim and the roll-forward: on an approved test plan, once the D&I conclusion is signed
   off effective (B0); the roll-forward once interim testing is signed off (or, where interim
   does not apply, once D&I is). Their requests are prepared in advance and go for approval
@@ -112,21 +114,25 @@ def understanding_waits(
 ) -> dict[UUID, str]:
     """What each control's understanding still waits for, in a sentence; a control missing
     from the result is understood. Control Understanding is complete when every client value
-    the control's statement asks is answered, no question on the control is open, and, for
-    a business process control, its process understanding is confirmed (as the workflow's
-    Control Understanding step reads it)."""
+    the control's statement asks is answered, no question on the control is open, for a
+    business process control its process understanding is confirmed (as the workflow's
+    Control Understanding step reads it), and every required walkthrough question asked for
+    it has a confirmed answer (11 November 2026; walkthrough_answers). The walkthrough is
+    checked last, so the earlier waits read as before; optional questions never hold it."""
     from ai_workforce_api.control_context import (
         classifications_of,
         needs_process_understanding,
     )
     from ai_workforce_api.control_design import unanswered_values
+    from ai_workforce_api.walkthrough_answers import unanswered_required
 
     one = control_id is not None
     params = {"p": project_id, "c": control_id}
     which = "c.id = %(c)s" if one else "c.included"
     rows = connection.execute(
         f"""
-        SELECT c.id, c.classifications, c.domain, c.nature, u.status
+        SELECT c.id, c.classifications, c.domain, c.nature, u.status,
+               coalesce(c.library_key, ''), coalesce(c.frequency, '')
         FROM engagement_controls c
         LEFT JOIN process_understandings u ON u.engagement_control_id = c.id
         WHERE c.project_id = %(p)s AND {which}
@@ -142,8 +148,15 @@ def understanding_waits(
         ).fetchall()
     }
     missing = unanswered_values(connection, project_id)
+    # One read of the engagement's confirmed walkthrough answers (or the one control's).
+    walkthrough = unanswered_required(
+        connection,
+        project_id,
+        [(UUID(str(row[0])), str(row[5]), str(row[3] or ""), str(row[6])) for row in rows],
+        control_id,
+    )
     waits: dict[UUID, str] = {}
-    for cid, classifications, domain, nature, understanding in rows:
+    for cid, classifications, domain, nature, understanding, _library, _frequency in rows:
         control = UUID(str(cid))
         if missing.get(control):
             count = missing[control]
@@ -166,7 +179,125 @@ def understanding_waits(
             waits[control] = (
                 "Control Understanding is not complete: the process understanding is not confirmed."
             )
+        elif walkthrough.get(control):
+            count = walkthrough[control]
+            waits[control] = (
+                f"Control Understanding is not complete: {count} walkthrough question"
+                f"{' is' if count == 1 else 's are'} not answered."
+            )
     return waits
+
+
+def _counted(count: int, word: str) -> str:
+    return f"{count} {word}{'' if count == 1 else 's'}"
+
+
+# An approved attribute's criteria that wait only for a person's acceptance, over
+# control_attributes as `a`: the planner agent tailored them, or they were prepared with the
+# demo, they are complete, and no person has accepted them. Accepting them owns them
+# (control_attributes.CRITERIA_OWNED_SQL); any other unowned criteria (none at all, or a
+# person's own left incomplete) still need tailoring.
+_CRITERIA_TO_ACCEPT_SQL = """
+    (a.criteria_origin IN ('AGENT', 'SEEDED') AND a.criteria_accepted_at IS NULL
+     AND (a.judgment_required IS TRUE
+          OR (a.condition <> '' AND a.pass_criteria <> '' AND a.fail_criteria <> '')))
+"""
+
+
+def attribute_waits(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID | None = None
+) -> dict[UUID, str]:
+    """What each control's attributes still wait for, in a sentence; a control missing from
+    the result has its attributes settled. The D&I evidence is a test of one against them
+    (product owner, 11 November 2026), so its release is recommended only once they are.
+    Settled is evidence_plans.ATTRIBUTES_SETTLED_SQL's rule (approved attributes, none
+    proposed, no open question about them), read here with its counts, with the attribute
+    agent not still at work on the control (its proposals would follow), and with every
+    approved attribute's criteria tailored to the control and owned by a person
+    (control_attributes.CRITERIA_OWNED_SQL): the testers judge evidence against them. Unowned
+    criteria are worded by what they wait for: a person's acceptance (_CRITERIA_TO_ACCEPT_SQL),
+    or tailoring. A narrative run holds the attributes while it waits, or works under a live
+    lease (a WORKING run with no lease is held, as process_narrative never reclaims it); one
+    whose lease ran out was interrupted and is reclaimed, so it holds nothing."""
+    from ai_workforce_api.control_attributes import CRITERIA_OWNED_SQL
+
+    one = control_id is not None
+    params = {"p": project_id, "c": control_id}
+    which = "c.id = %(c)s" if one else "c.included"
+    rows = connection.execute(
+        f"""
+        SELECT c.id,
+               (SELECT count(*) FROM control_attributes a
+                WHERE a.engagement_control_id = c.id AND a.status = 'APPROVED'),
+               (SELECT count(*) FROM control_attributes a
+                WHERE a.engagement_control_id = c.id AND a.status = 'PROPOSED'),
+               (SELECT count(*) FROM control_context_issues i
+                WHERE i.engagement_control_id = c.id AND i.status = 'OPEN'
+                  AND i.origin IN ('ATTRIBUTES', 'SOURCES')),
+               EXISTS (SELECT 1 FROM process_narrative_runs r
+                       WHERE r.engagement_control_id = c.id
+                         AND (r.run_status = 'PENDING'
+                              OR (r.run_status = 'WORKING'
+                                  AND (r.run_lease_until IS NULL
+                                       OR r.run_lease_until >= clock_timestamp())))),
+               (SELECT count(*) FROM control_attributes a
+                WHERE a.engagement_control_id = c.id AND a.status = 'APPROVED'
+                  AND NOT coalesce({CRITERIA_OWNED_SQL}, false)
+                  AND coalesce({_CRITERIA_TO_ACCEPT_SQL}, false)),
+               (SELECT count(*) FROM control_attributes a
+                WHERE a.engagement_control_id = c.id AND a.status = 'APPROVED'
+                  AND NOT coalesce({CRITERIA_OWNED_SQL}, false)
+                  AND NOT coalesce({_CRITERIA_TO_ACCEPT_SQL}, false))
+        FROM engagement_controls c
+        WHERE c.project_id = %(p)s AND {which}
+        """,
+        params,
+    ).fetchall()
+    waits: dict[UUID, str] = {}
+    for cid, approved, proposed, questions, working, to_accept, untailored in rows:
+        control = UUID(str(cid))
+        if working:
+            waits[control] = "The attributes are not settled: the agent is still updating them."
+        elif int(proposed) > 0:
+            waits[control] = (
+                f"The attributes are not settled: {_counted(int(proposed), 'proposed attribute')} "
+                f"{'waits' if int(proposed) == 1 else 'wait'} for a decision."
+            )
+        elif int(questions) > 0:
+            waits[control] = (
+                f"The attributes are not settled: {_counted(int(questions), 'question')} about "
+                f"them {'is' if int(questions) == 1 else 'are'} open."
+            )
+        elif int(approved) == 0:
+            waits[control] = "The attributes are not settled: no attribute is approved."
+        elif int(to_accept) > 0 or int(untailored) > 0:
+            parts = []
+            if int(to_accept) > 0:
+                count = int(to_accept)
+                parts.append(
+                    f"{_counted(count, 'attribute')} {'has' if count == 1 else 'have'} "
+                    "criteria to accept"
+                )
+            if int(untailored) > 0:
+                count = int(untailored)
+                parts.append(
+                    f"{_counted(count, 'attribute')} {'needs' if count == 1 else 'need'} "
+                    "criteria tailored to this control"
+                )
+            waits[control] = f"The attributes are not settled: {' and '.join(parts)}."
+    return waits
+
+
+def approved_attributes(connection: psycopg.Connection[Any], control_id: UUID) -> list[str]:
+    """The control's approved attributes, in their order, as worded now."""
+    return [
+        str(row[0])
+        for row in connection.execute(
+            "SELECT text FROM control_attributes WHERE engagement_control_id = %s "
+            "AND status = 'APPROVED' ORDER BY position, created_at",
+            (control_id,),
+        ).fetchall()
+    ]
 
 
 class PhaseStatus(BaseModel):
@@ -182,6 +313,9 @@ class PhaseStatus(BaseModel):
     reason: str = ""
     # What it waits for, in words, when it is not ready.
     waiting_for: str = ""
+    # What the D&I release waits on, for the screens that point to it: Control
+    # Understanding, or the attributes (11 November 2026). Empty otherwise.
+    waiting_on: Literal["", "UNDERSTANDING", "ATTRIBUTES"] = ""
 
 
 class ControlPhases(BaseModel):
@@ -229,6 +363,7 @@ def _statuses(
 
     designed = effective_controls(connection, project_id, control_id if one else None)
     waits = understanding_waits(connection, project_id, control_id if one else None)
+    unsettled = attribute_waits(connection, project_id, control_id if one else None)
     tested = {
         UUID(str(row[0]))
         for row in connection.execute(
@@ -298,10 +433,16 @@ def _statuses(
             elif release is not None:
                 status.step = "RELEASED"
             elif phase == "DESIGN":
-                # Its own release, once the control is understood (B1); never the plan's.
-                wait = waits.get(control)
-                status.step = "READY" if wait is None else "WAITING"
-                status.waiting_for = wait or ""
+                # Its own release, once the control is understood (B1) and its attributes
+                # are settled (11 November 2026); never the plan's approval.
+                if control in waits:
+                    status.step, status.waiting_on = "WAITING", "UNDERSTANDING"
+                    status.waiting_for = waits[control]
+                elif control in unsettled:
+                    status.step, status.waiting_on = "WAITING", "ATTRIBUTES"
+                    status.waiting_for = unsettled[control]
+                else:
+                    status.step = "READY"
             elif not approved:
                 status.step, status.waiting_for = "AWAITING_PLAN", "Approve the test plan."
             else:
@@ -312,7 +453,9 @@ def _statuses(
                 "Released early"
                 if status.step == "RELEASED" and status.early
                 else "Waiting for understanding"
-                if status.step == "WAITING" and phase == "DESIGN"
+                if status.waiting_on == "UNDERSTANDING"
+                else "Waiting for the attributes"
+                if status.waiting_on == "ATTRIBUTES"
                 else STEP_LABELS[status.step]
             )
             phases.append(status)
@@ -471,9 +614,14 @@ def release(
             """,
             (organization_id, project_id, control_id, phase, early, reason, plan[1], actor),
         )
+        payload: dict[str, Any] = {"phase": phase, "early": early, "reason": reason}
+        if phase == "DESIGN":
+            # What the D&I evidence is requested against, as worded at the release: a test
+            # of one is judged against these attributes (11 November 2026).
+            payload["attributes"] = approved_attributes(cursor.connection, control_id)
         _audit(
             cursor, organization_id, project_id, actor, "phase.released", "engagement_control",
-            control_id, {"phase": phase, "early": early, "reason": reason},
+            control_id, payload,
         )  # fmt: skip
     return True
 

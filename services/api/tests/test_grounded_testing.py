@@ -1202,3 +1202,40 @@ def test_the_supplementary_scenarios_load_and_a_right_answer_scores_clean(
     assert card["metrics"]["false_pass"] == {"count": 0, "of": 3, "rate": 0.0}
     assert card["metrics"]["negatives_exactly_expected"]["count"] == 3
     assert card["metrics"]["clean_passed"]["rate"] == 1.0
+
+
+def test_the_tester_judges_against_the_criteria_tailored_to_the_control() -> None:
+    """Product owner, 11 November 2026: the agents judge evidence against criteria tailored
+    to the control environment, guided by the attribute's requirements. The tester is given
+    a person's tailored criteria beside the standard's definition, and told which governs."""
+    import json
+
+    from ai_workforce_api.testing_engine import PROMPT_VERSION, SYSTEM_PROMPT
+
+    tailored = {
+        "condition": "The ServiceNow request is approved by the user's manager.",
+        "pass_when": "The manager approved in ServiceNow before the SAP S/4HANA grant.",
+        "exception_when": "No approval, or an approval after the grant.",
+        "judgment_required": False,
+        "stated_by": "PERSON",
+    }
+    context = ItemContext(
+        control_ref=AC, title="New user access is approved", activity="", frequency="",
+        nature="", period="", attributes=("Approved before access", "A request exists"),
+        item_label="u0001", item_detail=(("User ID", "u0001"),), test_of_one=False,
+        files=(ItemFile(file_name="u0001.txt", kind="other", text="Approved", review=None),),
+        definitions=({"pass_when": "The required approvers approved."}, None),
+        tailored=(tailored, None),
+    )  # fmt: skip
+    prompt = prompt_for(context)
+    facts = json.loads(prompt.split("<control_and_item>\n", 1)[1].split("\n</control_and_item>")[0])
+    first, second = facts["attributes"][0], facts["attributes"][1]
+    assert first["tailored_criteria"] == tailored
+    assert first["definition"] == {"pass_when": "The required approvers approved."}
+    assert "tailored_criteria" not in second and "definition" not in second
+    assert "Where an attribute has tailored_criteria, judge it against them" in SYSTEM_PROMPT
+    assert "that is the standard's requirement the tailored criteria meet" in SYSTEM_PROMPT
+    # Rewritten 11 November 2026: the tester reads the walkthrough's confirmed answers as
+    # context (B1c), a prompt change, so the version moved on. Old: "control-tester/6". New:
+    # "control-tester/7". The assertion still pins that a prompt change bumps the version.
+    assert PROMPT_VERSION == "control-tester/7"

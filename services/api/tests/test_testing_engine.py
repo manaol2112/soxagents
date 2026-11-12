@@ -851,7 +851,7 @@ def test_earlier_files_left_unknown_take_their_requests_application(migrated: Da
         )
         migration = Path(__file__).resolve().parents[3] / "migrations"
         sql = (migration / "0100_request_application_default.sql").read_text(encoding="utf-8")
-        connection.execute(sql)  # type: ignore[arg-type]
+        connection.execute(sql)
         rows = dict(
             (str(row[0]), (row[1], row[2], row[3]))
             for row in connection.execute(

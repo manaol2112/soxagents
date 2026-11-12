@@ -499,9 +499,13 @@ def test_a_rejected_plan_is_corrected_by_the_planner(migrated: Database) -> None
         over["understanding"]["summary"] = "x" * 1600
         planner = _Planner(over)
         answers = iter([over, good])
-        planner.complete = lambda request, config: (  # type: ignore[method-assign]
-            planner.requests.append(request) or ModelRaw(next(answers), (), 100, 100)
-        )
+
+        def complete(request: ModelRequest, config: ModelConfig) -> ModelRaw:
+            del config
+            planner.requests.append(request)
+            return ModelRaw(next(answers), (), 100, 100)
+
+        planner.complete = complete  # type: ignore[method-assign]
         generate(connection, planner, org, project, control_id, team["owner_id"])
         body = plan_body(connection, project, control_id)
     assert body.source == "MODEL"

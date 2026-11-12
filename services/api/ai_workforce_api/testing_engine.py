@@ -54,6 +54,7 @@ from ai_workforce_api.test_citations import (
 from ai_workforce_api.testing_checks import CHECKS_SCHEMA, instruction_guard
 from ai_workforce_api.testing_checks import apply as apply_checks
 from ai_workforce_api.testing_checks import evaluate as evaluate_checks
+from ai_workforce_api.walkthrough_answers import for_agents as walkthrough_for_agents
 
 logger = logging.getLogger(__name__)
 
@@ -239,7 +240,11 @@ def excerpt(text: str, key: str) -> str:
 
 # The tester's prompt version, recorded on every call (Milestone 3a). Bump it when the
 # system prompt, the prompt shape or the schema changes.
-PROMPT_VERSION = "control-tester/5"
+# 6: each attribute's criteria tailored to the control, owned by a person, beside the
+# standard's requirement (11 November 2026).
+# 7: the walkthrough's confirmed answers under the control, as context for applying the
+# criteria (11 November 2026).
+PROMPT_VERSION = "control-tester/7"
 
 SYSTEM_PROMPT = """You are the control tester on a SOX IT audit. Test one sample (or, for \
 a control tested once, the control itself) against each of the control's test attributes, \
@@ -266,9 +271,17 @@ says what_counts: what it must include and what is not sufficient. Judge the fil
 that, not against a document's name: evidence that holds what is listed meets the \
 requirement, wherever it is recorded, unless what_counts excludes it. Never treat a \
 document as required because it would add confidence.
-- Where an attribute has a definition, follow it: check its condition, find the evidence \
-and values it names, make its comparison, and apply its pass, exception, insufficient and \
-review rules. Never infer what it says not to infer. A document being present is not a pass.
+- Where an attribute has tailored_criteria, judge it against them: they state the \
+attribute's condition and what passes and fails as the control operates at this client \
+(its system, tool, roles and policy), and a person on the audit team owns them. Where it \
+also has a definition, that is the standard's requirement the tailored criteria meet: use \
+it for the evidence and values to find and the comparison to make, and keep its \
+insufficient, review and do-not-infer rules. Where an attribute has only a definition, \
+apply it to this control as its design describes it. Never infer what a definition says \
+not to infer. A document being present is not a pass.
+- The control's walkthrough, where given, is the audit team's record of how the client says \
+the control operates (who approves, the tools, what changed in the period): use it as context \
+for applying the criteria to this item, never as evidence that the control operated.
 
 - For every result, say what you observed and what the attribute expects, in one sentence \
 each (observed, expected), and any limitation of the evidence (limitations). An EXCEPTION \
@@ -350,8 +363,12 @@ class ItemContext:
     item_detail: tuple[tuple[str, str], ...]
     test_of_one: bool
     files: tuple[ItemFile, ...]
-    # Each attribute's testing definition, where it has one (library_definitions.py).
+    # Each attribute's testing definition, where it has one (library_definitions.py): the
+    # standard's requirement.
     definitions: tuple[dict[str, Any] | None, ...] = ()
+    # Each attribute's criteria tailored to the control and owned by a person, where it has
+    # them (11 November 2026; control_attributes.CRITERIA_OWNED_SQL).
+    tailored: tuple[dict[str, Any] | None, ...] = ()
     # The control's design, as its statement states it with the client's values (8.9).
     design: dict[str, Any] | None = None
     # Passages the evidence mapping verified in this item's files (M3b), as context only:
@@ -360,6 +377,10 @@ class ItemContext:
     # The approved evidence plan's requirements for each attribute (M3d): title and
     # necessity (REQUIRED, CONDITIONAL, OPTIONAL), by attribute index.
     required: tuple[tuple[dict[str, str], ...], ...] = ()
+    # The walkthrough's confirmed answers, each {"question", "answer"} (walkthrough_answers.
+    # for_agents, 11 November 2026): how the client says the control operates. Context for
+    # applying the criteria, never evidence of performance.
+    walkthrough: tuple[dict[str, str], ...] = ()
 
 
 def definition_prompt(item: Any) -> dict[str, Any]:
@@ -396,10 +417,49 @@ def design_prompt(design: Any) -> dict[str, Any] | None:
 
 def _definition_at(context: ItemContext, index: int) -> dict[str, Any]:
     found = context.definitions[index] if index < len(context.definitions) else None
+    tailored = context.tailored[index] if index < len(context.tailored) else None
     planned = context.required[index] if index < len(context.required) else ()
-    return ({"definition": found} if found else {}) | (
-        {"evidence_required_by_plan": list(planned)} if planned else {}
+    return (
+        ({"tailored_criteria": tailored} if tailored else {})
+        | ({"definition": found} if found else {})
+        | ({"evidence_required_by_plan": list(planned)} if planned else {})
     )
+
+
+def tailored_criteria(
+    connection: psycopg.Connection[Any], control_id: UUID, texts: list[str]
+) -> list[dict[str, Any] | None]:
+    """Each attribute's criteria tailored to the control and owned by a person, by its
+    wording; None where no person owns criteria for it (the tester then applies the
+    standard's definition to the control's design). Agent criteria no person accepted are
+    never given to the tester."""
+    from ai_workforce_api.control_attributes import CRITERIA_OWNED_SQL
+
+    rows = {
+        " ".join(str(row[0]).lower().split()): row
+        for row in connection.execute(
+            "SELECT a.text, a.condition, a.pass_criteria, a.fail_criteria, "
+            "a.judgment_required, a.criteria_origin FROM control_attributes a "
+            "WHERE a.engagement_control_id = %s AND a.status = 'APPROVED' "
+            f"AND coalesce({CRITERIA_OWNED_SQL}, false)",
+            (control_id,),
+        ).fetchall()
+    }
+    found: list[dict[str, Any] | None] = []
+    for text in texts:
+        row = rows.get(" ".join(text.lower().split()))
+        found.append(
+            None
+            if row is None
+            else {
+                "condition": str(row[1]),
+                "pass_when": str(row[2]),
+                "exception_when": str(row[3]),
+                "judgment_required": bool(row[4]),
+                "stated_by": "PERSON" if row[5] == "PERSON" else "AGENT_ACCEPTED_BY_PERSON",
+            }
+        )
+    return found
 
 
 def prompt_for(context: ItemContext) -> str:
@@ -411,7 +471,20 @@ def prompt_for(context: ItemContext) -> str:
             "frequency": context.frequency,
             "nature": context.nature,
         }
-        | ({"design": context.design} if context.design else {}),
+        | ({"design": context.design} if context.design else {})
+        | (
+            {
+                "walkthrough": [
+                    {
+                        "question": str(item.get("question", ""))[:220],
+                        "answer": str(item.get("answer", ""))[:300],
+                    }
+                    for item in context.walkthrough
+                ]
+            }
+            if context.walkthrough
+            else {}
+        ),
         "audit_period": context.period,
         "attributes": [
             {"index": index, "attribute": attribute[:300]} | _definition_at(context, index)
@@ -1555,11 +1628,27 @@ def _test_item(
                 None if found is None else definition_prompt(found)
                 for found in sheet_definitions(connection, control_id, list(attributes))
             ),
+            tailored=tuple(tailored_criteria(connection, control_id, list(attributes))),
             design=design_prompt(design_for(connection, control_id)),
             passages=mapped_passages(connection, project_id, control_id, files),
             required=plan_evidence(connection, UUID(str(item[3])), control_id, attributes),
+            walkthrough=tuple(
+                {"question": question, "answer": answer}
+                for question, answer in walkthrough_for_agents(connection, control_id)
+            ),
         )
         inputs["mapping_context"] = len(context.passages)
+        # How many walkthrough answers the tester read as context, for the reviewer's trace.
+        inputs["walkthrough_answers"] = len(context.walkthrough)
+        # Which criteria each attribute was judged against, for the reviewer's trace.
+        inputs["criteria"] = [
+            "TAILORED" if tailored else "STANDARD" if standard else "NONE"
+            for tailored, standard in zip(
+                context.tailored or (None,) * len(attributes),
+                context.definitions or (None,) * len(attributes),
+                strict=False,
+            )
+        ]
         inputs["plan_evidence"] = [len(found) for found in context.required]
         call = caller.generate(
             ModelRequest(

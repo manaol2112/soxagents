@@ -794,3 +794,50 @@ def test_a_phase_reads_its_own_state_and_an_empty_list_is_never_done() -> None:
     assert phase_state(True, "APPLICABLE", False, accepted) == "EVIDENCE_ACCEPTED"
     # Complete only when the phase's testing is: never from requests or receipt alone.
     assert phase_state(True, "APPLICABLE", True, accepted) == "COMPLETE"
+
+
+def test_the_planner_tailors_every_attribute_guided_by_the_standard() -> None:
+    """Product owner, 11 November 2026: the criteria are "tailored on the control environment
+    but still guided by the requirements of the attributes". The planner sees each library
+    attribute's standard as the requirement, and tailors the criteria of every attribute no
+    person owns criteria for, library ones included."""
+    import json
+
+    from ai_workforce_api.definition_registry import DEFINITIONS
+    from ai_workforce_api.evidence_planning import PLAN_SCHEMA, SYSTEM_PROMPT
+
+    definition = next(item for item in DEFINITIONS if item.control_ref == "ITGC-AC-01")
+    first, second = definition.attributes[0], definition.attributes[1]
+    facts = _facts(
+        control_ref="ITGC-AC-01",
+        library_key=definition.library_key,
+        attributes=(first.text, second.text, "A client's own attribute"),
+        attribute_keys=((first.key, first.text), (second.key, second.text)),
+        # Rewritten 11 November 2026 (review M5). Old: the facts named the attributes a
+        # person owns criteria for (criteria_owned=(second.text,)) and the planner was asked
+        # for every other one. New: the facts name the attributes the planner may write
+        # (evidence_plans.CRITERIA_WRITABLE_SQL), and only those are asked for. Why: one a
+        # person stated incompletely, or prepared with the demo, is never written, so asking
+        # for it lost the tailoring. The assertion below is unchanged.
+        criteria_writable=(first.text, "A client's own attribute"),
+    )
+    prompt = prompt_for(facts)
+    data = json.loads(prompt.split("<control>\n", 1)[1].rsplit("\n</control>", 1)[0])
+    standards = {item["attribute"]: item for item in data["attribute_standards"]}
+    assert set(standards) == {first.text, second.text}
+    assert standards[first.text]["pass_when"] == first.passes
+    assert standards[first.text]["do_not_infer"] == first.not_infer
+    # The second's criteria are not the planner's to write: only the others are tailored.
+    assert data["attributes_needing_criteria"] == [first.text, "A client's own attribute"]
+    # An attribute it may not write is never asked for, whatever else the facts say.
+    none = prompt_for(replace(facts, criteria_writable=()))
+    assert '"attributes_needing_criteria": []' in none
+    # Tailored to how the control operates here, never weaker than the standard.
+    assert "Tailor the criteria to this control as it operates here" in SYSTEM_PROMPT
+    assert "never weaken or drop one" in SYSTEM_PROMPT
+    assert "never invent a name, role, tool or value" in SYSTEM_PROMPT
+    criteria = PLAN_SCHEMA["properties"]["criteria"]["description"]
+    assert "attributes_needing_criteria" in criteria and "attribute_standards" in criteria
+    # A control tested on the client's own procedures has no standard to meet.
+    client = prompt_for(replace(facts, test_basis="CLIENT"))
+    assert '"attribute_standards": []' in client

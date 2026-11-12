@@ -11,7 +11,17 @@ A suggestion is never recorded by itself: a person chooses it and saves it, as t
 client's value. Amounts, tolerances, and lists only the client's documents set (the
 interfaces in scope, the ruleset) offer none: a threshold depends on the client's
 materiality, and a guessed list would read as the client's.
+
+Every question an access or change control asks offers its usual answers, so the person
+types as little as possible (product owner, 11 November 2026): the roles, tools and limits,
+and for free text the usual forms of the answer (which roles are privileged, what makes a
+change an emergency), written as the control's wording reads them. Typing the client's own
+answer stays open for every one. Only the control's own system (filled automatically), the
+sign-in settings (composed setting by setting) and the segregation-of-duties ruleset (a
+document, linked) offer none.
 """
+
+import re
 
 from ai_workforce_api.control_statements import Slot
 
@@ -136,40 +146,168 @@ _EXPLICIT: dict[str, tuple[str, ...]] = {
     "admin-role": (
         "IT service desk",
         "Identity and access management team",
+        "IT Security Administrator",
         "Application security administrator",
         "System administrator",
     ),
-    "review-owner": ("Application owner", "Line manager", "Business process owner"),
-    "account-reviewer": ("IT Security Analyst", "Application owner", "System owner"),
-    "sponsor-reviewer": ("IT Security Analyst", "Vendor relationship owner", "Line manager"),
-    "privileged-reviewer": ("Head of IT", "IT Director", "Chief Information Security Officer"),
-    "infra-reviewer": ("Head of Infrastructure", "IT Director", "IT Security Manager"),
-    "infra-admin-role": ("Database and platform administrators", "Infrastructure team"),
-    "data-admin": ("Database administrator", "Application support team"),
-    "ff-approver": ("IT Security Manager", "Business process owner", "Line manager"),
-    "ff-reviewer": ("IT Controls Manager", "Business process owner", "IT Security Manager"),
-    "deploy-reviewer": ("IT Applications Manager", "Change Manager", "IT Security Manager"),
+    # The owner is accountable for the control, so never the team that operates it.
+    "access-owner": (
+        "IT Security Manager",
+        "Identity and Access Management Lead",
+        "IT Director",
+        "Chief Information Security Officer",
+        "Application owner",
+    ),
+    "review-owner": (
+        "Application owner",
+        "Line manager",
+        "Business process owner",
+        "System owner",
+        "Data owner",
+    ),
+    "account-reviewer": (
+        "IT Security Analyst",
+        "Application owner",
+        "System owner",
+        "IT Security Manager",
+    ),
+    "sponsor-reviewer": (
+        "IT Security Analyst",
+        "Vendor relationship owner",
+        "Line manager",
+        "IT Security Manager",
+        "Application owner",
+    ),
+    "privileged-reviewer": (
+        "Head of IT",
+        "IT Director",
+        "Chief Information Security Officer",
+        "IT Security Manager",
+        "Application owner",
+    ),
+    "infra-reviewer": (
+        "Head of Infrastructure",
+        "IT Director",
+        "IT Security Manager",
+        "Infrastructure Manager",
+        "Chief Information Security Officer",
+    ),
+    "infra-admin-role": (
+        "Database and platform administrators",
+        "Infrastructure team",
+        "Database administrator",
+        "System administrator",
+        "Cloud platform team",
+        "Managed service provider",
+    ),
+    "data-admin": (
+        "Database administrator",
+        "Application support team",
+        "Production support team",
+        "System administrator",
+    ),
+    "ff-approver": (
+        "IT Security Manager",
+        "Business process owner",
+        "Line manager",
+        "Application owner",
+        "Role owner",
+    ),
+    "ff-reviewer": (
+        "IT Controls Manager",
+        "Business process owner",
+        "IT Security Manager",
+        "Firefighter controller",
+        "Line manager",
+    ),
+    "deploy-reviewer": (
+        "IT Applications Manager",
+        "Change Manager",
+        "IT Security Manager",
+        "IT Director",
+        "Application owner",
+    ),
     "facilities-reviewer": ("Facilities manager", "Data center manager", "IT Security Manager"),
-    "sod-reviewer": ("Business Controls Manager", "Business process owner", "Controller"),
+    "sod-reviewer": (
+        "Business Controls Manager",
+        "Business process owner",
+        "Controller",
+        "GRC Manager",
+        "IT Security Manager",
+    ),
     # Change
-    "it-approver": (
-        "Change Advisory Board (CAB)",
+    # The owner is accountable for the control, so never a developer whose changes it covers.
+    "change-owner": (
         "IT Applications Manager",
         "Change Manager",
         "IT Director",
+        "Head of IT",
+        "Application owner",
     ),
-    "emergency-approver": ("IT Director", "Emergency CAB", "Change Manager"),
-    "config-approver": ("Finance systems lead", "Business process owner", "Controller"),
-    "patch-approver": ("Infrastructure Change Manager", "Change Advisory Board (CAB)"),
-    "go-live-approver": ("IT Steering Committee", "Business process owner", "Project sponsor"),
-    "migration-approver": ("Corporate Controller", "Business process owner", "Project sponsor"),
+    # The library's example is the IT Change Advisory Board: a second CAB would repeat it.
+    "it-approver": (
+        "Change Manager",
+        "IT Applications Manager",
+        "IT Director",
+        "Application owner",
+        "Head of IT",
+    ),
+    "emergency-approver": (
+        "IT Director",
+        "Emergency CAB",
+        "Change Manager",
+        "IT Applications Manager",
+        "Head of IT",
+    ),
+    "config-approver": (
+        "Finance systems lead",
+        "Business process owner",
+        "Controller",
+        "Application owner",
+        "Change Advisory Board (CAB)",
+    ),
+    "patch-approver": (
+        "Infrastructure Change Manager",
+        "Change Advisory Board (CAB)",
+        "Change Manager",
+        "Infrastructure Manager",
+        "IT Operations Manager",
+    ),
+    "go-live-approver": (
+        "IT Steering Committee",
+        "Business process owner",
+        "Project sponsor",
+        "Change Advisory Board (CAB)",
+        "Application owner",
+    ),
+    "migration-approver": (
+        "Corporate Controller",
+        "Business process owner",
+        "Project sponsor",
+        "Data owner",
+        "Finance systems lead",
+    ),
     "schedule-approver": ("IT Operations Manager", "Change Advisory Board (CAB)"),
+    # Operations owner: accountable, so not the operations team itself.
+    "ops-owner": (
+        "IT Operations Manager",
+        "Infrastructure Manager",
+        "Head of IT",
+        "IT Director",
+        "Chief Information Security Officer",
+    ),
     # Operations and security
     "ops-role": ("IT operations", "Service desk", "Managed service provider"),
     "restore-reviewer": ("Application owner", "IT Operations Manager", "Backup administrator"),
     "interface-owner": ("Integration support", "Application support team", "IT Operations"),
     "vuln-owner": ("Security Engineering Lead", "IT Security Manager", "Infrastructure Manager"),
-    "soc-role": ("Security operations", "Managed security service provider"),
+    "soc-role": (
+        "Security operations",
+        "Managed security service provider",
+        "IT Security team",
+        "Security analyst",
+        "IT operations",
+    ),
     "soc-reviewer": ("IT Compliance Manager", "Vendor management", "IT Security Manager"),
     "risk-acceptor": ("Chief Information Security Officer", "IT Director", "Risk committee"),
     # Oversight
@@ -187,26 +325,59 @@ _EXPLICIT: dict[str, tuple[str, ...]] = {
     "je-approver": ("Assistant Controller", "Controller", "Accounting Manager"),
     "payroll-approver": ("HR Business Partner", "Payroll Manager", "HR Director"),
     # Systems: the tools usually used for the job.
-    "access-tool": ("ServiceNow", "SailPoint", "Saviynt", "Jira Service Management"),
-    "change-tool": ("ServiceNow", "Jira Service Management", "BMC Remedy", "Azure DevOps"),
+    # Read in the control's wording ("raised in {access-tool}"): an answer that is not a
+    # product is written as the sentence reads it.
+    "access-tool": (
+        "ServiceNow",
+        "Jira Service Management",
+        "SailPoint",
+        "BMC Remedy / Helix",
+        "Saviynt",
+        "the application's own workflow",
+    ),
+    "change-tool": (
+        "ServiceNow",
+        "Jira Service Management",
+        "BMC Remedy / Helix",
+        "Azure DevOps",
+        "SAP Solution Manager (ChaRM)",
+    ),
     "incident-tool": ("ServiceNow", "Jira Service Management", "BMC Remedy"),
     "scheduler": ("Control-M", "Redwood RunMyJobs", "AutoSys", "SAP job scheduling (SM36)"),
     "backup-tool": ("Veeam", "Commvault", "Azure Backup", "AWS Backup"),
-    "siem-tool": ("Microsoft Sentinel", "Splunk", "IBM QRadar"),
+    "siem-tool": (
+        "Microsoft Sentinel",
+        "Splunk",
+        "IBM QRadar",
+        "Google Security Operations",
+        "Elastic Security",
+    ),
     "scan-tool": ("Qualys", "Tenable", "Rapid7"),
-    "sod-tool": ("SAP GRC Access Risk Analysis", "Pathlock", "SafePaaS"),
-    "ff-tool": ("SAP GRC Firefighter", "CyberArk", "BeyondTrust"),
+    "sod-tool": ("SAP GRC Access Risk Analysis", "Pathlock", "Fastpath", "SafePaaS", "SailPoint"),
+    "ff-tool": (
+        "SAP GRC Firefighter",
+        "CyberArk",
+        "BeyondTrust",
+        "Delinea Secret Server",
+        "Pathlock",
+    ),
     "interface-tool": ("SAP PI/PO", "MuleSoft", "Boomi", "Azure Integration Services"),
     "consol-tool": ("OneStream", "Oracle FCCS", "SAP Group Reporting"),
-    "hr-system": ("Workday", "SAP SuccessFactors", "Oracle HCM Cloud", "ADP"),
+    "hr-system": ("Workday", "SAP SuccessFactors", "Oracle HCM Cloud", "ADP", "UKG Pro"),
     "ack-tool": ("Workday Learning", "The learning management system", "DocuSign"),
     "euc-location": ("SharePoint finance library", "A restricted network drive"),
     "bank-portal": ("The bank's online portal", "Kyriba", "SWIFT"),
-    # Days and deadlines: the usual policy choices.
-    "removal-days": ("1 business day", "3 business days", "5 business days"),
-    "transfer-days": ("5 business days", "10 business days", "30 days"),
-    "emergency-days": ("1 business day", "2 business days", "5 business days"),
-    "ff-review-days": ("1 business day", "2 business days", "5 business days"),
+    # Days and deadlines: the usual policy choices. A limit in days is written as a number of
+    # business or calendar days, as the sample trace reads it (sample_traces.limit_of).
+    "removal-days": ("1 business day", "2 business days", "3 business days", "5 business days"),
+    "transfer-days": ("5 business days", "10 business days", "15 business days", "30 days"),
+    "emergency-days": ("1 business day", "2 business days", "3 business days", "5 business days"),
+    "ff-review-days": (
+        "1 business day",
+        "2 business days",
+        "5 business days",
+        "10 business days",
+    ),
     "backup-fix-days": ("1 business day", "2 business days"),
     "vuln-sla": (
         "30 days for critical, 90 days for high",
@@ -221,16 +392,48 @@ _EXPLICIT: dict[str, tuple[str, ...]] = {
         "10 business days after month end",
         "15 business days after month end",
     ),
-    "review-deadline": ("30 days after quarter end", "45 days after quarter end"),
+    "review-deadline": (
+        "30 days after quarter end",
+        "45 days after quarter end",
+        "the end of each quarter",
+        "60 days after quarter end",
+    ),
     "ack-deadline": ("31 March", "within 30 days of joining", "by year end"),
     "indirect-tax-deadline": (
         "before the filing deadline",
         "10 business days after period end",
     ),
     "retention": ("30 days", "35 days", "90 days"),
-    "feed-frequency": ("daily", "in real time", "weekly"),
+    "feed-frequency": ("daily", "in real time", "each business day", "weekly"),
     "backup-frequency": ("daily", "daily incremental and weekly full"),
     "major-priority": ("priority 1 or 2", "priority 1"),
+    # Free text read in the control's wording: the usual forms, written as the sentence
+    # reads them ("every user with {privileged-definition}", "a change that
+    # {emergency-criteria}"). The client's own words replace them where they differ.
+    "privileged-definition": (
+        "administrator or superuser access",
+        "access to maintain users, roles, or security settings",
+        "superuser, database administrator, or operating system root access",
+        "the roles the security policy defines as privileged",
+    ),
+    "emergency-criteria": (
+        "restores a failed production service",
+        "restores a failed production service or closes a critical security vulnerability",
+        "fixes a defect that stops a critical business process",
+        "resolves a priority 1 or 2 incident",
+    ),
+    "config-scope": (
+        "tolerances, account determination, and approval workflows",
+        "posting rules, tolerances, and approval limits",
+        "the chart of accounts, posting periods, and tax settings",
+        "approval workflows and limits",
+    ),
+    "alert-criteria": (
+        "high and critical alerts on in-scope servers and privileged account events",
+        "the high and critical severity rules",
+        "the rules for privileged account use, failed sign-ins, and security setting changes",
+        "the rules the security monitoring procedure defines",
+    ),
     # Policies and procedures, by their usual names.
     "security-policy": ("Information Security Policy", "IT Security Standard"),
     "access-policy": ("Access Management Standard", "Information Security Policy"),
@@ -244,6 +447,17 @@ _EXPLICIT: dict[str, tuple[str, ...]] = {
 _OWN_SYSTEM = frozenset({"system", "erp", "source-system"})
 # Kinds whose answer only the client's documents set: no suggestion stands in for them.
 _NO_SUGGESTION = frozenset({"AMOUNT", "PERCENT", "REPORT"})
+
+
+def _names(tool: str) -> tuple[str, ...]:
+    """The product names a usual tool goes by, in lower case: each of "BMC Remedy / Helix"
+    (split only where the slash is spaced, so "SAP PI/PO" stays one name), without a
+    qualifier in brackets ("SAP Solution Manager (ChaRM)"). An answer that is not a product
+    ("the application's own workflow") names none."""
+    if tool[:1].islower():
+        return ()
+    names = (re.sub(r"\s*\([^)]*\)", "", part).strip().lower() for part in tool.split(" / "))
+    return tuple(name for name in names if name)
 
 
 def area_of(key: str) -> str | None:
@@ -266,7 +480,7 @@ def options_for(slot: Slot, systems: tuple[str, ...] = ()) -> list[str]:
         # the client runs it.
         found.extend(
             system for system in systems
-            if any(tool.lower() in system.lower() for tool in common)
+            if any(name in system.lower() for tool in common for name in _names(tool))
         )  # fmt: skip
     # The library's example is a usual answer for a role, a tool, or a period; for free
     # text it describes one client (a policy's version, a system's privileged roles) and

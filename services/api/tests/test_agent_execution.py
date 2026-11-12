@@ -26,6 +26,7 @@ from ai_workforce_api.main import create_app
 from ai_workforce_api.models import ModelConfig, ModelProviderError, ModelRaw, ModelRequest
 from ai_workforce_api.provenance import agent_actor
 from ai_workforce_api.settings import Settings
+from ai_workforce_api.testing_engine import PROMPT_VERSION as TESTER_PROMPT_VERSION
 from ai_workforce_api.testing_engine import open_runs, request_run, run_sheet
 from ai_workforce_api.workspace import automation_of
 
@@ -91,8 +92,10 @@ def test_the_tester_records_its_calls_with_provenance_and_acts_as_the_agent(
         ).fetchone()
     assert instance is not None
     assert len(calls) == 3
+    # The tester's current prompt version (control-tester/6 since 11 November 2026, when it
+    # was given each attribute's tailored criteria; before: a literal "control-tester/5").
     assert {(c[1], c[2], c[3], c[4]) for c in calls} == {
-        ("itgc-access-tester", "BALANCED", "control-tester/5", "test_sheet")
+        ("itgc-access-tester", "BALANCED", TESTER_PROMPT_VERSION, "test_sheet")
     }
     assert {str(c[5]) for c in calls} == {sheet["id"]}
     assert len({c[6] for c in calls}) == 1, "one job for the run"
@@ -130,7 +133,7 @@ def test_the_tester_records_its_calls_with_provenance_and_acts_as_the_agent(
         "local",
     )
     assert (
-        record["prompt_version"] == "control-tester/5"
+        record["prompt_version"] == TESTER_PROMPT_VERSION
     )  # M3c, its closure and M3d: the prompt changed
     assert len(record["prompt_sha256"]) == 64 and len(record["output_sha256"]) == 64
     assert (record["target_type"], record["target_id"]) == ("test_sheet", sheet["id"])
