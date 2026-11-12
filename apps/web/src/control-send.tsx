@@ -142,7 +142,7 @@ export function ControlSend({
     setStep(
       result === null
         ? { kind: "done", title, summary }
-        : { kind: "sent", report: sentReport(result, handover) },
+        : { kind: "sent", report: sentReport(result) },
     );
     startTransition(() => router.refresh());
   }

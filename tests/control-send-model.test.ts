@@ -302,22 +302,15 @@ describe("approve and send from the Request step", () => {
     assert.equal(sentReport(all).title, "2 requests sent");
     assert.equal(sentReport(all).tone, "success");
     assert.match(sentReport(all).lead, /emailed to Jordan Lee\./);
-    // Live email off (the D&I list, product owner, 12 November 2026: "Approve and mark
-    // as handed over"): the same result is reported as handed over, and never as sent
-    // or emailed, because nothing was.
-    const handed = sentReport(all, true);
-    assert.equal(handed.title, "2 requests handed over");
-    assert.equal(handed.tone, "success");
-    assert.match(handed.lead, /recorded as handed over to Jordan Lee\./);
-    assert.match(handed.lead, /Nothing was emailed/);
-    assert.doesNotMatch(
-      `${handed.title} ${handed.lead}`,
-      /\bsent\b|and emailed/,
-    );
-    // A refusal reads the same either way: nothing went.
-    assert.equal(sentReport(none, true).title, "Not sent");
+    // Old expectation (first cut of the D&I list, 12 November 2026): told by the page
+    // that email was off, `sentReport(all, true)` reported these server-confirmed
+    // emails as "2 requests handed over". That flag is read before the send and may be
+    // stale, so it reported emails that went out as never sent. New: the report follows
+    // what the server answered for each request and takes no flag; a request it sent
+    // reads as sent (asserted above), and only one it says it handed over reads so.
+    assert.equal(sentReport.length, 1);
     // The server's own answer for a request approved while email is off: not counted
-    // as sent, and not a failure to resolve either, whatever the page knew beforehand.
+    // as sent, and not a failure to resolve either.
     const answered = {
       ...result,
       targets: result.targets.map((t) => ({
@@ -328,16 +321,28 @@ describe("approve and send from the Request step", () => {
         detail: HANDED_OVER_ANSWER,
       })),
     };
-    for (const known of [false, true]) {
-      const report = sentReport(answered, known);
-      assert.equal(report.title, "2 requests handed over");
-      assert.deepEqual(report.problems, []);
-      assert.match(report.lead, /recorded as handed over to Jordan Lee\./);
-      assert.doesNotMatch(
-        `${report.title} ${report.lead}`,
-        /\bsent\b|and emailed/,
-      );
-    }
+    const report = sentReport(answered);
+    assert.equal(report.title, "2 requests handed over");
+    assert.equal(report.tone, "success");
+    assert.deepEqual(report.problems, []);
+    assert.match(report.lead, /recorded as handed over to Jordan Lee\./);
+    assert.match(report.lead, /Nothing was emailed/);
+    assert.doesNotMatch(
+      `${report.title} ${report.lead}`,
+      /\bsent\b|and emailed/,
+    );
+    // One emailed and one handed over in the same answer: each said as it went.
+    const mixed = sentReport({
+      ...all,
+      targets: all.targets.map((t, at) =>
+        at === 0 ? t : { ...t, ok: false, detail: HANDED_OVER_ANSWER },
+      ),
+    });
+    assert.equal(mixed.title, "2 requests approved");
+    assert.match(mixed.lead, /1 emailed, 1 recorded as handed over/);
+    assert.deepEqual(mixed.problems, []);
+    // A refusal is still a refusal.
+    assert.equal(sentReport(none).title, "Not sent");
   });
 
   it("says a request scheduled for its phase is still scheduled, not unsent", () => {

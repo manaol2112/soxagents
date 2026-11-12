@@ -358,18 +358,13 @@ function whoOf(result: SendResult): string {
   return names.length <= 2 ? names.join(" and ") : `${names.length} people`;
 }
 
-export function sentReport(
-  result: SendResult,
-  /** Live email is off here (the D&I list, 12 November 2026): the requests were approved
-   * and recorded as handed over, and nothing was emailed, so the report never says sent. */
-  handover = false,
-): SentReport {
+export function sentReport(result: SendResult): SentReport {
   const plan = reviewPlan(result);
-  // A request the server says it handed over is no failure, and nothing was emailed for
-  // it: said as handed over, whether or not the page knew email was off.
-  const handed = result.targets.filter(handedOver).length;
-  const emailedCount = handover ? 0 : plan.sending.length;
-  const handedCount = handed + (handover ? plan.sending.length : 0);
+  // Each request is reported as the server answered for it, never from what the page
+  // believed about email beforehand (that may be stale): a target it sent was emailed;
+  // one it says it handed over is no failure, and nothing was emailed for it.
+  const handedCount = result.targets.filter(handedOver).length;
+  const emailedCount = plan.sending.length;
   const sent = emailedCount + handedCount;
   const problems = plan.attention
     .filter((a) => a.reason !== HANDED_OVER_ANSWER)
