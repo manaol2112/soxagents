@@ -12,10 +12,22 @@ Approval boundary and evidence traceability (critical tier):
   request's pending change, and what it adds arrives unaccepted;
 - every approved attribute is addressed by a live D&I request, or a person recorded why
   not (an exception with a reason);
-- the D&I evidence is released in the request of the person who completes the list, as
-  theirs, and never by a worker, a scheduler or an agent; there is no early D&I release.
+- the D&I evidence is released as soon as the list is settled, for the person of the
+  list's last decision, whatever event settled it (their request, another person's save,
+  the end of a run), and only while that person may still accept; an agent decides
+  nothing, and there is no early D&I release.
+
+After the independent review of 12 November 2026 (each finding with its regression test
+here): the release's attribution and triggers, a links change held to the request's version
+and to the planner, a proposed addition nobody accepts by a side effect, exceptions
+withdrawn once a request addresses their attribute, the backfill's limit to what a release
+covered, bounded "working" and "drafting", one lock order, the release and its requests in
+one step, and acceptance not surviving a removal.
 """
 
+import threading
+import time
+from datetime import timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -28,21 +40,41 @@ from support import (
     tailor_criteria,
     understand_and_settle_attributes,
 )
+from test_attributes_follow_understanding import _answer_required
 from test_evidence_plans import _Planner
 from test_execution import _add_project_member, _add_user
 from test_outbound import _session, migrated
 from test_planning_gate import _control, _launched, _plan, _project, _rows
 
+from ai_workforce_api import phase_release
 from ai_workforce_api.auth import token_hash
-from ai_workforce_api.authorization import Principal, PrincipalKind
+from ai_workforce_api.authorization import _ROLE_ACTIONS, Role
 from ai_workforce_api.control_attributes import AttributeAdd, add_attribute
-from ai_workforce_api.db import connect
+from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.evidence_planning import rules_plan
-from ai_workforce_api.evidence_plans import fail_plan_run, generate, load_facts, run_plan
+from ai_workforce_api.evidence_plans import (
+    DRAFT_QUEUE_MINUTES,
+    PLAN_QUEUE_MINUTES,
+    EditBody,
+    _link,
+    edit,
+    fail_plan_run,
+    generate,
+    load_facts,
+    run_plan,
+)
 from ai_workforce_api.main import create_app
+from ai_workforce_api.master_plans import LINKS_STALE, LINKS_VERSION
 from ai_workforce_api.migrate import migrations_dir
 from ai_workforce_api.pbc_drafting import run_draft
-from ai_workforce_api.phase_release import settle_design, settle_design_after_run
+from ai_workforce_api.phase_release import (
+    DESIGN_ACCEPT_ACTION,
+    PLANNING_SENTENCE,
+    STOPPED_SENTENCE,
+    TO_CONFIRM_SENTENCE,
+    settle_design,
+)
+from ai_workforce_api.process_narrative import fail_run as fail_narrative
 from ai_workforce_api.settings import Settings
 
 __all__ = ["migrated"]
@@ -52,6 +84,24 @@ NEW = "The removal is recorded on the leaver's ticket with the date it was done"
 WHY = "Evidenced at interim only: the ticket date is tested on each sampled leaver."
 STALE = "A request changed after you opened the list. Read the list again, then accept."
 LIVE = ("PLANNED", "AWAITING_DEPENDENCY", "REQUESTED")
+# Whether the one rule for who may accept D&I requests lets a contributor (the product
+# owner is deciding between that and those who may update the engagement): the tests of
+# the roles follow the constant, so changing it needs no change here.
+CONTRIBUTOR_ACCEPTS = DESIGN_ACCEPT_ACTION in _ROLE_ACTIONS[Role.CONTRIBUTOR]
+# The plan's summary of a list nothing was decided on, and of a released one (no worker in
+# these tests: the drafts wait, so the requests read as being drafted).
+NOTHING_YET: dict[str, Any] = {
+    "settled": False,
+    "released": False,
+    "to_accept": 0,
+    "uncovered": [],
+    "exceptions": [],
+    "waiting_for": "",
+    "working": False,
+    "drafting": False,
+    "to_confirm": False,
+}
+RELEASED: dict[str, Any] = {**NOTHING_YET, "settled": True, "released": True, "drafting": True}
 
 
 def _path(team: dict[str, Any], control: str) -> str:
@@ -170,6 +220,21 @@ def _unsettle_attributes(migrated: Database, control: str) -> None:
         connection.commit()
 
 
+def _run_status(migrated: Database, control: str, status: str) -> UUID:
+    """The plan's run as a worker would leave it: queued (the trigger stamps when), working
+    under a live lease, or idle. Returns the plan."""
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            "UPDATE evidence_plans SET run_status = %s, run_attempts = 0, run_lease_until = "
+            "CASE WHEN %s = 'WORKING' THEN clock_timestamp() + interval '20 minutes' END "
+            "WHERE engagement_control_id = %s RETURNING id",
+            (status, status, control),
+        ).fetchone()
+        connection.commit()
+    assert row is not None
+    return UUID(str(row[0]))
+
+
 def _reject_proposals(migrated: Database, control: str) -> None:
     """The proposal is gone without a person's request on the control (a direct write, as
     no route would): the list can then be settled with nobody's request last."""
@@ -209,15 +274,10 @@ def test_the_requests_wait_to_be_accepted_and_show_the_attributes_they_address(
     summary = _summary(team, control)
     count = len(requests)
     assert summary == {
-        "settled": False,
-        "released": False,
+        **NOTHING_YET,
         "to_accept": count,
-        "uncovered": [],
-        "exceptions": [],
         "waiting_for": f"{count} D&I request{'' if count == 1 else 's'} "
         f"{'waits' if count == 1 else 'wait'} to be accepted.",
-        "working": False,
-        "drafting": False,
     }
     # The operating phases' items are not part of the list.
     plan = _plan(team, control)
@@ -273,17 +333,8 @@ def test_accepting_the_last_request_releases_the_d_and_i_evidence_as_that_person
     done = _accept(owner, team, control, [after[item["id"]] for item in rest])
     assert done.status_code == 200, done.text
     summary = done.json()["design_requests"]
-    assert summary == {
-        "settled": True,
-        "released": True,
-        "to_accept": 0,
-        "uncovered": [],
-        "exceptions": [],
-        "waiting_for": "",
-        "working": False,
-        # No worker in this test: the drafts wait, so the requests are still being drafted.
-        "drafting": True,
-    }
+    # No worker in this test: the drafts wait, so the requests are still being drafted.
+    assert summary == RELEASED
     assert _releases(migrated, control) == [(team["owner_id"], False, True, "")]
     design = _design(team, control)
     assert (design["step"], design["early"], design["automatic"]) == ("RELEASED", False, True)
@@ -295,6 +346,10 @@ def test_accepting_the_last_request_releases_the_d_and_i_evidence_as_that_person
     assert len(audit) == 1 and audit[0][0] == team["owner_id"]
     payload = audit[0][1]
     assert (payload["phase"], payload["early"], payload["automatic"]) == ("DESIGN", False, True)
+    # Their own request settled it: not deferred, and the record says what triggered it.
+    assert payload["trigger"] == {"kind": "REQUEST", "by": str(team["owner_id"])}
+    assert payload["deferred"] is False
+    assert payload["last_decision"]["by"] == str(team["owner_id"])
     assert payload["attributes"] == [row[1] for row in approved]
     assert payload["exceptions"] == []
     final = {item["id"]: item for item in _requests(team, control)}
@@ -330,7 +385,10 @@ def test_accepting_the_last_request_releases_the_d_and_i_evidence_as_that_person
     assert manual.status_code == 200, manual.text
     assert _releases(migrated, control) == [(team["owner_id"], False, True, "")]
     assert len(_audit(migrated, "phase.released", control)) == 1
-    assert len(_audit(migrated, "design_requests.accepted", control)) == 2
+    # The acceptance repeated is on the trail as a confirmation of the list, no row changed.
+    groups = _audit(migrated, "design_requests.accepted", control)
+    assert len(groups) == 3
+    assert (groups[-1][1]["items"], groups[-1][1]["confirmed"]) == ([], len(final))
     assert len(
         _rows(
             migrated,
@@ -393,7 +451,7 @@ def test_a_reviewer_is_refused_and_a_contributors_acceptance_is_theirs(
     member with the reviewer role reads the list and is refused; an agent is no person."""
     team, control = _prepared(migrated, "dr-roles")
     requests = _requests(team, control)
-    reviewer_id, reviewer = _member(migrated, team, "REVIEWER")
+    _, reviewer = _member(migrated, team, "REVIEWER")
     assert _requests(team, control, reviewer) == requests
     assert _accept(reviewer, team, control, requests).status_code == 403
     attribute = str(_approved(migrated, control)[0][0])
@@ -410,17 +468,19 @@ def test_a_reviewer_is_refused_and_a_contributors_acceptance_is_theirs(
     assert _accept(anonymous, team, control, requests).status_code == 401
     assert not any(item["accepted"] for item in _requests(team, control))
     assert _releases(migrated, control) == []
-    # Neither a reviewer nor an agent can have the list settled in their name.
-    with connect(migrated.url) as connection:
-        org, project = UUID(str(team["org"])), UUID(str(team["project"]))
-        for principal in (
-            Principal(PrincipalKind.USER, reviewer_id),
-            Principal(PrincipalKind.AGENT, team["owner_id"]),
-            Principal(PrincipalKind.USER, uuid4()),
-        ):
-            assert settle_design(connection, principal, org, project, UUID(control)) is False
-    # A contributor may: the acceptance, and the release that follows it, are theirs.
+    # One rule says who may accept (phase_release.DESIGN_ACCEPT_ACTION), read by the accept
+    # route, the D&I release route and the check on the list's last decider. A contributor
+    # is held to it on both routes: where it allows them, the acceptance, and the release
+    # that follows it, are theirs.
     contributor_id, contributor = _member(migrated, team, "CONTRIBUTOR")
+    route = f"{_path(team, control)}/phases/DESIGN/release"
+    if not CONTRIBUTOR_ACCEPTS:
+        assert _accept(contributor, team, control, requests).status_code == 403
+        assert contributor.post(route, json={}).status_code == 403
+        assert _releases(migrated, control) == []
+        return
+    refused = contributor.post(route, json={})
+    assert refused.status_code == 409 and refused.json()["detail"].endswith("to be accepted.")
     done = _accept(contributor, team, control, requests)
     assert done.status_code == 200, done.text
     assert {item["accepted_by"] for item in _requests(team, control)} == {
@@ -497,7 +557,7 @@ def test_a_persons_add_edit_links_and_restore_accept_the_request_as_that_person(
     attribute = str(_approved(migrated, control)[0][0])
     linked = owner.put(
         f"{base}/master-plan/evidence/{target['id']}/links",
-        json={"attribute_ids": [attribute], "procedure_ids": []},
+        json={"attribute_ids": [attribute], "procedure_ids": [], "version": target["version"]},
     )
     assert linked.status_code == 200, linked.text
     relinked = next(i for i in _requests(team, control) if i["id"] == target["id"])
@@ -622,7 +682,8 @@ def test_the_planner_never_overwrites_an_accepted_request(migrated: Database) ->
         generate(connection, _Planner(without), org, project, UUID(control), team["owner_id"])
         connection.commit()
     held = next(i for i in _requests(team, control) if i["id"] == instance["id"])
-    assert held["status"] in LIVE and held["pending_change"] == {"remove": True}
+    assert held["status"] in LIVE
+    assert held["pending_change"] == {"remove": True, "add": False}
     assert (held["accepted"], held["to_accept"]) == (True, True)
     assert held["title"] == f"{accepted['title']} (replanned)"
 
@@ -648,17 +709,10 @@ def test_the_background_planner_and_the_attribute_repair_respect_an_accepted_req
         connection.commit()
     tailor_criteria(migrated, team["project"])
     new_id = next(str(row[0]) for row in _approved(migrated, control) if row[1] == NEW)
-    with connect(migrated.url) as connection:
-        plan_id = connection.execute(
-            "UPDATE evidence_plans SET run_status = 'PENDING', run_attempts = 0 "
-            "WHERE engagement_control_id = %s RETURNING id",
-            (control,),
-        ).fetchone()
-        connection.commit()
-        assert plan_id is not None
-        with connect(migrated.url) as worker:
-            output = _replanned(worker, project, UUID(control))
-            assert run_plan(worker, _Planner(output), plan_id[0]) == "DONE"
+    plan_id = _run_status(migrated, control, "PENDING")
+    with connect(migrated.url) as worker:
+        output = _replanned(worker, project, UUID(control))
+        assert run_plan(worker, _Planner(output), plan_id) == "DONE"
     held = next(i for i in _requests(team, control) if i["id"] == instance["id"])
     # The instance is not relinked under the person: the new attribute is in its pending
     # change, and stays uncovered until they accept it.
@@ -726,6 +780,60 @@ def test_an_addition_the_planner_proposes_stays_proposed_until_a_person_accepts_
         "SELECT count(*) FROM evidence_requirement_attributes WHERE requirement_id = %s",
         requirement_id,
     ) == [(0,)]
+    # The body says it is a proposed addition, for the screen to offer Accept or Reject.
+    assert proposed["pending_change"] == {"add": True}
+    # No act on it accepts it by a side effect (review finding 3): its attributes are not
+    # set and it is not reworded before a person accepts it.
+    base = _path(team, control)
+    linked = owner.put(
+        f"{base}/master-plan/evidence/{requirement_id}/links",
+        json={
+            "attribute_ids": proposed["attribute_ids"],
+            "procedure_ids": [],
+            "version": proposed["version"],
+        },
+    )
+    assert (linked.status_code, linked.json()["detail"]) == (409, "Accept the request first.")
+    reworded = owner.post(
+        f"{base}/evidence-requirements/{requirement_id}/edit",
+        json={
+            "title": "Access approval matrix, reworded",
+            "description": "The matrix of who may approve access, as a person reworded it.",
+            "version": proposed["version"],
+        },
+    )
+    assert (reworded.status_code, reworded.json()["detail"]) == (409, "Accept the request first.")
+    # Whatever the row's acceptance says, no run clears the proposal or makes it live: here
+    # the row carries an acceptance it should never have (as a backfill could leave one).
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE evidence_requirements SET accepted_by = %s, accepted_at = clock_timestamp() "
+            "WHERE id = %s",
+            (team["owner_id"], requirement_id),
+        )
+        connection.commit()
+        generate(connection, _Planner(output), org, project, UUID(control), team["owner_id"])
+        connection.commit()
+    still = _rows(
+        migrated,
+        "SELECT status, pending_change, pbc_request_id FROM evidence_requirements WHERE id = %s",
+        requirement_id,
+    )
+    assert still == [("PLANNED", {"add": True}, None)]
+    shown = next(i for i in _requests(team, control) if i["id"] == str(requirement_id))
+    assert (shown["accepted"], shown["to_accept"]) == (False, True)
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE evidence_requirements SET accepted_by = NULL, accepted_at = NULL WHERE id = %s",
+            (requirement_id,),
+        )
+        connection.commit()
+    assert _rows(
+        migrated,
+        "SELECT count(*) FROM evidence_requirement_attributes WHERE requirement_id = %s",
+        requirement_id,
+    ) == [(0,)]
+    version = shown["version"]
     # Accepted by a person: part of the plan, theirs, linked, and requested.
     done = _accept(owner, team, control, [{"id": str(requirement_id), "version": version}])
     assert done.status_code == 200, done.text
@@ -767,8 +875,7 @@ def test_an_attribute_no_request_addresses_holds_the_list_until_linked_or_except
     # Every request accepted: the list is still not settled, and nothing is released.
     body = accept_design_requests(owner, team["org"], team["project"], control)
     assert body["design_requests"] == {
-        "settled": False, "released": False, "to_accept": 0, "uncovered": [new_id],
-        "exceptions": [], "waiting_for": held, "working": False, "drafting": False,
+        **NOTHING_YET, "uncovered": [new_id], "waiting_for": held,
     }  # fmt: skip
     assert _releases(migrated, control) == []
     # The release route refuses it, reason or not: there is no early D&I release.
@@ -834,13 +941,14 @@ def test_an_attribute_no_request_addresses_holds_the_list_until_linked_or_except
     )
     linked = owner.put(
         f"{base}/master-plan/evidence/{target['id']}/links",
-        json={"attribute_ids": [*target["attribute_ids"], new_id], "procedure_ids": []},
+        json={
+            "attribute_ids": [*target["attribute_ids"], new_id],
+            "procedure_ids": [],
+            "version": target["version"],
+        },
     )
     assert linked.status_code == 200, linked.text
-    assert _summary(team, control) == {
-        "settled": True, "released": True, "to_accept": 0, "uncovered": [],
-        "exceptions": [], "waiting_for": "", "working": False, "drafting": True,
-    }  # fmt: skip
+    assert _summary(team, control) == RELEASED
     assert _releases(migrated, control) == [(team["owner_id"], False, True, "")]
     payload = _audit(migrated, "phase.released", control)[0][1]
     assert payload["exceptions"] == []
@@ -888,12 +996,7 @@ def test_the_list_is_not_settled_under_a_run_unsettled_attributes_or_a_pending_c
     requests = _requests(team, control)
 
     def run(status: str) -> None:
-        with connect(migrated.url) as connection:
-            connection.execute(
-                "UPDATE evidence_plans SET run_status = %s WHERE engagement_control_id = %s",
-                (status, control),
-            )
-            connection.commit()
+        _run_status(migrated, control, status)
 
     # While the planner works the list may still change: nothing is accepted under it.
     for status in ("PENDING", "WORKING"):
@@ -901,10 +1004,11 @@ def test_the_list_is_not_settled_under_a_run_unsettled_attributes_or_a_pending_c
         design = _design(team, control)
         assert (design["step"], design["waiting_on"]) == ("WAITING", "REQUESTS")
         assert design["step_label"] == "Requests being updated"
-        assert design["waiting_for"] == "The planner is still updating the D&I requests."
+        assert design["waiting_for"] == PLANNING_SENTENCE
+        assert _summary(team, control)["working"] is True
         refused = _accept(owner, team, control, requests)
         assert refused.status_code == 409
-        assert refused.json()["detail"] == "The planner is still updating the D&I requests."
+        assert refused.json()["detail"] == PLANNING_SENTENCE
     run("IDLE")
     assert not any(item["accepted"] for item in _requests(team, control))
     # Unsettled attributes: every request accepted, and still nothing is released.
@@ -951,7 +1055,7 @@ def _completed_before_the_run_ended(
     """A list two people completed while something else still held it (here the attributes,
     then let go by a direct write no request made), with the planner's run queued: settled
     but for the run, and not released. Returns the team, the control, the plan, the person
-    whose acceptance was last, and the request they accepted."""
+    whose decision on the list was the last, and the request they accepted."""
     team, control = _prepared(migrated, slug)
     _unsettle_attributes(migrated, control)
     requests = _requests(team, control)
@@ -963,27 +1067,20 @@ def _completed_before_the_run_ended(
     assert _design(team, control)["step"] == "READY", _design(team, control)
     assert _summary(team, control)["settled"] is True
     assert _releases(migrated, control) == []
-    with connect(migrated.url) as connection:
-        plan = connection.execute(
-            "UPDATE evidence_plans SET run_status = 'PENDING', run_attempts = 0 "
-            "WHERE engagement_control_id = %s RETURNING id",
-            (control,),
-        ).fetchone()
-        connection.commit()
-    assert plan is not None
+    plan_id = _run_status(migrated, control, "PENDING")
     waiting = _summary(team, control)
     assert (waiting["settled"], waiting["working"], waiting["released"]) == (False, True, False)
-    return team, control, plan[0], admin_id, requests[-1]["id"]
+    return team, control, plan_id, admin_id, requests[-1]["id"]
 
 
-def test_a_run_that_ends_and_changed_nothing_completes_the_release_as_the_last_acceptor(
+def test_a_run_that_ends_and_changed_nothing_completes_the_release_as_the_last_decider(
     migrated: Database,
 ) -> None:
-    """The one release a worker completes (B1e, the product owner wants no release button
-    at all): every request and coverage decision on the list was already a person's, and
-    only the planner's run was still in the way. It is recorded as the last acceptor's,
-    automatic, and marked deferred with the run that ended."""
-    team, control, plan_id, admin_id, last = _completed_before_the_run_ended(
+    """The planner's run was the last thing the list waited for. Its end releases the D&I
+    evidence for the person of the list's last decision, automatic, with what triggered it
+    on the record and marked deferred. The worker decides nothing: every request and
+    coverage decision on the list was already a person's."""
+    team, control, plan_id, admin_id, _last = _completed_before_the_run_ended(
         migrated, "dr-deferred"
     )
     sent = _rows(
@@ -996,22 +1093,21 @@ def test_a_run_that_ends_and_changed_nothing_completes_the_release_as_the_last_a
     assert len(audit) == 1 and audit[0][0] == admin_id
     payload = audit[0][1]
     assert (payload["automatic"], payload["deferred"], payload["early"]) == (True, True, False)
-    assert payload["run"]["plan_id"] == str(plan_id)
-    assert payload["run"]["last_acceptance"]["requirement"] == last
-    accepted_at = _rows(
-        migrated, "SELECT accepted_at FROM evidence_requirements WHERE id = %s", UUID(last)
-    )[0][0]
-    assert payload["run"]["last_acceptance"]["at"] == accepted_at.isoformat()
+    assert payload["trigger"] == {"kind": "PLAN_RUN", "by": None}
+    decided = _rows(
+        migrated,
+        "SELECT design_decided_by, design_decided_at FROM evidence_plans WHERE id = %s",
+        plan_id,
+    )[0]
+    assert payload["last_decision"] == {"by": str(admin_id), "at": decided[1].isoformat()}
+    assert decided[0] == admin_id
     assert payload["attributes"] == [row[1] for row in _approved(migrated, control)]
     assert {item["id"] for item in payload["requirements"]} == {
         item["id"] for item in _requests(team, control)
     }
     # The Design items are requested: drafts that wait for the worker and for a person's
     # approval. Nothing is sent.
-    summary = _summary(team, control)
-    assert (summary["settled"], summary["released"], summary["working"], summary["drafting"]) == (
-        True, True, False, True,
-    )  # fmt: skip
+    assert _summary(team, control) == RELEASED
     drafted = _rows(
         migrated,
         "SELECT r.status, d.status FROM pbc_requests r JOIN pbc_drafts d "
@@ -1027,12 +1123,7 @@ def test_a_run_that_ends_and_changed_nothing_completes_the_release_as_the_last_a
         == sent
     )
     # A later run releases nothing twice.
-    with connect(migrated.url) as connection:
-        connection.execute(
-            "UPDATE evidence_plans SET run_status = 'PENDING', run_attempts = 0 WHERE id = %s",
-            (plan_id,),
-        )
-        connection.commit()
+    _run_status(migrated, control, "PENDING")
     with connect(migrated.url) as worker:
         assert run_plan(worker, None, plan_id) == "DONE"
     assert len(_releases(migrated, control)) == 1
@@ -1047,6 +1138,23 @@ def test_a_run_that_ends_and_changed_nothing_completes_the_release_as_the_last_a
         with connect(migrated.url) as connection:
             run_draft(connection, None, draft_id, settings)
     assert _summary(team, control)["drafting"] is False
+
+
+def test_a_failed_run_completes_the_release_as_a_finished_one_does(migrated: Database) -> None:
+    """A failed run changed nothing on the list (review finding 1: a settled list stranded
+    at READY after it): its end releases for the list's last decider, as a finished run's."""
+    team, control, plan_id, admin_id, _last = _completed_before_the_run_ended(
+        migrated, "dr-deferred-failed"
+    )
+    with connect(migrated.url) as worker:
+        fail_plan_run(worker, plan_id)
+    assert _rows(migrated, "SELECT run_status FROM evidence_plans WHERE id = %s", plan_id) == [
+        ("FAILED",)
+    ]
+    assert _releases(migrated, control) == [(admin_id, False, True, "")]
+    payload = _audit(migrated, "phase.released", control)[0][1]
+    assert payload["trigger"] == {"kind": "PLAN_RUN", "by": None} and payload["deferred"] is True
+    assert all(item["status"] == "REQUESTED" for item in _requests(team, control))
 
 
 def test_a_run_that_changed_or_added_anything_releases_nothing(migrated: Database) -> None:
@@ -1086,47 +1194,49 @@ def test_a_run_that_changed_or_added_anything_releases_nothing(migrated: Databas
     assert done.status_code == 200, done.text
     assert _releases(migrated, control) == [(team["owner_id"], False, True, "")]
     payload = _audit(migrated, "phase.released", control)[0][1]
-    assert (payload["automatic"], payload["deferred"]) == (True, False) and "run" not in payload
+    assert (payload["automatic"], payload["deferred"]) == (True, False)
+    assert payload["trigger"] == {"kind": "REQUEST", "by": str(team["owner_id"])}
 
 
-def test_no_other_background_path_releases_and_the_release_route_is_a_persons(
+def test_a_list_whose_last_decider_may_no_longer_accept_waits_for_a_person_to_accept_it(
     migrated: Database,
 ) -> None:
-    """Outside the finished run of a list a person completed, nothing in the background
-    releases: not a failed run, not a run whose last acceptor may no longer change the
-    engagement's work, not the planner answering in a person's request, not a read."""
+    """Review findings 1 and 6: the release is never made in the name of someone who may no
+    longer accept, nor of whoever happens to trigger it. The list then waits, visibly, for
+    a person who may accept to accept it; it does not strand at READY or read as drafting."""
     team, control, plan_id, admin_id, _last = _completed_before_the_run_ended(
-        migrated, "dr-background"
+        migrated, "dr-ineligible"
     )
     owner = team["owner"]
     org, project = UUID(str(team["org"])), UUID(str(team["project"]))
-    # The run fails: nothing is released for a planner that did not finish.
-    with connect(migrated.url) as worker:
-        fail_plan_run(worker, plan_id)
-        worker.commit()
-        assert settle_design_after_run(worker, org, project, UUID(control), plan_id) is False
-    assert _releases(migrated, control) == []
-    # The last acceptor is now a reviewer: the run that ends releases nothing in their name.
     with connect(migrated.url) as connection:
         connection.execute(
             "UPDATE memberships SET role = 'REVIEWER' WHERE user_id = %s AND organization_id = %s",
             (admin_id, team["org"]),
         )
-        connection.execute(
-            "UPDATE evidence_plans SET run_status = 'PENDING', run_attempts = 0 WHERE id = %s",
-            (plan_id,),
-        )
         connection.commit()
+    # The run ends: nothing is released in the name of a person who may no longer accept.
     with connect(migrated.url) as worker:
         assert run_plan(worker, None, plan_id) == "DONE"
-    assert _design(team, control)["step"] == "READY"
     assert _releases(migrated, control) == []
-    # A person asking the planner to plan again, answered in their request, is the agent's
-    # work: it releases nothing. Nor does a read.
+    design = _design(team, control)
+    assert (design["step"], design["waiting_on"]) == ("WAITING", "REQUESTS")
+    assert design["step_label"] == "Requests to accept"
+    assert design["waiting_for"] == TO_CONFIRM_SENTENCE
+    assert _summary(team, control) == {
+        **NOTHING_YET, "waiting_for": TO_CONFIRM_SENTENCE, "to_confirm": True,
+    }  # fmt: skip
+    # Nor by any other event: another person's save on the control, the planner answering
+    # in a person's request, a read, or a call naming a kind of trigger.
     planned = owner.post(f"{_path(team, control)}/evidence-plan/generate")
     assert planned.status_code == 200, planned.text
     assert _plan(team, control)["design_requests"]["released"] is False
-    assert _design(team, control)["step"] == "READY"
+    with connect(migrated.url) as connection:
+        for kind in ("REQUEST", "PLAN_RUN", "NARRATIVE_RUN", "PHASE_DECISION"):
+            assert (
+                settle_design(connection, org, project, UUID(control), kind, team["owner_id"])
+                is False
+            )
     assert _releases(migrated, control) == []
     assert _audit(migrated, "phase.released", control) == []
     assert _rows(
@@ -1135,35 +1245,130 @@ def test_no_other_background_path_releases_and_the_release_route_is_a_persons(
         "AND testing_phase = 'DESIGN'",
         UUID(control),
     ) == [(0,)]
-    # An agent has no request to settle a list in.
+    # A person who may accept accepts the list as it stands: it is theirs, and released.
+    current = _requests(team, control)
+    assert all(item["accepted"] and not item["to_accept"] for item in current)
+    done = _accept(owner, team, control, current)
+    assert done.status_code == 200, done.text
+    assert done.json()["design_requests"] == RELEASED
+    assert _releases(migrated, control) == [(team["owner_id"], False, True, "")]
+    payload = _audit(migrated, "phase.released", control)[0][1]
+    assert payload["trigger"] == {"kind": "REQUEST", "by": str(team["owner_id"])}
+    assert payload["deferred"] is False
+    confirmed = _audit(migrated, "design_requests.accepted", control)[-1]
+    assert confirmed[0] == team["owner_id"]
+    assert (confirmed[1]["items"], confirmed[1]["confirmed"]) == ([], len(current))
+
+
+def test_a_list_accepted_with_no_decision_on_record_waits_and_the_release_route_stands_behind_it(
+    migrated: Database,
+) -> None:
+    """A list accepted before decisions were kept (or by a direct write) has nobody behind
+    it: it waits for a person. The release route, kept for this, is held to the rule for
+    who may accept; the person using it stands behind the list, and it is not automatic."""
+    team, control = _prepared(migrated, "dr-no-decider")
+    owner = team["owner"]
     with connect(migrated.url) as connection:
-        assert (
-            settle_design(
-                connection, Principal(PrincipalKind.AGENT, team["owner_id"]), org, project,
-                UUID(control),
-            )
-            is False
-        )  # fmt: skip
-    assert _releases(migrated, control) == []
-    # The release route, kept for a settled list nothing released: a contributor is refused,
-    # as before; the owner's release is theirs and is not marked automatic.
+        connection.execute(
+            "UPDATE evidence_requirements SET accepted_by = %s, accepted_at = clock_timestamp() "
+            "WHERE engagement_control_id = %s AND phase = 'DESIGN'",
+            (team["owner_id"], control),
+        )
+        connection.commit()
+    summary = _summary(team, control)
+    assert (summary["settled"], summary["to_confirm"], summary["waiting_for"]) == (
+        False, True, TO_CONFIRM_SENTENCE,
+    )  # fmt: skip
     route = f"{_path(team, control)}/phases/DESIGN/release"
+    _, reviewer = _member(migrated, team, "REVIEWER")
+    assert reviewer.post(route, json={}).status_code == 403
     _, contributor = _member(migrated, team, "CONTRIBUTOR")
-    assert contributor.post(route, json={}).status_code == 403
-    released = owner.post(route, json={})
+    if not CONTRIBUTOR_ACCEPTS:
+        assert contributor.post(route, json={}).status_code == 403
+        assert _releases(migrated, control) == []
+    released = (contributor if CONTRIBUTOR_ACCEPTS else owner).post(route, json={})
     assert released.status_code == 200, released.text
     status = next(item for item in released.json()["phases"] if item["phase"] == "DESIGN")
     assert (status["step"], status["early"], status["automatic"]) == ("RELEASED", False, False)
-    assert _releases(migrated, control) == [(team["owner_id"], False, False, "")]
     payload = _audit(migrated, "phase.released", control)[0][1]
     assert (payload["automatic"], payload["deferred"]) == (False, False)
-    assert payload["requirements"]
+    assert payload["trigger"]["kind"] == "REQUEST" and payload["requirements"]
     assert _rows(
         migrated,
         "SELECT count(*) FROM pbc_requests WHERE engagement_control_id = %s "
         "AND testing_phase = 'DESIGN' AND status = 'DRAFT'",
         UUID(control),
     ) != [(0,)]
+
+
+def test_a_run_that_stopped_reads_as_stopped_and_planning_again_releases(
+    migrated: Database,
+) -> None:
+    """Review finding 9: "working" is bounded. A run queued longer than the worker's bound,
+    or working past its lease, is not working: the list says the run stopped and what a
+    person does. Planning the evidence again closes it, and the end of that planning, like
+    a run's, releases the list for its last decider."""
+    team, control, plan_id, admin_id, _last = _completed_before_the_run_ended(
+        migrated, "dr-stopped"
+    )
+    owner = team["owner"]
+    requests = _requests(team, control)
+    # Queued within the bound: working.
+    design = _design(team, control)
+    assert (design["step_label"], design["waiting_for"]) == (
+        "Requests being updated", PLANNING_SENTENCE,
+    )  # fmt: skip
+    refused = _accept(owner, team, control, requests)
+    assert (refused.status_code, refused.json()["detail"]) == (409, PLANNING_SENTENCE)
+    for stale in ("queued too long", "lease ran out", "no lease"):
+        with connect(migrated.url) as connection:
+            if stale == "queued too long":
+                connection.execute(
+                    "UPDATE evidence_plans SET run_queued_at = clock_timestamp() - %s "
+                    "WHERE id = %s",
+                    (timedelta(minutes=PLAN_QUEUE_MINUTES + 1), plan_id),
+                )
+            else:
+                connection.execute(
+                    "UPDATE evidence_plans SET run_status = 'WORKING', run_lease_until = "
+                    "CASE WHEN %s THEN NULL ELSE clock_timestamp() - interval '1 minute' END "
+                    "WHERE id = %s",
+                    (stale == "no lease", plan_id),
+                )
+            connection.commit()
+        summary = _summary(team, control)
+        assert (summary["working"], summary["settled"], summary["waiting_for"]) == (
+            False, False, STOPPED_SENTENCE,
+        ), stale  # fmt: skip
+        design = _design(team, control)
+        assert (design["step"], design["waiting_on"], design["step_label"]) == (
+            "WAITING", "REQUESTS", "Requests not updated",
+        )  # fmt: skip
+        # Still not a list to accept under: the run may resume.
+        refused = _accept(owner, team, control, requests)
+        assert (refused.status_code, refused.json()["detail"]) == (409, STOPPED_SENTENCE)
+    assert _releases(migrated, control) == []
+    # A person plans the evidence again: the stopped run is closed, and the list, which a
+    # person had completed, is released for its last decider.
+    planned = owner.post(f"{_path(team, control)}/evidence-plan/generate")
+    assert planned.status_code == 200, planned.text
+    assert _rows(migrated, "SELECT run_status FROM evidence_plans WHERE id = %s", plan_id) == [
+        ("IDLE",)
+    ]
+    assert planned.json()["design_requests"] == RELEASED
+    assert _releases(migrated, control) == [(admin_id, False, True, "")]
+    payload = _audit(migrated, "phase.released", control)[0][1]
+    assert payload["trigger"] == {"kind": "PLAN_RUN", "by": str(team["owner_id"])}
+    assert payload["deferred"] is True
+    # A draft nobody picks up within the bound is not "drafting" either.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE pbc_drafts SET updated_at = clock_timestamp() - %s "
+            "WHERE engagement_control_id = %s AND status = 'PENDING'",
+            (timedelta(minutes=DRAFT_QUEUE_MINUTES + 1), control),
+        )
+        connection.commit()
+    assert _summary(team, control) == {**RELEASED, "drafting": False}
 
 
 def test_a_request_added_for_an_uncovered_attribute_in_one_step_completes_the_list(
@@ -1246,7 +1451,12 @@ def test_each_request_gives_its_procedures_so_a_links_change_keeps_them(
     )
     links = f"{_path(team, control)}/master-plan/evidence/{target['id']}/links"
     served = owner.put(
-        links, json={"attribute_ids": target["attribute_ids"], "procedure_ids": [procedure]}
+        links,
+        json={
+            "attribute_ids": target["attribute_ids"],
+            "procedure_ids": [procedure],
+            "version": target["version"],
+        },
     )
     assert served.status_code == 200, served.text
     shown = next(i for i in _requests(team, control) if i["id"] == target["id"])
@@ -1257,6 +1467,7 @@ def test_each_request_gives_its_procedures_so_a_links_change_keeps_them(
         json={
             "attribute_ids": shown["attribute_ids"][:1],
             "procedure_ids": shown["procedure_ids"],
+            "version": shown["version"],
         },
     )
     assert changed.status_code == 200, changed.text
@@ -1281,6 +1492,11 @@ def test_working_says_when_an_agent_run_holds_the_list(migrated: Database) -> No
             """,
             (control,),
         )
+        connection.execute(
+            "UPDATE process_narrative_runs SET run_lease_until = clock_timestamp() "
+            "+ interval '20 minutes' WHERE engagement_control_id = %s",
+            (control,),
+        )
         connection.commit()
     held = _summary(team, control)
     assert held["working"] is True and held["settled"] is False
@@ -1291,16 +1507,25 @@ def test_working_says_when_an_agent_run_holds_the_list(migrated: Database) -> No
             "WHERE engagement_control_id = %s",
             (control,),
         )
+        connection.commit()
+    _run_status(migrated, control, "WORKING")
+    assert _summary(team, control)["working"] is True
+    _run_status(migrated, control, "IDLE")
+    assert _summary(team, control)["working"] is False
+    # A narrative run queued longer than the bound is not working either.
+    with connect(migrated.url) as connection:
         connection.execute(
-            "UPDATE evidence_plans SET run_status = 'WORKING' WHERE engagement_control_id = %s",
+            "UPDATE process_narrative_runs SET run_status = 'PENDING', run_lease_until = NULL, "
+            "updated_at = clock_timestamp() WHERE engagement_control_id = %s",
             (control,),
         )
         connection.commit()
     assert _summary(team, control)["working"] is True
     with connect(migrated.url) as connection:
         connection.execute(
-            "UPDATE evidence_plans SET run_status = 'IDLE' WHERE engagement_control_id = %s",
-            (control,),
+            "UPDATE process_narrative_runs SET updated_at = clock_timestamp() - %s "
+            "WHERE engagement_control_id = %s",
+            (timedelta(minutes=PLAN_QUEUE_MINUTES + 1), control),
         )
         connection.commit()
     assert _summary(team, control)["working"] is False
@@ -1417,7 +1642,10 @@ def test_completing_the_understanding_or_the_attributes_last_releases_too(
     migrated: Database,
 ) -> None:
     """The list can be accepted before the attributes are settled (through the API). The
-    person's decision that settles them is then the request that completes the list."""
+    decision that settles them is then the request that completes the list. Review findings
+    1 and 6: when another person makes that request, they do not become the releaser of a
+    list they did not decide. The release is the last list decider's, with the other
+    person's request on the record as what triggered it, and marked deferred."""
     team, control = _prepared(migrated, "dr-attributes-last")
     owner = team["owner"]
     _unsettle_attributes(migrated, control)
@@ -1435,8 +1663,12 @@ def test_completing_the_understanding_or_the_attributes_last_releases_too(
         json={"decision": "REJECT", "version": proposal[1]},
     )
     assert decided.status_code == 200, decided.text
-    assert _releases(migrated, control) == [(admin_id, False, True, "")]
-    assert _audit(migrated, "phase.released", control)[0][0] == admin_id
+    assert _releases(migrated, control) == [(team["owner_id"], False, True, "")]
+    released = _audit(migrated, "phase.released", control)[0]
+    assert released[0] == team["owner_id"]
+    assert released[1]["trigger"] == {"kind": "REQUEST", "by": str(admin_id)}
+    assert released[1]["deferred"] is True
+    assert released[1]["last_decision"]["by"] == str(team["owner_id"])
 
 
 def test_the_backfill_accepts_what_a_person_released_and_nothing_else(
@@ -1445,7 +1677,9 @@ def test_the_backfill_accepts_what_a_person_released_and_nothing_else(
     """Migration 0149's backfill, run on rows as they stood before it (no acceptance): the
     D&I requests of a control a person released are accepted by the releaser at the
     release; a release with no releaser on record, a control not released, a proposed
-    addition, a removed request and the operating items are left."""
+    addition, a removed request and the operating items are left. So is a request made
+    after the release (review finding 8): the releaser never saw it, so they did not
+    accept it."""
     team = _launched(migrated, "dr-backfill")
     owner = team["owner"]
     released = str(_control(team, AC02)["id"])
@@ -1454,6 +1688,26 @@ def test_the_backfill_accepts_what_a_person_released_and_nothing_else(
     understand_and_settle_attributes(migrated, team["project"], released)
     accept_design_requests(owner, team["org"], team["project"], released)
     assert _releases(migrated, released) == [(team["owner_id"], False, True, "")]
+    # A request made after the release (here by a person; a planner's accepted addition is
+    # the same to the backfill): not part of what was released.
+    late = owner.post(
+        f"{_path(team, released)}/evidence-requirements",
+        json={
+            "phase": "DESIGN",
+            "title": "Leaver process narrative",
+            "description": "The current narrative of how a leaver's access is removed.",
+            "categories": ["PROCESS_DOCUMENTATION"],
+            "objective": "Show how the control is designed to operate.",
+            "rationale": "The design is assessed against the documented process.",
+        },
+    )
+    assert late.status_code == 200, late.text
+    late_id = _rows(
+        migrated,
+        "SELECT id FROM evidence_requirements WHERE engagement_control_id = %s "
+        "AND title = 'Leaver process narrative'",
+        UUID(released),
+    )[0][0]
     with connect(migrated.url) as connection:
         # As 0145 recorded a release for requests already under way: nobody named.
         connection.execute(
@@ -1474,8 +1728,8 @@ def test_the_backfill_accepts_what_a_person_released_and_nothing_else(
         )
         rows = connection.execute(
             "SELECT id FROM evidence_requirements WHERE engagement_control_id = %s "
-            "AND phase = 'DESIGN' ORDER BY created_at, requirement_key",
-            (released,),
+            "AND phase = 'DESIGN' AND id <> %s ORDER BY created_at, requirement_key",
+            (released, late_id),
         ).fetchall()
         assert len(rows) >= 2
         proposed = rows[-1][0]
@@ -1506,7 +1760,8 @@ def test_the_backfill_accepts_what_a_person_released_and_nothing_else(
     assert accepted
     for requirement_id, phase, by, at, control_id in accepted:
         assert (str(control_id), phase) == (released, "DESIGN")
-        assert (by, at) == (release[0], release[1]) and requirement_id != proposed
+        assert (by, at) == (release[0], release[1])
+        assert requirement_id not in (proposed, late_id)
     live = _rows(
         migrated,
         "SELECT count(*) FROM evidence_requirements WHERE engagement_control_id = %s "
@@ -1514,7 +1769,9 @@ def test_the_backfill_accepts_what_a_person_released_and_nothing_else(
         "AND NOT coalesce((pending_change ->> 'add')::boolean, false)",
         UUID(released),
     )
-    assert live == [(len(accepted),)]
+    # Every request the release covered, and only those: the late one is live and not
+    # accepted.
+    assert live == [(len(accepted) + 1,)]
     for other in (unnamed, untouched):
         assert _rows(
             migrated,
@@ -1573,3 +1830,567 @@ def test_the_migration_keeps_acceptance_whole_and_an_automatic_release_named(
                 (attribute, team["owner_id"], control),
             )
         connection.rollback()
+
+
+# After the independent review of 12 November 2026: one regression test per finding.
+
+
+def test_a_links_change_on_a_d_and_i_request_is_held_to_its_version_and_to_the_planner(
+    migrated: Database,
+) -> None:
+    """Review finding 2: setting the attributes a D&I request addresses accepts it, so it
+    is held to what an acceptance is held to: the version the person saw, and no planner
+    run open. Before, a links change sent no version, and accepted whatever the request
+    had become since the person read it."""
+    team, control = _prepared(migrated, "dr-links-version")
+    owner = team["owner"]
+    org, project = UUID(str(team["org"])), UUID(str(team["project"]))
+    target = next(i for i in _requests(team, control) if "CONTROL_EXECUTION" in i["categories"])
+    url = f"{_path(team, control)}/master-plan/evidence/{target['id']}/links"
+    links = {"attribute_ids": target["attribute_ids"][:1], "procedure_ids": []}
+
+    def unchanged() -> None:
+        now = next(i for i in _requests(team, control) if i["id"] == target["id"])
+        assert (now["accepted"], now["attribute_ids"]) == (False, target["attribute_ids"])
+
+    # No version: refused, in a sentence.
+    missing = owner.put(url, json=links)
+    assert (missing.status_code, missing.json()["detail"]) == (422, LINKS_VERSION)
+    unchanged()
+    # The planner rewords the request after the person read it: their version is stale.
+    with connect(migrated.url) as connection:
+        output = _replanned(connection, project, UUID(control))
+        design = next(phase for phase in output["phases"] if phase["phase"] == "DESIGN")
+        for requirement in design["requirements"]:
+            if requirement["key"] == target["key"]:
+                requirement["title"] += " (replanned)"
+        generate(connection, _Planner(output), org, project, UUID(control), team["owner_id"])
+        connection.commit()
+    reworded = next(i for i in _requests(team, control) if i["id"] == target["id"])
+    assert reworded["title"].endswith("(replanned)") and reworded["version"] > target["version"]
+    stale = owner.put(url, json={**links, "version": target["version"]})
+    assert (stale.status_code, stale.json()["detail"]) == (409, LINKS_STALE)
+    target = reworded
+    unchanged()
+    # While the planner works, and when its run stopped: refused, as the acceptance is.
+    plan_id = _run_status(migrated, control, "PENDING")
+    working = owner.put(url, json={**links, "version": target["version"]})
+    assert (working.status_code, working.json()["detail"]) == (409, PLANNING_SENTENCE)
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE evidence_plans SET run_queued_at = clock_timestamp() - %s WHERE id = %s",
+            (timedelta(minutes=PLAN_QUEUE_MINUTES + 1), plan_id),
+        )
+        connection.commit()
+    stopped = owner.put(url, json={**links, "version": target["version"]})
+    assert (stopped.status_code, stopped.json()["detail"]) == (409, STOPPED_SENTENCE)
+    unchanged()
+    # Another phase's requirement keeps its behaviour: no version, no hold.
+    interim = next(
+        item
+        for phase in _plan(team, control)["phases"]
+        if phase["phase"] == "INTERIM"
+        for item in phase["requirements"]
+    )
+    other = owner.put(
+        f"{_path(team, control)}/master-plan/evidence/{interim['id']}/links",
+        json={"attribute_ids": interim["attribute_ids"], "procedure_ids": interim["procedure_ids"]},
+    )
+    assert other.status_code == 200, other.text
+    # At the version the person sees, with no run open: set, and accepted as theirs.
+    _run_status(migrated, control, "IDLE")
+    done = owner.put(url, json={**links, "version": target["version"]})
+    assert done.status_code == 200, done.text
+    now = next(i for i in _requests(team, control) if i["id"] == target["id"])
+    assert (now["accepted"], now["attribute_ids"]) == (True, target["attribute_ids"][:1])
+    assert now["version"] == target["version"] + 1
+
+
+def test_a_proposed_addition_the_planner_drops_or_a_person_rejects_leaves_the_plan(
+    migrated: Database,
+) -> None:
+    """Review finding 3: an addition the planner proposed has two ways out, a person
+    accepting it or dismissing it; the planner dropping it withdraws its own proposal. It
+    is never turned into a removal to accept (which made it live), nor requested."""
+    team, control = _prepared(migrated, "dr-addition-out")
+    owner = team["owner"]
+    org, project = UUID(str(team["org"])), UUID(str(team["project"]))
+    accept_design_requests(owner, team["org"], team["project"], control)
+    assert _releases(migrated, control) != []
+
+    def proposed_row() -> tuple[Any, ...]:
+        return _rows(
+            migrated,
+            "SELECT id, version, status, pending_change, pbc_request_id, accepted_at "
+            "FROM evidence_requirements WHERE engagement_control_id = %s "
+            "AND requirement_key = 'design-change-5'",
+            UUID(control),
+        )[0]
+
+    with connect(migrated.url) as connection:
+        plain = _replanned(connection, project, UUID(control))
+        output = _replanned(connection, project, UUID(control))
+        design = next(phase for phase in output["phases"] if phase["phase"] == "DESIGN")
+        extra = dict(next(r for r in design["requirements"] if r["attributes"]))
+        extra.update(
+            key="design-change-5",
+            title="Access approval matrix",
+            description="The current matrix of who may approve access to the system.",
+            depends_on=None,
+        )
+        design["requirements"].append(extra)
+        generate(connection, _Planner(output), org, project, UUID(control), team["owner_id"])
+        connection.commit()
+        assert proposed_row()[2:] == ("PLANNED", {"add": True}, None, None)
+        # Nothing that asks for requirements asks for it: the one place a requirement is
+        # marked requested leaves a proposed addition alone, whoever calls it.
+        request = connection.execute(
+            "SELECT id FROM pbc_requests WHERE engagement_control_id = %s "
+            "AND testing_phase = 'DESIGN' LIMIT 1",
+            (control,),
+        ).fetchone()
+        assert request is not None
+        with transaction(connection) as cursor:
+            _link(cursor, [proposed_row()[0]], request[0], "")
+        assert proposed_row()[2:] == ("PLANNED", {"add": True}, None, None)
+        # The planner no longer plans it: its proposal is withdrawn, not turned into a
+        # removal for a person to accept.
+        generate(connection, _Planner(plain), org, project, UUID(control), team["owner_id"])
+        connection.commit()
+        assert proposed_row()[2:] == ("REMOVED", None, None, None)
+        # Proposed again, and rejected by a person: it leaves the plan.
+        generate(connection, _Planner(output), org, project, UUID(control), team["owner_id"])
+        connection.commit()
+    requirement_id, version, status, change, request, accepted_at = proposed_row()
+    assert (status, change, request, accepted_at) == ("REMOVED", {"add": True}, None, None)
+    shown = next(
+        item
+        for phase in _plan(team, control)["phases"]
+        for item in phase["requirements"]
+        if item["id"] == str(requirement_id)
+    )
+    assert shown["pending_change"] == {"add": True} and shown["accepted"] is False
+    dismissed = owner.post(
+        f"{_path(team, control)}/evidence-requirements/{requirement_id}/change",
+        json={"decision": "DISMISS", "version": version},
+    )
+    assert dismissed.status_code == 200, dismissed.text
+    assert proposed_row()[2:] == ("REMOVED", None, None, None)
+    assert _rows(
+        migrated,
+        "SELECT count(*) FROM evidence_requirement_attributes WHERE requirement_id = %s",
+        requirement_id,
+    ) == [(0,)]
+
+
+def test_an_exception_is_withdrawn_once_a_request_addresses_its_attribute(
+    migrated: Database,
+) -> None:
+    """Review finding 7: an exception says why an attribute is not evidenced at D&I. Once a
+    request addresses the attribute it is withdrawn, with a record, in the same step; so
+    it never applies again by itself when that request is later changed or removed."""
+    team, control = _prepared(migrated, "dr-exception-cleared")
+    owner = team["owner"]
+    org, project = UUID(str(team["org"])), UUID(str(team["project"]))
+    base = _path(team, control)
+    with connect(migrated.url) as connection:
+        add_attribute(
+            connection, org, project, UUID(control), team["owner_id"], AttributeAdd(text=NEW)
+        )
+        connection.commit()
+    tailor_criteria(migrated, team["project"])
+    new_id = next(str(row[0]) for row in _approved(migrated, control) if row[1] == NEW)
+    exception = f"{base}/design-coverage/{new_id}/exception"
+    recorded = owner.put(exception, json={"reason": WHY})
+    assert recorded.status_code == 200, recorded.text
+    assert [item["attribute_id"] for item in recorded.json()["design_requests"]["exceptions"]] == [
+        new_id
+    ]
+    # A person sets the attribute on a request: the exception is withdrawn with it.
+    target = next(i for i in _requests(team, control) if "CONTROL_EXECUTION" in i["categories"])
+    url = f"{base}/master-plan/evidence/{target['id']}/links"
+    linked = owner.put(
+        url,
+        json={
+            "attribute_ids": [*target["attribute_ids"], new_id],
+            "procedure_ids": target["procedure_ids"],
+            "version": target["version"],
+        },
+    )
+    assert linked.status_code == 200, linked.text
+    summary = _summary(team, control)
+    assert (summary["exceptions"], summary["uncovered"]) == ([], [])
+    cleared = _audit(migrated, "design_coverage.exception_cleared", new_id)
+    assert [(row[0], row[1]["reason"], row[1]["why"]) for row in cleared] == [
+        (team["owner_id"], WHY, "now addressed by a request")
+    ]
+    # The request no longer addresses it: the attribute is uncovered again, and the old
+    # exception does not come back by itself.
+    now = next(i for i in _requests(team, control) if i["id"] == target["id"])
+    unlinked = owner.put(
+        url,
+        json={
+            "attribute_ids": target["attribute_ids"],
+            "procedure_ids": target["procedure_ids"],
+            "version": now["version"],
+        },
+    )
+    assert unlinked.status_code == 200, unlinked.text
+    summary = _summary(team, control)
+    assert (summary["exceptions"], summary["uncovered"]) == ([], [new_id])
+    assert _design(team, control)["waiting_on"] == "EVIDENCE"
+    # Recorded again by a person, then covered by the planner's own links on a request
+    # nobody accepted yet: withdrawn as well, with nobody named.
+    assert owner.put(exception, json={"reason": WHY}).status_code == 200
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE evidence_requirements SET accepted_by = NULL, accepted_at = NULL WHERE id = %s",
+            (target["id"],),
+        )
+        connection.commit()
+        generate(connection, None, org, project, UUID(control), team["owner_id"])
+        connection.commit()
+    summary = _summary(team, control)
+    assert (summary["exceptions"], summary["uncovered"]) == ([], [])
+    cleared = _audit(migrated, "design_coverage.exception_cleared", new_id)
+    assert [(row[0], row[1]["why"]) for row in cleared] == [
+        (team["owner_id"], "now addressed by a request"),
+        (None, "now addressed by a request"),
+    ]
+
+
+def test_an_edit_takes_the_plan_before_the_request_as_accepting_the_list_does(
+    migrated: Database,
+) -> None:
+    """Review finding 10: one lock order, the plan's row and then its requirements. Before,
+    an edit held the request and then asked for the plan, while "accept all" held the plan
+    and asked for the request: the two could wait for each other for ever."""
+    team, control = _prepared(migrated, "dr-lock-order")
+    org, project = UUID(str(team["org"])), UUID(str(team["project"]))
+    target = _requests(team, control)[0]
+    outcome: dict[str, Any] = {}
+
+    def editing() -> None:
+        try:
+            with connect(migrated.url) as other:
+                edit(
+                    other, org, project, UUID(control), UUID(target["id"]), team["owner_id"],
+                    EditBody(
+                        title="One leaver traced from HR to the system",
+                        description="One leaver in the period, from the HR record to the removal.",
+                        version=target["version"],
+                    ),
+                )  # fmt: skip
+            outcome["done"] = True
+        except Exception as error:  # the assertion below reports it
+            outcome["error"] = error
+
+    with connect(migrated.url) as holder:
+        # As "accept all" does first: the plan's row.
+        holder.execute(
+            "SELECT 1 FROM evidence_plans WHERE engagement_control_id = %s FOR UPDATE", (control,)
+        )
+        thread = threading.Thread(target=editing)
+        thread.start()
+        waiting = 0
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and not waiting and "error" not in outcome:
+            row = holder.execute(
+                "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid "
+                "WHERE NOT l.granted AND a.datname = current_database()"
+            ).fetchone()
+            waiting = 0 if row is None else int(row[0])
+            if not waiting:
+                time.sleep(0.05)
+        assert waiting and "error" not in outcome, outcome
+        # The edit waits for the plan and holds nothing of the request: "accept all" takes
+        # the request at once (it would be refused here if the edit held it).
+        holder.execute(
+            "SELECT 1 FROM evidence_requirements WHERE id = %s FOR UPDATE NOWAIT", (target["id"],)
+        )
+        holder.commit()
+    thread.join(30)
+    assert outcome == {"done": True}
+    edited = next(i for i in _requests(team, control) if i["id"] == target["id"])
+    assert edited["title"] == "One leaver traced from HR to the system"
+
+
+def test_the_release_and_the_request_of_its_items_are_one_step(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review finding 11: the release recorded at the end of a run, and the request of its
+    items, are one transaction. If the items cannot be requested, nothing is released, and
+    the phase is never left released with its items only planned."""
+    team, control, plan_id, admin_id, _last = _completed_before_the_run_ended(
+        migrated, "dr-one-step"
+    )
+
+    def broken(*_args: Any, **_kwargs: Any) -> list[UUID]:
+        raise RuntimeError("the requests could not be written")
+
+    monkeypatch.setattr(phase_release, "request_released", broken)
+    with connect(migrated.url) as worker:
+        # The run itself is done; the release is not half-made.
+        assert run_plan(worker, None, plan_id) == "DONE"
+    assert _rows(migrated, "SELECT run_status FROM evidence_plans WHERE id = %s", plan_id) == [
+        ("IDLE",)
+    ]
+    assert _releases(migrated, control) == []
+    assert _audit(migrated, "phase.released", control) == []
+    assert all(item["status"] != "REQUESTED" for item in _requests(team, control))
+    # The list waits where a person can see it and act: accepting it releases it.
+    summary = _summary(team, control)
+    assert (summary["released"], summary["to_confirm"], summary["drafting"]) == (False, True, False)
+    monkeypatch.undo()
+    # The next thing that looks completes both together.
+    _run_status(migrated, control, "PENDING")
+    with connect(migrated.url) as worker:
+        assert run_plan(worker, None, plan_id) == "DONE"
+    assert _releases(migrated, control) == [(admin_id, False, True, "")]
+    assert all(item["status"] == "REQUESTED" for item in _requests(team, control))
+
+
+def test_acceptance_does_not_survive_a_removal(migrated: Database) -> None:
+    """Review finding 12: a request that leaves the plan is nobody's accepted request. When
+    the planner plans it again, or the rules revive it, it is a proposal to accept, not an
+    acceptance of words the person never saw."""
+    team, control = _prepared(migrated, "dr-removal")
+    owner = team["owner"]
+    org, project = UUID(str(team["org"])), UUID(str(team["project"]))
+    # The attributes hold the list, so nothing is released while this is set up.
+    _unsettle_attributes(migrated, control)
+    requests = _requests(team, control)
+    dropped = next(item for item in requests if "CONTROL_EXECUTION" in item["categories"])
+    accept_design_requests(owner, team["org"], team["project"], control)
+
+    def acceptance(requirement_id: str) -> tuple[Any, ...]:
+        return _rows(
+            migrated,
+            "SELECT status, accepted_by, accepted_at, pending_change FROM evidence_requirements "
+            "WHERE id = %s",
+            UUID(requirement_id),
+        )[0]
+
+    assert acceptance(dropped["id"])[1] == team["owner_id"]
+    # The planner drops it: a removal is proposed, and a person accepts the removal.
+    with connect(migrated.url) as connection:
+        without = _replanned(connection, project, UUID(control))
+        design = next(phase for phase in without["phases"] if phase["phase"] == "DESIGN")
+        design["requirements"] = [r for r in design["requirements"] if r["key"] != dropped["key"]]
+        for requirement in design["requirements"]:
+            requirement["depends_on"] = None
+        generate(connection, _Planner(without), org, project, UUID(control), team["owner_id"])
+        connection.commit()
+    held = next(i for i in _requests(team, control) if i["id"] == dropped["id"])
+    assert held["pending_change"] == {"remove": True, "add": False}
+    assert _accept(owner, team, control, [held]).status_code == 200
+    assert acceptance(dropped["id"]) == ("REMOVED", None, None, None)
+    # Planned again by the planner: back in the list as its proposal, to accept.
+    with connect(migrated.url) as connection:
+        generate(connection, None, org, project, UUID(control), team["owner_id"])
+        connection.commit()
+    back = next(i for i in _requests(team, control) if i["id"] == dropped["id"])
+    assert (back["status"] in LIVE, back["accepted"], back["to_accept"]) == (True, False, True)
+    assert back["accepted_by"] is None and back["pending_change"] is None
+    # A person's own removal clears it too, and the phase decided not applicable removes
+    # every request with its acceptance; the rules' requirements revived when it applies
+    # again are proposals.
+    accept_design_requests(owner, team["org"], team["project"], control)
+    assert all(item["accepted"] for item in _requests(team, control))
+    again = next(i for i in _requests(team, control) if i["id"] == dropped["id"])
+    removed = owner.post(
+        f"{_path(team, control)}/evidence-requirements/{dropped['id']}/remove",
+        json={"version": again["version"]},
+    )
+    assert removed.status_code == 200, removed.text
+    assert acceptance(dropped["id"])[:3] == ("REMOVED", None, None)
+    phase = next(p for p in _plan(team, control)["phases"] if p["phase"] == "DESIGN")
+    route = f"{_path(team, control)}/evidence-plan/phases/DESIGN"
+    off = owner.post(
+        route,
+        json={
+            "applicability": "NOT_APPLICABLE",
+            "rationale": "The control was introduced after the design assessment was performed.",
+            "version": phase["version"],
+        },
+    )
+    assert off.status_code == 200, off.text
+    assert _requests(team, control) == []
+    assert _rows(
+        migrated,
+        "SELECT count(*) FROM evidence_requirements WHERE engagement_control_id = %s "
+        "AND phase = 'DESIGN' AND accepted_at IS NOT NULL",
+        UUID(control),
+    ) == [(0,)]
+    phase = next(p for p in off.json()["phases"] if p["phase"] == "DESIGN")
+    on = owner.post(
+        route,
+        json={
+            "applicability": "APPLICABLE",
+            "rationale": "The design is assessed for this control after all.",
+            "version": phase["version"],
+        },
+    )
+    assert on.status_code == 200, on.text
+    revived = _requests(team, control)
+    assert revived and all(
+        (item["accepted"], item["to_accept"]) == (False, True) for item in revived
+    )
+    assert _releases(migrated, control) == []
+
+
+def test_the_end_of_a_narrative_run_and_a_phase_decision_release_for_the_last_decider(
+    migrated: Database,
+) -> None:
+    """Review finding 1: whatever event finds the list settled releases it, for the person
+    of its last decision: here the end of the approved narrative's run, which held the
+    attributes, and on another control a person's decision on a phase."""
+    team, control = _prepared(migrated, "dr-other-triggers")
+    owner = team["owner"]
+    admin_id, admin = _member(migrated, team, "ADMIN")
+    # The narrative's run holds the attributes while the list is accepted.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            """
+            INSERT INTO process_narrative_runs (
+                engagement_control_id, organization_id, project_id, run_status, stage,
+                run_lease_until
+            )
+            SELECT id, organization_id, project_id, 'WORKING', 'ATTRIBUTES',
+                   clock_timestamp() + interval '20 minutes'
+            FROM engagement_controls WHERE id = %s
+            ON CONFLICT (engagement_control_id)
+            DO UPDATE SET run_status = 'WORKING', stage = 'ATTRIBUTES',
+                          run_lease_until = EXCLUDED.run_lease_until
+            """,
+            (control,),
+        )
+        connection.commit()
+    body = accept_design_requests(admin, team["org"], team["project"], control)
+    summary: Any = body["design_requests"]
+    assert (summary["released"], summary["working"]) == (False, True)
+    with connect(migrated.url) as worker:
+        fail_narrative(worker, UUID(control))
+    assert _releases(migrated, control) == [(admin_id, False, True, "")]
+    payload = _audit(migrated, "phase.released", control)[0][1]
+    assert payload["trigger"] == {"kind": "NARRATIVE_RUN", "by": None}
+    assert payload["deferred"] is True
+    # Another control: accepted by the admin while its attributes were unsettled, which a
+    # direct write then let go. The owner decides a phase of it: the list is found settled,
+    # and released for the admin, with the owner's decision as what triggered it.
+    second = str(_control(team, "ITGC-AC-01")["id"])
+    understand_and_settle_attributes(migrated, team["project"], second)
+    with connect(migrated.url) as connection:
+        generate(
+            connection, None, UUID(str(team["org"])), UUID(str(team["project"])),
+            UUID(second), team["owner_id"],
+        )  # fmt: skip
+        connection.commit()
+    _unsettle_attributes(migrated, second)
+    accept_design_requests(admin, team["org"], team["project"], second)
+    _reject_proposals(migrated, second)
+    assert _design(team, second)["step"] == "READY"
+    interim = next(p for p in _plan(team, second)["phases"] if p["phase"] == "INTERIM")
+    decided = owner.post(
+        f"{_path(team, second)}/evidence-plan/phases/INTERIM",
+        json={
+            "applicability": interim["applicability"],
+            "rationale": "Interim testing applies: the control operated for the whole period.",
+            "condition": interim["condition"] or "As the plan states it.",
+            "version": interim["version"],
+        },
+    )
+    assert decided.status_code == 200, decided.text
+    assert _releases(migrated, second) == [(admin_id, False, True, "")]
+    payload = _audit(migrated, "phase.released", second)[0][1]
+    assert payload["trigger"] == {"kind": "PHASE_DECISION", "by": str(team["owner_id"])}
+    assert payload["deferred"] is True
+
+
+def test_from_a_fresh_launch_to_drafts_queued_through_the_routes_alone(
+    migrated: Database,
+) -> None:
+    """Review finding 13: the other tests reach the list through setup helpers that write
+    the understanding and the attributes directly. Here a freshly launched control goes all
+    the way through the application's own routes, as a person does: questions resolved,
+    values and the walkthrough answered, attributes decided with their criteria stated,
+    then the D&I requests accepted, which settles the list, releases the evidence, and
+    hands the drafts to the worker."""
+    team = _launched(migrated, "dr-routes")
+    control = str(_control(team, AC02)["id"])
+    worker = _Worker(migrated, control)
+    client = _session_with(migrated, team["owner_id"], worker)
+    base = _path(team, control)
+    context = client.get(f"{base}/context")
+    assert context.status_code == 200, context.text
+    for issue in context.json()["issues"]:
+        if issue["status"] == "OPEN":
+            resolved = client.post(
+                f"{base}/issues/{issue['id']}/resolve",
+                json={
+                    "status": "RESOLVED",
+                    "note": "Answered in the walkthrough with the control owner.",
+                    "version": issue["version"],
+                },
+            )
+            assert resolved.status_code == 200, resolved.text
+    for attribute in client.get(f"{base}/context").json()["attributes"]["proposed"]:
+        decided = client.post(
+            f"{base}/attributes/{attribute['id']}/decide",
+            json={"decision": "APPROVE", "version": attribute["version"]},
+        )
+        assert decided.status_code == 200, decided.text
+    design = client.get(f"{base}/context").json()["design"]
+    values = {
+        slot["key"]: slot["options"][0] if slot["options"] else "The IT security manager"
+        for slot in (design or {}).get("slots", [])
+        if not slot["automatic"] and not slot.get("document") and not slot["value"].strip()
+    }
+    if values:
+        saved = client.put(f"{base}/values", json={"values": values})
+        assert saved.status_code == 200, saved.text
+    _answer_required(migrated, team, control, client)
+    for attribute in client.get(f"{base}/context").json()["attributes"]["approved"]:
+        if attribute["criteria_owned"]:
+            continue
+        stated = client.post(
+            f"{base}/master-plan/attributes/{attribute['id']}/criteria",
+            json={
+                "version": attribute["version"],
+                "condition": f"As the attribute states, at this client: {attribute['text'][:200]}",
+                "pass_criteria": f"The evidence shows: {attribute['text'][:200]}",
+                "fail_criteria": f"The evidence shows it is not so: {attribute['text'][:200]}",
+            },
+        )
+        assert stated.status_code == 200, stated.text
+    status = _design(team, control)
+    if status["waiting_on"] == "EVIDENCE":
+        # An attribute approved after the launch has no request yet: plan again.
+        assert client.post(f"{base}/evidence-plan/generate").status_code == 200
+        status = _design(team, control)
+    assert (status["step"], status["waiting_on"]) == ("WAITING", "REQUESTS"), status
+    assert _releases(migrated, control) == [] and worker.drafts == []
+    plan = client.get(f"{base}/evidence-plan").json()
+    waiting = [
+        {"requirement_id": item["id"], "version": item["version"]}
+        for phase in plan["phases"]
+        for item in phase["requirements"]
+        if item["to_accept"]
+    ]
+    assert waiting and plan["design_requests"]["to_accept"] == len(waiting)
+    accepted = client.post(f"{base}/design-requests/accept", json={"items": waiting})
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["design_requests"] == RELEASED
+    assert _releases(migrated, control) == [(team["owner_id"], False, True, "")]
+    queued = _rows(
+        migrated,
+        "SELECT d.id FROM pbc_drafts d JOIN pbc_requests r ON r.id = d.pbc_request_id "
+        "WHERE d.engagement_control_id = %s AND r.testing_phase = 'DESIGN' "
+        "AND r.status = 'DRAFT' AND d.status = 'PENDING'",
+        UUID(control),
+    )
+    assert queued and sorted(worker.drafts) == sorted(row[0] for row in queued)
+    assert worker.committed == [True]
+    assert _rows(
+        migrated, "SELECT count(*) FROM mailbox_messages WHERE project_id = %s", team["project"]
+    ) == [(0,)]

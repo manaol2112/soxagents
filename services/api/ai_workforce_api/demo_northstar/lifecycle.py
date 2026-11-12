@@ -271,7 +271,7 @@ def _cover_design(ctx: Context, control_id: UUID) -> None:
         return
     first = ctx.cursor.execute(
         """
-        SELECT q.id,
+        SELECT q.id, q.version,
                ARRAY(SELECT ra.attribute_id FROM evidence_requirement_attributes ra
                      WHERE ra.requirement_id = q.id),
                ARRAY(SELECT rp.procedure_id FROM evidence_requirement_procedures rp
@@ -291,7 +291,10 @@ def _cover_design(ctx: Context, control_id: UUID) -> None:
     link_requirement(
         ctx.connection, ctx.organization_id, ctx.project_id, control_id, first[0],
         ctx.team["dana"],
-        LinksBody(attribute_ids=[*first[1], *uncovered], procedure_ids=list(first[2])),
+        LinksBody(
+            attribute_ids=[*first[2], *uncovered], procedure_ids=list(first[3]),
+            version=int(first[1]),
+        ),
     )  # fmt: skip
 
 
@@ -328,8 +331,8 @@ def _requests(ctx: Context) -> None:
                 ]),
             )  # fmt: skip
         released = settle_design(
-            ctx.connection, ctx.principal("dana"), ctx.organization_id, ctx.project_id,
-            control_id,
+            ctx.connection, ctx.organization_id, ctx.project_id, control_id, "REQUEST",
+            ctx.team["dana"],
         )  # fmt: skip
         if not released:
             # A phase the plan does not apply, or a list that still waits, says why.

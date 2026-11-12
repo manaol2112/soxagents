@@ -17,8 +17,10 @@ request (evidence_plans._merge_requirements). Here:
 - coverage: why an approved attribute no request addresses is not evidenced at D&I, recorded
   by a person (`record_exception`, `clear_exception`).
 
-When a person's request leaves the list settled, the D&I evidence is released in that
-request, by them (phase_release.settle_design). Nothing here is done by an agent.
+Every act on the list is that person's decision on it, kept as the list's last decision
+(evidence_plans.list_decided). When the list becomes settled, by whatever event, the D&I
+evidence is released for the person of that last decision (phase_release.settle_design).
+Nothing here is done by an agent.
 """
 
 from collections.abc import Callable
@@ -32,7 +34,6 @@ from pydantic import BaseModel, Field
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.after_commit import after_commit, committed
 from ai_workforce_api.authorization import (
-    Action,
     NotVisible,
     Principal,
     PrincipalKind,
@@ -50,10 +51,16 @@ from ai_workforce_api.evidence_plans import (
     accept_request,
     apply_change,
     issue,
+    list_decided,
     plan_body,
     queue_drafts,
 )
-from ai_workforce_api.phase_release import _LIVE_REQUIREMENT_SQL, settle_design
+from ai_workforce_api.phase_release import (
+    _LIVE_REQUIREMENT_SQL,
+    DESIGN_ACCEPT_ACTION,
+    planner_hold,
+    settle_design,
+)
 from ai_workforce_api.settings import Settings
 
 REASON_MIN = 20
@@ -79,12 +86,12 @@ class ExceptionBody(BaseModel):
     reason: str = Field(max_length=4000)
 
 
-# What the routes answer when they refuse, each a sentence the page shows as it is.
+# What the routes answer when they refuse, each a sentence the page shows as it is. While
+# the planner works, or its run stopped, the sentence is phase_release.planner_hold's.
 STALE = "A request changed after you opened the list. Read the list again, then accept."
 TWICE = "A request is listed twice."
 NOT_DESIGN = "Only a D&I request is accepted here."
 NOT_LISTED = "A request is no longer in the list. Read the list again, then accept."
-PLANNING = "The planner is still updating the D&I requests."
 NOT_PLANNED = "Plan the evidence first."
 OUT_OF_SCOPE = "The control is out of scope."
 NOT_APPROVED = "Only an approved attribute can have an exception."
@@ -139,21 +146,21 @@ def accept(
     evidence_requirement.change_decided for a change); the group one more
     (design_requests.accepted). All or none.
 
-    Refused while the planner works on the plan: the list may still change under the
-    person. An item already accepted at that version, with nothing pending, is left as it
-    is. Returns the drafts to write for what an accepted addition asks of a released phase."""
+    Refused while the planner works on the plan, or its run stopped before it finished: the
+    list may still change under the person. An item already accepted at that version, with
+    nothing pending, is left as it is, and still counts as this person standing behind the
+    list: the acceptance is the list's last decision (evidence_plans.list_decided), which is
+    how a list nobody eligible stands behind is accepted again. Returns the drafts to write
+    for what an accepted addition asks of a released phase."""
     chosen = [item.requirement_id for item in body.items]
     if len(set(chosen)) != len(chosen):
         raise PlanState(TWICE)
     with transaction(connection) as cursor:
-        # The plan's row first, then its requirements, as the planner's merge takes them.
+        # The plan's row first, then its requirements, as every writer takes them.
         plan_id = _planned(cursor, project_id, control_id)
-        running = cursor.execute(
-            "SELECT run_status IN ('PENDING', 'WORKING') FROM evidence_plans WHERE id = %s",
-            (plan_id,),
-        ).fetchone()
-        if running is not None and running[0]:
-            raise PlanState(PLANNING)
+        held = planner_hold(cursor, control_id)
+        if held is not None:
+            raise PlanState(held)
         rows = {
             UUID(str(row[0])): tuple(row)
             for row in cursor.execute(
@@ -173,6 +180,7 @@ def accept(
         if len(rows) != len(chosen):
             raise NotVisible()
         recorded: list[dict[str, Any]] = []
+        confirmed = 0
         for item in body.items:
             row = rows[item.requirement_id]
             if str(row[8]) != "DESIGN":
@@ -183,7 +191,8 @@ def accept(
             if not pending and str(row[1]) not in LISTED_STATUSES:
                 raise PlanState(NOT_LISTED)
             if not pending and bool(row[9]):
-                # Theirs already, as it stands: nothing to decide again.
+                # Theirs already, as it stands: nothing to decide again on the row.
+                confirmed += 1
                 continue
             kind: str | None = None
             if pending:
@@ -202,11 +211,11 @@ def accept(
                     "ACCEPT", kind,
                 )  # fmt: skip
             recorded.append({"requirement": str(item.requirement_id), "change": kind})
-        if recorded:
-            _audit(
-                cursor, organization_id, project_id, actor, "design_requests.accepted",
-                "engagement_control", control_id, {"items": recorded},
-            )  # fmt: skip
+        _audit(
+            cursor, organization_id, project_id, actor, "design_requests.accepted",
+            "engagement_control", control_id, {"items": recorded, "confirmed": confirmed},
+        )  # fmt: skip
+        list_decided(cursor, organization_id, project_id, control_id, actor)
         issued = issue(cursor, organization_id, project_id, control_id, actor, "evidence_plan")
         return queue_drafts(cursor, organization_id, project_id, actor, control_id, issued.drafts)
 
@@ -222,8 +231,10 @@ def record_exception(
 ) -> None:
     """A person records why an approved attribute is not evidenced at D&I: the coverage
     then counts it as explained. Only for an approved attribute of the control that no live
-    D&I request addresses (one a request addresses needs no exception). Recording it again
-    replaces the reason. On the audit trail with the reason, and the person as the actor."""
+    D&I request addresses (one a request addresses needs no exception; an exception is
+    withdrawn the moment a request addresses its attribute, evidence_plans.list_decided).
+    Recording it again replaces the reason. On the audit trail with the reason, and the
+    person as the actor; it is their decision on the list."""
     reason = stated_reason(body.reason)
     with transaction(connection) as cursor:
         _planned(cursor, project_id, control_id)
@@ -273,6 +284,7 @@ def record_exception(
             "control_attribute", attribute_id,
             {"control_id": str(control_id), "reason": reason, "replaced": before is not None},
         )  # fmt: skip
+        list_decided(cursor, organization_id, project_id, control_id, actor)
 
 
 def clear_exception(
@@ -286,6 +298,7 @@ def clear_exception(
     """A person withdraws the exception: the attribute needs a D&I request again. The
     reason withdrawn stays on the audit trail. Nothing to do when none is recorded."""
     with transaction(connection) as cursor:
+        _planned(cursor, project_id, control_id)
         attribute = cursor.execute(
             "SELECT 1 FROM control_attributes WHERE id = %s AND project_id = %s "
             "AND engagement_control_id = %s",
@@ -303,8 +316,9 @@ def clear_exception(
         _audit(
             cursor, organization_id, project_id, actor, "design_coverage.exception_cleared",
             "control_attribute", attribute_id,
-            {"control_id": str(control_id), "reason": str(removed[0])},
+            {"control_id": str(control_id), "reason": str(removed[0]), "why": "withdrawn"},
         )  # fmt: skip
+        list_decided(cursor, organization_id, project_id, control_id, actor)
 
 
 # Routes
@@ -329,12 +343,11 @@ def register_design_requests(app: FastAPI, settings: Settings, scheduler: Any = 
         connection: psycopg.Connection[Any], principal: Principal, organization_id: UUID,
         project_id: UUID, control_id: UUID,
     ) -> None:  # fmt: skip
-        """As accepting the attributes is authorized (context_routes): a person who may
-        change the engagement's work (an Owner, Admin, Project Manager or Contributor of
-        the engagement; a Reviewer reads and is refused), on a control of that engagement.
-        An agent never accepts a request or excuses an attribute."""
+        """Who may accept D&I requests (phase_release.DESIGN_ACCEPT_ACTION, the one rule
+        the release reads too), on a control of that engagement. A person only: an agent
+        never accepts a request or excuses an attribute."""
         authorize(
-            connection, principal=principal, action=Action.TASK_UPDATE,
+            connection, principal=principal, action=DESIGN_ACCEPT_ACTION,
             organization_id=organization_id, project_id=project_id,
         )  # fmt: skip
         if principal.kind is not PrincipalKind.USER:
@@ -354,18 +367,24 @@ def register_design_requests(app: FastAPI, settings: Settings, scheduler: Any = 
 
         after_commit(lambda: schedule(scheduler, ids))
 
+    def settled(
+        c: psycopg.Connection[Any], p: Principal, organization_id: UUID, project_id: UUID,
+        control_id: UUID,
+    ) -> None:  # fmt: skip
+        settle_design(c, organization_id, project_id, control_id, "REQUEST", p.id, scheduler)
+
     @app.post(f"{control}/design-requests/accept")
     def accept_requests(
         organization_id: UUID, project_id: UUID, control_id: UUID, body: RequestsAccepted,
         request: Request,
     ) -> EvidencePlanBody:  # fmt: skip
         """Accept D&I requests as they stand, one or all, all or none. When that settles
-        the list, the D&I evidence is released in this request, by this person."""
+        the list, the D&I evidence is released in this request, as this person's."""
 
         def work(c: psycopg.Connection[Any], p: Principal) -> EvidencePlanBody:
             allowed(c, p, organization_id, project_id, control_id)
             drafted(accept(c, organization_id, project_id, control_id, p.id, body))
-            settle_design(c, p, organization_id, project_id, control_id, scheduler)
+            settled(c, p, organization_id, project_id, control_id)
             return plan_body(c, project_id, control_id)
 
         return run(request, work)
@@ -378,7 +397,7 @@ def register_design_requests(app: FastAPI, settings: Settings, scheduler: Any = 
         def work(c: psycopg.Connection[Any], p: Principal) -> EvidencePlanBody:
             allowed(c, p, organization_id, project_id, control_id)
             record_exception(c, organization_id, project_id, control_id, attribute_id, p.id, body)
-            settle_design(c, p, organization_id, project_id, control_id, scheduler)
+            settled(c, p, organization_id, project_id, control_id)
             return plan_body(c, project_id, control_id)
 
         return run(request, work)
@@ -391,7 +410,7 @@ def register_design_requests(app: FastAPI, settings: Settings, scheduler: Any = 
         def work(c: psycopg.Connection[Any], p: Principal) -> EvidencePlanBody:
             allowed(c, p, organization_id, project_id, control_id)
             clear_exception(c, organization_id, project_id, control_id, attribute_id, p.id)
-            settle_design(c, p, organization_id, project_id, control_id, scheduler)
+            settled(c, p, organization_id, project_id, control_id)
             return plan_body(c, project_id, control_id)
 
         return run(request, work)

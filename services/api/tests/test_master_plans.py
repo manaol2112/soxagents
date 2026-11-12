@@ -737,9 +737,19 @@ def test_links_name_only_the_controls_own_records(migrated: Database) -> None:
         for f in after["findings"]
     )
     evidence = after["evidence"][0]
+    # Rewritten 12 November 2026 (B1e, after its independent review). Old: the links of any
+    # requirement were set with no version. New: a D&I request's links change accepts it,
+    # so it carries the version the person saw, as an acceptance does (the master plan's
+    # evidence item gives it); other phases' requirements are unchanged. Why: without it a
+    # person accepted whatever the request had become since they read it.
+    assert evidence["phase"] == "DESIGN"
     relinked = team["owner"].put(
         f"{base}/evidence/{evidence['id']}/links",
-        json={"attribute_ids": [plan["attributes"][0]["id"]], "procedure_ids": [procedure["id"]]},
+        json={
+            "attribute_ids": [plan["attributes"][0]["id"]],
+            "procedure_ids": [procedure["id"]],
+            "version": evidence["version"],
+        },
     )
     assert relinked.status_code == 200, relinked.text
     item = next(e for e in relinked.json()["evidence"] if e["id"] == evidence["id"])

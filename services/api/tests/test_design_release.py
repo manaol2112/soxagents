@@ -30,6 +30,7 @@ from test_execution import _add_project_member, _add_user
 from test_outbound import _session, migrated
 from test_planning_gate import _control, _launched, _plan, _project, _rows
 
+from ai_workforce_api.authorization import _ROLE_ACTIONS, Role
 from ai_workforce_api.control_design import ValuesBody, design_for, set_values
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.evidence_planning import rules_plan
@@ -43,6 +44,7 @@ from ai_workforce_api.evidence_plans import (
     load_facts,
     unrequested_controls,
 )
+from ai_workforce_api.phase_release import DESIGN_ACCEPT_ACTION
 from ai_workforce_api.testing_engine import tailored_criteria
 
 __all__ = ["migrated"]
@@ -114,11 +116,23 @@ def test_d_and_i_evidence_is_released_on_its_own_once_the_control_is_understood(
         bare = owner.post(path, json=body)
         assert bare.status_code == 409
         assert bare.json()["detail"] == waiting["waiting_for"]
-    # Only an Owner, Admin or Project Manager uses the release route.
+    # Rewritten 12 November 2026 (B1e, after its independent review). Old: only an Owner,
+    # Admin or Project Manager used the D&I release route (project update), so a
+    # contributor was answered 403. New: the route is held to the one rule for who may
+    # accept D&I requests (phase_release.DESIGN_ACCEPT_ACTION), since releasing a list is
+    # standing behind it; a reviewer, who may not accept, is refused, and a contributor is
+    # refused or told what the list waits for as that rule has it. Why: the acceptance
+    # route and the release route answered differently to the same person.
     with connect(migrated.url) as connection:
         member = _add_user(connection, team["org"], "di-member@example.com", "CONTRIBUTOR")
         _add_project_member(connection, team["org"], team["project"], member)
-    assert _session(migrated, member).post(path, json={"reason": REASON}).status_code == 403
+        reviewer = _add_user(connection, team["org"], "di-reviewer@example.com", "REVIEWER")
+        _add_project_member(connection, team["org"], team["project"], reviewer)
+    assert _session(migrated, reviewer).post(path, json={"reason": REASON}).status_code == 403
+    contributor_accepts = DESIGN_ACCEPT_ACTION in _ROLE_ACTIONS[Role.CONTRIBUTOR]
+    assert _session(migrated, member).post(path, json={"reason": REASON}).status_code == (
+        409 if contributor_accepts else 403
+    )
     assert _rows(
         migrated,
         "SELECT count(*) FROM phase_releases WHERE engagement_control_id = %s",

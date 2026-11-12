@@ -68,6 +68,7 @@ from ai_workforce_api.evidence_plans import (
     PlanState,
     _audit,
     accept_request,
+    list_decided,
     release,
 )
 from ai_workforce_api.implementations import CoverageBody, Scope, ScopeUnit, SplitBody, UnitCreate
@@ -2322,6 +2323,16 @@ class ProcedureRemove(BaseModel):
 class LinksBody(BaseModel):
     attribute_ids: list[UUID] = Field(default_factory=list, max_length=30)
     procedure_ids: list[UUID] = Field(default_factory=list, max_length=30)
+    # The requirement's version as the person saw it. Required for a D&I request, whose
+    # links change accepts it (link_requirement); other phases and procedures do not use it.
+    version: int | None = Field(default=None, ge=1)
+
+
+LINKS_VERSION = "Send the request's version to change the attributes of a D&I request."
+LINKS_STALE = (
+    "This request changed after you opened the list. Read the list again, then change its "
+    "attributes."
+)
 
 
 class CriteriaBody(BaseModel):
@@ -2583,17 +2594,42 @@ def link_requirement(
     body: LinksBody,
 ) -> None:
     """The attributes an evidence requirement supports and the procedures it serves, as a
-    person sets them."""
+    person sets them.
+
+    For a D&I request the act accepts it as that person (B1e), so it is held to what an
+    acceptance is held to: made at the version the person saw (the body's `version`,
+    required; a stale one is refused, so nobody accepts words the planner changed after
+    they read them), and refused while the planner works on the plan or its run stopped
+    (phase_release.planner_hold), as the acceptance is. An addition the planner proposed
+    is not linked, and so not accepted, before a person accepts it. Other phases'
+    requirements keep their behaviour: no version, no hold."""
     with transaction(connection) as cursor:
         plan_id = _plan_id(cursor, project_id, control_id)
         row = cursor.execute(
-            "SELECT status FROM evidence_requirements WHERE id = %s AND plan_id = %s FOR UPDATE",
+            "SELECT status, phase, version, coalesce((pending_change ->> 'add')::boolean, false) "
+            "FROM evidence_requirements WHERE id = %s AND plan_id = %s FOR UPDATE",
             (requirement_id, plan_id),
         ).fetchone()
         if row is None:
             raise NotVisible()
         if row[0] == "REMOVED":
             raise PlanState("the requirement is no longer planned")
+        if row[3]:
+            from ai_workforce_api.evidence_plans import ACCEPT_FIRST
+
+            raise PlanState(ACCEPT_FIRST)
+        design = str(row[1]) == "DESIGN"
+        if design:
+            from ai_workforce_api.phase_release import planner_hold
+
+            if body.version is None:
+                # Answered 422 with this sentence.
+                raise ValueError(LINKS_VERSION)
+            held = planner_hold(cursor, control_id)
+            if held is not None:
+                raise PlanState(held)
+            if int(row[2]) != body.version:
+                raise PlanState(LINKS_STALE)
         attributes = _approved_attributes(cursor, control_id, body.attribute_ids)
         procedures = sorted(set(body.procedure_ids))
         if procedures:
@@ -2618,6 +2654,10 @@ def link_requirement(
                 "UPDATE evidence_requirements SET version = version + 1 WHERE id = %s",
                 (requirement_id,),
             )
+        if design:
+            # Their decision on the list; an exception for an attribute the request now
+            # addresses is withdrawn with it.
+            list_decided(cursor, organization_id, project_id, control_id, actor)
 
 
 def set_requirement_links(
@@ -2803,10 +2843,11 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
     ) -> None:  # fmt: skip
         """The person's change (the attributes a D&I request addresses, or the criteria
         that settle the attributes) may have completed the D&I requests list: the D&I
-        evidence is then released in this request, by them (phase_release.settle_design)."""
+        evidence is then released in this request, for the person of the list's last
+        decision (phase_release.settle_design)."""
         from ai_workforce_api.phase_release import settle_design
 
-        settle_design(c, p, organization_id, project_id, control_id, scheduler)
+        settle_design(c, organization_id, project_id, control_id, "REQUEST", p.id, scheduler)
 
     def allowed(
         connection: psycopg.Connection[Any],

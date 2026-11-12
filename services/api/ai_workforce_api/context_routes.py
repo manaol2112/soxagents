@@ -230,16 +230,15 @@ def register_control_context(
                 _after_commit(lambda: plans([planned]))
         # The save may have been the last thing the D&I requests list waited for (the
         # understanding completed, or the attributes settled, with every request already
-        # accepted): the D&I evidence is then released in this request, by this person
-        # (B1e, 12 November 2026; phase_release.settle_design). After the queueing above:
-        # a run just queued means the list may still change, so nothing is released.
+        # accepted): the D&I evidence is then released in this request, for the person of
+        # the list's last decision, never for whoever made this save (it may reach this
+        # control from another one's bulk save; B1e, 12 November 2026,
+        # phase_release.settle_design). After the queueing above: a run just queued means
+        # the list may still change, so nothing is released.
         from ai_workforce_api.phase_release import settle_design
 
         if owner is not None:
-            settle_design(
-                connection, Principal(PrincipalKind.USER, actor), owner[0], project_id,
-                control_id, scheduler,
-            )  # fmt: skip
+            settle_design(connection, owner[0], project_id, control_id, "REQUEST", actor, scheduler)
 
     @app.get(f"{control}/context")
     def read(

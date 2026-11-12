@@ -29,7 +29,8 @@
 -- Backfill: the D&I requests of a control whose D&I phase is already released were released
 -- by a person, so they are accepted by the releaser at the release time. Not a request
 -- removed from the plan, nor an addition the planner proposed after the release and nobody
--- accepted (pending_change.add): neither was released. A release with no releaser on record
+-- accepted (pending_change.add), nor any request made after the release, whoever made it:
+-- none of them was released. A release with no releaser on record
 -- (0145 recorded some for requests already under way) accepts nothing: nobody is invented.
 -- An archived engagement's records are left as they are (0136 refuses the write). Nothing
 -- else changes: no release is added or removed.
@@ -112,4 +113,6 @@ WHERE r.engagement_control_id = q.engagement_control_id
   AND q.phase = 'DESIGN'
   AND q.status <> 'REMOVED'
   AND NOT coalesce((q.pending_change ->> 'add')::boolean, false)
+  -- Only what the release covered: a request made after it was not released by anyone.
+  AND q.created_at <= r.released_at
   AND q.accepted_at IS NULL;
