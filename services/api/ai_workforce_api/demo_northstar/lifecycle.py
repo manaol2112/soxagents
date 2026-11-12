@@ -229,7 +229,6 @@ def _plans(ctx: Context) -> None:
 
     approved = 0
     for _ref, control_id in ctx.controls.items():
-        _cover_design(ctx, control_id)
         row = ctx.cursor.execute(
             "SELECT version FROM evidence_plans WHERE project_id = %s AND engagement_control_id = %s",
             (ctx.project_id, control_id),
@@ -256,50 +255,10 @@ def _plans(ctx: Context) -> None:
     ctx.summary["plans_approved"] = approved
 
 
-def _cover_design(ctx: Context, control_id: UUID) -> None:
-    """Every approved attribute is addressed by a D&I request (the D&I requests list, B1f,
-    12 November 2026): an attribute none addresses holds the list. The rules' plan for a
-    key report asks for the report's definition without naming an attribute, so Dana sets
-    the attributes that request addresses ("Change attributes" on the row), having read the
-    definition against each of them. Before she approves the test plan: the links are part
-    of it, and changing them afterwards would send it back for approval."""
-    from ai_workforce_api.master_plans import LinksBody, link_requirement
-    from ai_workforce_api.phase_release import uncovered_attributes
-
-    uncovered = uncovered_attributes(ctx.connection, ctx.project_id, control_id).get(control_id, [])
-    if not uncovered:
-        return
-    first = ctx.cursor.execute(
-        """
-        SELECT q.id, q.version,
-               ARRAY(SELECT ra.attribute_id FROM evidence_requirement_attributes ra
-                     WHERE ra.requirement_id = q.id),
-               ARRAY(SELECT rp.procedure_id FROM evidence_requirement_procedures rp
-                     JOIN plan_procedures pp ON pp.id = rp.procedure_id
-                     WHERE rp.requirement_id = q.id AND pp.status = 'ACTIVE')
-        FROM evidence_requirements q
-        WHERE q.engagement_control_id = %s AND q.phase = 'DESIGN'
-          AND q.status IN ('PLANNED', 'AWAITING_DEPENDENCY', 'REQUESTED')
-          AND q.pending_change IS NULL
-        ORDER BY q.created_at, q.requirement_key
-        LIMIT 1
-        """,
-        (control_id,),
-    ).fetchone()
-    if first is None:
-        return
-    link_requirement(
-        ctx.connection, ctx.organization_id, ctx.project_id, control_id, first[0],
-        ctx.team["dana"],
-        LinksBody(
-            attribute_ids=[*first[2], *uncovered], procedure_ids=list(first[3]),
-            version=int(first[1]),
-        ),
-    )  # fmt: skip
-
-
 def _requests(ctx: Context) -> None:
-    """Accept each control's D&I requests, which releases its D&I evidence, request the
+    """Accept each control's D&I requests, which releases its D&I evidence (the planner
+    proposed which attributes each addresses, for the key report as for the others, so Dana
+    accepts them with the request and sets none by hand), request the
     plan's evidence, give the drafts their prepared words, prepare the design workpaper,
     and release the interim phase."""
     from ai_workforce_api.design_requests import RequestAccepted, RequestsAccepted, accept

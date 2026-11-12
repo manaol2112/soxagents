@@ -204,6 +204,10 @@ class PlanFacts:
     # person accepted, none prepared with the demo. The planner tailors these and leaves
     # the rest as they are (11 November 2026; review of the same day: only what is written).
     criteria_writable: tuple[str, ...] = ()
+    # The wording of each approved attribute a person excepted from the D&I evidence
+    # (design_coverage_exceptions: why it is not evidenced at D&I). The planner leaves these
+    # alone: it proposes no D&I request for them (design_links_proposed).
+    design_excepted: tuple[str, ...] = ()
     # The library statement as the control's documentation states it, with the client's
     # values in place, by field (empty for a client's own control). A source the plan may
     # quote.
@@ -1917,6 +1921,10 @@ def rules_plan(facts: PlanFacts, *, every_phase: bool = False) -> PlanOutput:
                 item for item in requirements if _CHANGE_KEY.search(item.key) is not None
             ]
         requirements = lean_requirements(phase, requirements, traits.profile)
+        if phase == "DESIGN":
+            # Every approved attribute is addressed by a D&I item, for every kind of
+            # control: the rules propose the links, as the planner agent does.
+            requirements = _attributes_addressed(requirements, facts, traits.profile)
         decision = forced.get(phase)
         if decision is None:
             applicability: Applicability = "APPLICABLE"
@@ -2115,6 +2123,8 @@ def check_plan(
             raise ValueError("a conditional phase must say its condition")
         if item.applicability in ("APPLICABLE", "CONDITIONAL") and not item.requirements:
             raise ValueError(f"{item.phase.lower()} has no evidence requirements")
+        if item.phase == "DESIGN":
+            item = _approved_attributes_only(item, allowed)
         _check_requirements(item, facts, traits, allowed)
         texts.extend([item.rationale, item.condition, item.open_question])
         texts.extend(item.objectives)
@@ -2132,7 +2142,7 @@ def check_plan(
         _check_links(item, allowed)
         for link in item.links:
             texts.append(link.procedure)
-        phases.append(_instance_against_every_attribute(item, facts))
+        phases.append(design_links_proposed(item, facts, traits.profile))
     sources = check_sources(facts)
     for fact in plan.understanding.facts:
         # A fact said to come from the records quotes them; the quote must be there.
@@ -2253,6 +2263,121 @@ def _instance_against_every_attribute(item: PhasePlan, facts: PlanFacts) -> Phas
                 requirement = requirement.model_copy(update={"attributes": wanted})
         requirements.append(requirement)
     return item.model_copy(update={"requirements": requirements})
+
+
+# The D&I item that carries an approved attribute no item of the phase names, by the kind
+# of control (design_links_proposed): the category of the item that evidences what the
+# control is, as its design is assessed. A key report's definition (its logic, sources,
+# parameters and filters) is what its completeness and accuracy are read from; a configured
+# control's setting is what enforces it; a control run over a population, and a management
+# review, are read from the policy or procedure that says how they are performed.
+DESIGN_CARRIER: dict[str, Category] = {
+    "REPORT": "REPORT_RELIABILITY",
+    "CONFIGURATION": "CONFIGURATION",
+    "POPULATION": "PROCESS_DOCUMENTATION",
+    "MANAGEMENT_REVIEW": "PROCESS_DOCUMENTATION",
+}
+
+
+def _approved_attributes_only(item: PhasePlan, allowed: set[str]) -> PhasePlan:
+    """A D&I item naming an attribute the control does not have approved is not a reason to
+    discard the plan: the name is ignored (it is a proposed link to nothing), and the item
+    keeps the approved attributes it names. The operating phases still reject one."""
+    requirements = [
+        requirement.model_copy(
+            update={
+                "attributes": [text for text in requirement.attributes if _normal(text) in allowed]
+            }
+        )
+        if any(_normal(text) not in allowed for text in requirement.attributes)
+        else requirement
+        for requirement in item.requirements
+    ]
+    return item.model_copy(update={"requirements": requirements})
+
+
+def _design_carrier(requirements: list[RequirementPlan], attribute: str, profile: str) -> int:
+    """Which D&I item carries an approved attribute none of them names. Deterministic:
+
+    1. an attribute about who can change the setting or the report goes to the item that
+       shows who can change it, when the plan has one of its own;
+    2. otherwise the item of the kind that evidences this kind of control (DESIGN_CARRIER),
+       the first of them in the plan's order;
+    3. otherwise the phase's first item that is not a recorded change's own item.
+
+    No item is invented: the attribute joins one the plan already asks for."""
+    plain = [i for i, r in enumerate(requirements) if not _EXCEPTION_KEY.search(r.key)]
+    candidates = plain or list(range(len(requirements)))
+    rights = [
+        i
+        for i in candidates
+        if _CHANGE_RIGHTS.search(f"{requirements[i].key} {requirements[i].title}")
+    ]
+    if rights and _CHANGE_RIGHTS.search(attribute):
+        return rights[0]
+    others = [i for i in candidates if i not in rights] or candidates
+    category = DESIGN_CARRIER.get(profile, "PROCESS_DOCUMENTATION")
+    return next((i for i in others if category in requirements[i].categories), others[0])
+
+
+def _attributes_addressed(
+    requirements: list[RequirementPlan], facts: PlanFacts, profile: str
+) -> list[RequirementPlan]:
+    """The phase's D&I items with every approved attribute named by at least one of them
+    (see design_links_proposed)."""
+    wanted = [text for text in facts.attributes if text.strip()][:20]
+    if not wanted or not requirements:
+        return requirements
+    order = {_normal(text): index for index, text in enumerate(wanted)}
+    excepted = {_normal(text) for text in facts.design_excepted}
+    found = []
+    for requirement in requirements:
+        # The item that shows the control performed once is read against every attribute.
+        if "CONTROL_EXECUTION" in requirement.categories:
+            listed = {_normal(text) for text in requirement.attributes}
+            if any(_normal(text) not in listed for text in wanted):
+                requirement = requirement.model_copy(update={"attributes": wanted})
+        found.append(requirement)
+    named = {_normal(text) for requirement in found for text in requirement.attributes}
+    for attribute in wanted:
+        key = _normal(attribute)
+        if key in named or key in excepted:
+            continue
+        index = _design_carrier(found, attribute, profile)
+        carrier = found[index]
+        if len(carrier.attributes) >= 20:
+            continue
+        carried = sorted(
+            [*carrier.attributes, attribute], key=lambda text: order.get(_normal(text), 99)
+        )
+        found[index] = carrier.model_copy(update={"attributes": carried})
+        named.add(key)
+    return found
+
+
+def design_links_proposed(item: PhasePlan, facts: PlanFacts, profile: str) -> PhasePlan:
+    """The planner proposes which approved attributes each D&I request addresses, for every
+    kind of control (product owner, 12 November 2026, asked what should happen for a key
+    report whose D&I requests name no attribute: "Planner proposes links"). Enforced here,
+    for the rules' plan and the model's alike, by repair, so no control's list stops at
+    "Evidence not planned against the attributes" merely because the plan named none:
+
+    - the item that shows the control performed once (category CONTROL_EXECUTION) lists
+      every approved attribute, as before (_instance_against_every_attribute: D&I is a test
+      of one against the attributes);
+    - an approved attribute no D&I item names then joins the item that evidences this kind
+      of control (_design_carrier, DESIGN_CARRIER), in the control's order of attributes.
+
+    Only names are added to items the plan already has; no request is invented. An
+    attribute a person excepted from the D&I evidence (PlanFacts.design_excepted) is left
+    alone. What this writes is a proposal: the links follow the names only on a request no
+    person accepted, and reach an accepted one through its pending change
+    (evidence_plans._merge_requirements); nothing is accepted here."""
+    if item.phase != "DESIGN" or item.applicability not in ("APPLICABLE", "CONDITIONAL"):
+        return item
+    return item.model_copy(
+        update={"requirements": _attributes_addressed(list(item.requirements), facts, profile)}
+    )
 
 
 def _uncovered(phases: list[PhasePlan], facts: PlanFacts) -> list[str]:
@@ -2645,7 +2770,7 @@ prior year's work as evidence that the control operates now.
 - Keep apart what the control data states (SOURCE, with its exact words as the quote), \
 what you propose, your methodological judgments, and your assumptions.
 - Link each operating procedure to the attributes it tests. Design procedures assess the \
-design against the risk and need no attribute link.
+design against the risk and need no attribute link (the design evidence items do: see below).
 - For each attribute in attributes_needing_criteria, propose the exact condition and \
 objective pass and fail criteria, or mark it as requiring professional judgment. Never use \
 words such as appropriate, adequate, timely, or operating effectively as a criterion.
@@ -2673,10 +2798,17 @@ needs the approver and the approval date; a grant needs who granted what and whe
 nothing an attribute or the phase's objective does not need.
 - Each record once per phase: when one record shows several details, it is one item, listing \
 every attribute it serves. In each operating phase, every attribute of the control is listed \
-by at least one item. In DESIGN, the item that shows the control performed once (a \
-walkthrough instance or example, category CONTROL_EXECUTION) lists every attribute of the \
-control: design and implementation is a test of one against the attributes. A policy or \
-procedure document lists only the attributes it states.
+by at least one item.
+- In DESIGN, for every kind of control, say for each item which attributes of the control it \
+evidences, in its attributes, by their wording, and leave no attribute of the control \
+unlisted: every attribute is listed by at least one DESIGN item. The item that shows the \
+control performed once (a walkthrough instance or example, category CONTROL_EXECUTION) lists \
+every attribute of the control: design and implementation is a test of one against the \
+attributes. A policy or procedure document lists the attributes it states. For a key report, \
+the report's definition (its logic, sources, parameters and filters) lists the attributes on \
+its completeness and accuracy; for a configured control, the setting lists the attributes it \
+enforces, and the item on who can change it lists those about changes to it. List only \
+attributes given for the control; an item that evidences none lists none.
 - No audit terms in a title or description (population, completeness and accuracy, \
 attribute, control execution, assertion, ITGC, walkthrough): say "the full list of", "how \
 the list was produced", "one example". Why the item is needed belongs in rationale, the \

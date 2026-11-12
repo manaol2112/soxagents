@@ -2039,8 +2039,14 @@ def test_an_exception_is_withdrawn_once_a_request_addresses_its_attribute(
     summary = _summary(team, control)
     assert (summary["exceptions"], summary["uncovered"]) == ([], [new_id])
     assert _design(team, control)["waiting_on"] == "EVIDENCE"
-    # Recorded again by a person, then covered by the planner's own links on a request
-    # nobody accepted yet: withdrawn as well, with nobody named.
+    # Rewritten 12 November 2026 (the planner proposes which attributes every D&I request
+    # addresses; product owner: "Planner proposes links"). Old: recorded again by a
+    # person, then named by the planner on a request nobody accepted yet, the attribute was
+    # linked by the planner and the exception withdrawn with nobody named. New: an
+    # attribute a person excepted is left alone by the planner: it is not linked, on an
+    # unaccepted request either, and the exception stands until a person links the
+    # attribute or clears it. Why: the planner's proposal must not undo what a person
+    # recorded. The withdrawal by a person's own links change, above, is unchanged.
     assert owner.put(exception, json={"reason": WHY}).status_code == 200
     with connect(migrated.url) as connection:
         connection.execute(
@@ -2051,11 +2057,13 @@ def test_an_exception_is_withdrawn_once_a_request_addresses_its_attribute(
         generate(connection, None, org, project, UUID(control), team["owner_id"])
         connection.commit()
     summary = _summary(team, control)
-    assert (summary["exceptions"], summary["uncovered"]) == ([], [])
+    assert [item["attribute_id"] for item in summary["exceptions"]] == [new_id]
+    assert summary["uncovered"] == []
+    planned = next(i for i in _requests(team, control) if i["id"] == target["id"])
+    assert new_id not in planned["attribute_ids"] and planned["accepted"] is False
     cleared = _audit(migrated, "design_coverage.exception_cleared", new_id)
     assert [(row[0], row[1]["why"]) for row in cleared] == [
         (team["owner_id"], "now addressed by a request"),
-        (None, "now addressed by a request"),
     ]
 
 

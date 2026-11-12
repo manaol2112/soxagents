@@ -264,6 +264,67 @@ def test_the_trial_demo_launches_with_approved_plans_and_accepted_criteria(
     ) == [(14,)]
 
 
+def test_the_planner_proposed_the_key_reports_attributes_and_the_lead_accepted_them(
+    demo: dict[str, Any],
+) -> None:
+    """The planner proposes which attributes every D&I request addresses (product owner, 12
+    November 2026: "Planner proposes links"), the key report's included. Before, the rules
+    named none on NS-IP-01's request (the report's definition), and the demo had Dana set
+    them by hand. Now the request carries the control's approved attributes as the planner
+    proposed them, Dana's part is the acceptance, and every control's D&I evidence is
+    released by it, with no attribute left unaddressed."""
+    from ai_workforce_api.phase_release import uncovered_attributes
+
+    url, project_id = demo["url"], demo["project_id"]
+    dana = _team(demo, "Dana Whitfield")
+    control = _rows(
+        url,
+        "SELECT id FROM engagement_controls WHERE project_id = %s AND control_ref = 'NS-IP-01'",
+        project_id,
+    )[0][0]
+    approved = {
+        row[0]
+        for row in _rows(
+            url,
+            "SELECT id FROM control_attributes WHERE engagement_control_id = %s "
+            "AND status = 'APPROVED'",
+            control,
+        )
+    }
+    assert len(approved) == 3
+    links = _rows(
+        url,
+        """
+        SELECT q.requirement_key, ra.attribute_id, ra.origin, ra.created_by, q.accepted_by
+        FROM evidence_requirement_attributes ra
+        JOIN evidence_requirements q ON q.id = ra.requirement_id
+        WHERE q.engagement_control_id = %s AND q.phase = 'DESIGN'
+        """,
+        control,
+    )
+    assert {row[1] for row in links} == approved
+    # Proposed by the planner (the rules here), not set by a person; accepted by Dana.
+    assert {(row[0], row[2], row[3], row[4]) for row in links} == {
+        ("design-report-logic", "RULES", None, dana)
+    }
+    assert _rows(
+        url,
+        "SELECT count(*) FROM audit_events WHERE project_id = %s "
+        "AND action = 'evidence_requirement.linked'",
+        project_id,
+    ) == [(0,)]
+    with connect(url) as connection:
+        assert uncovered_attributes(connection, project_id) == {}
+    released = _rows(
+        url,
+        "SELECT count(*), count(*) FILTER (WHERE r.automatic AND r.released_by = %s) "
+        "FROM phase_releases r WHERE r.project_id = %s AND r.phase = 'DESIGN'",
+        dana,
+        project_id,
+    )
+    assert released == [(14, 14)]
+
+
 def test_the_walkthrough_is_answered_by_the_lead_so_understanding_is_complete(
     demo: dict[str, Any],
 ) -> None:

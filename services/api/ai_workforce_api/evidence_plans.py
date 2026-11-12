@@ -261,6 +261,18 @@ def load_facts(
             (control_id,),
         ).fetchall()
     )
+    # Approved attributes a person excepted from the D&I evidence: the planner proposes no
+    # D&I request for them (evidence_planning.design_links_proposed).
+    excepted = tuple(
+        str(text)
+        for (text,) in connection.execute(
+            "SELECT a.text FROM control_attributes a "
+            "JOIN design_coverage_exceptions x ON x.attribute_id = a.id "
+            "WHERE a.engagement_control_id = %s AND a.status = 'APPROVED' "
+            "ORDER BY a.position, a.created_at",
+            (control_id,),
+        ).fetchall()
+    )
     writable = tuple(
         str(text)
         for (text,) in connection.execute(
@@ -282,6 +294,7 @@ def load_facts(
         applications=context.applications,
         attributes=context.test_attributes,
         criteria_writable=writable,
+        design_excepted=excepted,
         pbc_items=context.pbc_items,
         classifications=tuple(classes),
         process_required=needs_process_understanding(classes),
@@ -388,7 +401,7 @@ class Planned:
 # attribute (evidence_planning._instance_against_every_attribute enforces it).
 # /8 (12 November 2026, B1e): the confirmed understanding with its dates, newest first; the
 # planner follows it over the RCM record and the library's wording, the newer answer first.
-PLANNER_PROMPT_VERSION = "engagement-planner/8"
+PLANNER_PROMPT_VERSION = "engagement-planner/9"
 # Room for a whole plan: three phases, their procedures and evidence. At the provider's
 # default of 4,096 a plan built on an approved narrative was cut off and the rules stood in
 # (26 October 2026).
@@ -1069,14 +1082,26 @@ def _sync_named_links(
 ) -> None:
     """Link a requirement to the control's approved attributes it names by wording
     (ignoring case and spacing). Links a person made stay; wording that matches no
-    approved attribute stays unlinked, for the reviewer to see."""
+    approved attribute stays unlinked, for the reviewer to see.
+
+    A D&I request is never linked this way to an attribute a person excepted from the D&I
+    evidence (design_coverage_exceptions): the planner's naming of it is not a reason to
+    withdraw what the person recorded. Only a person's own links change addresses it."""
     wanted = {" ".join(str(name).split()).lower() for name in names}
     matched = sorted(
         UUID(str(row[0]))
         for row in cursor.execute(
-            "SELECT id, text FROM control_attributes WHERE engagement_control_id = %s "
-            "AND status = 'APPROVED'",
-            (control_id,),
+            """
+            SELECT a.id, a.text FROM control_attributes a
+            WHERE a.engagement_control_id = %s AND a.status = 'APPROVED'
+              AND NOT (
+                  EXISTS (SELECT 1 FROM design_coverage_exceptions x
+                          WHERE x.attribute_id = a.id
+                            AND x.engagement_control_id = a.engagement_control_id)
+                  AND EXISTS (SELECT 1 FROM evidence_requirements q
+                              WHERE q.id = %s AND q.phase = 'DESIGN'))
+            """,
+            (control_id, requirement_id),
         ).fetchall()
         if " ".join(str(row[1]).split()).lower() in wanted
     )
@@ -1275,6 +1300,15 @@ def _merge_requirements(
         (control_id,),
     ).fetchall()
     existing = {(str(row[1]), str(row[2])): row for row in rows}
+    excepted = {
+        " ".join(str(row[0]).split()).lower()
+        for row in cursor.execute(
+            "SELECT a.text FROM control_attributes a "
+            "JOIN design_coverage_exceptions x ON x.attribute_id = a.id "
+            "WHERE a.engagement_control_id = %s",
+            (control_id,),
+        ).fetchall()
+    }
     planned_keys: set[tuple[str, str]] = set()
     for phase_plan in output.phases:
         period = periods[phase_plan.phase]
@@ -1354,8 +1388,16 @@ def _merge_requirements(
             )
             # The attributes it supports are part of an approved master test plan.
             named = [str(item) for item in row[13]] if isinstance(row[13], list) else []
+            proposed_names = list(content["attributes"])
+            if phase_plan.phase == "DESIGN" and excepted:
+                # An attribute a person excepted from the D&I evidence is left alone: the
+                # planner naming it, or no longer naming it, is not a change to propose.
+                named = [n for n in named if " ".join(n.split()).lower() not in excepted]
+                proposed_names = [
+                    n for n in proposed_names if " ".join(n.split()).lower() not in excepted
+                ]
             if held and (
-                sorted(named) != sorted(content["attributes"])
+                sorted(named) != sorted(proposed_names)
                 or (row[14], row[15]) != (content["objective"], content["sample_selection"])
             ):
                 material = True
