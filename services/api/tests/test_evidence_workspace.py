@@ -509,7 +509,7 @@ def test_a_request_is_received_when_a_person_accepts_its_last_item(migrated: Dat
         sql = (
             Path(__file__).resolve().parents[3] / "migrations" / "0103_received_when_accepted.sql"
         ).read_text(encoding="utf-8")
-        connection.execute(sql)  # type: ignore[arg-type]
+        connection.execute(sql)
     assert status() == "RECEIVED"
 
 

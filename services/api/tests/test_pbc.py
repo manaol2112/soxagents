@@ -10,7 +10,6 @@ from test_execution import _add_project_member, _add_user, _client, _ready
 from ai_workforce_api.db import connect
 from ai_workforce_api.mailbox import MockMailbox
 from ai_workforce_api.main import create_app
-from ai_workforce_api.migrate import apply_migrations, migrations_dir
 from ai_workforce_api.settings import Settings
 
 # Always ahead: a fixed date here expired on 1 November 2026, and a request past its due date
@@ -215,9 +214,10 @@ def test_closed_pbc_records_do_not_send(migrated: Database) -> None:
 
 
 @pytest.fixture
-def migrated(empty_database: Database) -> Database:
-    apply_migrations(empty_database.url, migrations_dir())
-    return empty_database
+def migrated(migrated_database: Database) -> Database:
+    # Cloned from the session's migrated template (conftest): the state apply_migrations
+    # produces, without running the migrations again for every test.
+    return migrated_database
 
 
 def _move(

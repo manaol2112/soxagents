@@ -35,7 +35,9 @@ SSO_SETTINGS = {"auth-idp": "Okta", "auth-sso-mfa": "MFA for every user"}
 
 
 def test_the_settings_asked_follow_how_users_sign_in() -> None:
-    keys = lambda method: [s.key for s in asked(method)]  # noqa: E731
+    def keys(method: str) -> list[str]:
+        return [s.key for s in asked(method)]
+
     assert keys("") == ["auth-signin"]
     assert keys(SSO) == ["auth-signin", "auth-idp", "auth-sso-mfa", "auth-local-accounts"]
     local = keys(LOCAL)

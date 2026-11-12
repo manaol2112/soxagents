@@ -350,7 +350,7 @@ describe("the evidence workspace", () => {
     // The plan awaits approval: its items are not shown, so every file stays in the list.
     assert.deepEqual([...placedFiles(plan())], []);
     assert.deepEqual([...placedFiles(null)], []);
-    const approved = { ...plan(), status: "APPROVED" };
+    const approved = { ...plan(), status: "APPROVED" as const };
     // users.csv and policy.pdf serve items; new.csv serves none and stays in the list.
     assert.deepEqual([...placedFiles(approved)].sort(), [
       "f-policy",

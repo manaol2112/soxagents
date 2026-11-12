@@ -133,13 +133,11 @@ describe("engagement profile", () => {
         },
         { engagement_role: roles },
       );
-    assert.deepEqual(
-      "error" in add(["PREPARER"]) ? null : add(["PREPARER"]).body,
-      {
-        user_id: person,
-        engagement_role: "PREPARER",
-      },
-    );
+    const one = add(["PREPARER"]);
+    assert.deepEqual("error" in one ? null : one.body, {
+      user_id: person,
+      engagement_role: "PREPARER",
+    });
     const both = add(["PREPARER", "REVIEWER", "PREPARER"]);
     assert.deepEqual("error" in both ? null : both.body, {
       user_id: person,

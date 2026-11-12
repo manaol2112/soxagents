@@ -347,11 +347,10 @@ def test_an_existing_member_does_not_get_a_second_workspace(migrated: Database) 
 
 
 @pytest.fixture
-def migrated(empty_database: Database) -> Database:
-    from ai_workforce_api.migrate import apply_migrations, migrations_dir
-
-    apply_migrations(empty_database.url, migrations_dir())
-    return empty_database
+def migrated(migrated_database: Database) -> Database:
+    # Cloned from the session's migrated template (conftest): the state apply_migrations
+    # produces, without running the migrations again for every test.
+    return migrated_database
 
 
 def _app(database: Database, *, entra: Any = None, app_base_url: str = "") -> Any:

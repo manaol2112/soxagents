@@ -21,7 +21,6 @@ from test_execution import (
 from ai_workforce_api.actions import CATALOG
 from ai_workforce_api.authorization import Principal, PrincipalKind
 from ai_workforce_api.db import connect
-from ai_workforce_api.migrate import apply_migrations, migrations_dir
 from ai_workforce_api.policy import evaluate
 
 _SAMPLES = {
@@ -224,9 +223,10 @@ def test_races_do_not_duplicate_side_effects(migrated: Database) -> None:
 
 
 @pytest.fixture
-def migrated(empty_database: Database) -> Database:
-    apply_migrations(empty_database.url, migrations_dir())
-    return empty_database
+def migrated(migrated_database: Database) -> Database:
+    # Cloned from the session's migrated template (conftest): the state apply_migrations
+    # produces, without running the migrations again for every test.
+    return migrated_database
 
 
 def _together(work: Any, clients: list[TestClient]) -> list[Any]:

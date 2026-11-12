@@ -435,10 +435,12 @@ describe("console citations open the evidence", () => {
 
 describe("what waits on the team leads to the work", () => {
   const item = {
+    id: "01a1429c-504a-7abe-9fe0-bb5b2c4f2f9a",
     kind: "results",
     title: "Decide the open test results for ITGC-AC-01",
     detail: "",
     controlRef: "ITGC-AC-01",
+    controlLabel: "ITGC-AC-01",
     link: "controls",
     controlId: "01a1429c-504a-7abe-9fe0-bb5b2c4f2f99",
     tab: "interim",

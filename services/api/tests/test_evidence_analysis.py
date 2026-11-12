@@ -425,9 +425,10 @@ def test_the_local_worker_reads_files_off_the_request_thread() -> None:
 
 
 @pytest.fixture
-def migrated(empty_database: Database) -> Database:
-    apply_migrations(empty_database.url, migrations_dir())
-    return empty_database
+def migrated(migrated_database: Database) -> Database:
+    # Cloned from the session's migrated template (conftest): the state apply_migrations
+    # produces, without running the migrations again for every test.
+    return migrated_database
 
 
 class _Scheduler:

@@ -42,8 +42,11 @@ describe("the agent, clicked", () => {
     assert.match(AGENT_SAYS.working, /^Working on this now/);
     assert.match(AGENT_SAYS.attention, /details are needed/);
     // The product's neutral voice: no agent first person.
+    const firstPerson = /\b(I|I'm|I'll|me|my)\b/;
+    // The check itself catches a first-person line, so it cannot pass vacuously.
+    assert.match("I'll check my queue for me.", firstPerson);
     for (const line of Object.values(AGENT_SAYS)) {
-      assert.doesNotMatch(line, /(I|I'm|I'll|me|my)/);
+      assert.doesNotMatch(line, firstPerson);
     }
   });
 

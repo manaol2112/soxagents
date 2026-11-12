@@ -16,7 +16,9 @@ For an ordinary code change:
    lint`, `make typecheck`).
 2. The targeted tests for the modified components and the code that depends on them:
    the tests of the changed files and their callers, chosen by hand or with `make
-   test-changed`.
+   test-changed` (`make test-changed BASE=HEAD` selects only from the uncommitted and
+   untracked changes; `scripts/changed_tests.py --list` prints the selection without
+   running it).
 3. `make test-fast` once a feature change is complete.
 
 Decided by the owner on 23 October 2026, for active development:
@@ -102,6 +104,21 @@ Mechanics that keep the tests trustworthy and fast: every Python test still gets
 database, now cloned from a per-session template that `apply_migrations` built once
 (`tests/conftest.py`), and files run in parallel with `pytest-xdist` (one file per
 worker). `test_migrations` keeps applying the migrations itself on an empty database.
+Since 11 November 2026 the files that kept their own `migrated` fixture (test_access,
+test_auth, test_authorization and 22 others) clone the template too, instead of running
+every migration for each test. Each worker's database names carry an owner token, and the
+worker keeps one connection open under that token (its application_name) for the session,
+so the next run drops the databases of a run that was killed before its teardown, and never
+touches a live run's. Template builds are serialized by an advisory lock: eight or more
+at once (a run's workers, or two runs together) exhausted PostgreSQL's shared lock table
+("out of shared memory") and errored every test of those workers. A Temporal
+time-skipping test server that
+does not start within sdk-core's fixed five seconds (a loaded machine) is started again,
+up to four times; the harness itself is tested in `test_test_infrastructure.py`
+(critical tier). Under parallel load a test's time is mostly PostgreSQL round trips
+through Docker (thousands of queries and over a hundred new connections per test);
+another run on the same database server, such as `make test-demo`, can make a tier
+several times slower, so time a tier only when nothing else is running.
 
 Until the current branch is committed, `make test-changed` compares against `main` and
 selects almost everything; commit at each milestone so the selection is meaningful, or

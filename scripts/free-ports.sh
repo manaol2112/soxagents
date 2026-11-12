@@ -47,7 +47,8 @@ for port in "$@"; do
     [[ -z "${pid}" || "${pid}" == "0" ]] && continue
     name=$(name_of "${pid}")
     case "$(printf '%s' "${name}" | tr '[:upper:]' '[:lower:]')" in
-      python.exe | python | python3 | python3.* | node.exe | node)
+      # next-server: Next.js renames its Node process on macOS and Linux.
+      python.exe | python | python3 | python3.* | node.exe | node | next-server*)
         echo "Port ${port}: stopping ${name} (PID ${pid}), left running by an earlier start."
         stop "${pid}"
         ;;

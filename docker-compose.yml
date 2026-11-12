@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
     healthcheck:
@@ -35,7 +35,7 @@ services:
       POSTGRES_SEEDS: postgres
       BIND_ON_IP: 0.0.0.0
     ports:
-      - "7233:7233"
+      - "127.0.0.1:7233:7233"
     healthcheck:
       test: ["CMD", "tctl", "--address", "127.0.0.1:7233", "workflow", "list"]
       interval: 5s
@@ -52,8 +52,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-local-minio}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-local-minio-secret}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio_data:/data
     restart: "no"

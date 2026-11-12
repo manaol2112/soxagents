@@ -20,7 +20,6 @@ from ai_workforce_api.mailbox import (
     open_mailbox,
 )
 from ai_workforce_api.main import create_app
-from ai_workforce_api.migrate import apply_migrations, migrations_dir
 from ai_workforce_api.settings import Settings
 
 
@@ -170,9 +169,10 @@ def test_mailbox_configuration_stays_closed(migrated: Database) -> None:
 
 
 @pytest.fixture
-def migrated(empty_database: Database) -> Database:
-    apply_migrations(empty_database.url, migrations_dir())
-    return empty_database
+def migrated(migrated_database: Database) -> Database:
+    # Cloned from the session's migrated template (conftest): the state apply_migrations
+    # produces, without running the migrations again for every test.
+    return migrated_database
 
 
 def _client(database: Database, user_id: object, settings: Settings) -> TestClient:

@@ -1,7 +1,7 @@
 // Owner assignment for requests addressed to no one (Release 2b): the suggestions read
 // from the API, the person's choices, and what is confirmed.
 
-import type { Contact } from "./request-details-model";
+import type { Contact } from "./request-details-model.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const EMAIL = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;

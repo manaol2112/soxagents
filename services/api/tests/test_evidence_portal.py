@@ -182,7 +182,7 @@ def test_codes_asked_for_at_once_stay_within_the_hourly_limit(migrated: Database
     def ask() -> str:
         with connect(migrated.url) as connection:
             try:
-                send_code(connection, settings, token, lambda *_args: _SlowMailbox())  # type: ignore[arg-type,return-value]
+                send_code(connection, settings, token, lambda *_args: _SlowMailbox())  # type: ignore[arg-type]
             except TooMany:
                 return "limited"
             return "sent"

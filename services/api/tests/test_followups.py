@@ -20,7 +20,6 @@ from ai_workforce_api.durable import TASK_QUEUE, activities_for, follow_up_workf
 from ai_workforce_api.durable_workflow import FollowUpRequest, FollowUpWorkflow
 from ai_workforce_api.followups import DONE, HOLD_SECONDS, Occurrence, advance, plan
 from ai_workforce_api.mailbox import MailboxProvider, open_mailbox
-from ai_workforce_api.migrate import apply_migrations, migrations_dir
 from ai_workforce_api.outbound import PBC_REMINDER, render_reminder, send_reminder
 from ai_workforce_api.settings import Settings
 
@@ -394,9 +393,10 @@ async def test_the_durable_timer_escalates_a_silent_request(migrated: Database) 
 
 
 @pytest.fixture
-def migrated(empty_database: Database) -> Database:
-    apply_migrations(empty_database.url, migrations_dir())
-    return empty_database
+def migrated(migrated_database: Database) -> Database:
+    # Cloned from the session's migrated template (conftest): the state apply_migrations
+    # produces, without running the migrations again for every test.
+    return migrated_database
 
 
 @pytest.fixture

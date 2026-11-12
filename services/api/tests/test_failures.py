@@ -15,7 +15,6 @@ from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.durable import TASK_QUEUE, activities_for
 from ai_workforce_api.durable_workflow import DurableEffectWorkflow, EffectRequest
 from ai_workforce_api.main import create_app
-from ai_workforce_api.migrate import apply_migrations, migrations_dir
 from ai_workforce_api.settings import Settings
 
 
@@ -170,9 +169,10 @@ def anyio_backend() -> str:
 
 
 @pytest.fixture
-def migrated(empty_database: Database) -> Database:
-    apply_migrations(empty_database.url, migrations_dir())
-    return empty_database
+def migrated(migrated_database: Database) -> Database:
+    # Cloned from the session's migrated template (conftest): the state apply_migrations
+    # produces, without running the migrations again for every test.
+    return migrated_database
 
 
 def _workspace(database: Database, slug: str) -> tuple[dict[str, Any], UUID, TestClient]:

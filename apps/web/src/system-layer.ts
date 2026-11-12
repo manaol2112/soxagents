@@ -1,4 +1,4 @@
-import type { IconName } from "./ui-icon";
+import type { IconName } from "./icon-name.ts";
 
 /** A system's icon by its layer, as the system picker shows it when the system is
  * chosen; one map for every screen that names a system. */

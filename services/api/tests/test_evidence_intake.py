@@ -417,7 +417,7 @@ def _engagement(
     return team, client, scheduler
 
 
-def _client(database: Database, user_id: UUID, scheduler: _Scheduler) -> TestClient:
+def _client(database: Database, user_id: UUID, scheduler: _Scheduler | None) -> TestClient:
     settings = Settings(database_url=database.url, session_cookie_secure=False)
     token = uuid4().hex
     with connect(database.url) as connection:
