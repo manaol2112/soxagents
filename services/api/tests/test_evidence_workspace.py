@@ -266,7 +266,19 @@ def test_evidence_added_on_an_item_serves_that_item_only(migrated: Database) -> 
     assert other["files"] == [] and other["passed_over"] == []
 
     # The same file added on the second item serves it too.
-    again = upload(second["id"])
+    # Rewritten for B1g (product owner, 12 November 2026: evidence already in hand is per
+    # item). Old expectation: the second item was still on the first item's request, which
+    # the first file had marked partly received with its send withdrawn, so the file was
+    # added there. New: the request was never sent, so the first item's file left the
+    # second item to be asked for in a draft of its own, and the file is added on the
+    # request that now carries it. What this test is about is unchanged: the same file
+    # serves the second item too, by a link, and a replacement keeps its item.
+    carrying = str(other["request_id"])
+    assert carrying != request_id and other["in_hand"] is False and mine["in_hand"] is True
+    stale = upload(second["id"])
+    assert stale.status_code == 409
+    assert stale.json()["detail"] == "this item is not one the request asks for"
+    again = upload(second["id"], request_id=carrying)
     assert again.status_code == 200 and again.json()["duplicate"] is True
     design = _phase(_plan(client, team, control), "DESIGN")
     other = next(r for r in design["requirements"] if r["id"] == second["id"])

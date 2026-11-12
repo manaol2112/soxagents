@@ -190,6 +190,9 @@ class SubmitResult(BaseModel):
     request: PbcBody
     approval: ApprovalBody
     preview: OutboundPreview
+    # Whether a message can be sent now (email_on). False: an approval records a hand-over
+    # (request.delivery says HANDED_OVER) and nothing is sent.
+    live_email: bool = False
 
 
 class ReminderSubmitResult(BaseModel):
@@ -277,8 +280,12 @@ def register_outbound(
         principal = _session_principal(request)
         return _run(
             settings,
-            lambda connection: _submit(
-                connection, settings, principal, organization_id, project_id, request_id, body
+            lambda connection: _stamped(
+                settings,
+                mailbox,
+                _submit(
+                    connection, settings, principal, organization_id, project_id, request_id, body
+                ),
             ),
         )
 
@@ -293,9 +300,20 @@ def register_outbound(
         principal = _session_principal(request)
         return _run(
             settings,
-            lambda connection: _approve_draft(
-                connection, settings, principal, organization_id, project_id, request_id, body
-            ),
+            lambda connection: _stamped(
+                settings,
+                mailbox,
+                _approve_draft(
+                    connection,
+                    settings,
+                    principal,
+                    organization_id,
+                    project_id,
+                    request_id,
+                    body,
+                    mailbox,
+                ),
+            ),  # fmt: skip
         )
 
     @app.post(f"{base}/pbc-requests/{{request_id}}/send")
@@ -319,6 +337,7 @@ def register_outbound(
                 body.approval_id,
                 mailbox,
                 timer,
+                handover=True,
             ),
         )
 
@@ -476,6 +495,22 @@ def _run[T](settings: Settings, work: Callable[[psycopg.Connection[Any]], T]) ->
         raise HTTPException(status_code=409, detail=error.detail) from None
     except ValueError as error:
         raise HTTPException(status_code=422, detail="outbound fields are invalid") from error
+
+
+def email_on(settings: Settings, mailbox: MailboxFactory = open_mailbox) -> bool:
+    """Whether a message can be sent now: the rule the send itself refuses on
+    (_send_once). The configured mailbox sends (live email with every condition met, or
+    the mock mailbox of development and tests), or the caller brought its own."""
+    return mailbox is not open_mailbox or mailbox_available(settings)
+
+
+def _stamped(settings: Settings, mailbox: MailboxFactory, result: SubmitResult) -> SubmitResult:
+    """The answer of a submit or an approval says whether email is on, on the result and
+    on its request."""
+    on = email_on(settings, mailbox)
+    return result.model_copy(
+        update={"live_email": on, "request": result.request.model_copy(update={"live_email": on})}
+    )
 
 
 def render(request: PbcBody, engagement: str) -> RenderedMessage:
@@ -733,6 +768,7 @@ def _submit(
         raise OutboundState("pbc request changed")
     if pbc.status not in {"DRAFT", "APPROVAL_PENDING"}:
         raise OutboundState("request is already sent")
+    _settle_in_hand(connection, principal, organization_id, project_id, request_id)
     from ai_workforce_api.evidence_plans import held_for_planning
 
     held = held_for_planning(connection, request_id) if pbc.status == "DRAFT" else None
@@ -827,10 +863,15 @@ def _approve_draft(
     project_id: UUID,
     request_id: UUID,
     body: ApproveDraftBody,
+    mailbox: MailboxFactory = open_mailbox,
 ) -> SubmitResult:
     """The reviewer approves a request the agent drafted, as it stands: the evidence
     coordinator asked, the reviewer approves. It then waits to be sent. A request a person
-    wrote is submitted for someone else to approve instead."""
+    wrote is submitted for someone else to approve instead.
+
+    With email off nothing can be sent, so the approval records the hand-over (hand_over;
+    product owner, 12 November 2026): the approver is on record as having handed the
+    request over, as approved, and the answer says so (request.delivery)."""
     authorize(
         connection,
         principal=principal,
@@ -850,6 +891,7 @@ def _approve_draft(
         raise OutboundState("request is not a draft")
     if not _agent_drafted(connection, request_id):
         raise OutboundState("only an agent's draft is approved by its reviewer")
+    _settle_in_hand(connection, principal, organization_id, project_id, request_id)
     from ai_workforce_api.evidence_plans import held_for_planning
 
     held = held_for_planning(connection, request_id)
@@ -894,9 +936,117 @@ def _approve_draft(
     approval = _load(connection, organization_id, project_id, asked.id)
     if approval is None:
         raise NotVisible()
+    approved = _pbc_body(row)
+    if not email_on(settings, mailbox) and hand_over(
+        connection, settings, principal, organization_id, project_id, request_id, asked.id
+    ):
+        approved = _read_pbc(connection, organization_id, project_id, request_id)
     return SubmitResult(
-        request=_pbc_body(row), approval=approval, preview=_preview_body(settings, message)
+        request=approved, approval=approval, preview=_preview_body(settings, message)
     )
+
+
+IN_HAND_CHANGED = (
+    "Evidence for part of this request is already in hand, so the request was updated to "
+    "ask only for the rest. Review it again before approving."
+)
+IN_HAND_ALL = (
+    "Evidence for every item of this request is already in hand, so nothing needs sending."
+)
+
+
+def _settle_in_hand(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    request_id: UUID,
+) -> None:
+    """Before a request goes for approval: an item whose evidence is already in hand is
+    not asked for (evidence_receipts.settle_in_hand). When that changes what the request
+    asks, the change is kept and the approval is refused with why: a person approves the
+    wording that goes out, so they read it again first. When every item is in hand the
+    request is received as provided directly, and there is nothing to approve."""
+    from ai_workforce_api.evidence_receipts import settle_in_hand
+
+    with transaction(connection) as cursor:
+        changed = settle_in_hand(cursor, organization_id, project_id, request_id, principal.id)
+    if changed is not None:
+        connection.commit()
+        raise OutboundState(IN_HAND_CHANGED if changed == "SPLIT" else IN_HAND_ALL)
+
+
+def hand_over(
+    connection: psycopg.Connection[Any],
+    settings: Settings,
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    request_id: UUID,
+    approval_id: UUID,
+) -> bool:
+    """Record that an approved request was handed over, because email is off and nothing
+    can be sent (product owner, 12 November 2026: email off means handed over, on the
+    record). Who and when are kept on the request and on the audit trail, with the person
+    as the actor; never an agent. Returns whether this call recorded it.
+
+    Held to what a send is held to, except the mailbox: the request awaits its send, it
+    does not travel in a group, its send checks pass, and the approval is approved, not
+    used, not expired, and is the approval of the message as it now reads (the same
+    binding as a send, _lock_approval: a wording changed after the approval is not handed
+    over on it). Otherwise nothing is recorded. The approval is left as it stands, so the
+    same message can still be emailed once email is on; nothing here says it was sent."""
+    if principal.kind is not PrincipalKind.USER:
+        return False
+    from ai_workforce_api.evidence_groups import in_live_group
+
+    try:
+        with transaction(connection) as cursor:
+            pbc = _lock_pbc(cursor, organization_id, project_id, request_id)
+            if pbc.status != "APPROVAL_PENDING" or in_live_group(connection, request_id):
+                return False
+            message = render(pbc, _engagement(connection, organization_id, project_id))
+            _check(connection, settings, organization_id, project_id, request_id, _SEND_CHECKS)
+            _lock_approval(cursor, organization_id, project_id, approval_id, message)
+            row = cursor.execute(
+                """
+                UPDATE pbc_requests
+                SET handed_over_at = clock_timestamp(), handed_over_by = %s,
+                    handed_over_approval_id = %s, updated_at = clock_timestamp(),
+                    version = version + 1
+                WHERE id = %s AND project_id = %s AND status = 'APPROVAL_PENDING'
+                  AND handed_over_approval_id IS DISTINCT FROM %s
+                RETURNING id
+                """,
+                (principal.id, approval_id, request_id, project_id, approval_id),
+            ).fetchone()
+            if row is None:
+                return False
+            cursor.execute(
+                """
+                INSERT INTO audit_events (
+                    organization_id, project_id, actor_user_id, action, target_type,
+                    target_id, payload
+                )
+                VALUES (%s, %s, %s, 'pbc.handed_over', 'pbc_request', %s, %s)
+                """,
+                (
+                    organization_id,
+                    project_id,
+                    principal.id,
+                    request_id,
+                    Json(
+                        {
+                            "approval_id": str(approval_id),
+                            "content_sha256": message.content_sha256,
+                            "reason": "live email is off",
+                        }
+                    ),
+                ),
+            )
+            return True
+    except OutboundState, NotVisible, ValueError:
+        return False
 
 
 def send_request(
@@ -909,8 +1059,14 @@ def send_request(
     approval_id: UUID,
     mailbox: MailboxFactory = open_mailbox,
     timer: FollowUpTimer | None = None,
+    *,
+    handover: bool = False,
 ) -> OutboundBody:
-    """Commit the outbound record before the provider is called."""
+    """Commit the outbound record before the provider is called.
+
+    `handover` (the send route): with email off the send is refused as before, and the
+    approved request is first recorded as handed over by the person sending it
+    (hand_over), which is kept though the send is refused."""
     authorize(
         connection,
         principal=principal,
@@ -918,6 +1074,15 @@ def send_request(
         organization_id=organization_id,
         project_id=project_id,
     )
+    if (
+        handover
+        and not email_on(settings, mailbox)
+        and _by_approval(connection, organization_id, project_id, approval_id) is None
+        and hand_over(
+            connection, settings, principal, organization_id, project_id, request_id, approval_id
+        )
+    ):
+        connection.commit()
     result = _send_once(
         connection,
         settings,

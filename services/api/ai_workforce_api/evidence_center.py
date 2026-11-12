@@ -1451,8 +1451,9 @@ def bulk(
                     version=current.version, reason=reason or "Reviewed and approved."
                 )
                 approved = _approve_draft(
-                    connection, settings, principal, organization_id, project_id, item.id, note
-                )
+                    connection, settings, principal, organization_id, project_id, item.id, note,
+                    mailbox or open_mailbox,
+                )  # fmt: skip
                 if not sending:
                     outcome(True, "Approved. Not sent.")
                     continue
@@ -1613,6 +1614,9 @@ def _bulk_group(
     return outcome(False, f"Approved, but not sent: {sent.notice or 'delivery is pending.'}")
 
 
+HANDED_OVER = "Approved and handed over: email sending is off, so nothing was sent."
+
+
 def _send_approved(
     connection: psycopg.Connection[Any],
     settings: Settings,
@@ -1634,6 +1638,16 @@ def _send_approved(
             approval_id, mailbox or open_mailbox, timer,
         )  # fmt: skip
     except OutboundState as error:
+        if error.detail == "live email is off":
+            handed = connection.execute(
+                "SELECT handed_over_approval_id = %s FROM pbc_requests "
+                "WHERE id = %s AND project_id = %s",
+                (approval_id, request_id, project_id),
+            ).fetchone()
+            if handed is not None and handed[0] is True:
+                # The approval recorded the hand-over (outbound.hand_over): said as it is,
+                # and still not counted as sent.
+                return False, HANDED_OVER
         return False, f"Approved, but not sent: {_sentence(error.detail)}"
     except AccessDenied, NotVisible:
         return False, "Approved, but your role does not permit sending it."

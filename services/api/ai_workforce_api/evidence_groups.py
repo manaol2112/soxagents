@@ -1474,6 +1474,13 @@ def send_group(
             if refused.detail != "live email is off":
                 raise
             notice = "Email sending is off; the approval stands, to send once it is on."
+            if current is None and _hand_over(
+                connection, organization_id, project_id, principal, group
+            ):
+                notice = (
+                    "Email sending is off, so nothing was sent: the requests are recorded as "
+                    "handed over. The approval stands, to send once email is on."
+                )
         else:
             if result.status == "ACCEPTED":
                 schedule(timer, organization_id, project_id, group.lead_request_id)
@@ -1481,6 +1488,62 @@ def send_group(
                 notice = "Handed to the mail provider; delivery is not yet confirmed."
     view = review(connection, settings, principal, organization_id, project_id, group_id)
     return view.model_copy(update={"notice": notice}) if notice else view
+
+
+def _hand_over(
+    connection: psycopg.Connection[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    principal: Principal,
+    group: Stored,
+) -> bool:
+    """Email is off, so the approved group cannot be sent: each of its requests is
+    recorded as handed over by the person sending it (B1g; outbound.hand_over is the
+    rule for a request sent alone), each on its own approval, with the person as the
+    actor. Only for a group checked just now as still what was approved (_send_problem),
+    and never by an agent. The requests' versions are left as they are: the group's
+    approval is of those versions, and the same email still goes out once email is on."""
+    if principal.kind is not PrincipalKind.USER:
+        return False
+    with transaction(connection) as cursor:
+        rows = cursor.execute(
+            """
+            UPDATE pbc_requests r
+            SET handed_over_at = clock_timestamp(), handed_over_by = %s,
+                handed_over_approval_id = m.approval_id
+            FROM evidence_request_group_members m
+            WHERE m.group_id = %s AND m.pbc_request_id = r.id AND m.released_at IS NULL
+              AND r.project_id = %s AND r.organization_id = %s
+              AND r.status = 'APPROVAL_PENDING'
+              AND r.handed_over_approval_id IS DISTINCT FROM m.approval_id
+            RETURNING r.id, m.approval_id
+            """,
+            (principal.id, group.id, project_id, organization_id),
+        ).fetchall()
+        for request_id, approval_id in rows:
+            cursor.execute(
+                """
+                INSERT INTO audit_events (
+                    organization_id, project_id, actor_user_id, action, target_type,
+                    target_id, payload
+                )
+                VALUES (%s, %s, %s, 'pbc.handed_over', 'pbc_request', %s, %s)
+                """,
+                (
+                    organization_id,
+                    project_id,
+                    principal.id,
+                    request_id,
+                    Json(
+                        {
+                            "approval_id": str(approval_id),
+                            "group_id": str(group.id),
+                            "reason": "live email is off",
+                        }
+                    ),
+                ),
+            )
+    return bool(rows)
 
 
 def _outbound_of(
