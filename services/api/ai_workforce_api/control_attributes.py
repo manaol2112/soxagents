@@ -26,7 +26,7 @@ from uuid import UUID
 
 import psycopg
 from psycopg.types.json import Json
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from ai_workforce_api import understanding_authority as authority
 from ai_workforce_api.actions import contains_secret
@@ -72,11 +72,13 @@ MAX_ATTRIBUTES = 12
 # conflict is two sources the understanding is silent on, with one statement per side.
 PROMPT_VERSION = "attributes/5"
 # attribute-review/2 (the same day): the reviewer of the drafts checks every ADD against the
-# approved attributes and the other drafts. /3 (B1e): it never corrects a draft that follows
-# the understanding back to what was set aside.
+# approved attributes and the other drafts. /3 (B1e): it is given the confirmed understanding
+# with its dates and the precedence; every check it had stays.
 REVIEW_PROMPT_VERSION = "attribute-review/3"
-# The agent the attribute run acts as, on the audit trail and on what it records.
+# The agents of the attribute run, on the audit trail and on what they record: the drafter,
+# and the independent reviewer of its drafts.
 ATTRIBUTE_AGENT = "engagement-planner"
+DRAFT_REVIEWER = "independent-reviewer"
 # An approved attribute's criteria are tailored to the control and owned by a person (product
 # owner, 11 November 2026: the agents judge evidence against criteria "tailored on the control
 # environment but still guided by the requirements of the attributes"): a person wrote them,
@@ -132,11 +134,12 @@ class AttributeBody(BaseModel):
     # agent output, never a person's approval. None when it was not reviewed, or changed
     # since.
     review: ReviewMark | None = None
-    # What the agent followed in the confirmed Control Understanding and what it set aside
-    # for it (an older answer with its date, the RCM record, the library wording, the
-    # approved attribute), with one plain sentence (understanding_authority.py, B1e). Agent
-    # output, never a person's decision. None when nothing was set aside, or when the
-    # wording or criteria changed after the record was written.
+    # What the agent followed in the confirmed Control Understanding (the fact as the
+    # records hold it) and what it set aside for it (an older answer with its date, the RCM
+    # record, the library wording, the approved attribute), with the agent's one sentence
+    # (understanding_authority.py, B1e). The agent's statement, never a person's decision.
+    # None when nothing was set aside, or when it is no longer true: the wording or criteria
+    # changed after it was written, or a fact it names no longer stands as it was recorded.
     understanding_basis: authority.UnderstandingBasis | None = None
 
 
@@ -216,6 +219,11 @@ def attributes(connection: psycopg.Connection[Any], control_id: UUID) -> Attribu
         """,
         (control_id,),
     ).fetchall()
+    # The confirmed facts as they stand now, read only when an attribute has a record to
+    # check against them.
+    understood = (
+        authority.facts(connection, control_id) if any(row[28] is not None for row in rows) else ()
+    )
     bodies = [
         AttributeBody(
             id=row[0],
@@ -246,7 +254,7 @@ def attributes(connection: psycopg.Connection[Any], control_id: UUID) -> Attribu
             criteria_accepted_at=row[26],
             criteria_owned=bool(row[27]),
             understanding_basis=authority.current(
-                row[28], authority.mark(row[2], row[18], row[19], row[20], row[21])
+                row[28], authority.mark(row[2], row[18], row[19], row[20], row[21]), understood
             ),
         )
         for row in rows
@@ -667,7 +675,9 @@ not followed, with its kind (OLDER_ANSWER with that fact's ref in fact, or RCM_R
 LIBRARY_WORDING or APPROVED_ATTRIBUTE with fact empty) and what it said in a few plain words \
 (for example "the grant date in the Active Directory change log"); and why, one plain \
 sentence for the person who accepts the attribute. Leave follows out when nothing was set \
-aside. Never follow an older fact over a newer one.
+aside. Never follow an older fact over a newer one, nor a RECORDS fact over a PERSON one. \
+What you say in follows is checked against the records and reviewed like the rest of the \
+proposal.
 - DOCUMENTED only when a source states the requirement. Give the source's id and copy the \
 exact words that state it (at most 200 characters).
 - INFERRED when the requirement is common practice for a control of this kind but no \
@@ -693,14 +703,15 @@ fail, objective enough that two testers would agree and specific to this client'
 systems, dates and records (never words such as appropriate, adequate, timely or properly); \
 and judgment_required, true only when the condition calls for professional judgment (such \
 as the precision of a management review). For RETIRE leave them empty and false.
-- Raise an issue only for what confirmed_understanding does not settle. MISSING or \
-AMBIGUOUS: a fact no confirmed fact covers and without which an attribute cannot be tested \
-(no approval threshold, no population definition, who reviews is unclear). CONFLICT: two \
-source documents that disagree on a matter confirmed_understanding says nothing about (two \
-sources disagree on frequency or approver); quote both sides, each in its own words from its \
-own source. Say why it matters to testing and what would resolve it. In covered_by, give the \
-refs of every confirmed fact that speaks to the matter, or none when the understanding is \
-silent on it.
+- Raise an issue only for what confirmed_understanding does not settle: where a confirmed \
+fact settles the matter, follow it and raise nothing. MISSING or AMBIGUOUS: a fact no \
+confirmed fact settles and without which an attribute cannot be tested (no approval \
+threshold, no population definition, who reviews is unclear). CONFLICT: two source documents \
+that disagree on a matter no confirmed fact settles (two sources disagree on frequency or \
+approver); quote both sides, each in its own words from its own source. Say why it matters \
+to testing and what would resolve it. For a CONFLICT, give in covered_by the refs of the \
+confirmed facts that settle the matter, or none when none does; leave it empty for a missing \
+or ambiguous fact.
 - Raise at most five issues, only those that would change how the control is tested. \
 Do not raise one that open_issues already lists or answered_questions already settles, in \
 any wording. answered_questions are the team's answers about this client: work from them.
@@ -823,6 +834,13 @@ class _Proposal(BaseModel):
     judgment_required: bool = False
     follows: authority.Follows | None = None
 
+    @field_validator("follows", mode="before")
+    @classmethod
+    def _follows_or_none(cls, raw: Any) -> authority.Follows | None:
+        # A statement that does not fit is discarded by itself: the proposal it came with,
+        # the other proposals and the run's issues are kept.
+        return authority.follows_said(raw)
+
 
 class _Answer(BaseModel):
     attributes: list[_Proposal] = Field(max_length=MAX_ATTRIBUTES)
@@ -847,12 +865,9 @@ def generate(
     # confirmed, newest first, under the refs their answers name. Read here, so the refs
     # the agents were given are the ones their answers are checked against.
     understood = authority.facts(connection, control_id)
+    narrative_at = authority.narrative_confirmed_at(connection, control_id)
     package = _with_criteria(
-        connection,
-        control_id,
-        authority.packaged(
-            package, understood, authority.narrative_confirmed_at(connection, control_id)
-        ),
+        connection, control_id, authority.packaged(package, understood, narrative_at)
     )
     agent = agent_actor(connection, project_id, ATTRIBUTE_AGENT)
     call = AgentCaller(
@@ -891,20 +906,31 @@ def generate(
         answer = _Answer.model_validate(raw.output)
     except ValidationError:
         return 0, "The agent's proposals did not fit, so none were kept."
-    proposals, review_note, fixes = _review(
+    proposals, review_note, fixes, reviewed, review_call = _review(
         connection, provider, organization_id, project_id, control_id, requester, package,
         sources, answer.attributes,
     )  # fmt: skip
-    # A draft that follows the understanding is never corrected back or left out by its
-    # reviewer: the server keeps it as drafted (rule 8, with no model in the check).
-    proposals, restored = _keep_followed(answer.attributes, proposals, understood)
-    fixes = [*fixes, *restored]
+    # Who wrote what is stored: when the reviewer of the drafts returned the list, every
+    # proposal in it, and what it says it follows, is the reviewer's, by its model call;
+    # otherwise the drafter's. The reviewer's list stands as it returned it: a draft that
+    # says it follows the understanding is corrected or left out like any other, and the
+    # audit record says which were (B1e: a statement by an agent buys no exemption).
+    writer: tuple[str, UUID | None, str] = (
+        (DRAFT_REVIEWER, review_call, REVIEW_PROMPT_VERSION)
+        if reviewed
+        else (ATTRIBUTE_AGENT, call_id, PROMPT_VERSION)
+    )
+    reviewer_left_out = (
+        _left_by_reviewer(answer.attributes, proposals, understood) if reviewed else []
+    )
+    times = authority.source_times(connection, control_id, sources)
     kept = 0
     duplicates = 0
     detailed = 0
-    # What the run followed, what it left unraised and what it closed, for its audit record.
+    # What the run followed, what it left out or unraised and what it closed, for its audit
+    # record.
     followed: list[dict[str, Any]] = []
-    older_followed = 0
+    older_followed: list[dict[str, Any]] = []
     with transaction(connection) as cursor:
         approved = _approved(cursor, control_id)
         approved_ids = {str(i): t for i, t in approved}
@@ -947,7 +973,10 @@ def generate(
             # follows an older answer over a newer one is left out: the newer answer holds.
             record, backwards = authority.recorded(item.follows, understood)
             if backwards:
-                older_followed += 1
+                older_followed.append(
+                    {"action": item.action, "replaces": replaces, "text": text,
+                     **authority.weaker_followed(item.follows, understood)}
+                )  # fmt: skip
                 continue
             if item.action == "RETIRE":
                 text = approved_ids[replaces]
@@ -976,7 +1005,7 @@ def generate(
                     detailed += 1
                     if record is not None:
                         _record_basis(
-                            cursor, UUID(replaces), record, call_id,
+                            cursor, UUID(replaces), record, writer,
                             authority.mark(approved_ids[replaces], *stated, False),
                         )  # fmt: skip
                         followed.append(
@@ -1052,9 +1081,7 @@ def generate(
                     else Json(
                         authority.stored(
                             record,
-                            ATTRIBUTE_AGENT,
-                            call_id,
-                            PROMPT_VERSION,
+                            *writer,
                             authority.mark(text, condition, passes, fails, judgment),
                         )
                     ),  # fmt: skip
@@ -1073,11 +1100,13 @@ def generate(
             if standing:
                 held[1].add(standing)
             kept += 1
-        # What the agent may raise (B1e, rules 4 to 6), by a guard with no model in it: a
-        # difference the confirmed understanding settles is never raised, a conflict is two
-        # sources it is silent on, and a conflict that stands offers each side as a
-        # statement to pick.
-        raisable, not_raised = _screened(answer.issues, sources, understood)
+        # What the agent returned and is not raised (B1e, rule 4), by a guard with no model
+        # in it: only a conflict, and only in three narrow cases (not_raised); everything
+        # else is raised, a missing or ambiguous fact always. A conflict that stands offers
+        # each side as a statement to pick.
+        raisable, not_raised, settled_now = _screened(
+            answer.issues, sources, understood, narrative_at, times
+        )
         # The run's own open questions from before, read before they are replaced.
         stale = cursor.execute(
             "SELECT id, kind, topic, detail, why, resolve, quotes, fingerprint "
@@ -1098,7 +1127,9 @@ def generate(
         ]
         raised = _issues([item for item in raisable if item not in late], sources)
         raise_issues(cursor, organization_id, project_id, control_id, raised, "AGENT", call_id)
-        closed = _close_settled(cursor, stale, raised, not_raised, understood)
+        closed = _close_settled(
+            cursor, stale, raised, settled_now, sources, understood, narrative_at, times
+        )
         if late:
             from ai_workforce_api.process_narrative import raise_late_points
 
@@ -1110,30 +1141,37 @@ def generate(
         _audit(cursor, organization_id, project_id, requester, "attribute.proposed", control_id,
                {"proposals": kept, "reviewed": review_note == "", "fixes": fixes[:12],
                 "duplicates_left_out": duplicates, "criteria_detailed": detailed})  # fmt: skip
-        if followed or not_raised or closed or older_followed:
+        if followed or not_raised or closed or older_followed or reviewer_left_out:
             # The agent's own record of applying the understanding: what it followed and
-            # set aside, what it did not raise, and which of its earlier questions it
-            # closed. The actor is the agent, by its model call; nothing here is a
-            # person's decision, and no answer on record was changed.
+            # set aside, what it left out or did not raise (whole, so nothing is lost), and
+            # which of its earlier conflicts it closed. The actor is the agent's instance;
+            # where the engagement is not staffed with it, the event is written as the other
+            # agent events of this module are (attribute.proposed): under the person whose
+            # request or save started the run, with the agent named in the payload. Nothing
+            # here is a person's decision, and no answer on record was changed.
             cursor.execute(
                 """
                 INSERT INTO audit_events (
-                    organization_id, project_id, actor_agent_instance_id, action,
-                    target_type, target_id, payload
+                    organization_id, project_id, actor_user_id, actor_agent_instance_id,
+                    action, target_type, target_id, payload
                 )
-                VALUES (%s, %s, %s, 'attributes.understanding_followed',
+                VALUES (%s, %s, %s, %s, 'attributes.understanding_followed',
                         'engagement_control', %s, %s)
                 """,
                 (
-                    organization_id, project_id, agent, control_id,
+                    organization_id, project_id, requester if agent is None else None, agent,
+                    control_id,
                     Json({
                         "by": ATTRIBUTE_AGENT,
                         "model_call": None if call_id is None else str(call_id),
                         "prompt_version": PROMPT_VERSION,
+                        "written_by": writer[0],
+                        "written_by_model_call": None if writer[1] is None else str(writer[1]),
                         "followed": followed[:MAX_ATTRIBUTES],
                         "not_raised": not_raised,
                         "closed": closed,
-                        "older_answer_followed_left_out": older_followed,
+                        "older_answer_followed_left_out": older_followed[:MAX_ATTRIBUTES],
+                        "left_out_by_reviewer": reviewer_left_out[:MAX_ATTRIBUTES],
                     }),
                 ),
             )  # fmt: skip
@@ -1188,35 +1226,103 @@ def _record_basis(
     cursor: psycopg.Cursor[Any],
     attribute_id: UUID,
     record: authority.Followed,
-    call_id: UUID | None,
+    writer: tuple[str, UUID | None, str],
     marked: str,
 ) -> None:
     """Keep what the agent followed with the approved attribute whose criteria it made
     specific (a proposal's own record is written with the proposal)."""
     cursor.execute(
         "UPDATE control_attributes SET understanding_basis = %s WHERE id = %s",
-        (Json(authority.stored(record, ATTRIBUTE_AGENT, call_id, PROMPT_VERSION, marked)),
-         attribute_id),
-    )  # fmt: skip
+        (Json(authority.stored(record, *writer, marked)), attribute_id),
+    )
+
+
+def _left_by_reviewer(
+    drafted: list[_Proposal], reviewed: list[_Proposal], understood: tuple[authority.Fact, ...]
+) -> list[dict[str, Any]]:
+    """The drafts that said they follow the confirmed understanding and that their reviewer
+    left out, or returned without what they follow: for the run's audit record. The
+    reviewer's list stands; this only says what it did."""
+    left: list[dict[str, Any]] = []
+    # Each returned proposal accounts for one draft at most.
+    used: set[int] = set()
+    for draft in drafted:
+        record, _backwards = authority.recorded(draft.follows, understood)
+        if record is None or draft.follows is None:
+            continue
+        ref = draft.follows.fact.strip()
+        same_fact = [
+            index
+            for index, item in enumerate(reviewed)
+            if index not in used and item.follows is not None and item.follows.fact.strip() == ref
+        ]
+        exact = [
+            index
+            for index in same_fact
+            if reviewed[index].action == draft.action
+            and reviewed[index].replaces.strip() == draft.replaces.strip()
+        ]
+        # An addition the reviewer returned as a change of an attribute still follows the
+        # fact; a change or a retirement must be returned for the same attribute.
+        found = exact or (same_fact if draft.action == "ADD" else [])
+        if found:
+            used.add(found[0])
+            continue
+        left.append(
+            {"action": draft.action, "replaces": draft.replaces.strip(),
+             "text": line(draft.text, 300), **authority.audit_entry(record)}
+        )  # fmt: skip
+    return left
 
 
 def _screened(
-    raw: list[AnswerIssue], sources: list[Source], understood: tuple[authority.Fact, ...]
-) -> tuple[list[AnswerIssue], list[dict[str, str]]]:
-    """The agent's issues that may be raised, and those that are not, each with the reason
-    (understanding_authority.not_raised). A conflict that does not quote two distinct
-    sources is ambiguity, as a conflict nobody could point to already was."""
+    raw: list[AnswerIssue],
+    sources: list[Source],
+    understood: tuple[authority.Fact, ...],
+    narrative_at: Any,
+    times: dict[str, Any],
+) -> tuple[list[AnswerIssue], list[dict[str, Any]], set[str]]:
+    """The agent's issues that are raised; those that are not, whole and with the reason,
+    for the audit record (nothing left unraised is lost); and the fingerprints of the
+    conflicts left unraised because the agent named the confirmed fact that settles them
+    (understanding_authority.not_raised). A conflict that is raised without quoting two
+    distinct sources is ambiguity, as a conflict nobody could point to already was: it is
+    still put to a person."""
+    from ai_workforce_api.control_context import fingerprint
+
     kept: list[AnswerIssue] = []
-    left: list[dict[str, str]] = []
+    left: list[dict[str, Any]] = []
+    named: set[str] = set()
+    by_person = {fact.ref for fact in understood if fact.confirmed_by == "PERSON"}
     for item in raw[:5]:
-        reason = authority.not_raised(item, sources, understood)
+        reason = authority.not_raised(item, sources, understood, narrative_at, times)
         if reason:
-            left.append({"kind": item.kind, "topic": line(item.topic, 120), "reason": reason})
+            entry: dict[str, Any] = {
+                "kind": item.kind,
+                "topic": line(item.topic, 120),
+                "detail": line(item.detail, 600),
+                "why": line(item.why, 400),
+                "resolve": line(item.resolve, 400),
+                "quotes": [
+                    {"source": line(quote.source, 60), "quote": line(quote.quote, 200)}
+                    for quote in item.quotes[:3]
+                ],
+                "covered_by": [ref for ref in item.covered_by[:5] if ref.strip() in by_person],
+                "reason": reason,
+            }
+            if contains_secret({key: str(value) for key, value in entry.items()}):
+                # Never a credential on the audit trail: the words are withheld, and said so.
+                entry.update(detail="", why="", resolve="", quotes=[], withheld=True)
+            left.append(entry)
+            if entry["covered_by"]:
+                named.update(
+                    fingerprint(issue) for issue in checked_issues([item], sources, "ATTRIBUTES")
+                )
             continue
         if item.kind == "CONFLICT" and not authority.is_conflict(item, sources):
             item = item.model_copy(update={"kind": "AMBIGUOUS"})
         kept.append(item)
-    return kept, left
+    return kept, left, named
 
 
 def _issues(raw: list[AnswerIssue], sources: list[Source]) -> list[Issue]:
@@ -1235,89 +1341,49 @@ def _close_settled(
     cursor: psycopg.Cursor[Any],
     stale: list[Any],
     raised: list[Issue],
-    not_raised: list[dict[str, str]],
+    named: set[str],
+    sources: list[Source],
     understood: tuple[authority.Fact, ...],
+    narrative_at: Any,
+    times: dict[str, Any],
 ) -> list[dict[str, str]]:
-    """Say why on each of the run's earlier open questions that the rules settle (rule 7).
-    The run has replaced them all (supersede_agent_issues), as every run does; one raised
-    again comes back as a new row. One that is not raised again because the understanding
-    settles it keeps the reason on its row: it was a conflict these rules would not raise
-    (understanding_authority.settled_before), or the agent returned it again in this run and
-    the guard left it out. Only the attribute run's own questions are read: never one from
-    the rules, the narrative's agents or another origin, and never one a person resolved."""
+    """Say why on each of the run's earlier open conflicts that these rules settle (rule 7).
+    The run has replaced its open questions (supersede_agent_issues), as every run does; one
+    raised again comes back as a new row. A conflict that is not raised again keeps the
+    reason on its row only when the reason is true of that conflict: read from its own
+    stored words and quotes, these rules would leave it unraised
+    (understanding_authority.settled_before), or the agent returned the same conflict (the
+    same topic and quotes) in this run and named the confirmed fact that settles it. Any
+    other is replaced without the note, as before. Only the attribute run's own questions
+    are read: never one from the rules, the narrative's agents or another origin, and never
+    one a person resolved."""
     from ai_workforce_api.control_context import fingerprint
 
     again = {fingerprint(issue) for issue in raised}
-    left = {(item["kind"], item["topic"].lower()) for item in not_raised}
     closed: list[dict[str, str]] = []
     for issue_id, kind, topic, detail, why, resolve, quotes, mark in stale:
-        if str(mark) in again:
+        if str(mark) in again or str(kind) != "CONFLICT":
             continue
-        settled = (str(kind), str(topic).lower()) in left or authority.settled_before(
-            str(kind), str(topic), str(detail), str(why), str(resolve), quotes, understood
-        )
-        if not settled:
+        reason = (
+            "The agent named the confirmed fact that settles it."
+            if str(mark) in named
+            else authority.settled_before(
+                str(kind), " ".join([str(topic), str(detail), str(why), str(resolve)]),
+                quotes, sources, understood, narrative_at, times,
+            )
+        )  # fmt: skip
+        if not reason:
             continue
         cursor.execute(
-            "UPDATE control_context_issues SET resolution_note = %s, "
+            "UPDATE control_context_issues SET resolution_note = %s, version = version + 1, "
             "updated_at = clock_timestamp() WHERE id = %s AND status = 'SUPERSEDED'",
             (authority.SETTLED_NOTE, issue_id),
         )
         closed.append(
             {"issue": str(issue_id), "kind": str(kind), "topic": str(topic),
-             "note": authority.SETTLED_NOTE}
+             "note": authority.SETTLED_NOTE, "reason": reason}
         )  # fmt: skip
     return closed
-
-
-def _followed_key(item: _Proposal) -> tuple[str, str]:
-    return (item.action, item.replaces.strip() if item.action != "ADD" else _normal(item.text))
-
-
-def _keep_followed(
-    drafted: list[_Proposal],
-    reviewed: list[_Proposal],
-    understood: tuple[authority.Fact, ...],
-) -> tuple[list[_Proposal], list[str]]:
-    """The reviewer's list with every draft that follows the confirmed understanding still
-    in it and still following the same fact. The reviewer may correct such a draft (its
-    wording, its criteria), but not leave it out, drop what it follows, or turn it to
-    another fact: then the draft stands as drafted, in the place of whatever the reviewer
-    returned for the same attribute, and the fix says so."""
-    if reviewed is drafted:
-        return reviewed, []
-    result = list(reviewed)
-    fixes: list[str] = []
-    for draft in drafted:
-        record, backwards = authority.recorded(draft.follows, understood)
-        if record is None or backwards or draft.follows is None:
-            continue
-        ref = draft.follows.fact.strip()
-        same = [item for item in result if _followed_key(item) == _followed_key(draft)]
-        candidates = (
-            same if draft.action != "ADD" else [item for item in result if item.action == "ADD"]
-        )
-        if any(
-            item.follows is not None
-            and item.follows.fact.strip() == ref
-            and authority.recorded(item.follows, understood)[0] is not None
-            for item in candidates
-        ):
-            continue
-        # For a change or a retirement, whatever else was returned for the attribute goes.
-        result = [
-            item
-            for item in result
-            if item not in same
-            and not (draft.action != "ADD" and item.action != "ADD"
-                     and item.replaces.strip() == draft.replaces.strip())
-        ]  # fmt: skip
-        result.append(draft)
-        fixes.append(
-            "A draft that follows the confirmed understanding was kept as drafted: its "
-            "reviewer left it out or turned it back to what was set aside."
-        )
-    return result, fixes
 
 
 def _held_definitions(cursor: psycopg.Cursor[Any], control_id: UUID) -> tuple[str, set[str]]:
@@ -1386,12 +1452,11 @@ a real difference in what is tested (another approver, system or timing).
 
 """
     + authority.PRECEDENCE
-    + """ A draft with follows says which confirmed fact it \
-follows and what it sets aside for it (an older answer, the RCM record, a library wording, \
-an approved attribute): that is the rule applied, not an error. Return its follows as given. \
-Never correct such a draft back to what it set aside, never leave it out for differing from \
-the RCM record, a library wording, an approved attribute or an older answer, and never \
-report that difference in fixes.
+    + """ A draft's follows is the drafter's own statement of \
+which confirmed fact it follows and what it sets aside for it. Check it as you check the \
+rest of the draft, against confirmed_understanding: return it with the draft when you keep \
+the draft and it is true, and correct it or leave it out when it is not. It exempts the \
+draft from none of the checks above.
 
 Return the corrected list in attributes, in the drafter's shape: keep a sound attribute as \
 it is, correct what you can from the facts given, and leave out one that cannot stand. Keep \
@@ -1427,11 +1492,12 @@ def _review(
     package: dict[str, Any],
     sources: list[Source],
     drafted: list[_Proposal],
-) -> tuple[list[_Proposal], str, list[str]]:
+) -> tuple[list[_Proposal], str, list[str], bool, UUID | None]:
     """The reviewer's corrected proposals, a note for the team when it did not finish (the
-    drafts then stand as drafted, and say so), and what it corrected."""
+    drafts then stand as drafted, and say so), what it corrected, whether the list returned
+    is the reviewer's, and the reviewer's model call."""
     if not any(item.action != "RETIRE" for item in drafted):
-        return drafted, "", []
+        return drafted, "", [], False, None
     call = AgentCaller(
         connection,
         provider,
@@ -1464,13 +1530,13 @@ def _review(
     )
     unreviewed = "The reviewer agent did not finish, so the attributes are as drafted."
     if call.status not in ("SUCCEEDED", "MALFORMED") or call.raw.output is None:
-        return drafted, unreviewed, []
+        return drafted, unreviewed, [], False, None
     try:
         reviewed = _Reviewed.model_validate(call.raw.output)
     except ValidationError:
-        return drafted, unreviewed, []
+        return drafted, unreviewed, [], False, None
     fixes = [text for text in (line(item, 300) for item in reviewed.fixes) if text]
-    return reviewed.attributes, "", fixes
+    return reviewed.attributes, "", fixes, True, call.call_id
 
 
 def _criteria(item: _Proposal) -> tuple[str, str, str] | None:

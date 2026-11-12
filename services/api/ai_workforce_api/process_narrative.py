@@ -336,8 +336,7 @@ Rules:
 - The client's facts are in client_answers, answered_questions, statement and the \
 sources. Use them; name who does what, in which system, and when. Never invent a name, \
 a system, a threshold or a figure.
-- {PRECEDENCE} Write the narrative from the fact that holds, and never raise the \
-difference as a point for the client.
+- {PRECEDENCE} Write the narrative from the fact that holds.
 - Explain, in the sections, how each approved attribute (approved_attributes, each with \
 its code, condition and pass criteria) is met in the process, and list in each section the \
 codes it explains. Every attribute must be explained in at least one section.
@@ -362,8 +361,7 @@ The narrative passes only when all of these hold:
 and evaluated at at least one step.
 - Every fact agrees with client_answers, answered_questions, statement and the sources; \
 nothing is invented.
-- {PRECEDENCE} A narrative written from the fact that holds is right: never correct it \
-back, and never raise the difference as a finding or a question.
+- {PRECEDENCE} Check the narrative against the fact that holds.
 - It is written in the third person (no "I", "we", "our", "us") and makes no comment about \
 what the sources leave out.
 - The step or steps where the control operates are marked.

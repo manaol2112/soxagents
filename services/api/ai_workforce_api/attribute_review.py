@@ -35,7 +35,6 @@ with a mark of the words reviewed, so it never stands for words that changed aft
 
 import hashlib
 import json
-import re
 from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -52,18 +51,10 @@ from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 
 # /2 (12 November 2026): duplicates are merged, never left for the person. /3 (the same day,
-# B1e): the confirmed understanding is the authority, the newer answer holds, and an
-# attribute that follows it is neither revised back nor reported as a concern for it.
+# B1e): the reviewer is given the confirmed understanding with its dates, the precedence,
+# and what an attribute's agent says it follows, with the fact as recorded. Every verdict and
+# every power it had stays: what an agent says it follows exempts nothing from review.
 PROMPT_VERSION = "attribute-set-review/3"
-# The reviewer's reason questions what the confirmed understanding settles: the RCM record,
-# the approved wording or an older answer against the fact the attribute follows.
-_QUESTIONS_PRECEDENCE = re.compile(
-    r"\bRCM\b|\bapproved (attribute|wording)\b"
-    r"|\b(earlier|older|previous|prior|answered) (answer|question)s?\b"
-    r"|\bcontradict|\bconflict|\bdisagree|\binconsisten",
-    re.IGNORECASE,
-)
-FOLLOWS_NOTE = "The attribute follows the confirmed understanding, which holds."
 REVIEWER = "Reviewer agent"
 NOT_REVIEWED = (
     "The reviewer agent did not finish, so the attributes and criteria are as drafted and "
@@ -85,13 +76,11 @@ part of it and may never be weaker.
 
 """
     + authority.PRECEDENCE
-    + """ An attribute with follows_understanding was tailored by \
-that rule: it says which confirmed fact the attribute follows and what was set aside for it \
-(an older answer, the RCM record, a library wording, the approved attribute). That is not a \
-concern and not something to revise: never return it as REVISED towards what was set aside, \
-and never as CONCERN for differing from the RCM record, a library wording, the approved \
-attribute or an older answer. Naming the client's system or record where the standard names \
-a kind of record is tailoring, not weakening.
+    + """ An attribute's follows_understanding is what the agent \
+that wrote it says it follows: the confirmed fact as the records hold it (fact), the agent's \
+own summary of it, what it set aside, and why. Check it as you check everything else: that \
+the fact says what the attribute and its criteria rest on, and that the criteria still meet \
+every part of the standard. It exempts the attribute from no verdict.
 
 For each attribute in attributes, answer with its id and one verdict:
 - OK: the attribute is appropriate and its criteria can be applied as written.
@@ -315,6 +304,7 @@ def _inputs(
         classifications_of(control[0], context.domain, context.nature),
     )  # fmt: skip
     narrative = narrative_facts(connection, control_id)
+    understood = authority.facts(connection, control_id)
     rows: dict[str, dict[str, Any]] = {}
     texts = {
         str(found[0]): str(found[1])
@@ -346,17 +336,16 @@ def _inputs(
                 proposal
             ]
         )
-        # What the attribute follows in the confirmed understanding, while it still reads
-        # as it did when that was recorded (understanding_authority.current).
+        # What the attribute's agent says it follows in the confirmed understanding, while
+        # that is still true (understanding_authority.current). Given to the reviewer to
+        # check; it changes nothing of what the reviewer may revise.
         follows = authority.current(
-            found[14], authority.mark(found[4], found[5], found[6], found[7], found[8])
+            found[14],
+            authority.mark(found[4], found[5], found[6], found[7], found[8]),
+            understood,
         )
         may: list[str] = []
-        if follows is not None:
-            # It follows the understanding as the attribute agent wrote it: the reviewer
-            # may not turn it back (B1e, rule 8), so it revises nothing on it.
-            may = []
-        elif agent_made and proposal != "RETIRE":
+        if agent_made and proposal != "RETIRE":
             may = ["criteria", "text"]
         elif not proposed and bool(found[12]) and not plan_approved:
             may = ["criteria"]
@@ -376,7 +365,6 @@ def _inputs(
             "definition_key": found[11],
             # A person stated or accepted the criteria: no agent changes the attribute.
             "owned": found[9] == "PERSON" or bool(found[10]),
-            "follows": follows is not None,
         }
         rows[row["id"]] = row
         standard = attribute_for(library_key, str(found[11] or ""), str(found[4]))
@@ -401,12 +389,34 @@ def _inputs(
             entry["replaces"] = texts.get(str(found[3]), "")
         if follows is not None:
             entry["follows_understanding"] = {
-                "follows": follows.follows.statement,
-                "confirmed_at": authority.iso(follows.follows.confirmed_at),
+                # The fact as the records hold it, not the agent's words for it.
+                "fact": {
+                    "kind": follows.follows.kind,
+                    "question": follows.follows.question,
+                    "answer": follows.follows.answer,
+                    "confirmed_at": authority.iso(follows.follows.confirmed_at),
+                    "confirmed_by": follows.follows.confirmed_by,
+                },
+                "agent_summary_of_fact": follows.follows.statement,
                 "sets_aside": [
-                    {"kind": item.kind, "what": item.statement} for item in follows.sets_aside
+                    {
+                        "kind": item.kind,
+                        "agent_words": item.statement,
+                        **(
+                            {
+                                "question": item.question,
+                                "answer": item.answer,
+                                "confirmed_at": authority.iso(item.confirmed_at),
+                                "confirmed_by": item.confirmed_by,
+                            }
+                            if item.kind == "OLDER_ANSWER"
+                            else {}
+                        ),
+                    }
+                    for item in follows.sets_aside
                 ],
                 "why": follows.summary,
+                "stated_by": follows.by,
             }
         if standard is not None:
             entry["standard"] = {
@@ -423,7 +433,7 @@ def _inputs(
         "control_design_documented": dict(statement_fields(connection, control_id)),
         # Every confirmed fact with when it was confirmed, newest first (B1e): the walkthrough
         # answers, the client's values and the answers to earlier questions, once.
-        "confirmed_understanding": authority.for_agents(authority.facts(connection, control_id)),
+        "confirmed_understanding": authority.for_agents(understood),
         "approved_narrative": {
             "sections": [
                 {"heading": heading, "text": text}
@@ -806,15 +816,7 @@ def review_set(
                 continue
             verdict: Verdict = item.verdict
             note = line(item.note, 300)
-            if row["follows"] and (
-                verdict == "REVISED"
-                or (verdict == "CONCERN" and _QUESTIONS_PRECEDENCE.search(note))
-            ):
-                # The attribute follows the confirmed understanding (B1e): the reviewer's
-                # revision is not applied, and a concern that questions what the
-                # understanding settles is not one a person is asked to decide.
-                verdict, note = "OK", FOLLOWS_NOTE
-            elif verdict == "REVISED":
+            if verdict == "REVISED":
                 verdict, note = _kept(cursor, control_id, row, item, known, wordings)
             marked(row, verdict, note)
         # Duplicates last, so a merge is the final word on the attribute it lands on.

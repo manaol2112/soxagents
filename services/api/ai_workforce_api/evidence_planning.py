@@ -234,6 +234,9 @@ class PlanFacts:
             *(text for _field, text in self.statement), *self.applications,
             *(text for _heading, text in self.narrative), *self.narrative_steps,
             *(answer for _question, answer in self.walkthrough),
+            # What the planner is given as confirmed_understanding (B1e): a figure or a
+            # deadline it states from a confirmed answer comes from the records.
+            *(fact.answer for fact in self.confirmed),
         )  # fmt: skip
 
     @property
@@ -2718,6 +2721,33 @@ def _criteria_inputs(facts: PlanFacts) -> dict[str, Any]:
     }
 
 
+PROMPT_LIMIT = 16000
+# The fewest confirmed facts the planner is given, however long the rest of its data is.
+_FACTS_FLOOR = 12
+
+
+def _with_understanding(data: dict[str, Any], facts: PlanFacts) -> dict[str, Any]:
+    """The planner's data with the confirmed facts in it: as many of the newest as keep the
+    whole within PROMPT_LIMIT, so the limit never cuts through the facts or through what
+    follows them. The oldest are the ones left out, and never fewer than _FACTS_FLOOR are
+    given (data that is over the limit without any fact is cut at its end, as before)."""
+    if not facts.confirmed:
+        return data
+    given = for_agents(facts.confirmed, 300)
+
+    def size(count: int) -> int:
+        return len(
+            json.dumps(
+                {**data, "confirmed_understanding": given[:count]}, ensure_ascii=False, indent=1
+            )
+        )
+
+    count = len(given)
+    while count > min(_FACTS_FLOOR, len(given)) and size(count) > PROMPT_LIMIT:
+        count -= 1
+    return {**data, "confirmed_understanding": given[:count]}
+
+
 def prompt_for(facts: PlanFacts) -> str:
     traits = traits_of(facts)
     periods = phase_periods(facts)
@@ -2753,6 +2783,9 @@ def prompt_for(facts: PlanFacts) -> str:
             if facts.narrative or facts.narrative_steps
             else {}
         ),
+        # The confirmed understanding, each fact with when it was confirmed, newest first
+        # (B1e), where the walkthrough answers were. Filled in below, to fit the limit.
+        **({"confirmed_understanding": []} if facts.confirmed else {}),
         "suggested_control_type": traits.profile,
         "periods": {
             phase: {
@@ -2783,12 +2816,6 @@ def prompt_for(facts: PlanFacts) -> str:
             }
             for phase, decision in forced.items()
         },
-        # The confirmed understanding, each fact with when it was confirmed, newest first
-        # (B1e). Last, so a control with very many facts loses its oldest to the length
-        # limit before anything above.
-        **(
-            {"confirmed_understanding": for_agents(facts.confirmed, 300)} if facts.confirmed else {}
-        ),
     }
-    text = json.dumps(data, ensure_ascii=False, indent=1)[:16000]
+    text = json.dumps(_with_understanding(data, facts), ensure_ascii=False, indent=1)[:PROMPT_LIMIT]
     return f"Plan the testing and evidence for this control.\n\n<control>\n{text}\n</control>"
