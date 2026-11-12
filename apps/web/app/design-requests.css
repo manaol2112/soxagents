@@ -1,0 +1,413 @@
+/* ==========================================================================
+   The D&I requests list (product owner, 12 November 2026): the D&I Evidence step's one
+   list until its requests are drafted. It is the attributes list's row, chip, fold and
+   dialog (attribute-list.css) and D&I Evidence's tile, letter and folds
+   (step-panels.css); only what differs is here: the row's tile, letters and menu, the
+   coverage under the list, and the choices in its dialogs. Tokens only. The list answers
+   to its own width (the step's drawer is narrow on a wide screen), not the window's.
+   Motion: hover 120 ms, none under reduced motion; the row's opening and the folds'
+   chevrons are the shared ones.
+   ========================================================================== */
+
+.dq {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  container: dq / inline-size;
+}
+
+/* A row: its head, and its menu beside the head (a button cannot hold another). The list
+   does not clip, so a short list never cuts its row's menu; the corners are the rows'. */
+.dq .tar-list {
+  overflow: visible;
+}
+
+.dq .tar:first-child {
+  border-top-left-radius: 11px;
+  border-top-right-radius: 11px;
+}
+
+.dq .tar:last-child {
+  border-bottom-right-radius: 11px;
+  border-bottom-left-radius: 11px;
+}
+
+.dq .tar.has-menu {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.dq .tar > .tar-body {
+  grid-column: 1 / -1;
+  padding-left: calc(0.9rem + 34px + 0.75rem);
+}
+
+button.tar-head.dq-head {
+  grid-template-columns: 34px minmax(0, 1fr) auto 14px;
+  border-radius: inherit;
+}
+
+.dq .tar.has-menu > button.tar-head {
+  padding-right: 0.4rem;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.dq .tar.is-open > button.tar-head {
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.dq-menu {
+  display: flex;
+  align-items: center;
+  align-self: start;
+  min-height: 52px;
+  padding-right: 0.5rem;
+}
+
+/* The attributes a request addresses, then where it stands. */
+.dq-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.dq-letters {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.2rem;
+  max-width: 9.5rem;
+}
+
+.dq-none {
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* A change the planner proposes to an accepted request: agent output, not yet decided. */
+.dq-change {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.55rem 0.7rem;
+  background: color-mix(in srgb, var(--ai-soft) 50%, var(--surface));
+  border: 1px solid var(--ai-border);
+  border-radius: 10px;
+}
+
+.dq-addressed {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dq-addressed li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.5rem;
+}
+
+/* Coverage: one chip per approved attribute, then the one exception, spelled out. */
+.dq-coverage {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  margin-top: 0.25rem;
+}
+
+.dq-cov-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+}
+
+.dq-cov-line {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.dq-cov-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dq-cov {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  height: 24px;
+  padding: 0 0.55rem;
+  font-size: var(--fs-2xs);
+  font-weight: 650;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-radius: 999px;
+}
+
+.dq-cov-letter {
+  font-weight: 700;
+}
+
+.dq-cov-state {
+  display: inline-flex;
+  align-items: center;
+}
+
+.dq-cov.is-covered {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: var(--success-border);
+}
+
+.dq-cov.is-exception {
+  color: var(--neutral);
+  background: var(--neutral-soft);
+  border-color: var(--neutral-border);
+}
+
+.dq-cov.is-uncovered {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+}
+
+/* The attributes no request addresses: one block, a row each. */
+.dq-gaps {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  background: color-mix(in srgb, var(--warning-soft) 55%, var(--surface));
+  border: 1px solid var(--warning-border);
+  border-radius: 10px;
+  list-style: none;
+}
+
+.dq-gap {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.6rem 0.75rem;
+}
+
+.dq-gap + .dq-gap {
+  border-top: 1px solid var(--warning-border);
+}
+
+.dq-gap-mark {
+  display: inline-flex;
+  color: var(--warning);
+}
+
+.dq-gap-text {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+  margin: 0;
+}
+
+.dq-gap-text strong {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.dq-gap-text small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.dq-gap-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+/* Inside the folds: the recorded reasons, and the deleted requests. */
+.dq-reasons,
+.dq-history {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.15rem 0 0.9rem;
+  list-style: none;
+}
+
+.dq-reasons li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.6rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.dq-reason-text,
+.dq-history-text {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dq-reason-text q {
+  color: var(--text-secondary);
+}
+
+.dq-reason-text small,
+.dq-history-text small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.dq-history li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+/* The dialogs: the attribute dialog's form, with a line field and a list of choices. */
+.dq-form input[type="text"],
+.dq-form select {
+  width: 100%;
+}
+
+.dq-choices {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.dq-choices legend {
+  margin-bottom: 0.45rem;
+  padding: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 650;
+}
+
+.dq-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.dq-choice > input {
+  flex: none;
+  margin: 0.2rem 0 0;
+}
+
+.dq-choice > span:last-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dq-choice small {
+  display: block;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.dq-choice:hover {
+  background: var(--surface-hover);
+}
+
+.dq-choice:has(input:checked) {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.dq-choice:has(input:disabled) {
+  color: var(--text-disabled);
+  cursor: default;
+}
+
+/* Narrow (the drawer, a phone): the letters and the state go under the title, and the
+   exception's actions under its words. */
+@container dq (max-width: 560px) {
+  button.tar-head.dq-head {
+    grid-template-columns: 34px minmax(0, 1fr) 14px;
+  }
+
+  .dq-meta {
+    grid-row: 2;
+    grid-column: 2;
+    flex-wrap: wrap;
+    justify-self: start;
+  }
+
+  .dq-letters {
+    justify-content: flex-start;
+    max-width: none;
+  }
+
+  .dq .tar-text {
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
+
+  .dq .tar > .tar-body {
+    padding-left: 0.9rem;
+  }
+
+  .dq-gap {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .dq-gap-acts {
+    grid-column: 1 / -1;
+  }
+
+  .dq-reasons li {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .dq-reasons li > button {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dq-choice {
+    transition: none;
+  }
+}

@@ -2,478 +2,172 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-  checkMark,
-  EARLY_REASON_MIN,
-  earlyRelease,
   itemKind,
-  itemsHeading,
-  releaseView,
   showsEvidenceWorkspace,
 } from "../apps/web/src/design-release-model.ts";
-import type { PhaseStatus } from "../apps/web/src/planning-model.ts";
+import {
+  type RequestsInput,
+  requestsView,
+} from "../apps/web/src/design-requests-model.ts";
 
-const status = (extra: Partial<PhaseStatus> = {}): PhaseStatus => ({
-  phase: "DESIGN",
-  label: "Design",
-  applicability: "APPLICABLE",
-  complete: false,
-  step: "READY",
-  stepLabel: "Ready to release",
-  releasedBy: null,
-  releasedAt: null,
-  early: false,
-  reason: "",
-  waitingFor: "",
-  waitingOn: "",
-  ...extra,
-});
+// What changed here (product owner, 12 November 2026): "Why do I need to have the release
+// button? Simplify the workflow. After the attributes approval, list down the evidences
+// so that I can add, modify or update, or delete. Similar to how I do in the attributes."
+// The D&I release card is removed, with its Release button and its early release: the
+// server releases the phase once the requests list is settled, and refuses an early D&I
+// release. The tests of the removed card are retired with it, each with the test that now
+// holds its audit point (tests/design-requests-model.test.ts):
+//
+// - "is ready once understood and settled: what is requested, against which attributes"
+//   (old: a ready card titled "Release the D&I evidence", its three checks done, each item
+//   with the letters of the attributes it evidences, matched by wording). New: "lists the
+//   live D&I requests, each with its kind, origin and letters" (letters from the request's
+//   attribute links, by id) and "is settled once every request is accepted and every
+//   attribute addressed".
+// - "is an exception when no D&I item evidences the attributes, never ready" (old: the
+//   card offered an early release with a reason). New: "raises the one exception: the
+//   attribute no request addresses" and "never shows an attribute as addressed against
+//   the server or the records": it holds the step for each uncovered attribute, not only
+//   when none is evidenced, and nothing releases it early.
+// - "waits for the attributes, pointing to the Attributes step, with an early release
+//   offered" and "names Control Understanding first when that is what it waits on". New:
+//   "waits, in one line, while an earlier step holds it"; the step's frame still points to
+//   the step it waits on (tests/step-panel-model.test.ts). No early release is offered.
+// - "is hidden once released, complete, or not planned". New: "is hidden where the step is
+//   not the list's" and "shows the list at rest while the requests are drafted, then gives
+//   way".
+// - "names the attributes still without criteria tailored to the control" and "never
+//   ticks the attributes settled while criteria are missing, even waiting on
+//   understanding" (the card's attributes check). The card and its checks are gone; the
+//   server holds the D&I phase on the attributes (phase_release.attribute_waits) and the
+//   Attributes step words what they wait for (tests/control-workflow-model.test.ts, "holds
+//   the D&I evidence until its requests list is settled"), so the list is not shown as
+//   actionable while they are unsettled ("waits, in one line, ...").
+// - "marks each check done or open, in words a screen reader hears", "titles the list by
+//   the release's state and names who it goes to only when known", "offers the early
+//   release only while it waits and the person may release" and "keeps Release early
+//   disabled until the reason is long enough and nothing is pending": the checks, the
+//   "Will be requested" heading and the early-release form no longer exist. The reason a
+//   person records is now why an attribute is not evidenced at D&I: "takes a coverage
+//   reason only when it is long enough to stand on its own".
 
-const approved = [
-  { text: "Access is requested through a ticket.", sourceKind: "LIBRARY" },
-  {
-    text: "The user's manager approves before access is granted.",
-    sourceKind: "LIBRARY",
-  },
-  { text: "Access granted matches what was approved.", sourceKind: "AGENT" },
-];
-
-const [policy, walkthrough, gone] = [
-  {
-    id: "policy",
-    title: "Access provisioning policy",
-    attributes: ["The user's manager approves before access is granted."],
-    necessity: "REQUIRED",
-    state: "PLANNED",
-  },
-  {
-    id: "walkthrough",
-    title: "One instance, end to end",
-    // Wording as the plan holds it: matched however it is spaced or cased.
-    attributes: [
-      "access granted matches what was  approved.",
-      "Access is requested through a ticket.",
-      "The user's manager approves before access is granted.",
-    ],
-    necessity: "REQUIRED",
-    state: "PLANNED",
-  },
-  {
-    id: "gone",
-    title: "Removed item",
-    attributes: [],
-    necessity: "OPTIONAL",
-    state: "REMOVED",
-  },
-] as const;
-const items = [policy, walkthrough, gone];
-
-describe("the D&I release card (product owner, 11 November 2026)", () => {
-  it("is ready once understood and settled: what is requested, against which attributes", () => {
-    const view = releaseView({
-      status: status(),
-      approved,
-      proposed: 0,
-      items,
+describe("the kinds of D&I evidence (11 November 2026)", () => {
+  // Kept from "gives each item to request its kind, icon and one secondary line": the
+  // kinds and icons are the requests list's rows now; the secondary line is the row's own
+  // (tests/design-requests-model.test.ts).
+  it("names an item's kind and icon by its first category the list names", () => {
+    assert.deepEqual(itemKind(["PROCESS_DOCUMENTATION"]), {
+      kind: "Policy or procedure",
+      shows: "how the control is meant to work",
+      icon: "file",
     });
-    assert.equal(view.mode, "ready");
-    if (view.mode !== "ready") {
-      return;
-    }
-    assert.equal(view.title, "Release the D&I evidence");
-    assert.match(
-      view.lead,
-      /^2 requests will be drafted for approval, tested against 3 attributes\./,
-    );
-    assert.match(
-      view.lead,
-      /Nothing goes to the client until each request is approved\.$/,
-    );
-    // Rewritten (approved preview, 11 November 2026). Old: "Control understood". New:
-    // "Understood". Why: the checks now sit inline under the release's title, which names
-    // the control's step; the approved row reads "Understood · 3 attributes settled · 2
-    // items planned". The not-done wording is unchanged.
-    assert.deepEqual(
-      view.checks.map((check) => [check.label, check.done]),
-      [
-        ["Understood", true],
-        ["3 attributes settled", true],
-        ["2 items planned", true],
-      ],
-    );
-    // Removed items are not requested; each item names the attributes it evidences.
-    assert.deepEqual(
-      view.items.map((item) => [item.title, item.tests]),
-      [
-        ["Access provisioning policy", ["B"]],
-        ["One instance, end to end", ["A", "B", "C"]],
-      ],
-    );
-    assert.deepEqual(
-      view.attributes.map((item) => [item.letter, item.source]),
-      [
-        ["A", "Library"],
-        ["B", "Library"],
-        ["C", "Agent · approved"],
-      ],
-    );
-    assert.equal(
-      view.sources,
-      "the control library and the agent, approved by the team",
-    );
-    assert.equal(view.resolve, null);
-  });
-
-  it("is an exception when no D&I item evidences the attributes, never ready", () => {
-    // Found on 12 November 2026: a re-plan left the walkthrough instance with no attribute
-    // links and the card still read "tested against 4 attributes".
-    const waitingFor =
-      "The D&I evidence is not planned against the attributes: no D&I item evidences any of the 3 approved attributes. Plan the evidence again.";
-    const view = releaseView({
-      status: status({ step: "WAITING", waitingOn: "EVIDENCE", waitingFor }),
-      approved,
-      proposed: 0,
-      items: [
-        { ...policy, attributes: [] },
-        { ...walkthrough, attributes: [] },
-      ],
+    // Its first category the list names decides it: a walkthrough instance, not a policy.
+    assert.deepEqual(itemKind(["CONTROL_EXECUTION", "PROCESS_DOCUMENTATION"]), {
+      kind: "Walkthrough instance",
+      shows: "one instance, start to finish",
+      icon: "list",
     });
-    assert.equal(view.mode, "early");
-    if (view.mode !== "early") {
-      return;
-    }
-    assert.equal(view.title, "Plan the evidence against the attributes first");
-    assert.equal(view.lead.startsWith(waitingFor), true);
-    assert.match(view.lead, /You can release it early, with a reason\.$/);
-    assert.deepEqual(view.resolve, {
-      step: "testdesign",
-      label: "Open the test plan",
-    });
-    // Understood and settled, but the planned items do not count as planned against them.
-    assert.deepEqual(
-      view.checks.map((check) => [check.key, check.done]),
-      [
-        ["understanding", true],
-        ["attributes", true],
-        ["items", false],
-      ],
-    );
-    const items = view.checks.find((check) => check.key === "items");
-    assert.equal(items?.label, "No item evidences the attributes");
-    assert.equal(items?.detail, waitingFor);
-  });
-
-  it("waits for the attributes, pointing to the Attributes step, with an early release offered", () => {
-    const view = releaseView({
-      status: status({
-        step: "WAITING",
-        waitingOn: "ATTRIBUTES",
-        waitingFor:
-          "The attributes are not settled: 1 proposed attribute waits for a decision.",
-      }),
-      approved,
-      proposed: 1,
-      items,
-    });
-    assert.equal(view.mode, "early");
-    if (view.mode !== "early") {
-      return;
-    }
-    assert.equal(view.title, "Settle the attributes first");
-    assert.match(
-      view.lead,
-      /^The attributes are not settled: 1 proposed attribute waits/,
-    );
-    assert.match(view.lead, /You can release it early, with a reason\.$/);
-    assert.deepEqual(view.resolve, {
-      step: "attributes",
-      label: "Decide the attributes",
-    });
-    const attributes = view.checks.find((check) => check.key === "attributes");
-    assert.equal(attributes?.done, false);
-    assert.equal(attributes?.label, "1 attribute to decide");
-    assert.equal(
-      view.checks.find((check) => check.key === "understanding")?.done,
-      true,
-    );
-  });
-
-  it("names Control Understanding first when that is what it waits on", () => {
-    const view = releaseView({
-      status: status({
-        step: "WAITING",
-        waitingOn: "UNDERSTANDING",
-        waitingFor:
-          "Control Understanding is not complete: 2 questions are open.",
-      }),
-      approved,
-      proposed: 0,
-      items,
-    });
-    assert.equal(view.mode, "early");
-    if (view.mode !== "early") {
-      return;
-    }
-    assert.equal(view.title, "Complete Control Understanding first");
-    assert.deepEqual(view.resolve, {
-      step: "understanding",
-      label: "Open Control Understanding",
-    });
-    assert.equal(view.checks[0]?.done, false);
-    assert.equal(
-      view.checks[0]?.detail,
-      "Control Understanding is not complete: 2 questions are open.",
-    );
-  });
-
-  it("is hidden once released, complete, or not planned", () => {
-    for (const step of [
-      "RELEASED",
-      "COMPLETE",
-      "AWAITING_PLAN",
-      "NOT_APPLICABLE",
-    ] as const) {
-      assert.equal(
-        releaseView({ status: status({ step }), approved, proposed: 0, items })
-          .mode,
-        "hidden",
-      );
-    }
-    assert.equal(
-      releaseView({ status: null, approved, proposed: 0, items }).mode,
-      "hidden",
-    );
-  });
-});
-
-describe("the D&I release card's criteria check (11 November 2026)", () => {
-  it("names the attributes still without criteria tailored to the control", () => {
-    const view = releaseView({
-      status: status({
-        step: "WAITING",
-        waitingOn: "ATTRIBUTES",
-        waitingFor:
-          "The attributes are not settled: 2 attributes need criteria tailored to this control.",
-      }),
-      approved,
-      proposed: 0,
-      untailored: 2,
-      items,
-    });
-    assert.equal(view.mode, "early");
-    if (view.mode !== "early") {
-      return;
-    }
-    const check = view.checks.find((item) => item.key === "attributes");
-    assert.equal(check?.label, "2 attributes need criteria");
-    assert.equal(check?.done, false);
-    assert.match(check?.detail ?? "", /criteria tailored to this control/);
-  });
-
-  // Regression (independent review, 11 November 2026, M3): while the server waits on the
-  // understanding, the card worded the attributes as settled from approved and proposed
-  // alone, ticking "settled" while two attributes had no criteria.
-  it("never ticks the attributes settled while criteria are missing, even waiting on understanding", () => {
-    const waiting = status({
-      step: "WAITING",
-      waitingOn: "UNDERSTANDING",
-      waitingFor:
-        "Control Understanding is not complete: 4 walkthrough questions are not answered.",
-    });
-    const view = releaseView({
-      status: waiting,
-      approved,
-      proposed: 0,
-      untailored: 2,
-      items,
-    });
-    assert.equal(view.mode, "early");
-    if (view.mode !== "early") {
-      return;
-    }
-    const check = view.checks.find((item) => item.key === "attributes");
-    assert.equal(check?.done, false);
-    assert.equal(check?.label, "2 attributes need criteria");
-    // Each with criteria: settled, as before.
-    const tailored = releaseView({
-      status: waiting,
-      approved,
-      proposed: 0,
-      untailored: 0,
-      items,
-    });
-    assert.equal(
-      tailored.mode !== "hidden" &&
-        tailored.checks.find((item) => item.key === "attributes")?.done,
-      true,
-    );
-  });
-});
-
-describe("the D&I release as the approved decision row and list (11 November 2026)", () => {
-  const ready = () => {
-    const view = releaseView({
-      status: status(),
-      approved,
-      proposed: 0,
-      items: [
-        { ...policy, categories: ["PROCESS_DOCUMENTATION"] },
-        {
-          ...walkthrough,
-          categories: ["CONTROL_EXECUTION", "PROCESS_DOCUMENTATION"],
-        },
-        {
-          id: "context",
-          title: "Prior-year memo",
-          attributes: [],
-          necessity: "OPTIONAL",
-          state: "PLANNED",
-        },
-      ],
-    });
-    assert.equal(view.mode, "ready");
-    if (view.mode !== "ready") {
-      throw new Error("expected a ready release");
-    }
-    return view;
-  };
-
-  it("gives each item to request its kind, icon and one secondary line", () => {
-    assert.deepEqual(
-      ready().items.map((item) => [item.title, item.icon, item.line]),
-      [
-        [
-          "Access provisioning policy",
-          "file",
-          "Policy or procedure · how the control is meant to work",
-        ],
-        // Its first category the card names decides it: a walkthrough instance, not a policy.
-        [
-          "One instance, end to end",
-          "list",
-          "Walkthrough instance · one instance, start to finish",
-        ],
-        // No category named: supporting evidence, marked optional, with nothing invented.
-        ["Prior-year memo", "file", "Supporting evidence · Optional"],
-      ],
-    );
     assert.equal(itemKind(["OTHER", "CONFIGURATION"]).kind, "Configuration");
+    // No category named: supporting evidence, with nothing invented.
     assert.equal(itemKind([]).kind, "Supporting evidence");
+    assert.equal(itemKind([]).shows, "");
     assert.equal(itemKind().icon, "file");
-  });
-
-  it("marks each check done or open, in words a screen reader hears", () => {
-    assert.deepEqual(
-      ready().checks.map((check) => checkMark(check)),
-      [
-        { mark: "done", spoken: "Understood, done" },
-        { mark: "done", spoken: "3 attributes settled, done" },
-        { mark: "done", spoken: "3 items planned, done" },
-      ],
-    );
-    assert.deepEqual(
-      checkMark({ label: "1 attribute to decide", done: false }),
-      { mark: "open", spoken: "1 attribute to decide, not done" },
-    );
-  });
-
-  it("titles the list by the release's state and names who it goes to only when known", () => {
-    assert.deepEqual(itemsHeading(ready(), "  Dana Lee "), {
-      title: "Will be requested",
-      note: "Requested from Dana Lee",
-    });
-    const early = releaseView({
-      status: status({ step: "WAITING", waitingOn: "ATTRIBUTES" }),
-      approved,
-      proposed: 1,
-      items,
-    });
-    if (early.mode !== "early") {
-      throw new Error("expected an early release");
-    }
-    assert.deepEqual(itemsHeading(early, ""), { title: "Planned", note: "" });
-  });
-
-  it("offers the early release only while it waits and the person may release", () => {
-    const base = { reason: "", pending: false };
-    assert.equal(
-      earlyRelease({ ...base, mode: "early", canRelease: true }).offered,
-      true,
-    );
-    assert.equal(
-      earlyRelease({ ...base, mode: "early", canRelease: false }).offered,
-      false,
-    );
-    assert.equal(
-      earlyRelease({ ...base, mode: "ready", canRelease: true }).offered,
-      false,
-    );
-    assert.equal(
-      earlyRelease({ ...base, mode: "hidden", canRelease: true }).offered,
-      false,
-    );
-    const row = earlyRelease({ ...base, mode: "early", canRelease: true });
-    assert.equal(row.summary, "Release early instead");
-    assert.equal(row.line, "Only with a recorded reason");
-  });
-
-  it("keeps Release early disabled until the reason is long enough and nothing is pending", () => {
-    const at = (reason: string, pending = false) =>
-      earlyRelease({ mode: "early", canRelease: true, reason, pending });
-    const none = at("");
-    assert.equal(none.left, EARLY_REASON_MIN);
-    assert.equal(none.enabled, false);
-    assert.equal(
-      none.hint,
-      `Recorded with the release. At least ${EARLY_REASON_MIN} more characters.`,
-    );
-    // Spaces around the reason do not count toward it.
-    const short = at(`   ${"x".repeat(EARLY_REASON_MIN - 1)}   `);
-    assert.equal(short.left, 1);
-    assert.equal(
-      short.hint,
-      "Recorded with the release. At least 1 more character.",
-    );
-    assert.equal(short.enabled, false);
-    const enough = at("x".repeat(EARLY_REASON_MIN));
-    assert.equal(enough.left, 0);
-    assert.equal(enough.hint, "Recorded with the release.");
-    assert.equal(enough.enabled, true);
-    // While the release is with the server, it cannot be sent twice.
-    assert.equal(at("x".repeat(EARLY_REASON_MIN), true).enabled, false);
   });
 });
 
 describe("the evidence list shows once, not twice (12 November 2026)", () => {
-  const before = releaseView({
-    status: status(),
-    approved,
-    proposed: 0,
-    items: [policy, walkthrough],
-  });
-  const after = releaseView({
-    status: status({ step: "RELEASED", complete: false }),
-    approved,
-    proposed: 0,
-    items: [policy, walkthrough],
-  });
-
-  it("hides the D&I workspace while the release lists what will be requested", () => {
-    assert.notEqual(before.mode, "hidden");
-    assert.equal(showsEvidenceWorkspace("designevidence", before), false);
-    // A release that waits on the attributes still lists them: still one list.
-    const waiting = releaseView({
-      status: status({ step: "WAITING", waitingOn: "ATTRIBUTES" }),
-      approved,
-      proposed: 1,
-      items: [policy, walkthrough],
+  const uuid = (n: number) =>
+    `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const NOW = Date.parse("2026-11-12T10:00:00Z");
+  const requirement: RequestsInput["requirements"][number] = {
+    id: uuid(11),
+    phase: "DESIGN",
+    title: "Access provisioning policy",
+    description: "The approved policy for granting access.",
+    objective: "How access is meant to be approved.",
+    categories: ["PROCESS_DOCUMENTATION"],
+    necessity: "REQUIRED",
+    state: "NOT_GENERATED",
+    origin: "AGENT",
+    pendingChange: null,
+    version: 1,
+    requestId: null,
+    attributeIds: [uuid(1)],
+    accepted: true,
+    acceptedBy: "Dana Reyes",
+    acceptedAt: "2026-11-12T09:30:00Z",
+    toAccept: false,
+    personEdited: false,
+    procedureIds: null,
+  };
+  const view = (
+    status: RequestsInput["status"],
+    requirements = [requirement],
+  ) =>
+    requestsView({
+      status,
+      approved: [
+        { id: uuid(1), text: "Access is approved.", sourceKind: "LIBRARY" },
+      ],
+      requirements,
+      summary: null,
+      working: false,
+      procedures: null,
+      now: NOW,
     });
-    assert.notEqual(waiting.mode, "hidden");
+  const waits = (
+    step: string,
+    waitingOn: NonNullable<RequestsInput["status"]>["waitingOn"] = "",
+  ) => view({ step, waitingOn, waitingFor: "", releasedAt: null });
+  const before = waits("WAITING", "REQUESTS");
+
+  // Old: the workspace was hidden while the release card listed "Will be requested".
+  // New: it is hidden while the requests list is the step's one list (same audit point:
+  // each request is on the page once).
+  it("hides the D&I workspace while the requests list shows what will be requested", () => {
+    assert.equal(before.mode, "list");
+    assert.equal(showsEvidenceWorkspace("designevidence", before), false);
+    // Settled and not yet drafted: still the one list.
+    const ready = waits("READY");
+    assert.equal(ready.mode, "list");
+    assert.equal(showsEvidenceWorkspace("designevidence", ready), false);
+    // Old: a release that waited on the attributes still listed the planned items. New:
+    // the step waits in one line until they are settled; still no second list.
+    const waiting = waits("WAITING", "ATTRIBUTES");
+    assert.equal(waiting.mode, "waiting");
     assert.equal(showsEvidenceWorkspace("designevidence", waiting), false);
+    // While the requests are being drafted the list stays, at rest.
+    const drafting = view({
+      step: "RELEASED",
+      waitingOn: "",
+      waitingFor: "",
+      releasedAt: "2026-11-12T09:59:30Z",
+    });
+    assert.equal(drafting.mode, "drafting");
+    assert.equal(showsEvidenceWorkspace("designevidence", drafting), false);
   });
 
   it("shows the workspace once the release has drafted the requests", () => {
+    const after = view(
+      {
+        step: "RELEASED",
+        waitingOn: "",
+        waitingFor: "",
+        releasedAt: "2026-11-12T09:59:30Z",
+      },
+      [{ ...requirement, state: "DRAFT", requestId: uuid(31) }],
+    );
     assert.equal(after.mode, "hidden");
     assert.equal(showsEvidenceWorkspace("designevidence", after), true);
+    // A release from before the list, long drafted or not: the workspace, as before.
+    assert.equal(
+      showsEvidenceWorkspace("designevidence", waits("RELEASED")),
+      true,
+    );
+    assert.equal(
+      showsEvidenceWorkspace("designevidence", waits("COMPLETE")),
+      true,
+    );
   });
 
   it("leaves every other step's workspace as it was", () => {

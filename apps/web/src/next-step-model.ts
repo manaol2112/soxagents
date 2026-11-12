@@ -71,11 +71,14 @@ function actionOf(
   fresh: boolean,
 ): NextAction {
   const need = panelFrame(step.key, steps, null).need;
-  const kind: NextKind = step.agent
-    ? "agent"
-    : need.kind === "flag"
-      ? "flag"
-      : "act";
+  // An agent is at work on the step, or the step only waits on one (a settled D&I
+  // requests list the server releases itself): nothing is asked of the person.
+  const kind: NextKind =
+    step.agent || need.kind === "agent"
+      ? "agent"
+      : need.kind === "flag"
+        ? "flag"
+        : "act";
   const on = about.system === "" ? "" : ` on ${about.system}`;
   const title =
     kind === "agent"

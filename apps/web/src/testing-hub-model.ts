@@ -25,8 +25,10 @@ export const VIEW_LABELS: Record<TestingView, string> = {
 
 export const VIEW_NOTES: Record<TestingView, string> = {
   plans: "Each control's master test plan, reviewed and approved by a person.",
+  // The D&I evidence is not released here (product owner, 12 November 2026: "I don't
+  // want a separate D&I release."): it follows its requests list.
   phases:
-    "Release each control's D&I evidence once it is understood, and the interim and roll-forward phases once their plans are approved.",
+    "Release each control's interim and roll-forward phases once their plans are approved. The D&I evidence is released once its requests are accepted.",
   results:
     "Where each control's testing stands, with its result and the step that moves it.",
   review: "The independent reviews: their notes, re-performance and sign-off.",

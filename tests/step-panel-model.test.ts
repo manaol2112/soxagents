@@ -154,7 +154,15 @@ describe("a step's panel frame", () => {
     assert.equal(SECTION_OF.workpaper, "workpaper");
   });
 
-  it("asks for the D&I release when the evidence waits for it (B1)", () => {
+  // Old expectation (B1): a ready phase asked the person to "Release the D&I evidence",
+  // with a "Review and release" action. New (product owner, 12 November 2026: "Why do I
+  // need to have the release button? Simplify the workflow."): the panel asks for what its
+  // requests list needs, in the list's words, and never for a release. A ready phase is a
+  // settled list, which the server releases itself ("Yes. I don't want a separate D&I
+  // release."): the panel only says it waits; the earlier fallback, an act titled "Draft
+  // the D&I requests", is gone. Renamed from "asks for the D&I release when the evidence
+  // waits for it (B1)".
+  it("asks for what the D&I requests list needs, never for a release", () => {
     const steps = workflowOf(
       midway({
         requirements: [{ phase: "DESIGN", state: "NOT_GENERATED" }],
@@ -162,11 +170,108 @@ describe("a step's panel frame", () => {
       }),
     );
     const frame = panelFrame("designevidence", steps, null);
-    assert.equal(frame.need.kind, "act");
-    assert.equal(frame.need.title, "Release the D&I evidence");
-    assert.match(frame.need.detail, /approved before it is sent/);
-    assert.equal(frame.need.action?.anchor, "stp-work");
-    // Before the release nothing is requested, so the agent's note says so, not "0 accepted".
+    assert.equal(frame.need.kind, "agent");
+    assert.equal(frame.need.title, "Requests accepted");
+    assert.match(
+      frame.need.detail,
+      /^Drafting starts when the planner finishes\./,
+    );
+    // Kept: each drafted request is still approved before it goes out.
+    assert.match(frame.need.detail, /approved before it goes to the client/);
+    // Nothing is asked: no action, and no draft or release in its words.
+    assert.equal(frame.need.action, undefined);
+    assert.doesNotMatch(
+      `${frame.need.title} ${frame.need.detail}`,
+      /Draft the D&I requests|release/i,
+    );
+    // Requests the agent proposed: the panel asks a person to accept them.
+    const toAccept = panelFrame(
+      "designevidence",
+      workflowOf(
+        midway({
+          requirements: [{ phase: "DESIGN", state: "NOT_GENERATED" }],
+          designRelease: { step: "WAITING", waitingOn: "REQUESTS" },
+          designRequests: { tone: "attention", status: "2 to accept" },
+        }),
+      ),
+      null,
+    );
+    assert.equal(toAccept.need.kind, "act");
+    assert.equal(toAccept.need.title, "Accept the D&I requests");
+    assert.match(toAccept.need.detail, /approved before it is sent/);
+    assert.doesNotMatch(
+      `${toAccept.need.title} ${toAccept.need.detail}`,
+      /release/i,
+    );
+    // An approved attribute no request addresses is the step's one exception.
+    const uncovered = panelFrame(
+      "designevidence",
+      workflowOf(
+        midway({
+          requirements: [{ phase: "DESIGN", state: "NOT_GENERATED" }],
+          designRelease: { step: "WAITING", waitingOn: "EVIDENCE" },
+          designRequests: {
+            tone: "attention",
+            status: "Attribute D is not addressed",
+          },
+        }),
+      ),
+      null,
+    );
+    assert.equal(uncovered.need.kind, "act");
+    assert.equal(uncovered.need.title, "Attribute D is not addressed");
+    assert.match(uncovered.need.detail, /record why/);
+    // The planner at work, and the requests being drafted: the agent's, in one line.
+    const drafting = panelFrame(
+      "designevidence",
+      workflowOf(
+        midway({
+          requirements: [{ phase: "DESIGN", state: "NOT_GENERATED" }],
+          designRelease: { step: "RELEASED" },
+          designRequests: { tone: "active", status: "Requests accepted" },
+        }),
+      ),
+      null,
+    );
+    assert.equal(drafting.need.kind, "agent");
+    assert.match(drafting.need.detail, /^Drafting the requests\./);
+    // Nothing is drafted yet, so the agent's line does not say it drafted them.
+    const beingDrafted = midway({
+      requirements: [{ phase: "DESIGN", state: "NOT_GENERATED" }],
+      designRelease: { step: "RELEASED" },
+      designRequests: { tone: "active", status: "Requests accepted" },
+    });
+    const draftingStep = workflowOf(beingDrafted).find(
+      (step) => step.key === "designevidence",
+    );
+    assert.ok(draftingStep !== undefined);
+    assert.match(agentNote(draftingStep, beingDrafted).did, /^Planned the D&I/);
+    const planning = panelFrame(
+      "designevidence",
+      workflowOf(
+        midway({
+          designRelease: { step: "WAITING", waitingOn: "REQUESTS" },
+          designRequests: { tone: "active", status: "Being planned" },
+        }),
+      ),
+      null,
+    );
+    assert.equal(planning.need.kind, "agent");
+    // Once drafted, the step asks for its evidence decisions, as before.
+    const drafted = panelFrame(
+      "designevidence",
+      workflowOf(
+        midway({
+          requirements: [{ phase: "DESIGN", state: "RECEIVED" }],
+          designRelease: { step: "RELEASED" },
+        }),
+      ),
+      null,
+    );
+    assert.equal(drafted.need.title, "Decide the D&I evidence");
+    // Before its requests are drafted nothing is requested, so the agent's note says so,
+    // not "0 accepted". Old wording: "2 evidence items planned, requested once released."
+    // New: they are drafted once the list is accepted; no release is waited for.
     const input = midway({
       requirements: [
         { phase: "DESIGN", state: "NOT_GENERATED" },
@@ -179,7 +284,7 @@ describe("a step's panel frame", () => {
     );
     assert.ok(evidence !== undefined);
     assert.deepEqual(agentNote(evidence, input).found, [
-      "2 evidence items planned, requested once released.",
+      "2 requests planned, drafted once the list is accepted.",
     ]);
   });
 

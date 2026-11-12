@@ -1173,277 +1173,11 @@ button.stp-why:hover {
   }
 }
 
-/* The D&I release, D&I Evidence's one decision (product owner, 11 November 2026, approved
-   preview): one block on the muted surface. Row 1, the title and its one-line reason with
-   the one action; row 2, what the release rests on as inline checks; an early release as a
-   quiet row on request. What will be requested is the work area's (.dr-plan). Motion: the
-   folds' chevrons 180 ms, hover 120 ms, none under reduced motion. */
-.dr {
-  display: grid;
-  gap: 0.65rem;
-  padding: 0.9rem 1rem;
-  background: var(--surface-muted);
-  border: 1px solid var(--border-subtle);
-  border-radius: 12px;
-}
-
-.dr.is-done {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.6rem;
-}
-
-.dr-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem 1rem;
-}
-
-.dr-text {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.dr h3 {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.35;
-}
-
-.dr-text > p {
-  max-width: 80ch;
-  margin: 0.15rem 0 0;
-  color: var(--text-secondary);
-  font-size: 13.5px;
-  line-height: 1.45;
-}
-
-.dr-acts {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.dr-acts .btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  white-space: nowrap;
-}
-
-.dr-done-mark {
-  display: inline-grid;
-  flex: none;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  margin-top: 1px;
-  color: var(--success);
-}
-
-/* What the release rests on: inline, a success check or an open circle and its words. */
-.dr-checks {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 1.1rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.dr-checks li {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  color: var(--text-secondary);
-  font-size: 13px;
-}
-
-.dr-checks li.is-open {
-  color: var(--text-strong);
-  font-weight: 500;
-}
-
-.dr-check {
-  display: inline-grid;
-  flex: none;
-  place-items: center;
-  width: 14px;
-  height: 14px;
-  color: var(--success);
-}
-
-.dr-checks li.is-open .dr-check {
-  width: 12px;
-  height: 12px;
-  margin: 1px;
-  border: 1.5px solid var(--text-tertiary);
-  border-radius: 50%;
-}
-
-/* An early release: a quiet row, its reason and Release early on request. */
-.dr-early {
-  padding-top: 0.6rem;
-  border-top: 1px solid var(--border-subtle);
-}
-
-.dr-early > summary,
-.dr-fold > summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  cursor: pointer;
-  list-style: none;
-}
-
-.dr-early > summary::-webkit-details-marker,
-.dr-fold > summary::-webkit-details-marker {
-  display: none;
-}
-
-.dr-early > summary > span,
-.dr-fold > summary > span {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.1rem 0.5rem;
-  min-width: 0;
-}
-
-.dr-early > summary strong {
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.dr-early > summary small,
-.dr-fold > summary small {
-  color: var(--text-tertiary);
-  font-size: var(--fs-sm);
-}
-
-.dr-early > summary > svg,
-.dr-fold > summary > svg {
-  flex: none;
-  color: var(--text-tertiary);
-  transition: transform 180ms ease;
-}
-
-.dr-early[open] > summary > svg,
-.dr-fold[open] > summary > svg {
-  transform: rotate(180deg);
-}
-
-.dr-early > summary:hover strong,
-.dr-fold > summary:hover strong {
-  color: var(--text-strong);
-}
-
-.dr-early > summary:focus-visible,
-.dr-fold > summary:focus-visible {
-  border-radius: 6px;
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.dr-reason {
-  display: grid;
-  gap: 0.4rem;
-  margin-top: 0.6rem;
-}
-
-.dr-reason label {
-  color: var(--text-strong);
-  font-size: var(--fs-sm);
-  font-weight: 600;
-}
-
-.dr-reason textarea {
-  width: 100%;
-  resize: vertical;
-}
-
-.dr-reason-acts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-}
-
-.dr-hint,
-.dr-note {
-  margin: 0;
-  color: var(--text-tertiary);
-  font-size: var(--fs-xs);
-}
-
-.dr-problem {
-  margin: 0;
-  color: var(--danger);
-  font-size: var(--fs-sm);
-}
-
-/* What will be requested, at the top of the work area: a section title with who it goes
-   to, one bordered list with hairlines, then the quiet rows. */
-.dr-plan {
-  display: grid;
-  gap: 0.5rem;
-  min-width: 0;
-  margin-bottom: 1.25rem;
-}
-
-.dr-plan-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.25rem 1rem;
-}
-
-/* Matches the frame's section title (.stp-section-title) where the frame provides it. */
-.dr-section-title {
-  margin: 0;
-  color: var(--text-tertiary);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.dr-plan-note {
-  min-width: 0;
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-  overflow-wrap: anywhere;
-}
-
-.dr-items {
-  display: grid;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-  border: 1px solid var(--border-subtle);
-  border-radius: 12px;
-  list-style: none;
-}
-
-.dr-items li {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  min-width: 0;
-  padding: 0.7rem 0.85rem;
-  background: var(--surface);
-}
-
-.dr-items li + li {
-  border-top: 1px solid var(--border-subtle);
-}
-
+/* D&I Evidence's quiet rows and marks, shared by its requests list (design-requests.css):
+   the icon tile, the attribute's letter, and the folds under the list (the attributes it
+   is tested against, the governing documents, the history). The release card these sat
+   under is gone with its button (product owner, 12 November 2026). Motion: the folds'
+   chevrons 180 ms, none under reduced motion. */
 .dr-tile {
   display: inline-grid;
   flex: none;
@@ -1454,36 +1188,6 @@ button.stp-why:hover {
   background: var(--surface-muted);
   border: 1px solid var(--border-subtle);
   border-radius: 9px;
-}
-
-.dr-item-text {
-  display: grid;
-  flex: 1 1 auto;
-  gap: 0.1rem;
-  min-width: 0;
-}
-
-.dr-item-text strong {
-  color: var(--text-strong);
-  font-size: 14.5px;
-  font-weight: 500;
-  line-height: 1.35;
-  overflow-wrap: break-word;
-}
-
-.dr-item-text small {
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-  line-height: 1.4;
-}
-
-.dr-tests {
-  display: inline-flex;
-  flex: none;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 0.2rem;
-  max-width: 40%;
 }
 
 .dr-code {
@@ -1506,8 +1210,7 @@ button.stp-why:hover {
   font-size: var(--fs-sm);
 }
 
-/* The quiet rows under the list: the attributes it is tested against, the governing
-   documents. Hairline-separated, a chevron each. */
+/* The quiet rows under the list. Hairline-separated, a chevron each. */
 .dr-more {
   display: grid;
   margin-top: 0.25rem;
@@ -1518,14 +1221,57 @@ button.stp-why:hover {
 }
 
 .dr-fold > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
   min-height: 40px;
   padding: 0.55rem 0.1rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.dr-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.dr-fold > summary > span {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.1rem 0.5rem;
+  min-width: 0;
 }
 
 .dr-fold > summary strong {
   color: var(--text);
   font-size: 13.5px;
   font-weight: 500;
+}
+
+.dr-fold > summary small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.dr-fold > summary > svg {
+  flex: none;
+  color: var(--text-tertiary);
+  transition: transform 180ms ease;
+}
+
+.dr-fold[open] > summary > svg {
+  transform: rotate(180deg);
+}
+
+.dr-fold > summary:hover strong {
+  color: var(--text-strong);
+}
+
+.dr-fold > summary:focus-visible {
+  border-radius: 6px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .dr-fold-body {
@@ -1562,24 +1308,6 @@ button.stp-why:hover {
 }
 
 @media (max-width: 640px) {
-  .dr-row {
-    flex-wrap: wrap;
-  }
-
-  .dr-acts {
-    width: 100%;
-  }
-
-  .dr-items li {
-    flex-wrap: wrap;
-  }
-
-  .dr-tests {
-    max-width: none;
-    margin-left: calc(34px + 0.75rem);
-    justify-content: flex-start;
-  }
-
   .dr-attrs li {
     grid-template-columns: auto minmax(0, 1fr);
   }
@@ -1590,7 +1318,6 @@ button.stp-why:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dr-early > summary > svg,
   .dr-fold > summary > svg {
     transition: none;
   }
