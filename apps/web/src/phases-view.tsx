@@ -33,8 +33,8 @@ type Ids = {
   section?: "planning" | "testing";
 };
 
-/** One call to the planning route; refreshes the page when it succeeds. */
-function useRelease(ids: Ids) {
+/** One call to the planning route; refreshes the page's data in place when it succeeds. */
+export function useRelease(ids: Ids) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [busy, setBusy] = useState(false);
@@ -667,109 +667,6 @@ export function PhaseStrip({
           </div>
         </div>
       ) : null}
-      {action.problem ? (
-        <p className="pl-problem" role="alert">
-          {action.problem}
-        </p>
-      ) : null}
-    </section>
-  );
-}
-
-/**
- * The D&I evidence's own release, on the D&I Evidence step (B1; product owner, 8 November
- * 2026): recommended once the control is understood. Before then a person may release it,
- * with the reason recorded. Releasing drafts the requests; each is approved before it is sent.
- */
-export function DesignRelease({
-  ids,
-  controlId,
-  status,
-  canRelease,
-}: {
-  ids: Ids;
-  controlId: string;
-  status: PhaseStatus | null;
-  canRelease: boolean;
-}) {
-  const action = useRelease(ids);
-  const titleId = useId();
-  const reasonId = useId();
-  const [reason, setReason] = useState("");
-  const [released, setReleased] = useState(false);
-  if (released) {
-    return (
-      <p className="banner pl-design-done" role="status">
-        <UiIcon name="check" size={16} />
-        <span>
-          D&amp;I evidence released. Its requests are drafted for approval.
-        </span>
-      </p>
-    );
-  }
-  if (status === null || !releasable(status)) {
-    return null;
-  }
-  const early = releaseIsEarly(status);
-  return (
-    <section
-      className="pl-design-release"
-      aria-labelledby={titleId}
-      aria-busy={action.pending}
-    >
-      <h3 id={titleId}>
-        {early
-          ? "D&I evidence not released yet"
-          : "D&I evidence ready to release"}
-      </h3>
-      <p className="pl-sub">
-        {early
-          ? status.waitingFor
-          : "Control Understanding is complete. The planned D&I evidence items are listed below."}
-      </p>
-      {canRelease ? (
-        <div className="pl-decide">
-          <label htmlFor={reasonId}>
-            {early ? "Why release it now (required)" : "Reason (optional)"}
-          </label>
-          <textarea
-            id={reasonId}
-            rows={2}
-            maxLength={1000}
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-          />
-          <div className="pl-decide-buttons">
-            <button
-              type="button"
-              className="btn-sm"
-              disabled={action.pending || (early && reason.trim().length < 20)}
-              onClick={async () => {
-                const done = await action.run({
-                  intent: "phase-release",
-                  control_id: controlId,
-                  phase: "DESIGN",
-                  reason,
-                });
-                if (done.ok) {
-                  setReleased(true);
-                }
-              }}
-            >
-              {action.pending
-                ? "Releasing…"
-                : early
-                  ? "Release early"
-                  : "Release the D&I evidence"}
-            </button>
-            <span className="pl-sub">{releaseNote("DESIGN")}</span>
-          </div>
-        </div>
-      ) : (
-        <p className="pl-sub">
-          An Owner, Admin or Project Manager releases the D&amp;I evidence.
-        </p>
-      )}
       {action.problem ? (
         <p className="pl-problem" role="alert">
           {action.problem}

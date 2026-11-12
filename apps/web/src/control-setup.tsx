@@ -77,6 +77,8 @@ export type Conversation = {
   documents: number;
   /** Where the governing documents are linked (D&I Evidence), for a policy question. */
   documentsHref?: string | null;
+  /** Where the attributes are decided (the Attributes step), the step after the understanding. */
+  attributesHref?: string | null;
 };
 
 /** What each step is for, under its title. */
@@ -111,6 +113,7 @@ export function ControlSetup({
   panels,
   only,
   conversation = null,
+  embedded = false,
 }: {
   ids: Ids;
   input: SetupInput;
@@ -130,6 +133,11 @@ export function ControlSetup({
   /** The answers asked as a conversation with the engagement planner, the form behind
    * "Review all answers" (9 November 2026). Absent: the form, as before. */
   conversation?: Conversation | null;
+  /** Inside a workflow step's panel whose frame already gives the title, the status, the
+   * decision and the agent's line (product owner, 11 November 2026, approved preview): the
+   * step's body alone, with no step header, done chip, description or step list. Used by
+   * the Attributes and Scope & Sampling steps; Control Understanding is not embedded. */
+  embedded?: boolean;
 }) {
   const steps = useMemo(
     () => setupSteps(input).filter((step) => only.includes(step.key)),
@@ -180,7 +188,43 @@ export function ControlSetup({
           onTalk={() => setTalking(true)}
           onProcess={processStep ? () => setCurrent("process") : null}
           documentsHref={conversation.documentsHref ?? null}
+          attributesHref={conversation.attributesHref ?? null}
         />
+      </div>
+    );
+  }
+  // Embedded, a step that is not on this control's list shows nothing rather than an empty
+  // step header.
+  if (embedded && step === null) {
+    return null;
+  }
+  if (embedded && step !== null && step.key !== "answers") {
+    return (
+      <div className="cs-inline cs-embedded">
+        {step.key === "documents" ? (
+          <DocumentQuestions
+            ids={ids}
+            slots={slots.filter((slot) => slot.document)}
+            documents={documents}
+            canAct={input.canAct}
+          />
+        ) : null}
+        {panels[step.key] ?? null}
+        {step.key === "plan" && holds.length > 0 && !step.done ? (
+          <section
+            className="cs-holds-list"
+            aria-labelledby={`cs-holds-${ids.controlId}`}
+          >
+            <h4 className="cs-section-title" id={`cs-holds-${ids.controlId}`}>
+              Also holding evidence gathering
+            </h4>
+            <ul className="cs-list">
+              {holds.map((text) => (
+                <li key={text}>{text}</li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
       </div>
     );
   }

@@ -2,23 +2,31 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  ATTRIBUTE_ROW_CHIPS,
   type Attribute,
   attributeLetter,
+  attributeRowState,
+  attributeSourceLine,
   attributesSummary,
   clock,
   contextProblem,
   contextWrite,
+  criteriaState,
+  criteriaToAccept,
   decidedNote,
   documentUploadTarget,
+  firstToDecide,
   type NarrativeReview,
   type NarrativeRun,
   narrativeProgress,
+  openRows,
   parseContext,
   planOutcomeLine,
   REVIEW_ACTION_LABELS,
   reviewActions,
   reviewHeadline,
   selectionPlan,
+  untailored,
 } from "../apps/web/src/control-context-model.ts";
 
 const ORG = "01a13253-ec1a-7604-8944-a06dd7633ce0";
@@ -946,6 +954,7 @@ describe("updating the test plan from the approved narrative", () => {
         attributes: 2,
         evidence: 0,
         evidenceProposed: 1,
+        evidenceFallback: false,
         note: "",
       }),
       "The test plan was updated from the approved narrative: 2 attribute changes to decide on the Attributes tab; 1 evidence change to accept on the Evidence tab.",
@@ -955,6 +964,7 @@ describe("updating the test plan from the approved narrative", () => {
         attributes: 0,
         evidence: 0,
         evidenceProposed: 0,
+        evidenceFallback: false,
         note: "",
       }),
       "The test plan was checked against the approved narrative: it already matches how the control operates.",
@@ -1028,6 +1038,19 @@ function attribute(id: string, overrides: Partial<Attribute> = {}): Attribute {
     decidedBy: null,
     version: 1,
     definition: null,
+    criteria: {
+      objective: "",
+      condition: "",
+      passCriteria: "",
+      failCriteria: "",
+      judgmentRequired: null,
+      automatable: null,
+      phases: [],
+      origin: null,
+      acceptedBy: "",
+      acceptedAt: "",
+      owned: false,
+    },
     ...overrides,
   };
 }
@@ -1158,5 +1181,216 @@ describe("a context change's problem", () => {
     assert.match(contextProblem(409) ?? "", /changed/);
     assert.match(contextProblem(413) ?? "", /5 MB/);
     assert.match(contextProblem(403) ?? "", /role/);
+  });
+});
+
+describe("an attribute's tailored criteria (11 November 2026)", () => {
+  const tailored = {
+    objective: "",
+    condition: "The ServiceNow request is approved by the user's manager.",
+    passCriteria: "The manager approved in ServiceNow before the SAP grant.",
+    failCriteria: "No approval, or one after the grant.",
+    judgmentRequired: false,
+    automatable: null,
+    phases: [],
+    origin: "AGENT" as const,
+    acceptedBy: "",
+    acceptedAt: "",
+    owned: false,
+  };
+
+  it("reads the criteria the server sends with each attribute", () => {
+    const context = parseContext({
+      control_id: "01a13300-0000-7000-8000-000000000001",
+      classifications: [],
+      derived_classifications: [],
+      attributes: {
+        approved: [
+          {
+            id: "01a13300-0000-7000-8000-00000000000a",
+            text: "Approved before access",
+            status: "APPROVED",
+            condition: tailored.condition,
+            pass_criteria: tailored.passCriteria,
+            fail_criteria: tailored.failCriteria,
+            judgment_required: false,
+            criteria_origin: "AGENT",
+            criteria_accepted_by: "Sara Lee",
+            criteria_accepted_at: "2026-11-11T10:00:00Z",
+            criteria_owned: true,
+            phases: ["DESIGN", 4],
+          },
+        ],
+        proposed: [],
+        history: [],
+      },
+      issues: [],
+      documents: [],
+    });
+    const criteria = context?.approved[0]?.criteria;
+    assert.equal(criteria?.passCriteria, tailored.passCriteria);
+    assert.equal(criteria?.origin, "AGENT");
+    assert.equal(criteria?.acceptedBy, "Sara Lee");
+    assert.equal(criteria?.owned, true);
+    assert.deepEqual(criteria?.phases, ["DESIGN"]);
+  });
+
+  it("says whether a person owns them, they wait to be accepted, or they are missing", () => {
+    assert.equal(criteriaState({ ...tailored, owned: true }), "OWNED");
+    assert.equal(criteriaState(tailored), "TO_ACCEPT");
+    // The demo's prepared criteria are accepted like the agent's.
+    assert.equal(criteriaState({ ...tailored, origin: "SEEDED" }), "TO_ACCEPT");
+    // Half stated is not criteria a tester can apply.
+    assert.equal(criteriaState({ ...tailored, failCriteria: "" }), "MISSING");
+    // Only the library's standard: not tailored.
+    assert.equal(
+      criteriaState({
+        ...tailored,
+        condition: "",
+        passCriteria: "",
+        failCriteria: "",
+        origin: null,
+      }),
+      "MISSING",
+    );
+    const owned = attribute("a", { criteria: { ...tailored, owned: true } });
+    const waiting = attribute("b", { criteria: tailored });
+    const missing = attribute("c");
+    const context = { approved: [owned, waiting, missing] };
+    assert.deepEqual(
+      criteriaToAccept(context).map((item) => item.id),
+      ["b"],
+    );
+    assert.equal(untailored(context), 2);
+  });
+});
+
+// The Attributes step as one list (product owner, 11 November 2026, approved preview): each
+// row names its state in words, says where its wording came from, and the first row that
+// waits on a person starts open.
+describe("the Attributes step's rows", () => {
+  const tailored = {
+    objective: "",
+    condition: "The ServiceNow request is approved by the user's manager.",
+    passCriteria: "The manager approved in ServiceNow before the SAP grant.",
+    failCriteria: "No approval, or one after the grant.",
+    judgmentRequired: false,
+    automatable: null,
+    phases: [],
+    origin: "AGENT" as const,
+    acceptedBy: "",
+    acceptedAt: "",
+    owned: false,
+  };
+  const accepted = attribute("a", {
+    criteria: { ...tailored, owned: true, acceptedBy: "Sara Lee" },
+  });
+  const toAccept = attribute("b", { criteria: tailored });
+  const missing = attribute("c");
+  const proposal = attribute("p", {
+    status: "PROPOSED",
+    proposal: "ADD",
+    sourceKind: "AGENT",
+    basis: "INFERRED",
+  });
+
+  it("reads each row's state from its criteria, and a proposal as proposed", () => {
+    assert.deepEqual(
+      [accepted, toAccept, missing, proposal].map(attributeRowState),
+      ["ACCEPTED", "TO_ACCEPT", "MISSING", "PROPOSED"],
+    );
+    // A proposal is undecided agent output, whatever criteria it carries.
+    assert.equal(
+      attributeRowState({ ...proposal, criteria: accepted.criteria }),
+      "PROPOSED",
+    );
+  });
+
+  it("names every state in words, and never styles agent output as accepted", () => {
+    assert.deepEqual(
+      Object.values(ATTRIBUTE_ROW_CHIPS).map((chip) => chip.label),
+      ["Proposed", "To accept", "Needs criteria", "Accepted"],
+    );
+    assert.equal(ATTRIBUTE_ROW_CHIPS.PROPOSED.tone, "ai");
+    assert.equal(ATTRIBUTE_ROW_CHIPS.TO_ACCEPT.tone, "ai");
+    assert.equal(ATTRIBUTE_ROW_CHIPS.MISSING.tone, "warning");
+    assert.equal(ATTRIBUTE_ROW_CHIPS.ACCEPTED.tone, "success");
+  });
+
+  it("opens the first row that waits on a person, in the list's order", () => {
+    assert.equal(firstToDecide([accepted, missing, toAccept]), "c");
+    assert.equal(firstToDecide([accepted, proposal]), "p");
+    assert.equal(firstToDecide([accepted]), null);
+    assert.equal(firstToDecide([]), null);
+  });
+
+  it("follows the next waiting row until the person opens or closes one", () => {
+    assert.deepEqual([...openRows(null, [accepted, toAccept, missing])], ["b"]);
+    // Once b is accepted the next waiting row comes up on its own.
+    const after = { ...toAccept, criteria: accepted.criteria };
+    assert.deepEqual([...openRows(null, [accepted, after, missing])], ["c"]);
+    assert.deepEqual([...openRows(null, [accepted])], []);
+    // The person's own choice stands, even when it leaves nothing open.
+    assert.deepEqual(
+      [...openRows(new Set(["a"]), [accepted, toAccept])],
+      ["a"],
+    );
+    assert.deepEqual([...openRows(new Set(), [accepted, toAccept])], []);
+  });
+
+  it("says where the wording came from and who tailored the criteria", () => {
+    assert.equal(
+      attributeSourceLine(toAccept),
+      "Library standard · tailored by the agent",
+    );
+    // Accepted criteria the agent tailored still say who tailored them.
+    assert.equal(
+      attributeSourceLine(accepted),
+      "Library standard · tailored by the agent",
+    );
+    assert.equal(attributeSourceLine(missing), "Library standard");
+    assert.equal(
+      attributeSourceLine(attribute("m", { sourceKind: "MANUAL" })),
+      "Written by the team",
+    );
+    assert.equal(
+      attributeSourceLine(
+        attribute("m", {
+          sourceKind: "MANUAL",
+          criteria: { ...tailored, origin: "PERSON", owned: true },
+        }),
+      ),
+      "Written by the team",
+    );
+    assert.equal(
+      attributeSourceLine(
+        attribute("r", {
+          sourceKind: "RCM",
+          criteria: { ...tailored, origin: "PERSON", owned: true },
+        }),
+      ),
+      "Client RCM · criteria by the team",
+    );
+    assert.equal(
+      attributeSourceLine(
+        attribute("d", {
+          sourceKind: "DOCUMENT",
+          sourceTitle: " Access Policy ",
+        }),
+      ),
+      "From Access Policy",
+    );
+    assert.equal(
+      attributeSourceLine(attribute("d", { sourceKind: "DOCUMENT" })),
+      "Supporting document",
+    );
+    assert.equal(
+      attributeSourceLine(proposal),
+      "Drafted by the agent · inferred",
+    );
+    assert.equal(
+      attributeSourceLine({ ...proposal, basis: "DOCUMENTED" }),
+      "Drafted by the agent",
+    );
   });
 });

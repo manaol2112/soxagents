@@ -7,18 +7,30 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
+  useState,
   useSyncExternalStore,
 } from "react";
 import {
   GROUPS,
+  KIND_ICON,
   KIND_LABELS,
   progressOf,
   type StepKey,
   TONE_LABELS,
   type Tone,
   type WorkflowStep,
+  workflowFrame,
+  workflowLayout,
 } from "./control-workflow-model";
+import { StepAsk, StepAskContext, type StepAskTarget } from "./step-frame";
+import {
+  panelHeadFor,
+  panelHeadOf,
+  statusPill,
+  takesMinimalLayout,
+} from "./step-frame-model";
 import { UiIcon } from "./ui-icon";
 
 // The canvas and its library load only with the workflow, and never on the server.
@@ -37,6 +49,27 @@ const WorkflowCanvas = dynamic(
 );
 
 const NARROW = "(max-width: 767px)";
+
+/** The workflow's size in canvas units: fixed, so worked out once. */
+const CONTENT = workflowLayout().size;
+/** The canvas's width before it is measured: a laptop's workspace. */
+const TYPICAL_WIDTH = 1100;
+
+/** The canvas's measured width, kept as it resizes. */
+function useWidth(target: { current: HTMLElement | null }, on: boolean) {
+  const [width, setWidth] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const element = target.current;
+    if (!on || element === null) {
+      return;
+    }
+    setWidth(element.clientWidth);
+    const observer = new ResizeObserver(() => setWidth(element.clientWidth));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [target, on]);
+  return width;
+}
 
 function subscribe(change: () => void) {
   const query = window.matchMedia(NARROW);
@@ -61,7 +94,7 @@ const NO_FLAGS: Partial<Record<StepKey, string>> = {};
 
 /**
  * The control's workspace (product owner, 8 November 2026; docs/control-workflow-plan.md): the
- * 14 steps of its audit, in three lanes. A click or Enter opens a step's work in the panel beside
+ * 12 steps of its audit, in four stages. A click or Enter opens a step's work in the panel beside
  * the workflow.
  */
 export function ControlWorkflow({
@@ -89,6 +122,12 @@ export function ControlWorkflow({
   const progress = progressOf(steps);
   // One next step per open branch, so the header names each.
   const nexts = steps.filter((step) => step.next);
+  // The canvas is as high as the workflow at the zoom it opens at (workflowFrame): no fixed
+  // height to shrink it into, and no empty space under it.
+  const frameRef = useRef<HTMLDivElement>(null);
+  const width = useWidth(frameRef, !narrow);
+  const canvasWidth = width ?? TYPICAL_WIDTH;
+  const height = workflowFrame(canvasWidth, CONTENT).height;
 
   return (
     <section className="wf" aria-labelledby="wf-title">
@@ -127,7 +166,7 @@ export function ControlWorkflow({
         <ul className="wf-kinds" aria-label="Kinds of step">
           {(["source", "agent", "gate", "output"] as const).map((kind) => (
             <li key={kind} className={`kind-${kind}`}>
-              <span aria-hidden="true" />
+              <UiIcon name={KIND_ICON[kind]} size={13} />
               {KIND_LABELS[kind]}
             </li>
           ))}
@@ -136,12 +175,18 @@ export function ControlWorkflow({
       {narrow ? (
         <WorkflowList steps={steps} hrefs={hrefs} flags={flags ?? NO_FLAGS} />
       ) : (
-        <div className="wf-canvas">
+        <div
+          className="wf-canvas"
+          ref={frameRef}
+          // The frame's two border lines are outside the workflow's height.
+          style={{ height: height + 2 }}
+        >
           <WorkflowCanvas
             steps={steps}
             selected={opened}
             onOpen={open}
             flags={flags ?? NO_FLAGS}
+            canvasWidth={canvasWidth}
           />
         </div>
       )}
@@ -181,11 +226,12 @@ function WorkflowList({
                       {step.tone === "done" ? (
                         <UiIcon name="check" size={13} />
                       ) : (
-                        step.number
+                        String(step.number).padStart(2, "0")
                       )}
                     </span>
                     <span className="wf-list-text">
-                      <span className="wf-kind">
+                      <span className={`wf-badge kind-${step.kind}`}>
+                        <UiIcon name={KIND_ICON[step.kind]} size={12} />
                         {KIND_LABELS[step.kind]}
                         {step.next ? (
                           <span className="wf-next">
@@ -194,7 +240,9 @@ function WorkflowList({
                         ) : null}
                       </span>
                       <span className="wf-title">{step.title}</span>
-                      <span className="wf-state-text">{step.status}</span>
+                      <span className={`wf-state-text tone-${step.tone}`}>
+                        {step.status}
+                      </span>
                     </span>
                     <StatusChip tone={step.tone} />
                   </Link>
@@ -210,10 +258,13 @@ function WorkflowList({
 /**
  * A step's work, in a wide panel over the workflow's right side (product owner, 8 November 2026):
  * the workflow stays in view on the left. Escape or Close returns to the workflow; the arrows
- * move to the step before or after.
+ * move to the step before or after. Every step's header is the minimalist one (11 November
+ * 2026): its kind and number, its title with one status, and Ask; Control Understanding and
+ * the activity keep the header they had.
  */
 export function WorkflowPanel({
   kicker,
+  step = null,
   title,
   tone,
   status,
@@ -223,6 +274,8 @@ export function WorkflowPanel({
   children,
 }: {
   kicker: string;
+  /** The open step's key; null for the activity. The header is chosen from it. */
+  step?: string | null;
   title: string;
   tone: Tone | null;
   status: string;
@@ -254,6 +307,91 @@ export function WorkflowPanel({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [router, closeHref]);
+  // The step's Ask, from the frame inside the drawer (StepFrame), for the header.
+  const [ask, setAsk] = useState<StepAskTarget | null>(null);
+  // Every step takes the minimalist header (product owner, 11 November 2026), except Control
+  // Understanding, which keeps its own, and the activity, which is no step.
+  const head = step !== null ? panelHeadFor(step) : panelHeadOf(kicker);
+  const minimal = head !== null && takesMinimalLayout(head.key);
+  const pill = tone !== null ? statusPill(tone, status) : null;
+  const stepNav = (
+    <nav className="wf-panel-nav" aria-label="Steps">
+      {previous !== null ? (
+        <Link
+          className={`wf-icon-btn${minimal ? " is-ghost" : ""}`}
+          href={previous.href}
+          scroll={false}
+          title={`Previous: ${previous.title}`}
+          aria-label={`Previous step: ${previous.title}`}
+        >
+          <UiIcon name="back" size={15} />
+        </Link>
+      ) : null}
+      {next !== null ? (
+        <Link
+          className={`wf-icon-btn${minimal ? " is-ghost" : ""}`}
+          href={next.href}
+          scroll={false}
+          title={`Next: ${next.title}`}
+          aria-label={`Next step: ${next.title}`}
+        >
+          <UiIcon name="arrow" size={15} />
+        </Link>
+      ) : null}
+      <Link
+        className={`wf-icon-btn${minimal ? " is-ghost" : ""}`}
+        href={closeHref}
+        scroll={false}
+        aria-label="Close and return to the workflow"
+      >
+        <UiIcon name="x" size={15} />
+      </Link>
+    </nav>
+  );
+  if (minimal) {
+    return (
+      <aside className="wf-panel is-minimal" aria-labelledby="wf-panel-title">
+        <header className="wf-panel-head is-minimal">
+          <div className="wf-panel-titles">
+            <p className="wf-panel-kicker">
+              <span
+                className={`wf-panel-kind kind-${head.kind}`}
+                aria-hidden="true"
+              >
+                <UiIcon name={KIND_ICON[head.kind]} size={12} />
+              </span>
+              {head.label}
+            </p>
+            <div className="wf-panel-line">
+              <h2 id="wf-panel-title" ref={heading} tabIndex={-1}>
+                {title}
+              </h2>
+              {pill !== null ? (
+                <span className={`wf-panel-pill tone-${pill.tone}`}>
+                  <span className="sr-only">Status: </span>
+                  {pill.tone === "done" ? (
+                    <UiIcon name="check" size={12} />
+                  ) : (
+                    <span className="wf-panel-pill-dot" aria-hidden="true" />
+                  )}
+                  {pill.label}
+                </span>
+              ) : null}
+            </div>
+          </div>
+          <div className="wf-panel-actions">
+            {ask !== null ? <StepAsk target={ask} /> : null}
+            {stepNav}
+          </div>
+        </header>
+        <div className="wf-panel-body">
+          <StepAskContext.Provider value={setAsk}>
+            {children}
+          </StepAskContext.Provider>
+        </div>
+      </aside>
+    );
+  }
   return (
     <aside className="wf-panel" aria-labelledby="wf-panel-title">
       <header className="wf-panel-head">

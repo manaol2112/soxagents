@@ -10,6 +10,7 @@ import {
   useTransition,
 } from "react";
 import { createPortal } from "react-dom";
+import { AcceptAllCriteria, TailoredCriteria } from "./attribute-criteria";
 import {
   ClientWalkthrough,
   WALK_ASK_EVENT,
@@ -22,10 +23,13 @@ import {
 } from "./client-walkthrough-model";
 import {
   ATTRIBUTE_MAX,
+  ATTRIBUTE_ROW_CHIPS,
   type Attribute,
   type AttributeDecisionKind,
   type AttributeDefinition,
   attributeLetter,
+  attributeRowState,
+  attributeSourceLine,
   attributesSummary,
   BASIS_LABELS,
   CLASSIFICATIONS,
@@ -35,6 +39,7 @@ import {
   type ContextIssue,
   type ControlContext,
   contextProblem,
+  criteriaToAccept,
   type Design,
   DOCUMENT_KINDS,
   type DocumentKind,
@@ -42,6 +47,7 @@ import {
   FREQUENCY_LABELS,
   type LibraryUpdate,
   NATURE_LABELS,
+  openRows,
   PROCEDURE_PHASES,
   type ProcessStep,
   SECTION_HEADINGS,
@@ -190,20 +196,28 @@ function LibraryUpdatePanel({
   ids,
   update,
   canAct,
+  bare = false,
 }: {
   ids: Ids;
   update: LibraryUpdate;
   canAct: boolean;
+  /** Inside a fold whose line already names the version: no heading of its own. */
+  bare?: boolean;
 }) {
   const action = useAction(ids);
   const changes = update.items.filter((item) => item.change !== "KEEP");
   return (
-    <section className="cc-update" aria-label="Library update">
+    <section
+      className={`cc-update${bare ? " is-bare" : ""}`}
+      aria-label="Library update"
+    >
       <div className="cc-update-head">
-        <h4>
-          Library version {update.currentVersion} is available{" "}
-          <span className="num">{changes.length}</span>
-        </h4>
+        {bare ? null : (
+          <h4>
+            Library version {update.currentVersion} is available{" "}
+            <span className="num">{changes.length}</span>
+          </h4>
+        )}
         {canAct ? (
           <button
             type="button"
@@ -941,12 +955,18 @@ export function AttributesPanel({
   canAct,
   compact = false,
   showQuestions = true,
+  embedded = false,
 }: {
   ids: Ids;
   context: ControlContext;
   canAct: boolean;
   /** Off in the guided setup, which asks the open questions on its own step. */
   showQuestions?: boolean;
+  /** Inside the Attributes step's panel (product owner, 11 November 2026, approved
+   * preview): the panel's frame gives the title, the status, the decision and the agent's
+   * line, so this is the work alone: one list of rows that open on request, the first that
+   * waits on a person already open, and the rest folded below. */
+  embedded?: boolean;
   /** Inside the test plan, whose attribute table is the one list of the attributes (and
    * whose Procedures tab already says how each is tested): only what waits on a decision,
    * the agent's proposals and the history are shown here. */
@@ -957,6 +977,8 @@ export function AttributesPanel({
   const [dialog, setDialog] = useState<AttributeDialogState | null>(null);
   const [shown, setShown] = useState<ReadonlySet<string>>(new Set());
   const [about, setAbout] = useState(false);
+  // The rows the person opened or closed; until then the first that waits on them is open.
+  const [opened, setOpened] = useState<ReadonlySet<string> | null>(null);
   const [done, setDone] = useState("");
   const aboutId = useId();
   const letters = new Map(
@@ -1059,7 +1081,9 @@ export function AttributesPanel({
       ...(item.definition !== null
         ? [
             {
-              label: open ? "Hide how it is tested" : "Show how it is tested",
+              label: open
+                ? "Hide the standard's requirement"
+                : "Show the standard's requirement",
               icon: "info" as IconName,
               onSelect: () => setShown(toggle(shown, item.id)),
             },
@@ -1104,9 +1128,14 @@ export function AttributesPanel({
           {proposed && item.note !== "" ? (
             <p className="ta-why">{item.note}</p>
           ) : null}
+          {/* The criteria tailored to this control, what the testers judge evidence
+              against (11 November 2026); the standard's requirement opens on request. */}
+          {!proposed && !compact ? (
+            <TailoredCriteria ids={ids} item={item} canAct={canAct} />
+          ) : null}
           {open && item.definition !== null ? (
             <div className="ta-how">
-              <p className="ta-how-title">How it is tested</p>
+              <p className="ta-how-title">The standard's requirement</p>
               <DefinitionRules definition={item.definition} />
             </div>
           ) : null}
@@ -1175,6 +1204,133 @@ export function AttributesPanel({
           (each) => each.id === dialog.attribute.replacesId,
         ) ?? null)
       : null;
+  const dialogView =
+    dialog !== null ? (
+      <AttributeDialog
+        key={dialog.mode === "add" ? "add" : dialog.attribute.id}
+        ids={ids}
+        state={dialog}
+        replaced={
+          dialogTarget !== null
+            ? {
+                letter: letters.get(dialogTarget.id) ?? "",
+                text: dialogTarget.text,
+              }
+            : null
+        }
+        onClose={() => setDialog(null)}
+        onDone={(note) => {
+          setDialog(null);
+          setChosen(new Set());
+          setDone(note);
+        }}
+      />
+    ) : null;
+  const historyView =
+    context.history.length > 0 ? (
+      <details className={embedded ? "cc-history ta-fold" : "cc-history"}>
+        <summary>
+          History <span className="num">{context.history.length}</span>
+        </summary>
+        <ul>
+          {context.history.map((attribute) => (
+            <li key={attribute.id}>
+              <Badge>{attribute.status.toLowerCase()}</Badge>{" "}
+              <span>{attribute.text}</span>
+              {attribute.decidedBy !== null ? (
+                <span className="cc-by"> · {attribute.decidedBy}</span>
+              ) : null}
+              {attribute.note !== "" ? (
+                <span className="cc-by"> · {attribute.note}</span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      </details>
+    ) : null;
+  if (embedded && !compact) {
+    return (
+      <EmbeddedAttributes
+        ids={ids}
+        context={context}
+        canAct={canAct}
+        busy={action.pending}
+        busyKey={action.busy}
+        selected={selected}
+        proposalsChosen={plan.proposals}
+        onChoose={(next) => setChosen(next)}
+        open={openRows(opened, [...context.approved, ...context.proposed])}
+        onOpen={(next) => setOpened(next)}
+        shown={shown}
+        onShow={(next) => setShown(next)}
+        lastOne={lastOne}
+        onDecide={(decision, item) => void decideOne(decision, item)}
+        onDecideMany={(decision, items) => void decideMany(decision, items)}
+        onDialog={setDialog}
+        onGenerate={() =>
+          void action.run("generate", { intent: "attributes-generate" })
+        }
+        status={
+          <>
+            <p className="ta-done" role="status">
+              {done !== "" && action.problem === null ? (
+                <>
+                  <UiIcon name="check" size={14} />
+                  {done}
+                </>
+              ) : null}
+            </p>
+            {action.note !== "" && action.problem === null ? (
+              <p className="cc-note">{action.note}</p>
+            ) : null}
+            <Problem text={action.problem} />
+          </>
+        }
+        folds={
+          <>
+            {context.libraryUpdate !== null ? (
+              <details className="ta-fold">
+                <summary>
+                  Library version {context.libraryUpdate.currentVersion} is
+                  available{" "}
+                  <span className="num">
+                    {
+                      context.libraryUpdate.items.filter(
+                        (item) => item.change !== "KEEP",
+                      ).length
+                    }
+                  </span>
+                </summary>
+                <LibraryUpdatePanel
+                  ids={ids}
+                  update={context.libraryUpdate}
+                  canAct={canAct}
+                  bare
+                />
+              </details>
+            ) : null}
+            {historyView}
+            {context.testing !== null ? (
+              <TestingProcedures testing={context.testing} />
+            ) : null}
+          </>
+        }
+        after={
+          <>
+            {dialogView}
+            {showQuestions ? (
+              <IssuesList
+                ids={ids}
+                issues={issues}
+                canAct={canAct}
+                title="Open questions"
+              />
+            ) : null}
+          </>
+        }
+      />
+    );
+  }
   return (
     <div className="cc-attributes ta" aria-busy={action.pending}>
       {context.libraryUpdate !== null ? (
@@ -1342,6 +1498,9 @@ export function AttributesPanel({
         <p className="cc-note">{action.note}</p>
       ) : null}
       <Problem text={action.problem} />
+      {compact || !canAct ? null : (
+        <AcceptAllCriteria ids={ids} items={criteriaToAccept(context)} />
+      )}
       {compact ? null : (
         <ol className="ta-list" aria-label="Testing attributes">
           {context.approved.map((item, index) =>
@@ -1367,27 +1526,7 @@ export function AttributesPanel({
           </ul>
         </section>
       ) : null}
-      {dialog !== null ? (
-        <AttributeDialog
-          key={dialog.mode === "add" ? "add" : dialog.attribute.id}
-          ids={ids}
-          state={dialog}
-          replaced={
-            dialogTarget !== null
-              ? {
-                  letter: letters.get(dialogTarget.id) ?? "",
-                  text: dialogTarget.text,
-                }
-              : null
-          }
-          onClose={() => setDialog(null)}
-          onDone={(note) => {
-            setDialog(null);
-            setChosen(new Set());
-            setDone(note);
-          }}
-        />
-      ) : null}
+      {dialogView}
       {showQuestions ? (
         <IssuesList
           ids={ids}
@@ -1396,30 +1535,392 @@ export function AttributesPanel({
           title="Open questions"
         />
       ) : null}
-      {context.history.length > 0 ? (
-        <details className="cc-history">
-          <summary>
-            History <span className="num">{context.history.length}</span>
-          </summary>
-          <ul>
-            {context.history.map((attribute) => (
-              <li key={attribute.id}>
-                <Badge>{attribute.status.toLowerCase()}</Badge>{" "}
-                <span>{attribute.text}</span>
-                {attribute.decidedBy !== null ? (
-                  <span className="cc-by"> · {attribute.decidedBy}</span>
-                ) : null}
-                {attribute.note !== "" ? (
-                  <span className="cc-by"> · {attribute.note}</span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
+      {historyView}
       {context.testing !== null && !compact ? (
         <TestingProcedures testing={context.testing} />
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * The Attributes step's work area (product owner, 11 November 2026, approved preview). The
+ * step's frame names the step, its status, the one decision and the agent's line, so none
+ * of them is repeated here: a title row with the count and the quiet actions, one list
+ * where each attribute is a row that opens on request (the first that waits on a person is
+ * open), the agent's proposals in the same list with their own chip, the selection's
+ * toolbar only while there are proposals, and the settled detail folded below. Every
+ * decision is the panel's own, so the same server calls, versions and audit apply, and each
+ * shows success only once the server has confirmed it.
+ */
+function EmbeddedAttributes({
+  ids,
+  context,
+  canAct,
+  busy,
+  busyKey,
+  selected,
+  proposalsChosen,
+  onChoose,
+  open,
+  onOpen,
+  shown,
+  onShow,
+  lastOne,
+  onDecide,
+  onDecideMany,
+  onDialog,
+  onGenerate,
+  status,
+  folds,
+  after,
+}: {
+  ids: Ids;
+  context: ControlContext;
+  canAct: boolean;
+  busy: boolean;
+  busyKey: string;
+  selected: ReadonlySet<string>;
+  /** The chosen proposals, decided together. */
+  proposalsChosen: Attribute[];
+  onChoose: (next: Set<string>) => void;
+  open: ReadonlySet<string>;
+  onOpen: (next: Set<string>) => void;
+  /** The rows whose standard's requirement is shown. */
+  shown: ReadonlySet<string>;
+  onShow: (next: Set<string>) => void;
+  lastOne: boolean;
+  onDecide: (decision: AttributeDecisionKind, item: Attribute) => void;
+  onDecideMany: (decision: AttributeDecisionKind, items: Attribute[]) => void;
+  onDialog: (state: AttributeDialogState) => void;
+  /** Asks the agent to read the sources and propose attributes. */
+  onGenerate: () => void;
+  status: ReactNode;
+  folds: ReactNode;
+  after: ReactNode;
+}) {
+  const id = useId();
+  const approved = context.approved.length;
+  const proposals = context.proposed;
+  const allChosen =
+    proposals.length > 0 && proposals.every((item) => selected.has(item.id));
+  const flip = (set: ReadonlySet<string>, each: string): Set<string> => {
+    const next = new Set(set);
+    if (next.has(each)) {
+      next.delete(each);
+    } else {
+      next.add(each);
+    }
+    return next;
+  };
+  const letters = new Map(
+    context.approved.map((item, index) => [item.id, attributeLetter(index)]),
+  );
+
+  function row(item: Attribute, letter: string | null) {
+    const proposed = item.status === "PROPOSED";
+    const state = attributeRowState(item);
+    const chip = ATTRIBUTE_ROW_CHIPS[state];
+    const isOpen = open.has(item.id);
+    const standardShown = shown.has(item.id) && item.definition !== null;
+    const target =
+      item.replacesId !== null
+        ? (context.approved.find((each) => each.id === item.replacesId) ?? null)
+        : null;
+    const name = letter !== null ? `attribute ${letter}` : "the proposal";
+    const bodyId = `${id}-${item.id}`;
+    const standard =
+      item.definition !== null ? (
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          aria-expanded={standardShown}
+          aria-controls={`${bodyId}-standard`}
+          onClick={() => onShow(flip(shown, item.id))}
+        >
+          {standardShown ? "Hide the standard" : "Show the standard"}
+        </button>
+      ) : null;
+    const more =
+      !proposed && canAct ? (
+        <RowMenu
+          label={name}
+          items={[
+            {
+              label: "Edit wording",
+              icon: "compose",
+              onSelect: () =>
+                onDialog({
+                  mode: "edit",
+                  attribute: item,
+                  letter: letter ?? "",
+                }),
+            },
+            {
+              label: "Retire attribute",
+              icon: "trash",
+              danger: true,
+              unavailable: lastOne
+                ? "A control keeps at least one attribute."
+                : null,
+              onSelect: () => onDecide("RETIRE", item),
+            },
+          ]}
+        />
+      ) : null;
+    return (
+      <li
+        key={item.id}
+        className={`tar is-${state.toLowerCase()}${isOpen ? " is-open" : ""}${selected.has(item.id) ? " is-selected" : ""}${proposed && canAct ? " has-check" : ""}`}
+      >
+        {proposed && canAct ? (
+          <input
+            type="checkbox"
+            className="ta-check"
+            checked={selected.has(item.id)}
+            disabled={busy}
+            aria-label={`Select ${name}: ${item.text}`}
+            onChange={() => onChoose(flip(selected, item.id))}
+          />
+        ) : null}
+        <button
+          type="button"
+          className="tar-head"
+          aria-expanded={isOpen}
+          aria-controls={bodyId}
+          onClick={() => onOpen(flip(open, item.id))}
+        >
+          <span className="tar-letter" aria-hidden="true">
+            {letter ?? <UiIcon name="sparkles" size={13} />}
+          </span>
+          <span className="tar-name">
+            <span className="sr-only">
+              {letter !== null ? `Attribute ${letter}: ` : "Proposed change: "}
+            </span>
+            <span className="tar-text">{item.text}</span>
+            <span className="tar-source">{attributeSourceLine(item)}</span>
+          </span>
+          <span className={`tar-chip tone-${chip.tone}`}>{chip.label}</span>
+          <span className="tar-caret" aria-hidden="true">
+            <UiIcon name="chevron" size={14} />
+          </span>
+        </button>
+        {isOpen ? (
+          <div className="tar-body" id={bodyId}>
+            {target !== null ? (
+              <p className="ta-replaces">
+                <span>
+                  {item.proposal === "RETIRE" ? "Retires" : "Replaces"}{" "}
+                  {letters.get(target.id) ?? ""}
+                </span>{" "}
+                {target.text}
+              </p>
+            ) : null}
+            {item.sourceQuote !== "" ? (
+              <q className="ta-quote">{item.sourceQuote}</q>
+            ) : null}
+            {proposed && item.note !== "" ? (
+              <p className="ta-why">{item.note}</p>
+            ) : null}
+            {proposed ? (
+              <div className="tc-row-acts">
+                {canAct ? (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={busy}
+                      onClick={() => onDecide("APPROVE", item)}
+                    >
+                      {busyKey === `decide-${item.id}`
+                        ? "Saving…"
+                        : item.proposal === "RETIRE"
+                          ? "Approve the retirement"
+                          : "Approve"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      disabled={busy}
+                      onClick={() => onDecide("REJECT", item)}
+                    >
+                      Reject
+                    </button>
+                    {item.proposal !== "RETIRE" ? (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        disabled={busy}
+                        onClick={() =>
+                          onDialog({
+                            mode: "review",
+                            attribute: item,
+                            letter: "proposed",
+                          })
+                        }
+                      >
+                        Review wording
+                      </button>
+                    ) : null}
+                  </>
+                ) : null}
+                {standard}
+              </div>
+            ) : (
+              <TailoredCriteria
+                ids={ids}
+                item={item}
+                canAct={canAct}
+                flat
+                extra={
+                  standard !== null || more !== null ? (
+                    <>
+                      {standard}
+                      {more}
+                    </>
+                  ) : null
+                }
+              />
+            )}
+            {standardShown && item.definition !== null ? (
+              <div className="ta-how" id={`${bodyId}-standard`}>
+                <p className="ta-how-title">
+                  The standard's requirement{" "}
+                  <ConfidenceChip confidence={item.definition.confidence} />
+                </p>
+                <DefinitionRules definition={item.definition} />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </li>
+    );
+  }
+
+  return (
+    <div className="cc-attributes ta is-embedded" aria-busy={busy}>
+      <div className="ta-bar">
+        <h4 className="ta-section-title">
+          {approved === 0
+            ? "No attributes yet"
+            : `${approved} attribute${approved === 1 ? "" : "s"}`}
+        </h4>
+        {canAct ? (
+          <span className="ta-bar-acts">
+            <AcceptAllCriteria
+              ids={ids}
+              items={criteriaToAccept(context)}
+              compact
+            />
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm ta-quiet"
+              disabled={busy}
+              onClick={onGenerate}
+            >
+              <UiIcon name="sparkles" size={13} />
+              {busyKey === "generate"
+                ? "Reading the sources…"
+                : "Propose with the agent"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm ta-quiet"
+              disabled={busy}
+              onClick={() => onDialog({ mode: "add" })}
+            >
+              <UiIcon name="plus" size={13} />
+              Add attribute
+            </button>
+          </span>
+        ) : null}
+      </div>
+      {canAct && proposals.length > 0 ? (
+        <fieldset className="ta-tools">
+          <legend className="sr-only">Proposed changes</legend>
+          <input
+            type="checkbox"
+            className="ta-check"
+            checked={allChosen}
+            disabled={busy}
+            aria-label="Select every proposed change"
+            onChange={() =>
+              onChoose(
+                allChosen
+                  ? new Set()
+                  : new Set(proposals.map((item) => item.id)),
+              )
+            }
+          />
+          <span className="ta-tools-count">
+            {proposalsChosen.length > 0
+              ? `${proposalsChosen.length} selected`
+              : `${proposals.length} proposed change${proposals.length === 1 ? "" : "s"} to decide`}
+          </span>
+          {proposalsChosen.length > 0 ? (
+            <span className="ta-tools-acts">
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={busy}
+                onClick={() => onDecideMany("APPROVE", proposalsChosen)}
+              >
+                {busyKey === "many-APPROVE"
+                  ? "Approving…"
+                  : `Approve ${proposalsChosen.length}`}
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={busy}
+                onClick={() => onDecideMany("REJECT", proposalsChosen)}
+              >
+                {busyKey === "many-REJECT"
+                  ? "Rejecting…"
+                  : `Reject ${proposalsChosen.length}`}
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={busyKey.startsWith("many-")}
+                onClick={() => onChoose(new Set())}
+              >
+                Clear
+              </button>
+            </span>
+          ) : (
+            <span className="ta-tools-hint">
+              The approved attributes stay as they are until a change is
+              approved.
+            </span>
+          )}
+        </fieldset>
+      ) : null}
+      {status}
+      <ul className="tar-list" aria-label="Testing attributes">
+        {context.approved.map((item, index) =>
+          row(item, attributeLetter(index)),
+        )}
+        {approved === 0 ? (
+          <li className="tar-empty">
+            No approved attributes yet. Propose them with the agent, or add one.
+          </li>
+        ) : null}
+        {proposals.map((item) => row(item, null))}
+      </ul>
+      <div className="ta-folds">
+        <details className="ta-fold">
+          <summary>How attributes work</summary>
+          <p>
+            Approved attributes are the testing criteria: the test checks each
+            one on every item, against its pass and fail criteria. A proposal
+            changes nothing until a person approves it, and a changed or retired
+            attribute keeps its earlier wording in the history.
+          </p>
+        </details>
+        {folds}
+      </div>
+      {after}
     </div>
   );
 }

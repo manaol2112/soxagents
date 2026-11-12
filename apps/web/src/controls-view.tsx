@@ -7,7 +7,11 @@ import { AppIdentity } from "./app-identity";
 import { assistantBrief, stepAnchor } from "./assistant-model";
 import { AutoRefresh } from "./auto-refresh";
 import { ControlConclusionWork } from "./control-conclusion-panel";
-import { BLOCKING_STATES, CLASSIFICATIONS } from "./control-context-model";
+import {
+  BLOCKING_STATES,
+  CLASSIFICATIONS,
+  untailored as untailoredCount,
+} from "./control-context-model";
 import {
   AttributesPanel,
   Classifications,
@@ -102,6 +106,8 @@ import {
 import { ControlsToolbar } from "./controls-toolbar";
 import { CoverageForm } from "./coverage-form";
 import { DesignConclusionPanel } from "./design-conclusion-panel";
+import { DesignReleaseCard, DesignReleaseItems } from "./design-release";
+import { releaseView } from "./design-release-model";
 import { firstNameFrom } from "./engagement-guide-model";
 import {
   byApplication,
@@ -165,7 +171,6 @@ import { ImpactPanel } from "./impact-panel";
 import { NextStepCard } from "./next-step";
 import { nextStep, nodeFlags, journey as stagesOf } from "./next-step-model";
 import { FREQUENCIES, NATURES } from "./onboarding-model";
-import { DesignRelease } from "./phases-view";
 import { phaseStatus, planningHref, planVersions } from "./planning-model";
 import { PlanReview, type PlanWorkspace, ReviewActions } from "./planning-view";
 import { ControlPriorYear } from "./references-view";
@@ -1894,6 +1899,13 @@ function ControlRecord({
     attributes: {
       approved: context?.approved.length ?? 0,
       proposed: context?.proposed.length ?? 0,
+      untailored: context === null ? 0 : untailoredCount(context),
+      questions:
+        context?.issues.filter(
+          (item) =>
+            item.status === "OPEN" &&
+            (item.origin === "ATTRIBUTES" || item.origin === "SOURCES"),
+        ).length ?? 0,
     },
     plan: setupInput?.plan ?? {
       exists: false,
@@ -1951,6 +1963,22 @@ function ControlRecord({
     effectivenessPaper: paperOf("EFFECTIVENESS"),
     busy,
   };
+  // Governing documents are optional on D&I Evidence: their fold says where they stand.
+  const governingLine = `Optional · ${
+    workflowInput.setup.find((item) => item.key === "documents")?.summary ??
+    "None linked"
+  }`;
+  // The D&I release, the D&I Evidence step's one decision (11 November 2026): what it rests
+  // on, what will be requested and which attributes each item evidences.
+  const designReleaseView = releaseView({
+    status: designPhase,
+    approved: context?.approved ?? [],
+    proposed: context?.proposed.length ?? 0,
+    untailored: context === null ? 0 : untailoredCount(context),
+    items:
+      evidencePlan?.phases.find((phase) => phase.phase === "DESIGN")
+        ?.requirements ?? [],
+  });
   const workflow = workflowOf(workflowInput);
   // The control's next step, said above its workflow and marked on its node (product owner,
   // 10 November 2026: "not very clear what the user would do to begin").
@@ -2002,7 +2030,13 @@ function ControlRecord({
   // pop-up is retired, and each step opens its own screens.
   // Control Understanding is a conversation with the engagement planner (product owner,
   // 9 November 2026); the other setup steps keep their panels.
-  const setupFor = (only: readonly SetupStepKey[], conversation = false) =>
+  // Attributes and Scope & Sampling render embedded: the step panel's frame gives their title,
+  // status, decision and agent line (product owner, 11 November 2026).
+  const setupFor = (
+    only: readonly SetupStepKey[],
+    conversation = false,
+    embedded = false,
+  ) =>
     context === null || setupInput === null ? (
       <p className="cs-empty">
         The control's understanding is being prepared. It appears here once the
@@ -2011,6 +2045,7 @@ function ControlRecord({
     ) : (
       <ControlSetup
         only={only}
+        embedded={embedded}
         key={control.id}
         ids={ids}
         conversation={
@@ -2022,6 +2057,7 @@ function ControlRecord({
                   .join(" · "),
                 documents: walkthrough.documents.length,
                 documentsHref: stepHrefsWf.designevidence ?? null,
+                attributesHref: stepHrefsWf.attributes ?? null,
               }
             : null
         }
@@ -2067,6 +2103,7 @@ function ControlRecord({
               context={context}
               canAct={canAct}
               showQuestions={false}
+              embedded={embedded}
             />
           ),
           documents: (
@@ -2411,7 +2448,12 @@ function ControlRecord({
           {setupFor(["answers", "process"], true)}
         </>
       ) : null}
-      {section === "setup-plan" ? setupFor(["attributes", "plan"]) : null}
+      {/* The attributes have their own step before both branches (11 November 2026);
+          Scope & Sampling holds the rest of the test plan. */}
+      {section === "setup-attributes"
+        ? setupFor(["attributes"], false, true)
+        : null}
+      {section === "setup-plan" ? setupFor(["plan"], false, true) : null}
       {section === "design-conclusion" ? (
         <DesignConclusionPanel
           ids={{
@@ -2547,21 +2589,21 @@ function ControlRecord({
                     </PhasePanel>
                   ) : null
                 ) : null}
-                {tab === "evidence" && opened === "designevidence" ? (
-                  <DesignRelease
-                    ids={ids}
-                    controlId={control.id}
-                    status={designPhase}
-                    canRelease={
-                      engagement.phaseProgress?.viewerCanRelease ?? false
-                    }
+                {/* The D&I release is the step's decision row, above (DesignReleaseCard);
+                  what it will request leads the work area, with the attributes and the
+                  optional governing documents as quiet rows under it (11 November 2026). */}
+                {tab === "evidence" &&
+                opened === "designevidence" &&
+                designReleaseView.mode !== "hidden" ? (
+                  <DesignReleaseItems
+                    view={designReleaseView}
+                    owner={control.ownerName || control.ownerEmail}
+                    documents={{
+                      line: governingLine,
+                      body: setupFor(["documents"]),
+                    }}
                   />
                 ) : null}
-                {/* The decision first, then the optional governing documents (moved here
-                  from Control Understanding, 9 November 2026). */}
-                {tab === "evidence" && opened === "designevidence"
-                  ? setupFor(["documents"])
-                  : null}
                 {tab === "evidence" ? (
                   <EvidenceWorkspace
                     ids={stepIds}
@@ -2691,6 +2733,25 @@ function ControlRecord({
                     }
                     rcmItems={control.pbcItems}
                   />
+                ) : null}
+                {/* Optional, so it folds under the evidence once released; before, it is a
+                  row under what will be requested (11 November 2026; moved here from Control
+                  Understanding, 9 November 2026). */}
+                {tab === "evidence" &&
+                opened === "designevidence" &&
+                designReleaseView.mode === "hidden" ? (
+                  <details className="stp-fold dr-docs">
+                    <summary>
+                      <span>
+                        <strong>Governing documents</strong>
+                        <small>{governingLine}</small>
+                      </span>
+                      <UiIcon name="chevron" size={14} />
+                    </summary>
+                    <div className="stp-fold-body">
+                      {setupFor(["documents"])}
+                    </div>
+                  </details>
                 ) : null}
                 {tab === "testing" ? (
                   // The testing workspace (product owner's reference, 30 October 2026): the
@@ -3129,6 +3190,21 @@ function ControlRecord({
         prepared={panelContent}
         details={stepDetails}
         bare={ownHeader}
+        decision={
+          openStep.key === "designevidence" &&
+          designReleaseView.mode !== "hidden" ? (
+            <DesignReleaseCard
+              // Its early-release reason and asking state belong to this control: a
+              // sibling control opened next starts a fresh card.
+              key={control.id}
+              ids={ids}
+              controlId={control.id}
+              view={designReleaseView}
+              canRelease={engagement.phaseProgress?.viewerCanRelease ?? false}
+              stepHrefs={stepHrefsWf}
+            />
+          ) : undefined
+        }
       />
     );
 
@@ -3260,6 +3336,7 @@ function ControlRecord({
       {opened !== null ? (
         <WorkflowPanel
           key={opened}
+          step={openStep?.key ?? null}
           kicker={
             openStep !== null
               ? `${String(openStep.number).padStart(2, "0")} · ${KIND_LABELS[openStep.kind]}`

@@ -762,6 +762,7 @@ describe("the evidence release strip", () => {
     early: false,
     reason: "",
     waitingFor: "",
+    waitingOn: "",
     ...extra,
   });
 

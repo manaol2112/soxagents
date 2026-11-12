@@ -3,14 +3,18 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
+  FRAME_PAD,
   NODE_SIZE,
   openedFrom,
   progressOf,
+  READABLE_ZOOM,
   returnStep,
   SECTION_OF,
   STEPS,
+  sidewaysLimits,
   TO_RELEASE,
   type WorkflowInput,
+  workflowFrame,
   workflowLayout,
   workflowOf,
 } from "../apps/web/src/control-workflow-model.ts";
@@ -145,6 +149,9 @@ function concluded(): WorkflowInput {
   });
 }
 
+// The attributes settled: approved, none proposed, no open question (11 November 2026).
+const settled = { approved: 5, proposed: 0 };
+
 const by = (steps: ReturnType<typeof workflowOf>, key: string) =>
   steps.find((step) => step.key === key);
 const state = (steps: ReturnType<typeof workflowOf>, key: string) => [
@@ -153,16 +160,21 @@ const state = (steps: ReturnType<typeof workflowOf>, key: string) => [
 ];
 
 describe("the control's workflow", () => {
-  it("is the product owner's nine steps and two branches", () => {
+  // Rewritten 11 November 2026 (product owner: "it does not follow what we've just updated";
+  // chose "Attributes step first"). Old: eleven steps, with the attributes inside "Test Design
+  // & Approval" on the OE branch, so D&I Evidence did not depend on them. New: twelve, with
+  // the Attributes a human gate before both branches, and the OE step "Scope & Sampling".
+  it("is the product owner's steps: understanding, the attributes, then two branches", () => {
     assert.deepEqual(
       STEPS.map((step) => step.title),
       [
         "RCM / Control Setup",
         "Control Understanding",
+        "Attributes",
         "D&I Evidence",
         "D&I Assessment",
         "D&I Conclusion",
-        "Test Design & Approval",
+        "Scope & Sampling",
         "OE Evidence",
         "OE Testing",
         "Control Conclusion",
@@ -180,10 +192,14 @@ describe("the control's workflow", () => {
       ),
       ["testdesign", "oeevidence", "oetesting"],
     );
+    assert.deepEqual(
+      STEPS.filter((step) => step.group === "prepare").map((step) => step.key),
+      ["setup", "understanding", "attributes"],
+    );
     // People decide at the gates.
     assert.deepEqual(
       STEPS.filter((step) => step.kind === "gate").map((step) => step.key),
-      ["designconclusion", "testdesign", "review"],
+      ["attributes", "designconclusion", "testdesign", "review"],
     );
   });
 
@@ -222,15 +238,69 @@ describe("the control's workflow", () => {
       "idle",
       "Waiting on understanding",
     ]);
-    assert.deepEqual(state(start, "testdesign"), [
+    // Rewritten 11 November 2026: Scope & Sampling waits on the attributes, which wait on
+    // the understanding (before: Test Design waited on the understanding itself).
+    assert.deepEqual(state(start, "attributes"), [
       "idle",
       "Waiting on understanding",
+    ]);
+    assert.deepEqual(state(start, "testdesign"), [
+      "idle",
+      "Waiting on the attributes",
     ]);
     assert.deepEqual(
       start.filter((step) => step.next).map((step) => step.key),
       ["understanding"],
     );
-    const both = workflowOf(fresh({ setup: understood }));
+    // Understood: the attributes are next, alone (before: both branches opened here).
+    const understoodOnly = workflowOf(
+      fresh({ setup: understood, attributes: { approved: 4, proposed: 1 } }),
+    );
+    assert.deepEqual(state(understoodOnly, "attributes"), [
+      "attention",
+      "1 attribute to decide",
+    ]);
+    assert.deepEqual(
+      understoodOnly.filter((step) => step.next).map((step) => step.key),
+      ["attributes"],
+    );
+    // An open question about them holds them too, and so does none approved.
+    assert.deepEqual(
+      state(
+        workflowOf(
+          fresh({
+            setup: understood,
+            attributes: { approved: 4, proposed: 0, questions: 2 },
+          }),
+        ),
+        "attributes",
+      ),
+      ["attention", "2 questions on the attributes"],
+    );
+    assert.deepEqual(
+      state(workflowOf(fresh({ setup: understood })), "attributes"),
+      ["attention", "None approved yet"],
+    );
+    // Approved, but the testers have no criteria tailored to the control for two of them
+    // (11 November 2026): not settled.
+    assert.deepEqual(
+      state(
+        workflowOf(
+          fresh({
+            setup: understood,
+            attributes: { approved: 5, proposed: 0, untailored: 2 },
+          }),
+        ),
+        "attributes",
+      ),
+      ["attention", "2 need criteria"],
+    );
+    // Settled: both branches open.
+    const both = workflowOf(fresh({ setup: understood, attributes: settled }));
+    assert.deepEqual(state(both, "attributes"), [
+      "done",
+      "5 attributes settled",
+    ]);
     assert.deepEqual(
       both.filter((step) => step.next).map((step) => step.key),
       ["designevidence", "testdesign"],
@@ -370,7 +440,8 @@ describe("the control's workflow", () => {
     assert.deepEqual(state(steps, "oetesting"), ["done", "Retest effective"]);
     assert.deepEqual(state(steps, "conclusion"), ["done", "Effective"]);
     assert.deepEqual(state(steps, "workpaper"), ["done", "Prepared"]);
-    assert.deepEqual(progressOf(steps), { done: 11, of: 11 });
+    // Twelve steps since the Attributes step (11 November 2026; before: eleven).
+    assert.deepEqual(progressOf(steps), { done: 12, of: 12 });
     assert.equal(
       steps.some((step) => step.next),
       false,
@@ -407,8 +478,9 @@ describe("the control's workflow", () => {
       "active",
       "Proposed: not effective",
     ]);
-    // The two steps not performed are neither done nor left to do.
-    assert.equal(progressOf(steps).of, 9);
+    // The two steps not performed are neither done nor left to do (twelve steps since 11
+    // November 2026, so ten counted; before: nine of eleven).
+    assert.equal(progressOf(steps).of, 10);
     assert.deepEqual(
       steps.filter((step) => step.next).map((step) => step.key),
       ["conclusion"],
@@ -444,8 +516,10 @@ describe("the control's workflow", () => {
       steps.filter((step) => step.next).map((step) => step.key),
       ["designevidence"],
     );
-    // Planning is a next step while D&I is under way.
-    const planning = workflowOf(fresh({ setup: understood }));
+    // Planning is a next step while D&I is under way, once the attributes are settled.
+    const planning = workflowOf(
+      fresh({ setup: understood, attributes: settled }),
+    );
     assert.ok(planning.find((step) => step.key === "testdesign")?.next);
   });
 
@@ -591,19 +665,62 @@ describe("the control's workflow", () => {
       "idle",
       "Waiting on understanding",
     ]);
+    // Understood, the attributes not settled: the release waits on them (11 November 2026).
+    const unsettled = workflowOf(
+      fresh({
+        setup: understood,
+        attributes: { approved: 4, proposed: 1 },
+        designRelease: { step: "WAITING", waitingOn: "ATTRIBUTES" },
+      }),
+    );
+    assert.deepEqual(state(unsettled, "designevidence"), [
+      "idle",
+      "Waiting on the attributes",
+    ]);
+    assert.equal(
+      unsettled.find((step) => step.key === "designevidence")?.next,
+      false,
+    );
+    // The counts look settled but the server still waits (the agent is updating them).
+    const updating = workflowOf(
+      fresh({
+        setup: understood,
+        attributes: settled,
+        designRelease: { step: "WAITING", waitingOn: "ATTRIBUTES" },
+      }),
+    );
+    assert.deepEqual(state(updating, "attributes"), [
+      "active",
+      "Being updated",
+    ]);
+    assert.deepEqual(state(updating, "designevidence"), [
+      "idle",
+      "Waiting on the attributes",
+    ]);
     const ready = workflowOf(
-      fresh({ setup: understood, designRelease: { step: "READY" } }),
+      fresh({
+        setup: understood,
+        attributes: settled,
+        designRelease: { step: "READY" },
+      }),
     );
     assert.deepEqual(state(ready, "designevidence"), ["attention", TO_RELEASE]);
     assert.ok(ready.find((step) => step.key === "designevidence")?.next);
     // Released: the evidence items decide again, as before B1.
     const released = workflowOf(
-      fresh({ setup: understood, designRelease: { step: "RELEASED" } }),
+      fresh({
+        setup: understood,
+        attributes: settled,
+        designRelease: { step: "RELEASED" },
+      }),
     );
     assert.notEqual(state(released, "designevidence")[1], TO_RELEASE);
     assert.deepEqual(
       state(released, "designevidence"),
-      state(workflowOf(fresh({ setup: understood })), "designevidence"),
+      state(
+        workflowOf(fresh({ setup: understood, attributes: settled })),
+        "designevidence",
+      ),
     );
     // Released early, before the control is understood: under way, not waiting.
     const early = workflowOf(
@@ -615,6 +732,169 @@ describe("the control's workflow", () => {
     assert.deepEqual(state(early, "designevidence"), [
       "attention",
       "1 item to request",
+    ]);
+  });
+
+  // Regression (independent review, 11 November 2026, H1): the setup steps done read as
+  // "Understood" while the server's gate (phase_release.understanding_waits) still waited on
+  // required walkthrough questions, so the Attributes step and the branches opened while the
+  // D&I release card said "Complete Control Understanding first".
+  it("is not understood while the D&I release still waits on the understanding", () => {
+    const walkthrough = workflowOf(
+      fresh({
+        setup: understood,
+        attributes: settled,
+        designRelease: {
+          step: "WAITING",
+          waitingOn: "UNDERSTANDING",
+          waitingFor:
+            "Control Understanding is not complete: 4 walkthrough questions are not answered.",
+        },
+      }),
+    );
+    assert.deepEqual(state(walkthrough, "understanding"), [
+      "attention",
+      "Walkthrough to finish",
+    ]);
+    assert.deepEqual(state(walkthrough, "attributes"), [
+      "idle",
+      "Waiting on understanding",
+    ]);
+    assert.deepEqual(state(walkthrough, "designevidence"), [
+      "idle",
+      "Waiting on understanding",
+    ]);
+    assert.deepEqual(state(walkthrough, "testdesign"), [
+      "idle",
+      "Waiting on the attributes",
+    ]);
+    // The branches stay closed: the understanding is the one next step.
+    assert.deepEqual(
+      walkthrough.filter((step) => step.next).map((step) => step.key),
+      ["understanding"],
+    );
+    // Another reason the server holds it (an open question on the control): a short generic
+    // status, within the node's room.
+    const open = workflowOf(
+      fresh({
+        setup: understood,
+        attributes: settled,
+        designRelease: {
+          step: "WAITING",
+          waitingOn: "UNDERSTANDING",
+          waitingFor:
+            "Control Understanding is not complete: 2 questions are open.",
+        },
+      }),
+    );
+    assert.deepEqual(state(open, "understanding"), [
+      "attention",
+      "Questions to answer",
+    ]);
+    for (const steps of [walkthrough, open]) {
+      for (const step of steps) {
+        assert.doesNotMatch(step.status, /^(Once|When)\b/);
+        assert.ok(step.status.length <= 28, `${step.key}: ${step.status}`);
+      }
+    }
+    // The setup steps still decide first, in their own words.
+    assert.deepEqual(
+      state(
+        workflowOf(
+          fresh({
+            designRelease: {
+              step: "WAITING",
+              waitingOn: "UNDERSTANDING",
+              waitingFor:
+                "Control Understanding is not complete: 3 questions are not answered.",
+            },
+          }),
+        ),
+        "understanding",
+      ),
+      ["attention", "3 to answer"],
+    );
+    // Waiting on the attributes only: understood, as before.
+    assert.deepEqual(
+      state(
+        workflowOf(
+          fresh({
+            setup: understood,
+            attributes: settled,
+            designRelease: { step: "WAITING", waitingOn: "ATTRIBUTES" },
+          }),
+        ),
+        "understanding",
+      ),
+      ["done", "Understood"],
+    );
+  });
+
+  // Regression (independent review, 11 November 2026, H3): once attributes needed criteria
+  // tailored to the control, controls already under way (D&I released, plan approved) showed
+  // "N need criteria" and no branch step as next. The branches stay open once work on them
+  // has started; before then the attributes still gate them.
+  it("keeps an in-flight control's branch next steps while its attributes need criteria", () => {
+    const needCriteria = { approved: 5, proposed: 0, untailored: 2 };
+    const released = workflowOf(
+      fresh({
+        setup: understood,
+        attributes: needCriteria,
+        designRelease: { step: "RELEASED" },
+        requirements: [{ phase: "DESIGN", state: "RECEIVED" }],
+      }),
+    );
+    assert.deepEqual(state(released, "attributes"), [
+      "attention",
+      "2 need criteria",
+    ]);
+    assert.deepEqual(state(released, "designevidence"), [
+      "attention",
+      "1 item to review",
+    ]);
+    assert.deepEqual(
+      released.filter((step) => step.next).map((step) => step.key),
+      ["attributes", "designevidence"],
+    );
+    const approvedPlan = workflowOf({
+      ...midway(),
+      attributes: needCriteria,
+      designConclusion: signedEffective,
+      designRelease: { step: "COMPLETE" },
+    });
+    assert.deepEqual(state(approvedPlan, "attributes"), [
+      "attention",
+      "2 need criteria",
+    ]);
+    assert.deepEqual(
+      approvedPlan.filter((step) => step.next).map((step) => step.key),
+      ["attributes", "designevidence", "oeevidence"],
+    );
+    // The plan approved alone keeps the branches open too.
+    const planOnly = workflowOf({
+      ...midway(),
+      attributes: needCriteria,
+      designConclusion: signedEffective,
+    });
+    assert.deepEqual(
+      planOnly.filter((step) => step.next).map((step) => step.key),
+      ["attributes", "designevidence", "oeevidence"],
+    );
+    // Before any of that, the attributes still gate both branches.
+    const before = workflowOf(
+      fresh({
+        setup: understood,
+        attributes: needCriteria,
+        designRelease: { step: "WAITING", waitingOn: "ATTRIBUTES" },
+      }),
+    );
+    assert.deepEqual(
+      before.filter((step) => step.next).map((step) => step.key),
+      ["attributes"],
+    );
+    assert.deepEqual(state(before, "testdesign"), [
+      "idle",
+      "Waiting on the attributes",
     ]);
   });
 });
@@ -695,7 +975,7 @@ describe("the workflow's layout", () => {
     point.y <= box.y + box.height;
 
   it("places every step once, with no step overlapping another", () => {
-    assert.equal(placed.length, 11);
+    assert.equal(placed.length, 12);
     for (const a of placed) {
       for (const b of placed) {
         if (a !== b) {
@@ -718,7 +998,7 @@ describe("the workflow's layout", () => {
         `${edge.id} runs back`,
       );
     }
-    assert.equal(edges.length, 12);
+    assert.equal(edges.length, 13);
   });
 
   it("drops an effective D&I conclusion straight into OE evidence", () => {
@@ -729,11 +1009,22 @@ describe("the workflow's layout", () => {
     assert.equal(gate?.sourceHandle, "bottom");
     assert.equal(at("oeevidence").x, at("designconclusion").x);
     assert.ok(at("oeevidence").y > at("designconclusion").y);
-    // Test design may start once the control is understood, beside D&I evidence.
+    // Scope & Sampling may start once the attributes are settled, beside D&I evidence.
     assert.equal(at("testdesign").x, at("designevidence").x);
     assert.ok(at("designevidence").y < at("testdesign").y);
-    // Understanding opens both branches from between them; the conclusion joins them there.
-    for (const key of ["understanding", "conclusion"]) {
+    // Rewritten 11 November 2026: the Attributes (before: Control Understanding) open both
+    // branches from between them, under the understanding; the conclusion joins them there.
+    assert.equal(at("attributes").x, at("understanding").x);
+    assert.ok(at("understanding").y < at("attributes").y);
+    assert.ok(edges.some((edge) => edge.id === "e:attributes>designevidence"));
+    assert.ok(edges.some((edge) => edge.id === "e:attributes>testdesign"));
+    assert.ok(
+      !edges.some(
+        (edge) =>
+          edge.source === "understanding" && edge.target !== "attributes",
+      ),
+    );
+    for (const key of ["attributes", "conclusion"]) {
       assert.ok(
         at(key).y > at("designevidence").y && at(key).y < at("testdesign").y,
         `${key} is not between the branches`,
@@ -763,6 +1054,40 @@ describe("the workflow's layout", () => {
     }
   });
 
+  it("prepares in order: setup, then the understanding beside it, then the attributes below", () => {
+    // Rewritten 11 November 2026 (product owner: the nodes were too small to read). Old: Setup,
+    // Control Understanding and the Attributes stacked in one column, two rows above the D&I
+    // branch, so the workflow was five rows high and framed at about half size. New: Setup
+    // sits beside the understanding on the D&I row, and the Attributes under the
+    // understanding, so the workflow is four rows high and is read at full size. The order
+    // and the direction of every edge are unchanged.
+    assert.equal(at("setup").y, at("understanding").y);
+    assert.ok(at("setup").x + NODE_SIZE.width < at("understanding").x);
+    assert.equal(at("setup").y, at("designevidence").y);
+    const into = (key: string) =>
+      edges.filter((edge) => edge.target === key).map((edge) => edge.source);
+    assert.deepEqual(into("understanding"), ["setup"]);
+    assert.deepEqual(into("attributes"), ["understanding"]);
+    // The preparation comes before both branches.
+    for (const key of ["setup", "understanding", "attributes"]) {
+      assert.ok(at(key).x + NODE_SIZE.width < at("designevidence").x);
+    }
+    // Review and the workpaper follow below the conclusion.
+    assert.equal(at("review").x, at("conclusion").x);
+    assert.equal(at("workpaper").x, at("conclusion").x);
+    assert.ok(at("conclusion").y < at("review").y);
+    assert.ok(at("review").y < at("workpaper").y);
+  });
+
+  it("is compact: four rows, every step on the grid", () => {
+    const rows = new Set(placed.map((item) => item.y));
+    assert.equal(rows.size, 4);
+    // Before (8 to 11 November 2026) the workflow was about 1,430 by 730 canvas units and
+    // drawn at about 0.55; it is now 1,804 by 602 and drawn at 0.9 or more.
+    assert.ok(size.height <= 620, `${size.height} high`);
+    assert.ok(size.width <= 1820, `${size.width} wide`);
+  });
+
   it("draws a band round each stage, holding its own steps only", () => {
     assert.deepEqual(
       bands.map((band) => band.label),
@@ -789,6 +1114,90 @@ describe("the workflow's layout", () => {
       assert.ok(band.x + band.width <= size.width);
       assert.ok(band.y + band.height <= size.height);
     }
+  });
+});
+
+describe("the workflow's first view", () => {
+  // Added 11 November 2026 (product owner: "I can't even read the letters on it"). The canvas
+  // was 620 px high and framed the whole workflow, at about 0.55, so its 13 px titles read at
+  // 7 px. It now opens at the readable zoom or more, and pans sideways where it is wider.
+  const { placed, size } = workflowLayout();
+  const at = (key: string) =>
+    placed.find((item) => item.key === key) as { x: number; y: number };
+
+  it("is never framed below the readable zoom at the usual widths", () => {
+    for (const width of [988, 1100, 1146, 1280, 1440]) {
+      const frame = workflowFrame(width, size);
+      assert.ok(frame.zoom >= READABLE_ZOOM, `${frame.zoom} at ${width}px`);
+      assert.ok(frame.zoom >= 0.9);
+      assert.ok(frame.zoom <= 1);
+    }
+    const typical = workflowFrame(1100, size);
+    assert.equal(typical.zoom, 0.9);
+    // A 16 px title and 13.5 px lines on the node, at that zoom.
+    assert.ok(16 * typical.zoom >= 14);
+    assert.ok(13.5 * typical.zoom >= 12);
+  });
+
+  it("pans sideways where the workflow is wider than the canvas, opening at its start", () => {
+    const frame = workflowFrame(1100, size);
+    assert.equal(frame.pans, true);
+    assert.equal(frame.x, FRAME_PAD * frame.zoom);
+    const limits = sidewaysLimits(frame.zoom, 1100, size.width);
+    assert.ok(limits !== null);
+    // Panned fully, the end of the workflow and its margin are in view.
+    assert.equal(limits.min + (size.width + FRAME_PAD) * frame.zoom, 1100);
+  });
+
+  it("shows the whole workflow, centred, where it fits", () => {
+    const wide = workflowFrame(4000, size);
+    assert.equal(wide.zoom, 1);
+    assert.equal(wide.pans, false);
+    assert.equal(wide.x, (4000 - size.width) / 2);
+    assert.equal(sidewaysLimits(1, 4000, size.width), null);
+    // Just short of full size, it fits by zooming a little out, not by panning.
+    const near = workflowFrame((size.width + FRAME_PAD * 2) * 0.95, size);
+    assert.ok(Math.abs(near.zoom - 0.95) < 1e-9);
+    assert.equal(near.pans, false);
+  });
+
+  it("sizes the canvas to the workflow, with no empty space below it", () => {
+    for (const width of [1100, 1440, 4000]) {
+      const frame = workflowFrame(width, size);
+      assert.equal(
+        frame.height,
+        Math.round((size.height + FRAME_PAD * 2) * frame.zoom),
+      );
+      assert.equal(frame.y, FRAME_PAD * frame.zoom);
+    }
+    assert.ok(workflowFrame(1100, size).height <= 640);
+  });
+
+  it("moves on only as far as the step to do next, with what leads into it", () => {
+    const step = at("oetesting");
+    const frame = workflowFrame(1100, size, {
+      x: step.x,
+      width: NODE_SIZE.width,
+    });
+    const right = frame.x + (step.x + NODE_SIZE.width) * frame.zoom;
+    const left = frame.x + step.x * frame.zoom;
+    assert.ok(right <= 1100, "the step is cut off on the right");
+    assert.ok(left >= 0, "the step is cut off on the left");
+    assert.ok(left > NODE_SIZE.width * frame.zoom, "nothing leads into it");
+    // A step already in view leaves the workflow at its start.
+    const first = at("designevidence");
+    assert.equal(
+      workflowFrame(1100, size, { x: first.x, width: NODE_SIZE.width }).x,
+      FRAME_PAD * frame.zoom,
+    );
+    // The last step never moves the workflow past its end.
+    const last = at("workpaper");
+    const end = workflowFrame(1100, size, {
+      x: last.x,
+      width: NODE_SIZE.width,
+    });
+    const limits = sidewaysLimits(end.zoom, 1100, size.width);
+    assert.ok(limits !== null && end.x >= limits.min);
   });
 });
 

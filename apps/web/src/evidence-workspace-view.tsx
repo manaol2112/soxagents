@@ -114,7 +114,7 @@ export function EvidenceWorkspace({
   system?: string | null;
 }) {
   // One branch's evidence: its own phases and their requests. The planning basis (why each
-  // phase applies) is Test Design's, so it is not repeated under a branch.
+  // phase applies) is Scope & Sampling's, so it is not repeated under a branch.
   const plan =
     wholePlan === null || only === null
       ? wholePlan
@@ -125,6 +125,9 @@ export function EvidenceWorkspace({
           ),
         };
   const designOnly = only?.every((phase) => phase === "DESIGN") ?? false;
+  // Shown inside a workflow step's panel (D&I or OE Evidence): the panel is the frame, so
+  // the list drops its own card chrome (11 November 2026; evidence-requests.css).
+  const root = only === null ? "ew" : "ew is-step";
   const requests =
     only === null
       ? allRequests
@@ -236,7 +239,7 @@ export function EvidenceWorkspace({
     plan.status !== "NOT_PLANNED"
   ) {
     return (
-      <div className="ew">
+      <div className={root}>
         <ReaderProposals
           ids={ids}
           canAct={canAct}
@@ -292,6 +295,7 @@ export function EvidenceWorkspace({
           controlRef={requestList.controlRef}
           focusRequest={focus.request}
           intelligence={intelligence}
+          designOnly={designOnly}
         />
         <section className="ew-card" aria-label="Files and planning basis">
           {filesRow}
@@ -301,7 +305,7 @@ export function EvidenceWorkspace({
     );
   }
   return (
-    <div className="ew">
+    <div className={root}>
       <ReaderProposals
         ids={ids}
         canAct={canAct}

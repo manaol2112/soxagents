@@ -5,6 +5,12 @@
  * what is missing. Decided by the product owner: a detail recorded here applies to this
  * system's control; the same control on other systems is offered it where empty, one system
  * at a time, and never overwritten (the API: control_details).
+ *
+ * The owner is suggested (product owner, 11 November 2026: "All controls require me to input
+ * the process owner. Most of the time it's the same for one system unless the user wanted to
+ * change it."): a control with no owner opens on the owner most used by the other controls on
+ * its system, marked as a suggestion until the server records it, and a saved owner is also
+ * given to the other controls on that system that have none, unless the person says not to.
  */
 
 export type DetailField = "owner" | "frequency" | "nature";
@@ -18,6 +24,14 @@ export type DetailsTarget = {
   lacks: DetailField[];
 };
 
+/** The owner most used by the other controls on this control's system in the engagement,
+ * offered when this control has none; how many of them it owns. */
+export type OwnerSuggestion = {
+  name: string;
+  email: string;
+  controls: number;
+};
+
 export type Details = {
   version: number;
   ownerName: string;
@@ -26,6 +40,8 @@ export type Details = {
   nature: string;
   canEdit: boolean;
   targets: DetailsTarget[];
+  /** Null when the control has an owner or no other control on the system has one. */
+  ownerSuggestion: OwnerSuggestion | null;
 };
 
 /** One detail of the control as recorded, for the panel's record and its questions. */
@@ -96,6 +112,15 @@ export function detailsRequest(
       return { error: "invalid" };
     }
     body.owner_email = clean;
+  }
+  // Whether the owner also goes to the other controls on this system that have none: said
+  // explicitly with every owner save, so the record shows what the person chose.
+  const apply = fields.apply_to_system;
+  if (apply !== undefined && typeof apply !== "boolean") {
+    return { error: "invalid" };
+  }
+  if (name !== null || email !== null) {
+    body.apply_to_system = apply === true;
   }
   const frequency = text("frequency");
   if (frequency !== null) {
@@ -168,7 +193,152 @@ export function parseDetails(body: unknown): Details | null {
     nature: text(item.nature),
     canEdit: item.can_edit === true,
     targets,
+    ownerSuggestion: parseOwnerSuggestion(item.owner_suggestion),
   };
+}
+
+/** The suggested owner from the API's answer, checked as untrusted data: null when it is
+ * absent or cannot be read, so nothing malformed is offered as an owner. */
+export function parseOwnerSuggestion(value: unknown): OwnerSuggestion | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const item = value as Record<string, unknown>;
+  if (
+    typeof item.name !== "string" ||
+    typeof item.email !== "string" ||
+    typeof item.controls !== "number" ||
+    !Number.isInteger(item.controls) ||
+    item.controls < 1
+  ) {
+    return null;
+  }
+  const name = item.name.trim();
+  const email = item.email.trim().toLowerCase();
+  if (
+    (name === "" && email === "") ||
+    name.length > 200 ||
+    email.length > 200 ||
+    SECRET.test(name) ||
+    (email !== "" && !EMAIL.test(email))
+  ) {
+    return null;
+  }
+  return { name, email, controls: item.controls };
+}
+
+/** The owner form as it opens: the recorded owner, or, when there is none, the suggestion,
+ * marked as one so it is never shown as recorded before the server confirms it. */
+export type OwnerForm = {
+  name: string;
+  email: string;
+  suggestion: OwnerSuggestion | null;
+};
+
+export function initialOwnerForm(details: Details): OwnerForm {
+  const recorded =
+    details.ownerName.trim() !== "" || details.ownerEmail.trim() !== "";
+  if (recorded || details.ownerSuggestion === null) {
+    return {
+      name: details.ownerName,
+      email: details.ownerEmail,
+      suggestion: null,
+    };
+  }
+  return {
+    name: details.ownerSuggestion.name,
+    email: details.ownerSuggestion.email,
+    suggestion: details.ownerSuggestion,
+  };
+}
+
+/** Why the suggestion is offered, in one line: "Owner of 8 other controls on SAP S/4HANA". */
+export function suggestionNote(
+  suggestion: OwnerSuggestion,
+  system: string,
+): string {
+  const where = system.trim() !== "" ? system.trim() : "this system";
+  return `Owner of ${suggestion.controls} other ${suggestion.controls === 1 ? "control" : "controls"} on ${where}`;
+}
+
+/** How many other controls on the system got the owner, from the save's answer; 0 when it
+ * cannot be read. */
+export function appliedTo(body: unknown): number {
+  if (typeof body !== "object" || body === null) {
+    return 0;
+  }
+  const value = (body as Record<string, unknown>).applied_to;
+  return typeof value === "number" && Number.isInteger(value) && value > 0
+    ? value
+    : 0;
+}
+
+/** How many other systems the save actually copied the value to (`copied_to`); null when the
+ * answer does not say, so the caller can fall back to what it asked for. */
+export function copiedTo(body: unknown): number | null {
+  if (typeof body !== "object" || body === null) {
+    return null;
+  }
+  const value = (body as Record<string, unknown>).copied_to;
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
+const NAMES: Record<DetailField, string> = {
+  owner: "Owner",
+  frequency: "Frequency",
+  nature: "Nature",
+};
+
+/** The note shown once the server confirms a save: where the detail was recorded, the same
+ * control on other systems it was copied to, and, for the owner, the other controls on this
+ * system that had none. */
+export function savedNote(
+  field: DetailField,
+  system: string,
+  copied: number,
+  applied: number,
+): string {
+  const where = system.trim() !== "" ? system.trim() : "this system";
+  const others =
+    copied > 0
+      ? ` and ${copied} other ${copied === 1 ? "system" : "systems"} where it was empty`
+      : "";
+  const same =
+    field === "owner" && applied > 0
+      ? `, and on ${applied} other ${applied === 1 ? "control" : "controls"} on ${where} that had none`
+      : "";
+  return `${NAMES[field]} recorded on ${where}${others}${same}.`;
+}
+
+/** What the person is told when a save is refused: the server's reason when it gives one,
+ * then how to recover. */
+export function saveProblem(status: number, detail: unknown): string {
+  const reason =
+    typeof detail === "string"
+      ? detail
+          .replace(/\s+/g, " ")
+          .split("")
+          .filter((c) => c.charCodeAt(0) >= 32 && c.charCodeAt(0) !== 127)
+          .join("")
+          .trim()
+          .slice(0, 300)
+      : "";
+  const said = reason === "" ? "" : `${reason.replace(/[.!?]$/, "")}. `;
+  if (status === 409) {
+    return `${said || "The control changed since it was read. "}It is read again; check the detail and save it once more.`;
+  }
+  if (status === 403 || status === 404) {
+    return `${said}Only an engagement owner, admin or project manager can record a control's details. Ask one of them, or reload the page if your role changed.`;
+  }
+  if (status === 422) {
+    return `${said || "That detail cannot be recorded as given. "}Check it and try again.`;
+  }
+  if (status === 0) {
+    return "The detail could not be saved: the server did not answer. Check the connection and try again.";
+  }
+  return `${said || "The detail could not be saved. "}Try again.`;
 }
 
 /** The other systems a detail can be offered to: those that lack it. */

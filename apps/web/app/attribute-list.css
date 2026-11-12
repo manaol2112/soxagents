@@ -174,7 +174,7 @@
 }
 
 /* Drawn from the tokens, so its edge meets 3:1 in both themes; centred on the letter. */
-.ta-row .ta-check {
+:is(.ta-row, .tar, .ta-tools) .ta-check {
   appearance: none;
   display: inline-grid;
   width: 20px;
@@ -187,12 +187,12 @@
   cursor: pointer;
 }
 
-.ta-row .ta-check:checked {
+:is(.ta-row, .tar, .ta-tools) .ta-check:checked {
   background: var(--accent);
   border-color: var(--accent);
 }
 
-.ta-row .ta-check:checked::after {
+:is(.ta-row, .tar, .ta-tools) .ta-check:checked::after {
   width: 10px;
   height: 6px;
   border: solid var(--text-on-accent, #fff);
@@ -201,12 +201,12 @@
   content: "";
 }
 
-.ta-row .ta-check:focus-visible {
+:is(.ta-row, .tar, .ta-tools) .ta-check:focus-visible {
   outline: none;
   box-shadow: var(--ring);
 }
 
-.ta-row .ta-check:disabled {
+:is(.ta-row, .tar, .ta-tools) .ta-check:disabled {
   cursor: default;
   opacity: 0.55;
 }
@@ -681,5 +681,622 @@
   .ta-row,
   .tae-how-caret {
     transition: none;
+  }
+}
+
+/* An approved attribute's pass and fail criteria, tailored to the control (product owner,
+   11 November 2026): what the testers judge evidence against, with who owns them. */
+.tc {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.55rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+
+.tc.is-missing {
+  background: color-mix(in srgb, var(--warning-soft) 55%, var(--surface));
+  border-color: var(--warning-border);
+}
+
+.tc.is-to_accept {
+  background: color-mix(in srgb, var(--ai-soft) 55%, var(--surface));
+  border-color: var(--ai-border);
+}
+
+.tc-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+}
+
+.tc-label {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.tc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  height: 20px;
+  padding: 0 0.5rem;
+  color: var(--success);
+  background: var(--success-soft);
+  border-radius: 999px;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+}
+
+.tc-chip.is-to_accept {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.tc-chip.is-missing {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.tc-acts {
+  display: inline-flex;
+  gap: 0.3rem;
+  margin-left: auto;
+}
+
+.tc-rules {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+}
+
+.tc-rules > div {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+  gap: 0.6rem;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.tc-rules dt {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.tc-rules dd {
+  margin: 0;
+  color: var(--text);
+}
+
+.tc-rules .is-pass dt {
+  color: var(--success);
+}
+
+.tc-rules .is-fail dt {
+  color: var(--danger);
+}
+
+.tc-missing,
+.tc-hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.tc-edit {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tc-edit label {
+  display: grid;
+  gap: 0.25rem;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.tc-edit textarea {
+  width: 100%;
+  resize: vertical;
+  font-weight: 400;
+}
+
+.tc-edit .tc-judgment {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 500;
+}
+
+.tc-edit-acts {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.tc-problem {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+
+.tc-all {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.8rem;
+  background: color-mix(in srgb, var(--ai-soft) 60%, var(--surface));
+  border: 1px solid var(--ai-border);
+  border-radius: 10px;
+}
+
+.tc-all p {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+@media (max-width: 640px) {
+  .tc-rules > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.1rem;
+  }
+
+  .tc-acts {
+    margin-left: 0;
+  }
+}
+
+/* ==========================================================================
+   The Attributes step inside its panel (product owner, 11 November 2026, approved
+   preview). The panel's frame gives the title, the status, the decision and the agent's
+   line; this is the work alone: a title row, one bordered list of rows that open on
+   request, and the settled detail folded below. Tokens only.
+   ========================================================================== */
+
+.ta.is-embedded {
+  gap: 0.75rem;
+}
+
+.ta-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 1rem;
+  min-width: 0;
+}
+
+.ta-section-title {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ta-bar-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.4rem;
+}
+
+.ta-bar-problem {
+  flex-basis: 100%;
+}
+
+/* A quiet text action: accent words, no fill. */
+button.btn-ghost.ta-quiet,
+.btn.btn-ghost.ta-quiet {
+  color: var(--accent-text);
+}
+
+/* The selection of proposals, decided as one decision: shown only while there are any. */
+.ta-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0.45rem 0.75rem;
+  background: color-mix(in srgb, var(--ai-soft) 50%, var(--surface));
+  border: 1px solid var(--ai-border);
+  border-radius: 10px;
+}
+
+.ta-tools .ta-check {
+  margin: 0;
+}
+
+.ta-tools-count {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.ta-tools-hint {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.ta-tools-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+/* One bordered list: rows separated by hairlines, no card per row. */
+.tar-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.tar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  transition: background-color 120ms ease;
+}
+
+.tar + .tar,
+.tar-empty + .tar {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.tar.has-check {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.tar.has-check > .ta-check {
+  align-self: start;
+  margin: 1.05rem 0 0 0.85rem;
+}
+
+.tar.has-check > .tar-body {
+  grid-column: 1 / -1;
+}
+
+.tar.is-open,
+.tar.is-selected {
+  background: var(--surface-muted);
+}
+
+button.tar-head {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto 14px;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  height: auto;
+  min-height: 52px;
+  padding: 0.6rem 0.9rem;
+  color: var(--text);
+  text-align: left;
+  white-space: normal;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+button.tar-head:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+  border: 0;
+}
+
+button.tar-head:focus-visible:not(:disabled) {
+  position: relative;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.tar-letter {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  background: var(--accent-soft);
+  border-radius: var(--radius);
+}
+
+.tar.is-proposed .tar-letter {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.tar-name {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.tar-text {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 14.5px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+}
+
+/* Open, the wording reads in full. */
+.tar.is-open .tar-text {
+  display: block;
+}
+
+.tar-source {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tar-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 0.55rem;
+  font-size: var(--fs-2xs);
+  font-weight: 650;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-radius: 999px;
+}
+
+.tar-chip.tone-ai {
+  color: var(--ai);
+  background: var(--ai-soft);
+  border-color: var(--ai-border);
+}
+
+.tar-chip.tone-success {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: var(--success-border);
+}
+
+.tar-chip.tone-warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+}
+
+.tar-caret {
+  display: inline-flex;
+  color: var(--text-tertiary);
+  transition: transform 180ms ease;
+}
+
+.tar.is-open .tar-caret {
+  transform: rotate(90deg);
+}
+
+/* What opens under the wording, indented to it. */
+.tar-body {
+  display: grid;
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 0 0.9rem 0.9rem calc(0.9rem + 26px + 0.75rem);
+  animation: tar-open 200ms ease;
+}
+
+.tar.has-check .tar-body {
+  padding-left: calc(0.85rem + 20px + 0.9rem + 26px + 0.75rem);
+}
+
+@keyframes tar-open {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.tar-body .ta-replaces,
+.tar-body .ta-quote,
+.tar-body .ta-why {
+  font-size: 13.5px;
+}
+
+.tar-body .ta-how {
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+}
+
+.tar-body .ta-how-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tar-body .ta-how-title .ta-chip {
+  min-height: 22px;
+  font-size: var(--fs-2xs);
+}
+
+.tar-empty {
+  padding: 0.85rem 0.9rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* The criteria inside a row: a plain grid, no box of its own (the row's chip names it). */
+.tc.is-flat {
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+
+.tc.is-flat .tc-rules > div {
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  font-size: 13.5px;
+}
+
+.tc.is-flat .tc-missing {
+  font-size: 13.5px;
+}
+
+.tc-by {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.tc-row-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.tc-row-acts .row-menu-button {
+  width: 28px;
+  height: 28px;
+}
+
+/* The settled detail, as quiet rows that open on request. */
+.ta-folds {
+  display: grid;
+  min-width: 0;
+}
+
+.ta-folds > .ta-fold,
+.ta-folds > .cc-history {
+  padding: 0.5rem 0.15rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.ta-folds > * + * {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ta-folds > .ta-fold > summary,
+.ta-folds > .cc-history > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: fit-content;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  list-style: none;
+  cursor: pointer;
+}
+
+.ta-folds > .ta-fold > summary::-webkit-details-marker,
+.ta-folds > .cc-history > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ta-folds > .ta-fold > summary::before,
+.ta-folds > .cc-history > summary::before {
+  display: inline-block;
+  width: 0.4rem;
+  height: 0.4rem;
+  border: solid currentcolor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(-45deg);
+  transition: transform 180ms ease;
+  content: "";
+}
+
+.ta-folds > [open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.ta-folds > .ta-fold > summary:hover,
+.ta-folds > .cc-history > summary:hover {
+  color: var(--text-strong);
+}
+
+.ta-folds > .ta-fold > p {
+  margin: 0.45rem 0 0;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.ta-folds .cc-update.is-bare {
+  margin-top: 0.5rem;
+}
+
+@media (max-width: 640px) {
+  button.tar-head {
+    grid-template-columns: 26px minmax(0, 1fr) 14px;
+    padding: 0.6rem 0.75rem;
+  }
+
+  /* The chip under the wording, beside the source line. */
+  .tar-chip {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: start;
+  }
+
+  .tar-text {
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
+
+  .tar-body,
+  .tar.has-check .tar-body {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  .tc.is-flat .tc-rules > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ta-tools-acts {
+    margin-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tar,
+  .tar-caret,
+  .ta-folds > .ta-fold > summary::before,
+  .ta-folds > .cc-history > summary::before {
+    transition: none;
+  }
+
+  .tar-body {
+    animation: none;
   }
 }

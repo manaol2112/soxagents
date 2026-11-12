@@ -91,6 +91,7 @@ export function EvidenceRequests({
   controlRef,
   focusRequest,
   intelligence = null,
+  designOnly = false,
 }: {
   ids: Ids;
   plan: EvidencePlan;
@@ -109,6 +110,9 @@ export function EvidenceRequests({
   /** The evidence workspace's records (docs/evidence-intelligence.md); null keeps the
    * list of requests as the first view. */
   intelligence?: Intelligence | null;
+  /** The D&I Evidence step's list: one phase, so no phase filter, and its requests are
+   * drafted by the D&I release, not the test plan's approval. */
+  designOnly?: boolean;
 }) {
   const id = useId();
   const requests = useMemo(
@@ -144,7 +148,11 @@ export function EvidenceRequests({
     );
     return () => window.clearTimeout(timer);
   }, [typed]);
-  const shown = filterRequests(requests, filter);
+  // The D&I list has no Phase filter: a phase kept from another view never narrows it.
+  const effective: RequestFilter = designOnly
+    ? { ...filter, phase: NO_FILTER.phase }
+    : filter;
+  const shown = filterRequests(requests, effective);
   const open = requests.find((r) => r.key === selected) ?? null;
   // A drafted request waiting for a person's approval: what Approve and send sends.
   const drafted = rows.some((row) => row.status === "DRAFT");
@@ -356,56 +364,70 @@ export function EvidenceRequests({
         {view === "list" ? (
           <div className={`er-layout${open !== null ? " has-panel" : ""}`}>
             <div className="er-main" ref={main}>
-              <div className="er-filters">
-                <Select
-                  label="Phase"
-                  value={filter.phase}
-                  options={[
-                    ["all", "All phases"],
-                    ...REQUEST_PHASES.map(
-                      (p) => [p, REQUEST_PHASE_LABELS[p]] as [string, string],
-                    ),
-                  ]}
-                  onChange={(value) =>
-                    setFilter((f) => ({
-                      ...f,
-                      phase: value as RequestFilter["phase"],
-                    }))
-                  }
-                />
-                <Select
-                  label="Status"
-                  value={filter.status}
-                  options={STATUS_FILTERS.map(
-                    ([key, label]) => [key, label] as [string, string],
+              {/* Filters are for a long list: a short one shows every request at once. */}
+              {requests.length > FILTER_FROM ||
+              filter.search !== "" ||
+              typed !== "" ||
+              filter.status !== NO_FILTER.status ||
+              filter.assignee !== NO_FILTER.assignee ||
+              effective.phase !== NO_FILTER.phase ? (
+                <div className="er-filters">
+                  {designOnly ? null : (
+                    <Select
+                      label="Phase"
+                      value={filter.phase}
+                      options={[
+                        ["all", "All phases"],
+                        ...REQUEST_PHASES.map(
+                          (p) =>
+                            [p, REQUEST_PHASE_LABELS[p]] as [string, string],
+                        ),
+                      ]}
+                      onChange={(value) =>
+                        setFilter((f) => ({
+                          ...f,
+                          phase: value as RequestFilter["phase"],
+                        }))
+                      }
+                    />
                   )}
-                  onChange={(value) =>
-                    setFilter((f) => ({ ...f, status: value as StatusFilter }))
-                  }
-                />
-                <Select
-                  label="Assignee"
-                  value={filter.assignee}
-                  options={[
-                    ["all", "All assignees"],
-                    ...people.map((p) => [p, p] as [string, string]),
-                    [UNASSIGNED, "Not assigned"],
-                  ]}
-                  onChange={(value) =>
-                    setFilter((f) => ({ ...f, assignee: value }))
-                  }
-                />
-                <label className="er-search">
-                  <UiIcon name="search" size={14} />
-                  <span className="sr-only">Search evidence requests</span>
-                  <input
-                    type="search"
-                    value={typed}
-                    placeholder="Search evidence requests…"
-                    onChange={(event) => setTyped(event.target.value)}
+                  <Select
+                    label="Status"
+                    value={filter.status}
+                    options={STATUS_FILTERS.map(
+                      ([key, label]) => [key, label] as [string, string],
+                    )}
+                    onChange={(value) =>
+                      setFilter((f) => ({
+                        ...f,
+                        status: value as StatusFilter,
+                      }))
+                    }
                   />
-                </label>
-              </div>
+                  <Select
+                    label="Assignee"
+                    value={filter.assignee}
+                    options={[
+                      ["all", "All assignees"],
+                      ...people.map((p) => [p, p] as [string, string]),
+                      [UNASSIGNED, "Not assigned"],
+                    ]}
+                    onChange={(value) =>
+                      setFilter((f) => ({ ...f, assignee: value }))
+                    }
+                  />
+                  <label className="er-search">
+                    <UiIcon name="search" size={14} />
+                    <span className="sr-only">Search evidence requests</span>
+                    <input
+                      type="search"
+                      value={typed}
+                      placeholder="Search evidence requests…"
+                      onChange={(event) => setTyped(event.target.value)}
+                    />
+                  </label>
+                </div>
+              ) : null}
               {shown.length === 0 ? (
                 <p className="er-empty">
                   {requests.length === 0
@@ -460,8 +482,9 @@ export function EvidenceRequests({
             </p>
             {sent === 0 ? (
               <p className="er-empty">
-                Nothing has been drafted yet. The requests are drafted once the
-                test plan is approved.
+                {designOnly
+                  ? "Nothing has been drafted yet. The requests are drafted once the D&I evidence is released."
+                  : "Nothing has been drafted yet. The requests are drafted once the test plan is approved."}
               </p>
             ) : (
               sentRequests
@@ -483,6 +506,9 @@ export function EvidenceRequests({
     </section>
   );
 }
+
+/** Above this many requests the list offers its filters. */
+const FILTER_FROM = 6;
 
 function Select({
   label,

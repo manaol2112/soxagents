@@ -16,6 +16,7 @@ import type { RequirementState } from "./evidence-plan-model.ts";
 export type StepKey =
   | "setup"
   | "understanding"
+  | "attributes"
   | "designevidence"
   | "designassessment"
   | "designconclusion"
@@ -87,6 +88,17 @@ export const STEPS: ReadonlyArray<{
     covers: "Walkthrough · Narrative",
     short: "understanding",
   },
+  // The attributes before both branches (product owner, 11 November 2026): D&I is a test of
+  // one against them, and they decide the evidence asked for; OE tests each sample against
+  // them. The standard's come approved (L3e); a person decides the agent's tailoring.
+  {
+    key: "attributes",
+    group: "prepare",
+    kind: "gate",
+    title: "Attributes",
+    covers: "Standard · Tailored · Settled",
+    short: "the attributes",
+  },
   {
     key: "designevidence",
     group: "design",
@@ -115,8 +127,8 @@ export const STEPS: ReadonlyArray<{
     key: "testdesign",
     group: "operating",
     kind: "gate",
-    title: "Test Design & Approval",
-    covers: "Attributes · Scope · Sampling",
+    title: "Scope & Sampling",
+    covers: "Scope · Sampling · Periods",
     short: "plan approval",
   },
   {
@@ -175,7 +187,16 @@ export type WorkflowInput = {
     mine: boolean;
     summary: string;
   }>;
-  attributes: { approved: number; proposed: number };
+  /** The control's attributes: approved, proposed for a decision, and the open questions
+   * about them (origin ATTRIBUTES or SOURCES), which also hold them. */
+  attributes: {
+    approved: number;
+    proposed: number;
+    questions?: number;
+    /** Approved attributes with no criteria a person owns, tailored to the control
+     * (11 November 2026). */
+    untailored?: number;
+  };
   plan: { exists: boolean; approved: boolean; pendingReview: boolean };
   /** The evidence items, each in its phase (DESIGN, INTERIM, ROLLFORWARD). */
   requirements: ReadonlyArray<{ phase: string; state: RequirementState }>;
@@ -189,6 +210,11 @@ export type WorkflowInput = {
       | "READY"
       | "RELEASED"
       | "COMPLETE";
+    /** What a waiting release waits on (11 November 2026): the attributes, once the
+     * control is understood. Absent when not read. */
+    waitingOn?: "" | "UNDERSTANDING" | "ATTRIBUTES";
+    /** What it waits for, in the server's sentence (phase_release.understanding_waits). */
+    waitingFor?: string;
   } | null;
   /** The interim test sheet: null until samples are drawn. */
   sheet: {
@@ -308,10 +334,22 @@ function understandingState(input: WorkflowInput): State {
       !step.optional &&
       !step.done,
   );
-  if (open === undefined) {
-    return { tone: "done", status: "Understood" };
+  if (open !== undefined) {
+    return { tone: open.mine ? "attention" : "active", status: open.summary };
   }
-  return { tone: open.mine ? "attention" : "active", status: open.summary };
+  // The setup steps are done, but the server's gate still waits (phase_release.
+  // understanding_waits also holds it for an open question on the control and for every
+  // required walkthrough question not answered): not understood, so the attributes wait and
+  // the next-step card agrees with the D&I release card.
+  if (input.designRelease?.waitingOn === "UNDERSTANDING") {
+    return {
+      tone: "attention",
+      status: /walkthrough/i.test(input.designRelease.waitingFor ?? "")
+        ? "Walkthrough to finish"
+        : "Questions to answer",
+    };
+  }
+  return { tone: "done", status: "Understood" };
 }
 
 /** One branch's evidence: its own phases' items, as the shared evidence service holds them. */
@@ -436,13 +474,13 @@ function designConclusionState(input: WorkflowInput): State {
   };
 }
 
-function testDesignState(input: WorkflowInput, understanding: State): State {
+/** The attributes, settled before both branches (11 November 2026), as the D&I release
+ * reads them (phase_release.attribute_waits): approved, none proposed, no open question. */
+function attributesState(input: WorkflowInput, understanding: State): State {
   const { approved, proposed } = input.attributes;
-  if (input.plan.approved) {
-    return {
-      tone: "done",
-      status: `Approved · ${plural(approved, "attribute")}`,
-    };
+  const questions = input.attributes.questions ?? 0;
+  if (understanding.tone !== "done") {
+    return waiting("understanding");
   }
   if (proposed > 0) {
     return {
@@ -450,15 +488,49 @@ function testDesignState(input: WorkflowInput, understanding: State): State {
       status: `${plural(proposed, "attribute")} to decide`,
     };
   }
+  if (questions > 0) {
+    return {
+      tone: "attention",
+      status: `${plural(questions, "question")} on the attributes`,
+    };
+  }
+  if (approved === 0) {
+    return { tone: "attention", status: "None approved yet" };
+  }
+  // The testers judge evidence against each attribute's tailored criteria.
+  const untailored = input.attributes.untailored ?? 0;
+  if (untailored > 0) {
+    return {
+      tone: "attention",
+      status: `${untailored} need${untailored === 1 ? "s" : ""} criteria`,
+    };
+  }
+  // The counts say settled, but the server still waits: the agent is updating them.
+  if (input.designRelease?.waitingOn === "ATTRIBUTES") {
+    return { tone: "active", status: "Being updated" };
+  }
+  return { tone: "done", status: `${plural(approved, "attribute")} settled` };
+}
+
+/** Scope and sampling (OE's): the rest of the test plan, once the attributes are settled. */
+function testDesignState(input: WorkflowInput, attributes: State): State {
+  const { approved } = input.attributes;
+  if (input.plan.approved) {
+    return {
+      tone: "done",
+      status: `Approved · ${plural(approved, "attribute")}`,
+    };
+  }
+  if (attributes.tone !== "done") {
+    return waiting("attributes");
+  }
   if (input.plan.pendingReview) {
     return { tone: "attention", status: "Awaiting approval" };
   }
-  if (approved > 0 || input.plan.exists) {
+  if (input.plan.exists) {
     return { tone: "active", status: "Plan being drafted" };
   }
-  return understanding.tone === "done"
-    ? { tone: "idle", status: "Not started" }
-    : waiting("understanding");
+  return { tone: "idle", status: "Not started" };
 }
 
 function oeTestingState(input: WorkflowInput, evidence: State): State {
@@ -581,17 +653,20 @@ function workpaperState(input: WorkflowInput): State {
 /** Every step with where it stands, and the steps to take up next. */
 export function workflowOf(input: WorkflowInput): WorkflowStep[] {
   const understanding = understandingState(input);
+  const attributes = attributesState(input, understanding);
   const phase = (phases: readonly string[]) =>
     input.requirements.filter((item) => phases.includes(item.phase));
-  // D&I evidence has its own release, once the control is understood (B1): until a person
-  // releases it, nothing of it is requested.
+  // D&I evidence has its own release, once the control is understood (B1) and its attributes
+  // are settled (11 November 2026): until a person releases it, nothing of it is requested.
   const unreleased =
     input.designRelease?.step === "READY" ||
     input.designRelease?.step === "WAITING";
   const designEvidence: State = unreleased
-    ? understanding.tone === "done"
-      ? { tone: "attention", status: TO_RELEASE }
-      : waiting("understanding")
+    ? understanding.tone !== "done"
+      ? waiting("understanding")
+      : attributes.tone !== "done"
+        ? waiting("attributes")
+        : { tone: "attention", status: TO_RELEASE }
     : evidenceState(
         phase(["DESIGN"]),
         "understanding",
@@ -630,10 +705,11 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
   const states: Record<StepKey, State> = {
     setup: setupState(input),
     understanding,
+    attributes,
     designevidence: designEvidence,
     designassessment: assessmentState(input, designEvidence),
     designconclusion: designConclusionState(input),
-    testdesign: testDesignState(input, understanding),
+    testdesign: testDesignState(input, attributes),
     oeevidence: oeEvidence,
     oetesting: oeTesting,
     conclusion: conclusionState(input, verdict, oeTesting),
@@ -648,7 +724,7 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
     agent: input.busy.has(step.key),
     next: false,
   }));
-  // The next steps: the first open step before the branches; once the control is understood,
+  // The next steps: the first open step before the branches; once the attributes are settled,
   // the first open step in each branch as well (OE work flagged as started early is not one:
   // the D&I sign-off is); once the branches are done, the first open step to conclude. A
   // design signed off as not effective ends the OE branch.
@@ -663,7 +739,16 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
         step.status !== EARLY.status &&
         step.status !== NOT_RELIED.status,
     );
-  const branchesOpen = understanding.tone === "done";
+  // The branches open once the attributes are settled (11 November 2026), and stay open once
+  // work on them has started (the D&I evidence released or complete, or the plan approved):
+  // a control already under way keeps its branches' next steps while its attributes still
+  // need finishing (criteria tailored to the control, 11 November 2026), which the Attributes
+  // step shows as work to finish alongside, not as a gate.
+  const branchesOpen =
+    attributes.tone === "done" ||
+    input.designRelease?.step === "RELEASED" ||
+    input.designRelease?.step === "COMPLETE" ||
+    input.plan.approved;
   const done = (group: Group) =>
     steps.every((step) => step.group !== group || settled(step));
   const branchesDone =
@@ -712,6 +797,7 @@ const LEGACY: Record<string, Opened> = {
   design: "designassessment",
   plan: "testdesign",
   approval: "testdesign",
+  scope: "testdesign",
   evidence: "oeevidence",
   intake: "oeevidence",
   request: "oeevidence",
@@ -756,6 +842,7 @@ export function returnStep(value: string | null | undefined): StepKey | null {
 export type Section =
   | "risk"
   | "setup-answers"
+  | "setup-attributes"
   | "setup-plan"
   | "evidence"
   | "design"
@@ -769,6 +856,7 @@ export type Section =
 export const SECTION_OF: Record<Opened, Section> = {
   setup: "risk",
   understanding: "setup-answers",
+  attributes: "setup-attributes",
   designevidence: "evidence",
   designassessment: "design",
   designconclusion: "design-conclusion",
@@ -791,16 +879,26 @@ export const NOT_YET_BUILT: Partial<Record<StepKey, string>> = {
 
 // Layout: positions in canvas units, so the canvas draws what is decided here.
 
-export const NODE_SIZE = { width: 200, height: 112 };
-/** Between two steps of a branch. */
-const GAP_X = 32;
-/** Between a branch and the column beside it, wide enough for the fork and the join. */
-const GAP_BAND = 56;
+/** How the canvas marks each kind of step (an icon beside its label). */
+export const KIND_ICON = {
+  source: "database",
+  agent: "sparkles",
+  gate: "shield",
+  output: "file",
+} as const satisfies Record<Kind, string>;
+
+// Sized to be read (product owner, 11 November 2026: "I can't even read the letters on it"):
+// at the readable zoom below, a title is 14.4 px on screen and every other line 12.15 px.
+export const NODE_SIZE = { width: 224, height: 120 };
+/** Between two steps side by side, in a branch or in the preparation. */
+const GAP_X = 28;
+/** Between a stage and the one beside it, wide enough for the fork and the join. */
+const GAP_BAND = 48;
 /** Between two steps stacked in a column. */
-const GAP_Y = 32;
+const GAP_Y = 24;
 /** Room above a band's steps for its label. */
-export const BAND_HEAD = 30;
-const BAND_PAD = 12;
+export const BAND_HEAD = 36;
+const BAND_PAD = 14;
 
 export type Placed = { key: StepKey; x: number; y: number };
 
@@ -825,12 +923,14 @@ export type Band = {
 
 /**
  * Time runs left to right and every edge runs forward or down (product owner, 8 November
- * 2026: the flow has to read the way the audit is done). Setup leads down into Control
- * Understanding, which opens the two branches. OE starts one column later than D&I: Test
- * Design may begin once the control is understood, but OE Evidence sits directly under the D&I
- * Conclusion, whose effective verdict drops straight into it. A not-effective verdict and OE
- * Testing join at the Control Conclusion, and the review and the final workpaper follow below
- * it.
+ * 2026: the flow has to read the way the audit is done), on a grid of rows (11 November 2026:
+ * compact enough to be read without shrinking). Setup leads into Control Understanding beside
+ * it, and the understanding down into the Attributes, which open the two branches from the row
+ * between them. D&I runs along the top row and OE along the third; OE starts one column later
+ * than D&I: Scope & Sampling may begin once the attributes are settled, but OE Evidence sits
+ * directly under the D&I Conclusion, whose effective verdict drops straight into it. A
+ * not-effective verdict and OE Testing join at the Control Conclusion on the middle row, and
+ * the review and the final workpaper follow below it.
  */
 export function workflowLayout(): {
   placed: Placed[];
@@ -839,20 +939,20 @@ export function workflowLayout(): {
   size: { width: number; height: number };
 } {
   const { width, height } = NODE_SIZE;
-  const step = width + GAP_X;
-  // Columns: the preparation, four for the branches, and the conclusion.
-  const prepareX = 0;
-  const branchX = (at: number) => prepareX + width + GAP_BAND + at * step;
+  const across = width + GAP_X;
+  const row = (at: number) => at * (height + GAP_Y);
+  // Columns: the preparation's two, four for the branches, and the conclusion.
+  const prepareX = (at: number) => at * across;
+  const branchX = (at: number) => prepareX(1) + width + GAP_BAND + at * across;
   const concludeX = branchX(3) + width + GAP_BAND;
-  // Rows: D&I above OE; the fork and the join sit halfway between them.
-  const designY = BAND_HEAD;
-  const operatingY = designY + height + BAND_PAD + 40 + BAND_HEAD;
-  const middle = (designY + operatingY) / 2;
-  const below = (y: number) => y + height + GAP_Y;
-  const above = (y: number) => y - height - GAP_Y;
+  // Rows: D&I on the first, OE on the third; the fork and the join between them.
+  const designY = row(0);
+  const middle = row(1);
+  const operatingY = row(2);
   const at: Record<StepKey, { x: number; y: number }> = {
-    setup: { x: prepareX, y: above(middle) },
-    understanding: { x: prepareX, y: middle },
+    setup: { x: prepareX(0), y: designY },
+    understanding: { x: prepareX(1), y: designY },
+    attributes: { x: prepareX(1), y: middle },
     designevidence: { x: branchX(0), y: designY },
     designassessment: { x: branchX(1), y: designY },
     designconclusion: { x: branchX(2), y: designY },
@@ -860,47 +960,27 @@ export function workflowLayout(): {
     oeevidence: { x: branchX(2), y: operatingY },
     oetesting: { x: branchX(3), y: operatingY },
     conclusion: { x: concludeX, y: middle },
-    review: { x: concludeX, y: below(middle) },
-    workpaper: { x: concludeX, y: below(below(middle)) },
+    review: { x: concludeX, y: operatingY },
+    workpaper: { x: concludeX, y: row(3) },
   };
-  const band = (
-    key: Group,
-    left: number,
-    right: number,
-    top: number,
-    bottom: number,
-  ): Band => ({
-    key,
-    label: GROUPS.find((group) => group.key === key)?.label ?? key,
-    x: left - BAND_PAD,
-    y: top - BAND_HEAD,
-    width: right - left + BAND_PAD * 2,
-    height: bottom - top + BAND_HEAD + BAND_PAD,
-  });
-  const rawBands: Band[] = [
-    band(
-      "prepare",
-      prepareX,
-      prepareX + width,
-      at.setup.y,
-      at.understanding.y + height,
-    ),
-    band("design", branchX(0), branchX(3) + width, designY, designY + height),
-    band(
-      "operating",
-      branchX(0),
-      branchX(3) + width,
-      operatingY,
-      operatingY + height,
-    ),
-    band(
-      "conclude",
-      concludeX,
-      concludeX + width,
-      at.conclusion.y,
-      at.workpaper.y + height,
-    ),
-  ];
+  const band = (key: Group): Band => {
+    const held = STEPS.filter((item) => item.group === key).map(
+      (item) => at[item.key],
+    );
+    const left = Math.min(...held.map((item) => item.x));
+    const right = Math.max(...held.map((item) => item.x)) + width;
+    const top = Math.min(...held.map((item) => item.y));
+    const bottom = Math.max(...held.map((item) => item.y)) + height;
+    return {
+      key,
+      label: GROUPS.find((group) => group.key === key)?.label ?? key,
+      x: left - BAND_PAD,
+      y: top - BAND_HEAD,
+      width: right - left + BAND_PAD * 2,
+      height: bottom - top + BAND_HEAD + BAND_PAD,
+    };
+  };
+  const rawBands = GROUPS.map((group) => band(group.key));
   // Everything moves so the band furthest up and left starts at the origin.
   const left = Math.min(...rawBands.map((item) => item.x));
   const top = Math.min(...rawBands.map((item) => item.y));
@@ -927,9 +1007,11 @@ export function workflowLayout(): {
     targetHandle,
   });
   const edges = [
-    edge("setup", "understanding", "bottom", "top"),
-    edge("understanding", "designevidence"),
-    edge("understanding", "testdesign"),
+    // Rewritten 11 November 2026: Setup sits beside the understanding (before: above it).
+    edge("setup", "understanding"),
+    edge("understanding", "attributes", "bottom", "top"),
+    edge("attributes", "designevidence"),
+    edge("attributes", "testdesign"),
     edge("designevidence", "designassessment"),
     edge("designassessment", "designconclusion"),
     {
@@ -955,4 +1037,69 @@ export function workflowLayout(): {
       height: Math.max(...bands.map((item) => item.y + item.height)),
     },
   };
+}
+
+// Framing: how the canvas first shows the workflow. Pure, so the canvas and the height of its
+// frame agree, and the rule is tested.
+
+/** The smallest zoom the workflow is first shown at: its words stay readable, and a workflow
+ * wider than the canvas pans sideways rather than shrinking (11 November 2026). */
+export const READABLE_ZOOM = 0.9;
+/** The room around the workflow, in canvas units. */
+export const FRAME_PAD = 24;
+
+export type Frame = {
+  zoom: number;
+  x: number;
+  y: number;
+  /** The canvas's height in pixels: the workflow's, at that zoom. */
+  height: number;
+  /** The workflow is wider than the canvas, so it pans sideways. */
+  pans: boolean;
+};
+
+/** How far the workflow may pan sideways at a zoom, or null where all of it is in view. */
+export function sidewaysLimits(
+  zoom: number,
+  canvasWidth: number,
+  contentWidth: number,
+): { min: number; max: number } | null {
+  const max = FRAME_PAD * zoom;
+  const min = canvasWidth - (contentWidth + FRAME_PAD) * zoom;
+  return min < max - 0.5 ? { min, max } : null;
+}
+
+/**
+ * The first view of a workflow `content` wide and high in a canvas `canvasWidth` wide: as large
+ * as fits, never past full size and never under the readable zoom. Where it pans, it opens at
+ * the start, moved on only as far as it takes to show `focus` (the step to do next, or the one
+ * open), with a little of what leads into it.
+ */
+export function workflowFrame(
+  canvasWidth: number,
+  content: { width: number; height: number },
+  focus: { x: number; width: number } | null = null,
+): Frame {
+  const fit = canvasWidth / (content.width + FRAME_PAD * 2);
+  const zoom = Math.min(1, Math.max(READABLE_ZOOM, fit));
+  const height = Math.round((content.height + FRAME_PAD * 2) * zoom);
+  const y = FRAME_PAD * zoom;
+  const limits = sidewaysLimits(zoom, canvasWidth, content.width);
+  if (limits === null) {
+    return {
+      zoom,
+      x: (canvasWidth - content.width * zoom) / 2,
+      y,
+      height,
+      pans: false,
+    };
+  }
+  let x = limits.max;
+  if (focus !== null) {
+    const right = x + (focus.x + focus.width + FRAME_PAD * 2) * zoom;
+    if (right > canvasWidth) {
+      x = Math.max(limits.min, x - (right - canvasWidth));
+    }
+  }
+  return { zoom, x, y, height, pans: true };
 }

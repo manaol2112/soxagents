@@ -17,31 +17,71 @@ import { acceptProposal } from "./references-view";
 import { UiIcon } from "./ui-icon";
 import {
   AGENT_NAME,
+  afterTopicSave,
+  answerDisplay,
   askSeparately,
   CARRIED,
   type CopyTarget,
   type CopyTargets,
+  carriedCopy,
+  carriedSource,
+  confirmsByProposal,
   copyChoices,
   copyTargetLine,
+  draftedFrom,
   draftText,
+  drivesLine,
   extendInterview,
+  followUpShown,
   type Interview,
+  ignoredNote,
   interviewProgress,
   type Need,
   type NotesResult,
   neededForLine,
+  nextAfterUnderstanding,
   nextOpen,
   notesChosen,
   notesSummary,
+  OTHER_MAX,
+  OTHER_RULE,
+  otherSystemLabel,
+  otherText,
   parseNotes,
   parseReview,
   parseTargets,
+  pickProblem,
+  proposalMark,
+  proposedPick,
   type Review,
+  readyLines,
+  restartInterview,
   reviewGroups,
+  START_NONE,
+  sameSystemLabel,
+  startFromBanner,
+  startFromField,
   startInterview,
   statusLine,
-  stepOpen,
+  stepRequired,
+  stepTopic,
+  topicAsks,
+  topicBlocked,
+  topicDone,
+  topicHint,
+  topicLeft,
+  topicName,
+  topicQuestions,
+  topicSave,
+  topicShown,
+  topicStep,
+  WALKTHROUGH_TEXT_MAX,
+  type WalkthroughAnswer,
+  type WalkthroughTopic,
+  walkthroughOutcome,
+  walkthroughRecord,
   withConfirmed,
+  withOther,
 } from "./understanding-chat-model";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
@@ -51,10 +91,15 @@ const SOURCE_WORDS: Record<Need["source"], string> = {
   PERSON: "Recorded by the team",
   RECORDS: "From the records",
   PRIOR_YEAR: "Last year's workpaper",
+  SYSTEM: "Used on this system",
+  OTHER_SYSTEM: "From the same control on another system",
   USUAL: "Usual practice",
   AGENT: "Raised by the agents",
   NONE: "",
 };
+
+/** The saving mark while the review is read again from another system's answers. */
+const STARTING = "@start";
 
 /** The value the "Other (specify)" choice stands for in a point's selection. */
 const OTHER = "@other";
@@ -73,6 +118,7 @@ export function UnderstandingReview({
   onTalk,
   onProcess,
   documentsHref,
+  attributesHref = null,
 }: {
   ids: Ids;
   canAct: boolean;
@@ -81,8 +127,12 @@ export function UnderstandingReview({
   onTalk: () => void;
   /** Opens the process understanding, for a business process control. */
   onProcess: (() => void) | null;
-  /** D&I Evidence: where the governing documents are linked, and the step that follows. */
+  /** D&I Evidence: where the governing documents are linked, and the step that follows
+   * once the attributes are settled. */
   documentsHref: string | null;
+  /** The Attributes step, where the attributes are decided: the step that follows the
+   * understanding until they are settled (11 November 2026). */
+  attributesHref?: string | null;
 }) {
   const action = useAction(ids);
   const router = useRouter();
@@ -98,10 +148,23 @@ export function UnderstandingReview({
   // The course through the points, fixed at the first read, and where the person is on it.
   const [interview, setInterview] = useState<Interview | null>(null);
   const [at, setAt] = useState(0);
+  // The course and the step as the latest read and move left them, for the reads and saves
+  // that finish after a render.
+  const courseRef = useRef<Interview | null>(null);
+  const atRef = useRef(0);
+  // The walkthrough (11 November 2026): what the person chose on each question before it is
+  // saved, the answers on record reopened to change, and the reasons and sources opened.
+  const [wtPicks, setWtPicks] = useState<Record<string, string[]>>({});
+  const [wtReopened, setWtReopened] = useState<Record<string, boolean>>({});
+  const [wtShown, setWtShown] = useState<Record<string, boolean>>({});
+  // The words typed for each question's "Other" answer, kept while Other is unticked so
+  // ticking it again brings them back (11 November 2026).
+  const [wtOther, setWtOther] = useState<Record<string, string>>({});
   // The choice made on each point before it is saved, and the text of "Other (specify)".
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [typed, setTyped] = useState<Record<string, string>>({});
-  // Last year's answers unticked on the carried step: asked on their own.
+  // Known answers (last year's, this system's) unticked on the carried step: asked on
+  // their own.
   const [unticked, setUnticked] = useState<Record<string, boolean>>({});
   // On record: an answer being changed in place.
   const [editing, setEditing] = useState<Record<string, boolean>>({});
@@ -120,8 +183,16 @@ export function UnderstandingReview({
   const reads = useRef(0);
   const started = useRef(false);
   const askPane = useRef<HTMLElement>(null);
+  // Which other system's answers the review starts from (11 November 2026): the person's
+  // choice for this control, sent with every read of it; none made means the server's
+  // default. Kept with the control it was made on, so another control starts afresh. While
+  // the new read is on its way, the choice shows as made; once it lands, the course is set
+  // afresh from its proposals (`restart`).
+  const startRef = useRef<{ control: string; from: string } | null>(null);
+  const [startPending, setStartPending] = useState<string | null>(null);
+  const restart = useRef(false);
 
-  const read = useCallback(async () => {
+  const read = useCallback(async (): Promise<Review | null> => {
     reads.current += 1;
     const mine = reads.current;
     const query = (intent: string) =>
@@ -130,6 +201,9 @@ export function UnderstandingReview({
         organization_id: ids.organizationId,
         project_id: ids.projectId,
         control_id: ids.controlId,
+        ...(intent === "review"
+          ? startFromField(startRef.current, ids.controlId)
+          : {}),
       }).toString()}`;
     try {
       const [first, second] = await Promise.all([
@@ -141,35 +215,90 @@ export function UnderstandingReview({
         ),
       ]);
       if (mine !== reads.current) {
-        return;
+        return null;
       }
       const found = parseReview(first.body ?? null);
       setFailed(found === null);
       if (found !== null) {
         setReview(found);
-        setInterview((now) =>
-          now === null ? startInterview(found) : extendInterview(found, now),
-        );
+        const now = courseRef.current;
+        if (restart.current && now !== null) {
+          // Another system's answers to start from: its proposals set the course afresh.
+          restart.current = false;
+          const next = restartInterview(found, now, atRef.current);
+          courseRef.current = next.interview;
+          setInterview(next.interview);
+          atRef.current = next.at;
+          setAt(next.at);
+          setUnticked({});
+        } else {
+          // A follow-up the answers raised takes its place after the step the person is on.
+          const course =
+            now === null
+              ? startInterview(found)
+              : extendInterview(found, now, atRef.current);
+          courseRef.current = course;
+          setInterview(course);
+        }
         // The first read opens on the first point still open.
-        if (!started.current) {
+        if (!started.current && courseRef.current !== null) {
           started.current = true;
-          setAt(nextOpen(found, startInterview(found), -1));
+          const first = nextOpen(found, courseRef.current, -1);
+          atRef.current = first;
+          setAt(first);
         }
       }
       setTargets(parseTargets(second.body ?? null));
+      return found;
     } catch {
       if (mine === reads.current) {
         setFailed(true);
       }
+      return null;
     }
   }, [ids]);
+
+  /** The course changed here: kept for the reads that finish later too. */
+  function setCourse(course: Interview) {
+    courseRef.current = course;
+    setInterview(course);
+  }
 
   useEffect(() => {
     void read();
   }, [read]);
 
+  /** Starts from another system's answers, or none ("none"): the review is read again with
+   * them proposed. Nothing is written; each proposal is confirmed or changed as before. When
+   * the read fails, the choice goes back to what the review shows. */
+  async function startFrom(from: string) {
+    if (saving !== null) {
+      return;
+    }
+    const before = startRef.current;
+    startRef.current = { control: ids.controlId, from };
+    restart.current = true;
+    setStartPending(from);
+    setSaving(STARTING);
+    setSaved(null);
+    setProblem(null);
+    // The read about to start; a newer one landing first carries the same choice.
+    const mine = reads.current + 1;
+    const found = await read();
+    if (found === null && reads.current === mine) {
+      startRef.current = before;
+      restart.current = false;
+      setProblem(
+        "The answers could not be read again from that system. Try again.",
+      );
+    }
+    setStartPending(null);
+    setSaving(null);
+  }
+
   /** Moves to a step, and brings the question into view on a phone. */
   function go(step: number) {
+    atRef.current = step;
     setAt(step);
     setProblem(null);
     if (
@@ -321,7 +450,7 @@ export function UnderstandingReview({
         .filter((need) => unticked[need.key] === true)
         .map((need) => need.key),
     );
-    setInterview(course);
+    setCourse(course);
     if (ticked.length === 0) {
       go(nextOpen(review, course, course.plan.indexOf(CARRIED)));
       return;
@@ -333,7 +462,7 @@ export function UnderstandingReview({
     let done = 0;
     for (const need of ticked) {
       const ok =
-        need.proposalId !== null
+        confirmsByProposal(need) && need.proposalId !== null
           ? await acceptProposal(ids, need.proposalId)
           : await action.run("values", {
               intent: "values-set",
@@ -358,9 +487,7 @@ export function UnderstandingReview({
       setSaving(null);
       return;
     }
-    await settle(
-      `${done} ${done === 1 ? "answer" : "answers"} from last year confirmed.`,
-    );
+    await settle(carriedCopy(course, 0).confirmed(done));
   }
 
   async function readNotes() {
@@ -413,6 +540,11 @@ export function UnderstandingReview({
     }
     setFound(result);
     setChosen(notesChosen(result.answers));
+    // The planner stores its walkthrough proposals on the server: read the review again so
+    // they show pre-selected in their topics.
+    if ((result.walkthroughProposed ?? 0) > 0) {
+      void read();
+    }
   }
 
   function closeNotes() {
@@ -465,6 +597,161 @@ export function UnderstandingReview({
     );
   }
 
+  /** Sends walkthrough answers in one save; the server's answer, read. */
+  async function putWalkthrough(
+    answers: Record<string, WalkthroughAnswer>,
+  ): Promise<{
+    status: number;
+    outcome: ReturnType<typeof walkthroughOutcome>;
+  }> {
+    let status = 0;
+    let detail = "";
+    let body: unknown = null;
+    try {
+      const response = await fetch("/workspace/understanding-chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          intent: "walkthrough-answers",
+          organization_id: ids.organizationId,
+          project_id: ids.projectId,
+          control_id: ids.controlId,
+          answers,
+        }),
+      });
+      const answer = (await response.json()) as {
+        status?: unknown;
+        detail?: unknown;
+        body?: unknown;
+      };
+      status = typeof answer.status === "number" ? answer.status : 0;
+      detail = typeof answer.detail === "string" ? answer.detail : "";
+      body = answer.body ?? null;
+    } catch {
+      status = 0;
+    }
+    return { status, outcome: walkthroughOutcome(status, detail, body) };
+  }
+
+  /** Forgets the choices and reopened answers of the questions given. */
+  function clearWalkthrough(keys: readonly string[]) {
+    const drop = <T,>(was: Record<string, T>) =>
+      Object.fromEntries(
+        Object.entries(was).filter(([key]) => !keys.includes(key)),
+      );
+    setWtPicks(drop);
+    setWtReopened(drop);
+    setWtOther(drop);
+  }
+
+  /** "Save and continue" on a topic: every answered question shown in one save (a follow-up
+   * its parent's pick no longer opens is left out). Success is shown once the server confirms
+   * it; the review is then read again, and the person stays on the step when a required
+   * question is still open there (a follow-up the answers raised). */
+  async function saveTopic(topic: WalkthroughTopic, asked: readonly Need[]) {
+    if (!canAct || review === null || interview === null) {
+      return;
+    }
+    const shown = topicShown(asked, wtPicks, review.needs).map(
+      (need) => need.key,
+    );
+    // Leaving the step forgets every choice made on it, a hidden follow-up's too.
+    const all = asked.map((need) => need.key);
+    const blocked = topicBlocked(asked, wtPicks, review.needs);
+    if (blocked !== null) {
+      // An Other answer that cannot be saved: say why beside it, and send nothing.
+      setWtShown((was) => ({ ...was, [`${blocked.key}:tried`]: true }));
+      return;
+    }
+    const answers = topicSave(asked, wtPicks, review.needs);
+    const count = Object.keys(answers).length;
+    if (count === 0) {
+      if (topicDone(review, topic)) {
+        clearWalkthrough(all);
+        go(nextOpen(review, interview, at));
+      }
+      return;
+    }
+    const label = asked[0]?.walkthrough?.topicLabel ?? topicName(review, topic);
+    setSaving(topicStep(topic));
+    setSaved(null);
+    setProblem(null);
+    const { status, outcome } = await putWalkthrough(answers);
+    if ("problem" in outcome) {
+      setSaving(null);
+      setProblem(outcome.problem);
+      if (status === 409) {
+        // The understanding changed meanwhile: read it again, keeping what was chosen.
+        setChecking(true);
+        await read();
+        setChecking(false);
+      }
+      return;
+    }
+    const values = Object.fromEntries(
+      Object.entries(answers).map(([key, answer]) => [key, answer.value]),
+    );
+    // Confirmed by the server: shown as on record now, before the next read arrives. Applied
+    // to the review as it now stands, so a read that landed meanwhile is never undone; the
+    // narrative stays marked as updating until the read below replaces it.
+    setReview((was) => (was === null ? was : withConfirmed(was, values)));
+    clearWalkthrough(Object.keys(answers));
+    const also = await spread();
+    const saved = outcome.saved > 0 ? outcome.saved : count;
+    // A follow-up the server left out (its parent answered here no longer opens it) is part of
+    // a successful save: noted quietly, never as a problem.
+    const message = `${label}: ${saved} ${saved === 1 ? "answer" : "answers"} saved.${ignoredNote(outcome.ignored)}${also}`;
+    setSaved(message);
+    router.refresh();
+    setChecking(true);
+    const fresh = await read();
+    setChecking(false);
+    setSaving(null);
+    if (fresh === null) {
+      return;
+    }
+    const next = afterTopicSave(shown, fresh, topic);
+    if (next.stay) {
+      setSaved(`${message} ${next.note}`);
+      return;
+    }
+    clearWalkthrough(all);
+    go(nextOpen(fresh, courseRef.current ?? interview, atRef.current));
+  }
+
+  /** "Mark not applicable" on an optional question: saved on its own at once. */
+  async function notApplicable(need: Need) {
+    if (!canAct || review === null || need.required) {
+      return;
+    }
+    setSaving(need.key);
+    setSaved(null);
+    setProblem(null);
+    const { status, outcome } = await putWalkthrough({
+      [need.key]: { value: "", not_applicable: true },
+    });
+    if ("problem" in outcome) {
+      setSaving(null);
+      setProblem(outcome.problem);
+      if (status === 409) {
+        setChecking(true);
+        await read();
+        setChecking(false);
+      }
+      return;
+    }
+    setReview((was) =>
+      was === null ? was : withConfirmed(was, { [need.key]: "Not applicable" }),
+    );
+    clearWalkthrough([need.key]);
+    setSaved(`Marked not applicable: ${need.question || need.label}`);
+    router.refresh();
+    setChecking(true);
+    await read();
+    setChecking(false);
+    setSaving(null);
+  }
+
   if (review === null || interview === null) {
     return failed ? (
       <p className="cc-problem" role="alert">
@@ -484,16 +771,65 @@ export function UnderstandingReview({
   const groups = reviewGroups(review);
   const byKey = new Map(review.needs.map((need) => [need.key, need]));
   const status = statusLine(review);
+  // Where the answers start from: another system's, proposed below, or none.
+  const banner = startFromBanner(review);
   const progress = interviewProgress(review, interview);
   const plan = interview.plan;
   const step = at < plan.length ? (plan[at] ?? null) : null;
-  const current = step !== null && step !== CARRIED ? byKey.get(step) : null;
+  const topic = step === null ? null : stepTopic(step);
+  const current =
+    step !== null && step !== CARRIED && topic === null
+      ? byKey.get(step)
+      : null;
   const onRecord = [...groups.confirmed, ...groups.rcm];
+  // The walkthrough answers on record, by topic.
+  const wtRecord = walkthroughRecord(review);
+  const recordCount =
+    onRecord.length +
+    wtRecord.reduce((sum, group) => sum + group.needs.length, 0);
+  const wtSteps = plan.filter((item) => stepTopic(item) !== null);
+  const reopened = Object.keys(wtReopened).filter(
+    (key) => wtReopened[key] === true,
+  );
   const copyTargets = copyChoices(targets, copyTo);
   const busy = saving !== null;
+  // A walkthrough save in flight (a topic, a question marked not applicable, or the notes):
+  // the narrative shows as updating until the review is read again, never as blank.
+  const wtSaving =
+    saving !== null &&
+    (stepTopic(saving) !== null ||
+      saving === "notes" ||
+      byKey.get(saving)?.kind === "WALKTHROUGH");
+  const narrativeUpdating = checking || wtSaving;
+
+  /** Opens a walkthrough topic's step, adding it to the course when it was not asked; an
+   * answer on record given is reopened there to change. */
+  function openTopic(need: Need) {
+    const wt = need.walkthrough;
+    if (wt === undefined || interview === null) {
+      return;
+    }
+    if (need.status === "CONFIRMED") {
+      setWtReopened((was) => ({ ...was, [need.key]: true }));
+    }
+    const target = topicStep(wt.topic);
+    const known = plan.indexOf(target);
+    if (known >= 0) {
+      go(known);
+      return;
+    }
+    const course = { ...interview, plan: [...plan, target] };
+    setCourse(course);
+    go(course.plan.length - 1);
+  }
 
   /** Where a slot of the statement leads: its point, last year's step, or the record. */
   function openSlot(key: string) {
+    const slot = byKey.get(key);
+    if (slot?.kind === "WALKTHROUGH") {
+      openTopic(slot);
+      return;
+    }
     if (byKey.get(key)?.kind === "AUTH" && interview !== null) {
       const known = plan.indexOf(key);
       if (known >= 0) {
@@ -501,7 +837,7 @@ export function UnderstandingReview({
         return;
       }
       const course = { ...interview, plan: [...plan, key] };
-      setInterview(course);
+      setCourse(course);
       go(course.plan.length - 1);
       return;
     }
@@ -639,37 +975,76 @@ export function UnderstandingReview({
         })}
       </p>
 
+      {review.narrative.length > 0 || wtSaving ? (
+        <section
+          className={`ur-narrative${narrativeUpdating ? " is-updating" : ""}`}
+          aria-label="The walkthrough, as answered"
+          aria-busy={narrativeUpdating}
+        >
+          {review.narrative.length === 0 ? (
+            <p className="ur-narrative-label" role="status">
+              <small>Updating…</small>
+            </p>
+          ) : null}
+          {review.narrative.map((paragraph, index) => (
+            <div key={paragraph.topic} className="ur-narrative-topic">
+              <p className="ur-narrative-label">
+                <span>{paragraph.label}</span>
+                {index === 0 && narrativeUpdating ? (
+                  <small role="status">Updating…</small>
+                ) : null}
+              </p>
+              <p className="ur-narrative-text">
+                {paragraph.parts.map((part, at) => {
+                  const need =
+                    part.key === null ? undefined : byKey.get(part.key);
+                  if (need === undefined) {
+                    // biome-ignore lint/suspicious/noArrayIndexKey: the paragraph's parts in order
+                    return <span key={at}>{part.text}</span>;
+                  }
+                  const question = need.question || need.label;
+                  return (
+                    // biome-ignore lint/a11y/useSemanticElements: an inline phrase of the sentence that wraps across lines, which a button cannot
+                    <span
+                      // biome-ignore lint/suspicious/noArrayIndexKey: the paragraph's parts in order
+                      key={at}
+                      role="button"
+                      tabIndex={0}
+                      className="ur-slot is-filled"
+                      title={question}
+                      aria-label={`${canAct ? "Change" : "Show"}: ${question}`}
+                      onClick={() => openSlot(need.key)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          openSlot(need.key);
+                        }
+                      }}
+                    >
+                      {part.text}
+                    </span>
+                  );
+                })}
+              </p>
+            </div>
+          ))}
+        </section>
+      ) : null}
+
       <ul
         className={`ur-ready${checking ? " is-updating" : ""}`}
         aria-busy={checking}
         aria-label="What the understanding is ready for"
       >
-        {[
-          {
-            key: "evidence",
-            text: "D&I evidence can be requested",
-            gate: review.evidence,
-          },
-          {
-            key: "attributes",
-            text: "Attributes can be finalized",
-            gate: review.attributes,
-          },
-        ].map((line) => (
-          <li key={line.key} className={line.gate.ready ? "is-ok" : ""}>
+        {/* The attributes first, then the D&I evidence requested against them (product
+            owner, 11 November 2026). */}
+        {readyLines(review).map((line) => (
+          <li key={line.key} className={line.ready ? "is-ok" : ""}>
             <span className="ur-check" aria-hidden="true">
-              {line.gate.ready ? <UiIcon name="check" size={12} /> : null}
+              {line.ready ? <UiIcon name="check" size={12} /> : null}
             </span>
             <span>{line.text}</span>
-            <small>
-              {checking
-                ? "Updating…"
-                : line.gate.ready
-                  ? "Ready"
-                  : line.gate.missing.length > 0
-                    ? `${line.gate.missing.length} left`
-                    : "Not yet"}
-            </small>
+            <small>{checking ? "Updating…" : line.note}</small>
           </li>
         ))}
       </ul>
@@ -721,14 +1096,14 @@ export function UnderstandingReview({
         </fieldset>
       ) : null}
 
-      {onRecord.length > 0 ? (
+      {recordCount > 0 ? (
         <details
           className="ur-record"
           open={recordOpen}
           onToggle={(event) => setRecordOpen(event.currentTarget.open)}
         >
           <summary>
-            On record <span className="ur-count">{onRecord.length}</span>
+            On record <span className="ur-count">{recordCount}</span>
             <UiIcon name="chevron" size={14} />
           </summary>
           <ul>
@@ -767,6 +1142,40 @@ export function UnderstandingReview({
               </li>
             ))}
           </ul>
+          {/* The walkthrough's answers, by topic (11 November 2026). */}
+          {wtRecord.map((group) => (
+            <section
+              key={group.topic}
+              className="ur-record-topic"
+              aria-labelledby={`ur-record-${group.topic}`}
+            >
+              <h4 id={`ur-record-${group.topic}`}>{group.label}</h4>
+              <ul>
+                {group.needs.map((need) => (
+                  <li key={need.key}>
+                    <span className="ur-record-q">
+                      {need.question || need.label}
+                    </span>
+                    <span className="ur-record-a">
+                      <strong>{answerDisplay(need) || "Not applicable"}</strong>
+                      {SOURCE_WORDS[need.source] !== "" ? (
+                        <small>{SOURCE_WORDS[need.source]}</small>
+                      ) : null}
+                      {canAct ? (
+                        <button
+                          type="button"
+                          className="cs-link"
+                          onClick={() => openTopic(need)}
+                        >
+                          Change
+                        </button>
+                      ) : null}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
         </details>
       ) : null}
     </>
@@ -776,7 +1185,7 @@ export function UnderstandingReview({
   const foot = (primary: ReactNode, skip: boolean) => (
     <div className="ur-foot">
       <p className="ur-foot-where">
-        {plan.length > 1 ? `Point ${at + 1} of ${plan.length}` : null}
+        {plan.length > 1 ? `Step ${at + 1} of ${plan.length}` : null}
         {skip ? (
           <button
             type="button"
@@ -808,22 +1217,20 @@ export function UnderstandingReview({
       .filter((need): need is Need => need !== undefined);
     const waiting = items.filter((need) => need.status !== "CONFIRMED");
     const ticked = waiting.filter((need) => unticked[need.key] !== true);
+    const copy = carriedCopy(interview, waiting.length);
     return (
       <>
         <div className="ur-kicker">
-          <span className="ur-chip is-accent">From last year's workpaper</span>
+          <span className="ur-chip is-accent">{copy.chip}</span>
         </div>
         <h3 className="ur-q" id="ur-q">
-          Confirm last year's answers
+          {copy.title}
         </h3>
-        <p className="ur-hint">
-          {waiting.length === 0
-            ? "Last year's answers are confirmed."
-            : `${waiting.length} ${waiting.length === 1 ? "answer was" : "answers were"} given by the client last year. Untick any that changed; it is asked on its own.`}
-        </p>
+        <p className="ur-hint">{copy.hint}</p>
         <ul className="ur-carried">
           {items.map((need) => {
             const done = need.status === "CONFIRMED";
+            const from = done ? "" : carriedSource(interview, need);
             return (
               <li key={need.key} className={done ? "is-done" : ""}>
                 {done ? (
@@ -847,6 +1254,9 @@ export function UnderstandingReview({
                     {need.question || need.label}
                   </span>
                   <strong>{need.value}</strong>
+                  {from !== "" ? (
+                    <span className="ai-mark is-rules">{from}</span>
+                  ) : null}
                 </span>
                 {done ? <small>Confirmed</small> : null}
               </li>
@@ -908,6 +1318,12 @@ export function UnderstandingReview({
         {need.source === "PRIOR_YEAR" && !onFile ? (
           <span className="ur-chip is-accent">Last year</span>
         ) : null}
+        {need.source === "SYSTEM" && !onFile ? (
+          <span className="ur-chip is-accent">{sameSystemLabel(need)}</span>
+        ) : null}
+        {need.source === "OTHER_SYSTEM" && !onFile ? (
+          <span className="ur-chip is-accent">{otherSystemLabel(need)}</span>
+        ) : null}
         {onFile ? <span className="ur-chip is-ok">On record</span> : null}
         {!need.required ? <span className="ur-chip">Optional</span> : null}
         {forLine !== "" ? <span className="ur-chip">{forLine}</span> : null}
@@ -950,7 +1366,11 @@ export function UnderstandingReview({
           ? "The planner asks it as a short interview, with a proposed answer to confirm."
           : need.kind === "PROCESS"
             ? "The process understanding is confirmed in its own screen: the steps, the hand-offs and where this control sits."
-            : "Optional. The governing policy is linked as a D&I evidence item.";
+            : need.source === "SYSTEM" && need.value !== ""
+              ? `"${need.value}" governs this system's other controls. Optional: choose the governing policy for this control in D&I Evidence.`
+              : need.source === "OTHER_SYSTEM" && need.value !== ""
+                ? `"${need.value}" governs the same control on another system. Optional: choose the governing policy for this control in D&I Evidence.`
+                : "Optional. The governing policy is linked as a D&I evidence item.";
       const act =
         need.kind === "QUESTION" ? (
           <button type="button" className="btn btn-primary" onClick={onTalk}>
@@ -982,9 +1402,13 @@ export function UnderstandingReview({
         ? "Selected from usual practice. Confirm it holds for this client, or choose another."
         : need.source === "PRIOR_YEAR"
           ? "Last year's answer is selected. Confirm it still holds."
-          : need.status === "PROPOSED"
-            ? "A proposed answer is selected. Confirm it, or choose another."
-            : "";
+          : need.source === "SYSTEM"
+            ? "The answer used on this system's other controls is selected. Confirm it holds for this control, or choose another."
+            : need.source === "OTHER_SYSTEM"
+              ? "The answer given for the same control on another system is selected. Confirm it holds here, or choose another."
+              : need.status === "PROPOSED"
+                ? "A proposed answer is selected. Confirm it, or choose another."
+                : "";
     const tagFor = (option: string) =>
       option !== need.value || onFile
         ? ""
@@ -992,9 +1416,13 @@ export function UnderstandingReview({
           ? "Usual"
           : need.source === "PRIOR_YEAR"
             ? "Last year"
-            : need.status === "PROPOSED"
-              ? "Proposed"
-              : "";
+            : need.source === "SYSTEM"
+              ? "This system"
+              : need.source === "OTHER_SYSTEM"
+                ? "Other system"
+                : need.status === "PROPOSED"
+                  ? "Proposed"
+                  : "";
     const name = `ur-${need.key}`;
     return (
       <form
@@ -1080,9 +1508,405 @@ export function UnderstandingReview({
     );
   };
 
+  /** A step as the end's list names it. */
+  const stepLabel = (key: string, need: Need | undefined): string => {
+    const named = stepTopic(key);
+    if (named !== null) {
+      return `Walkthrough: ${topicName(review, named)}`;
+    }
+    return need?.question || need?.label || key;
+  };
+
+  /** What the person has chosen on a walkthrough question, or its proposal untouched. */
+  const pickFor = (need: Need): string[] =>
+    wtPicks[need.key] ?? proposedPick(need);
+
+  const setPick = (need: Need, pick: string[]) =>
+    setWtPicks((was) => ({ ...was, [need.key]: pick }));
+
+  const toggleShown = (id: string) =>
+    setWtShown((was) => ({ ...was, [id]: was[id] !== true }));
+
+  /** One walkthrough question: its words, the reason on request, the control for its kind,
+   * and where a proposed answer comes from. A proposal is selected but marked as not yet
+   * anyone's answer. */
+  const walkthroughQuestion = (need: Need) => {
+    const wt = need.walkthrough;
+    if (wt === undefined) {
+      return null;
+    }
+    const id = `ur-wt-${need.key}`;
+    const pick = pickFor(need);
+    const touched = need.key in wtPicks;
+    const onFile = need.status === "CONFIRMED";
+    const proposal = need.status === "PROPOSED" && need.value !== "";
+    // Where the proposal comes from: last year's, another system's, or the agents'.
+    const mark = proposalMark(need);
+    // A selection still the proposal's, not the person's: styled as a proposal.
+    const tone = proposal && !touched ? " is-proposed" : "";
+    const reason = [need.why, drivesLine(wt.drives)]
+      .filter((part) => part !== "")
+      .join(" ");
+    const whyOpen = wtShown[`${need.key}:why`] === true;
+    const quoteOpen = wtShown[`${need.key}:quote`] === true;
+    const locked = !canAct || busy;
+    const multi = wt.answerKind === "MULTI";
+    // The question's Other answer (11 November 2026): its words when chosen, null otherwise.
+    const other = wt.allowsOther ? otherText(pick) : null;
+    const draft = wtOther[need.key] ?? otherText(proposedPick(need)) ?? "";
+    const otherIssue = pickProblem(need, pick);
+    // Quiet until the person has typed or tried to save.
+    const otherError =
+      other !== null &&
+      otherIssue !== "" &&
+      (other !== "" || wtShown[`${need.key}:tried`] === true);
+    // Yes or No (product owner, 11 November 2026: "Feels cheap"): one pill-shaped track
+    // with two equal segments and a raised thumb that slides to the one chosen. Native
+    // radios underneath, so the arrow keys move between them. An untouched proposal keeps
+    // the proposal's look on the thumb, with a word beside it: never shown as confirmed.
+    const yesNoAt =
+      wt.answerKind === "YES_NO" && pick.length === 1
+        ? need.options.indexOf(pick[0] ?? "")
+        : -1;
+    const yesNo = (
+      <div className="ur-wt-seg-row">
+        <fieldset className={`ur-wt-seg${tone}`} aria-labelledby={`${id}-q`}>
+          <span
+            className={`ur-wt-thumb${yesNoAt < 0 ? " is-none" : ""}`}
+            data-at={yesNoAt < 0 ? undefined : yesNoAt}
+            aria-hidden="true"
+          />
+          {need.options.map((option) => {
+            const on = pick.includes(option);
+            return (
+              <label key={option} className={`ur-wt-chip${on ? " is-on" : ""}`}>
+                <input
+                  type="radio"
+                  name={id}
+                  value={option}
+                  checked={on}
+                  disabled={locked}
+                  onChange={() => setPick(need, [option])}
+                />
+                <UiIcon name={option === "No" ? "x" : "check"} size={14} />
+                <span>{option}</span>
+              </label>
+            );
+          })}
+        </fieldset>
+        {tone !== "" && yesNoAt >= 0 ? (
+          <span className="ur-wt-seg-tag">Proposed</span>
+        ) : null}
+      </div>
+    );
+    const control =
+      wt.answerKind === "YES_NO" ? (
+        yesNo
+      ) : wt.answerKind === "TEXT" ? (
+        <textarea
+          className="ur-wt-text"
+          rows={3}
+          maxLength={WALKTHROUGH_TEXT_MAX}
+          value={pick[0] ?? ""}
+          disabled={locked}
+          placeholder="Type the client's answer"
+          aria-labelledby={`${id}-q`}
+          onChange={(event) => setPick(need, [event.target.value])}
+        />
+      ) : (
+        <fieldset className={`ur-wt-chips${tone}`} aria-labelledby={`${id}-q`}>
+          {need.options.map((option) => {
+            const on = pick.includes(option);
+            return (
+              <label key={option} className={`ur-wt-chip${on ? " is-on" : ""}`}>
+                <input
+                  type={multi ? "checkbox" : "radio"}
+                  name={id}
+                  value={option}
+                  checked={on}
+                  disabled={locked}
+                  onChange={() =>
+                    setPick(
+                      need,
+                      multi
+                        ? on
+                          ? pick.filter((each) => each !== option)
+                          : [...pick, option]
+                        : [option],
+                    )
+                  }
+                />
+                {multi ? (
+                  <span className="ur-wt-box" aria-hidden="true">
+                    {on ? <UiIcon name="check" size={11} /> : null}
+                  </span>
+                ) : null}
+                <span>{option}</span>
+              </label>
+            );
+          })}
+          {wt.allowsOther ? (
+            <label
+              className={`ur-wt-chip is-other${other !== null ? " is-on" : ""}`}
+            >
+              <input
+                type={multi ? "checkbox" : "radio"}
+                name={id}
+                value="Other"
+                checked={other !== null}
+                disabled={locked}
+                aria-controls={other !== null ? `${id}-other` : undefined}
+                onChange={() =>
+                  setPick(
+                    need,
+                    withOther(
+                      wt.answerKind,
+                      pick,
+                      other !== null ? null : draft,
+                    ),
+                  )
+                }
+              />
+              {multi ? (
+                <span className="ur-wt-box" aria-hidden="true">
+                  {other !== null ? <UiIcon name="check" size={11} /> : null}
+                </span>
+              ) : null}
+              <span>Other</span>
+            </label>
+          ) : null}
+        </fieldset>
+      );
+    // The Other answer's words, right below the chips while Other is chosen.
+    const otherField =
+      other === null ? null : (
+        <div className="ur-wt-other">
+          <label className="ur-wt-other-label" htmlFor={`${id}-other`}>
+            Describe it
+          </label>
+          <input
+            id={`${id}-other`}
+            className="ur-other ur-wt-other-input"
+            type="text"
+            maxLength={OTHER_MAX}
+            value={other}
+            disabled={locked}
+            placeholder="How it works at this client"
+            aria-describedby={`${id}-other-hint`}
+            aria-invalid={otherError}
+            onChange={(event) => {
+              const words = event.target.value;
+              setWtOther((was) => ({ ...was, [need.key]: words }));
+              setPick(need, withOther(wt.answerKind, pick, words));
+            }}
+            onKeyDown={(event) => {
+              // Enter does not save the topic from here: it checks these words.
+              if (event.key === "Enter") {
+                event.preventDefault();
+                setWtShown((was) => ({ ...was, [`${need.key}:tried`]: true }));
+              }
+            }}
+          />
+          <p
+            className={`ur-wt-other-hint${otherError ? " is-error" : ""}`}
+            id={`${id}-other-hint`}
+            aria-live="polite"
+          >
+            {otherError ? otherIssue : OTHER_RULE}
+          </p>
+        </div>
+      );
+    return (
+      <li
+        key={need.key}
+        // A follow-up comes in with the step's own entry motion (.ur-step: 200 ms, off under
+        // reduced motion) when its parent's pick opens it; it leaves at once when it stops.
+        className={`ur-wt-item${wt.whenKey !== "" ? " ur-step" : ""}`}
+      >
+        <div className="ur-wt-head">
+          <p className="ur-wt-q" id={`${id}-q`}>
+            {need.question || need.label}
+          </p>
+          <span className="ur-wt-tags">
+            {!need.required ? <span className="ur-chip">Optional</span> : null}
+            {onFile ? <span className="ur-chip is-ok">On record</span> : null}
+            {reason !== "" ? (
+              <button
+                type="button"
+                className="ur-wt-info"
+                aria-expanded={whyOpen}
+                aria-controls={`${id}-why`}
+                aria-label="Why this is asked"
+                title="Why this is asked"
+                onClick={() => toggleShown(`${need.key}:why`)}
+              >
+                <UiIcon name="info" size={15} />
+              </button>
+            ) : null}
+          </span>
+        </div>
+        {reason !== "" ? (
+          <p className="ur-wt-why" id={`${id}-why`} hidden={!whyOpen}>
+            {reason}
+          </p>
+        ) : null}
+        {control}
+        {otherField}
+        {proposal || (!need.required && !onFile) ? (
+          <div className="ur-wt-foot">
+            {proposal && !mark.agent ? (
+              <span className="ai-mark is-rules">{mark.text}</span>
+            ) : proposal ? (
+              <span className="ai-mark">
+                <UiIcon name="sparkles" size={11} />
+                {mark.text}
+              </span>
+            ) : null}
+            {proposal && wt.quote !== "" ? (
+              <button
+                type="button"
+                className="cs-link"
+                aria-expanded={quoteOpen}
+                aria-controls={`${id}-quote`}
+                onClick={() => toggleShown(`${need.key}:quote`)}
+              >
+                {quoteOpen ? "Hide the source" : "Show the source"}
+              </button>
+            ) : null}
+            {!need.required && !onFile ? (
+              <button
+                type="button"
+                className="ur-skip ur-wt-na"
+                disabled={locked}
+                onClick={() => void notApplicable(need)}
+              >
+                {saving === need.key ? "Saving…" : "Mark not applicable"}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {proposal && wt.quote !== "" ? (
+          <blockquote
+            className="ur-wt-quote"
+            id={`${id}-quote`}
+            hidden={!quoteOpen}
+          >
+            {wt.quote}
+          </blockquote>
+        ) : null}
+      </li>
+    );
+  };
+
+  /** A walkthrough topic as one step: its open questions together, one save for them all. */
+  const topicStepView = (named: WalkthroughTopic) => {
+    const all = topicQuestions(review, named);
+    const asked = topicAsks(review, named, reopened);
+    // What the step shows now: a follow-up only while its parent's pick opens it.
+    const shown = topicShown(asked, wtPicks, review.needs);
+    const label = topicName(review, named);
+    const onFile = all.filter(
+      (need) =>
+        need.status === "CONFIRMED" &&
+        !reopened.includes(need.key) &&
+        followUpShown(need, asked, wtPicks, review.needs),
+    ).length;
+    const count = Object.keys(topicSave(asked, wtPicks, review.needs)).length;
+    const blocked = topicBlocked(asked, wtPicks, review.needs);
+    const blockedOn =
+      blocked === null
+        ? undefined
+        : shown.find((need) => need.key === blocked.key);
+    const done = topicDone(review, named);
+    const left = topicLeft(asked, wtPicks, review.needs);
+    const position = wtSteps.indexOf(topicStep(named)) + 1;
+    const mine = saving === topicStep(named);
+    return (
+      <form
+        className="ur-point"
+        autoComplete="off"
+        onSubmit={(event: FormEvent<HTMLFormElement>) => {
+          event.preventDefault();
+          void saveTopic(named, asked);
+        }}
+      >
+        <div className="ur-kicker">
+          <span className="ur-chip is-accent">Walkthrough</span>
+          {wtSteps.length > 1 && position > 0 ? (
+            <span className="ur-chip">
+              Topic {position} of {wtSteps.length}
+            </span>
+          ) : null}
+          {done && shown.length > 0 ? (
+            <span className="ur-chip is-ok">Required answers on record</span>
+          ) : null}
+        </div>
+        <h3 className="ur-q" id="ur-q">
+          {label}
+        </h3>
+        <p className="ur-hint" id="ur-wt-hint">
+          {topicHint(shown, label)}
+        </p>
+        {shown.length > 0 ? (
+          <ol className="ur-wt">{shown.map(walkthroughQuestion)}</ol>
+        ) : null}
+        {onFile > 0 && shown.length > 0 ? (
+          <p className="ur-wt-onfile">
+            {onFile} {onFile === 1 ? "answer" : "answers"} on this topic{" "}
+            {onFile === 1 ? "is" : "are"} on record.{" "}
+            <button
+              type="button"
+              className="cs-link"
+              onClick={() => {
+                setRecordOpen(true);
+                setDocOpen(true);
+              }}
+            >
+              See on record
+            </button>
+          </p>
+        ) : null}
+        {blocked !== null ? (
+          <p className="ur-wt-left" id="ur-wt-left">
+            Saving waits on the Other answer to “
+            {blockedOn?.question || blockedOn?.label}”: {blocked.problem}
+          </p>
+        ) : left > 0 && count === 0 ? (
+          <p className="ur-wt-left" id="ur-wt-left">
+            Answer the required {left === 1 ? "question" : "questions"} to
+            continue, or skip for now.
+          </p>
+        ) : null}
+        {foot(
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={
+              !canAct || busy || blocked !== null || (count === 0 && !done)
+            }
+            aria-describedby={
+              blocked !== null || (left > 0 && count === 0)
+                ? "ur-wt-left"
+                : undefined
+            }
+          >
+            {mine ? (
+              <span className="spinner small" aria-hidden="true" />
+            ) : null}
+            {mine ? "Saving…" : count === 0 ? "Continue" : "Save and continue"}
+            <UiIcon name="arrow" size={14} />
+          </button>,
+          !done,
+        )}
+      </form>
+    );
+  };
+
+  // What still holds the understanding back: a walkthrough topic with only optional
+  // questions left is not listed.
   const openSteps = plan
     .map((key, index) => ({ key, index }))
-    .filter((item) => stepOpen(review, interview, item.key));
+    .filter((item) => stepRequired(review, interview, item.key));
   const endStep = () =>
     status.done ? (
       <div className="ur-end">
@@ -1113,7 +1937,12 @@ export function UnderstandingReview({
               <UiIcon name="back" size={14} /> Back
             </button>
           ) : null}
-          {documentsHref !== null ? (
+          {nextAfterUnderstanding(review) === "attributes" &&
+          attributesHref !== null ? (
+            <a className="btn btn-primary" href={attributesHref}>
+              Finalize the attributes <UiIcon name="arrow" size={14} />
+            </a>
+          ) : documentsHref !== null ? (
             <a className="btn btn-primary" href={documentsHref}>
               Continue to D&amp;I evidence <UiIcon name="arrow" size={14} />
             </a>
@@ -1136,8 +1965,8 @@ export function UnderstandingReview({
                 <li key={item.key}>
                   <span>
                     {item.key === CARRIED
-                      ? "Last year's answers"
-                      : need?.question || need?.label || item.key}
+                      ? carriedCopy(interview, 0).step
+                      : stepLabel(item.key, need)}
                   </span>
                   <button
                     type="button"
@@ -1153,6 +1982,59 @@ export function UnderstandingReview({
         ) : null}
       </div>
     );
+
+  /** The quiet line on where the answers start from: a sentence while another system's
+   * answers are proposed, and the choice of system (a compact select, or a quiet link when
+   * there is only one). Choosing only reads the review again; nothing is written. */
+  const startBanner = (shown: NonNullable<typeof banner>) => {
+    const choose = shown.choose;
+    const starting = saving === STARTING;
+    return (
+      <div
+        className={`ur-start${shown.text === "" ? " is-off" : ""}`}
+        aria-busy={starting}
+      >
+        {shown.text !== "" ? (
+          <p className="ur-start-text">
+            <UiIcon name="server" size={14} />
+            <span>{shown.text}</span>
+          </p>
+        ) : null}
+        {choose.kind === "select" ? (
+          <label className="ur-start-pick">
+            <span>Start from:</span>
+            <select
+              value={startPending ?? choose.value}
+              disabled={busy}
+              onChange={(event) => void startFrom(event.target.value)}
+            >
+              {choose.options.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <button
+            type="button"
+            className="ur-skip ur-start-link"
+            disabled={busy}
+            onClick={() => void startFrom(choose.value)}
+          >
+            {choose.label}
+          </button>
+        )}
+        {starting ? (
+          <small className="ur-start-status" role="status">
+            {startPending === START_NONE
+              ? "Removing the proposals…"
+              : "Reading the answers…"}
+          </small>
+        ) : null}
+      </div>
+    );
+  };
 
   // The drawer around the review already names the step and its number.
   const eyebrow = AGENT_NAME;
@@ -1176,7 +2058,7 @@ export function UnderstandingReview({
           <p className="ur-lede">
             {status.done
               ? "Every point the evidence and the attributes rely on is on record."
-              : `Drafted from the RCM${groups.lastYear.length > 0 || interview.carried.length > 0 ? " and last year's workpaper" : ""}. Confirm it, so the D&I evidence can be requested and the attributes finalized.`}
+              : `${draftedFrom(groups, interview)}. Confirm it, so the D&I evidence can be requested and the attributes finalized.`}
           </p>
         </div>
         <div className="ur-head-tools">
@@ -1197,6 +2079,7 @@ export function UnderstandingReview({
             </button>
           ) : null}
         </div>
+        {banner !== null ? startBanner(banner) : null}
         {progress.total > 0 ? (
           <div className="ur-progress">
             <div className="ur-segments" aria-hidden="true">
@@ -1260,9 +2143,11 @@ export function UnderstandingReview({
           <div className="ur-step" key={step ?? "end"}>
             {step === CARRIED
               ? carriedStep()
-              : current !== null && current !== undefined
-                ? pointStep(current)
-                : endStep()}
+              : topic !== null
+                ? topicStepView(topic)
+                : current !== null && current !== undefined
+                  ? pointStep(current)
+                  : endStep()}
           </div>
         </section>
       </div>

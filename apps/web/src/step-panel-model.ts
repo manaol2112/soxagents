@@ -54,6 +54,11 @@ const ACTION: Record<StepKey, { title: string; label: string; why: string }> = {
     label: "Answer",
     why: "Each question has a proposed answer from the records; confirm or change it.",
   },
+  attributes: {
+    title: "Decide the attributes",
+    label: "Decide the attributes",
+    why: "The D&I evidence is requested against them, and each OE sample is tested against them. The standard's come approved; decide what the agent proposed from the understanding.",
+  },
   designevidence: {
     title: "Decide the D&I evidence",
     label: "Review evidence",
@@ -70,9 +75,9 @@ const ACTION: Record<StepKey, { title: string; label: string; why: string }> = {
     why: "A reviewer who did not prepare the design workpaper signs it. An effective sign-off clears OE.",
   },
   testdesign: {
-    title: "Decide the attributes and approve the test plan",
-    label: "Review the test design",
-    why: "Approved attributes become the testing criteria for OE.",
+    title: "Approve scope and sampling",
+    label: "Review scope and sampling",
+    why: "The phases, the sample and the periods OE is tested over. The D&I evidence does not wait for them.",
   },
   oeevidence: {
     title: "Decide the OE evidence",
@@ -194,7 +199,11 @@ function needOf(step: WorkflowStep, steps: readonly WorkflowStep[]): PanelNeed {
     kind: "act",
     title: ACTION[step.key].title,
     detail: ACTION[step.key].why,
-    action: { label: ACTION[step.key].label, anchor: "stp-work" },
+    // Scope & Sampling's own plan review holds its one primary action (Approve plan): the
+    // decision row only says what is needed, so the step never shows two (11 November 2026).
+    ...(step.key === "testdesign"
+      ? {}
+      : { action: { label: ACTION[step.key].label, anchor: "stp-work" } }),
   };
 }
 
@@ -246,10 +255,11 @@ export function panelFrame(
 export const PREPARED_TITLE: Record<StepKey, string> = {
   setup: "The control as recorded",
   understanding: "What is understood",
+  attributes: "The control's attributes",
   designevidence: "D&I evidence",
   designassessment: "The design assessment",
   designconclusion: "The D&I conclusion",
-  testdesign: "The test design",
+  testdesign: "Scope and sampling",
   oeevidence: "OE evidence",
   oetesting: "OE testing",
   conclusion: "The control's conclusion",
@@ -290,6 +300,15 @@ export function agentNote(
         : []),
     ];
   };
+  // Before the release nothing is requested, so nothing is accepted yet either.
+  const planned = (phases: readonly string[]) => {
+    const live = input.requirements.filter(
+      (item) => phases.includes(item.phase) && !GONE.includes(item.state),
+    ).length;
+    return live === 0
+      ? "No evidence items are planned yet."
+      : `${count(live, "evidence item")} planned, requested once released.`;
+  };
   const paper = (which: WorkflowInput["designPaper"], name: string) =>
     which === null
       ? `The ${name} is not started.`
@@ -320,8 +339,8 @@ export function agentNote(
       return input.designRelease?.step === "READY" ||
         input.designRelease?.step === "WAITING"
         ? {
-            did: "Planned the D&I evidence items from the control's understanding.",
-            found: evidence(["DESIGN"]),
+            did: "Planned the D&I evidence from the control's understanding and its attributes.",
+            found: [planned(["DESIGN"])],
           }
         : {
             did: "Drafted the D&I evidence requests and read each file that came back.",
@@ -354,11 +373,29 @@ export function agentNote(
         ],
       };
     }
-    case "testdesign":
+    case "attributes":
       return {
-        did: "Proposed the testing attributes, the phases and the sample from the understanding and the firm's methodology.",
+        did: "Started from the standard's attributes, proposed what the understanding changes, and tailored each one's pass/fail criteria to this control.",
         found: [
           `${count(input.attributes.approved, "attribute")} approved${input.attributes.proposed > 0 ? `, ${input.attributes.proposed} proposed to decide` : ""}.`,
+          ...((input.attributes.questions ?? 0) > 0
+            ? [
+                `${count(input.attributes.questions ?? 0, "question")} on them open.`,
+              ]
+            : []),
+          ...((input.attributes.untailored ?? 0) > 0
+            ? [
+                `${count(input.attributes.untailored ?? 0, "attribute")} without pass/fail criteria tailored to this control.`,
+              ]
+            : input.attributes.approved > 0
+              ? ["Each approved attribute has tailored criteria a person owns."]
+              : []),
+        ],
+      };
+    case "testdesign":
+      return {
+        did: "Proposed the phases, the sample and the periods from the understanding and the firm's methodology.",
+        found: [
           input.plan.approved
             ? "The test plan is approved."
             : input.plan.exists

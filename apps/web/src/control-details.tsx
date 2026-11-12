@@ -12,13 +12,18 @@ import {
 } from "react";
 import { AgentAvatar } from "./agent-avatar";
 import {
+  appliedTo,
+  copiedTo,
   type DetailField,
   type DetailRow,
   type Details,
+  initialOwnerForm,
   offerFor,
-  ownerText,
   parseDetails,
   recordWith,
+  savedNote,
+  saveProblem,
+  suggestionNote,
   toAsk,
 } from "./control-details-model";
 import { UiIcon } from "./ui-icon";
@@ -56,7 +61,9 @@ const WHY: Record<DetailRow["key"], string> = {
  * actual section where I can put my answers or what are the things that are needed"). A
  * detail recorded here applies to this system's control; the same control on other systems
  * is offered it where empty, chosen system by system (decided the same day). The layout is
- * Control Understanding's, so the two steps read alike.
+ * Control Understanding's, so the two steps read alike. A control with no owner opens on the
+ * owner most used on its system, as a suggestion, and a saved owner also goes to the other
+ * controls on the system that have none (product owner, 11 November 2026).
  */
 export function ControlDetails({
   ids,
@@ -92,6 +99,8 @@ export function ControlDetails({
   const [email, setEmail] = useState<string | null>(null);
   const [choice, setChoice] = useState<string | null>(null);
   const [copyTo, setCopyTo] = useState<Record<string, boolean>>({});
+  // The owner also for the other controls on this system without one: on unless unticked.
+  const [applyToSystem, setApplyToSystem] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -159,6 +168,7 @@ export function ControlDetails({
     setEmail(null);
     setChoice(null);
     setCopyTo({});
+    setApplyToSystem(true);
     setProblem(null);
   }
 
@@ -176,8 +186,11 @@ export function ControlDetails({
         .map((target) => target.controlId),
     };
     if (field === "owner") {
-      body.owner_name = (name ?? details.ownerName).trim();
-      body.owner_email = (email ?? details.ownerEmail).trim();
+      // The form as shown: what the person typed, else the recorded owner or the suggestion.
+      const form = initialOwnerForm(details);
+      body.owner_name = (name ?? form.name).trim();
+      body.owner_email = (email ?? form.email).trim();
+      body.apply_to_system = system.trim() !== "" && applyToSystem;
     } else {
       body[field] =
         choice ?? (field === "frequency" ? details.frequency : details.nature);
@@ -186,6 +199,11 @@ export function ControlDetails({
     setSaved(null);
     setProblem(null);
     let status = 0;
+    let detail: unknown = "";
+    let applied = 0;
+    // How many other systems the server actually copied to (it skips any that already had
+    // a value); null when an older server did not say.
+    let copiedActual: number | null = null;
     let found: Details | null = null;
     try {
       const answer = (await (
@@ -194,34 +212,28 @@ export function ControlDetails({
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
         })
-      ).json()) as { status?: unknown; body?: unknown };
+      ).json()) as { status?: unknown; detail?: unknown; body?: unknown };
       status = typeof answer.status === "number" ? answer.status : 0;
+      detail = answer.detail;
       found = status === 200 ? parseDetails(answer.body ?? null) : null;
+      applied = field === "owner" ? appliedTo(answer.body ?? null) : 0;
+      copiedActual = copiedTo(answer.body ?? null);
     } catch {
       status = 0;
     }
     setSaving(false);
     if (found === null) {
-      setProblem(
-        status === 409
-          ? "The control changed since it was read. It is read again; check the detail and save it once more."
-          : status === 403 || status === 404
-            ? "Only an engagement owner, admin or project manager can record a control's details."
-            : status === 422
-              ? "That detail cannot be recorded as given. Check it and try again."
-              : "The detail could not be saved. Try again.",
-      );
+      // A 200 whose answer cannot be read is not a confirmed save.
+      setProblem(saveProblem(status === 200 ? 500 : status, detail));
       if (status === 409) {
         void read();
       }
       return;
     }
     // Confirmed by the server: shown as recorded now.
-    const copied = (body.copy_to as string[]).length;
+    const copied = copiedActual ?? (body.copy_to as string[]).length;
     setDetails(found);
-    setSaved(
-      `${field === "owner" ? "Owner" : field === "frequency" ? "Frequency" : "Nature"} recorded on ${system || "this system"}${copied > 0 ? ` and ${copied} other ${copied === 1 ? "system" : "systems"} where it was empty` : ""}.`,
-    );
+    setSaved(savedNote(field, system, copied, applied));
     reset();
     if (changing !== null) {
       setChanging(null);
@@ -382,8 +394,15 @@ export function ControlDetails({
     }
     const field = each.key as DetailField;
     if (field === "owner") {
-      const who = name ?? details.ownerName;
-      const mail = email ?? details.ownerEmail;
+      const form = initialOwnerForm(details);
+      const who = name ?? form.name;
+      const mail = email ?? form.email;
+      // Still the suggestion while the person has not typed over it: shown as one, never as
+      // recorded, until the server confirms the save.
+      const suggestion =
+        form.suggestion !== null && name === null && email === null
+          ? form.suggestion
+          : null;
       const valid =
         (who.trim() !== "" || mail.trim() !== "") &&
         (mail.trim() === "" || EMAIL.test(mail.trim()));
@@ -404,6 +423,17 @@ export function ControlDetails({
           <p className="ur-hint">
             The person who performs or answers for the control at the client.
           </p>
+          {suggestion !== null ? (
+            <p className="cd-suggest" id="cd-suggest">
+              <span className="ai-mark">
+                <UiIcon name="sparkles" size={11} /> Suggested
+              </span>
+              <span>
+                {suggestionNote(suggestion, system)}. Use this owner, or type
+                someone else.
+              </span>
+            </p>
+          ) : null}
           <div className="cd-fields">
             <label className="cd-field">
               <span>Name</span>
@@ -412,8 +442,15 @@ export function ControlDetails({
                 maxLength={200}
                 value={who}
                 disabled={busy}
+                className={suggestion !== null ? "is-suggested" : undefined}
+                aria-describedby={
+                  suggestion !== null ? "cd-suggest" : undefined
+                }
                 placeholder="The control owner's name"
-                onChange={(event) => setName(event.target.value)}
+                onChange={(event) => {
+                  setName(event.target.value);
+                  setEmail((was) => was ?? mail);
+                }}
               />
             </label>
             <label className="cd-field">
@@ -423,12 +460,36 @@ export function ControlDetails({
                 maxLength={200}
                 value={mail}
                 disabled={busy}
+                className={suggestion !== null ? "is-suggested" : undefined}
+                aria-describedby={
+                  suggestion !== null ? "cd-suggest" : undefined
+                }
                 placeholder="name@client.com"
                 aria-invalid={mail.trim() !== "" && !EMAIL.test(mail.trim())}
-                onChange={(event) => setEmail(event.target.value)}
+                onChange={(event) => {
+                  setEmail(event.target.value);
+                  setName((was) => was ?? who);
+                }}
               />
             </label>
           </div>
+          {system.trim() !== "" ? (
+            <label className="ur-systems cd-apply" htmlFor="cd-apply">
+              <input
+                type="checkbox"
+                id="cd-apply"
+                checked={applyToSystem}
+                disabled={busy}
+                onChange={(event) => setApplyToSystem(event.target.checked)}
+              />
+              <span>
+                <strong>
+                  Also use for other controls on {system} without an owner
+                </strong>
+                <span>Owners already recorded are not changed.</span>
+              </span>
+            </label>
+          ) : null}
           {offer("owner")}
           {why}
           {foot(
@@ -440,7 +501,11 @@ export function ControlDetails({
               {saving ? (
                 <span className="spinner small" aria-hidden="true" />
               ) : null}
-              {saving ? "Saving…" : "Save & continue"}
+              {saving
+                ? "Saving…"
+                : suggestion !== null
+                  ? "Use this owner"
+                  : "Save & continue"}
               <UiIcon name="arrow" size={14} />
             </button>,
             each.missing,

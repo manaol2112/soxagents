@@ -799,6 +799,97 @@
   padding-left: 1.1rem;
 }
 
+/* Scope & Sampling inside its step panel (product owner, 11 November 2026, approved
+   preview): the frame gives the title, status and decision, so the plan's content sits
+   flat: its figures as one bordered strip divided by hairlines, and what else holds
+   evidence gathering under a section title as one bordered list. */
+.cs-embedded {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.cs-embedded .cs-plan-facts {
+  gap: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.cs-embedded .cs-plan-facts > div {
+  padding: 0.6rem 0.9rem;
+  background: none;
+  border-radius: 0;
+}
+
+.cs-embedded .cs-plan-facts > div + div {
+  border-left: 1px solid var(--border-subtle);
+}
+
+.cs-embedded .cs-plan-facts dt {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.cs-embedded .cs-plan-facts dd {
+  font-size: var(--fs-lg);
+}
+
+.cs-section-title {
+  margin: 0 0 0.5rem;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.cs-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+
+.cs-list > li {
+  padding: 0.6rem 0.9rem;
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.cs-list > li + li {
+  border-top: 1px solid var(--border-subtle);
+}
+
+@media (max-width: 900px) {
+  /* The figures as a list, one to a line, where four across would crowd. */
+  .cs-embedded .cs-plan-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cs-embedded .cs-plan-facts > div {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .cs-embedded .cs-plan-facts > div + div {
+    border-top: 1px solid var(--border-subtle);
+    border-left: 0;
+  }
+
+  .cs-embedded .cs-plan-facts dd {
+    margin: 0;
+  }
+}
+
 /* Ready for evidence. */
 .cs-ready {
   justify-items: start;
@@ -2027,6 +2118,81 @@
   white-space: nowrap;
 }
 
+/* Where the answers start from (11 November 2026): a quiet line across the header while
+   another system's answers are proposed, with the choice of system beside it. */
+.ur-start {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 6px 14px;
+  min-width: 0;
+  padding: 8px 12px;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  font-size: var(--fs-sm);
+}
+
+.ur-start.is-off {
+  padding: 0;
+  background: none;
+  border: 0;
+}
+
+.ur-start[aria-busy="true"] {
+  opacity: 0.75;
+}
+
+.ur-start-text {
+  display: flex;
+  flex: 1 1 280px;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  line-height: 1.45;
+}
+
+.ur-start-text svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--text-tertiary);
+}
+
+.ur-start-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.ur-start-pick select {
+  max-width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-sm);
+  font: inherit;
+}
+
+.ur-start-pick select:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.ur-start-link {
+  transition: color 120ms ease;
+}
+
+.ur-start-status {
+  color: var(--text-tertiary);
+}
+
 /* The two panes */
 .ur-body {
   display: grid;
@@ -2123,6 +2289,55 @@
   background: var(--accent-soft);
   box-shadow: inset 0 -2px 0 var(--accent);
   text-decoration: none;
+}
+
+/* The walkthrough as answered, under the statement (11 November 2026): one short paragraph
+   per topic in the server's order, led by a quiet topic label; each answer is a slot that
+   opens its topic to change. While a save is read again it dims and says so. */
+.ur-narrative {
+  display: grid;
+  gap: 12px;
+  margin-top: -4px;
+}
+
+.ur-narrative-topic {
+  display: grid;
+  gap: 2px;
+}
+
+.ur-narrative-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ur-narrative-label small {
+  margin-left: auto;
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.ur-narrative-text {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 15.5px;
+  line-height: 1.7;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+  transition: opacity 150ms ease;
+}
+
+.ur-narrative.is-updating .ur-narrative-text {
+  opacity: 0.7;
 }
 
 /* What the understanding is ready for: the gates' own verdicts. */
@@ -2919,6 +3134,430 @@
   overflow-wrap: anywhere;
 }
 
+/* The walkthrough (11 November 2026): a topic's questions together, each with the control
+   for its kind. A proposed answer is selected in the agents' colours, dashed, until the
+   person touches it or saves: agent output never reads as a decision. */
+.ur-wt {
+  display: grid;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+}
+
+.ur-wt-item {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 16px 18px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ur-wt-item:first-child {
+  border-top: 0;
+}
+
+.ur-wt-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ur-wt-q {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ur-wt-tags {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Reset from the global button: a quiet round icon button. */
+.ur-wt-info {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-tertiary);
+  background: none;
+  border: 0;
+  border-radius: 50%;
+  box-shadow: none;
+  transition:
+    color 120ms ease,
+    background 120ms ease;
+}
+
+.ur-wt-info:hover:not(:disabled),
+.ur-wt-info[aria-expanded="true"] {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border: 0;
+}
+
+.ur-wt-why {
+  max-width: 62ch;
+  margin: -4px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+  animation: ur-in 180ms ease-out;
+}
+
+.ur-wt-why[hidden],
+.ur-wt-quote[hidden] {
+  display: none;
+}
+
+.ur-wt-chips,
+.ur-wt-seg {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.ur-wt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ur-wt-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-height: 34px;
+  padding: 6px 14px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--fs-base);
+  font-weight: 500;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.ur-wt-chip:hover {
+  border-color: var(--accent-border);
+}
+
+.ur-wt-chip input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.ur-wt-chip input:disabled {
+  cursor: default;
+}
+
+.ur-wt-chip:has(input:focus-visible) {
+  box-shadow: var(--ring);
+}
+
+.ur-wt-chip.is-on {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.ur-wt-box {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  color: var(--text-on-accent);
+  border: 1.5px solid var(--border-control);
+  border-radius: 4px;
+}
+
+.ur-wt-chip.is-on .ur-wt-box {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Yes or No (product owner, 11 November 2026: "Feels cheap"): one pill-shaped track holding
+   two equal segments, the one chosen a raised thumb that slides between them. Native radios
+   underneath: the arrow keys move, and the focus ring sits on the thumb. */
+.ur-wt-seg-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  justify-self: start;
+  min-width: 0;
+}
+
+.ur-wt-seg {
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(84px, 1fr));
+  min-width: 180px;
+  padding: 3px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+}
+
+.ur-wt-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  box-shadow: var(--shadow-xs);
+  pointer-events: none;
+  transition:
+    transform 150ms ease-out,
+    opacity 150ms ease-out,
+    background 150ms ease-out,
+    border-color 150ms ease-out;
+}
+
+.ur-wt-thumb[data-at="1"] {
+  transform: translateX(100%);
+}
+
+.ur-wt-thumb.is-none {
+  opacity: 0;
+}
+
+.ur-wt-seg .ur-wt-chip {
+  z-index: 1;
+  justify-content: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 14px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  transition:
+    color 120ms ease,
+    background 120ms ease;
+}
+
+.ur-wt-seg .ur-wt-chip svg {
+  flex: none;
+  opacity: 0.7;
+}
+
+.ur-wt-seg .ur-wt-chip:not(.is-on):hover {
+  color: var(--text);
+  background: var(--surface-hover);
+  border: 0;
+}
+
+.ur-wt-seg .ur-wt-chip.is-on {
+  color: var(--text-strong);
+  background: transparent;
+  border: 0;
+}
+
+.ur-wt-seg .ur-wt-chip.is-on svg {
+  opacity: 1;
+}
+
+/* Keyboard focus: on the thumb when the focused segment is chosen, else on the segment. */
+.ur-wt-seg .ur-wt-chip:has(input:focus-visible) {
+  box-shadow: none;
+}
+
+.ur-wt-seg .ur-wt-chip:has(input:focus-visible:not(:checked)) {
+  box-shadow: var(--ring);
+}
+
+.ur-wt-seg:has(input:checked:focus-visible) .ur-wt-thumb {
+  box-shadow: var(--ring);
+}
+
+/* An untouched proposal on the thumb: the agents' tint, dashed, with a word beside it. */
+.ur-wt-seg.is-proposed .ur-wt-thumb {
+  background: var(--ai-soft);
+  border: 1px dashed var(--ai);
+  box-shadow: none;
+}
+
+.ur-wt-seg.is-proposed .ur-wt-chip.is-on {
+  color: var(--ai);
+}
+
+.ur-wt-seg-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  color: var(--ai);
+  background: var(--ai-soft);
+  border-radius: 999px;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Locked: muted, and nothing reacts. */
+.ur-wt-seg:has(input:disabled) {
+  opacity: 0.6;
+}
+
+.ur-wt-seg:has(input:disabled) .ur-wt-chip:not(.is-on):hover {
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+/* A proposal still untouched: the agents' colours, dashed. */
+.ur-wt-chips.is-proposed .ur-wt-chip.is-on {
+  color: var(--ai);
+  background: var(--ai-soft);
+  border-color: var(--ai);
+  border-style: dashed;
+}
+
+.ur-wt-chips.is-proposed .ur-wt-chip.is-on .ur-wt-box {
+  background: var(--ai);
+  border-color: var(--ai);
+}
+
+.ur-wt-text {
+  width: 100%;
+  min-height: 76px;
+  padding: 10px 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1.5px solid var(--border-control);
+  border-radius: var(--radius-lg);
+  font: inherit;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.ur-wt-text:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+/* "Other" (11 November 2026): the person's own words, right below the chips while Other is
+   chosen. The rule reads as a quiet hint until they have typed or tried to save. */
+.ur-wt-other {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  max-width: 62ch;
+  animation: ur-in 180ms ease-out;
+}
+
+.ur-wt-other-label {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.ur-wt-other-input {
+  height: 40px;
+  border-radius: var(--radius-lg);
+}
+
+.ur-wt-other-input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.ur-wt-other-hint {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
+.ur-wt-other-hint.is-error {
+  color: var(--danger);
+}
+
+.ur-wt-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  min-width: 0;
+  font-size: var(--fs-sm);
+}
+
+.ur-wt-na {
+  margin-left: auto;
+}
+
+.ur-wt-quote {
+  margin: 0;
+  padding-left: 10px;
+  color: var(--text-tertiary);
+  border-left: 2px solid var(--ai-border);
+  font-family: var(--font-display);
+  font-size: var(--fs-base);
+  font-style: italic;
+  overflow-wrap: anywhere;
+  animation: ur-in 180ms ease-out;
+}
+
+.ur-wt-onfile,
+.ur-wt-left {
+  margin: -6px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+}
+
+/* On record: the walkthrough's answers under their topic. */
+.ur-record-topic {
+  display: grid;
+  padding-top: 10px;
+}
+
+.ur-record-topic h4 {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ur-record .ur-record-topic ul {
+  margin-top: 4px;
+}
+
 /* A step whose work carries its own header. */
 .stp-bare {
   min-width: 0;
@@ -2929,9 +3568,24 @@
     animation: none;
   }
 
+  .ur-wt-why,
+  .ur-wt-quote,
+  .ur-wt-other {
+    animation: none;
+  }
+
+  .ur-wt-thumb,
+  .ur-wt-seg .ur-wt-chip,
+  .ur-start-link {
+    transition: none;
+  }
+
   .ur-segments span,
   .ur-slot,
+  .ur-narrative-text,
   .ur-option,
+  .ur-wt-chip,
+  .ur-wt-info,
   .ur-systems.is-many li label,
   .ur-record > summary svg,
   .ur-fold svg {
@@ -3023,12 +3677,24 @@
     font-size: 16px;
   }
 
+  .ur-narrative-text {
+    font-size: 14.5px;
+  }
+
   .ur-ask {
     padding: 20px 18px 0;
   }
 
   .ur-options {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ur-wt-item {
+    padding: 14px;
+  }
+
+  .ur-wt-na {
+    margin-left: 0;
   }
 
   .ur-q {
@@ -3168,6 +3834,55 @@
 
 .cd-offer {
   padding: 12px 14px;
+}
+
+/* The owner suggested from the other controls on the system (11 November 2026): marked as a
+   proposal in the agent's colours, never as recorded, until the server confirms the save. */
+.cd-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--text);
+  background: var(--ai-soft);
+  border: 1px solid var(--ai-border);
+  border-radius: var(--radius-lg);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  animation: cd-suggest-in 200ms ease-out;
+}
+
+@keyframes cd-suggest-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.cd-field input.is-suggested {
+  background: var(--ai-soft);
+}
+
+.cd-field input {
+  transition: background-color 150ms ease;
+}
+
+.cd-apply {
+  padding: 12px 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cd-suggest {
+    animation: none;
+  }
+
+  .cd-field input {
+    transition: none;
+  }
 }
 
 .cd-readonly {

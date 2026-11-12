@@ -109,9 +109,148 @@ export type Attribute = {
   replacesId: string | null;
   decidedBy: string | null;
   version: number;
-  /** How the attribute is tested, for a library version 3 attribute. */
+  /** How the attribute is tested, for a library version 3 attribute: the standard's
+   * requirement the tailored criteria must meet. */
   definition: AttributeDefinition | null;
+  /** The criteria tailored to this control (11 November 2026), what the testers judge
+   * evidence against. */
+  criteria: AttributeCriteria;
 };
+
+/** An attribute's criteria as tailored to the control: who stated them (a person, the
+ * planner agent, or the demo), who accepted the agent's, and whether a person owns them
+ * (control_attributes.CRITERIA_OWNED_SQL). */
+export type AttributeCriteria = {
+  objective: string;
+  condition: string;
+  passCriteria: string;
+  failCriteria: string;
+  judgmentRequired: boolean | null;
+  automatable: boolean | null;
+  phases: string[];
+  origin: "PERSON" | "AGENT" | "SEEDED" | null;
+  acceptedBy: string;
+  acceptedAt: string;
+  owned: boolean;
+};
+
+export type CriteriaState = "OWNED" | "TO_ACCEPT" | "MISSING";
+
+/** Where an approved attribute's criteria stand: owned by a person; tailored by the agent
+ * (or prepared with the demo) for a person to accept; or not tailored yet. */
+export function criteriaState(criteria: AttributeCriteria): CriteriaState {
+  if (criteria.owned) {
+    return "OWNED";
+  }
+  const stated =
+    criteria.judgmentRequired === true ||
+    (criteria.condition !== "" &&
+      criteria.passCriteria !== "" &&
+      criteria.failCriteria !== "");
+  return stated && (criteria.origin === "AGENT" || criteria.origin === "SEEDED")
+    ? "TO_ACCEPT"
+    : "MISSING";
+}
+
+/** The approved attributes whose criteria a person can accept as they read. */
+export function criteriaToAccept(context: {
+  approved: Attribute[];
+}): Attribute[] {
+  return context.approved.filter(
+    (item) => criteriaState(item.criteria) === "TO_ACCEPT",
+  );
+}
+
+/** How many approved attributes have no criteria a person owns yet. */
+export function untailored(context: { approved: Attribute[] }): number {
+  return context.approved.filter((item) => !item.criteria.owned).length;
+}
+
+/** Where a row of the Attributes step stands (product owner, 11 November 2026): an agent
+ * proposal to decide, tailored criteria to accept, criteria still to write, or accepted. */
+export type AttributeRowState =
+  | "PROPOSED"
+  | "TO_ACCEPT"
+  | "MISSING"
+  | "ACCEPTED";
+
+export function attributeRowState(
+  item: Pick<Attribute, "status" | "criteria">,
+): AttributeRowState {
+  if (item.status === "PROPOSED") {
+    return "PROPOSED";
+  }
+  const state = criteriaState(item.criteria);
+  return state === "OWNED" ? "ACCEPTED" : state;
+}
+
+/** Each row's chip: its state in words, and the tone that repeats it. Agent output that no
+ * person has decided is violet; it is never styled as accepted. */
+export const ATTRIBUTE_ROW_CHIPS: Record<
+  AttributeRowState,
+  { label: string; tone: "ai" | "warning" | "success" }
+> = {
+  PROPOSED: { label: "Proposed", tone: "ai" },
+  TO_ACCEPT: { label: "To accept", tone: "ai" },
+  MISSING: { label: "Needs criteria", tone: "warning" },
+  ACCEPTED: { label: "Accepted", tone: "success" },
+};
+
+/** The row that starts open: the first, in the list's order, that waits on a person. */
+export function firstToDecide(
+  items: readonly Pick<Attribute, "id" | "status" | "criteria">[],
+): string | null {
+  return (
+    items.find((item) => attributeRowState(item) !== "ACCEPTED")?.id ?? null
+  );
+}
+
+/** Which rows are open: the ones the person chose, once they have opened or closed one;
+ * until then the first that waits on a person, so it follows the list as decisions land. */
+export function openRows(
+  chosen: ReadonlySet<string> | null,
+  items: readonly Pick<Attribute, "id" | "status" | "criteria">[],
+): ReadonlySet<string> {
+  if (chosen !== null) {
+    return chosen;
+  }
+  const first = firstToDecide(items);
+  return new Set(first !== null ? [first] : []);
+}
+
+/** Where the wording came from, as a row's small line. */
+const SOURCE_LINES: Record<Attribute["sourceKind"], string> = {
+  LIBRARY: "Library standard",
+  RCM: "Client RCM",
+  MANUAL: "Written by the team",
+  AGENT: "Drafted by the agent",
+  DOCUMENT: "Supporting document",
+};
+
+/** A row's source line: where the wording came from, then who tailored the criteria (an
+ * approved attribute) or whether a proposal is inferred rather than stated in a source. */
+export function attributeSourceLine(
+  item: Pick<
+    Attribute,
+    "status" | "sourceKind" | "sourceTitle" | "basis" | "criteria"
+  >,
+): string {
+  const from =
+    item.sourceKind === "DOCUMENT" && item.sourceTitle.trim() !== ""
+      ? `From ${item.sourceTitle.trim()}`
+      : SOURCE_LINES[item.sourceKind];
+  if (item.status === "PROPOSED") {
+    return item.basis === "INFERRED" ? `${from} · inferred` : from;
+  }
+  const origin = item.criteria.origin;
+  if (origin === "AGENT" || origin === "SEEDED") {
+    return `${from} · tailored by the agent`;
+  }
+  if (origin === "PERSON" && item.sourceKind !== "MANUAL") {
+    return `${from} · criteria by the team`;
+  }
+  return from;
+}
 
 export type Confidence = "HIGH" | "MODERATE" | "LOW" | "NOT_ESTABLISHED";
 export const CONFIDENCE_LABELS: Record<Confidence, string> = {
@@ -1161,6 +1300,30 @@ function parseAttribute(item: Raw): Attribute {
     decidedBy: typeof item.decided_by === "string" ? item.decided_by : null,
     version: num(item.version),
     definition: parseDefinition(item.definition),
+    criteria: {
+      objective: str(item.objective),
+      condition: str(item.condition),
+      passCriteria: str(item.pass_criteria),
+      failCriteria: str(item.fail_criteria),
+      judgmentRequired:
+        typeof item.judgment_required === "boolean"
+          ? item.judgment_required
+          : null,
+      automatable:
+        typeof item.automatable === "boolean" ? item.automatable : null,
+      phases: Array.isArray(item.phases)
+        ? item.phases.filter((each): each is string => typeof each === "string")
+        : [],
+      origin:
+        item.criteria_origin === "PERSON" ||
+        item.criteria_origin === "AGENT" ||
+        item.criteria_origin === "SEEDED"
+          ? item.criteria_origin
+          : null,
+      acceptedBy: str(item.criteria_accepted_by),
+      acceptedAt: str(item.criteria_accepted_at),
+      owned: item.criteria_owned === true,
+    },
   };
 }
 

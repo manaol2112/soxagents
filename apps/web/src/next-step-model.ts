@@ -9,7 +9,6 @@
 
 import {
   KIND_LABELS,
-  STEPS,
   type StepKey,
   type WorkflowInput,
   type WorkflowStep,
@@ -50,7 +49,7 @@ export type About = { ref: string; system: string };
 
 const STAGES: ReadonlyArray<{ label: string; keys: readonly StepKey[] }> = [
   { label: "Set up", keys: ["setup"] },
-  { label: "Understand", keys: ["understanding"] },
+  { label: "Understand", keys: ["understanding", "attributes"] },
   {
     label: "D&I evidence",
     keys: ["designevidence", "designassessment", "designconclusion"],
@@ -153,27 +152,21 @@ export function nodeFlags(next: NextStep): Partial<Record<StepKey, string>> {
     : {};
 }
 
-/** The eleven steps as five plain stages, with where the control is. */
+/** The eleven steps as five plain stages, with where the control is: every stage that holds
+ * a next step (the D&I and OE branches run side by side, so both can be current). */
 export function journey(steps: readonly WorkflowStep[]): Stage[] {
   const byKey = new Map(steps.map((step) => [step.key, step]));
   const of = (keys: readonly StepKey[]) =>
     keys
       .map((key) => byKey.get(key))
       .filter((step): step is WorkflowStep => step !== undefined);
-  const first = STEPS.findIndex((meta) => byKey.get(meta.key)?.next === true);
-  const firstKey = first < 0 ? null : STEPS[first]?.key;
-  const here = STAGES.findIndex(
-    (stage) =>
-      firstKey !== null &&
-      firstKey !== undefined &&
-      stage.keys.includes(firstKey),
-  );
-  return STAGES.map((stage, at) => {
+  return STAGES.map((stage) => {
     const all = of(stage.keys);
+    const here = all.some((step) => step.next);
     const done = all.length > 0 && all.every(settled);
     return {
       label: stage.label,
-      state: at === here ? "here" : done ? "done" : "todo",
+      state: here ? "here" : done ? "done" : "todo",
     };
   });
 }

@@ -1,23 +1,19 @@
-/* The control's workflow (control-workflow.tsx, control-workflow-canvas.tsx): 11 steps in
-   four stage bands, the selected step's summary, the list on a phone, and the wide panel a step
-   opens. Shared tokens, so both themes follow; each kind of step has its own colour.
-   Motion: hover 120 ms, panel 220 ms, none under reduced motion. */
+/* The control's workflow (control-workflow.tsx, control-workflow-canvas.tsx): 12 steps in
+   four stage lanes, the list on a phone, and the wide panel a step opens. Shared tokens, so
+   the light, dark and glass workspaces all follow; each kind of step has its own colour, on
+   its icon. Sized to be read (product owner, 11 November 2026): the canvas opens at 0.9 or
+   more, so a node's title is at least 14.4 px on screen and its other lines 12.15 px.
+   Motion: hover 120 ms, fades 150 ms, pans 200-240 ms, panel 220 ms; none under reduced
+   motion. */
 
 .wf {
   --wf-source: var(--accent-text);
-  --wf-agent: var(--success);
+  --wf-agent: var(--ai);
   --wf-gate: var(--warning);
-  --wf-output: #6d28d9;
-  --wf-output-soft: #f3efff;
+  --wf-output: var(--success);
   display: grid;
   gap: 0.75rem;
   margin-top: 0.5rem;
-}
-
-:root[data-theme="dark"] .wf,
-:root[data-theme="dark"] .wf-panel {
-  --wf-output: #c4b5fd;
-  --wf-output-soft: rgb(167 139 250 / 14%);
 }
 
 .wf-head {
@@ -29,7 +25,7 @@
 
 .wf-head h2 {
   margin: 0;
-  font-size: var(--fs-md, 15px);
+  font-size: var(--fs-lg, 16px);
 }
 
 .wf-head p {
@@ -63,10 +59,11 @@
   margin-left: auto;
 }
 
+/* The legend: the same icon and colour as on each step. */
 .wf-kinds {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.3rem 0.9rem;
+  gap: 0.3rem 1rem;
   margin: 0;
   padding: 0;
   color: var(--text-secondary);
@@ -80,39 +77,37 @@
   gap: 0.35rem;
 }
 
-.wf-kinds li span {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
+.wf-kinds li svg,
+.wf-badge svg {
+  flex: none;
+  color: var(--wf-kind, var(--text-tertiary));
 }
 
-.wf-kinds .kind-source span { background: var(--wf-source); }
-.wf-kinds .kind-agent span { background: var(--wf-agent); }
-.wf-kinds .kind-gate span { background: var(--wf-gate); }
-.wf-kinds .kind-output span { background: var(--wf-output); }
+.wf .kind-source { --wf-kind: var(--wf-source); }
+.wf .kind-agent { --wf-kind: var(--wf-agent); }
+.wf .kind-gate { --wf-kind: var(--wf-gate); }
+.wf .kind-output { --wf-kind: var(--wf-output); }
 
-/* The canvas: a drafting grid on a softly lit surface, like a process-modelling tool. The
-   light falls from the top left, where the workflow starts, and fades towards the conclusion. */
+/* The canvas: a quiet dot grid on a sunken well, as high as the workflow at the zoom it opens
+   at (the height is set by control-workflow.tsx from workflowFrame). */
 .wf-canvas {
-  --wf-grid-minor: color-mix(in srgb, var(--border) 32%, transparent);
-  --wf-grid-major: color-mix(in srgb, var(--border) 75%, transparent);
-  --wf-glow: color-mix(in srgb, var(--accent) 8%, transparent);
+  --wf-canvas-bg: var(--surface-muted);
+  /* 3:1 or more on the well in both themes (WCAG 1.4.11). */
+  --wf-line: color-mix(in srgb, var(--text-tertiary) 70%, var(--wf-canvas-bg));
+  --wf-line-strong: var(--text-tertiary);
+  --wf-dots: color-mix(in srgb, var(--text-tertiary) 24%, transparent);
   position: relative;
-  height: 620px;
+  min-height: 320px;
   overflow: hidden;
-  background:
-    radial-gradient(70% 60% at 0% 0%, var(--wf-glow), transparent 70%),
-    radial-gradient(60% 55% at 100% 100%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 70%),
-    var(--surface-muted);
+  background: var(--wf-canvas-bg);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-xl, 14px);
   box-shadow: var(--shadow-xs);
 }
 
 :root[data-theme="dark"] .wf-canvas {
-  --wf-grid-minor: color-mix(in srgb, var(--border) 30%, transparent);
-  --wf-grid-major: color-mix(in srgb, var(--border) 65%, transparent);
-  --wf-glow: color-mix(in srgb, var(--accent) 14%, transparent);
+  --wf-canvas-bg: var(--surface-sunken);
+  --wf-dots: color-mix(in srgb, var(--text-tertiary) 20%, transparent);
 }
 
 .wf-loading {
@@ -124,31 +119,75 @@
   color: var(--text-secondary);
 }
 
-/* The grid fades out towards the canvas's edge, so the frame stays quiet. */
 .wf .wf-grid {
   --xy-background-color: transparent;
-  mask-image: radial-gradient(ellipse 85% 85% at 50% 50%, #000 40%, transparent 100%);
+  --xy-background-pattern-color: var(--wf-dots);
 }
 
-.wf .wf-grid-minor {
-  --xy-background-pattern-color: var(--wf-grid-minor);
+/* The workflow pans by dragging the canvas. */
+.wf .react-flow__pane {
+  cursor: grab;
 }
 
-.wf .wf-grid-major {
-  --xy-background-pattern-color: var(--wf-grid-major);
+.wf .react-flow__pane.dragging {
+  cursor: grabbing;
 }
 
-/* Lanes */
+/* The arrowheads' definitions take no room. */
+.wf-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
 
+/* A stage's lane: a soft tint behind its steps, its name in a quiet chip. */
+.wf-band {
+  --wf-band: var(--text-tertiary);
+  position: relative;
+  background: color-mix(in srgb, var(--wf-band) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--wf-band) 16%, transparent);
+  border-radius: 16px;
+}
+
+.wf-band.band-prepare { --wf-band: var(--text-tertiary); }
+.wf-band.band-design { --wf-band: var(--accent); }
+.wf-band.band-operating { --wf-band: var(--ai); }
+.wf-band.band-conclude { --wf-band: var(--success); }
+
+.wf-band-label,
 .wf-lane {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  height: 22px;
   margin: 0;
-  color: var(--text-tertiary);
-  font-size: var(--fs-xs, 11px);
-  font-weight: 700;
-  letter-spacing: 0.05em;
+  padding: 0 9px 0 8px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   white-space: nowrap;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 999px;
+}
+
+.wf-band-label {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+}
+
+.wf-band-label::before {
+  width: 6px;
+  height: 6px;
+  background: var(--wf-band);
+  border-radius: 999px;
+  content: "";
 }
 
 /* Steps: buttons drawn as cards, undoing the platform's filled button. */
@@ -160,8 +199,7 @@
   align-content: start;
   align-items: start;
   justify-items: stretch;
-  gap: 0.15rem;
-  padding: 0.6rem 0.75rem 0.55rem;
+  padding: 12px 14px;
   color: var(--text);
   font-family: inherit;
   font-size: var(--fs-base);
@@ -171,10 +209,11 @@
   white-space: normal;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   box-shadow: var(--shadow-sm);
   cursor: pointer;
   transition:
+    transform 120ms ease,
     border-color 120ms ease,
     box-shadow 120ms ease;
 }
@@ -182,111 +221,289 @@
 .wf button.wf-node:hover {
   color: var(--text);
   background: var(--surface);
-  border-color: var(--border-strong, var(--text-tertiary));
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-1px);
 }
 
+/* A step to do next: the accent ring and the card's words in a flag. */
 .wf button.wf-node.is-next {
-  border-color: var(--accent-border, var(--accent));
-  box-shadow:
-    0 0 0 3px var(--accent-soft),
-    var(--shadow-sm);
-}
-
-.wf button.wf-node.is-selected {
   border-color: var(--accent);
   box-shadow:
-    0 0 0 3px var(--accent-soft),
+    0 0 0 4px var(--accent-soft),
     var(--shadow-sm);
 }
 
-.wf-kind {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  min-width: 0;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  white-space: nowrap;
+/* The step whose panel is open. */
+.wf button.wf-node.is-selected {
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--accent),
+    0 0 0 5px var(--accent-soft),
+    var(--shadow-lg);
 }
 
-.kind-source .wf-kind { color: var(--wf-source); }
-.kind-agent .wf-kind { color: var(--wf-agent); }
-.kind-gate .wf-kind { color: var(--wf-gate); }
-.kind-output .wf-kind { color: var(--wf-output); }
+/* Keyboard focus keeps the ring whatever the step's state (WCAG 2.4.7). */
+.wf button.wf-node:focus-visible:not(:disabled) {
+  outline: 0;
+  box-shadow:
+    var(--ring),
+    var(--shadow-lg);
+}
+
+/* Needs attention, or blocked: an edge and the status in the tone, nothing louder. */
+.wf button.wf-node.tone-attention:not(.is-next, .is-selected) {
+  border-color: var(--warning-border);
+}
+
+.wf button.wf-node.tone-blocked:not(.is-next, .is-selected) {
+  border-color: var(--danger-border);
+}
+
+.wf-node-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.wf-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px 0 7px;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: var(--radius-sm, 6px);
+}
+
+.wf-num {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: 13.5px;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
 
 .wf-next {
   margin-left: auto;
-  padding: 0 0.35rem;
+  padding: 1px 7px;
   color: var(--accent-text);
-  font-size: 10px;
-  letter-spacing: 0.02em;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  text-transform: none;
   background: var(--accent-soft);
-  border-radius: 4px;
+  border-radius: 999px;
 }
 
 .wf-title {
+  margin-top: 8px;
   overflow: hidden;
   color: var(--text-strong, var(--text));
-  font-size: 13.5px;
-  font-weight: 700;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 20px;
+  letter-spacing: -0.01em;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
 .wf-covers {
+  margin-top: 1px;
   overflow: hidden;
   color: var(--text-secondary);
-  font-size: 11.5px;
+  font-size: 13.5px;
+  line-height: 18px;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
 .wf-state {
+  position: relative;
   display: flex;
   align-self: end;
   align-items: center;
-  gap: 0.4rem;
+  gap: 8px;
   min-width: 0;
-  padding-top: 0.4rem;
-  border-top: 1px solid var(--border-subtle, var(--border));
+  border-radius: 6px;
 }
 
 .wf-state-text {
   overflow: hidden;
   color: var(--text);
-  font-size: 11.5px;
+  font-size: 13.5px;
   font-weight: 550;
+  line-height: 18px;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
+/* Done is calm: a check, and the status in the secondary colour. */
+.wf-node.tone-done .wf-state-text,
+.wf-node.tone-idle .wf-state-text {
+  color: var(--text-secondary);
+}
+
+.wf-node.tone-attention .wf-state-text,
+.wf-state-text.tone-attention {
+  color: var(--warning);
+}
+
+.wf-node.tone-blocked .wf-state-text,
+.wf-state-text.tone-blocked {
+  color: var(--danger);
+}
+
 .wf-dot {
   flex: none;
-  width: 7px;
-  height: 7px;
-  background: var(--text-tertiary);
+  width: 8px;
+  height: 8px;
+  background: transparent;
+  border: 1.5px solid var(--text-tertiary);
   border-radius: 999px;
 }
 
-.wf-dot.tone-done { background: var(--success); }
-.wf-dot.tone-active { background: var(--accent); }
-.wf-dot.tone-attention { background: var(--warning); }
-.wf-dot.tone-blocked { background: var(--danger); }
+.wf-dot.tone-active { background: var(--accent); border-color: var(--accent); }
+.wf-dot.tone-attention { background: var(--warning); border-color: var(--warning); }
+.wf-dot.tone-blocked { background: var(--danger); border-color: var(--danger); }
 
-.wf-pulse {
+.wf-check {
+  display: inline-grid;
   flex: none;
-  width: 7px;
-  height: 7px;
-  background: var(--accent);
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  color: var(--success);
+  background: var(--success-soft);
+  border: 1px solid var(--success-border);
   border-radius: 999px;
-  animation: wf-pulse 1.6s ease-in-out infinite;
+}
+
+/* An agent at work: the AI mark pulses and a light sweeps along the status line. */
+.wf-pulse {
+  position: relative;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  background: var(--ai);
+  border-radius: 999px;
+}
+
+.wf-pulse::after {
+  position: absolute;
+  inset: -4px;
+  border: 2px solid var(--ai);
+  border-radius: 999px;
+  opacity: 0;
+  animation: wf-pulse 1.6s ease-out infinite;
+  content: "";
 }
 
 @keyframes wf-pulse {
-  50% {
+  0% {
+    opacity: 0.6;
+    transform: scale(0.6);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.4);
+  }
+}
+
+/* The status text clips its own overflow (its ellipsis), so the sweep stays on the line. */
+.wf-node.is-working .wf-state-text {
+  position: relative;
+}
+
+.wf-node.is-working .wf-state-text::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    color-mix(in srgb, var(--ai) 16%, transparent) 45%,
+    transparent 70%
+  );
+  transform: translateX(-100%);
+  animation: wf-sweep 1.8s ease-in-out infinite;
+  content: "";
+  pointer-events: none;
+}
+
+@keyframes wf-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* A step not performed: OE when the design is not effective. */
+.wf button.wf-node.tone-skipped {
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.wf button.wf-node.tone-skipped .wf-title,
+.wf button.wf-node.tone-skipped .wf-state-text {
+  color: var(--text-secondary);
+}
+
+.wf-dot.tone-skipped {
+  border-style: dashed;
+}
+
+/* The next step's node: the card's words in a flag, and a soft pulse. */
+.wf-flag {
+  position: absolute;
+  top: -11px;
+  right: 12px;
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 10px;
+  color: var(--text-on-accent);
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  background: var(--accent);
+  border-radius: 999px;
+  box-shadow: var(--shadow-sm);
+}
+
+.wf button.wf-node.is-next::after {
+  position: absolute;
+  inset: -6px;
+  border: 2px solid var(--accent);
+  border-radius: 16px;
+  opacity: 0;
+  pointer-events: none;
+  animation: wf-next-pulse 2.8s ease-out infinite;
+  content: "";
+}
+
+@keyframes wf-next-pulse {
+  0% {
     opacity: 0.35;
+    transform: scale(0.98);
+  }
+
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(1.03);
   }
 }
 
@@ -301,62 +518,161 @@
   pointer-events: none;
 }
 
-/* Edges: a step done lights the edge out of it; the retest loop is dashed. */
+/* Edges: neutral; the path taken so far a shade stronger; the way into a step to do next in
+   the accent. An outcome's label is a small pill. */
 
 .wf .wf-edge .react-flow__edge-path {
-  stroke: var(--border-strong, var(--text-tertiary));
+  stroke: var(--wf-line);
   stroke-width: 1.5;
 }
 
 .wf .wf-edge.is-reached .react-flow__edge-path {
-  stroke: var(--text-tertiary);
+  stroke: var(--wf-line-strong);
 }
+
+.wf .wf-edge.is-next .react-flow__edge-path {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.wf .wf-arrow path { fill: var(--wf-line); }
+.wf .wf-arrow-reached path { fill: var(--wf-line-strong); }
+.wf .wf-arrow-next path { fill: var(--accent); }
 
 .wf .react-flow__edge-textbg {
   fill: var(--surface);
+  stroke: var(--border-strong);
+  stroke-width: 1;
 }
 
 .wf .react-flow__edge-text {
   fill: var(--text-secondary);
-  font-size: 11px;
+  font-size: 13px;
+  font-weight: 600;
 }
 
-.wf .react-flow__arrowhead polyline {
-  fill: var(--text-tertiary);
-  stroke: var(--text-tertiary);
+.wf .wf-edge.is-next .react-flow__edge-textbg {
+  fill: var(--accent-soft);
+  stroke: var(--accent-border);
 }
 
-.wf .wf-controls {
-  overflow: hidden;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: var(--shadow-xs);
+.wf .wf-edge.is-next .react-flow__edge-text {
+  fill: var(--accent-text);
 }
 
-.wf .wf-controls button {
-  width: 30px;
-  height: 30px;
+/* Where more of the workflow lies off the canvas: a soft fade on that edge, and a button. */
+.wf-fade {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  width: 88px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease;
+}
+
+.wf-fade.is-start {
+  left: 0;
+  justify-content: flex-start;
+  padding-left: 12px;
+  background: linear-gradient(90deg, var(--wf-canvas-bg) 12%, transparent);
+}
+
+.wf-fade.is-end {
+  right: 0;
+  justify-content: flex-end;
+  padding-right: 12px;
+  background: linear-gradient(270deg, var(--wf-canvas-bg) 12%, transparent);
+}
+
+.wf-fade.is-shown,
+.wf-fade:has(:focus-visible) {
+  opacity: 1;
+}
+
+.wf .wf-edge-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
   padding: 0;
   color: var(--text-secondary);
   background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-sm);
+  transition:
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.wf .wf-fade.is-shown .wf-edge-btn {
+  pointer-events: auto;
+}
+
+.wf .wf-edge-btn:hover {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--border-strong);
+}
+
+/* The view's tools: zoom out, the zoom (back to the readable view), zoom in, the whole. */
+.wf .wf-tools {
+  margin: 12px;
+}
+
+.wf .wf-tools > div {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-sm);
+}
+
+.wf .wf-tools button {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-secondary);
+  background: transparent;
   border: 0;
-  border-bottom: 1px solid var(--border-subtle, var(--border));
-  border-radius: 0;
+  border-radius: 7px;
   box-shadow: none;
 }
 
-.wf .wf-controls button:last-child {
-  border-bottom: 0;
-}
-
-.wf .wf-controls button:hover {
+.wf .wf-tools button:hover {
   color: var(--text);
-  background: var(--surface-muted);
+  background: var(--surface-hover);
 }
 
-.wf .wf-controls button svg {
-  fill: currentColor;
+.wf .wf-tools .wf-zoom {
+  width: auto;
+  min-width: 50px;
+  padding: 0 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.wf .wf-tools button:focus-visible:not(:disabled),
+.wf .wf-edge-btn:focus-visible:not(:disabled) {
+  outline: 0;
+  box-shadow: var(--ring);
+}
+
+.wf-tools-rule {
+  width: 1px;
+  height: 16px;
+  margin: 0 2px;
+  background: var(--border);
 }
 
 /* React Flow's attribution, kept as its licence asks of anyone not on its Pro plan. */
@@ -401,21 +717,27 @@
 .wf-chip.tone-attention { color: var(--warning); background: var(--warning-soft); border-color: var(--warning-border); }
 .wf-chip.tone-blocked { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-border); }
 
-/* The list, on a phone. */
+.wf-chip.tone-skipped {
+  color: var(--text-secondary);
+  background: transparent;
+  border-style: dashed;
+}
+
+/* The list, on a phone: the same cards, one under another, in their stages. */
 
 .wf-list {
   display: grid;
-  gap: 1rem;
+  gap: 1.1rem;
 }
 
 .wf-list section {
   display: grid;
-  gap: 0.45rem;
+  gap: 0.5rem;
 }
 
 .wf-list ol {
   display: grid;
-  gap: 0.45rem;
+  gap: 0.5rem;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -424,43 +746,117 @@
 .wf-list-row {
   display: flex;
   align-items: center;
-  gap: 0.7rem;
-  padding: 0.65rem 0.75rem;
+  gap: 0.75rem;
+  min-height: 64px;
+  padding: 0.75rem 0.85rem;
   color: var(--text);
   text-decoration: none;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.wf-list-row:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.wf-list-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .wf-list-row.is-next {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow:
+    0 0 0 3px var(--accent-soft),
+    var(--shadow-sm);
 }
 
 .wf-list-mark {
   display: inline-grid;
   flex: none;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 12.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
   background: var(--surface-muted);
+  border: 1px solid var(--border-subtle, var(--border));
   border-radius: 999px;
 }
 
 .wf-list-mark.tone-done {
   color: var(--success);
   background: var(--success-soft);
+  border-color: var(--success-border);
+}
+
+.wf-list-mark.tone-attention {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+}
+
+.wf-list-mark.tone-blocked {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
 }
 
 .wf-list-text {
   display: grid;
   flex: 1 1 auto;
-  gap: 0.1rem;
+  gap: 0.15rem;
   min-width: 0;
+}
+
+.wf-list .wf-badge {
+  display: flex;
+  height: auto;
+  padding: 0;
+  font-size: 12.5px;
+  background: none;
+  border: 0;
+}
+
+.wf-list .wf-title {
+  margin: 0;
+  font-size: 15px;
+}
+
+.wf-list .wf-state-text {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.wf-list .wf-state-text:not(.tone-attention, .tone-blocked) {
+  color: var(--text-secondary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wf button.wf-node,
+  .wf-list-row,
+  .wf-fade,
+  .wf .wf-edge-btn {
+    transition: none;
+  }
+
+  .wf button.wf-node:hover {
+    transform: none;
+  }
+
+  .wf-pulse::after,
+  .wf-node.is-working .wf-state-text::after,
+  .wf button.wf-node.is-next::after {
+    animation: none;
+  }
 }
 
 /* The step's panel: wide, over the workflow's right side, the workflow visible on its left. */
@@ -558,6 +954,130 @@
   overscroll-behavior: contain;
 }
 
+/* The minimalist header (product owner, 11 November 2026; every step but Control
+   Understanding): the kind badge with the step's number, kind and branch; the title with its
+   one status; Ask, then previous, next and close as quiet icons. It stays at the top while
+   the body scrolls under it. Hover 120 ms, none under reduced motion. */
+.wf-panel-head.is-minimal {
+  align-items: flex-start;
+  gap: 16px;
+  padding: 18px 24px 16px;
+  border-bottom-color: var(--border-subtle);
+}
+
+.wf-panel-kicker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.wf-panel-kind {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: var(--neutral);
+  background: var(--neutral-soft);
+  border-radius: var(--radius-sm);
+}
+
+.wf-panel-kind.kind-agent { color: var(--ai); background: var(--ai-soft); }
+.wf-panel-kind.kind-gate { color: var(--warning); background: var(--warning-soft); }
+.wf-panel-kind.kind-source { color: var(--accent-text); background: var(--accent-soft); }
+.wf-panel-kind.kind-output { color: var(--success); background: var(--success-soft); }
+
+.wf-panel-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin-top: 6px;
+}
+
+.wf-panel-line h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+  outline: none;
+}
+
+.wf-panel-line h2:focus {
+  outline: none;
+}
+
+.wf-panel-pill {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  color: var(--neutral);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--neutral-soft);
+  border-radius: 999px;
+}
+
+.wf-panel-pill-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  background: currentColor;
+  border-radius: 999px;
+}
+
+.wf-panel-pill.tone-done { color: var(--success); background: var(--success-soft); }
+.wf-panel-pill.tone-active { color: var(--accent-text); background: var(--accent-soft); }
+.wf-panel-pill.tone-attention { color: var(--warning); background: var(--warning-soft); }
+.wf-panel-pill.tone-blocked { color: var(--danger); background: var(--danger-soft); }
+
+.wf-panel-pill.tone-skipped {
+  color: var(--text-secondary);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.wf-panel-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.wf-panel-actions .wf-panel-nav {
+  gap: 2px;
+}
+
+.wf-icon-btn.is-ghost {
+  color: var(--text-secondary);
+  background: transparent;
+  border-color: transparent;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.wf-icon-btn.is-ghost:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+.wf-panel.is-minimal .wf-panel-body {
+  padding: 20px 24px 28px;
+}
+
 /* The setup's screens, inline in a step's panel rather than in their pop-up. */
 .wf-panel .cs-inline {
   margin-bottom: 1.25rem;
@@ -585,27 +1105,36 @@
     padding: 0.9rem 1rem 2rem;
   }
 
+  .wf-panel-head.is-minimal {
+    gap: 8px;
+    padding: 14px 16px 12px;
+  }
+
+  .wf-panel-line h2 {
+    font-size: 19px;
+  }
+
+  .wf-panel-actions {
+    gap: 2px;
+  }
+
+  .wf-panel.is-minimal .wf-panel-body {
+    padding: 16px 16px 24px;
+  }
+
   .wf-activity {
     margin-left: 0;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .wf-pulse,
   .wf-panel {
     animation: none;
   }
 
-  .wf button.wf-node {
+  .wf-icon-btn.is-ghost {
     transition: none;
   }
-}
-
-/* On the canvas a lane's label sits on the grid's colour, so an edge dropping between lanes
-   passes behind it rather than through its words. */
-.wf .react-flow__node-lane .wf-lane {
-  padding: 2px 8px 2px 0;
-  background: var(--surface-muted);
 }
 
 /* The setup's screens in a panel: one column when there is one screen, at a readable width. */
@@ -622,48 +1151,6 @@
   padding: 0;
 }
 
-/* A branch's band, behind its steps (the product owner's diagram). */
-/* A stage's band, behind its steps: a frosted panel over the grid, its name in the header and
-   a thin rule in the stage's colour along the top. */
-.wf-band {
-  --wf-band: var(--text-tertiary);
-  position: relative;
-  overflow: hidden;
-  background: color-mix(in srgb, var(--surface) 78%, transparent);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  box-shadow:
-    0 1px 2px rgb(15 23 42 / 4%),
-    0 8px 24px -12px rgb(15 23 42 / 10%);
-  backdrop-filter: blur(2px);
-}
-
-.wf-band::before {
-  position: absolute;
-  inset: 0 0 auto;
-  height: 3px;
-  background: var(--wf-band);
-  opacity: 0.7;
-  content: "";
-}
-
-.wf-band.band-prepare { --wf-band: var(--wf-source); }
-.wf-band.band-design { --wf-band: var(--accent); }
-.wf-band.band-operating { --wf-band: var(--wf-agent); }
-.wf-band.band-conclude { --wf-band: var(--wf-output); }
-
-.wf-band-label {
-  position: absolute;
-  top: 9px;
-  left: 12px;
-  color: var(--text-secondary);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
 /* What a step's panel says is not built yet. */
 .wf-not-yet {
   display: flex;
@@ -676,30 +1163,6 @@
   background: var(--surface-muted);
   border: 1px dashed var(--border);
   border-radius: 9px;
-}
-
-/* A step not performed: OE when the design is not effective. */
-.wf button.wf-node.tone-skipped {
-  color: var(--text-secondary);
-  background: var(--surface-muted);
-  border-style: dashed;
-  box-shadow: none;
-}
-
-.wf button.wf-node.tone-skipped .wf-title,
-.wf button.wf-node.tone-skipped .wf-state-text {
-  color: var(--text-secondary);
-}
-
-.wf-dot.tone-skipped {
-  background: transparent;
-  border: 1.5px solid var(--text-tertiary);
-}
-
-.wf-chip.tone-skipped {
-  color: var(--text-secondary);
-  background: transparent;
-  border-style: dashed;
 }
 
 /* Step 05, the D&I conclusion: the verdict, what it rests on, and the reviewer's sign-off. */
@@ -875,20 +1338,21 @@
   position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 6px 20px;
-  margin-bottom: 16px;
-  padding: 22px 24px 0;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+  padding: 12px 16px 0;
   overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 18px;
+  border-radius: 14px;
   box-shadow: var(--shadow-sm);
 }
 
 .ns::before {
   position: absolute;
   inset: 0 0 auto;
-  height: 3px;
+  height: 2px;
   background: linear-gradient(90deg, var(--accent), var(--ai));
   content: "";
 }
@@ -899,12 +1363,10 @@
 
 .ns-tile {
   display: grid;
-  grid-row: span 2;
-  align-self: start;
   place-items: center;
-  width: 56px;
-  height: 56px;
-  border-radius: 16px;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
   background: var(--accent-soft);
 }
 
@@ -912,32 +1374,39 @@
   background: var(--success-soft);
 }
 
+/* Compact (product owner, 11 November 2026): the title and its reason share one line; the
+   reason truncates and its full text is the element's title. */
 .ns-text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
   min-width: 0;
 }
 
 .ns-eyebrow {
   display: flex;
+  flex: none;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin: 0;
   color: var(--text-tertiary);
-  font-size: var(--fs-xs);
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .ns-pill {
   display: inline-flex;
   align-items: center;
-  height: 22px;
-  padding: 0 8px;
+  height: 18px;
+  padding: 0 7px;
   color: var(--text-secondary);
   background: var(--surface-sunken);
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 10.5px;
   letter-spacing: 0.04em;
 }
 
@@ -952,43 +1421,48 @@
 }
 
 .ns h2 {
-  margin: 2px 0 0;
+  min-width: 0;
+  margin: 0;
   color: var(--text-strong);
-  font-size: 21px;
+  font-size: 15px;
   font-weight: 650;
-  letter-spacing: -0.012em;
-  line-height: 1.3;
-  text-wrap: balance;
+  letter-spacing: -0.005em;
+  line-height: 1.35;
 }
 
 .ns-why {
-  max-width: 74ch;
-  margin: 4px 0 0;
+  flex: 1 1 16ch;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
   color: var(--text-secondary);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ns-facts {
   display: flex;
+  flex-basis: 100%;
   flex-wrap: wrap;
-  gap: 6px 18px;
-  margin: 10px 0 0;
+  gap: 2px 14px;
+  margin: 2px 0 0;
   padding: 0;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12.5px;
   list-style: none;
 }
 
 .ns-facts li {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
 }
 
 .ns-facts li::before {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   flex: none;
   border-radius: 50%;
   background: var(--accent);
@@ -997,42 +1471,32 @@
 
 .ns-side {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: flex-end;
+  gap: 6px;
 }
 
 .ns .btn {
-  height: 40px;
-  padding: 0 16px;
-  border-radius: 10px;
-  font-size: 13.5px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .ns .btn.btn-quiet {
-  height: 36px;
-  padding: 0 12px;
+  padding: 0 10px;
 }
 
 .ns-side .ng-launch {
-  height: 36px;
-  padding: 0 12px;
-  font-size: 13px;
-}
-
-.ns-acts {
-  display: flex;
-  flex-wrap: wrap;
-  grid-column: 2 / -1;
-  align-items: center;
-  gap: 8px 10px;
-  margin-top: 12px;
+  height: 32px;
+  padding: 0 10px;
+  font-size: 12.5px;
 }
 
 .ns-working {
   grid-column: 2 / -1;
-  height: 4px;
-  margin-top: 12px;
+  height: 3px;
   overflow: hidden;
   border-radius: 999px;
   background: var(--surface-sunken);
@@ -1061,8 +1525,8 @@
   display: grid;
   grid-column: 2 / -1;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin: 12px 0 0;
+  gap: 8px;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
@@ -1073,31 +1537,34 @@
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
-  padding: 14px 16px;
+  padding: 7px 8px 7px 12px;
   background: var(--surface-muted);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 10px;
 }
 
 .ns-pair-text {
   display: grid;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
 }
 
 .ns-pair-text strong {
   color: var(--text-strong);
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .ns-pair-text span {
+  overflow: hidden;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ns-pair .btn {
   flex: none;
-  height: 36px;
+  height: 30px;
 }
 
 /* Where the control is: five plain stages. */
@@ -1105,8 +1572,8 @@
   display: grid;
   grid-column: 1 / -1;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  margin: 18px -24px 0;
-  padding: 14px 24px;
+  margin: 4px -16px 0;
+  padding: 8px 16px;
   background: var(--surface-muted);
   border-top: 1px solid var(--border-subtle);
   list-style: none;
@@ -1115,17 +1582,17 @@
 .ns-journey li {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   color: var(--text-tertiary);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 500;
 }
 
 .ns-journey li:not(:last-child)::after {
   flex: 1;
   height: 2px;
-  margin: 0 10px;
+  margin: 0 8px;
   border-radius: 2px;
   background: var(--border);
   content: "";
@@ -1139,8 +1606,8 @@
   display: grid;
   flex: none;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   border: 1.5px solid var(--border-control);
   border-radius: 50%;
   background: var(--surface);
@@ -1159,12 +1626,12 @@
 
 .ns-journey li.is-here .ns-dot {
   border-color: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-soft);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .ns-journey li.is-here .ns-dot::after {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--accent);
   content: "";
@@ -1182,52 +1649,8 @@
   font-weight: 500;
 }
 
-/* The next step's node: the card's words in a flag, and a soft pulse. */
-.wf-flag {
-  position: absolute;
-  top: -11px;
-  right: 10px;
-  display: inline-flex;
-  align-items: center;
-  height: 22px;
-  padding: 0 9px;
-  color: var(--text-on-accent);
-  background: var(--accent);
-  border-radius: 999px;
-  box-shadow: var(--shadow-sm);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-}
-
-.wf button.wf-node.is-next::after {
-  position: absolute;
-  inset: -6px;
-  border: 2px solid var(--accent);
-  border-radius: 14px;
-  opacity: 0;
-  pointer-events: none;
-  animation: wf-next-pulse 2.4s ease-out infinite;
-  content: "";
-}
-
-@keyframes wf-next-pulse {
-  0% {
-    opacity: 0.45;
-    transform: scale(0.98);
-  }
-
-  70%,
-  100% {
-    opacity: 0;
-    transform: scale(1.04);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .ns-working span,
-  .wf button.wf-node.is-next::after {
+  .ns-working span {
     animation: none;
   }
 }
@@ -1235,27 +1658,25 @@
 @media (max-width: 760px) {
   .ns {
     grid-template-columns: auto minmax(0, 1fr);
-    padding: 18px 16px 0;
+    padding: 12px 12px 0;
   }
 
-  .ns-tile {
-    grid-row: auto;
-    width: 44px;
-    height: 44px;
-    border-radius: 12px;
-  }
-
-  .ns h2 {
-    font-size: 18px;
+  /* No hover on touch: the reason wraps to two lines instead of truncating. */
+  .ns-why {
+    display: -webkit-box;
+    flex-basis: 100%;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
   }
 
   .ns-side {
     grid-column: 1 / -1;
+    flex-wrap: wrap;
     justify-content: flex-start;
     order: 5;
   }
 
-  .ns-acts,
   .ns-working,
   .ns-pair {
     grid-column: 1 / -1;
@@ -1273,8 +1694,8 @@
   .ns-journey {
     order: 10;
     grid-template-columns: minmax(0, 1fr);
-    margin: 14px -16px 0;
-    padding: 12px 16px;
+    margin: 4px -12px 0;
+    padding: 8px 12px;
   }
 
   .ns-journey li:not(.is-here) {

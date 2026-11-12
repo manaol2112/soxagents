@@ -126,8 +126,13 @@ describe("the control's next step (product owner, 10 November 2026)", () => {
     assert.equal(next.actions[0]?.flag, "Being prepared");
   });
 
-  it("offers both branches once the control is understood, each with its own action", () => {
-    const input = fresh({ setup: understood });
+  // Rewritten 11 November 2026: the branches open once the attributes are settled (before:
+  // once the control was understood), since D&I is a test of one against them.
+  it("offers both branches once the attributes are settled, each with its own action", () => {
+    const input = fresh({
+      setup: understood,
+      attributes: { approved: 5, proposed: 0 },
+    });
     const next = nextStep(workflowOf(input), input, about);
     assert.equal(next.mode, "next");
     if (next.mode !== "next") {
@@ -149,6 +154,7 @@ describe("the control's next step (product owner, 10 November 2026)", () => {
     for (const input of [
       fresh(),
       fresh({ setup: understood }),
+      fresh({ setup: understood, attributes: { approved: 5, proposed: 0 } }),
       fresh({ busy: new Set(["understanding"]) }),
     ]) {
       const steps = workflowOf(input);
@@ -188,10 +194,109 @@ describe("the control's next step (product owner, 10 November 2026)", () => {
         ["Conclude", "todo"],
       ],
     );
-    const branches = journey(workflowOf(fresh({ setup: understood })));
+    // Rewritten 11 November 2026 (product owner: "after control understanding, why am I
+    // being asked to release the evidence"). Old expectation: only the first branch with a
+    // next step was "here" ([done, done, here, todo, todo]), so Test read as coming after
+    // D&I. New: every stage holding a next step is current, since the D&I and OE branches
+    // run side by side once the control is understood.
+    // The Attributes step (11 November 2026) sits in the Understand stage: understood but
+    // not settled, the control is still there; settled, both branches are current.
+    assert.deepEqual(
+      journey(workflowOf(fresh({ setup: understood }))).map(
+        (stage) => stage.state,
+      ),
+      ["done", "here", "todo", "todo", "todo"],
+    );
+    const branches = journey(
+      workflowOf(
+        fresh({ setup: understood, attributes: { approved: 5, proposed: 0 } }),
+      ),
+    );
     assert.deepEqual(
       branches.map((stage) => stage.state),
-      ["done", "done", "here", "todo", "todo"],
+      ["done", "done", "here", "here", "todo"],
+    );
+  });
+
+  it("asks for the attributes before the D&I release (11 November 2026)", () => {
+    // Understood, with a proposed attribute: D&I is a test of one against the attributes,
+    // so its release waits for them, and the one next step is deciding them.
+    const input = fresh({
+      setup: understood,
+      attributes: { approved: 4, proposed: 1 },
+      plan: { exists: true, approved: false, pendingReview: false },
+      requirements: [{ phase: "DESIGN", state: "NOT_GENERATED" }],
+      designRelease: { step: "WAITING", waitingOn: "ATTRIBUTES" },
+    });
+    const steps = workflowOf(input);
+    const evidence = steps.find((step) => step.key === "designevidence");
+    assert.equal(evidence?.status, "Waiting on the attributes");
+    assert.equal(evidence?.next, false);
+    const next = nextStep(steps, input, about);
+    assert.equal(next.mode, "next");
+    if (next.mode !== "next") {
+      return;
+    }
+    // The Attributes step is the one next step (11 November 2026), and Scope & Sampling
+    // waits on it too.
+    assert.deepEqual(
+      next.actions.map((action) => [action.key, action.title]),
+      [["attributes", "Decide the attributes"]],
+    );
+    assert.equal(
+      steps.find((step) => step.key === "testdesign")?.status,
+      "Waiting on the attributes",
+    );
+    assert.deepEqual(
+      journey(steps).map((stage) => stage.state),
+      ["done", "here", "todo", "todo", "todo"],
+    );
+  });
+
+  it("offers the release and scope and sampling once the attributes are settled", () => {
+    const input = fresh({
+      setup: understood,
+      attributes: { approved: 5, proposed: 0 },
+      plan: { exists: true, approved: false, pendingReview: false },
+      requirements: [{ phase: "DESIGN", state: "NOT_GENERATED" }],
+      designRelease: { step: "READY", waitingOn: "" },
+    });
+    const next = nextStep(workflowOf(input), input, about);
+    assert.equal(next.mode, "next");
+    if (next.mode !== "next") {
+      return;
+    }
+    assert.deepEqual(
+      next.actions.map((action) => [action.key, action.title]),
+      [
+        ["designevidence", "Release the D&I evidence"],
+        ["testdesign", "Approve scope and sampling"],
+      ],
+    );
+  });
+
+  // Regression (independent review, 11 November 2026, H1): the card offered the attributes
+  // while the D&I release card said the understanding was not complete (walkthrough
+  // questions not answered). Both now name Control Understanding.
+  it("names Control Understanding while the D&I release still waits on it", () => {
+    const input = fresh({
+      setup: understood,
+      attributes: { approved: 5, proposed: 0 },
+      designRelease: {
+        step: "WAITING",
+        waitingOn: "UNDERSTANDING",
+        waitingFor:
+          "Control Understanding is not complete: 4 walkthrough questions are not answered.",
+      },
+    });
+    const next = nextStep(workflowOf(input), input, about);
+    assert.equal(next.mode, "next");
+    if (next.mode !== "next") {
+      return;
+    }
+    assert.deepEqual(
+      next.actions.map((each) => each.key),
+      ["understanding"],
     );
   });
 });

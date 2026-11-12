@@ -485,6 +485,514 @@
   }
 }
 
+/* ==========================================================================
+   The minimalist panel (product owner, 11 November 2026, approved from a preview): every
+   step but Control Understanding, which keeps the rules above. One decision row or one
+   quiet sentence; the agent's line with its reasons on request; the work, flat, at a 24px
+   rhythm; the folds as quiet rows between hairlines; a slim footer. No left-border
+   accents. Motion: hover 120 ms, folds and reveals 180 ms, the Ask popover 200 ms, none
+   under reduced motion.
+   ========================================================================== */
+
+.stp.is-minimal {
+  gap: 24px;
+}
+
+/* What the step needs from the person: one row, one action. */
+.stp-decide {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+
+.stp-decide-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.stp-decide h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.stp-decide.is-flag h3 > svg {
+  flex: none;
+  color: var(--warning);
+}
+
+.stp-decide-text > p {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.stp-decide-act {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+/* Where the step needs nothing from the person: one quiet sentence. */
+.stp-quiet {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.stp-quiet-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent-text);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.stp-quiet-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* The agent at work: its mark pulses (.wf-pulse) and a light sweeps along the sentence. */
+.stp-quiet.is-agent {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+}
+
+.stp-quiet.is-agent::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    color-mix(in srgb, var(--ai) 14%, transparent) 45%,
+    transparent 70%
+  );
+  transform: translateX(-100%);
+  animation: stp-sweep 1.8s ease-in-out infinite;
+  content: "";
+  pointer-events: none;
+}
+
+@keyframes stp-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* What the agent did, in one line, and why on request. */
+.stp-agent-line > p {
+  position: relative;
+  margin: 0;
+  padding-left: 22px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.stp-agent-line > p > svg {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  color: var(--ai);
+}
+
+.stp-agent-line-did {
+  margin-right: 8px;
+}
+
+button.stp-why {
+  display: inline-flex;
+  gap: 2px;
+  height: auto;
+  padding: 0 2px;
+  color: var(--accent-text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: inherit;
+  vertical-align: baseline;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+button.stp-why:hover {
+  color: var(--accent-text);
+  background: transparent;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.stp-why > svg {
+  transition: transform 180ms ease;
+}
+
+.stp-why[aria-expanded="true"] > svg {
+  transform: rotate(90deg);
+}
+
+.stp-why-list {
+  margin: 6px 0 0 22px;
+  padding-left: 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+  animation: stp-reveal 180ms ease-out;
+}
+
+.stp-why-list[hidden] {
+  display: none;
+}
+
+.stp-why-list li + li {
+  margin-top: 2px;
+}
+
+@keyframes stp-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+/* The step's work, flat in the panel: no card around it, no heading over it. */
+.stp-area {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
+  align-content: start;
+  min-width: 0;
+  scroll-margin-top: 16px;
+}
+
+/* Utilities for a step's content to opt into. */
+
+/* A section's heading inside the work: small, uppercase, tertiary. */
+.stp-section-title {
+  margin: 0 0 12px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+/* Parts stacked at the panel's rhythm. */
+.stp-stack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
+  min-width: 0;
+}
+
+/* Rows between hairlines, with no box around them. */
+.stp-divided {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stp-divided > * {
+  padding: 12px 0;
+}
+
+.stp-divided > * + * {
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* A card's chrome taken off where the panel already frames it: no fill, edge, shadow or
+   frost (stronger than glass.css's panel rule). Its own padding stays. */
+.stp .stp-flat > .card,
+.stp .card.stp-flat {
+  background-color: transparent;
+  background-image: none;
+  border-color: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+/* The detail, folded: quiet rows between hairlines. */
+:where(.stp.is-minimal) .stp-details {
+  gap: 0;
+}
+
+:where(.stp.is-minimal) .stp-fold {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0;
+}
+
+:where(.stp.is-minimal) .stp-fold + .stp-fold {
+  border-top: 0;
+}
+
+:where(.stp.is-minimal) .stp-fold > summary {
+  padding: 12px 2px;
+}
+
+:where(.stp.is-minimal) .stp-fold > summary strong {
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+:where(.stp.is-minimal) .stp-fold > summary small {
+  font-size: 12.5px;
+}
+
+:where(.stp.is-minimal) .stp-fold > summary > svg {
+  transition: transform 180ms ease;
+}
+
+:where(.stp.is-minimal) .stp-fold[open] > summary > svg {
+  transform: rotate(90deg);
+}
+
+:where(.stp.is-minimal) .stp-fold > summary:focus-visible {
+  border-radius: var(--radius-sm);
+}
+
+:where(.stp.is-minimal) .stp-fold-body {
+  padding: 4px 2px 16px;
+  border-top: 0;
+}
+
+/* The slim footer: what the step rests on, and what follows. */
+.stp-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding-top: 14px;
+  font-size: 13px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.stp-foot-based {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+  color: var(--text-secondary);
+}
+
+.stp-foot-label {
+  color: var(--text-tertiary);
+}
+
+.stp-foot-based a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.stp-foot-based a:hover,
+.stp-foot-next a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.stp-foot-more {
+  padding: 0 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--surface-muted);
+  border-radius: 999px;
+}
+
+.stp-foot-next {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-left: auto;
+}
+
+.stp-foot-next a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-text);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+/* The header's Ask (control-workflow.tsx): a small popover with one question. */
+.stp-ask-wrap {
+  position: relative;
+}
+
+.stp-ask-wrap .btn.stp-ask-btn svg {
+  color: var(--ai);
+}
+
+.stp-ask-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 5;
+  width: 320px;
+  padding: 12px;
+  background: var(--glass-strong, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop, var(--shadow-lg));
+  animation: stp-pop-in 200ms ease-out;
+}
+
+.stp-ask-pop[hidden] {
+  display: none;
+}
+
+.stp-ask-pop label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.stp-ask-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 3px 3px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
+}
+
+.stp-ask-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+
+.stp-ask-field input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+
+.stp-ask-field > button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+.stp-ask-field > button:hover:not(:disabled) {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  filter: brightness(0.97);
+}
+
+.stp-ask-field > button:disabled {
+  color: var(--text-tertiary);
+  background: transparent;
+  cursor: default;
+}
+
+@keyframes stp-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@media (max-width: 767px) {
+  .stp-decide {
+    flex-wrap: wrap;
+  }
+
+  .stp-decide-act {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .stp-foot-next {
+    margin-left: 0;
+  }
+
+  /* Ask as an icon beside the step's arrows, its word kept for screen readers. */
+  .stp-ask-wrap .btn.stp-ask-btn {
+    width: 32px;
+    padding: 0;
+  }
+
+  .stp-ask-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  /* Under the header, across the screen. */
+  .stp-ask-pop {
+    position: fixed;
+    top: 80px;
+    right: 16px;
+    left: 16px;
+    width: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stp-quiet.is-agent::after,
+  .stp-why-list,
+  .stp-ask-pop {
+    animation: none;
+  }
+
+  .stp-quiet.is-agent::after {
+    display: none;
+  }
+
+  .stp-why > svg,
+  :where(.stp.is-minimal) .stp-fold > summary > svg {
+    transition: none;
+  }
+}
+
 /* Step 09: the conclusion the records support, what it rests on, and each rating. */
 .cc {
   display: grid;
@@ -661,6 +1169,429 @@
 
 @media (prefers-reduced-motion: reduce) {
   .cc-pill {
+    transition: none;
+  }
+}
+
+/* The D&I release, D&I Evidence's one decision (product owner, 11 November 2026, approved
+   preview): one block on the muted surface. Row 1, the title and its one-line reason with
+   the one action; row 2, what the release rests on as inline checks; an early release as a
+   quiet row on request. What will be requested is the work area's (.dr-plan). Motion: the
+   folds' chevrons 180 ms, hover 120 ms, none under reduced motion. */
+.dr {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.9rem 1rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+
+.dr.is-done {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
+.dr-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.dr-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dr h3 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.dr-text > p {
+  max-width: 80ch;
+  margin: 0.15rem 0 0;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.dr-acts {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.dr-acts .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+
+.dr-done-mark {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  color: var(--success);
+}
+
+/* What the release rests on: inline, a success check or an open circle and its words. */
+.dr-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dr-checks li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.dr-checks li.is-open {
+  color: var(--text-strong);
+  font-weight: 500;
+}
+
+.dr-check {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  color: var(--success);
+}
+
+.dr-checks li.is-open .dr-check {
+  width: 12px;
+  height: 12px;
+  margin: 1px;
+  border: 1.5px solid var(--text-tertiary);
+  border-radius: 50%;
+}
+
+/* An early release: a quiet row, its reason and Release early on request. */
+.dr-early {
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.dr-early > summary,
+.dr-fold > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.dr-early > summary::-webkit-details-marker,
+.dr-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.dr-early > summary > span,
+.dr-fold > summary > span {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.1rem 0.5rem;
+  min-width: 0;
+}
+
+.dr-early > summary strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.dr-early > summary small,
+.dr-fold > summary small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.dr-early > summary > svg,
+.dr-fold > summary > svg {
+  flex: none;
+  color: var(--text-tertiary);
+  transition: transform 180ms ease;
+}
+
+.dr-early[open] > summary > svg,
+.dr-fold[open] > summary > svg {
+  transform: rotate(180deg);
+}
+
+.dr-early > summary:hover strong,
+.dr-fold > summary:hover strong {
+  color: var(--text-strong);
+}
+
+.dr-early > summary:focus-visible,
+.dr-fold > summary:focus-visible {
+  border-radius: 6px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.dr-reason {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+}
+
+.dr-reason label {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.dr-reason textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.dr-reason-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.dr-hint,
+.dr-note {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.dr-problem {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+
+/* What will be requested, at the top of the work area: a section title with who it goes
+   to, one bordered list with hairlines, then the quiet rows. */
+.dr-plan {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  margin-bottom: 1.25rem;
+}
+
+.dr-plan-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+}
+
+/* Matches the frame's section title (.stp-section-title) where the frame provides it. */
+.dr-section-title {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dr-plan-note {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.dr-items {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  list-style: none;
+}
+
+.dr-items li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.7rem 0.85rem;
+  background: var(--surface);
+}
+
+.dr-items li + li {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.dr-tile {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+}
+
+.dr-item-text {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.dr-item-text strong {
+  color: var(--text-strong);
+  font-size: 14.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow-wrap: break-word;
+}
+
+.dr-item-text small {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
+.dr-tests {
+  display: inline-flex;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.2rem;
+  max-width: 40%;
+}
+
+.dr-code {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 0.3rem;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 6px;
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+}
+
+.dr-empty {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+/* The quiet rows under the list: the attributes it is tested against, the governing
+   documents. Hairline-separated, a chevron each. */
+.dr-more {
+  display: grid;
+  margin-top: 0.25rem;
+}
+
+.dr-fold {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dr-fold > summary {
+  min-height: 40px;
+  padding: 0.55rem 0.1rem;
+}
+
+.dr-fold > summary strong {
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.dr-fold-body {
+  padding: 0.15rem 0 0.9rem;
+}
+
+.dr-attrs {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0.15rem 0 0.9rem;
+  list-style: none;
+}
+
+.dr-attrs li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.6rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.dr-attrs li small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+/* Governing documents, optional, folded under the evidence list once released. */
+.dr-docs {
+  margin-top: 1rem;
+}
+
+@media (max-width: 640px) {
+  .dr-row {
+    flex-wrap: wrap;
+  }
+
+  .dr-acts {
+    width: 100%;
+  }
+
+  .dr-items li {
+    flex-wrap: wrap;
+  }
+
+  .dr-tests {
+    max-width: none;
+    margin-left: calc(34px + 0.75rem);
+    justify-content: flex-start;
+  }
+
+  .dr-attrs li {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .dr-attrs li small {
+    grid-column: 2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dr-early > summary > svg,
+  .dr-fold > summary > svg {
     transition: none;
   }
 }

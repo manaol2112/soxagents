@@ -8,6 +8,10 @@ import { SpotlightTour } from "./spotlight-tour";
 import type { TourStep } from "./tour-model";
 import { UiIcon } from "./ui-icon";
 
+/** Why two steps show at once, and which comes first. */
+const PAIR_WHY =
+  "The D&I and OE branches run side by side. OE evidence waits for the D&I sign-off, so D&I is the one to start.";
+
 /** The event that opens the control's tour (its own button opens it too). */
 const TOUR_EVENT = "aw:next-step-tour";
 
@@ -95,7 +99,7 @@ export function NextStepCard({
     >
       <span className="ns-tile" aria-hidden="true">
         <AgentAvatar
-          size={34}
+          size={22}
           state={working ? "working" : next.mode === "done" ? "done" : "idle"}
         />
       </span>
@@ -114,7 +118,9 @@ export function NextStepCard({
               ) : null}
             </p>
             <h2 id="ns-title">{one.title}</h2>
-            <p className="ns-why">{one.detail}</p>
+            <p className="ns-why" title={one.detail}>
+              {one.detail}
+            </p>
             {one.facts.length > 0 ? (
               <ul className="ns-facts">
                 {one.facts.slice(0, 3).map((fact) => (
@@ -123,29 +129,25 @@ export function NextStepCard({
               </ul>
             ) : null}
           </div>
-          <div className="ns-side">{tour}</div>
+          <div className="ns-side ns-acts">
+            <a className="btn btn-quiet" href={askHref}>
+              Ask the planner
+            </a>
+            {open(one, !working)}
+            {tour}
+          </div>
           {working ? (
             <div className="ns-working" aria-hidden="true">
               <span />
             </div>
           ) : null}
-          <div className="ns-acts">
-            {open(one, !working)}
-            <a className="btn btn-quiet" href={askHref}>
-              Ask the planner
-            </a>
-          </div>
         </>
       ) : many !== null ? (
         <>
           <div className="ns-text">
-            <p className="ns-eyebrow">
-              Next steps · {many.length} can go ahead
-            </p>
             <h2 id="ns-title">{many.length} steps are ready for you</h2>
-            <p className="ns-why">
-              The D&amp;I branch and the OE branch run side by side. Either can
-              go first.
+            <p className="ns-why" title={PAIR_WHY}>
+              {PAIR_WHY}
             </p>
           </div>
           <div className="ns-side">{tour}</div>
@@ -174,7 +176,9 @@ export function NextStepCard({
         <div className="ns-text">
           <p className="ns-eyebrow">Next step</p>
           <h2 id="ns-title">{next.title}</h2>
-          <p className="ns-why">{next.detail}</p>
+          <p className="ns-why" title={next.detail}>
+            {next.detail}
+          </p>
         </div>
       ) : null}
 
@@ -189,9 +193,7 @@ export function NextStepCard({
             aria-current={stage.state === "here" ? "step" : undefined}
           >
             <span className="ns-dot" aria-hidden="true">
-              {stage.state === "done" ? (
-                <UiIcon name="check" size={11} />
-              ) : null}
+              {stage.state === "done" ? <UiIcon name="check" size={9} /> : null}
             </span>
             <span className="ns-stage">
               {stage.label}

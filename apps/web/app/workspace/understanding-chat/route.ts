@@ -5,8 +5,10 @@ import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 import { chatRequest } from "../../../src/understanding-chat-model";
 
 /** The Control Understanding conversation's requests (9 November 2026): a reply read by the
- * engagement planner, the same control on other systems, and the answers copied there.
- * Called in the background; answers as JSON. The API decides who may do each. */
+ * engagement planner, the same control on other systems, and the answers copied there; and
+ * the walkthrough's answers, a topic's at once (11 November 2026). Called in the background;
+ * answers as JSON. Each request is checked first (chatRequest); the API decides who may do
+ * each. */
 async function forward(fields: Record<string, unknown>) {
   const call = chatRequest(fields);
   if ("error" in call) {
@@ -75,11 +77,14 @@ export async function POST(request: Request) {
 
 export async function GET(request: Request) {
   const query = new URL(request.url).searchParams;
-  // The reads: the understanding to review, or the same control on other systems.
+  // The reads: the understanding to review, or the same control on other systems. The
+  // review also says which other system's answers it starts from (`from`: a control id or
+  // "none"), checked by chatRequest.
   return forward({
     intent: query.get("intent") === "review" ? "review" : "targets",
     organization_id: query.get("organization_id") ?? "",
     project_id: query.get("project_id") ?? "",
     control_id: query.get("control_id") ?? "",
+    from: query.get("from") ?? "",
   });
 }

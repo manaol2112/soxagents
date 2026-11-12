@@ -166,6 +166,46 @@ describe("a step's panel frame", () => {
     assert.equal(frame.need.title, "Release the D&I evidence");
     assert.match(frame.need.detail, /approved before it is sent/);
     assert.equal(frame.need.action?.anchor, "stp-work");
+    // Before the release nothing is requested, so the agent's note says so, not "0 accepted".
+    const input = midway({
+      requirements: [
+        { phase: "DESIGN", state: "NOT_GENERATED" },
+        { phase: "DESIGN", state: "NOT_GENERATED" },
+      ],
+      designRelease: { step: "READY" },
+    });
+    const evidence = workflowOf(input).find(
+      (step) => step.key === "designevidence",
+    );
+    assert.ok(evidence !== undefined);
+    assert.deepEqual(agentNote(evidence, input).found, [
+      "2 evidence items planned, requested once released.",
+    ]);
+  });
+
+  it("waits on the attributes before the D&I release, and points to them (11 November 2026)", () => {
+    const steps = workflowOf(
+      midway({
+        attributes: { approved: 4, proposed: 1 },
+        requirements: [{ phase: "DESIGN", state: "NOT_GENERATED" }],
+        designRelease: { step: "WAITING", waitingOn: "ATTRIBUTES" },
+      }),
+    );
+    const frame = panelFrame("designevidence", steps, null);
+    assert.equal(frame.need.kind, "wait");
+    assert.equal(frame.need.title, "Waiting on the attributes");
+    assert.deepEqual(frame.need.action, {
+      label: "Open Attributes",
+      step: "attributes",
+    });
+    // The Attributes step asks a person to decide them; D&I Evidence is based on it.
+    const attributes = panelFrame("attributes", steps, null);
+    assert.equal(attributes.need.kind, "act");
+    assert.equal(attributes.need.title, "Decide the attributes");
+    assert.deepEqual(
+      frame.basedOn.map((item) => item.key),
+      ["attributes"],
+    );
   });
 });
 
@@ -198,5 +238,22 @@ describe("the agent's strip", () => {
       // ("D&I" is the branch, not the first person.)
       assert.doesNotMatch(note.did, /(^|\s)(I|I'm|I've|we|We)(\s|$)/, step.key);
     }
+  });
+});
+
+describe("Scope & Sampling holds one primary action (11 November 2026)", () => {
+  it("says what is needed without a second button: the plan review approves", async () => {
+    const { workflowOf } = await import(
+      "../apps/web/src/control-workflow-model.ts"
+    );
+    const steps = workflowOf(
+      midway({
+        attributes: { approved: 5, proposed: 0 },
+        plan: { exists: true, approved: false, pendingReview: true },
+      }),
+    );
+    const frame = panelFrame("testdesign", steps, null);
+    assert.equal(frame.need.kind, "act");
+    assert.equal(frame.need.action, undefined);
   });
 });
