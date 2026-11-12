@@ -62,6 +62,9 @@ from ai_workforce_api.process_understanding import (
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.question_review import review_open_questions
 from ai_workforce_api.settings import Settings
+from ai_workforce_api.understanding_authority import PRECEDENCE
+from ai_workforce_api.understanding_authority import facts as understanding_facts
+from ai_workforce_api.understanding_authority import for_agents as understanding_for_agents
 
 logger = logging.getLogger(__name__)
 
@@ -333,6 +336,8 @@ Rules:
 - The client's facts are in client_answers, answered_questions, statement and the \
 sources. Use them; name who does what, in which system, and when. Never invent a name, \
 a system, a threshold or a figure.
+- {PRECEDENCE} Write the narrative from the fact that holds, and never raise the \
+difference as a point for the client.
 - Explain, in the sections, how each approved attribute (approved_attributes, each with \
 its code, condition and pass criteria) is met in the process, and list in each section the \
 codes it explains. Every attribute must be explained in at least one section.
@@ -357,6 +362,8 @@ The narrative passes only when all of these hold:
 and evaluated at at least one step.
 - Every fact agrees with client_answers, answered_questions, statement and the sources; \
 nothing is invented.
+- {PRECEDENCE} A narrative written from the fact that holds is right: never correct it \
+back, and never raise the difference as a finding or a question.
 - It is written in the third person (no "I", "we", "our", "us") and makes no comment about \
 what the sources leave out.
 - The step or steps where the control operates are marked.
@@ -799,6 +806,11 @@ def _inputs(
         for item in waiting
     ]
     point_round, asked = _rounds(connection, control_id, bool(waiting))
+    # Every confirmed fact with when it was confirmed, newest first (B1e): the newer answer
+    # holds, and the narrative is written from it.
+    package["confirmed_understanding"] = understanding_for_agents(
+        understanding_facts(connection, control_id)
+    )
     package["may_ask"] = may_ask(point_round)
     package["asked_topics"] = sorted(asked)
     package.pop("open_issues", None)
@@ -990,7 +1002,7 @@ def _draft(
         "Write the process narrative for this control.\n\n<control_context>\n"
         f"{json.dumps(inputs['package'], ensure_ascii=False, indent=1, default=str)}\n"
         f"</control_context>\n\n<sources>\n{source_blocks(inputs['sources'])}\n</sources>",
-        DRAFTER_PROMPT, DRAFT_SCHEMA, "process-narrative/3", DRAFT_TOKENS, DRAFT_SECONDS,
+        DRAFTER_PROMPT, DRAFT_SCHEMA, "process-narrative/4", DRAFT_TOKENS, DRAFT_SECONDS,
     )  # fmt: skip
     if output is None:
         return None
@@ -1037,7 +1049,7 @@ def _review(
         f"{json.dumps(draft, ensure_ascii=False, indent=1)}\n</draft>\n\n<control_context>\n"
         f"{json.dumps(inputs['package'], ensure_ascii=False, indent=1, default=str)}\n"
         f"</control_context>\n\n<sources>\n{source_blocks(inputs['sources'])}\n</sources>",
-        REVIEWER_PROMPT, REVIEW_SCHEMA, "process-narrative-review/3", REVIEW_TOKENS,
+        REVIEWER_PROMPT, REVIEW_SCHEMA, "process-narrative-review/4", REVIEW_TOKENS,
         REVIEW_SECONDS,
     )  # fmt: skip
     if output is None:

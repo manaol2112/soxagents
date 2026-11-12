@@ -883,6 +883,10 @@ class AnswerIssue(BaseModel):
     proposal: str = ""
     proposal_basis: Literal["", "SOURCES", "TYPICAL"] = ""
     suggestions: list[str] = []
+    # The refs of the confirmed facts that speak to the matter, when the agent's schema asks
+    # for them (understanding_authority.py, 12 November 2026); none when the understanding
+    # is silent on it.
+    covered_by: list[str] = []
 
 
 def checked_issues(

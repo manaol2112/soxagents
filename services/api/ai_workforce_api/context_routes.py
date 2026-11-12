@@ -1134,15 +1134,12 @@ def _generate(
         )
     package = context_package(connection, project_id, control_id, context, found)
     # The understanding the attributes follow (12 November 2026): the documented design with
-    # the client's values and the confirmed walkthrough answers, as the planner reads them.
-    # Data the client provided, as the control's other fields are.
+    # the client's values. The confirmed answers, each with when it was confirmed, are added
+    # by control_attributes.generate (confirmed_understanding; B1e), under the refs its
+    # answer is checked against. Data the client provided, as the control's other fields are.
     from ai_workforce_api.evidence_plans import statement_fields
 
     package["control_design_documented"] = dict(statement_fields(connection, control_id))
-    package["walkthrough_answers"] = [
-        {"question": question, "answer": answer}
-        for question, answer in walkthrough_answers.for_agents(connection, control_id)
-    ]
     # Which approved attributes a person owns the criteria of: a duplicate of one is left
     # out, never turned into a change of it (control_attributes.REVIEW_PROMPT).
     owned = {

@@ -73,6 +73,11 @@ _TITLES: dict[str, tuple[Category, str]] = {
     "evidence.restored": ("evidence", "Evidence restored"),
     "evidence.custody_check_failed": ("error", "Evidence custody check failed"),
     "attribute.proposed": ("design", "Test attribute proposed"),
+    # The attribute agent's own record (B1e): its actor is the agent instance.
+    "attributes.understanding_followed": (
+        "design",
+        "Attributes follow the confirmed understanding",
+    ),
     "attribute.approved": ("design", "Test attribute approved"),
     "attribute.rejected": ("design", "Test attribute rejected"),
     "attribute.added": ("design", "Test attribute added"),
