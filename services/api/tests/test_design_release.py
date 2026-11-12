@@ -3,17 +3,27 @@ docs/control-workflow-plan.md). The Design phase's evidence is requested once a 
 releases it for the control, after Control Understanding, and not with the test plan's
 approval. The test plan's approval gates only the operating phases, so revising the plan does
 not hold D&I requests. Each request still needs its own approval to be sent; a release sends
-nothing, and the agents never release a phase."""
+nothing, and the agents never release a phase.
+
+Since 12 November 2026 (B1e, the D&I requests list; the product owner: "Why do I need to
+have the release button? Simplify the workflow.") the release is not pressed: a person
+accepts the D&I requests and the acceptance that completes the list releases the evidence,
+never early. The tests here that pressed a release, or expected READY, were rewritten for
+that, each with the old and the new expectation noted; test_design_requests.py has the
+list itself."""
 
 from typing import Any
 from uuid import UUID
 
 from support import (
     Database,
+    accept_design_requests,
     answer_walkthrough,
     approve_evidence_plans,
+    release_design,
     settle_attributes,
     tailor_criteria,
+    understand_and_settle_attributes,
 )
 from test_evidence_plans import _Planner
 from test_execution import _add_project_member, _add_user
@@ -92,22 +102,37 @@ def test_d_and_i_evidence_is_released_on_its_own_once_the_control_is_understood(
     waiting = _design(team, control)
     assert waiting["step"] == "WAITING" and waiting["step_label"] == "Waiting for understanding"
     assert waiting["waiting_for"].startswith("Control Understanding is not complete")
-    bare = owner.post(path, json={})
-    assert bare.status_code == 409
-    assert "Say why the D&I phase is released now" in bare.json()["detail"]
-    # Only an Owner, Admin or Project Manager releases it.
+    # Rewritten 12 November 2026 (B1e, the D&I requests list; product owner: "Why do I need
+    # to have the release button? Simplify the workflow."). Old: a person released D&I early
+    # here, with a reason of 20 characters (409 "Say why the D&I phase is released now"
+    # without one), and the release read RELEASED, early, with the reason. New: there is no
+    # early D&I release: the route refuses with what the list waits for, reason or not; once
+    # the control is understood and its attributes settled, the person's acceptance of the
+    # D&I requests releases the evidence, as theirs, never early. Why: the acceptance of
+    # each request against the attributes is the approval; the button repeated it.
+    for body in ({}, {"reason": REASON}):
+        bare = owner.post(path, json=body)
+        assert bare.status_code == 409
+        assert bare.json()["detail"] == waiting["waiting_for"]
+    # Only an Owner, Admin or Project Manager uses the release route.
     with connect(migrated.url) as connection:
         member = _add_user(connection, team["org"], "di-member@example.com", "CONTRIBUTOR")
         _add_project_member(connection, team["org"], team["project"], member)
     assert _session(migrated, member).post(path, json={"reason": REASON}).status_code == 403
+    assert _rows(
+        migrated,
+        "SELECT count(*) FROM phase_releases WHERE engagement_control_id = %s",
+        UUID(control),
+    ) == [(0,)]
     sent = _rows(
         migrated, "SELECT count(*) FROM mailbox_messages WHERE project_id = %s", team["project"]
     )
-    released = owner.post(path, json={"reason": REASON})
-    assert released.status_code == 200, released.text
-    status = next(item for item in released.json()["phases"] if item["phase"] == "DESIGN")
-    assert status["step"] == "RELEASED" and status["early"] is True
-    assert status["reason"] == REASON and status["released_by"]
+    understand_and_settle_attributes(migrated, team["project"], control)
+    accepted = accept_design_requests(owner, team["org"], team["project"], control)
+    assert accepted["design_requests"]["released"] is True  # type: ignore[index]
+    status = _design(team, control)
+    assert status["step"] == "RELEASED" and status["early"] is False
+    assert status["automatic"] is True and status["reason"] == "" and status["released_by"]
     # The D&I items are requested now, on a plan still not approved; nothing is sent, and the
     # operating evidence still waits for the plan.
     assert _plan(team, control)["status"] == "PROPOSED"
@@ -128,7 +153,10 @@ def test_d_and_i_evidence_is_released_on_its_own_once_the_control_is_understood(
         "SELECT payload FROM audit_events WHERE target_id = %s AND action = 'phase.released'",
         UUID(control),
     )
-    assert [row[0]["phase"] for row in audit] == ["DESIGN"] and audit[0][0]["early"] is True
+    # The release is on the audit trail (before 12 November 2026: early; now never early,
+    # and recorded with the acceptance that completed the list).
+    assert [row[0]["phase"] for row in audit] == ["DESIGN"] and audit[0][0]["early"] is False
+    assert audit[0][0]["automatic"] is True
     # Releasing again changes nothing and asks for nothing twice.
     again = owner.post(path, json={"reason": REASON})
     assert again.status_code == 200
@@ -183,19 +211,28 @@ def test_a_understood_control_is_recommended_for_release_without_a_reason(
     assert waiting["step"] == "WAITING" and waiting["waiting_on"] == "UNDERSTANDING"
     assert waiting["waiting_for"].endswith("walkthrough questions are not answered.")
     answer_walkthrough(migrated, team["project"], [UUID(control)])
+    # Rewritten 12 November 2026 (B1e, the D&I requests list; product owner: "Why do I need
+    # to have the release button? Simplify the workflow."). Old: understood, with the
+    # attributes settled, the release was READY ("The D&I evidence is ready to release.",
+    # next step "Release the D&I evidence"), and a person released it with no reason. New:
+    # the step waits for the D&I requests to be accepted; nothing is recommended for release
+    # and no release is the next step; accepting the requests releases the evidence, by
+    # that person, never early. Why: accepting each request against the attributes is the
+    # approval, so the separate release repeated the decision.
     design = _design(team, control)
-    assert design["step"] == "READY", design
+    assert (design["step"], design["waiting_on"]) == ("WAITING", "REQUESTS"), design
+    assert design["step_label"] == "Requests to accept"
+    assert design["waiting_for"].endswith("to be accepted.")
     progress = team["owner"].get(f"{_project(team)}/phase-progress").json()
-    assert progress["ready"]["DESIGN"] >= 1
-    assert progress["recommendation"].endswith("The D&I evidence is ready to release.")
+    assert progress["ready"]["DESIGN"] == 0
+    assert "ready to release" not in progress["recommendation"]
     row = _control(team, "ITGC-AC-01")
-    assert row["next_step"] == "Release the D&I evidence"
-    released = team["owner"].post(
-        f"{_project(team)}/controls/{control}/phases/DESIGN/release", json={}
-    )
-    assert released.status_code == 200, released.text
-    status = next(item for item in released.json()["phases"] if item["phase"] == "DESIGN")
+    assert row["next_step"] != "Release the D&I evidence"
+    accepted = accept_design_requests(team["owner"], team["org"], team["project"], control)
+    assert accepted["design_requests"]["released"] is True  # type: ignore[index]
+    status = _design(team, control)
     assert status["step"] == "RELEASED" and status["early"] is False
+    assert status["automatic"] is True and status["released_by"]
 
 
 def test_revising_the_test_plan_does_not_hold_d_and_i_requests(migrated: Database) -> None:
@@ -230,10 +267,12 @@ def test_the_planner_proposes_what_it_adds_to_released_d_and_i_evidence(
 ) -> None:
     team = _launched(migrated, "di-planner")
     control = _control(team, "ITGC-AC-01")["id"]
-    released = team["owner"].post(
-        f"{_project(team)}/controls/{control}/phases/DESIGN/release", json={"reason": REASON}
-    )
-    assert released.status_code == 200, released.text
+    # Rewritten 12 November 2026 (B1e): the setup released D&I early through the route,
+    # with a reason; there is no early D&I release any more, so the setup records the
+    # release with its requests accepted (support.release_design). What is tested, the
+    # planner's addition to a released phase, is unchanged.
+    release_design(migrated, team["project"], [UUID(control)])
+    assert _design(team, control)["step"] == "RELEASED"
     org, project = UUID(str(team["org"])), UUID(str(team["project"]))
     with connect(migrated.url) as connection:
         facts = load_facts(connection, project, UUID(control))
@@ -308,15 +347,22 @@ def test_d_and_i_evidence_waits_for_the_attributes_it_is_tested_against(
     migrated: Database,
 ) -> None:
     """D&I is a test of one against the control's attributes, and they decide the evidence
-    asked for (product owner, 11 November 2026): the release is recommended only once the
-    attributes are settled, as the operating evidence's gate reads them. Before then a person
-    may still release it, with the reason recorded, as before understanding."""
+    asked for (product owner, 11 November 2026): the D&I evidence is released only once the
+    attributes are settled, as the operating evidence's gate reads them.
+
+    Rewritten 12 November 2026 (B1e, the D&I requests list; product owner: "Why do I need to
+    have the release button? Simplify the workflow."). Old: with the attributes settled the
+    release read READY and a person released it with no reason, or earlier with one. New:
+    with the attributes settled the step waits for the D&I requests to be accepted
+    (REQUESTS), the release route refuses while the attributes are unsettled whatever the
+    reason, and the acceptance of the requests releases. The attributes' hold, its wording,
+    and the attributes kept on the release's audit record are as before."""
     team = _launched(migrated, "di-attributes")
     control = _control(team, "ITGC-AC-01")["id"]
     settle_attributes(migrated, team["project"])
     tailor_criteria(migrated, team["project"])
     _understood(migrated, team, control)
-    assert _design(team, control)["step"] == "READY"
+    assert _design(team, control)["waiting_on"] == "REQUESTS"
     # The attribute agent proposes a wording the narrative showed: not settled again.
     with connect(migrated.url) as connection:
         connection.execute(
@@ -343,13 +389,24 @@ def test_d_and_i_evidence_waits_for_the_attributes_it_is_tested_against(
     # reason is refused with what it waits for.
     assert _control(team, "ITGC-AC-01")["next_step"] != "Release the D&I evidence"
     path = f"{_project(team)}/controls/{control}/phases/DESIGN/release"
-    bare = team["owner"].post(path, json={})
-    assert bare.status_code == 409
-    assert bare.json()["detail"].startswith("The attributes are not settled")
+    for body in ({}, {"reason": REASON}):
+        bare = team["owner"].post(path, json=body)
+        assert bare.status_code == 409
+        assert bare.json()["detail"].startswith("The attributes are not settled")
     # While the attribute agent is still at work its proposals would follow: not settled.
     settle_attributes(migrated, team["project"])
     tailor_criteria(migrated, team["project"])
-    assert _design(team, control)["step"] == "READY"
+    # The attribute just approved is addressed by no D&I request yet (B1e: coverage is per
+    # attribute), until the evidence is planned again, as the planner does after an
+    # accepted addition; here by the rules.
+    assert _design(team, control)["waiting_on"] == "EVIDENCE"
+    with connect(migrated.url) as connection:
+        generate(
+            connection, None, UUID(str(team["org"])), UUID(str(team["project"])),
+            UUID(control), team["owner_id"],
+        )  # fmt: skip
+        connection.commit()
+    assert _design(team, control)["waiting_on"] == "REQUESTS"
     with connect(migrated.url) as connection:
         connection.execute(
             """
@@ -374,12 +431,12 @@ def test_d_and_i_evidence_waits_for_the_attributes_it_is_tested_against(
             (control,),
         )
         connection.commit()
-    # Settled: recommended, released without a reason, and the release records the
-    # attributes the evidence is requested against, as worded then.
+    # Settled: the list waits only for its requests; accepting them releases, and the
+    # release records the attributes the evidence is requested against, as worded then.
     ready = _design(team, control)
-    assert ready["step"] == "READY" and ready["waiting_on"] == "" and ready["waiting_for"] == ""
-    released = team["owner"].post(path, json={})
-    assert released.status_code == 200, released.text
+    assert (ready["step"], ready["waiting_on"]) == ("WAITING", "REQUESTS")
+    accepted = accept_design_requests(team["owner"], team["org"], team["project"], control)
+    assert accepted["design_requests"]["released"] is True  # type: ignore[index]
     approved = [
         row[0]
         for row in _rows(
@@ -521,8 +578,11 @@ def test_d_and_i_evidence_waits_for_criteria_tailored_to_the_control(migrated: D
         json={"attributes": [{"id": key, "version": version} for key, version in versions]},
     )
     assert accepted.status_code == 200, accepted.text
+    # Rewritten 12 November 2026 (B1e). Old: with the criteria owned the release read READY.
+    # New: the attributes no longer hold the list, which waits for its requests to be
+    # accepted (product owner: no release button; the acceptance releases).
     ready = _design(team, control)
-    assert ready["step"] == "READY", ready
+    assert (ready["step"], ready["waiting_on"]) == ("WAITING", "REQUESTS"), ready
     after = team["owner"].get(f"{_project(team)}/controls/{control}/context").json()
     assert all(item["criteria_owned"] for item in after["attributes"]["approved"])
     assert all(item["criteria_accepted_by"] for item in after["attributes"]["approved"])

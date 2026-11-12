@@ -10,13 +10,23 @@ migrations 0081 and 0145). The agents never release a phase.
   the evidence asked for). It does not wait for the rest of the test plan (scope, sampling),
   and revising the plan does not hold it. Releasing it requests the Design phase's evidence
   items, and the release's audit record keeps the attributes they were requested against.
+  Since 12 November 2026 (B1e, the D&I requests list; the product owner: "Why do I need to
+  have the release button? Simplify the workflow.") nobody presses a release: a person
+  accepts each D&I request, every approved attribute is addressed by a request or has a
+  recorded exception, and the request of the person who completes that list releases the
+  D&I evidence (settle_design), recorded as theirs and marked automatic. Never an agent's
+  decision: the one release a worker completes is for a list a person had already
+  completed while the planner's run was still at work, recorded when that run ends as the
+  last acceptor's and marked deferred (settle_design_after_run). There is no early D&I
+  release any more.
 - Interim and the roll-forward: on an approved test plan, once the D&I conclusion is signed
   off effective (B0); the roll-forward once interim testing is signed off (or, where interim
   does not apply, once D&I is). Their requests are prepared in advance and go for approval
   once released.
 
-The platform recommends a release when what comes before it is complete. A person may
-release a phase before then, for one control, with the reason recorded.
+The platform recommends an operating phase's release when what comes before it is
+complete. A person may release an operating phase before then, for one control, with the
+reason recorded.
 
 A released phase only lets its requests go for approval: each request is still approved,
 and sent, by a person. Releasing never sends anything.
@@ -31,7 +41,9 @@ import psycopg
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from ai_workforce_api.after_commit import after_commit, committed
 from ai_workforce_api.authorization import (
+    AccessDenied,
     Action,
     NotVisible,
     Principal,
@@ -42,7 +54,12 @@ from ai_workforce_api.authorization import (
 )
 from ai_workforce_api.db import transaction
 from ai_workforce_api.evidence_planning import PHASE_LABELS
-from ai_workforce_api.evidence_plans import GATE_DESIGN_RELEASE, PlanState, _audit
+from ai_workforce_api.evidence_plans import (
+    GATE_DESIGN_RELEASE,
+    LISTED_STATUSES,
+    PlanState,
+    _audit,
+)
 from ai_workforce_api.settings import Settings
 
 Released = Literal["DESIGN", "INTERIM", "ROLLFORWARD"]
@@ -204,6 +221,20 @@ _CRITERIA_TO_ACCEPT_SQL = """
 """
 
 
+# The approved narrative's run holds the control's attributes (engagement_controls as `c`):
+# it waits, or works under a live lease (a WORKING run with no lease is held, as
+# process_narrative never reclaims it); one whose lease ran out was interrupted and holds
+# nothing. Read by attribute_waits and by the D&I requests list's `working`.
+NARRATIVE_AT_WORK_SQL = """
+    EXISTS (SELECT 1 FROM process_narrative_runs r
+            WHERE r.engagement_control_id = c.id
+              AND (r.run_status = 'PENDING'
+                   OR (r.run_status = 'WORKING'
+                       AND (r.run_lease_until IS NULL
+                            OR r.run_lease_until >= clock_timestamp()))))
+"""
+
+
 def attribute_waits(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID | None = None
 ) -> dict[UUID, str]:
@@ -239,12 +270,7 @@ def attribute_waits(
                (SELECT count(*) FROM control_context_issues i
                 WHERE i.engagement_control_id = c.id AND i.status = 'OPEN'
                   AND i.origin IN ('ATTRIBUTES', 'SOURCES')),
-               EXISTS (SELECT 1 FROM process_narrative_runs r
-                       WHERE r.engagement_control_id = c.id
-                         AND (r.run_status = 'PENDING'
-                              OR (r.run_status = 'WORKING'
-                                  AND (r.run_lease_until IS NULL
-                                       OR r.run_lease_until >= clock_timestamp())))),
+               {NARRATIVE_AT_WORK_SQL},
                (SELECT count(*) FROM control_attributes a
                 WHERE a.engagement_control_id = c.id AND a.status = 'APPROVED'
                   AND NOT coalesce({CRITERIA_OWNED_SQL}, false)
@@ -310,51 +336,199 @@ _LIVE_REQUIREMENT_SQL = """
 """
 
 
+def uncovered_attributes(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID | None = None
+) -> dict[UUID, list[UUID]]:
+    """Per control, its approved attributes that the D&I evidence does not cover, in the
+    control's order: no live D&I request (_LIVE_REQUIREMENT_SQL) is linked to the attribute
+    (evidence_requirement_attributes), and no person recorded why it is not evidenced at
+    D&I (design_coverage_exceptions). A control every one of whose approved attributes is
+    covered or excepted is not in the result."""
+    one = control_id is not None
+    which = "c.id = %(c)s" if one else "c.included"
+    found: dict[UUID, list[UUID]] = {}
+    for cid, attribute in connection.execute(
+        f"""
+        SELECT c.id, a.id
+        FROM engagement_controls c
+        JOIN control_attributes a ON a.engagement_control_id = c.id AND a.status = 'APPROVED'
+        WHERE c.project_id = %(p)s AND {which}
+          AND NOT EXISTS (
+              SELECT 1 FROM evidence_requirement_attributes ra
+              JOIN evidence_requirements q ON q.id = ra.requirement_id
+              WHERE ra.attribute_id = a.id AND q.engagement_control_id = c.id
+                AND q.phase = 'DESIGN' AND {_LIVE_REQUIREMENT_SQL})
+          AND NOT EXISTS (
+              SELECT 1 FROM design_coverage_exceptions x
+              WHERE x.attribute_id = a.id AND x.engagement_control_id = c.id)
+        ORDER BY c.id, a.position, a.created_at
+        """,
+        {"p": project_id, "c": control_id},
+    ).fetchall():
+        found.setdefault(UUID(str(cid)), []).append(UUID(str(attribute)))
+    return found
+
+
 def design_untraced(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID | None = None
 ) -> dict[UUID, str]:
     """The controls whose D&I evidence cannot be tested against their attributes, with why,
-    in a sentence: the control has approved attributes and D&I items, and no D&I item that
-    is live (_LIVE_REQUIREMENT_SQL: planned, waiting for its dependency, or requested; not
-    waived, removed, or only a proposed addition) is linked to any of them. D&I is a test
-    of one against the attributes, so a release from such a plan would request evidence
-    nobody could judge against them; it is not recommended, and it is an exception a
-    person sees (found on 12 November 2026: a re-plan left the walkthrough instance with
-    no attribute links, and the release still read as ready, "tested against 4
-    attributes"). The planner now puts every
-    attribute on the instance (evidence_planning._instance_against_every_attribute), so
-    planning the evidence again clears it. A control with no approved attribute is not
-    listed: the attributes hold it already (attribute_waits)."""
+    in a sentence.
+
+    As first built (12 November 2026, the none-at-all rule): the control has approved
+    attributes and D&I items, and no D&I item that is live (_LIVE_REQUIREMENT_SQL: planned,
+    waiting for its dependency, or requested; not waived, removed, or only a proposed
+    addition) is linked to any of them. D&I is a test of one against the attributes, so a
+    release from such a plan would request evidence nobody could judge against them; it is
+    not recommended, and it is an exception a person sees (found on 12 November 2026: a
+    re-plan left the walkthrough instance with no attribute links, and the release still
+    read as ready, "tested against 4 attributes"). The planner now puts every attribute on
+    the instance (evidence_planning._instance_against_every_attribute), so planning the
+    evidence again clears it. A control with no approved attribute is not listed: the
+    attributes hold it already (attribute_waits).
+
+    Since the D&I requests list (B1e, the same day; the product owner: "For each request, I
+    want to show which specific attributes it is addressing to make sure I get coverage")
+    the rule is per attribute: a control is listed when any approved attribute is addressed
+    by no live D&I request and has no recorded exception (uncovered_attributes). The
+    none-at-all case is the same rule with every attribute uncovered. Then there was no
+    field to record why an attribute is not evidenced at D&I; there is one now
+    (design_coverage_exceptions), recorded by a person with the reason. It is cleared by
+    linking the attribute to a request, by planning the evidence again, or by the
+    exception. Only a live request counts, as before."""
+    return {
+        control: (
+            "The D&I requests do not cover the attributes: "
+            f"{_counted(len(attributes), 'approved attribute')} "
+            f"{'is' if len(attributes) == 1 else 'are'} not addressed by any D&I request. "
+            "Add each to a request, or record why it is not evidenced at D&I."
+        )
+        for control, attributes in uncovered_attributes(connection, project_id, control_id).items()
+    }
+
+
+# A D&I request in the list that waits for a person (evidence_requirements as `q`): in the
+# list (evidence_plans.LISTED_STATUSES; an addition the planner proposed included) and not
+# accepted by a person, or carrying a change the planner proposed.
+_TO_ACCEPT_SQL = f"""
+    (q.phase = 'DESIGN' AND q.status IN ({", ".join(repr(item) for item in LISTED_STATUSES)})
+     AND (q.accepted_at IS NULL OR q.pending_change IS NOT NULL))
+"""
+
+RequestWait = Literal["PLANNING", "ACCEPT", "NONE"]
+_REQUEST_LABELS: dict[str, str] = {
+    "PLANNING": "Requests being updated",
+    "ACCEPT": "Requests to accept",
+    "NONE": "No D&I request yet",
+}
+
+
+def request_waits(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID | None = None
+) -> dict[UUID, tuple[RequestWait, str]]:
+    """What each planned control's D&I requests list still waits for, with the sentence; a
+    control missing from the result has every live D&I request accepted by a person, with
+    no change pending, and the planner not at work (B1e, 12 November 2026).
+
+    PLANNING: the plan's run waits or works (run_status PENDING or WORKING), so the list
+    may still change; nothing is settled, accepted or released under a run. ACCEPT: a
+    request in the list is not accepted, or carries a change the planner proposed. NONE:
+    there is no live D&I request to ask the client for. A control without a plan is not
+    listed: the phase status says it is not planned."""
     one = control_id is not None
     which = "c.id = %(c)s" if one else "c.included"
-    rows = connection.execute(
+    waits: dict[UUID, tuple[RequestWait, str]] = {}
+    for cid, running, to_accept, live in connection.execute(
         f"""
-        SELECT c.id,
-               (SELECT count(*) FROM control_attributes a
-                WHERE a.engagement_control_id = c.id AND a.status = 'APPROVED')
+        SELECT c.id, p.run_status IN ('PENDING', 'WORKING'),
+               (SELECT count(*) FROM evidence_requirements q
+                WHERE q.engagement_control_id = c.id AND {_TO_ACCEPT_SQL}),
+               (SELECT count(*) FROM evidence_requirements q
+                WHERE q.engagement_control_id = c.id AND q.phase = 'DESIGN'
+                  AND {_LIVE_REQUIREMENT_SQL})
         FROM engagement_controls c
+        JOIN evidence_plans p ON p.engagement_control_id = c.id
         WHERE c.project_id = %(p)s AND {which}
-          AND EXISTS (SELECT 1 FROM control_attributes a
-                      WHERE a.engagement_control_id = c.id AND a.status = 'APPROVED')
-          AND EXISTS (SELECT 1 FROM evidence_requirements q
-                      WHERE q.engagement_control_id = c.id AND q.phase = 'DESIGN'
-                        AND q.status <> 'REMOVED')
-          AND NOT EXISTS (
-              SELECT 1 FROM evidence_requirement_attributes ra
-              JOIN evidence_requirements q ON q.id = ra.requirement_id
-              JOIN control_attributes a ON a.id = ra.attribute_id
-              WHERE q.engagement_control_id = c.id AND q.phase = 'DESIGN'
-                AND {_LIVE_REQUIREMENT_SQL} AND a.status = 'APPROVED')
         """,
         {"p": project_id, "c": control_id},
-    ).fetchall()
-    return {
-        UUID(str(cid)): (
-            "The D&I evidence is not planned against the attributes: no D&I item evidences "
-            f"any of the {_counted(int(count), 'approved attribute')}. Plan the evidence again."
-        )
-        for cid, count in rows
-    }
+    ).fetchall():
+        control = UUID(str(cid))
+        if running:
+            waits[control] = ("PLANNING", "The planner is still updating the D&I requests.")
+        elif int(to_accept) > 0:
+            count = int(to_accept)
+            waits[control] = (
+                "ACCEPT",
+                f"{_counted(count, 'D&I request')} {'waits' if count == 1 else 'wait'} "
+                "to be accepted.",
+            )
+        elif int(live) == 0:
+            waits[control] = ("NONE", "No D&I request is planned. Add a request.")
+    return waits
+
+
+DesignWaitingOn = Literal["UNDERSTANDING", "ATTRIBUTES", "EVIDENCE", "REQUESTS"]
+
+
+class DesignWaits:
+    """What each control's D&I requests list waits for before it is settled, read once for
+    an engagement (or one control): the one rule the phase status, the plan's summary, the
+    release route and settle_design all read, so they never disagree.
+
+    Settled (B1e, product owner, 12 November 2026): Control Understanding complete; the
+    attributes settled; the planner not at work on the plan; at least one live D&I
+    request; every D&I request in the list accepted by a person with no change pending;
+    and every approved attribute addressed by a live D&I request or excepted by a person.
+    Checked in that order, except that an attribute left uncovered is said before the
+    requests still to accept: it is the exception that needs a person's judgment, and the
+    plan may have to change before its requests are accepted."""
+
+    def __init__(
+        self, connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID | None = None
+    ) -> None:
+        self.understanding = understanding_waits(connection, project_id, control_id)
+        self.attributes = attribute_waits(connection, project_id, control_id)
+        self.requests = request_waits(connection, project_id, control_id)
+        self.untraced = design_untraced(connection, project_id, control_id)
+
+    def of(self, control: UUID) -> tuple[DesignWaitingOn, str, str] | None:
+        """What the control's list waits on, the sentence, and the step's label; None when
+        it is settled."""
+        if control in self.understanding:
+            return "UNDERSTANDING", self.understanding[control], "Waiting for understanding"
+        if control in self.attributes:
+            return "ATTRIBUTES", self.attributes[control], "Waiting for the attributes"
+        request = self.requests.get(control)
+        if request is not None and request[0] == "PLANNING":
+            return "REQUESTS", request[1], _REQUEST_LABELS["PLANNING"]
+        if control in self.untraced:
+            return (
+                "EVIDENCE",
+                self.untraced[control],
+                "Evidence not planned against the attributes",
+            )
+        if request is not None:
+            return "REQUESTS", request[1], _REQUEST_LABELS[request[0]]
+        return None
+
+
+def design_wait(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> tuple[str, str] | None:
+    """What the control's D&I requests list waits on and the sentence, or None when it is
+    settled (DesignWaits), whether or not it is released already. A control with no plan,
+    or whose plan says the D&I phase does not apply, has no list to settle."""
+    phase = connection.execute(
+        "SELECT applicability FROM evidence_plan_phases WHERE project_id = %s "
+        "AND engagement_control_id = %s AND phase = 'DESIGN'",
+        (project_id, control_id),
+    ).fetchone()
+    if phase is None:
+        return "", "The control is not planned."
+    if phase[0] not in _APPLIES:
+        return "", "The test plan says the D&I phase does not apply."
+    found = DesignWaits(connection, project_id, control_id).of(control_id)
+    return None if found is None else (found[0], found[1])
 
 
 def approved_attributes(connection: psycopg.Connection[Any], control_id: UUID) -> list[str]:
@@ -385,8 +559,16 @@ class PhaseStatus(BaseModel):
     # What the D&I release waits on, for the screens that point to it: Control
     # Understanding, or the attributes (11 November 2026). Empty otherwise.
     # EVIDENCE (12 November 2026): no D&I item evidences any approved attribute, so the
-    # evidence could not be tested against them.
-    waiting_on: Literal["", "UNDERSTANDING", "ATTRIBUTES", "EVIDENCE"] = ""
+    # evidence could not be tested against them. Since the D&I requests list (B1e, the same
+    # day) it is per attribute: an approved attribute is addressed by no live D&I request
+    # and has no recorded exception.
+    # REQUESTS (B1e): the D&I requests list is not settled: a request waits to be accepted
+    # ("Requests to accept"), the planner is still updating the list, or there is no
+    # request yet. The step's label and waiting_for say which.
+    waiting_on: Literal["", "UNDERSTANDING", "ATTRIBUTES", "EVIDENCE", "REQUESTS"] = ""
+    # The D&I release the server recorded in the request of the person who completed the
+    # requests list (B1e); released_by names that person.
+    automatic: bool = False
 
 
 class ControlPhases(BaseModel):
@@ -433,9 +615,7 @@ def _statuses(
     from ai_workforce_api.design_conclusions import effective_controls
 
     designed = effective_controls(connection, project_id, control_id if one else None)
-    waits = understanding_waits(connection, project_id, control_id if one else None)
-    unsettled = attribute_waits(connection, project_id, control_id if one else None)
-    untraced = design_untraced(connection, project_id, control_id if one else None)
+    design_waits = DesignWaits(connection, project_id, control_id if one else None)
     tested = {
         UUID(str(row[0]))
         for row in connection.execute(
@@ -460,7 +640,7 @@ def _statuses(
         for row in connection.execute(
             f"""
             SELECT r.engagement_control_id, r.phase, u.display_name, r.released_at, r.early,
-                   r.reason
+                   r.reason, r.automatic
             FROM phase_releases r LEFT JOIN users u ON u.id = r.released_by
             WHERE r.{scope}
             """,
@@ -496,6 +676,8 @@ def _statuses(
                     bool(release[2]),
                     str(release[3]),
                 )
+                status.automatic = bool(release[4])
+            label = ""
             if decided is None:
                 status.step, status.waiting_for = "AWAITING_PLAN", "The control is not planned."
             elif not applies:
@@ -506,18 +688,17 @@ def _statuses(
                 status.step = "RELEASED"
             elif phase == "DESIGN":
                 # Its own release, once the control is understood (B1) and its attributes
-                # are settled (11 November 2026); never the plan's approval.
-                if control in waits:
-                    status.step, status.waiting_on = "WAITING", "UNDERSTANDING"
-                    status.waiting_for = waits[control]
-                elif control in unsettled:
-                    status.step, status.waiting_on = "WAITING", "ATTRIBUTES"
-                    status.waiting_for = unsettled[control]
-                elif control in untraced:
-                    status.step, status.waiting_on = "WAITING", "EVIDENCE"
-                    status.waiting_for = untraced[control]
-                else:
+                # are settled (11 November 2026); never the plan's approval. Since the
+                # D&I requests list (B1e, 12 November 2026) also once every request is
+                # accepted and every attribute covered (DesignWaits): READY is the
+                # settled list, which the request that settles it releases at once, so
+                # it is read only when nothing a person did was last to complete it.
+                wait = design_waits.of(control)
+                if wait is None:
                     status.step = "READY"
+                else:
+                    status.step = "WAITING"
+                    status.waiting_on, status.waiting_for, label = wait
             elif not approved:
                 status.step, status.waiting_for = "AWAITING_PLAN", "Approve the test plan."
             else:
@@ -527,13 +708,7 @@ def _statuses(
             status.step_label = (
                 "Released early"
                 if status.step == "RELEASED" and status.early
-                else "Waiting for understanding"
-                if status.waiting_on == "UNDERSTANDING"
-                else "Waiting for the attributes"
-                if status.waiting_on == "ATTRIBUTES"
-                else "Evidence not planned against the attributes"
-                if status.waiting_on == "EVIDENCE"
-                else STEP_LABELS[status.step]
+                else label or STEP_LABELS[status.step]
             )
             phases.append(status)
         found.append(
@@ -639,8 +814,16 @@ def release(
     body: ReleaseBody,
 ) -> bool:
     """A person releases the control's phase. Idempotent: a released phase stays as it was.
-    Returns whether this call released it. The D&I evidence needs a plan, not its approval;
-    an operating phase needs the approved plan and the D&I conclusion signed off effective."""
+    Returns whether this call released it. An operating phase needs the approved plan and
+    the D&I conclusion signed off effective, and may be released early with a reason.
+
+    The D&I evidence needs a plan, not its approval, and (B1e, product owner, 12 November
+    2026: "Why do I need to have the release button? Simplify the workflow.") is released
+    only once its requests list is settled: the same rule settle_design applies in the
+    request of the person who completes the list, which is how it is normally released.
+    This route stays for the list a person's own request was not the last to complete (the
+    planner finished after their last change). There is no early D&I release: before the
+    list is settled it is refused with what it waits for, reason or not."""
     reason = " ".join(body.reason.split())
     with transaction(connection) as cursor:
         plan = cursor.execute(
@@ -670,12 +853,22 @@ def release(
         )
         if current is None or current.step == "NOT_APPLICABLE":
             raise PlanState(f"the test plan says the {phase_word(phase)} phase does not apply")
-        if phase in _OPERATING:
-            from ai_workforce_api.design_conclusions import oe_gate_reason
+        if phase == "DESIGN":
+            if current.step != "READY":
+                raise PlanState(
+                    current.waiting_for
+                    or "The D&I requests list is not settled, so the D&I evidence is not released."
+                )
+            _record_design_release(
+                cursor, organization_id, project_id, control_id, actor, plan[1],
+                automatic=False, reason=reason,
+            )  # fmt: skip
+            return True
+        from ai_workforce_api.design_conclusions import oe_gate_reason
 
-            gated = oe_gate_reason(cursor.connection, control_id)
-            if gated is not None:
-                raise PlanState(gated)
+        gated = oe_gate_reason(cursor.connection, control_id)
+        if gated is not None:
+            raise PlanState(gated)
         early = current.step != "READY"
         if early and len(reason) < 20:
             raise PlanState(
@@ -691,15 +884,267 @@ def release(
             """,
             (organization_id, project_id, control_id, phase, early, reason, plan[1], actor),
         )
-        payload: dict[str, Any] = {"phase": phase, "early": early, "reason": reason}
-        if phase == "DESIGN":
-            # What the D&I evidence is requested against, as worded at the release: a test
-            # of one is judged against these attributes (11 November 2026).
-            payload["attributes"] = approved_attributes(cursor.connection, control_id)
         _audit(
             cursor, organization_id, project_id, actor, "phase.released", "engagement_control",
-            control_id, payload,
+            control_id, {"phase": phase, "early": early, "reason": reason},
         )  # fmt: skip
+    return True
+
+
+def _record_design_release(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID,
+    plan_revision: Any,
+    automatic: bool,
+    reason: str = "",
+    deferred: dict[str, Any] | None = None,
+) -> None:
+    """Record the D&I release of a settled requests list, by the person named, with what
+    was released on the audit trail: the approved attributes as worded then (a test of one
+    is judged against them, 11 November 2026), each request with the attributes it
+    addresses, and each exception a person recorded for an attribute no request addresses.
+    The caller holds the plan's row and has checked the list is settled."""
+    cursor.execute(
+        """
+        INSERT INTO phase_releases (
+            organization_id, project_id, engagement_control_id, phase, early, reason,
+            plan_revision, released_by, automatic
+        )
+        VALUES (%s, %s, %s, 'DESIGN', false, %s, %s, %s, %s)
+        """,
+        (organization_id, project_id, control_id, reason, plan_revision, actor, automatic),
+    )
+    requirements = [
+        {"id": str(row[0]), "title": str(row[1]), "attribute_ids": [str(a) for a in row[2]]}
+        for row in cursor.execute(
+            f"""
+            SELECT q.id, q.title,
+                   (SELECT coalesce(array_agg(ra.attribute_id ORDER BY a.position, a.created_at),
+                                    '{{}}'::uuid[])
+                    FROM evidence_requirement_attributes ra
+                    JOIN control_attributes a ON a.id = ra.attribute_id
+                    WHERE ra.requirement_id = q.id AND a.status = 'APPROVED')
+            FROM evidence_requirements q
+            WHERE q.engagement_control_id = %s AND q.phase = 'DESIGN'
+              AND {_LIVE_REQUIREMENT_SQL}
+            ORDER BY q.created_at, q.requirement_key
+            """,
+            (control_id,),
+        ).fetchall()
+    ]
+    exceptions = [
+        {"attribute_id": str(row[0]), "reason": str(row[1]), "recorded_by": str(row[2])}
+        for row in cursor.execute(
+            """
+            SELECT x.attribute_id, x.reason, x.recorded_by
+            FROM design_coverage_exceptions x
+            JOIN control_attributes a ON a.id = x.attribute_id
+            WHERE x.engagement_control_id = %s AND a.status = 'APPROVED'
+            ORDER BY a.position, a.created_at
+            """,
+            (control_id,),
+        ).fetchall()
+    ]
+    _audit(
+        cursor, organization_id, project_id, actor, "phase.released", "engagement_control",
+        control_id,
+        {
+            "phase": "DESIGN",
+            "early": False,
+            "reason": reason,
+            "automatic": automatic,
+            # Recorded when the planner's run ended, for the person whose acceptance had
+            # completed the list (settle_design_after_run); `run` then says which run.
+            "deferred": deferred is not None,
+            **({} if deferred is None else {"run": deferred}),
+            "attributes": approved_attributes(cursor.connection, control_id),
+            "requirements": requirements,
+            "exceptions": exceptions,
+        },
+    )  # fmt: skip
+
+
+def settle_design(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    scheduler: Any = None,
+) -> bool:
+    """Release the control's D&I evidence when the request a person just made left its
+    requests list settled (DesignWaits), and the phase is not released yet (B1e, product
+    owner, 12 November 2026: no release button; the acceptance is the approval). Called at
+    the end of each request by a person that can complete the list: accepting requests,
+    adding, rewording, removing, waiving or restoring one, setting the attributes one
+    addresses, deciding a proposed change, recording or clearing a coverage exception, and
+    what settles the attributes or completes the understanding. Returns whether this call
+    released it.
+
+    Only inside a request by an authorised person: the principal must be a person who may
+    change the engagement's work (the authorization of the request that got here, checked
+    again), and the release names them. Never from a worker, a scheduler or an agent: those
+    have no such principal, and none of them calls this. The one release a worker completes
+    is settle_design_after_run, for a list a person had already completed.
+
+    The release is in the request's transaction; the Design phase's items are then
+    requested (request_released) and their drafts handed to the worker once the request
+    has committed (after_commit). Each drafted request still needs its own approval before
+    it is sent: nothing is sent here. Idempotent under concurrent requests: the plan's row
+    is locked, as release() locks it, and one release per control and phase is all the
+    table holds."""
+    if principal.kind is not PrincipalKind.USER:
+        return False
+    try:
+        authorize(
+            connection, principal=principal, action=Action.TASK_UPDATE,
+            organization_id=organization_id, project_id=project_id,
+        )  # fmt: skip
+    except AccessDenied, NotVisible:
+        return False
+    with transaction(connection) as cursor:
+        plan = cursor.execute(
+            """
+            SELECT p.revision FROM evidence_plans p
+            JOIN engagement_controls c ON c.id = p.engagement_control_id
+            WHERE p.project_id = %s AND p.engagement_control_id = %s
+              AND p.organization_id = %s AND c.included
+            FOR UPDATE OF p
+            """,
+            (project_id, control_id, organization_id),
+        ).fetchone()
+        if plan is None:
+            return False
+        if (
+            cursor.execute(
+                "SELECT 1 FROM phase_releases WHERE engagement_control_id = %s "
+                "AND phase = 'DESIGN'",
+                (control_id,),
+            ).fetchone()
+            is not None
+        ):
+            return False
+        status = phases_of(cursor.connection, project_id, control_id)
+        current = (
+            None
+            if status is None
+            else next((item for item in status.phases if item.phase == "DESIGN"), None)
+        )
+        if current is None or current.step != "READY":
+            return False
+        _record_design_release(
+            cursor, organization_id, project_id, control_id, principal.id, plan[0],
+            automatic=True,
+        )  # fmt: skip
+    from ai_workforce_api.pbc_drafting import DraftScheduler, schedule
+
+    drafts = request_released(
+        connection, organization_id, project_id, control_id, "DESIGN", principal.id
+    )
+    worker = scheduler if isinstance(scheduler, DraftScheduler) else None
+    after_commit(lambda: schedule(worker, drafts))
+    return True
+
+
+def settle_design_after_run(
+    connection: psycopg.Connection[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    plan_id: UUID,
+) -> bool:
+    """Record the D&I release of a requests list that a person completed while the planner
+    was still at work, once the planner's run has ended and left it as they completed it
+    (B1e; the product owner wants no release button at all, 12 November 2026). Called by
+    the plan run when it finishes (evidence_plans.run_plan), and by nothing else. Returns
+    whether it released.
+
+    This is the one place a worker completes the release, and it decides nothing: the list
+    is settled by the rule a person's request is held to (DesignWaits), which means every
+    request on it was accepted by a person and carries no change, every approved attribute
+    is addressed by an accepted request or excepted by a person, the attributes and the
+    understanding are settled by people, and no run waits or works. A run that changed or
+    added anything left a request unaccepted or a change pending, so the list is not
+    settled and nothing is released: the person accepts, and their request releases it.
+
+    The release is attributed to the person whose acceptance was the last on the list
+    (the latest accepted_at among its live requests), recorded as automatic, and marked
+    deferred on the audit trail with the run that ended and that acceptance, so the record
+    says a worker wrote it and when the person's decision was made. That person must still
+    be allowed to change the engagement's work now (authorize, as settle_design checks the
+    person in a request); if they no longer are, nothing is released and the list waits
+    for a person's request. A run that failed releases nothing either.
+
+    The Design items are requested in the same step; their drafts wait in the database,
+    where the worker that ran the plan picks them up (drafts_for_plan). Each drafted request
+    still needs its own approval before it is sent."""
+    with transaction(connection) as cursor:
+        plan = cursor.execute(
+            """
+            SELECT p.revision, p.run_status FROM evidence_plans p
+            JOIN engagement_controls c ON c.id = p.engagement_control_id
+            JOIN projects j ON j.id = p.project_id
+            WHERE p.id = %s AND p.project_id = %s AND p.engagement_control_id = %s
+              AND p.organization_id = %s AND c.included
+              -- Only a running engagement: a paused, completed or archived one waits.
+              AND j.status::text = 'ACTIVE' AND j.deleted_at IS NULL
+            FOR UPDATE OF p
+            """,
+            (plan_id, project_id, control_id, organization_id),
+        ).fetchone()
+        if plan is None or str(plan[1]) in ("PENDING", "WORKING", "FAILED"):
+            return False
+        if (
+            cursor.execute(
+                "SELECT 1 FROM phase_releases WHERE engagement_control_id = %s "
+                "AND phase = 'DESIGN'",
+                (control_id,),
+            ).fetchone()
+            is not None
+        ):
+            return False
+        status = phases_of(cursor.connection, project_id, control_id)
+        current = (
+            None
+            if status is None
+            else next((item for item in status.phases if item.phase == "DESIGN"), None)
+        )
+        if current is None or current.step != "READY":
+            return False
+        last = cursor.execute(
+            f"""
+            SELECT q.id, q.accepted_by, q.accepted_at FROM evidence_requirements q
+            WHERE q.engagement_control_id = %s AND q.phase = 'DESIGN'
+              AND {_LIVE_REQUIREMENT_SQL}
+            ORDER BY q.accepted_at DESC NULLS FIRST, q.id DESC
+            LIMIT 1
+            """,
+            (control_id,),
+        ).fetchone()
+        # Settled means every live request is accepted; a request with nobody named would
+        # sort first, and then there is no person to attribute the release to.
+        if last is None or last[1] is None:
+            return False
+        person = Principal(PrincipalKind.USER, UUID(str(last[1])))
+        try:
+            authorize(
+                cursor.connection, principal=person, action=Action.TASK_UPDATE,
+                organization_id=organization_id, project_id=project_id,
+            )  # fmt: skip
+        except AccessDenied, NotVisible:
+            return False
+        _record_design_release(
+            cursor, organization_id, project_id, control_id, person.id, plan[0],
+            automatic=True,
+            deferred={
+                "plan_id": str(plan_id),
+                "last_acceptance": {"requirement": str(last[0]), "at": last[2].isoformat()},
+            },
+        )  # fmt: skip
+    request_released(connection, organization_id, project_id, control_id, "DESIGN", person.id)
     return True
 
 
@@ -755,18 +1200,19 @@ def register_phase_release(app: FastAPI, settings: Settings, scheduler: Any = No
         connection: psycopg.Connection[Any], organization_id: UUID, project_id: UUID,
         control_id: UUID, phase: str, actor: UUID,
     ) -> None:  # fmt: skip
-        """A D&I release requests the Design items; their drafts go to the background."""
+        """A D&I release requests the Design items; their drafts go to the background, once
+        the request has committed (after_commit)."""
         from ai_workforce_api.pbc_drafting import schedule
 
-        schedule(
-            scheduler,
-            request_released(connection, organization_id, project_id, control_id, phase, actor),
-        )
+        drafts = request_released(connection, organization_id, project_id, control_id, phase, actor)
+        after_commit(lambda: schedule(scheduler, drafts))
 
     def run[T](request: Request, work: Callable[[psycopg.Connection[Any], Principal], T]) -> T:
         principal = _session_principal(request)
         try:
-            return _call(settings, lambda connection: work(connection, principal))
+            return committed(
+                lambda: _call(settings, lambda connection: work(connection, principal))
+            )
         except PlanState as error:
             raise HTTPException(status_code=409, detail=error.detail) from None
 

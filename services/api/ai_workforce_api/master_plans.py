@@ -43,6 +43,7 @@ from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field
 
+from ai_workforce_api.after_commit import committed
 from ai_workforce_api.authorization import (
     AccessDenied,
     Action,
@@ -66,6 +67,7 @@ from ai_workforce_api.evidence_plans import (
     ATTRIBUTES_SETTLED_SQL,
     PlanState,
     _audit,
+    accept_request,
     release,
 )
 from ai_workforce_api.implementations import CoverageBody, Scope, ScopeUnit, SplitBody, UnitCreate
@@ -2609,6 +2611,13 @@ def link_requirement(
             "evidence_requirement", requirement_id,
             {"attributes": len(attributes), "procedures": len(procedures)},
         )  # fmt: skip
+        # A person set the attributes it addresses: a D&I request is theirs from now on
+        # (B1e, 12 November 2026), and read again at its new version.
+        if accept_request(cursor, organization_id, project_id, requirement_id, actor, "LINKS"):
+            cursor.execute(
+                "UPDATE evidence_requirements SET version = version + 1 WHERE id = %s",
+                (requirement_id,),
+            )
 
 
 def set_requirement_links(
@@ -2778,11 +2787,26 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
     def run[T](request: Request, work: Callable[[psycopg.Connection[Any], Principal], T]) -> T:
         principal = _session_principal(request)
         try:
-            return _call(settings, lambda connection: work(connection, principal))
+            # What the work hands over with after_commit (the drafts of a D&I release that
+            # followed the person's change, `settled` below) goes once it has committed.
+            return committed(
+                lambda: _call(settings, lambda connection: work(connection, principal))
+            )
         except PlanState as error:
             raise HTTPException(status_code=409, detail=error.detail) from None
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error) or "plan is invalid") from None
+
+    def settled(
+        c: psycopg.Connection[Any], p: Principal, organization_id: UUID, project_id: UUID,
+        control_id: UUID,
+    ) -> None:  # fmt: skip
+        """The person's change (the attributes a D&I request addresses, or the criteria
+        that settle the attributes) may have completed the D&I requests list: the D&I
+        evidence is then released in this request, by them (phase_release.settle_design)."""
+        from ai_workforce_api.phase_release import settle_design
+
+        settle_design(c, p, organization_id, project_id, control_id, scheduler)
 
     def allowed(
         connection: psycopg.Connection[Any],
@@ -3164,6 +3188,7 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
             allowed(c, p, organization_id, project_id, control_id, Action.TASK_UPDATE)
             link_requirement(c, organization_id, project_id, control_id, requirement_id, p.id,
                              body)  # fmt: skip
+            settled(c, p, organization_id, project_id, control_id)
             return read(c, p, organization_id, project_id, control_id)
 
         return run(request, work)
@@ -3176,6 +3201,7 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
         def work(c: psycopg.Connection[Any], p: Principal) -> MasterPlanBody:
             allowed(c, p, organization_id, project_id, control_id, Action.TASK_UPDATE)
             set_criteria(c, organization_id, project_id, control_id, attribute_id, p.id, body)
+            settled(c, p, organization_id, project_id, control_id)
             return read(c, p, organization_id, project_id, control_id)
 
         return run(request, work)
@@ -3188,6 +3214,7 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
         def work(c: psycopg.Connection[Any], p: Principal) -> MasterPlanBody:
             allowed(c, p, organization_id, project_id, control_id, Action.TASK_UPDATE)
             accept_criteria(c, organization_id, project_id, control_id, p.id, body)
+            settled(c, p, organization_id, project_id, control_id)
             return read(c, p, organization_id, project_id, control_id)
 
         return run(request, work)

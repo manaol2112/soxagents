@@ -25,6 +25,7 @@ as complete and accurate (control_tests.py asks population_gate).
 
 import hashlib
 import json
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
@@ -38,6 +39,7 @@ from psycopg.types.json import Json
 from pydantic import BaseModel, Field
 
 from ai_workforce_api.actions import contains_secret
+from ai_workforce_api.after_commit import committed
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -79,6 +81,8 @@ from ai_workforce_api.model_providers import fallback_note, live_model, provider
 from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.settings import Settings
+
+logger = logging.getLogger(__name__)
 
 # The email template adds about 500 characters around the description.
 # The full wording of a request (migration 0073); never shortened (pbc_drafting.py).
@@ -1244,13 +1248,18 @@ def _merge_requirements(
 ) -> Changes:
     """Merge a run's requirements into the plan. Under a plan a person approved, or in a
     phase a person released (the D&I evidence, B1), the run's changes are proposed to a
-    person rather than applied: the agent never extends what a person approved."""
+    person rather than applied: the agent never extends what a person approved. The same
+    holds for one D&I request a person accepted (B1e, 12 November 2026), on any plan: its
+    material change or its removal arrives as the request's pending change, and a request
+    the run adds arrives unaccepted (accepted_by is never set here)."""
     changes = Changes([], [], [], [], [])
     rows = cursor.execute(
         """
         SELECT q.id, q.phase, q.requirement_key, q.status, q.origin, q.person_edited,
                r.status, q.title, q.description, q.categories, q.necessity, q.depends_on,
-               q.population_kind, q.attributes, q.objective, q.sample_selection
+               q.population_kind, q.attributes, q.objective, q.sample_selection,
+               q.accepted_at IS NOT NULL,
+               coalesce((q.pending_change ->> 'add')::boolean, false)
         FROM evidence_requirements q
         LEFT JOIN pbc_requests r ON r.id = q.pbc_request_id
         WHERE q.engagement_control_id = %s
@@ -1262,13 +1271,18 @@ def _merge_requirements(
     planned_keys: set[tuple[str, str]] = set()
     for phase_plan in output.phases:
         period = periods[phase_plan.phase]
-        held = approved or phase_plan.phase in released
+        phase_held = approved or phase_plan.phase in released
         for requirement in phase_plan.requirements:
             key = (phase_plan.phase, requirement.key)
             planned_keys.add(key)
             label = f"{phase_plan.phase.lower()}:{requirement.key}"
             content = _content(requirement)
             row = existing.get(key)
+            # A D&I request a person accepted is theirs (12 November 2026: "Agent proposes,
+            # the human approves"): the planner never overwrites it, whatever the plan's
+            # status. Its change arrives as the request's pending change, to accept.
+            accepted = row is not None and phase_plan.phase == "DESIGN" and bool(row[16])
+            held = phase_held or accepted
             if row is None:
                 # Added to a plan a person approved (or a phase a person released): proposed
                 # to them, not planned, until they accept it (decide_change). The agent never
@@ -1342,7 +1356,8 @@ def _merge_requirements(
                 # owner, 26 October 2026). A person restores it.
                 continue
             if status == "REMOVED" and held:
-                # Planned again on a plan a person approved: proposed to them.
+                # Planned again on a plan a person approved, or a D&I request a person had
+                # accepted before it left the plan: proposed to them.
                 cursor.execute(
                     "UPDATE evidence_requirements SET pending_change = %s, needs_review = true, "
                     "version = version + 1 WHERE id = %s AND pending_change IS NULL",
@@ -1363,13 +1378,30 @@ def _merge_requirements(
                 )  # fmt: skip
                 changes.added.append(label)
                 continue
-            if material and (locked or held):
+            # An addition still only proposed to a person is the agent's own proposal: a
+            # later run revises it in place and it stays proposed (below). Recorded as a
+            # change to it instead, it would have read as part of the plan with a change
+            # pending, and been requested as it first stood.
+            proposed = held and bool(row[17]) and status != "REMOVED"
+            if material and (locked or held) and not proposed:
                 cursor.execute(
                     "UPDATE evidence_requirements SET pending_change = %s, needs_review = true, "
                     "version = version + 1 WHERE id = %s",
                     (Json(content), requirement_id),
                 )
                 changes.flagged.append(label)
+                continue
+            if accepted:
+                # Nothing material changed: the accepted request stays exactly as the
+                # person accepted it (its other words are not rewritten under them). A
+                # change or removal an earlier run proposed and this run no longer plans
+                # is the agent's own proposal withdrawn, so the request reads accepted again.
+                cursor.execute(
+                    "UPDATE evidence_requirements SET pending_change = NULL, "
+                    "needs_review = false, version = version + 1 "
+                    "WHERE id = %s AND pending_change IS NOT NULL",
+                    (requirement_id,),
+                )
                 continue
             cursor.execute(
                 """
@@ -1382,7 +1414,14 @@ def _merge_requirements(
                                   THEN CASE WHEN %s::text IS NULL THEN 'PLANNED'
                                             ELSE 'AWAITING_DEPENDENCY' END
                                   ELSE status END,
-                    pending_change = NULL,
+                    -- An addition proposed to a person (held) stays proposed until they
+                    -- decide it: planning it again, unchanged, is not their acceptance
+                    -- (12 November 2026; before, the second run cleared the proposal and
+                    -- the addition joined the plan, and a released phase's requests, with
+                    -- no person accepting it).
+                    pending_change = CASE
+                        WHEN %s AND coalesce((pending_change ->> 'add')::boolean, false)
+                        THEN pending_change ELSE NULL END,
                     version = version + CASE WHEN %s THEN 1 ELSE 0 END
                 WHERE id = %s
                 """,
@@ -1392,9 +1431,13 @@ def _merge_requirements(
                     content["rationale"], content["necessity"],
                     content["period_label"] or period.label, period.start, period.end,
                     period.as_of, content["population_kind"], content["sample_selection"],
-                    content["depends_on"], content["depends_on"], material, requirement_id,
+                    content["depends_on"], content["depends_on"], held, material,
+                    requirement_id,
                 ),
             )  # fmt: skip
+            if proposed:
+                # Still only proposed: its links follow once a person accepts it.
+                continue
             _sync_named_links(
                 cursor, organization_id, project_id, control_id, requirement_id,
                 list(content["attributes"]), origin,
@@ -1409,7 +1452,10 @@ def _merge_requirements(
             continue
         label = f"{known[0].lower()}:{known[1]}"
         locked = status == "REQUESTED" and request_status not in ("DRAFT", "CANCELLED")
-        if locked or approved or known[0] in released:
+        # A D&I request a person accepted is not removed under them: the removal is
+        # proposed, like any change to it.
+        accepted = known[0] == "DESIGN" and bool(row[16])
+        if locked or approved or known[0] in released or accepted:
             cursor.execute(
                 "UPDATE evidence_requirements SET pending_change = %s, needs_review = true, "
                 "version = version + 1 WHERE id = %s",
@@ -1910,6 +1956,11 @@ def queue_drafts(
 # person has not approved. Design evidence (policy, narrative, walkthrough) waits for the
 # approved plan; operating evidence (population, samples, reports) also waits for the
 # control's attributes to be settled, since they define what a population must hold.
+
+# A D&I request in the list (B1e): planned, waiting for the item it depends on, or
+# requested. An addition the planner proposed counts (it waits for a person, like any
+# proposal); a waived or removed request does not.
+LISTED_STATUSES: tuple[str, ...] = ("PLANNED", "AWAITING_DEPENDENCY", "REQUESTED")
 
 GATE_PLAN = "approve the test plan first"
 GATE_ATTRIBUTES = "settle the control's attributes first"
@@ -2432,6 +2483,20 @@ def run_plan(
             "run_stage = '', run_note = %s WHERE id = %s",
             (note[:300], plan_id),
         )
+    # The run was the last thing a D&I requests list a person had completed waited for:
+    # the release their acceptance stood for is recorded now, as theirs and marked deferred
+    # (phase_release.settle_design_after_run, the one release a worker completes). A run
+    # that changed or added anything left it to accept, so nothing is released. Never
+    # fails the run, which is done: the list then waits for a person's next request.
+    try:
+        from ai_workforce_api.phase_release import settle_design_after_run
+
+        settle_design_after_run(connection, organization_id, project_id, control_id, plan_id)
+    except Exception as error:
+        logger.warning(
+            "the D&I release deferred to the end of a plan run was not recorded (%s)",
+            type(error).__name__,
+        )
     return "DONE"
 
 
@@ -2881,6 +2946,21 @@ class RequirementBody(BaseModel):
     needs_review: bool
     coverage_note: str
     version: int
+    # The approved attributes it addresses (its links, evidence_requirement_attributes), in
+    # the control's order. For an addition the planner proposed and nobody has accepted
+    # yet, the approved attributes it names: what it would address once accepted.
+    attribute_ids: list[UUID] = Field(default_factory=list)
+    # The plan's active procedures it serves (its links), in their order: what a person
+    # changing its attributes sends back unchanged (the links route sets both).
+    procedure_ids: list[UUID] = Field(default_factory=list)
+    # A D&I request a person owns as it stands (B1e, 12 November 2026): who accepted it,
+    # by name, and when. The agent's proposals, and the operating phases' items, are not.
+    accepted: bool = False
+    accepted_by: str | None = None
+    accepted_at: datetime | None = None
+    # In the D&I requests list and waiting for a person: not accepted yet, or carrying a
+    # change the planner proposed (pending_change).
+    to_accept: bool = False
     files: list[RequirementFile] = Field(default_factory=list)
     # Files on its request the reader found do not cover it: not its evidence, and named
     # so a person can link one that does.
@@ -2941,6 +3021,40 @@ class ReconcileInfo(BaseModel):
     waiting_items: int
 
 
+class CoverageException(BaseModel):
+    """Why an approved attribute is not evidenced at D&I, as a person recorded it."""
+
+    attribute_id: UUID
+    reason: str
+    recorded_by: str
+    recorded_at: datetime
+
+
+class DesignRequests(BaseModel):
+    """The D&I requests list of a control (B1e, product owner, 12 November 2026): each live
+    D&I request is accepted by a person, and every approved attribute is addressed by one
+    or has a recorded exception. Once that holds, with the understanding complete, the
+    attributes settled and the planner not at work, the list is settled and the D&I
+    evidence is released in the request of the person who completed it."""
+
+    settled: bool = False
+    released: bool = False
+    # How many requests in the list wait for a person.
+    to_accept: int = 0
+    # Approved attributes no live D&I request addresses and no exception explains.
+    uncovered: list[UUID] = Field(default_factory=list)
+    exceptions: list[CoverageException] = Field(default_factory=list)
+    # What the list waits for, in a sentence; empty once settled.
+    waiting_for: str = ""
+    # The agents are at work on what the list rests on, so it may still change: the plan's
+    # run waits or works, or the approved narrative's run holds the attributes (the same
+    # tests the settled rule applies).
+    working: bool = False
+    # Released, and the client request of a live D&I request is still being written by
+    # the evidence coordinator (its draft waits or is in progress).
+    drafting: bool = False
+
+
 class EvidencePlanBody(BaseModel):
     control_id: UUID
     plan_id: UUID | None
@@ -2970,6 +3084,8 @@ class EvidencePlanBody(BaseModel):
     runs: list[RunBody]
     categories: dict[str, str]
     version: int
+    # The D&I requests list (B1e): what it waits for, and whether it is released.
+    design_requests: DesignRequests = Field(default_factory=DesignRequests)
 
 
 def requirement_state(
@@ -3185,6 +3301,70 @@ def plan_body(
         runs=runs,
         categories=dict(CATEGORY_LABELS),
         version=int(plan[9]),
+        design_requests=design_requests(connection, project_id, control_id, requirements),
+    )
+
+
+def design_requests(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    control_id: UUID,
+    requirements: list[RequirementBody],
+) -> DesignRequests:
+    """The D&I requests list's summary for the plan's body: one rule with the phase status
+    and the release (phase_release.design_wait), so the list never disagrees with them."""
+    from ai_workforce_api.phase_release import (
+        NARRATIVE_AT_WORK_SQL,
+        design_wait,
+        uncovered_attributes,
+    )
+
+    released = connection.execute(
+        "SELECT 1 FROM phase_releases WHERE engagement_control_id = %s AND phase = 'DESIGN'",
+        (control_id,),
+    ).fetchone()
+    exceptions = [
+        CoverageException(
+            attribute_id=row[0],
+            reason=str(row[1]),
+            recorded_by=str(row[2] or ""),
+            recorded_at=row[3],
+        )  # fmt: skip
+        for row in connection.execute(
+            """
+            SELECT x.attribute_id, x.reason, u.display_name, x.recorded_at
+            FROM design_coverage_exceptions x
+            JOIN control_attributes a ON a.id = x.attribute_id
+            LEFT JOIN users u ON u.id = x.recorded_by
+            WHERE x.engagement_control_id = %s AND a.status = 'APPROVED'
+            ORDER BY a.position, a.created_at
+            """,
+            (control_id,),
+        ).fetchall()
+    ]
+    wait = design_wait(connection, project_id, control_id)
+    state = connection.execute(
+        f"""
+        SELECT (SELECT p.run_status IN ('PENDING', 'WORKING') FROM evidence_plans p
+                WHERE p.engagement_control_id = c.id)
+               OR {NARRATIVE_AT_WORK_SQL},
+               EXISTS (SELECT 1 FROM evidence_requirements q
+                       JOIN pbc_drafts d ON d.pbc_request_id = q.pbc_request_id
+                       WHERE q.engagement_control_id = c.id AND q.phase = 'DESIGN'
+                         AND q.status = 'REQUESTED' AND d.status IN ('PENDING', 'DRAFTING'))
+        FROM engagement_controls c WHERE c.id = %s
+        """,
+        (control_id,),
+    ).fetchone()
+    return DesignRequests(
+        settled=wait is None,
+        released=released is not None,
+        to_accept=sum(1 for item in requirements if item.to_accept),
+        uncovered=uncovered_attributes(connection, project_id, control_id).get(control_id, []),
+        exceptions=exceptions,
+        waiting_for="" if wait is None else wait[1],
+        working=state is not None and bool(state[0]),
+        drafting=released is not None and state is not None and bool(state[1]),
     )
 
 
@@ -3240,11 +3420,23 @@ def _requirements(connection: psycopg.Connection[Any], plan_id: UUID) -> list[Re
                        JOIN evidence_file_links l
                          ON l.evidence_file_id = ef.evidence_file_id
                         AND l.engagement_control_id = ef.engagement_control_id
-                       WHERE ef.requirement_id = q.id AND ef.status = 'LINKED')
+                       WHERE ef.requirement_id = q.id AND ef.status = 'LINKED'),
+               (SELECT coalesce(array_agg(ra.attribute_id ORDER BY a.position, a.created_at),
+                                '{}'::uuid[])
+                FROM evidence_requirement_attributes ra
+                JOIN control_attributes a ON a.id = ra.attribute_id
+                WHERE ra.requirement_id = q.id AND a.status = 'APPROVED'),
+               ua.display_name, q.accepted_at, q.engagement_control_id,
+               (SELECT coalesce(array_agg(rp.procedure_id ORDER BY pp.position, pp.created_at),
+                                '{}'::uuid[])
+                FROM evidence_requirement_procedures rp
+                JOIN plan_procedures pp ON pp.id = rp.procedure_id
+                WHERE rp.requirement_id = q.id AND pp.status = 'ACTIVE')
         FROM evidence_requirements q
         LEFT JOIN pbc_requests r ON r.id = q.pbc_request_id
         LEFT JOIN pbc_drafts d ON d.pbc_request_id = q.pbc_request_id
         LEFT JOIN users u ON u.id = q.sufficiency_by
+        LEFT JOIN users ua ON ua.id = q.accepted_by
         WHERE q.plan_id = %s
         ORDER BY q.phase, CASE q.necessity WHEN 'REQUIRED' THEN 0 WHEN 'CONDITIONAL' THEN 1
                  ELSE 2 END, q.created_at, q.requirement_key
@@ -3255,8 +3447,30 @@ def _requirements(connection: psycopg.Connection[Any], plan_id: UUID) -> list[Re
     ).fetchall()
     titles = {(str(r[1]), str(r[2])): str(r[3]) for r in rows}
     files, passed_over = requirement_files(connection, plan_id)
+    # An addition only proposed has no links yet (they follow its acceptance): it shows the
+    # approved attributes it names, matched by wording as _sync_named_links will.
+    proposed = [r for r in rows if isinstance(r[26], dict) and r[26].get("add") is True]
+    approved: list[tuple[UUID, str]] = []
+    if proposed:
+        approved = [
+            (UUID(str(attribute_id)), " ".join(str(text).split()).lower())
+            for attribute_id, text in connection.execute(
+                "SELECT id, text FROM control_attributes WHERE engagement_control_id = %s "
+                "AND status = 'APPROVED' ORDER BY position, created_at",
+                (proposed[0][36],),
+            ).fetchall()
+        ]
     found: list[RequirementBody] = []
     for r in rows:
+        addition = isinstance(r[26], dict) and r[26].get("add") is True
+        attribute_ids = [UUID(str(item)) for item in r[33]]
+        if addition and not attribute_ids:
+            named = {" ".join(str(a).split()).lower() for a in r[7]}
+            attribute_ids = [found_id for found_id, wording in approved if wording in named]
+        # In the D&I list: planned, waiting for its dependency, or requested (a proposed
+        # addition included; a waived or removed one is not in the list).
+        listed = str(r[1]) == "DESIGN" and str(r[15]) in LISTED_STATUSES
+        accepted = listed and r[35] is not None
         state = requirement_state(
             str(r[15]), r[17], r[19], str(r[20]), bool(r[31]) or bool(r[32]), bool(r[32])
         )
@@ -3282,6 +3496,11 @@ def _requirements(connection: psycopg.Connection[Any], plan_id: UUID) -> list[Re
                 needs_review=bool(r[27]), coverage_note=str(r[28]), version=int(r[29]),
                 request_recipient=r[30], files=mine, assessment=assess(mine),
                 passed_over=passed_over.get(UUID(str(r[0])), []),
+                attribute_ids=attribute_ids,
+                procedure_ids=[UUID(str(item)) for item in r[37]], accepted=accepted,
+                accepted_by=None if not accepted or r[34] is None else str(r[34]),
+                accepted_at=r[35] if accepted else None,
+                to_accept=listed and (not accepted or r[26] is not None),
             )
         )  # fmt: skip
     return found
@@ -3537,6 +3756,9 @@ class RequirementAdd(BaseModel):
     objective: str = Field(min_length=3, max_length=500)
     rationale: str = Field(min_length=10, max_length=1000)
     necessity: Necessity = "REQUIRED"
+    # The control's approved attributes it addresses, linked as the person's in the same
+    # act (B1e): a request for an attribute nothing covers is added in one step.
+    attribute_ids: list[UUID] = Field(default_factory=list, max_length=30)
 
 
 class ControlChangeBody(BaseModel):
@@ -4092,7 +4314,7 @@ def _requirement_row(
     row = cursor.execute(
         """
         SELECT q.id, q.status, q.version, q.pbc_request_id, r.status, q.pending_change,
-               q.depends_on, q.plan_id
+               q.depends_on, q.plan_id, q.phase, q.accepted_at IS NOT NULL
         FROM evidence_requirements q
         LEFT JOIN pbc_requests r ON r.id = q.pbc_request_id
         WHERE q.id = %s AND q.project_id = %s AND q.engagement_control_id = %s
@@ -4438,6 +4660,46 @@ def unlink_file(
         )  # fmt: skip
 
 
+AcceptedBy = Literal["ACCEPT", "ADD", "EDIT", "LINKS", "RESTORE", "CHANGE"]
+
+
+def accept_request(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    requirement_id: UUID,
+    actor: UUID,
+    by: AcceptedBy,
+    change: str | None = None,
+) -> bool:
+    """A person owns the D&I request as it now stands (B1e, product owner, 12 November
+    2026: "Agent proposes, the human approves"): accepted by them, now. By accepting it as
+    the agent proposed it (ACCEPT, with the pending change it applied, if any), or by their
+    own act on it: adding it, rewording it, restoring it, setting the attributes it
+    addresses, or accepting a change the planner proposed. Only a D&I request is accepted;
+    the operating phases' items follow the test plan's approval. A removed or waived
+    request is not: it is not in the list. Each acceptance is on the audit trail with the
+    person as the actor. Returns whether it was recorded. The caller holds the row."""
+    row = cursor.execute(
+        """
+        UPDATE evidence_requirements
+        SET accepted_by = %s, accepted_at = clock_timestamp()
+        WHERE id = %s AND phase = 'DESIGN'
+          AND status IN ('PLANNED', 'AWAITING_DEPENDENCY', 'REQUESTED')
+        RETURNING engagement_control_id
+        """,
+        (actor, requirement_id),
+    ).fetchone()
+    if row is None:
+        return False
+    _audit(
+        cursor, organization_id, project_id, actor, "evidence_requirement.accepted",
+        "evidence_requirement", requirement_id,
+        {"by": by, "change": change, "control_id": str(row[0])},
+    )  # fmt: skip
+    return True
+
+
 def waive(
     connection: psycopg.Connection[Any],
     organization_id: UUID,
@@ -4515,6 +4777,9 @@ def restore(
             cursor, organization_id, project_id, actor, "evidence_requirement.restored",
             "evidence_requirement", requirement_id, {},
         )  # fmt: skip
+        # A person puts it back in the list: their decision that it is requested, so a
+        # D&I request is accepted by it (a restore in a released phase requests it at once).
+        accept_request(cursor, organization_id, project_id, requirement_id, actor, "RESTORE")
         issued = issue(cursor, organization_id, project_id, control_id, actor, "evidence_plan")
         return queue_drafts(cursor, organization_id, project_id, actor, control_id, issued.drafts)
 
@@ -4601,6 +4866,8 @@ def edit(
             cursor, organization_id, project_id, actor, "evidence_requirement.edited",
             "evidence_requirement", requirement_id, {},
         )  # fmt: skip
+        # Reworded by a person: a D&I request is theirs from now on.
+        accept_request(cursor, organization_id, project_id, requirement_id, actor, "EDIT")
 
 
 def decide_change(
@@ -4613,104 +4880,135 @@ def decide_change(
     body: ChangeDecision,
 ) -> list[UUID]:
     """A person accepts or dismisses a change a later run proposed. An accepted change to
-    something already sent is requested again, never rewritten in the sent request."""
+    something already sent is requested again, never rewritten in the sent request. A D&I
+    request whose change (or proposed addition) a person accepts is accepted by them as it
+    then stands; dismissing a change keeps the request as it was, and whoever accepted it."""
     with transaction(connection) as cursor:
         row = _requirement_row(cursor, project_id, control_id, requirement_id)
         if int(row[2]) != body.version:
             raise PlanState("the requirement changed")
-        change = row[5]
-        if not isinstance(change, dict):
-            raise PlanState("no change is waiting")
-        plan_id = UUID(str(row[7]))
-        if body.decision == "DISMISS":
-            # A proposed addition that is dismissed was never part of the plan.
-            cursor.execute(
-                "UPDATE evidence_requirements SET pending_change = NULL, needs_review = false, "
-                "status = CASE WHEN %s THEN 'REMOVED' ELSE status END, "
-                "version = version + 1 WHERE id = %s",
-                (change.get("add") is True, requirement_id),
-            )
-        elif change.get("add") is True:
-            # Accepted: it joins the plan, which a person approves again.
-            cursor.execute(
-                """
-                UPDATE evidence_requirements
-                SET pending_change = NULL, needs_review = false,
-                    status = CASE WHEN status = 'REMOVED'
-                                  THEN CASE WHEN depends_on IS NULL THEN 'PLANNED'
-                                            ELSE 'AWAITING_DEPENDENCY' END
-                                  ELSE status END,
-                    removed_by = NULL, removed_at = NULL,
-                    version = version + 1
-                WHERE id = %s
-                RETURNING attributes, origin
-                """,
-                (requirement_id,),
-            )
-            added = cursor.fetchone()
-            if added is not None:
-                _sync_named_links(
-                    cursor, organization_id, project_id, control_id, requirement_id,
-                    [str(item) for item in added[0]] if isinstance(added[0], list) else [],
-                    "AGENT" if added[1] == "AGENT" else "RULES",
-                )  # fmt: skip
-            _revise(cursor, plan_id)
-        elif change.get("remove") is True:
-            cursor.execute(
-                "UPDATE evidence_requirements SET pending_change = NULL, needs_review = false, "
-                "status = CASE WHEN status = 'REQUESTED' THEN status ELSE 'REMOVED' END, "
-                "coverage_note = CASE WHEN status = 'REQUESTED' "
-                "THEN 'No longer planned; kept because it was already requested.' "
-                "ELSE coverage_note END, version = version + 1 WHERE id = %s",
-                (requirement_id,),
-            )
-            _revise(cursor, plan_id)
-        else:
-            sent = row[1] == "REQUESTED" and row[4] not in ("DRAFT", "CANCELLED")
-            cursor.execute(
-                """
-                UPDATE evidence_requirements
-                SET title = %s, description = %s, categories = %s, objective = %s,
-                    attributes = %s, risk = %s, rationale = %s, necessity = %s,
-                    period_label = %s, population_kind = %s, sample_selection = %s,
-                    depends_on = %s, pending_change = NULL, needs_review = false,
-                    status = CASE WHEN %s THEN
-                                 CASE WHEN %s::text IS NULL THEN 'PLANNED'
-                                      ELSE 'AWAITING_DEPENDENCY' END
-                             ELSE status END,
-                    pbc_request_id = CASE WHEN %s THEN NULL ELSE pbc_request_id END,
-                    coverage_note = CASE WHEN %s
-                        THEN 'Changed after it was requested; requested again.'
-                        ELSE coverage_note END,
-                    version = version + 1
-                WHERE id = %s
-                """,
-                (
-                    change["title"], change["description"], change["categories"],
-                    change["objective"], Json(change.get("attributes", [])),
-                    change.get("risk", ""), change["rationale"], change["necessity"],
-                    change.get("period_label", ""), change.get("population_kind"),
-                    change.get("sample_selection", ""), change.get("depends_on"), sent,
-                    change.get("depends_on"), sent, sent, requirement_id,
-                ),
-            )  # fmt: skip
-            origin = cursor.execute(
-                "SELECT origin FROM evidence_requirements WHERE id = %s", (requirement_id,)
-            ).fetchone()
-            _sync_named_links(
-                cursor, organization_id, project_id, control_id, requirement_id,
-                [str(item) for item in change.get("attributes", [])],
-                "AGENT" if origin is not None and origin[0] == "AGENT" else "RULES",
-            )  # fmt: skip
-            _revise(cursor, plan_id)
-            if not sent and row[3] is not None:
-                render_into(cursor, project_id, control_id, UUID(str(row[3])))
-        _audit(
-            cursor, organization_id, project_id, actor, "evidence_requirement.change_decided",
-            "evidence_requirement", requirement_id, {"decision": body.decision},
+        kind = apply_change(
+            cursor, organization_id, project_id, control_id, requirement_id, actor, row,
+            body.decision,
         )  # fmt: skip
+        if body.decision == "ACCEPT" and kind != "REMOVE":
+            accept_request(
+                cursor, organization_id, project_id, requirement_id, actor, "CHANGE", kind
+            )
         issued = issue(cursor, organization_id, project_id, control_id, actor, "evidence_plan")
         return queue_drafts(cursor, organization_id, project_id, actor, control_id, issued.drafts)
+
+
+def apply_change(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    requirement_id: UUID,
+    actor: UUID,
+    row: tuple[Any, ...],
+    decision: Literal["ACCEPT", "DISMISS"],
+) -> Literal["ADD", "REMOVE", "CHANGE"]:
+    """Apply a person's decision on the change a run proposed for the requirement
+    (`row`, from _requirement_row, which holds it), and record it. Returns what the change
+    was: a proposed addition, a proposed removal, or a change to its content."""
+    change = row[5]
+    if not isinstance(change, dict):
+        raise PlanState("no change is waiting")
+    plan_id = UUID(str(row[7]))
+    kind: Literal["ADD", "REMOVE", "CHANGE"] = (
+        "ADD" if change.get("add") is True
+        else "REMOVE" if change.get("remove") is True
+        else "CHANGE"
+    )  # fmt: skip
+    if decision == "DISMISS":
+        # A proposed addition that is dismissed was never part of the plan.
+        cursor.execute(
+            "UPDATE evidence_requirements SET pending_change = NULL, needs_review = false, "
+            "status = CASE WHEN %s THEN 'REMOVED' ELSE status END, "
+            "version = version + 1 WHERE id = %s",
+            (change.get("add") is True, requirement_id),
+        )
+    elif change.get("add") is True:
+        # Accepted: it joins the plan, which a person approves again.
+        cursor.execute(
+            """
+            UPDATE evidence_requirements
+            SET pending_change = NULL, needs_review = false,
+                status = CASE WHEN status = 'REMOVED'
+                              THEN CASE WHEN depends_on IS NULL THEN 'PLANNED'
+                                        ELSE 'AWAITING_DEPENDENCY' END
+                              ELSE status END,
+                removed_by = NULL, removed_at = NULL,
+                version = version + 1
+            WHERE id = %s
+            RETURNING attributes, origin
+            """,
+            (requirement_id,),
+        )
+        added = cursor.fetchone()
+        if added is not None:
+            _sync_named_links(
+                cursor, organization_id, project_id, control_id, requirement_id,
+                [str(item) for item in added[0]] if isinstance(added[0], list) else [],
+                "AGENT" if added[1] == "AGENT" else "RULES",
+            )  # fmt: skip
+        _revise(cursor, plan_id)
+    elif change.get("remove") is True:
+        cursor.execute(
+            "UPDATE evidence_requirements SET pending_change = NULL, needs_review = false, "
+            "status = CASE WHEN status = 'REQUESTED' THEN status ELSE 'REMOVED' END, "
+            "coverage_note = CASE WHEN status = 'REQUESTED' "
+            "THEN 'No longer planned; kept because it was already requested.' "
+            "ELSE coverage_note END, version = version + 1 WHERE id = %s",
+            (requirement_id,),
+        )
+        _revise(cursor, plan_id)
+    else:
+        sent = row[1] == "REQUESTED" and row[4] not in ("DRAFT", "CANCELLED")
+        cursor.execute(
+            """
+            UPDATE evidence_requirements
+            SET title = %s, description = %s, categories = %s, objective = %s,
+                attributes = %s, risk = %s, rationale = %s, necessity = %s,
+                period_label = %s, population_kind = %s, sample_selection = %s,
+                depends_on = %s, pending_change = NULL, needs_review = false,
+                status = CASE WHEN %s THEN
+                             CASE WHEN %s::text IS NULL THEN 'PLANNED'
+                                  ELSE 'AWAITING_DEPENDENCY' END
+                         ELSE status END,
+                pbc_request_id = CASE WHEN %s THEN NULL ELSE pbc_request_id END,
+                coverage_note = CASE WHEN %s
+                    THEN 'Changed after it was requested; requested again.'
+                    ELSE coverage_note END,
+                version = version + 1
+            WHERE id = %s
+            """,
+            (
+                change["title"], change["description"], change["categories"],
+                change["objective"], Json(change.get("attributes", [])),
+                change.get("risk", ""), change["rationale"], change["necessity"],
+                change.get("period_label", ""), change.get("population_kind"),
+                change.get("sample_selection", ""), change.get("depends_on"), sent,
+                change.get("depends_on"), sent, sent, requirement_id,
+            ),
+        )  # fmt: skip
+        origin = cursor.execute(
+            "SELECT origin FROM evidence_requirements WHERE id = %s", (requirement_id,)
+        ).fetchone()
+        _sync_named_links(
+            cursor, organization_id, project_id, control_id, requirement_id,
+            [str(item) for item in change.get("attributes", [])],
+            "AGENT" if origin is not None and origin[0] == "AGENT" else "RULES",
+        )  # fmt: skip
+        _revise(cursor, plan_id)
+        if not sent and row[3] is not None:
+            render_into(cursor, project_id, control_id, UUID(str(row[3])))
+    _audit(
+        cursor, organization_id, project_id, actor, "evidence_requirement.change_decided",
+        "evidence_requirement", requirement_id, {"decision": decision},
+    )  # fmt: skip
+    return kind
 
 
 def add_requirement(
@@ -4759,11 +5057,30 @@ def add_requirement(
             ),
         ).fetchone()  # fmt: skip
         assert row is not None
+        attributes = list(dict.fromkeys(body.attribute_ids))
+        if attributes:
+            approved = cursor.execute(
+                "SELECT count(*) FROM control_attributes WHERE engagement_control_id = %s "
+                "AND status = 'APPROVED' AND id = ANY(%s)",
+                (control_id, attributes),
+            ).fetchone()
+            if approved is None or int(approved[0]) != len(attributes):
+                # Answered 422 with this sentence; the request is not added.
+                raise ValueError("Link only the control's approved attributes.")
+            from ai_workforce_api.master_plans import set_requirement_links
+
+            set_requirement_links(
+                cursor, organization_id, project_id, control_id, UUID(str(row[0])),
+                attributes, None, actor,
+            )  # fmt: skip
         _revise(cursor, plan_id)
         _audit(
             cursor, organization_id, project_id, actor, "evidence_requirement.added",
-            "evidence_requirement", UUID(str(row[0])), {"phase": body.phase},
+            "evidence_requirement", UUID(str(row[0])),
+            {"phase": body.phase, **({"attributes": len(attributes)} if attributes else {})},
         )  # fmt: skip
+        # Added by a person: a D&I request is accepted by that act, by them.
+        accept_request(cursor, organization_id, project_id, UUID(str(row[0])), actor, "ADD")
         issued = issue(cursor, organization_id, project_id, control_id, actor, "evidence_plan")
         return queue_drafts(cursor, organization_id, project_id, actor, control_id, issued.drafts)
 
@@ -4845,7 +5162,12 @@ def register_evidence_plans(
     def run[T](request: Request, work: Callable[[psycopg.Connection[Any], Principal], T]) -> T:
         principal = _session_principal(request)
         try:
-            return _call(settings, lambda connection: work(connection, principal))
+            # What the work hands over with after_commit (the drafts of a D&I release
+            # that followed the person's change, settled below) goes to the worker once
+            # the request has committed.
+            return committed(
+                lambda: _call(settings, lambda connection: work(connection, principal))
+            )
         except PlanState as error:
             raise HTTPException(status_code=409, detail=error.detail) from None
         except ValueError as error:
@@ -4855,6 +5177,16 @@ def register_evidence_plans(
         from ai_workforce_api.pbc_drafting import schedule
 
         schedule(scheduler, ids)
+
+    def settled(
+        c: psycopg.Connection[Any], p: Principal, organization_id: UUID, project_id: UUID,
+        control_id: UUID,
+    ) -> None:  # fmt: skip
+        """The person's change may have completed the D&I requests list: the D&I evidence
+        is then released in this request, by them (phase_release.settle_design)."""
+        from ai_workforce_api.phase_release import settle_design
+
+        settle_design(c, p, organization_id, project_id, control_id, scheduler)
 
     def allowed(
         connection: psycopg.Connection[Any],
@@ -5021,6 +5353,7 @@ def register_evidence_plans(
         def work(c: psycopg.Connection[Any], p: Principal) -> EvidencePlanBody:
             allowed(c, p, organization_id, project_id, control_id)
             drafted(add_requirement(c, organization_id, project_id, control_id, p.id, body))
+            settled(c, p, organization_id, project_id, control_id)
             return plan_body(c, project_id, control_id)
 
         return run(request, work)
@@ -5079,6 +5412,7 @@ def register_evidence_plans(
         def work(c: psycopg.Connection[Any], p: Principal) -> EvidencePlanBody:
             allowed(c, p, organization_id, project_id, control_id)
             waive(c, organization_id, project_id, control_id, requirement_id, p.id, body)
+            settled(c, p, organization_id, project_id, control_id)
             return plan_body(c, project_id, control_id)
 
         return run(request, work)
@@ -5091,6 +5425,7 @@ def register_evidence_plans(
         def work(c: psycopg.Connection[Any], p: Principal) -> EvidencePlanBody:
             allowed(c, p, organization_id, project_id, control_id)
             drafted(restore(c, organization_id, project_id, control_id, requirement_id, p.id, body))
+            settled(c, p, organization_id, project_id, control_id)
             return plan_body(c, project_id, control_id)
 
         return run(request, work)
@@ -5103,6 +5438,7 @@ def register_evidence_plans(
         def work(c: psycopg.Connection[Any], p: Principal) -> EvidencePlanBody:
             allowed(c, p, organization_id, project_id, control_id)
             remove(c, organization_id, project_id, control_id, requirement_id, p.id, body)
+            settled(c, p, organization_id, project_id, control_id)
             return plan_body(c, project_id, control_id)
 
         return run(request, work)
@@ -5115,6 +5451,7 @@ def register_evidence_plans(
         def work(c: psycopg.Connection[Any], p: Principal) -> EvidencePlanBody:
             allowed(c, p, organization_id, project_id, control_id)
             edit(c, organization_id, project_id, control_id, requirement_id, p.id, body)
+            settled(c, p, organization_id, project_id, control_id)
             return plan_body(c, project_id, control_id)
 
         return run(request, work)
@@ -5131,6 +5468,7 @@ def register_evidence_plans(
                     c, organization_id, project_id, control_id, requirement_id, p.id, body
                 )
             )
+            settled(c, p, organization_id, project_id, control_id)
             return plan_body(c, project_id, control_id)
 
         return run(request, work)

@@ -6,9 +6,7 @@ inside the engagement the control belongs to. A change that clears a control's b
 asks its waiting test sheets to run again.
 """
 
-import logging
 from collections.abc import Callable
-from contextvars import ContextVar
 from typing import Any, Literal
 from uuid import UUID
 
@@ -30,6 +28,7 @@ from ai_workforce_api import (
     walkthrough_answers,
 )
 from ai_workforce_api.actions import contains_secret
+from ai_workforce_api.after_commit import after_commit, committed
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -155,21 +154,10 @@ class UploadResult(BaseModel):
     linked: list[UUID] = []
 
 
-logger = logging.getLogger(__name__)
-
 # What a request hands to the background worker once it has committed (run, in
-# register_control_context). Outside a request there is nothing to wait for.
-_AFTER_COMMIT: ContextVar[list[Callable[[], None]] | None] = ContextVar(
-    "context_routes_after_commit", default=None
-)
-
-
-def _after_commit(handoff: Callable[[], None]) -> None:
-    waiting = _AFTER_COMMIT.get()
-    if waiting is None:
-        handoff()
-    else:
-        waiting.append(handoff)
+# register_control_context; after_commit.py, shared with the other routes since the D&I
+# requests list, 12 November 2026). Outside a request there is nothing to wait for.
+_after_commit = after_commit
 
 
 def register_control_context(
@@ -189,36 +177,18 @@ def register_control_context(
     def run[T](request: Request, work: Callable[[psycopg.Connection[Any], Principal], T]) -> T:
         principal = _session_principal(request)
         # Background work a request queues is handed to the worker only once the request
-        # has committed (12 November 2026). Handed over inside the request, the worker's
-        # claim ran against the rows as they were before it: a run just queued was not
-        # there to claim, was skipped, and then waited, queued, for nobody.
-        handoffs: list[Callable[[], None]] = []
-        token = _AFTER_COMMIT.set(handoffs)
+        # has committed (12 November 2026; after_commit.committed). Handed over inside the
+        # request, the worker's claim ran against the rows as they were before it: a run
+        # just queued was not there to claim, was skipped, and then waited, queued, for
+        # nobody. A handoff that fails never fails the request that committed.
         try:
-            result = _call(settings, lambda connection: work(connection, principal))
+            return committed(
+                lambda: _call(settings, lambda connection: work(connection, principal))
+            )
         except ContextState as error:
             raise HTTPException(status_code=409, detail=error.detail) from None
         except ValueError:
             raise HTTPException(status_code=422, detail="control context is invalid") from None
-        finally:
-            _AFTER_COMMIT.reset(token)
-        for handoff in handoffs:
-            # The request has committed: a worker that cannot be reached must not turn a
-            # recorded decision into an error (the person would retry and be refused), nor
-            # stop the handoffs after it. What was queued stays queued in the database and
-            # is picked up without this handoff: the local worker's start (resume, which
-            # reads open_plan_runs and the open drafts and tests), the workflow engine's
-            # start (durable.resume_plan_runs), and, for a run that follows the
-            # understanding, the person's "Run again" (the generate route hands a queued
-            # run over again).
-            try:
-                handoff()
-            except Exception as error:
-                logger.warning(
-                    "queued work could not be handed to the worker (%s); it stays queued",
-                    type(error).__name__,
-                )
-        return result
 
     def changed(
         connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, actor: UUID
@@ -258,6 +228,18 @@ def register_control_context(
             ) or replan_for_new_attributes(connection, control_id)
             if planned is not None:
                 _after_commit(lambda: plans([planned]))
+        # The save may have been the last thing the D&I requests list waited for (the
+        # understanding completed, or the attributes settled, with every request already
+        # accepted): the D&I evidence is then released in this request, by this person
+        # (B1e, 12 November 2026; phase_release.settle_design). After the queueing above:
+        # a run just queued means the list may still change, so nothing is released.
+        from ai_workforce_api.phase_release import settle_design
+
+        if owner is not None:
+            settle_design(
+                connection, Principal(PrincipalKind.USER, actor), owner[0], project_id,
+                control_id, scheduler,
+            )  # fmt: skip
 
     @app.get(f"{control}/context")
     def read(
