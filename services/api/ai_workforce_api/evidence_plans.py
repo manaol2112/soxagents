@@ -212,6 +212,7 @@ def load_facts(
         needs_process_understanding,
     )
     from ai_workforce_api.pbc_drafting import load_context
+    from ai_workforce_api.understanding_authority import facts as understanding_facts
     from ai_workforce_api.walkthrough_answers import for_agents
 
     context = load_context(connection, project_id, control_id)
@@ -304,6 +305,7 @@ def load_facts(
         statement=statement_fields(connection, control_id),
         **narrative_facts(connection, control_id),
         walkthrough=for_agents(connection, control_id),
+        confirmed=understanding_facts(connection, control_id),
         rules=context.rules,
     )
 
@@ -384,7 +386,9 @@ class Planned:
 # evidence and the criteria (11 November 2026).
 # /7 (12 November 2026): the design item that shows the control performed once lists every
 # attribute (evidence_planning._instance_against_every_attribute enforces it).
-PLANNER_PROMPT_VERSION = "engagement-planner/7"
+# /8 (12 November 2026, B1e): the confirmed understanding with its dates, newest first; the
+# planner follows it over the RCM record and the library's wording, the newer answer first.
+PLANNER_PROMPT_VERSION = "engagement-planner/8"
 # Room for a whole plan: three phases, their procedures and evidence. At the provider's
 # default of 4,096 a plan built on an approved narrative was cut off and the rules stood in
 # (26 October 2026).
@@ -1252,7 +1256,7 @@ def _merge_requirements(
     """Merge a run's requirements into the plan. Under a plan a person approved, or in a
     phase a person released (the D&I evidence, B1), the run's changes are proposed to a
     person rather than applied: the agent never extends what a person approved. The same
-    holds for one D&I request a person accepted (B1e, 12 November 2026), on any plan: its
+    holds for one D&I request a person accepted (B1f, 12 November 2026), on any plan: its
     material change or its removal arrives as the request's pending change, and a request
     the run adds arrives unaccepted (accepted_by is never set here)."""
     changes = Changes([], [], [], [], [])
@@ -1991,7 +1995,7 @@ def queue_drafts(
 # approved plan; operating evidence (population, samples, reports) also waits for the
 # control's attributes to be settled, since they define what a population must hold.
 
-# A D&I request in the list (B1e): planned, waiting for the item it depends on, or
+# A D&I request in the list (B1f): planned, waiting for the item it depends on, or
 # requested. An addition the planner proposed counts (it waits for a person, like any
 # proposal); a waived or removed request does not.
 LISTED_STATUSES: tuple[str, ...] = ("PLANNED", "AWAITING_DEPENDENCY", "REQUESTED")
@@ -3002,7 +3006,7 @@ class RequirementBody(BaseModel):
     # The plan's active procedures it serves (its links), in their order: what a person
     # changing its attributes sends back unchanged (the links route sets both).
     procedure_ids: list[UUID] = Field(default_factory=list)
-    # A D&I request a person owns as it stands (B1e, 12 November 2026): who accepted it,
+    # A D&I request a person owns as it stands (B1f, 12 November 2026): who accepted it,
     # by name, and when. The agent's proposals, and the operating phases' items, are not.
     accepted: bool = False
     accepted_by: str | None = None
@@ -3081,7 +3085,7 @@ class CoverageException(BaseModel):
 
 
 class DesignRequests(BaseModel):
-    """The D&I requests list of a control (B1e, product owner, 12 November 2026): each live
+    """The D&I requests list of a control (B1f, product owner, 12 November 2026): each live
     D&I request is accepted by a person, and every approved attribute is addressed by one
     or has a recorded exception. Once that holds, with the understanding complete, the
     attributes settled and the planner not at work, the list is settled and the D&I
@@ -3140,7 +3144,7 @@ class EvidencePlanBody(BaseModel):
     runs: list[RunBody]
     categories: dict[str, str]
     version: int
-    # The D&I requests list (B1e): what it waits for, and whether it is released.
+    # The D&I requests list (B1f): what it waits for, and whether it is released.
     design_requests: DesignRequests = Field(default_factory=DesignRequests)
 
 
@@ -3824,7 +3828,7 @@ class RequirementAdd(BaseModel):
     rationale: str = Field(min_length=10, max_length=1000)
     necessity: Necessity = "REQUIRED"
     # The control's approved attributes it addresses, linked as the person's in the same
-    # act (B1e): a request for an attribute nothing covers is added in one step.
+    # act (B1f): a request for an attribute nothing covers is added in one step.
     attribute_ids: list[UUID] = Field(default_factory=list, max_length=30)
 
 
@@ -4752,7 +4756,7 @@ def accept_request(
     by: AcceptedBy,
     change: str | None = None,
 ) -> bool:
-    """A person owns the D&I request as it now stands (B1e, product owner, 12 November
+    """A person owns the D&I request as it now stands (B1f, product owner, 12 November
     2026: "Agent proposes, the human approves"): accepted by them, now. By accepting it as
     the agent proposed it (ACCEPT, with the pending change it applied, if any), or by their
     own act on it: adding it, rewording it, restoring it, setting the attributes it

@@ -1,4 +1,4 @@
-"""The D&I requests list (B1e; decided by the product owner on 12 November 2026,
+"""The D&I requests list (B1f; decided by the product owner on 12 November 2026,
 docs/control-workflow-plan.md): "Why do I need to have the release button? Simplify the
 workflow. After the attributes approval, list down the evidences so that I can add, modify
 or update, or delete." and "Agent proposes, the human approves. For each request, I want to
@@ -1534,7 +1534,7 @@ def test_working_says_when_an_agent_run_holds_the_list(migrated: Database) -> No
 def test_an_early_d_and_i_release_is_refused_with_what_it_waits_for(
     migrated: Database,
 ) -> None:
-    """Rewritten rule (B1e, product owner, 12 November 2026: "Why do I need to have the
+    """Rewritten rule (B1f, product owner, 12 November 2026: "Why do I need to have the
     release button? Simplify the workflow."). Old: a person released D&I early with a
     reason of 20 characters, at any time after the plan. New: the release route releases
     D&I only when the requests list is settled, and says what it waits for otherwise."""
@@ -1739,7 +1739,7 @@ def test_the_backfill_accepts_what_a_person_released_and_nothing_else(
             (proposed,),
         )
         connection.commit()
-        script = (migrations_dir() / "0149_design_request_acceptance.sql").read_text("utf-8")
+        script = (migrations_dir() / "0150_design_request_acceptance.sql").read_text("utf-8")
         marker = "-- Backfill: what a person released is accepted by that person, at the release."
         assert script.count(marker) == 1
         backfill = script.split(marker)[1]

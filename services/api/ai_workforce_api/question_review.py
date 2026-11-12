@@ -462,7 +462,9 @@ def _cleaned(item: _Item, held: _Held) -> dict[str, Any]:
             :3
         ]
         if first is not None
-        else [],
+        # A conflict has no interview: the statements a person picks between, one per side
+        # (control_attributes._issues, 12 November 2026), stay as the server checked them.
+        else (held.suggestions[:3] if conflict else []),
         "why": str(first["why"]) if first is not None else line(item.why, 400),
         "detail": question
         if not conflict and held.detail == held.question

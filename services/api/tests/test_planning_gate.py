@@ -122,7 +122,7 @@ def test_a_plan_waits_for_a_person_at_launch(migrated: Database) -> None:
     assert _rows(migrated, design_query, UUID(row["id"]))[0] == (0, 0)
     # Releasing the D&I evidence requests it. Every request still waits for an approver
     # before it is sent.
-    # Rewritten 12 November 2026 (B1e, the D&I requests list; product owner: "Why do I need
+    # Rewritten 12 November 2026 (B1f, the D&I requests list; product owner: "Why do I need
     # to have the release button? Simplify the workflow."). Old: a person released D&I
     # early through the route, with a reason, and the route answered 200. New: there is no
     # early D&I release (the route refuses with what the list waits for); the release
@@ -288,7 +288,7 @@ def test_approving_the_plan_releases_design_then_operating_evidence(
         UUID(control),
     )
     assert phases == [("INTERIM",)], phases
-    # Rewritten 12 November 2026 (B1e; product owner: "Why do I need to have the release
+    # Rewritten 12 November 2026 (B1f; product owner: "Why do I need to have the release
     # button? Simplify the workflow."). Old: an early D&I release through the route, with a
     # reason, answered 200. New: no early D&I release; the release follows the acceptance
     # of the D&I requests, recorded here by the setup (support.release_design). Unchanged:

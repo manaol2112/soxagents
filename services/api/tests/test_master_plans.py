@@ -700,7 +700,7 @@ def test_the_planner_never_extends_an_approved_plan(migrated: Database) -> None:
         "SELECT pbc_request_id IS NOT NULL FROM evidence_requirements WHERE id = %s",
         requirement_id,
     ) == [(False,)]
-    # Rewritten 12 November 2026 (B1e, the D&I requests list; product owner: "Why do I need
+    # Rewritten 12 November 2026 (B1f, the D&I requests list; product owner: "Why do I need
     # to have the release button? Simplify the workflow."). Old: an early D&I release
     # through the route, with a reason, requested the item. New: there is no early D&I
     # release; the release follows the acceptance of the D&I requests, recorded here by the
@@ -737,7 +737,7 @@ def test_links_name_only_the_controls_own_records(migrated: Database) -> None:
         for f in after["findings"]
     )
     evidence = after["evidence"][0]
-    # Rewritten 12 November 2026 (B1e, after its independent review). Old: the links of any
+    # Rewritten 12 November 2026 (B1f, after its independent review). Old: the links of any
     # requirement were set with no version. New: a D&I request's links change accepts it,
     # so it carries the version the person saw, as an acceptance does (the master plan's
     # evidence item gives it); other phases' requirements are unchanged. Why: without it a

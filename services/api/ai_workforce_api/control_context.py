@@ -27,7 +27,7 @@ from uuid import UUID
 
 import psycopg
 from psycopg.types.json import Json
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.console_citations import find_quote
@@ -883,6 +883,19 @@ class AnswerIssue(BaseModel):
     proposal: str = ""
     proposal_basis: Literal["", "SOURCES", "TYPICAL"] = ""
     suggestions: list[str] = []
+    # For a conflict, the refs of the confirmed facts the agent says settle the matter, when
+    # its schema asks for them (understanding_authority.py, 12 November 2026); none when
+    # none does. Read for a CONFLICT only: it never keeps a missing or ambiguous fact from a
+    # person.
+    covered_by: list[str] = []
+
+    @field_validator("covered_by", mode="before")
+    @classmethod
+    def _refs_only(cls, raw: Any) -> list[str]:
+        # Whatever does not fit is left out by itself; the issue it came with is kept.
+        if not isinstance(raw, list):
+            return []
+        return [item for item in raw if isinstance(item, str) and len(item) <= 8][:5]
 
 
 def checked_issues(

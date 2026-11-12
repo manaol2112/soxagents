@@ -1,5 +1,5 @@
 -- The D&I requests list, after its independent review (12 November 2026;
--- docs/control-workflow-plan.md, B1e "After the independent review").
+-- docs/control-workflow-plan.md, B1f "After the independent review").
 --
 -- 1. The list's last decision. The D&I release rests on the last decision a person made on
 --    the control's requests list (accepting, adding, rewording, linking, removing, waiving
@@ -30,7 +30,7 @@
 -- evidence_plans; DROP FUNCTION stamp_plan_run_queued(); ALTER TABLE evidence_plans DROP
 -- CONSTRAINT evidence_plans_design_decided, DROP COLUMN design_decided_by, DROP COLUMN
 -- design_decided_at, DROP COLUMN run_queued_at; and delete the
--- '0150_design_list_decisions' row from schema_migrations.
+-- '0151_design_list_decisions' row from schema_migrations.
 
 ALTER TABLE evidence_plans
     ADD COLUMN design_decided_by uuid REFERENCES users (id),

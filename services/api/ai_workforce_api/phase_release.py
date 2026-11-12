@@ -10,7 +10,7 @@ migrations 0081 and 0145). The agents never release a phase.
   the evidence asked for). It does not wait for the rest of the test plan (scope, sampling),
   and revising the plan does not hold it. Releasing it requests the Design phase's evidence
   items, and the release's audit record keeps the attributes they were requested against.
-  Since 12 November 2026 (B1e, the D&I requests list; the product owner: "Why do I need to
+  Since 12 November 2026 (B1f, the D&I requests list; the product owner: "Why do I need to
   have the release button? Simplify the workflow.") nobody presses a release: a person
   accepts each D&I request, every approved attribute is addressed by a request or has a
   recorded exception, and the request of the person who completes that list releases the
@@ -392,7 +392,7 @@ def design_untraced(
     evidence again clears it. A control with no approved attribute is not listed: the
     attributes hold it already (attribute_waits).
 
-    Since the D&I requests list (B1e, the same day; the product owner: "For each request, I
+    Since the D&I requests list (B1f, the same day; the product owner: "For each request, I
     want to show which specific attributes it is addressing to make sure I get coverage")
     the rule is per attribute: a control is listed when any approved attribute is addressed
     by no live D&I request and has no recorded exception (uncovered_attributes). The
@@ -467,7 +467,7 @@ def request_waits(
 ) -> dict[UUID, tuple[RequestWait, str]]:
     """What each planned control's D&I requests list still waits for, with the sentence; a
     control missing from the result has every live D&I request accepted by a person, with
-    no change pending, and no plan run open (B1e, 12 November 2026).
+    no change pending, and no plan run open (B1f, 12 November 2026).
 
     PLANNING: the plan's run is queued or working (evidence_plans.PLAN_RUN_LIVE_SQL: a
     working run under a live lease, a queued run within the worker's bound), so the list
@@ -521,7 +521,7 @@ class DesignWaits:
     read once for an engagement (or one control): the one rule the phase status, the plan's
     summary, the release route and settle_design all read, so they never disagree.
 
-    The list's own rule (`list_wait`; B1e, product owner, 12 November 2026): Control
+    The list's own rule (`list_wait`; B1f, product owner, 12 November 2026): Control
     Understanding complete; the attributes settled; no plan run open; at least one live D&I
     request; every D&I request in the list accepted by a person with no change pending; and
     every approved attribute addressed by a live D&I request or excepted by a person.
@@ -690,14 +690,14 @@ class PhaseStatus(BaseModel):
     # What the D&I release waits on, for the screens that point to it: Control
     # Understanding, or the attributes (11 November 2026). Empty otherwise.
     # EVIDENCE (12 November 2026): no D&I item evidences any approved attribute, so the
-    # evidence could not be tested against them. Since the D&I requests list (B1e, the same
+    # evidence could not be tested against them. Since the D&I requests list (B1f, the same
     # day) it is per attribute: an approved attribute is addressed by no live D&I request
     # and has no recorded exception.
-    # REQUESTS (B1e): the D&I requests list is not settled: a request waits to be accepted
+    # REQUESTS (B1f): the D&I requests list is not settled: a request waits to be accepted
     # ("Requests to accept"), the planner is still updating the list, or there is no
     # request yet. The step's label and waiting_for say which.
     waiting_on: Literal["", "UNDERSTANDING", "ATTRIBUTES", "EVIDENCE", "REQUESTS"] = ""
-    # The D&I release the server recorded when the requests list was settled (B1e);
+    # The D&I release the server recorded when the requests list was settled (B1f);
     # released_by names the person of the list's last decision.
     automatic: bool = False
 
@@ -820,7 +820,7 @@ def _statuses(
             elif phase == "DESIGN":
                 # Its own release, once the control is understood (B1) and its attributes
                 # are settled (11 November 2026); never the plan's approval. Since the
-                # D&I requests list (B1e, 12 November 2026) also once every request is
+                # D&I requests list (B1f, 12 November 2026) also once every request is
                 # accepted, every attribute covered, and a person who may accept stands
                 # behind the list (DesignWaits): READY is the settled list, which
                 # whatever settles it releases in the same step (settle_design), so it
@@ -949,7 +949,7 @@ def release(
     Returns whether this call released it. An operating phase needs the approved plan and
     the D&I conclusion signed off effective, and may be released early with a reason.
 
-    The D&I evidence needs a plan, not its approval, and (B1e, product owner, 12 November
+    The D&I evidence needs a plan, not its approval, and (B1f, product owner, 12 November
     2026: "Why do I need to have the release button? Simplify the workflow.") is released
     only once its requests list's own rule holds (DesignWaits.list_wait). It is normally
     released without this route, the moment the list is settled (settle_design); the route
@@ -1128,7 +1128,7 @@ def settle_design(
     scheduler: Any = None,
 ) -> bool:
     """Release the control's D&I evidence when its requests list is settled and not yet
-    released (B1e, product owner, 12 November 2026: no release button; the acceptance is
+    released (B1f, product owner, 12 November 2026: no release button; the acceptance is
     the approval). Returns whether this call released it.
 
     One rule for what triggers it and who it is attributed to. It is called whenever

@@ -1,4 +1,4 @@
-"""The D&I requests list (B1e; decided by the product owner on 12 November 2026,
+"""The D&I requests list (B1f; decided by the product owner on 12 November 2026,
 docs/control-workflow-plan.md).
 
 "Why do I need to have the release button? Simplify the workflow. After the attributes

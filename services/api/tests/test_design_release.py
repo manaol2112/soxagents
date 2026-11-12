@@ -5,7 +5,7 @@ approval. The test plan's approval gates only the operating phases, so revising 
 not hold D&I requests. Each request still needs its own approval to be sent; a release sends
 nothing, and the agents never release a phase.
 
-Since 12 November 2026 (B1e, the D&I requests list; the product owner: "Why do I need to
+Since 12 November 2026 (B1f, the D&I requests list; the product owner: "Why do I need to
 have the release button? Simplify the workflow.") the release is not pressed: a person
 accepts the D&I requests and the acceptance that completes the list releases the evidence,
 never early. The tests here that pressed a release, or expected READY, were rewritten for
@@ -104,7 +104,7 @@ def test_d_and_i_evidence_is_released_on_its_own_once_the_control_is_understood(
     waiting = _design(team, control)
     assert waiting["step"] == "WAITING" and waiting["step_label"] == "Waiting for understanding"
     assert waiting["waiting_for"].startswith("Control Understanding is not complete")
-    # Rewritten 12 November 2026 (B1e, the D&I requests list; product owner: "Why do I need
+    # Rewritten 12 November 2026 (B1f, the D&I requests list; product owner: "Why do I need
     # to have the release button? Simplify the workflow."). Old: a person released D&I early
     # here, with a reason of 20 characters (409 "Say why the D&I phase is released now"
     # without one), and the release read RELEASED, early, with the reason. New: there is no
@@ -116,7 +116,7 @@ def test_d_and_i_evidence_is_released_on_its_own_once_the_control_is_understood(
         bare = owner.post(path, json=body)
         assert bare.status_code == 409
         assert bare.json()["detail"] == waiting["waiting_for"]
-    # Rewritten 12 November 2026 (B1e, after its independent review). Old: only an Owner,
+    # Rewritten 12 November 2026 (B1f, after its independent review). Old: only an Owner,
     # Admin or Project Manager used the D&I release route (project update), so a
     # contributor was answered 403. New: the route is held to the one rule for who may
     # accept D&I requests (phase_release.DESIGN_ACCEPT_ACTION), since releasing a list is
@@ -225,7 +225,7 @@ def test_a_understood_control_is_recommended_for_release_without_a_reason(
     assert waiting["step"] == "WAITING" and waiting["waiting_on"] == "UNDERSTANDING"
     assert waiting["waiting_for"].endswith("walkthrough questions are not answered.")
     answer_walkthrough(migrated, team["project"], [UUID(control)])
-    # Rewritten 12 November 2026 (B1e, the D&I requests list; product owner: "Why do I need
+    # Rewritten 12 November 2026 (B1f, the D&I requests list; product owner: "Why do I need
     # to have the release button? Simplify the workflow."). Old: understood, with the
     # attributes settled, the release was READY ("The D&I evidence is ready to release.",
     # next step "Release the D&I evidence"), and a person released it with no reason. New:
@@ -281,7 +281,7 @@ def test_the_planner_proposes_what_it_adds_to_released_d_and_i_evidence(
 ) -> None:
     team = _launched(migrated, "di-planner")
     control = _control(team, "ITGC-AC-01")["id"]
-    # Rewritten 12 November 2026 (B1e): the setup released D&I early through the route,
+    # Rewritten 12 November 2026 (B1f): the setup released D&I early through the route,
     # with a reason; there is no early D&I release any more, so the setup records the
     # release with its requests accepted (support.release_design). What is tested, the
     # planner's addition to a released phase, is unchanged.
@@ -364,7 +364,7 @@ def test_d_and_i_evidence_waits_for_the_attributes_it_is_tested_against(
     asked for (product owner, 11 November 2026): the D&I evidence is released only once the
     attributes are settled, as the operating evidence's gate reads them.
 
-    Rewritten 12 November 2026 (B1e, the D&I requests list; product owner: "Why do I need to
+    Rewritten 12 November 2026 (B1f, the D&I requests list; product owner: "Why do I need to
     have the release button? Simplify the workflow."). Old: with the attributes settled the
     release read READY and a person released it with no reason, or earlier with one. New:
     with the attributes settled the step waits for the D&I requests to be accepted
@@ -410,7 +410,7 @@ def test_d_and_i_evidence_waits_for_the_attributes_it_is_tested_against(
     # While the attribute agent is still at work its proposals would follow: not settled.
     settle_attributes(migrated, team["project"])
     tailor_criteria(migrated, team["project"])
-    # The attribute just approved is addressed by no D&I request yet (B1e: coverage is per
+    # The attribute just approved is addressed by no D&I request yet (B1f: coverage is per
     # attribute), until the evidence is planned again, as the planner does after an
     # accepted addition; here by the rules.
     assert _design(team, control)["waiting_on"] == "EVIDENCE"
@@ -592,7 +592,7 @@ def test_d_and_i_evidence_waits_for_criteria_tailored_to_the_control(migrated: D
         json={"attributes": [{"id": key, "version": version} for key, version in versions]},
     )
     assert accepted.status_code == 200, accepted.text
-    # Rewritten 12 November 2026 (B1e). Old: with the criteria owned the release read READY.
+    # Rewritten 12 November 2026 (B1f). Old: with the criteria owned the release read READY.
     # New: the attributes no longer hold the list, which waits for its requests to be
     # accepted (product owner: no release button; the acceptance releases).
     ready = _design(team, control)

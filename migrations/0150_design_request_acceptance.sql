@@ -1,6 +1,6 @@
 -- The D&I requests list: acceptance per request, coverage of the attributes, and a release
 -- that follows the last acceptance (decided by the product owner on 12 November 2026;
--- docs/control-workflow-plan.md, B1e "The D&I requests list").
+-- docs/control-workflow-plan.md, B1f "The D&I requests list").
 --
 -- Until now a person released the D&I evidence with a button, once Control Understanding
 -- was complete and the attributes were settled (0145, B1a). The product owner: "Why do I
@@ -38,7 +38,7 @@
 -- Rollback: DROP TABLE design_coverage_exceptions; ALTER TABLE phase_releases DROP
 -- CONSTRAINT phase_releases_automatic, DROP COLUMN automatic; ALTER TABLE
 -- evidence_requirements DROP CONSTRAINT evidence_requirements_accepted, DROP COLUMN
--- accepted_by, DROP COLUMN accepted_at; and delete the '0149_design_request_acceptance' row
+-- accepted_by, DROP COLUMN accepted_at; and delete the '0150_design_request_acceptance' row
 -- from schema_migrations. The acceptances are lost with the columns (the audit trail keeps
 -- evidence_requirement.accepted), and D&I releases made automatically stay released.
 

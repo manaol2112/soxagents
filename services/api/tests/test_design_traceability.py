@@ -9,7 +9,7 @@ attribute (its prompt asked for the attributes only in the operating phases, and
 checked the design phase), the rules' walkthrough it replaced had been linked to them, and
 the release still read as ready, "tested against 4 attributes".
 
-Since the D&I requests list (B1e, the same day) the hold is per attribute: every approved
+Since the D&I requests list (B1f, the same day) the hold is per attribute: every approved
 attribute is addressed by a live D&I request, or a person records why not
 (test_design_requests.py has the list, its acceptance and the exceptions)."""
 
@@ -143,7 +143,7 @@ def test_a_replan_keeps_the_design_instance_linked_to_every_attribute_and_to_a_n
 def test_a_plan_whose_design_items_evidence_no_attribute_is_not_released_as_ready(
     migrated: Database,
 ) -> None:
-    """Rewritten 12 November 2026 (B1e, the D&I requests list; product owner: "For each
+    """Rewritten 12 November 2026 (B1f, the D&I requests list; product owner: "For each
     request, I want to show which specific attributes it is addressing to make sure I get
     coverage", and "Why do I need to have the release button? Simplify the workflow.").
 
@@ -237,7 +237,7 @@ def test_a_plan_whose_design_items_evidence_no_attribute_is_not_released_as_read
 def test_only_a_live_design_item_counts_as_evidencing_an_attribute(migrated: Database) -> None:
     """A waived item will not be obtained, and an addition proposed on an approved plan has
     not been accepted: neither evidences an attribute, so neither clears the hold.
-    (12 November 2026, B1e: the hold's sentence is the per-attribute one; the rule for what
+    (12 November 2026, B1f: the hold's sentence is the per-attribute one; the rule for what
     counts as live is unchanged.)"""
     team = _launched(migrated, "dt-live")
     control = str(_control(team, AC02)["id"])

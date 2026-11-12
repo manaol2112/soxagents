@@ -257,7 +257,7 @@ def _plans(ctx: Context) -> None:
 
 
 def _cover_design(ctx: Context, control_id: UUID) -> None:
-    """Every approved attribute is addressed by a D&I request (the D&I requests list, B1e,
+    """Every approved attribute is addressed by a D&I request (the D&I requests list, B1f,
     12 November 2026): an attribute none addresses holds the list. The rules' plan for a
     key report asks for the report's definition without naming an attribute, so Dana sets
     the attributes that request addresses ("Change attributes" on the row), having read the
@@ -309,7 +309,7 @@ def _requests(ctx: Context) -> None:
 
     requests = 0
     for ref, control_id in ctx.controls.items():
-        # The D&I requests list (B1e, 12 November 2026): Dana accepts the requests the
+        # The D&I requests list (B1f, 12 November 2026): Dana accepts the requests the
         # planner prepared, as she would on the control, and her acceptance of the last
         # one releases the D&I evidence, recorded as hers (before, she pressed a release).
         waiting = ctx.cursor.execute(

@@ -2596,7 +2596,7 @@ def link_requirement(
     """The attributes an evidence requirement supports and the procedures it serves, as a
     person sets them.
 
-    For a D&I request the act accepts it as that person (B1e), so it is held to what an
+    For a D&I request the act accepts it as that person (B1f), so it is held to what an
     acceptance is held to: made at the version the person saw (the body's `version`,
     required; a stale one is refused, so nobody accepts words the planner changed after
     they read them), and refused while the planner works on the plan or its run stopped
@@ -2648,7 +2648,7 @@ def link_requirement(
             {"attributes": len(attributes), "procedures": len(procedures)},
         )  # fmt: skip
         # A person set the attributes it addresses: a D&I request is theirs from now on
-        # (B1e, 12 November 2026), and read again at its new version.
+        # (B1f, 12 November 2026), and read again at its new version.
         if accept_request(cursor, organization_id, project_id, requirement_id, actor, "LINKS"):
             cursor.execute(
                 "UPDATE evidence_requirements SET version = version + 1 WHERE id = %s",

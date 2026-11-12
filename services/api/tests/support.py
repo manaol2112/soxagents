@@ -19,7 +19,7 @@ def record_design_release(
     recorded as theirs. Returns (organization, control, owner) for each control released
     here, for the caller to request the Design items.
 
-    Rewritten 12 November 2026 (B1e, the D&I requests list; product owner: "Why do I need
+    Rewritten 12 November 2026 (B1f, the D&I requests list; product owner: "Why do I need
     to have the release button? Simplify the workflow."). Old: the setup released D&I early
     through phase_release.release, with a reason, whatever the control's understanding and
     attributes. New: there is no early D&I release; the product releases D&I only once the
@@ -149,7 +149,7 @@ def accept_design_requests(
 ) -> dict[str, object]:
     """Accept every D&I request of the control that waits for a person, through the API, as
     one decision ("Accept all"). Returns the evidence plan as the route answers it: when the
-    acceptance settles the list, the D&I evidence is released in that request (B1e)."""
+    acceptance settles the list, the D&I evidence is released in that request (B1f)."""
     base = f"/organizations/{organization_id}/projects/{project_id}/controls/{control_id}"
     plan = client.get(f"{base}/evidence-plan")  # type: ignore[attr-defined]
     assert plan.status_code == 200, plan.text
@@ -345,7 +345,7 @@ def approve_plans_over_api(client: object, organization_id: object, project_id: 
     for row in rows:
         if not row.get("included"):
             continue
-        # D&I evidence has its own release (B1). Rewritten 12 November 2026 (B1e). Old: the
+        # D&I evidence has its own release (B1). Rewritten 12 November 2026 (B1f). Old: the
         # setup posted an early release, with a reason, to the release route, which handed
         # the drafts to the background. New: there is no early D&I release, so the setup
         # records it (record_design_release), and the Design items are requested, with
