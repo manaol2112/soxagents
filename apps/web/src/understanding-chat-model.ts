@@ -1082,7 +1082,7 @@ export function statusLine(review: Review): { done: boolean; text: string } {
     return {
       done: true,
       text: review.attributesSettled
-        ? "Understood, and the attributes are settled. The D&I evidence can be released."
+        ? "Understood, and the attributes are settled. The D&I requests are ready to review."
         : "Understood. Next, finalize the attributes: the D&I evidence is requested against them.",
     };
   }

@@ -471,7 +471,10 @@ describe("the understanding as a draft to review", () => {
         attributes: { ready: true, missing: [] },
         attributesSettled: true,
       }).text,
-      "Understood, and the attributes are settled. The D&I evidence can be released.",
+      // Was "…The D&I evidence can be released." There is no separate D&I release since the
+      // D&I requests list (product owner, 12 November 2026: "I don't want a separate D&I
+      // release"): the requests are reviewed and accepted, and drafting follows.
+      "Understood, and the attributes are settled. The D&I requests are ready to review.",
     );
     assert.equal(
       statusLine({ ...review, evidence: { ready: false, missing: [] } }).text,
