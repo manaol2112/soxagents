@@ -9,6 +9,7 @@
  * and an empty list of requests never reads as done.
  */
 
+import { readSeam } from "./design-evidence-model.ts";
 import {
   type DesignRequestsState,
   parseDesignRequests,
@@ -371,7 +372,11 @@ export type PlanRequirement = {
   // The attributes it addresses and whether a person accepted it (the D&I requests list,
   // 12 November 2026): attributeIds, accepted, acceptedBy, acceptedAt, toAccept,
   // personEdited.
-} & RequestAcceptance;
+} & RequestAcceptance & {
+    /** Its evidence was uploaded before its request was sent, so it is left out of what
+     * is sent (the D&I list, 12 November 2026). Present only when the server says so. */
+    inHand?: boolean;
+  };
 
 /** Whether an item waits on a person now: something arrived and no one has judged it, the
  * planner proposes a change to it, or it is flagged for review. */
@@ -570,6 +575,7 @@ function parseRequirement(item: Raw): PlanRequirement {
       ? item.passed_over.map((name) => str(name)).filter((name) => name !== "")
       : [],
     ...parseRequestAcceptance(item),
+    ...(readSeam(item).inHand ? { inHand: true } : {}),
   };
 }
 

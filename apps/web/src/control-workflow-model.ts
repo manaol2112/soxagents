@@ -11,6 +11,7 @@ import type {
   DesignConclusionStatus,
   DesignVerdict,
 } from "./design-conclusion-model.ts";
+import type { EvidenceWorkflowHeader } from "./design-evidence-model.ts";
 import { requestsFallback } from "./design-requests-model.ts";
 import type { RequirementState } from "./evidence-plan-model.ts";
 
@@ -224,6 +225,12 @@ export type WorkflowInput = {
    * drafted. Undefined or null when the list is not shown or the plan was not read: the
    * phase's own state decides then. */
   designRequests?: { tone: Tone; status: string; line?: string } | null;
+  /** Where the D&I evidence list stands once its requests are drafted, as the list's own
+   * header says it (design-evidence-model.evidenceList; product owner, 12 November 2026:
+   * one list, one status, one decision line), so the node, the panel's pill, its decision
+   * line and the agent's line never disagree with the rows. Undefined or null when the
+   * list is not shown or the plan was not read: the evidence items alone decide then. */
+  designEvidence?: EvidenceWorkflowHeader | null;
   /** The interim test sheet: null until samples are drawn. */
   sheet: {
     method: "SAMPLE" | "TEST_OF_ONE";
@@ -275,6 +282,9 @@ export type WorkflowStep = (typeof STEPS)[number] & {
   /** The step's one line, where its own records word it (the D&I requests list: what the
    * server says an accepted list still waits for). Absent where the status says it all. */
   note?: string;
+  /** What the step needs from the person, where its own list words it (the D&I evidence
+   * list once its requests are drafted): one line, with no action of its own. */
+  need?: EvidenceWorkflowHeader["need"];
 };
 
 const GONE: readonly RequirementState[] = [
@@ -681,6 +691,11 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
     input.designRelease?.step === "READY" ||
     input.designRelease?.step === "WAITING";
   const requests = input.designRequests ?? null;
+  const evidenceList = input.designEvidence ?? null;
+  const evidenceHeader: State | null =
+    evidenceList === null
+      ? null
+      : { tone: evidenceList.tone, status: evidenceList.status };
   const designEvidence: State = unreleased
     ? understanding.tone !== "done"
       ? waiting("understanding")
@@ -691,8 +706,10 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
             input.designRelease?.step ?? "",
             input.designRelease?.waitingOn,
           ) ?? { tone: "attention", status: "Requests to accept" })
-    : // Released, with the list still on the page: its requests are being drafted.
+    : // Released, with the list still on the page: its requests are being drafted. Once
+      // they are, the evidence list's own header says where the step stands.
       (requests ??
+      evidenceHeader ??
       evidenceState(
         phase(["DESIGN"]),
         "understanding",
@@ -756,6 +773,12 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
     next: false,
     ...(step.key === "designevidence" && designNote !== ""
       ? { note: designNote }
+      : {}),
+    // The evidence list's own decision line goes with its state, and only with it.
+    ...(step.key === "designevidence" &&
+    evidenceList !== null &&
+    designEvidence === evidenceHeader
+      ? { need: evidenceList.need }
       : {}),
   }));
   // The next steps: the first open step before the branches; once the attributes are settled,

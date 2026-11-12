@@ -349,7 +349,12 @@ function whoOf(result: SendResult): string {
   return names.length <= 2 ? names.join(" and ") : `${names.length} people`;
 }
 
-export function sentReport(result: SendResult): SentReport {
+export function sentReport(
+  result: SendResult,
+  /** Live email is off here (the D&I list, 12 November 2026): the requests were approved
+   * and recorded as handed over, and nothing was emailed, so the report never says sent. */
+  handover = false,
+): SentReport {
   const plan = reviewPlan(result);
   const sent = plan.sending.length;
   const problems = plan.attention.map((a) => ({
@@ -361,7 +366,10 @@ export function sentReport(result: SendResult): SentReport {
     period: l.period,
   }));
   const who = whoOf(result);
-  const emailed = `Approved and emailed${who === "" ? "" : ` to ${who}`}. Replies and evidence will appear in the Evidence center.`;
+  const emailed = handover
+    ? `Approved and recorded as handed over${who === "" ? "" : ` to ${who}`}. Nothing was emailed: email sending is off in this environment. Upload what you receive on its row.`
+    : `Approved and emailed${who === "" ? "" : ` to ${who}`}. Replies and evidence will appear in the Evidence center.`;
+  const went = handover ? "handed over" : "sent";
   const base = { scheduled, scheduledLead: plan.laterLead, problems };
   if (sent > 0) {
     return {
@@ -370,9 +378,9 @@ export function sentReport(result: SendResult): SentReport {
       title:
         problems.length === 0
           ? sent === 1
-            ? "Request sent"
-            : `${sent} requests sent`
-          : `${sent} of ${sent + problems.length} requests sent`,
+            ? `Request ${went}`
+            : `${sent} requests ${went}`
+          : `${sent} of ${sent + problems.length} requests ${went}`,
       lead: emailed,
     };
   }

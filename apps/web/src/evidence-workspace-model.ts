@@ -367,6 +367,8 @@ export type HeldFile = {
   /** When it was added, and its size: shown on the item's file card. */
   createdAt?: string;
   sizeBytes?: number;
+  /** Who added it, where the register says: shown on the D&I list's file line. */
+  addedBy?: string;
 };
 
 /** The second line of an item's file card: when the file was uploaded, its size, and how

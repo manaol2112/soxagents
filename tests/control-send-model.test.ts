@@ -301,6 +301,20 @@ describe("approve and send from the Request step", () => {
     assert.equal(sentReport(all).title, "2 requests sent");
     assert.equal(sentReport(all).tone, "success");
     assert.match(sentReport(all).lead, /emailed to Jordan Lee\./);
+    // Live email off (the D&I list, product owner, 12 November 2026: "Approve and mark
+    // as handed over"): the same result is reported as handed over, and never as sent
+    // or emailed, because nothing was.
+    const handed = sentReport(all, true);
+    assert.equal(handed.title, "2 requests handed over");
+    assert.equal(handed.tone, "success");
+    assert.match(handed.lead, /recorded as handed over to Jordan Lee\./);
+    assert.match(handed.lead, /Nothing was emailed/);
+    assert.doesNotMatch(
+      `${handed.title} ${handed.lead}`,
+      /\bsent\b|and emailed/,
+    );
+    // A refusal reads the same either way: nothing went.
+    assert.equal(sentReport(none, true).title, "Not sent");
   });
 
   it("says a request scheduled for its phase is still scheduled, not unsent", () => {
