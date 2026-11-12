@@ -264,6 +264,40 @@ def test_the_trial_demo_launches_with_approved_plans_and_accepted_criteria(
     ) == [(14,)]
 
 
+def test_the_walkthrough_is_answered_by_the_lead_so_understanding_is_complete(
+    demo: dict[str, Any],
+) -> None:
+    """Since 11 November 2026 Control Understanding waits for the walkthrough's required
+    questions (walkthrough_answers): the demo records its control owners' answers
+    (plans.WALKTHROUGH_ANSWERS) as Dana confirmed them, so no control waits for them."""
+    from ai_workforce_api.phase_release import understanding_waits
+    from ai_workforce_api.walkthrough_answers import answers_of, questions_asked, stands
+
+    url, project_id = demo["url"], demo["project_id"]
+    answers = _rows(
+        url,
+        "SELECT w.status, w.source, w.answered_by, w.not_applicable FROM control_walkthrough_answers w "
+        "JOIN engagement_controls c ON c.id = w.engagement_control_id WHERE c.project_id = %s",
+        project_id,
+    )
+    assert answers
+    assert set(answers) == {("CONFIRMED", "PERSON", _team(demo, "Dana Whitfield"), False)}
+    with connect(url) as connection:
+        waits = understanding_waits(connection, project_id)
+        for ref, control_id in demo["controls"].items():
+            rows = answers_of(connection, control_id)
+            asked = questions_asked(connection, control_id, rows)
+            assert all(stands(rows.get(item.key), item) for item in asked if item.required), ref
+            assert "walkthrough" not in waits.get(control_id, ""), ref
+    # Each answer saved through the walkthrough's own save, audited as the lead's.
+    assert _rows(
+        url,
+        "SELECT count(*), count(DISTINCT actor_user_id) FROM audit_events WHERE project_id = %s "
+        "AND action = 'control_walkthrough.answered'",
+        project_id,
+    ) == [(len(answers), 1)]
+
+
 # 7-8. Evidence
 
 

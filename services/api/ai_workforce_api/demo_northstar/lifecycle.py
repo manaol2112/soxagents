@@ -127,6 +127,7 @@ def run_lifecycle(
         connection, cursor, organization_id, project_id, team, controls, systems, filed,
         data, by_key, texts, {}, settings,
     )  # fmt: skip
+    _walkthrough(ctx)
     _criteria(ctx)
     _plans(ctx)
     _requests(ctx)
@@ -142,6 +143,43 @@ def run_lifecycle(
 
 
 # Planning
+
+
+def _walkthrough(ctx: Context) -> None:
+    """The control owners' answers to the walkthrough's questions (plans.WALKTHROUGH_ANSWERS),
+    recorded by Dana as she would after each walkthrough, through the walkthrough's own save
+    (checked against the bank, confirmed by a person, audited): every required question the
+    bank asks each control, a follow-up once the answer before it opens it, so Control
+    Understanding is complete where the rest of it is. Optional questions are left."""
+    from ai_workforce_api.walkthrough_answers import (
+        AnswerIn,
+        AnswersBody,
+        answers_of,
+        questions_asked,
+        save,
+        stands,
+    )
+
+    systems = {control.ref: control.systems for control in R.CONTROLS}
+    recorded = 0
+    for ref, control_id in ctx.controls.items():
+        # A follow-up is asked once its parent is answered: a few rounds settle it.
+        for _round in range(5):
+            rows = answers_of(ctx.connection, control_id)
+            answers = {
+                item.key: AnswerIn(value=value)
+                for item in questions_asked(ctx.connection, control_id, rows)
+                if item.required
+                and not stands(rows.get(item.key), item)
+                and (value := P.walkthrough_answer(systems[ref], item.key)) is not None
+            }
+            if not answers:
+                break
+            recorded += save(
+                ctx.connection, ctx.organization_id, ctx.project_id, control_id,
+                ctx.team["dana"], AnswersBody(answers=answers),
+            ).saved  # fmt: skip
+    ctx.summary["walkthrough_answers"] = recorded
 
 
 def _criteria(ctx: Context) -> None:

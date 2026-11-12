@@ -71,6 +71,7 @@ _SETUP_TABLES = (
     "control_context_issues",
     "control_narratives",
     "control_parameters",
+    "control_walkthrough_answers",
     "process_narrative_runs",
     "process_understanding_versions",
     "process_understandings",

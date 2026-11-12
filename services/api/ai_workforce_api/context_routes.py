@@ -25,6 +25,7 @@ from ai_workforce_api import (
     process_narrative,
     process_understanding,
     understanding_chat,
+    walkthrough_answers,
 )
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.authorization import (
@@ -357,6 +358,32 @@ def register_control_context(
 
         return run(request, work)
 
+    # The walkthrough's answers (11 November 2026; walkthrough_answers.py): a topic's at
+    # once, each checked against its question, confirmed and audited. Who may set the
+    # statement's values may answer them.
+
+    @app.put(f"{control}/walkthrough-answers")
+    def set_walkthrough_answers(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: walkthrough_answers.AnswersBody,
+        request: Request,
+    ) -> walkthrough_answers.SavedBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> walkthrough_answers.SavedBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            try:
+                saved = walkthrough_answers.save(
+                    c, organization_id, project_id, control_id, p.id, body
+                )
+            except walkthrough_answers.AnswerRefused as error:
+                raise HTTPException(status_code=422, detail=error.detail) from None
+            changed(c, project_id, control_id, p.id)
+            # How many were saved, and how many follow-ups the same save closed (ignored).
+            return saved
+
+        return run(request, work)
+
     # Bringing forward another control's answers (28 October 2026)
 
     @app.get(f"{control}/understanding/sources")
@@ -427,13 +454,24 @@ def register_control_context(
 
     @app.get(f"{control}/understanding/review")
     def understanding_review(
-        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        request: Request,
+        # The same control on another system to start from (its control id), or "none";
+        # left out, the one answering the most (11 November 2026).
+        start_from: str | None = Query(default=None, alias="from", max_length=64),
     ) -> understanding_chat.UnderstandingReviewBody:
         def work(
             c: psycopg.Connection[Any], p: Principal
         ) -> understanding_chat.UnderstandingReviewBody:
             _allowed(c, p, organization_id, project_id, control_id, Action.TASK_READ)
-            return understanding_chat.understanding_review(c, project_id, control_id)
+            try:
+                return understanding_chat.understanding_review(
+                    c, project_id, control_id, start_from
+                )
+            except understanding_chat.StartFromRefused as error:
+                raise HTTPException(status_code=422, detail=error.detail) from None
 
         return run(request, work)
 
@@ -528,14 +566,16 @@ def register_control_context(
         control_id: UUID,
         body: control_details.DetailsSet,
         request: Request,
-    ) -> control_details.DetailsBody:
-        def work(c: psycopg.Connection[Any], p: Principal) -> control_details.DetailsBody:
+    ) -> control_details.DetailsSaved:
+        def work(c: psycopg.Connection[Any], p: Principal) -> control_details.DetailsSaved:
             _allowed(c, p, organization_id, project_id, control_id)
-            for changed_id in control_details.set_details(
-                c, p, organization_id, project_id, control_id, body
-            ):
+            saved = control_details.set_details(c, p, organization_id, project_id, control_id, body)
+            for changed_id in saved.changed:
                 changed(c, project_id, changed_id, p.id)
-            return control_details.details(c, p, organization_id, project_id, control_id)
+            read = control_details.details(c, p, organization_id, project_id, control_id)
+            return control_details.DetailsSaved(
+                **read.model_dump(), copied_to=saved.copied, applied_to=saved.applied
+            )
 
         return run(request, work)
 

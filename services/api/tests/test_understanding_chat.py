@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID
 
 import pytest
-from support import Database
+from support import Database, answer_walkthrough, settle_attributes, tailor_criteria
 from test_execution import _add_project_member, _add_user
 from test_onboarding import _base, _new_engagement
 from test_outbound import _session, migrated
@@ -15,6 +15,7 @@ from test_outbound import _session, migrated
 from ai_workforce_api.authorization import Principal, PrincipalKind
 from ai_workforce_api.db import connect
 from ai_workforce_api.models import ModelRaw, ModelRequest
+from ai_workforce_api.phase_release import attribute_waits
 from ai_workforce_api.understanding_chat import InterpretBody, interpret
 
 __all__ = ["migrated"]
@@ -297,6 +298,8 @@ def test_the_review_reads_ready_once_the_gaps_are_answered(migrated: Database) -
     review = _review(owner, team, sap)
     assert (review["control_ref"], review["system"]) == ("ITGC-AC-01", "SAP ERP")
     assert review["other_systems"] == ["Oracle EBS"]
+    # Oracle EBS holds no answers yet: nothing to start from (test_start_from.py).
+    assert review["start_from"] == {"chosen": None, "options": []}
     # The draft reads as the control's statement, each answer marked where it shows.
     assert any(part["key"] for part in review["statement"])
     assert "".join(part["text"] for part in review["statement"]).strip()
@@ -340,9 +343,36 @@ def test_the_review_reads_ready_once_the_gaps_are_answered(migrated: Database) -
             (sap,),
         )
         connection.commit()
+    # Rewritten 11 November 2026 (B1c): Control Understanding asks the walkthrough's
+    # required questions too. Old: with the statement's answers given and the question
+    # settled, the review read ready for both. New: it still waits for the required
+    # walkthrough questions, each listed by its question as missing, until they are
+    # answered; then it reads ready for both, as before. Why: only required walkthrough
+    # questions hold "Control Understanding complete" (product owner, 11 November 2026).
+    review = _review(owner, team, sap)
+    walkthrough = [n for n in review["needs"] if n["kind"] == "WALKTHROUGH" and n["required"]]
+    assert walkthrough and review["evidence"]["ready"] is False
+    assert {n["question"] for n in walkthrough if "EVIDENCE" in n["needed_for"]} <= set(
+        review["evidence"]["missing"]
+    )
+    answer_walkthrough(migrated, team["project"], [UUID(sap)])
     review = _review(owner, team, sap)
     assert review["evidence"] == {"ready": True, "missing": []}
     assert review["attributes"] == {"ready": True, "missing": []}
+    # Understood is not settled (11 November 2026): the review says whether the attributes
+    # are settled exactly as the D&I release reads them, so the attributes come next.
+    with connect(migrated.url) as connection:
+        expected = attribute_waits(connection, UUID(str(team["project"])), UUID(sap)).get(UUID(sap))
+    assert review["attributes_settled"] is (expected is None)
+    assert review["attributes_waiting"] == (expected or "")
+    settle_attributes(migrated, team["project"])
+    # Settled also means each attribute's criteria are tailored and owned by a person.
+    assert _review(owner, team, sap)["attributes_waiting"].endswith(
+        "criteria tailored to this control."
+    )
+    tailor_criteria(migrated, team["project"])
+    settled = _review(owner, team, sap)
+    assert settled["attributes_settled"] is True and settled["attributes_waiting"] == ""
     confirmed = [need for need in review["needs"] if need["kind"] == "ANSWER"]
     assert all((n["status"], n["source"]) == ("CONFIRMED", "PERSON") for n in confirmed)
     # Read only by the engagement's team.
@@ -474,3 +504,201 @@ def test_the_planner_answers_from_the_notes_only_and_its_answers_are_checked(
         )  # fmt: skip
     assert fallback.source == "RULES"
     assert all(answer.quote in notes for answer in fallback.answers)
+
+
+def _on_systems(migrated: Database, project: Any) -> dict[tuple[str, str], str]:
+    """The engagement's controls by library key and system."""
+    with connect(migrated.url) as connection:
+        return {
+            (str(key), str(system)): str(control)
+            for key, system, control in connection.execute(
+                "SELECT c.library_key, a.name, c.id FROM engagement_controls c "
+                "JOIN engagement_applications a ON a.id = c.engagement_application_id "
+                "WHERE c.project_id = %s AND c.library_key IS NOT NULL",
+                (project,),
+            ).fetchall()
+        }
+
+
+def test_an_answer_given_on_this_system_is_proposed_on_its_other_controls(
+    migrated: Database,
+) -> None:
+    """Product owner, 11 November 2026: the statement questions are "most of the time the
+    same for one system", so they "should be the same by default but user can still update
+    it". A question this control has no answer for, nor last year's, is proposed with the
+    answer most used for it on the engagement's other controls on the same system, saying
+    on how many; a person confirms it, and reading saves nothing."""
+    team = _two_systems(migrated, "uc-same")
+    owner = team["owner"]
+    on = _on_systems(migrated, team["project"])
+
+    def sap(key: str) -> str:
+        return on[(key, "SAP ERP")]
+
+    def oracle(key: str) -> str:
+        return on[(key, "Oracle EBS")]
+
+    def put(control: str, values: dict[str, str]) -> None:
+        saved = owner.put(f"{_control_path(team, control)}/values", json={"values": values})
+        assert saved.status_code == 200, saved.text
+
+    def need(control: str, key: str, at: Any = team) -> dict[str, Any]:
+        found: dict[str, Any] = next(
+            n for n in _review(at["owner"], at, control)["needs"] if n["key"] == key
+        )
+        return found
+
+    termination = sap("access-termination")
+    # Nothing answered on the system yet: the usual first option, as before.
+    assert need(termination, "admin-role")["source"] in ("USUAL", "NONE")
+    assert need(termination, "admin-role")["source_detail"] == ""
+    put(
+        sap("access-provisioning"), {"admin-role": "SAP_ALL holders", "access-owner": "IT security"}
+    )
+    put(sap("access-review"), {"admin-role": "SAP_ALL holders", "access-owner": "Access admin"})
+    # Another system answers differently, and more often: never used on SAP ERP.
+    for key in ("access-provisioning", "access-review", "access-privileged"):
+        put(oracle(key), {"admin-role": "DBA"})
+
+    admin = need(termination, "admin-role")
+    assert (admin["value"], admin["status"], admin["source"], admin["source_detail"]) == (
+        "SAP_ALL holders", "PROPOSED", "SYSTEM", "Used on 2 other controls on SAP ERP",
+    )  # fmt: skip
+    assert admin["proposal_id"] is None
+    # A tie goes to the answer given most recently; one control is "control".
+    owner_need = need(termination, "access-owner")
+    assert (owner_need["value"], owner_need["source_detail"]) == (
+        "Access admin", "Used on 1 other control on SAP ERP",
+    )  # fmt: skip
+    assert need(oracle("access-termination"), "admin-role")["source_detail"] == (
+        "Used on 3 other controls on Oracle EBS"
+    )
+    # Only in-scope controls count.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE engagement_controls SET included = false WHERE id = %s",
+            (oracle("access-privileged"),),
+        )
+        connection.commit()
+    assert need(oracle("access-termination"), "admin-role")["source_detail"] == (
+        "Used on 2 other controls on Oracle EBS"
+    )
+    # Reading proposes; it saves nothing.
+    with connect(migrated.url) as connection:
+        held = connection.execute(
+            "SELECT count(*) FROM control_parameters WHERE engagement_control_id = %s "
+            "AND value <> ''",
+            (termination,),
+        ).fetchone()
+    assert held is not None and held[0] == 0
+    # Another engagement's answers are its own.
+    other = _two_systems(migrated, "uc-same-other")
+    elsewhere = _on_systems(migrated, other["project"])[("access-termination", "SAP ERP")]
+    assert need(elsewhere, "admin-role", other)["source"] != "SYSTEM"
+
+    # This control's own answer wins, and so does last year's proposal for it.
+    put(termination, {"access-owner": "Service desk"})
+    mine = need(termination, "access-owner")
+    assert (mine["value"], mine["status"], mine["source"], mine["source_detail"]) == (
+        "Service desk", "CONFIRMED", "PERSON", "",
+    )  # fmt: skip
+    with connect(migrated.url) as connection:
+        document = connection.execute(
+            "INSERT INTO source_documents (organization_id, project_id, kind, title, text, "
+            "origin) VALUES (%s, %s, 'POLICY', 'FY2026 access workpaper', 'Basis admins.', "
+            "'WRITTEN') RETURNING id",
+            (team["org"], team["project"]),
+        ).fetchone()
+        assert document is not None
+        match = connection.execute(
+            "INSERT INTO prior_year_matches (organization_id, project_id, document_id, "
+            "engagement_control_id, basis, status) VALUES (%s, %s, %s, %s, 'REFERENCE', "
+            "'CONFIRMED') RETURNING id",
+            (team["org"], team["project"], document[0], termination),
+        ).fetchone()
+        assert match is not None
+        proposal = connection.execute(
+            "INSERT INTO prior_year_proposals (organization_id, project_id, match_id, "
+            "engagement_control_id, kind, slot_key, value, title, quote) VALUES (%s, %s, %s, "
+            "%s, 'ANSWER', 'admin-role', 'Basis administrators', 'Admin role', 'Basis admins.') "
+            "RETURNING id",
+            (team["org"], team["project"], match[0], termination),
+        ).fetchone()
+        assert proposal is not None
+        connection.commit()
+    last_year = need(termination, "admin-role")
+    assert (last_year["value"], last_year["source"], last_year["proposal_id"]) == (
+        "Basis administrators", "PRIOR_YEAR", str(proposal[0]),
+    )  # fmt: skip
+    assert last_year["source_detail"] == ""
+
+    # Confirming the proposal is a person's answer, through the usual save.
+    shared = sap("access-shared-accounts")
+    proposed = need(shared, "admin-role")
+    assert (proposed["value"], proposed["source"]) == ("SAP_ALL holders", "SYSTEM")
+    put(shared, {"admin-role": proposed["value"]})
+    confirmed = need(shared, "admin-role")
+    assert (confirmed["value"], confirmed["status"], confirmed["source"]) == (
+        "SAP_ALL holders", "CONFIRMED", "PERSON",
+    )  # fmt: skip
+    with connect(migrated.url) as connection:
+        filled = connection.execute(
+            "SELECT filled_by FROM control_parameters WHERE engagement_control_id = %s "
+            "AND slot_key = 'admin-role'",
+            (shared,),
+        ).fetchone()
+    assert filled is not None and str(filled[0]) == str(team["owner_id"])
+
+
+def test_a_governing_document_is_proposed_only_when_this_control_has_it(
+    migrated: Database,
+) -> None:
+    """The same-system proposal for a governing document (11 November 2026) names only a
+    document that applies to this control (linked to it, or governing its system), so the
+    name in the control's wording and the file never disagree; otherwise nothing is
+    proposed and the document is linked as before."""
+    team = _two_systems(migrated, "uc-same-doc")
+    on = _on_systems(migrated, team["project"])
+    title = "Access Management Policy v3"
+    with connect(migrated.url) as connection:
+        document = connection.execute(
+            "INSERT INTO source_documents (organization_id, project_id, kind, title, text, "
+            "origin) VALUES (%s, %s, 'POLICY', %s, 'Access is approved.', 'WRITTEN') "
+            "RETURNING id",
+            (team["org"], team["project"], title),
+        ).fetchone()
+        assert document is not None
+        connection.execute(
+            "INSERT INTO source_document_systems (document_id, project_id, "
+            "engagement_application_id) SELECT %s, %s, engagement_application_id "
+            "FROM engagement_controls WHERE id = %s",
+            (document[0], team["project"], on[("access-provisioning", "SAP ERP")]),
+        )
+        # The governing policy answered on another control on each system (the library
+        # asks it of one access control, so the record is written directly): on SAP ERP
+        # with the document governing it, on Oracle EBS with a name no document has.
+        for control, value in (
+            (on[("access-review", "SAP ERP")], title),
+            (on[("access-review", "Oracle EBS")], "Oracle Security Standard"),
+        ):
+            connection.execute(
+                "INSERT INTO control_parameters (organization_id, project_id, "
+                "engagement_control_id, slot_key, value, filled_by, filled_at) "
+                "VALUES (%s, %s, %s, 'access-policy', %s, %s, clock_timestamp())",
+                (team["org"], team["project"], control, value, team["owner_id"]),
+            )
+        connection.commit()
+
+    def policy(system: str) -> dict[str, Any]:
+        control = on[("access-provisioning", system)]
+        found: dict[str, Any] = next(
+            n for n in _review(team["owner"], team, control)["needs"] if n["key"] == "access-policy"
+        )
+        return found
+
+    sap = policy("SAP ERP")
+    assert (sap["kind"], sap["value"], sap["status"], sap["source"], sap["source_detail"]) == (
+        "DOCUMENT", title, "PROPOSED", "SYSTEM", "Used on 1 other control on SAP ERP",
+    )  # fmt: skip
+    oracle = policy("Oracle EBS")
+    assert (oracle["value"], oracle["status"], oracle["source"]) == ("", "MISSING", "NONE")

@@ -10,10 +10,18 @@ The setup editor (onboarding._update_control) still sets a control's details on 
 system at once. This is the narrower action, under the same permission (PROJECT_UPDATE,
 after the engagement starts) and the same checks (the known frequencies and natures, a
 valid email, no secrets, the control's version).
+
+The owner is mostly the same across one system (product owner, 11 November 2026: "All
+controls require me to input the process owner. Most of the time it's the same for one
+system unless the user wanted to change it."). A control with no owner is suggested the
+owner most used by the engagement's other in-scope controls on its system, and a save can
+apply the owner to every other in-scope control on that system whose owner is empty. Like a
+copy, it never overwrites an owner a control already records.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -49,6 +57,15 @@ class DetailsTarget(BaseModel):
     lacks: list[str]
 
 
+class OwnerSuggestion(BaseModel):
+    """The owner most used by the other in-scope controls on this control's system."""
+
+    name: str
+    email: str
+    #: How many of those controls record this owner.
+    controls: int
+
+
 class DetailsBody(BaseModel):
     version: int
     owner_name: str
@@ -58,6 +75,26 @@ class DetailsBody(BaseModel):
     #: Whether the person may record details (the setup permission).
     can_edit: bool
     targets: list[DetailsTarget]
+    #: Offered only while this control has no owner; null otherwise.
+    owner_suggestion: OwnerSuggestion | None = None
+
+
+class DetailsSaved(DetailsBody):
+    """The details after a save, with how many other controls the save filled."""
+
+    #: The same control on other systems that took a copy (copy_to).
+    copied_to: int
+    #: The other controls on this system that took the owner (apply_to_system).
+    applied_to: int
+
+
+@dataclass
+class Saved:
+    """Every control a save changed, and how the others were reached."""
+
+    changed: list[UUID]
+    copied: int = 0
+    applied: int = 0
 
 
 class DetailsSet(BaseModel):
@@ -70,6 +107,9 @@ class DetailsSet(BaseModel):
     nature: str | None = None
     #: The same control on other systems, to fill where the detail is empty there.
     copy_to: list[UUID] = Field(default_factory=list, max_length=50)
+    #: Also record the owner on every other in-scope control of this system whose owner is
+    #: empty. Needs the owner in this save; a recorded owner is never overwritten.
+    apply_to_system: bool = False
 
     @field_validator("owner_name", "owner_email")
     @classmethod
@@ -79,7 +119,8 @@ class DetailsSet(BaseModel):
 
 def _row(cursor: Any, project_id: UUID, control_id: UUID, lock: bool = False) -> Any:
     return cursor.execute(
-        "SELECT control_ref, version, owner_name, owner_email, frequency, nature "
+        "SELECT control_ref, version, owner_name, owner_email, frequency, nature, "
+        "engagement_application_id "
         "FROM engagement_controls WHERE id = %s AND project_id = %s"
         + (" FOR UPDATE" if lock else ""),
         (control_id, project_id),
@@ -114,6 +155,30 @@ def _others(
     ]
 
 
+def _owner_suggestion(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, application: Any
+) -> OwnerSuggestion | None:
+    """The owner (name and email together) most used by the engagement's other in-scope
+    controls on the same system; on a tie, the one recorded most recently. One query, on
+    the (project_id, engagement_application_id) index."""
+    found = connection.execute(
+        """
+        SELECT coalesce(owner_name, ''), lower(coalesce(owner_email, '')), count(*),
+               max(updated_at) AS latest
+        FROM engagement_controls
+        WHERE project_id = %s AND engagement_application_id = %s AND id <> %s AND included
+          AND btrim(coalesce(owner_name, '') || coalesce(owner_email, '')) <> ''
+        GROUP BY 1, 2
+        ORDER BY 3 DESC, latest DESC, 1, 2
+        LIMIT 1
+        """,
+        (project_id, application, control_id),
+    ).fetchone()
+    if found is None:
+        return None
+    return OwnerSuggestion(name=str(found[0]), email=str(found[1]), controls=int(found[2]))
+
+
 def _may_edit(
     connection: psycopg.Connection[Any],
     principal: Principal,
@@ -145,6 +210,11 @@ def details(
     if row is None:
         raise ContextState("this control is not in the engagement")
     mine = _held(row)
+    suggestion = (
+        None
+        if mine["owner"] or row[6] is None
+        else _owner_suggestion(connection, project_id, control_id, row[6])
+    )
     targets: list[DetailsTarget] = []
     for other, system in _others(connection, project_id, control_id, str(row[0])):
         theirs = _row(connection, project_id, other)
@@ -167,6 +237,7 @@ def details(
         nature=str(row[5] or ""),
         can_edit=_may_edit(connection, principal, organization_id, project_id),
         targets=targets,
+        owner_suggestion=suggestion,
     )
 
 
@@ -177,9 +248,10 @@ def set_details(
     project_id: UUID,
     control_id: UUID,
     body: DetailsSet,
-) -> list[UUID]:
+) -> Saved:
     """Records the details given on this control, then fills the same details on each other
-    system chosen where that system has none. Returns every control changed."""
+    system chosen where that system has none, and (apply_to_system) the owner on this
+    system's other controls that have none. Returns every control changed."""
     # Imported here: onboarding imports the context modules.
     from ai_workforce_api.onboarding import _authorize_setup
 
@@ -200,7 +272,10 @@ def set_details(
     }
     if not any(given.values()):
         raise ValueError("no detail is given")
-    changed: list[UUID] = []
+    if body.apply_to_system and not given["owner"]:
+        raise ValueError("applying to the system needs the owner")
+    saved = Saved(changed=[])
+    changed = saved.changed
     with transaction(connection) as cursor:
         row = _row(cursor, project_id, control_id, lock=True)
         if row is None:
@@ -256,12 +331,62 @@ def set_details(
                 ),
             )
             changed.append(target)
+            saved.copied += 1
             _audit(
                 cursor, organization_id, project_id, principal.id, target,
                 "control.details_copied",
                 {"source_control_id": str(control_id), "fields": fills},
             )  # fmt: skip
-    return changed
+        if body.apply_to_system:
+            if (name + mail).strip() == "":
+                raise ValueError("there is no owner to apply")
+            for target in _apply_owner(
+                cursor, organization_id, project_id, control_id, row[6], name, mail
+            ):
+                changed.append(target)
+                saved.applied += 1
+                _audit(
+                    cursor, organization_id, project_id, principal.id, target,
+                    "control.details_applied",
+                    {
+                        "source_control_id": str(control_id),
+                        "engagement_application_id": str(row[6]),
+                        "fields": ["owner"],
+                    },
+                )  # fmt: skip
+    return saved
+
+
+def _apply_owner(
+    cursor: Any,
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    application: Any,
+    name: str,
+    mail: str,
+) -> list[UUID]:
+    """Records the owner on the engagement's other in-scope controls on this system whose
+    owner is empty (name and email both), in one statement. The emptiness is checked again
+    on each row as it is locked, so an owner recorded meanwhile is never overwritten. A
+    control with no system has no system to apply to."""
+    if application is None:
+        return []
+    return [
+        UUID(str(found[0]))
+        for found in cursor.execute(
+            """
+            UPDATE engagement_controls
+            SET owner_name = %s, owner_email = %s,
+                version = version + 1, updated_at = clock_timestamp()
+            WHERE project_id = %s AND organization_id = %s
+              AND engagement_application_id = %s AND id <> %s AND included
+              AND btrim(coalesce(owner_name, '') || coalesce(owner_email, '')) = ''
+            RETURNING id
+            """,
+            (name, mail, project_id, organization_id, application, control_id),
+        ).fetchall()
+    ]
 
 
 def _audit(

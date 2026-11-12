@@ -320,6 +320,36 @@ REVIEW_NOTES: dict[str, tuple[str, str, str]] = {
     ),
 }
 
+# The control owners' answers to the walkthrough's questions (walkthrough_questions.py), as
+# the audit team recorded them in each design walkthrough (closure.py's memos): a person's
+# confirmed answers, not a model's. The demo's controls are its own (library keys
+# "manual:northstar-*"), so the bank asks each of them its universal questions. None of the
+# owners knew of a deviation or a change in the period at the walkthrough (the exceptions
+# the testing finds come later), and every system is hosted by its vendor: SAP S/4HANA on
+# RISE with SAP, Entra ID and Snowflake as cloud services (records.SYSTEMS). Each vendor's
+# SOC 1 Type 2 report covers 1 October 2026 to 30 September 2027, so it covers part of the
+# 2027 period and a bridge letter takes it to 31 December 2027 (SERVICE_ORGANIZATIONS).
+WALKTHROUGH_ANSWERS: dict[str, str] = {
+    "wt-known-deviations": "No",
+    "wt-changes-in-period": "No",
+    "wt-service-org": "Yes",
+    "wt-service-org-report": "A SOC 1 Type 2 report covering part of the period (bridge letter needed)",
+}
+SERVICE_ORGANIZATIONS: dict[str, str] = {
+    "sap": "SAP SE hosts SAP S/4HANA on RISE with SAP (private cloud) and operates its infrastructure, database and backups; Northstar performs this control itself. SAP's SOC 1 Type 2 report for RISE with SAP covers 1 October 2026 to 30 September 2027, with a bridge letter to 31 December 2027; the complementary user entity controls relied on are Northstar's own user access and change management over S/4HANA.",
+    "entra": "Microsoft hosts Entra ID as a cloud service and operates its platform; Northstar configures its tenant and performs this control itself. Microsoft's SOC 1 Type 2 report for Microsoft Entra covers 1 October 2026 to 30 September 2027, with a bridge letter to 31 December 2027; the complementary user entity controls relied on are Northstar's administration of its tenant, its privileged roles and its access reviews.",
+    "snowflake": "Snowflake Inc. hosts the data warehouse as a cloud service and operates its platform; Northstar performs this control itself. Snowflake's SOC 1 Type 2 report covers 1 October 2026 to 30 September 2027, with a bridge letter to 31 December 2027; the complementary user entity controls relied on are Northstar's management of its own users, roles, tasks and pipeline changes.",
+}
+
+
+def walkthrough_answer(systems: tuple[str, ...], key: str) -> str | None:
+    """The owner's answer to one walkthrough question for a control on these systems; None
+    for a question the demo leaves unanswered (an optional one)."""
+    if key == "wt-service-org-detail":
+        return " ".join(SERVICE_ORGANIZATIONS[system] for system in systems)
+    return WALKTHROUGH_ANSWERS.get(key)
+
+
 WORKPAPER_NOTE = (
     "Prepared with the Northstar demo dataset: the engagement as of 30 September 2027 (simulated)."
 )
