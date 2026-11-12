@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type ReactNode, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useState } from "react";
 import { HeldPicker, PolicyPicker } from "./add-evidence-menu";
 import { AutoRefresh } from "./auto-refresh";
 import { ControlSend } from "./control-send";
@@ -41,6 +41,7 @@ import { formatOf, wordingOf } from "./evidence-requests-model";
 import type { HeldFile } from "./evidence-workspace-model";
 import { linkableFiles } from "./evidence-workspace-model";
 import { fileLine } from "./evidence-workspace-view";
+import { formatDate } from "./format";
 import {
   choosable,
   type PolicyEvidence,
@@ -206,15 +207,22 @@ export function DesignEvidence({
     setChosen(next);
   };
   const wording = new Map(view.attributes.map((item) => [item.id, item]));
-  const locked = action.pending || list.pending;
+  // An upload can move rows to another request (evidence in hand splits a request), so
+  // after one nothing else is offered until the plan has been read again: the plan the
+  // upload was made on is remembered, and the list is locked while it is still shown.
+  const [settling, setSettling] = useState<EvidencePlan | null>(null);
+  // The upload reads the plan again itself. Should that reading never arrive, the
+  // lock lifts after a while rather than hold the list for good: the server still
+  // refuses anything made on a request the row has left.
+  useEffect(() => {
+    if (settling === null) {
+      return;
+    }
+    const timer = window.setTimeout(() => setSettling(null), 10000);
+    return () => window.clearTimeout(timer);
+  }, [settling]);
+  const locked = action.pending || list.pending || settling === plan;
   const problem = action.problem ?? list.problem;
-  const reviewHref =
-    view.delivery.requestId === null
-      ? null
-      : evidenceHref(stepHref, {
-          view: "requests",
-          request: view.delivery.requestId,
-        });
   const events = evidenceActivity(activity);
 
   async function remove(row: EvidenceRow) {
@@ -290,98 +298,139 @@ export function DesignEvidence({
       {action.note ? <p className="cc-note">{action.note}</p> : null}
       <Problem text={problem} />
 
-      <div className="de-card">
-        <div className="de-delivery">
-          <UiIcon name="mail" size={14} />
-          <span className="de-delivery-to">
-            To <strong>{view.delivery.to}</strong>
-            {view.delivery.role !== "" ? ` · ${view.delivery.role}` : ""}
-            {view.delivery.due !== "" ? ` · ${view.delivery.due}` : ""}
-          </span>
-          <span className={`de-delivery-status tone-${view.delivery.tone}`}>
-            {view.delivery.status}
-          </span>
-          {canAct && view.delivery.canChange && reviewHref !== null ? (
-            <Link
-              className="de-change"
-              href={reviewHref}
-              scroll={false}
-              aria-label="Change the recipient and the due date"
+      {view.groups.map((group) => {
+        const reviewHref =
+          group.line.requestId === null
+            ? null
+            : evidenceHref(stepHref, {
+                view: "requests",
+                request: group.line.requestId,
+              });
+        return (
+          <div className="de-card" key={group.key}>
+            <div
+              className={`de-delivery${group.line.quiet ? " is-quiet" : ""}`}
             >
-              Change
-            </Link>
-          ) : null}
-          <RowMenu
-            label="the requests as sent"
-            items={[
-              {
-                label: "Preview the email",
-                icon: "eye",
-                unavailable:
-                  reviewHref === null
-                    ? "The request is not drafted yet."
-                    : null,
-                onSelect: () => {
-                  if (reviewHref !== null) {
-                    router.push(reviewHref, { scroll: false });
-                  }
-                },
-              },
-              {
-                label: "Open in the Evidence center",
-                icon: "inbox",
-                href: centerHref(ids, DEFAULT_QUERY, { q: controlRef }),
-              },
-            ]}
-          />
-        </div>
-        <ul className="tar-list" aria-label="D&I requests">
-          {view.rows.map((row) => {
-            const item = requirements.get(row.id);
-            return item === undefined ? null : (
-              <Row
-                key={row.id}
-                ids={ids}
-                row={row}
-                item={item}
-                open={opened.has(row.id)}
-                onToggle={() => flip(row.id)}
-                canAct={canAct}
-                action={action}
-                locked={locked}
-                files={files}
-                applications={applications}
-                system={system}
-                policies={policies.evidence}
-                onPolicyDecided={policies.reload}
-                wording={wording}
-                attributeCount={view.attributes.length}
-                onDialog={setEvidence}
-                onCoverage={() =>
-                  document
-                    .getElementById(`${id}-coverage`)
-                    ?.scrollIntoView({ block: "center" })
+              <UiIcon name={group.line.quiet ? "file" : "mail"} size={14} />
+              {group.line.quiet ? (
+                <span className="de-delivery-to">{group.line.status}</span>
+              ) : (
+                <>
+                  <span className="de-delivery-to">
+                    To <strong>{group.line.to}</strong>
+                    {group.line.role !== "" ? ` · ${group.line.role}` : ""}
+                    {group.line.due !== "" ? ` · ${group.line.due}` : ""}
+                  </span>
+                  <span
+                    className={`de-delivery-status tone-${group.line.tone}`}
+                  >
+                    {group.line.status}
+                  </span>
+                </>
+              )}
+              {canAct && group.line.canChange && reviewHref !== null ? (
+                <Link
+                  className="de-change"
+                  href={reviewHref}
+                  scroll={false}
+                  aria-label="Change the recipient and the due date"
+                >
+                  Change
+                </Link>
+              ) : null}
+              <RowMenu
+                label={
+                  group.line.quiet ? "these requests" : "the request as sent"
                 }
-                onEdit={() => setDialog({ mode: "edit", row: asRequest(row) })}
-                onAttributes={() =>
-                  setDialog({ mode: "attributes", row: asRequest(row) })
-                }
-                onRemove={() => void remove(row)}
-                onDone={(note) => {
-                  setRemoved(null);
-                  setDone(note);
-                }}
+                items={[
+                  ...(group.line.quiet
+                    ? []
+                    : [
+                        {
+                          label: "Preview the email",
+                          icon: "eye" as const,
+                          unavailable:
+                            reviewHref === null
+                              ? "The request is not drafted yet."
+                              : null,
+                          onSelect: () => {
+                            if (reviewHref !== null) {
+                              router.push(reviewHref, { scroll: false });
+                            }
+                          },
+                        },
+                      ]),
+                  {
+                    label: "Open in the Evidence center",
+                    icon: "inbox" as const,
+                    href: centerHref(ids, DEFAULT_QUERY, { q: controlRef }),
+                  },
+                ]}
               />
-            );
-          })}
-          {view.rows.length === 0 ? (
-            <li className="tar-empty">
-              No D&amp;I request is on the list. Add one, then choose the
-              attributes it addresses.
-            </li>
-          ) : null}
-        </ul>
-      </div>
+            </div>
+            <ul
+              className="tar-list"
+              aria-label={
+                view.groups.length === 1
+                  ? "D&I requests"
+                  : `D&I requests: ${group.line.quiet ? group.line.status : `to ${group.line.to}, ${group.line.status}`}`
+              }
+            >
+              {group.rowIds.map((rowId) => {
+                const row = view.rows.find((each) => each.id === rowId);
+                if (row === undefined) {
+                  return null;
+                }
+                const item = requirements.get(row.id);
+                return item === undefined ? null : (
+                  <Row
+                    key={row.id}
+                    ids={ids}
+                    row={row}
+                    item={item}
+                    open={opened.has(row.id)}
+                    onToggle={() => flip(row.id)}
+                    canAct={canAct}
+                    action={action}
+                    locked={locked}
+                    onUploaded={() => setSettling(plan)}
+                    files={files}
+                    applications={applications}
+                    system={system}
+                    policies={policies.evidence}
+                    onPolicyDecided={policies.reload}
+                    wording={wording}
+                    attributeCount={view.attributes.length}
+                    onDialog={setEvidence}
+                    onCoverage={() =>
+                      document
+                        .getElementById(`${id}-coverage`)
+                        ?.scrollIntoView({ block: "center" })
+                    }
+                    onEdit={() =>
+                      setDialog({ mode: "edit", row: asRequest(row) })
+                    }
+                    onAttributes={() =>
+                      setDialog({ mode: "attributes", row: asRequest(row) })
+                    }
+                    onRemove={() => void remove(row)}
+                    onDone={(note) => {
+                      setRemoved(null);
+                      setDone(note);
+                    }}
+                  />
+                );
+              })}
+            </ul>
+          </div>
+        );
+      })}
+      {view.rows.length === 0 ? (
+        <p className="dr-empty">
+          No D&amp;I request is on the list. Add one, then choose the attributes
+          it addresses.
+        </p>
+      ) : null}
 
       {/* While the agent reads a file the list is read again, in place, so the row
           moves from Reading… to To review by itself; it stops when the reading ends. */}
@@ -408,7 +457,7 @@ export function DesignEvidence({
                         ? "is-exception"
                         : "is-uncovered"
                 }`}
-                title={`${chip.label}. ${chip.text}`}
+                title={`${chip.label}. ${chip.text}${chip.reason !== "" ? ` Reason: ${chip.reason}` : ""}`}
               >
                 <span className="sr-only">{chip.label}</span>
                 <span className="dq-cov-letter" aria-hidden="true">
@@ -432,6 +481,43 @@ export function DesignEvidence({
       ) : null}
 
       <div className="dr-more">
+        {/* The reason behind a "Reason recorded" chip, readable on request. */}
+        {view.exceptions.length > 0 ? (
+          <details className="dr-fold">
+            <summary>
+              <span>
+                <strong>Not evidenced at D&amp;I</strong>
+                <small>
+                  {view.exceptions.length} attribute
+                  {view.exceptions.length === 1 ? "" : "s"}, with the reason
+                  recorded
+                </small>
+              </span>
+              <UiIcon name="chevron" size={13} />
+            </summary>
+            <ul className="dq-reasons">
+              {view.exceptions.map((item) => (
+                <li key={item.attributeId}>
+                  <span className="dr-code">{item.letter}</span>
+                  <span className="dq-reason-text">
+                    <span>{item.text}</span>
+                    <q>{item.reason}</q>
+                    <small>
+                      {[
+                        item.recordedBy,
+                        item.recordedAt !== null
+                          ? formatDate(item.recordedAt)
+                          : "",
+                      ]
+                        .filter((part) => part !== "")
+                        .join(" · ")}
+                    </small>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
         {view.attributes.length > 0 ? (
           <details className="dr-fold">
             <summary>
@@ -485,6 +571,43 @@ export function DesignEvidence({
               <UiIcon name="chevron" size={13} />
             </summary>
             <div className="dr-fold-body">{library}</div>
+          </details>
+        ) : null}
+        {view.history.length > 0 ? (
+          <details className="dr-fold">
+            <summary>
+              <span>
+                <strong>History</strong>
+                <small>
+                  {view.history.length} deleted request
+                  {view.history.length === 1 ? "" : "s"}
+                </small>
+              </span>
+              <UiIcon name="chevron" size={13} />
+            </summary>
+            <ul className="dq-history">
+              {view.history.map((item) => (
+                <li key={item.id}>
+                  <span className="dq-history-text">
+                    <span>{item.title}</span>
+                    <small>{item.kind} · Deleted</small>
+                  </span>
+                  {canAct ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      disabled={locked}
+                      aria-label={`Restore ${item.title}`}
+                      onClick={() => void restore(item)}
+                    >
+                      {list.busy === `restore-${item.id}`
+                        ? "Restoring…"
+                        : "Restore"}
+                    </button>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
           </details>
         ) : null}
         <details className="dr-fold">
@@ -587,6 +710,7 @@ function Row({
   canAct,
   action,
   locked,
+  onUploaded,
   files,
   applications,
   system,
@@ -609,6 +733,8 @@ function Row({
   canAct: boolean;
   action: Action;
   locked: boolean;
+  /** Files were added: the plan is read again before anything else is offered. */
+  onUploaded: () => void;
   files: HeldFile[];
   applications: Array<{ id: string; name: string }>;
   system: string | null;
@@ -845,7 +971,7 @@ function Row({
           <button
             type="button"
             className="btn btn-secondary btn-sm de-upload"
-            disabled={running}
+            disabled={running || locked}
             aria-label={`Upload evidence for ${row.title}`}
             title="Choose files, or drop them on the row. They are evidence for this request only."
             onClick={pick}
@@ -1267,6 +1393,7 @@ function Row({
               : []
           }
           system={system}
+          onUploaded={onUploaded}
           chooser={(pick, running) => content(pick, running)}
         />
       ) : (

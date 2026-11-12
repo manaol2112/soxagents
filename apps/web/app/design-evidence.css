@@ -41,6 +41,16 @@
   line-height: 1.3;
 }
 
+/* Several requests (evidence in hand, a follow-up): one card each, the same card. */
+.de-card + .de-card {
+  margin-top: -0.15rem;
+}
+
+/* Nothing goes anywhere for these rows: the line only says so. */
+.de-delivery.is-quiet .de-delivery-to {
+  color: var(--text-secondary);
+}
+
 .de-delivery > svg {
   flex: none;
 }

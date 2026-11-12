@@ -6,6 +6,7 @@ import {
   addressOf,
   checkOwner,
   confirmLines,
+  HANDED_OVER_ANSWER,
   initialsOf,
   matchOwners,
   outsideDomains,
@@ -315,6 +316,28 @@ describe("approve and send from the Request step", () => {
     );
     // A refusal reads the same either way: nothing went.
     assert.equal(sentReport(none, true).title, "Not sent");
+    // The server's own answer for a request approved while email is off: not counted
+    // as sent, and not a failure to resolve either, whatever the page knew beforehand.
+    const answered = {
+      ...result,
+      targets: result.targets.map((t) => ({
+        ...t,
+        ok: false,
+        waiting: false,
+        recipient: "jordan.lee@example.com",
+        detail: HANDED_OVER_ANSWER,
+      })),
+    };
+    for (const known of [false, true]) {
+      const report = sentReport(answered, known);
+      assert.equal(report.title, "2 requests handed over");
+      assert.deepEqual(report.problems, []);
+      assert.match(report.lead, /recorded as handed over to Jordan Lee\./);
+      assert.doesNotMatch(
+        `${report.title} ${report.lead}`,
+        /\bsent\b|and emailed/,
+      );
+    }
   });
 
   it("says a request scheduled for its phase is still scheduled, not unsent", () => {

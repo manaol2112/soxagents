@@ -96,7 +96,9 @@ export type Requirement = Pick<
   | "acceptedAt"
 > & { inHand?: boolean };
 
-/** The request (PBC request) the rows travel in, as the control holds it. */
+/** The request (PBC request) rows travel in. `delivery` is how it reached its owner:
+ * null when the server says it did not, absent when the server did not say (an answer
+ * without the field), in which case only its status is known. */
 export type Carrier = {
   id: string;
   kind: string;
@@ -104,8 +106,64 @@ export type Carrier = {
   dueAt: string;
   recipient?: string;
   delivery?: Delivery | null;
-  liveEmail?: boolean | null;
 };
+
+/** A request of the D&I phase as the evidence plan lists it (`phases[].requests[]`). */
+export type PlanRequest = {
+  id: string;
+  status: string;
+  recipient?: string;
+  dueAt?: string;
+  delivery?: Delivery | null;
+};
+
+/**
+ * The requests of the D&I phase: the plan's own list (its status, recipient, due date and
+ * delivery, read with the rows they carry, so the two never disagree), with the kind the
+ * control's list gives each (evidence, samples, follow-up), and what the plan does not
+ * say filled from there. A request only the control lists is kept, after the plan's.
+ */
+export function carriersOf(
+  planned: readonly PlanRequest[],
+  listed: readonly Carrier[],
+): Carrier[] {
+  const known = new Map(listed.map((request) => [request.id, request]));
+  const seen = new Set(planned.map((request) => request.id));
+  return [
+    ...planned.map((request): Carrier => {
+      const other = known.get(request.id);
+      const delivery =
+        request.delivery !== undefined ? request.delivery : other?.delivery;
+      return {
+        id: request.id,
+        kind: other?.kind ?? "EVIDENCE",
+        status: request.status,
+        dueAt: request.dueAt || other?.dueAt || "",
+        recipient: request.recipient || other?.recipient || "",
+        ...(delivery !== undefined ? { delivery } : {}),
+      };
+    }),
+    ...listed.filter((request) => !seen.has(request.id)),
+  ];
+}
+
+/** What the server answers when evidence in hand changed a request as it was being
+ * approved or submitted (outbound.IN_HAND_CHANGED, IN_HAND_ALL): shown as they are, and
+ * the plan is read again, since the rows now travel in other requests. */
+export const IN_HAND_REFUSALS: readonly string[] = [
+  "Evidence for part of this request is already in hand, so the request was updated to ask only for the rest. Review it again before approving.",
+  "Evidence for every item of this request is already in hand, so nothing needs sending.",
+];
+
+/** Whether a refusal means the requests changed under the person: read them again. */
+export function rereadsRequests(detail: string): boolean {
+  const said = detail.split(/\s+/).join(" ").trim();
+  return (
+    IN_HAND_REFUSALS.includes(said) ||
+    said === "this item is not one the request asks for" ||
+    said === "This item is not one the request asks for."
+  );
+}
 
 type Approved = { id: string; text: string; sourceKind: string };
 
@@ -118,8 +176,16 @@ export type EvidenceInput = {
   requests: readonly Carrier[];
   /** The process owner, as the control records them; the role where it is known. */
   owner: { name: string; role: string };
-  /** Approved attributes a person decided are not evidenced at D&I. */
-  excepted: readonly string[];
+  /** Approved attributes a person decided are not evidenced at D&I, with why. */
+  exceptions: ReadonlyArray<{
+    attributeId: string;
+    reason: string;
+    recordedBy: string;
+    recordedAt: string | null;
+  }>;
+  /** Whether live email is on in this environment (the plan's `live_email`); null when
+   * the server did not say. */
+  liveEmail: boolean | null;
   /** The plan's procedures each requirement serves, from the test plan; null when it
    * was not read. Used only for a requirement that does not carry its own. */
   procedures: Readonly<Record<string, readonly string[]>> | null;
@@ -234,6 +300,10 @@ export type EvidenceRow = {
   procedureIds: string[] | null;
   /** Out of the count: not applicable, or its request cancelled. */
   aside: boolean;
+  /** Its evidence was uploaded before its request was sent (the server's word). */
+  inHand: boolean;
+  /** The request it travels in; null while none is drafted for it. */
+  requestId: string | null;
   /** How its request went out; null when it has not, or the server did not say. */
   delivery: Delivery | null;
   /** The plan's own state for the requirement. */
@@ -279,6 +349,36 @@ export type DeliveryLine = {
   tone: "neutral" | "success" | "danger" | "info";
   /** The recipient and the due date can still be changed. */
   canChange: boolean;
+  /** It reached its owner: by email, handed over, or (where the server did not say
+   * how) no longer a draft. */
+  out: boolean;
+  /** Nothing goes anywhere for these rows (evidence in hand, or set aside): the line
+   * names no recipient. */
+  quiet: boolean;
+};
+
+/** The rows that travel in one request, under that request's delivery line. */
+export type RequestGroup = {
+  /** The request's id, or "none" for rows no request is drafted for. */
+  key: string;
+  line: DeliveryLine;
+  rowIds: string[];
+};
+
+export type ExceptionLine = {
+  attributeId: string;
+  letter: string;
+  text: string;
+  reason: string;
+  recordedBy: string;
+  recordedAt: string | null;
+};
+
+export type HistoryRow = {
+  id: string;
+  version: number;
+  title: string;
+  kind: string;
 };
 
 export type CoverageState =
@@ -294,6 +394,8 @@ export type CoverageChip = {
   state: CoverageState;
   /** The chip in words: the mark and the colour never replace them. */
   label: string;
+  /** The recorded reason, where it is not evidenced at D&I; "" otherwise. */
+  reason: string;
 };
 
 export type EvidenceAttribute = {
@@ -308,7 +410,10 @@ export type EvidenceList = {
   title: string;
   rows: EvidenceRow[];
   header: EvidenceHeader;
-  delivery: DeliveryLine;
+  /** The rows by the request they travel in, each under its delivery line: what waits
+   * to be sent first, then what the owner has, then what is complete, then evidence in
+   * hand. One group is the usual case. */
+  groups: RequestGroup[];
   send: {
     /** A request is drafted and waits to be sent: the bar shows its primary action. */
     show: boolean;
@@ -318,6 +423,10 @@ export type EvidenceList = {
   };
   coverage: CoverageChip[];
   coverageLine: string;
+  /** Attributes not evidenced at D&I, each with the recorded reason. */
+  exceptions: ExceptionLine[];
+  /** Deleted requests, each restorable: part of the record. */
+  history: HistoryRow[];
   attributes: EvidenceAttribute[];
   sources: string;
   /** The Activity fold's one line. */
@@ -438,7 +547,9 @@ function stateOf(
 ): ChipState {
   const files = item.files.length;
   const delivered = carrier?.delivery ?? null;
-  const unsent = BEFORE_SENDING.includes(item.state);
+  // A request handed over while email is off stays awaiting approval on the server:
+  // what went out is read from its delivery, never from the status alone.
+  const unsent = BEFORE_SENDING.includes(item.state) && delivered === null;
   if (item.state === "NOT_APPLICABLE") {
     return "NOT_APPLICABLE";
   }
@@ -460,16 +571,15 @@ function stateOf(
   if (item.state === "FOLLOW_UP_REQUIRED") {
     return followUpOut ? "FOLLOW_UP" : "FOLLOW_UP_TO_SEND";
   }
-  // Evidence uploaded before its request went out: said so, on the server's word only,
-  // until the request is out and the file waits for review like any other.
-  if (item.inHand === true && (unsent || delivered === null)) {
+  // Evidence uploaded before its request went out: said so, on the server's word only.
+  if (item.inHand === true && delivered === null) {
     return "IN_HAND";
   }
   const owner = (): ChipState =>
     item.state === "OVERDUE" ||
     (carrier !== null &&
       (LATE.includes(carrier.status) || daysOverdue(carrier.dueAt, now) > 0) &&
-      !NOT_OUT.includes(carrier.status))
+      (delivered !== null || !NOT_OUT.includes(carrier.status)))
       ? "OVERDUE"
       : delivered?.mode === "HANDED_OVER"
         ? "HANDED_OVER"
@@ -552,10 +662,17 @@ function deliveryOf(
       status: "Not drafted yet",
       tone: "neutral",
       canChange: false,
+      out: false,
+      quiet: false,
     };
   }
   const delivered = carrier.delivery ?? null;
-  const out = delivered !== null || !NOT_OUT.includes(carrier.status);
+  // Sent or handed over on the server's word. Where it did not say (no delivery field
+  // at all), a request that left the draft reads as sent, without a date. Where it says
+  // there was none, nothing is claimed, whatever the status.
+  const out =
+    delivered !== null ||
+    (carrier.delivery === undefined && !NOT_OUT.includes(carrier.status));
   if (!out) {
     return {
       ...base,
@@ -566,7 +683,10 @@ function deliveryOf(
             ? "Cancelled"
             : "Not sent",
       tone: "neutral",
-      canChange: carrier.status !== "CANCELLED",
+      canChange:
+        carrier.status === "DRAFT" || carrier.status === "APPROVAL_PENDING",
+      out: false,
+      quiet: false,
     };
   }
   // Out: by email, handed over, or (where the server did not say how) no longer a draft.
@@ -587,6 +707,8 @@ function deliveryOf(
           : `${how} · Overdue`,
       tone: "danger",
       canChange: true,
+      out: true,
+      quiet: false,
     };
   }
   return {
@@ -594,6 +716,8 @@ function deliveryOf(
     status: complete ? `${how} · complete` : how,
     tone: delivered?.mode === "HANDED_OVER" ? "info" : "success",
     canChange: !complete,
+    out: true,
+    quiet: false,
   };
 }
 
@@ -607,12 +731,6 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
     source: SOURCE_SHORT[item.sourceKind] ?? "Team",
   }));
   const allLetters = attributes.map((item) => item.letter);
-  // The request the rows travel in: the one they name, else the phase's evidence request.
-  const carried = design.find((item) => item.requestId !== null)?.requestId;
-  const main =
-    input.requests.find((request) => request.id === carried) ??
-    input.requests.find((request) => request.kind === "EVIDENCE") ??
-    null;
   const carrierOf = (item: Requirement) =>
     input.requests.find((request) => request.id === item.requestId) ?? null;
   const followUp =
@@ -657,7 +775,9 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
       chip: EVIDENCE_CHIPS[state],
       files,
       reading,
-      sent: !BEFORE_SENDING.includes(item.state) && item.inHand !== true,
+      sent:
+        (carrier?.delivery != null || !BEFORE_SENDING.includes(item.state)) &&
+        item.inHand !== true,
       uploadBlocked:
         item.state === "ACCEPTED"
           ? "Its evidence is accepted. Reopen the decision to add more."
@@ -698,17 +818,87 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
           ? null
           : [...(input.procedures[item.id] ?? [])]),
       aside,
+      inHand: item.inHand === true,
+      requestId: item.requestId,
       delivery: carrier?.delivery ?? null,
       planState: item.state,
     };
   });
   const live = rows.filter((row) => !row.aside);
-  const complete =
-    live.length > 0 && live.every((row) => row.state === "ACCEPTED");
+
+  // The rows by the request they travel in. Evidence in hand splits a request (the rows
+  // in hand stay on it, the rest move to a new draft), and a follow-up is a request of
+  // its own, so several are normal; one is the usual case.
+  const keys = [...new Set(rows.map((row) => row.requestId ?? "none"))];
+  const groups: RequestGroup[] = keys
+    .map((key) => {
+      const members = rows.filter((row) => (row.requestId ?? "none") === key);
+      const active = members.filter((row) => !row.aside);
+      const carrier =
+        input.requests.find((request) => request.id === key) ?? null;
+      const done =
+        active.length > 0 && active.every((row) => row.state === "ACCEPTED");
+      const inHand =
+        carrier?.delivery == null &&
+        active.length > 0 &&
+        active.every((row) => row.inHand);
+      const still = {
+        requestId: carrier?.id ?? null,
+        to: "",
+        role: "",
+        due: "",
+        tone: "neutral" as const,
+        canChange: false,
+        out: false,
+        quiet: true,
+      };
+      const line: DeliveryLine =
+        active.length === 0
+          ? { ...still, status: "Set aside" }
+          : inHand
+            ? {
+                ...still,
+                status: done
+                  ? "In hand · complete"
+                  : "In hand · nothing to send",
+              }
+            : deliveryOf(carrier, input.owner, done, input.now);
+      const rank =
+        active.length === 0 ? 4 : inHand ? 3 : !line.out ? 0 : done ? 2 : 1;
+      return { key, line, rowIds: members.map((row) => row.id), rank };
+    })
+    .sort((a, b) => a.rank - b.rank)
+    .map(({ key, line, rowIds }) => ({ key, line, rowIds }));
+  // The request the owner has now (the step's one waiting line names it), else the
+  // first that went out, else the first there is.
+  const WAITS: readonly ChipState[] = [
+    "WITH_OWNER",
+    "HANDED_OVER",
+    "OVERDUE",
+    "NO_FILE",
+  ];
+  const lead =
+    groups.find(
+      (group) =>
+        group.line.out &&
+        group.rowIds.some((id) =>
+          live.some((row) => row.id === id && WAITS.includes(row.state)),
+        ),
+    ) ??
+    groups.find((group) => group.line.out) ??
+    groups.find((group) => !group.line.quiet) ??
+    null;
+  const main =
+    input.requests.find((request) => request.id === lead?.key) ?? null;
+  const delivery =
+    lead?.line ?? deliveryOf(null, input.owner, false, input.now);
 
   // Coverage: outline where a request addresses the attribute, green with a check once
   // the evidence of one such request is accepted.
-  const excepted = new Set(input.excepted);
+  const reasonOf = new Map(
+    input.exceptions.map((item) => [item.attributeId, item]),
+  );
+  const excepted = new Set(reasonOf.keys());
   const coverage: CoverageChip[] = attributes.map((item) => {
     const addressing = live.filter((row) => row.attributeIds.includes(item.id));
     const state: CoverageState = addressing.some(
@@ -733,7 +923,14 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
             : state === "EXCEPTED"
               ? `Attribute ${item.letter}: not evidenced at D&I, with a recorded reason`
               : `Attribute ${item.letter}: not addressed by any request`,
+      reason: state === "EXCEPTED" ? (reasonOf.get(item.id)?.reason ?? "") : "",
     };
+  });
+  const exceptions: ExceptionLine[] = attributes.flatMap((item) => {
+    const reason = reasonOf.get(item.id);
+    return reason === undefined
+      ? []
+      : [{ ...reason, letter: item.letter, text: item.text }];
   });
   const evidenced = coverage.filter((chip) => chip.state === "EVIDENCED");
   const gaps = coverage.filter((chip) => chip.state === "UNCOVERED");
@@ -777,15 +974,7 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
           .filter((part) => part !== "")
           .join(" · ");
 
-  const delivery = deliveryOf(main, input.owner, complete, input.now);
-  const liveEmail = input.requests.some(
-    (request) => request.liveEmail === false,
-  )
-    ? false
-    : input.requests.some((request) => request.liveEmail === true)
-      ? true
-      : null;
-  const handover = liveEmail === false;
+  const handover = input.liveEmail === false;
   // A request of the phase is drafted and waits for a person to approve and send it.
   const drafted = input.requests.some((request) => request.status === "DRAFT");
   const header = headerOf({
@@ -793,6 +982,16 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
     review,
     reviewFiles,
     main,
+    // A row waits to be sent on a request submitted for someone else's approval.
+    approval: live.some(
+      (row) =>
+        row.state === "TO_SEND" &&
+        input.requests.some(
+          (request) =>
+            request.id === row.requestId &&
+            request.status === "APPROVAL_PENDING",
+        ),
+    ),
     followUp,
     owner: delivery.to,
     handover,
@@ -803,7 +1002,7 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
 
   const received = live.reduce((sum, row) => sum + row.files, 0);
   const accepted = live.filter((row) => row.state === "ACCEPTED").length;
-  const out = main !== null && delivery.tone !== "neutral";
+  const out = delivery.out;
   const requested = design
     .filter((item) => item.acceptedBy !== null && item.acceptedAt !== null)
     .sort((a, b) => (b.acceptedAt ?? "").localeCompare(a.acceptedAt ?? ""))[0];
@@ -823,7 +1022,7 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
     title: `Requests · ${live.length}`,
     rows,
     header,
-    delivery,
+    groups,
     send: {
       show: drafted,
       handover,
@@ -831,6 +1030,20 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
     },
     coverage,
     coverageLine,
+    exceptions,
+    history: input.requirements
+      .filter(
+        (item) =>
+          item.phase === "DESIGN" &&
+          item.state === "REMOVED" &&
+          item.pendingChange?.add !== true,
+      )
+      .map((item) => ({
+        id: item.id,
+        version: item.version,
+        title: item.title,
+        kind: itemKind(item.categories).kind,
+      })),
     attributes,
     sources: listed([
       ...new Set(
@@ -849,6 +1062,7 @@ function headerOf(facts: {
   review: readonly EvidenceRow[];
   reviewFiles: number;
   main: Carrier | null;
+  approval: boolean;
   followUp: Carrier | null;
   owner: string;
   handover: boolean;
@@ -928,8 +1142,7 @@ function headerOf(facts: {
     };
   }
   if (toSend > 0) {
-    const approval = main?.status === "APPROVAL_PENDING";
-    return approval
+    return facts.approval
       ? {
           standing: "AWAITING_APPROVAL",
           tone: "active",

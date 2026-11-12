@@ -30,7 +30,6 @@ export type ControlFiles = {
 
 import type { ControlContext } from "./control-context-model.ts";
 import { type ControlJourney, parseJourney } from "./control-journey-model.ts";
-import { type Delivery, readSeam } from "./design-evidence-model.ts";
 import type { EvidencePlan } from "./evidence-plan-model.ts";
 import type { Automation } from "./execution-model.ts";
 import type { NextSteps } from "./home-model.ts";
@@ -193,24 +192,7 @@ export type ControlRequest = {
   draftedBy?: "AGENT" | "PERSON";
   /** The person reading may decide its open approval (the API enforces the same). */
   viewerCanDecide?: boolean;
-  /** How it went to the process owner (by email, or handed over where live email is
-   * off); absent or null when it has not gone, or the server did not say. */
-  delivery?: Delivery | null;
-  /** Whether live email is on in this environment; absent when the server did not say. */
-  liveEmail?: boolean | null;
 };
-
-/** A request's delivery and whether live email is on, each only where the server sent it
- * (design-evidence-model.readSeam reads the fields). */
-function requestSeam(
-  request: unknown,
-): Pick<ControlRequest, "delivery" | "liveEmail"> {
-  const seam = readSeam(request);
-  return {
-    ...(seam.delivery !== null ? { delivery: seam.delivery } : {}),
-    ...(seam.liveEmail !== null ? { liveEmail: seam.liveEmail } : {}),
-  };
-}
 
 export type WaitingOn = "TEAM" | "OWNER" | "AGENT" | "NONE";
 
@@ -1017,7 +999,6 @@ export function parseControls(value: unknown): ControlRow[] | null {
             ? request.approval_decided_by
             : null,
         viewerCanDecide: request.viewer_can_decide === true,
-        ...requestSeam(request),
       })),
       testingRunning: item.testing_running === true,
       populationPending: item.population_pending === true,

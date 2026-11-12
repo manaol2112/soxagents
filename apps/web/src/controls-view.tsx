@@ -107,7 +107,7 @@ import { ControlsToolbar } from "./controls-toolbar";
 import { CoverageForm } from "./coverage-form";
 import { DesignConclusionPanel } from "./design-conclusion-panel";
 import { DesignEvidence } from "./design-evidence";
-import { evidenceList } from "./design-evidence-model";
+import { carriersOf, evidenceList } from "./design-evidence-model";
 import { showsEvidenceWorkspace } from "./design-release-model";
 import { DesignRequests } from "./design-requests";
 import { requestsView } from "./design-requests-model";
@@ -1886,14 +1886,16 @@ function ControlRecord({
       ? evidenceList({
           requirements: designWindow?.requirements ?? [],
           approved: context?.approved ?? [],
-          requests: control.requests.filter(
-            (request) => request.phase === "DESIGN",
+          // The plan lists the phase's requests with how each reached its owner;
+          // the control's list says what kind each is.
+          requests: carriersOf(
+            designWindow?.requests ?? [],
+            control.requests.filter((request) => request.phase === "DESIGN"),
           ),
           // The control records its owner by name and email; no role is on record.
           owner: { name: control.ownerName, role: "" },
-          excepted: (evidencePlan.designRequests?.exceptions ?? []).map(
-            (item) => item.attributeId,
-          ),
+          exceptions: evidencePlan.designRequests?.exceptions ?? [],
+          liveEmail: evidencePlan.liveEmail ?? null,
           procedures:
             masterHere === null
               ? null
