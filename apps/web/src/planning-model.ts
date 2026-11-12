@@ -1953,9 +1953,15 @@ export function planningWrite(fields: Fields): PlanningWrite {
       const shows = text(fields, "objective");
       const category = text(fields, "category");
       const necessity = text(fields, "necessity") || "REQUIRED";
+      // The approved attributes it addresses, chosen as it is added (the D&I requests
+      // list, 12 November 2026). Sent only when some are chosen: the call is otherwise
+      // what it was.
+      const attributes =
+        fields.attribute_ids === undefined ? [] : ids(fields, "attribute_ids");
       return (PHASES as readonly string[]).includes(phase) &&
         ADDABLE_TYPES.includes(category) &&
         (necessity === "REQUIRED" || necessity === "OPTIONAL") &&
+        attributes !== null &&
         clean(title, 3, 200) &&
         clean(description, 10, 1500) &&
         clean(shows, 10, 500)
@@ -1968,6 +1974,7 @@ export function planningWrite(fields: Fields): PlanningWrite {
             objective: shows,
             rationale: shows,
             necessity,
+            ...(attributes.length > 0 ? { attribute_ids: attributes } : {}),
           })
         : { error: "invalid" };
     }
@@ -2254,18 +2261,43 @@ export function releaseIsEarly(status: PhaseStatus): boolean {
   return status.step !== "READY";
 }
 
-/** Whether the phase can be released at all now: it applies, what it needs first is in
- * place (a plan for the D&I evidence, the approved plan for an operating phase), and it is
- * not released or complete yet. The D&I evidence has its own release (B1). */
+/** Whether a person can release the phase now: an operating phase that applies, with the
+ * approved plan in place, not released or complete yet. Never the D&I phase (product
+ * owner, 12 November 2026: "I don't want a separate D&I release."): the server releases
+ * it once its requests list is accepted, so no screen offers it, early or not. */
 export function releasable(status: PhaseStatus | null): boolean {
   return (
-    status !== null && (status.step === "READY" || status.step === "WAITING")
+    status !== null &&
+    status.phase !== "DESIGN" &&
+    (status.step === "READY" || status.step === "WAITING")
   );
 }
 
-/** The phases a person releases, in the audit's order. */
-export const RELEASED_PHASES = ["DESIGN", "INTERIM", "ROLLFORWARD"] as const;
+/** The phases a person releases, in the audit's order: the operating phases. The D&I
+ * phase is not one, so its release cannot be sent from the web at all. */
+export const RELEASED_PHASES = ["INTERIM", "ROLLFORWARD"] as const;
 export type Released = (typeof RELEASED_PHASES)[number];
+
+/** What the D&I phase says where the operating phases offer their release. */
+export const DESIGN_RELEASE_LINE = "Released once its requests are accepted";
+
+/** Whether the D&I phase still waits for its requests list: not released yet. The
+ * screens show the one quiet line then, with the way to the control's D&I Evidence step. */
+export function designAwaitsRequests(status: PhaseStatus | null): boolean {
+  return (
+    status !== null &&
+    status.phase === "DESIGN" &&
+    (status.step === "READY" || status.step === "WAITING")
+  );
+}
+
+/** A phase's state in a word or two. A ready D&I phase is a settled requests list the
+ * server is about to release, never something for a person to release. */
+export function stepLabelOf(status: PhaseStatus): string {
+  return status.phase === "DESIGN" && status.step === "READY"
+    ? "Requests accepted"
+    : status.stepLabel;
+}
 
 function isReleased(value: string): value is Released {
   return (RELEASED_PHASES as readonly string[]).includes(value);
@@ -2276,11 +2308,9 @@ export function phaseWord(phase: Phase): string {
   return phase === "DESIGN" ? "D&I" : PHASE_SHORT[phase].toLowerCase();
 }
 
-/** What releasing a phase does, in a line. */
-export function releaseNote(phase: Released): string {
-  return phase === "DESIGN"
-    ? "Releasing drafts the D&I evidence requests. Each still needs an approver before it is sent."
-    : "Releasing lets the phase's prepared requests go for approval. Nothing is sent.";
+/** What releasing an operating phase does, in a line. */
+export function releaseNote(_phase: Released): string {
+  return "Releasing lets the phase's prepared requests go for approval. Nothing is sent.";
 }
 
 /** The phase a reviewer releases next: the first, in the audit's order, that can be
@@ -2299,7 +2329,7 @@ export function phaseNote(status: PhaseStatus): string {
   if (status.step === "WAITING" && status.waitingFor !== "") {
     return status.waitingFor;
   }
-  return status.stepLabel;
+  return stepLabelOf(status);
 }
 
 // What holds approval, as work to do

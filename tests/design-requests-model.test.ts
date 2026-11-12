@@ -31,7 +31,10 @@ import {
   withAttribute,
 } from "../apps/web/src/design-requests-model.ts";
 import { parsePlan } from "../apps/web/src/evidence-plan-model.ts";
-import { parsePhaseProgress } from "../apps/web/src/planning-model.ts";
+import {
+  parsePhaseProgress,
+  planningWrite,
+} from "../apps/web/src/planning-model.ts";
 
 // The D&I requests list (product owner, 12 November 2026): "Why do I need to have the
 // release button? Simplify the workflow. After the attributes approval, list down the
@@ -89,6 +92,7 @@ const requirement = (extra: Partial<Requirement> = {}): Requirement => ({
   acceptedAt: null,
   toAccept: true,
   personEdited: false,
+  procedureIds: null,
   ...extra,
 });
 
@@ -117,6 +121,8 @@ const summary = (
   uncovered: [D],
   exceptions: [],
   waitingFor: "",
+  working: null,
+  drafting: null,
   ...extra,
 });
 
@@ -611,8 +617,14 @@ describe("the D&I requests list: where it stands", () => {
     assert.deepEqual(view.uncovered, []);
   });
 
+  // Product owner, 12 November 2026: "Yes. I don't want a separate D&I release." The server
+  // releases a settled list itself (when the planner finishes, if it is still at work),
+  // so the page never offers to draft or release it.
+  // Old expectation: a settled list not yet released read "Requests accepted" as work for
+  // a person (tone attention), and `settled` meant "offer Draft the requests", which
+  // called the D&I release. New: it is at rest (tone idle), nothing is offered, and the
+  // page waits for the server.
   it("is settled once every request is accepted and every attribute addressed", () => {
-    // Settled behind a background run, so not yet released: a person drafts it.
     const view = listOf(
       requestsView(
         input({
@@ -629,63 +641,88 @@ describe("the D&I requests list: where it stands", () => {
     );
     assert.equal(view.mode, "list");
     assert.equal(view.settled, true);
+    assert.equal(view.working, false);
     assert.equal(view.holds, "");
+    assert.deepEqual(view.accept, []);
     assert.deepEqual(view.header, {
-      tone: "attention",
+      tone: "idle",
       status: "Requests accepted",
     });
-    // The plan's own word is enough where the phase's was not read as ready.
+    // Not settled while a request waits or an attribute is uncovered.
+    assert.equal(listOf(requestsView(input())).settled, false);
     assert.equal(
       listOf(
         requestsView(
-          input({
-            requirements: covered,
-            summary: summary({ ...nothingLeft, settled: true }),
-          }),
+          input({ requirements: covered, summary: summary({ toAccept: 0 }) }),
         ),
       ).settled,
-      true,
+      false,
     );
   });
 
-  it("never offers to draft a list the server still holds, and says what holds it", () => {
+  // Old expectation: with the planner at work the list never read settled. New: a list a
+  // person finished accepting while the planner still works is settled and waiting, with
+  // every action off; the server releases it when the planner finishes.
+  it("waits for the planner on a list accepted while it is still at work", () => {
     const view = listOf(
       requestsView(
         input({
           requirements: covered,
           summary: summary({
             ...nothingLeft,
+            working: true,
             waitingFor: "The planner is still working on the plan.",
           }),
         }),
       ),
     );
-    assert.equal(view.settled, false);
-    assert.equal(view.holds, "The planner is still working on the plan.");
+    assert.equal(view.settled, true);
+    assert.equal(view.working, true);
     assert.deepEqual(view.header, {
       tone: "idle",
       status: "Requests accepted",
     });
-    // Nothing to accept is not settled while a request waits or an attribute is uncovered.
-    assert.equal(listOf(requestsView(input())).settled, false);
-    assert.equal(listOf(requestsView(input())).holds, "");
+    // The step's own line says it; the server's sentence is not repeated under the list.
+    assert.equal(view.holds, "");
+    assert.deepEqual(
+      view.rows.map((row) => row.state),
+      ["ACCEPTED", "ACCEPTED"],
+    );
+  });
+
+  // Old name: "never offers to draft a list the server still holds, and says what holds
+  // it". Nothing is offered in any state now; what the server waits for is still said.
+  it("says what the server still waits for on a list that reads settled here", () => {
+    const view = listOf(
+      requestsView(
+        input({
+          requirements: covered,
+          summary: summary({
+            ...nothingLeft,
+            waitingFor: "The control's plan is being read again.",
+          }),
+        }),
+      ),
+    );
+    assert.equal(view.settled, true);
+    assert.equal(view.holds, "The control's plan is being read again.");
+    // The server calls it settled: nothing more to say.
     assert.equal(
       listOf(
         requestsView(
           input({
-            status: {
-              step: "READY",
-              waitingOn: "",
-              waitingFor: "",
-              releasedAt: null,
-            },
             requirements: covered,
-            working: true,
+            summary: summary({
+              ...nothingLeft,
+              settled: true,
+              waitingFor: "Stale.",
+            }),
           }),
         ),
-      ).settled,
-      false,
+      ).holds,
+      "",
     );
+    assert.equal(listOf(requestsView(input())).holds, "");
   });
 
   it("shows the list at rest while the requests are drafted, then gives way", () => {
@@ -780,6 +817,93 @@ describe("the D&I requests list: where it stands", () => {
   });
 });
 
+describe("the D&I requests list: what the server says over the page's own reading", () => {
+  const covered = [
+    walkthrough,
+    requirement({
+      accepted: true,
+      toAccept: false,
+      attributeIds: [B, D],
+      acceptedBy: "Dana Reyes",
+    }),
+  ];
+  const nothingLeft = summary({ toAccept: 0, uncovered: [] });
+
+  it("takes the planner at work from the plan, and the test plan's state only without it", () => {
+    const working = (flag: boolean | null, fallback: boolean) =>
+      listOf(
+        requestsView(
+          input({ summary: summary({ working: flag }), working: fallback }),
+        ),
+      ).working;
+    assert.equal(working(true, false), true);
+    // The plan says the planner is not at work, whatever the test plan's state reads.
+    assert.equal(working(false, true), false);
+    // Not said: the test plan's state decides, as before the server sent it.
+    assert.equal(working(null, true), true);
+    assert.equal(working(null, false), false);
+    assert.equal(
+      listOf(requestsView(input({ summary: null, working: true }))).working,
+      true,
+    );
+  });
+
+  it("takes the drafting from the plan, and the release's time only without it", () => {
+    const view = (
+      drafting: boolean | null,
+      step: string,
+      releasedAt: string | null,
+    ) =>
+      requestsView(
+        input({
+          status: { step, waitingOn: "", waitingFor: "", releasedAt },
+          requirements: covered,
+          summary: summary({ ...nothingLeft, released: true, drafting }),
+        }),
+      );
+    // The server says so: no clock is read, however long ago the release was.
+    const said = view(true, "RELEASED", "2026-11-12T08:00:00Z");
+    assert.equal(said.mode, "drafting");
+    assert.deepEqual(listOf(said).header, {
+      tone: "active",
+      status: "Requests accepted",
+    });
+    assert.equal(listOf(said).working, true);
+    assert.equal(listOf(said).settled, false);
+    // The server says it is not: the workspace, even seconds after the release.
+    assert.equal(
+      view(false, "RELEASED", "2026-11-12T09:59:50Z").mode,
+      "hidden",
+    );
+    // Not said: the release's time decides, as before the server sent it.
+    assert.equal(
+      view(null, "RELEASED", "2026-11-12T09:59:50Z").mode,
+      "drafting",
+    );
+    assert.equal(view(null, "RELEASED", "2026-11-12T08:00:00Z").mode, "hidden");
+    // Drafting, with the phase's own read a moment behind: still the list at rest.
+    assert.equal(view(true, "READY", null).mode, "drafting");
+  });
+
+  it("keeps the procedures a request serves from the plan, the test plan's only without them", () => {
+    const row = (
+      procedureIds: string[] | null,
+      procedures: RequestsInput["procedures"],
+    ) =>
+      listOf(
+        requestsView(
+          input({ requirements: [requirement({ procedureIds })], procedures }),
+        ),
+      ).rows[0]?.procedureIds;
+    // The plan carries them: the test plan need not be read at all.
+    assert.deepEqual(row([uuid(21)], null), [uuid(21)]);
+    assert.deepEqual(row([], { [POLICY]: [uuid(22)] }), []);
+    // Not sent: the test plan's record, and nothing where it was not read either.
+    assert.deepEqual(row(null, { [POLICY]: [uuid(22)] }), [uuid(22)]);
+    assert.equal(row(null, null), null);
+  });
+});
+
 describe("the D&I Evidence step's pill and decision row", () => {
   it("reads the list's standing back from its header", () => {
     const cases: Array<[string, string, string | null]> = [
@@ -793,8 +917,9 @@ describe("the D&I Evidence step's pill and decision row", () => {
       [REQUESTS_STATUS.planning, "active", "PLANNING"],
       [REQUESTS_STATUS.updating, "active", "PLANNING"],
       [REQUESTS_STATUS.accepted, "active", "DRAFTING"],
+      // Accepted and not being drafted yet: settled, whatever tone it is drawn in.
+      [REQUESTS_STATUS.accepted, "idle", "SETTLED"],
       [REQUESTS_STATUS.accepted, "attention", "SETTLED"],
-      [REQUESTS_STATUS.accepted, "idle", "HELD"],
       // The step's statuses once its requests are drafted are not the list's.
       ["2 items to request", "attention", null],
       ["1 of 2 accepted", "done", null],
@@ -841,18 +966,50 @@ describe("the D&I Evidence step's pill and decision row", () => {
     );
   });
 
-  it("words a settled list not yet drafted, and one the server still holds", () => {
-    const settled = requestsNeed(REQUESTS_STATUS.accepted, "attention");
-    assert.equal(settled?.kind, "act");
-    assert.equal(settled?.title, "Draft the D&I requests");
-    assert.equal(requestsNeed(REQUESTS_STATUS.accepted, "idle")?.kind, "wait");
+  // Product owner, 12 November 2026: "Yes. I don't want a separate D&I release." The server
+  // releases a settled list itself (when the planner finishes, if it is still at work),
+  // so the page never offers to draft or release it.
+  // Old expectation: a settled list asked the person to "Draft the D&I requests" (kind
+  // act). New: one quiet working line, no action, and those words appear nowhere.
+  it("only waits on a settled list: no draft and no release is ever asked for", () => {
+    const settled = requestsNeed(REQUESTS_STATUS.accepted, "idle");
+    assert.equal(settled?.kind, "agent");
+    assert.equal(settled?.title, "Requests accepted");
+    assert.match(
+      settled?.detail ?? "",
+      /^Drafting starts when the planner finishes\./,
+    );
+    assert.match(
+      settled?.detail ?? "",
+      /approved before it goes to the client/,
+    );
+    assert.equal(settled !== null && "action" in settled, false);
+    const statuses: Array<[string, string]> = [
+      ["3 to accept", "attention"],
+      ["Attribute D is not addressed", "attention"],
+      [REQUESTS_STATUS.empty, "attention"],
+      [REQUESTS_STATUS.updating, "active"],
+      [REQUESTS_STATUS.accepted, "active"],
+      [REQUESTS_STATUS.accepted, "idle"],
+      [REQUESTS_STATUS.accepted, "attention"],
+    ];
+    for (const [status, tone] of statuses) {
+      const need = requestsNeed(status, tone);
+      assert.ok(need !== null, status);
+      assert.doesNotMatch(
+        `${need.title} ${need.detail}`,
+        /Draft the D&I requests|release/i,
+        status,
+      );
+    }
     assert.equal(requestsNeed(REQUESTS_STATUS.empty, "attention")?.kind, "act");
     assert.equal(requestsNeed("2 items to request", "attention"), null);
   });
 
   it("falls back to the phase's own state where the plan was not read", () => {
+    // Old: tone attention, a settled list being a person's to draft. New: at rest.
     assert.deepEqual(requestsFallback("READY", ""), {
-      tone: "attention",
+      tone: "idle",
       status: "Requests accepted",
     });
     assert.deepEqual(requestsFallback("WAITING", "REQUESTS"), {
@@ -882,6 +1039,7 @@ describe("the D&I requests list: what the server sends", () => {
         accepted_at: "2026-11-12T09:30:00Z",
         to_accept: false,
         person_edited: true,
+        procedure_ids: [uuid(21), uuid(21), uuid(22)],
       }),
       {
         attributeIds: [A, C],
@@ -890,7 +1048,13 @@ describe("the D&I requests list: what the server sends", () => {
         acceptedAt: "2026-11-12T09:30:00Z",
         toAccept: false,
         personEdited: true,
+        procedureIds: [uuid(21), uuid(22)],
       },
+    );
+    // Sent, and empty: it serves no procedure, which is not the same as not sent.
+    assert.deepEqual(
+      parseRequestAcceptance({ procedure_ids: [] }).procedureIds,
+      [],
     );
   });
 
@@ -902,6 +1066,7 @@ describe("the D&I requests list: what the server sends", () => {
       acceptedAt: null,
       toAccept: null,
       personEdited: false,
+      procedureIds: null,
     };
     assert.deepEqual(parseRequestAcceptance({}), cautious);
     assert.deepEqual(
@@ -912,6 +1077,7 @@ describe("the D&I requests list: what the server sends", () => {
         accepted_at: "",
         to_accept: "no",
         person_edited: 1,
+        procedure_ids: "none",
       }),
       cautious,
     );
@@ -940,6 +1106,8 @@ describe("the D&I requests list: what the server sends", () => {
           "not a record",
         ],
         waiting_for: "2 requests wait to be accepted.",
+        working: true,
+        drafting: false,
       }),
       {
         settled: false,
@@ -955,14 +1123,23 @@ describe("the D&I requests list: what the server sends", () => {
           },
         ],
         waitingFor: "2 requests wait to be accepted.",
+        working: true,
+        drafting: false,
       },
     );
     for (const missing of [undefined, null, "settled", [], 3]) {
       assert.equal(parseDesignRequests(missing), null);
     }
-    // Settled and released only on the server's own true.
+    // Settled and released only on the server's own true; whether the planner works or
+    // the requests are drafted is not known unless the server says so.
     assert.deepEqual(
-      parseDesignRequests({ settled: "yes", released: 1, to_accept: -2 }),
+      parseDesignRequests({
+        settled: "yes",
+        released: 1,
+        to_accept: -2,
+        working: "yes",
+        drafting: 1,
+      }),
       {
         settled: false,
         released: false,
@@ -970,6 +1147,8 @@ describe("the D&I requests list: what the server sends", () => {
         uncovered: [],
         exceptions: [],
         waitingFor: "",
+        working: null,
+        drafting: null,
       },
     );
   });
@@ -1240,6 +1419,47 @@ describe("the D&I requests list: actions", () => {
     });
   });
 
+  it("adds a request with the attributes it addresses, in the same call", () => {
+    const fields = {
+      organization_id: uuid(51),
+      project_id: uuid(52),
+      control_id: uuid(53),
+      intent: "evidence-add",
+      phase: "DESIGN",
+      category: "CONTROL_EXECUTION",
+      title: "One access request, end to end",
+      description: "One request traced from ticket to access granted.",
+      objective: "One instance, start to finish.",
+      necessity: "REQUIRED",
+    };
+    const added = planningWrite({ ...fields, attribute_ids: [A, D, A] });
+    assert.ok(!("error" in added));
+    assert.equal(added.method, "POST");
+    assert.equal(added.path, `${control}/evidence-requirements`);
+    assert.deepEqual(added.body, {
+      phase: "DESIGN",
+      title: "One access request, end to end",
+      description: "One request traced from ticket to access granted.",
+      categories: ["CONTROL_EXECUTION"],
+      objective: "One instance, start to finish.",
+      rationale: "One instance, start to finish.",
+      necessity: "REQUIRED",
+      attribute_ids: [A, D],
+    });
+    // None chosen, or the field left out: the call is what it was before.
+    for (const none of [{ ...fields, attribute_ids: [] }, fields]) {
+      const plain = planningWrite(none);
+      assert.ok(!("error" in plain));
+      assert.equal("attribute_ids" in plain.body, false);
+    }
+    assert.deepEqual(planningWrite({ ...fields, attribute_ids: ["D"] }), {
+      error: "invalid",
+    });
+    assert.deepEqual(planningWrite({ ...fields, attribute_ids: "all" }), {
+      error: "invalid",
+    });
+  });
+
   it("clears a recorded reason, with no body", () => {
     assert.deepEqual(
       requestsWrite({ ...ids, intent: "exception-clear", attribute_id: D }),
@@ -1318,6 +1538,12 @@ describe("the D&I requests list: actions", () => {
     assert.match(requestsProblem(403) ?? "", /role/);
     assert.match(requestsProblem(404) ?? "", /role/);
     assert.match(requestsProblem(422) ?? "", /long enough/);
+    // The list's routes word what is wrong in a sentence, on a 422 as on a 409.
+    assert.equal(
+      requestsProblem(422, "The reason needs at least 20 characters."),
+      "The reason needs at least 20 characters.",
+    );
+    assert.match(requestsProblem(422, "string_too_short") ?? "", /long enough/);
     assert.match(
       requestsProblem(422, "the text must not contain credentials") ?? "",
       /credentials/,
@@ -1358,6 +1584,9 @@ describe("the D&I requests list: actions", () => {
       "utf8",
     );
     assert.doesNotMatch(view, /Release early|>\s*Release\s*</);
+    // Nor a draft button: the fallback that called the D&I release is gone ("I don't
+    // want a separate D&I release.").
+    assert.doesNotMatch(view, /Draft the requests|phase-release|canRelease/);
     const controls = readFileSync(
       new URL("../apps/web/src/controls-view.tsx", import.meta.url),
       "utf8",

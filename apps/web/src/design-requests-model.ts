@@ -7,7 +7,9 @@
  * the human approves"), and each request shows the approved attributes it addresses ("to
  * make sure I get coverage"). When every request is accepted and every approved attribute
  * is addressed, or has a recorded reason, the server releases the phase and drafts the
- * requests: there is no release card, no Release button and no early release.
+ * requests: there is no release card, no Release button and no early release ("I don't
+ * want a separate D&I release."). A list that settles while the planner is still at work
+ * is released by the server when the planner finishes; the page only waits.
  *
  * Pure. The server decides what is accepted, what is covered and when the list is settled
  * (evidence_plans and phase_release); this module reads what it sent, words it, and checks
@@ -51,6 +53,9 @@ export type RequestAcceptance = {
   toAccept: boolean | null;
   /** A person changed the agent's wording. */
   personEdited: boolean;
+  /** The plan's procedures it serves, which a change to its attributes keeps; null when
+   * the plan body did not say (the test plan's own record is read then). */
+  procedureIds: string[] | null;
 };
 
 /** A requirement's acceptance, from the plan body. Anything missing or of the wrong type
@@ -63,6 +68,9 @@ export function parseRequestAcceptance(item: Raw): RequestAcceptance {
     acceptedAt: named(item.accepted_at),
     toAccept: typeof item.to_accept === "boolean" ? item.to_accept : null,
     personEdited: item.person_edited === true,
+    procedureIds: Array.isArray(item.procedure_ids)
+      ? idList(item.procedure_ids)
+      : null,
   };
 }
 
@@ -86,6 +94,10 @@ export type DesignRequestsState = {
   exceptions: CoverageException[];
   /** What the list still waits for, in the server's sentence. */
   waitingFor: string;
+  /** The planner's run is pending or working; null when the server did not say. */
+  working: boolean | null;
+  /** The phase is released and its requests are being drafted; null when not said. */
+  drafting: boolean | null;
 };
 
 /** The plan's `design_requests`, or null when the server did not send it. */
@@ -117,6 +129,8 @@ export function parseDesignRequests(
         recordedAt: named(item.recorded_at),
       })),
     waitingFor: str(value.waiting_for),
+    working: typeof value.working === "boolean" ? value.working : null,
+    drafting: typeof value.drafting === "boolean" ? value.drafting : null,
   };
 }
 
@@ -263,10 +277,12 @@ export type RequestsList = {
   header: RequestsHeader;
   /** The planner is at work, or the requests are being drafted: every action is off. */
   working: boolean;
-  /** Settled, and not yet released: the server releases on a person's request, so one
-   * that settled behind a background run still needs a person to draft it. */
+  /** Every request is accepted and every attribute addressed, and the requests are not
+   * drafted yet: nothing is asked of the person. The server releases the phase itself,
+   * when the planner finishes if it is still at work; the page waits and reads again. */
   settled: boolean;
-  /** What the server still waits for when the list reads settled here and is not. */
+  /** What the server says it still waits for when the list reads settled here, the
+   * planner is not at work and the server does not call it settled. */
   holds: string;
   /** What an empty list says. */
   empty: string;
@@ -310,20 +326,24 @@ export type RequestsInput = {
   requirements: readonly Requirement[];
   /** The plan's `design_requests`, or null when it was not sent. */
   summary: DesignRequestsState | null;
-  /** The planner is at work on the control's plan. */
+  /** The planner is at work on the control's plan, as the test plan's own state reads:
+   * used only where the plan's summary does not say (`design_requests.working`). */
   working: boolean;
-  /** The plan's procedures each requirement serves, by its id; null when the test plan
-   * was not read. */
+  /** The plan's procedures each requirement serves, by its id, from the test plan; null
+   * when it was not read. Used only for a requirement that does not carry its own
+   * (`procedure_ids`). */
   procedures: Readonly<Record<string, readonly string[]>> | null;
-  /** The time now, in milliseconds: how long ago the release was. */
+  /** The time now, in milliseconds: how long ago the release was, where the plan's
+   * summary does not say whether the requests are being drafted. */
   now: number;
 };
 
 const GONE = ["CANCELLED", "REMOVED", "NOT_APPLICABLE"];
 const NOT_DRAFTED = ["NOT_GENERATED", "AWAITING_DEPENDENCY"];
 
-/** How long after the release the step says the requests are being drafted. Past it the
- * evidence workspace shows what is there, so a draft that never comes is not waited on. */
+/** Where the server does not say whether the requests are being drafted: how long
+ * after the release the step says so. Past it the evidence workspace shows what is there,
+ * so a draft that never comes is not waited on. */
 export const DRAFTING_WINDOW_MS = 2 * 60 * 1000;
 
 /** How far ahead of this clock a release's time may read and still be the release just
@@ -333,6 +353,7 @@ export const CLOCK_SKEW_MS = 30 * 1000;
 export const WORKING_LINES = {
   planning: "The planner is preparing the requests against the attributes",
   drafting: "Drafting the requests",
+  settled: "Drafting starts when the planner finishes",
 } as const;
 
 /** The header's words. One source: the step's node, its pill and its decision row read
@@ -426,7 +447,8 @@ function isLive(item: Pick<Requirement, "phase" | "state">): boolean {
   return item.phase === "DESIGN" && !GONE.includes(item.state);
 }
 
-/** Whether the release is recent and none of its requests is drafted yet. */
+/** Whether the release is recent and none of its requests is drafted yet: the page's
+ * own reading, where the server does not say (`design_requests.drafting`). */
 function isDrafting(
   live: readonly Requirement[],
   releasedAt: string | null,
@@ -454,9 +476,13 @@ export function requestsView(input: RequestsInput): RequestsView {
   }
   const design = input.requirements.filter((item) => item.phase === "DESIGN");
   const live = design.filter(isLive);
+  // The server says whether the planner is at work and whether the requests are being
+  // drafted; where it does not, the test plan's state and the release's time are read.
+  const planning = input.summary?.working ?? input.working;
   const drafting =
-    status.step === "RELEASED" &&
-    isDrafting(live, status.releasedAt, input.now);
+    input.summary?.drafting ??
+    (status.step === "RELEASED" &&
+      isDrafting(live, status.releasedAt, input.now));
   if (!drafting && status.step !== "READY" && status.step !== "WAITING") {
     return { mode: "hidden" };
   }
@@ -474,7 +500,7 @@ export function requestsView(input: RequestsInput): RequestsView {
       line: "Each request addresses the control's attributes. They are listed here once the attributes are settled.",
     };
   }
-  const working = drafting || input.working;
+  const working = drafting || planning;
   const attributes: RequestAttribute[] = input.approved.map((item, at) => ({
     id: item.id,
     letter: attributeLetter(at),
@@ -506,14 +532,15 @@ export function requestsView(input: RequestsInput): RequestsView {
           ? "addresses no attribute"
           : `addresses attribute${letters.length === 1 ? "" : "s"} ${listed(letters)}`,
       // While the requests are drafted nothing is being rewritten: each reads as it stands.
-      state: stateOf(item, input.working && !drafting),
+      state: stateOf(item, planning && !drafting),
       change: changeOf(item),
       acceptedBy: item.acceptedBy,
       acceptedAt: item.acceptedAt,
       procedureIds:
-        input.procedures === null
+        item.procedureIds ??
+        (input.procedures === null
           ? null
-          : [...(input.procedures[item.id] ?? [])],
+          : [...(input.procedures[item.id] ?? [])]),
     };
   });
   const accept: AcceptItem[] = rows
@@ -571,39 +598,38 @@ export function requestsView(input: RequestsInput): RequestsView {
     attributes.length === 0
       ? "No approved attributes"
       : `${covered} of ${plural(attributes.length, "attribute")} addressed${excepted > 0 ? `, ${excepted} with a recorded reason` : ""}`;
+  // Settled as the page reads it: every request accepted by a person, every approved
+  // attribute addressed or excepted. Nothing is asked of the person then, whether or not
+  // the planner is still at work: the server releases the phase itself.
+  const settled =
+    !drafting &&
+    rows.length > 0 &&
+    rows.every((row) => row.state === "ACCEPTED") &&
+    uncovered.length === 0;
   const serverSettled =
     status.step === "READY" || input.summary?.settled === true;
-  const reads =
-    rows.length > 0 &&
-    accept.length === 0 &&
-    uncovered.length === 0 &&
-    !working;
-  const settled = reads && !drafting && serverSettled;
   const header: RequestsHeader = drafting
     ? { tone: "active", status: REQUESTS_STATUS.accepted }
-    : input.working
-      ? {
-          tone: "active",
-          status:
-            rows.length === 0
-              ? REQUESTS_STATUS.planning
-              : REQUESTS_STATUS.updating,
-        }
-      : rows.length === 0
-        ? { tone: "attention", status: REQUESTS_STATUS.empty }
-        : accept.length > 0
-          ? { tone: "attention", status: `${accept.length} to accept` }
-          : uncovered.length > 0
-            ? {
+    : settled
+      ? { tone: "idle", status: REQUESTS_STATUS.accepted }
+      : planning
+        ? {
+            tone: "active",
+            status:
+              rows.length === 0
+                ? REQUESTS_STATUS.planning
+                : REQUESTS_STATUS.updating,
+          }
+        : rows.length === 0
+          ? { tone: "attention", status: REQUESTS_STATUS.empty }
+          : accept.length > 0
+            ? { tone: "attention", status: `${accept.length} to accept` }
+            : {
                 tone: "attention",
                 status:
                   uncovered.length === 1
                     ? `Attribute ${uncovered[0]?.letter ?? ""} is not addressed`
                     : `${uncovered.length} attributes not addressed`,
-              }
-            : {
-                tone: settled ? "attention" : "idle",
-                status: REQUESTS_STATUS.accepted,
               };
   return {
     mode: drafting ? "drafting" : "list",
@@ -635,10 +661,10 @@ export function requestsView(input: RequestsInput): RequestsView {
     working,
     settled,
     holds:
-      reads && !drafting && !serverSettled
+      settled && !planning && !serverSettled
         ? input.summary?.waitingFor || status.waitingFor
         : "",
-    empty: input.working
+    empty: planning
       ? "The planner is preparing the requests."
       : "No D&I request is planned yet. Add one, then choose the attributes it addresses.",
   };
@@ -667,8 +693,7 @@ export type RequestsStanding =
   | "EMPTY"
   | "TO_ACCEPT"
   | "UNCOVERED"
-  | "SETTLED"
-  | "HELD";
+  | "SETTLED";
 
 export function requestsStanding(
   status: string,
@@ -681,11 +706,9 @@ export function requestsStanding(
     return "PLANNING";
   }
   if (status === REQUESTS_STATUS.accepted) {
-    return tone === "active"
-      ? "DRAFTING"
-      : tone === "idle"
-        ? "HELD"
-        : "SETTLED";
+    // Being drafted reads as work in progress; accepted and waiting for the server to
+    // release it reads at rest.
+    return tone === "active" ? "DRAFTING" : "SETTLED";
   }
   if (status === REQUESTS_STATUS.empty) {
     return "EMPTY";
@@ -710,7 +733,7 @@ export function requestsFallback(
   waitingOn: DesignWait | undefined,
 ): RequestsHeader | null {
   if (step === "READY") {
-    return { tone: "attention", status: REQUESTS_STATUS.accepted };
+    return { tone: "idle", status: REQUESTS_STATUS.accepted };
   }
   if (step !== "WAITING") {
     return null;
@@ -726,12 +749,14 @@ export function requestsFallback(
 
 /** What the D&I Evidence panel asks of the person, or says in one quiet line, for the
  * list's state; null for a status that is not the list's. No action of its own: the list
- * below holds the one primary action (Accept all), so the step never shows two. */
+ * below holds the one primary action (Accept all), so the step never shows two. And
+ * never a release: a settled list is the server's to release (product owner, 12 November
+ * 2026: "I don't want a separate D&I release."), so the panel only says it is waiting. */
 export function requestsNeed(
   status: string,
   tone: string,
 ): {
-  kind: "act" | "agent" | "wait";
+  kind: "act" | "agent";
   title: string;
   detail: string;
 } | null {
@@ -771,17 +796,9 @@ export function requestsNeed(
       };
     case "SETTLED":
       return {
-        kind: "act",
-        title: "Draft the D&I requests",
-        detail:
-          "Every request is accepted and every approved attribute is addressed. Each drafted request is still approved before it is sent.",
-      };
-    case "HELD":
-      return {
-        kind: "wait",
+        kind: "agent",
         title: status,
-        detail:
-          "The requests are accepted. Drafting them waits on what the list below names.",
+        detail: `${WORKING_LINES.settled}. Each request is approved before it goes to the client.`,
       };
     default:
       return null;
@@ -994,8 +1011,12 @@ export function requestsProblem(status: number, detail = ""): string | null {
     return "Your role cannot change this control's requests.";
   }
   if (status === 422) {
-    return detail === "the text must not contain credentials"
-      ? "The text must not contain credentials."
+    if (detail === "the text must not contain credentials") {
+      return "The text must not contain credentials.";
+    }
+    // The list's routes say what is wrong in a sentence: shown as it is.
+    return /^[A-Z0-9].*\.$/.test(detail)
+      ? detail
       : "Check the entry: each text needs to be long enough to stand on its own, within the length limits, and hold no credential.";
   }
   return readsAgain(status)

@@ -113,30 +113,6 @@ button.tar-head.dq-head {
   gap: 0.5rem;
 }
 
-/* Settled behind a background run: one line and the one action that drafts it. */
-.dq-settled {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem 1rem;
-  padding: 0.6rem 0.75rem;
-  background: var(--surface-muted);
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-}
-
-.dq-settled p {
-  margin: 0;
-  color: var(--text);
-  font-size: var(--fs-sm);
-}
-
-.dq-settled small {
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
-}
-
 /* Coverage: one chip per approved attribute, then the one exception, spelled out. */
 .dq-coverage {
   display: grid;

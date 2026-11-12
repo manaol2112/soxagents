@@ -8,6 +8,7 @@ import {
   useState,
   useTransition,
 } from "react";
+import { AutoRefresh } from "./auto-refresh";
 import {
   ADD_KINDS,
   EXCEPTION_REASON_MAX,
@@ -32,8 +33,9 @@ import { UiIcon } from "./ui-icon";
 type Ids = { organizationId: string; projectId: string; controlId: string };
 
 /** Where each action goes: the list's own routes (accept, a coverage reason), the test
- * plan's (add, edit, delete, restore, the attributes a request addresses, the release),
- * and the evidence plan's (a pending change kept as it was). */
+ * plan's (add, edit, delete, restore, the attributes a request addresses), and the
+ * evidence plan's (a pending change kept as it was). None releases the D&I phase: the
+ * server does, once the list is accepted. */
 const ROUTES = {
   requests: "/workspace/design-requests",
   planning: "/workspace/planning",
@@ -101,7 +103,8 @@ function Problem({ text }: { text: string | null }) {
 }
 
 type DialogState =
-  | { mode: "add" }
+  // A new request, with the attributes already ticked where it is written for one.
+  | { mode: "add"; attributeIds: readonly string[] }
   | { mode: "edit"; row: RequestRow }
   | { mode: "attributes"; row: RequestRow }
   | { mode: "reason"; attribute: UncoveredLine }
@@ -112,23 +115,22 @@ type DialogState =
  * 2026): one list of what will be requested. The agent proposes each request and a person
  * accepts it, per row or all at once; a person can add, edit or delete one and change the
  * attributes it addresses; under the list, every approved attribute shows whether a
- * request addresses it. There is no Release button: the server drafts the requests once
- * the list is accepted and every attribute is addressed. The step's frame names the step,
- * its status and what it needs, so none of that is repeated here.
+ * request addresses it. There is no Release button and no way to release the phase from
+ * here ("I don't want a separate D&I release."): the server drafts the requests once the
+ * list is accepted and every attribute is addressed, when the planner finishes if it is
+ * still at work. The step's frame names the step, its status and what it needs, so none
+ * of that is repeated here.
  */
 export function DesignRequests({
   ids,
   view,
   canAct,
-  canRelease,
   documents,
 }: {
   ids: Ids;
   view: RequestsView;
   /** The person may change the control's plan. The server checks again. */
   canAct: boolean;
-  /** The person may release a phase: asked only where a settled list is not yet drafted. */
-  canRelease: boolean;
   /** The optional governing documents, folded: their one line and their setup. */
   documents?: { line: string; body: ReactNode };
 }) {
@@ -153,7 +155,6 @@ export function DesignRequests({
       view={view}
       drafting={view.mode === "drafting"}
       canAct={canAct}
-      canRelease={canRelease}
       documents={documents}
     />
   );
@@ -183,14 +184,12 @@ function RequestsPanel({
   view,
   drafting,
   canAct,
-  canRelease,
   documents,
 }: {
   ids: Ids;
   view: RequestsList;
   drafting: boolean;
   canAct: boolean;
-  canRelease: boolean;
   documents: { line: string; body: ReactNode } | undefined;
 }) {
   const id = useId();
@@ -298,18 +297,6 @@ function RequestsPanel({
     });
     if (ok) {
       setDone(`Reason removed for attribute ${letter}.`);
-    }
-  }
-
-  async function draft() {
-    setDone("");
-    const ok = await action.run("draft", "planning", {
-      intent: "phase-release",
-      phase: "DESIGN",
-      reason: "",
-    });
-    if (ok) {
-      setDone("The requests are being drafted.");
     }
   }
 
@@ -557,7 +544,7 @@ function RequestsPanel({
               type="button"
               className="btn btn-ghost btn-sm ta-quiet"
               disabled={locked}
-              onClick={() => setDialog({ mode: "add" })}
+              onClick={() => setDialog({ mode: "add", attributeIds: [] })}
             >
               <UiIcon name="plus" size={13} />
               Add request
@@ -594,25 +581,9 @@ function RequestsPanel({
         ) : null}
       </ul>
 
-      {view.settled ? (
-        <div className="dq-settled">
-          <p>Every request is accepted and every attribute is addressed.</p>
-          {canRelease ? (
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={locked}
-              onClick={() => void draft()}
-            >
-              {action.busy === "draft" ? "Drafting…" : "Draft the requests"}
-            </button>
-          ) : (
-            <small>
-              An Owner, Admin or Project Manager drafts the requests.
-            </small>
-          )}
-        </div>
-      ) : null}
+      {/* Accepted and addressed, not drafted yet: nothing to do here. The server
+          releases the phase itself, so the list is read again for a while, in place. */}
+      {view.settled && !view.working ? <AutoRefresh /> : null}
       {view.holds !== "" ? (
         <p className="ta-run-note" role="status">
           <UiIcon name="info" size={13} />
@@ -670,12 +641,7 @@ function RequestsPanel({
                       <button
                         type="button"
                         className="btn btn-secondary btn-sm"
-                        disabled={locked || view.rows.length === 0}
-                        title={
-                          view.rows.length === 0
-                            ? "Add a request first."
-                            : undefined
-                        }
+                        disabled={locked}
                         aria-label={`Add attribute ${item.letter} to a request`}
                         onClick={() =>
                           setDialog({ mode: "assign", attribute: item })
@@ -828,6 +794,8 @@ function RequestsPanel({
           key={dialog.mode === "add" ? "add" : dialog.row.id}
           ids={ids}
           row={dialog.mode === "edit" ? dialog.row : null}
+          attributes={view.attributes}
+          preset={dialog.mode === "add" ? dialog.attributeIds : []}
           onClose={() => setDialog(null)}
           onDone={(note) => {
             setDialog(null);
@@ -864,6 +832,12 @@ function RequestsPanel({
           ids={ids}
           attribute={dialog.attribute}
           rows={view.rows}
+          onNew={() =>
+            setDialog({
+              mode: "add",
+              attributeIds: [dialog.attribute.attributeId],
+            })
+          }
           onClose={() => setDialog(null)}
           onDone={(note) => {
             setDialog(null);
@@ -917,16 +891,25 @@ function DialogFoot({
   );
 }
 
-/** A request added, or its title and description edited. Either is accepted by that act:
- * the person wrote it. What was typed stays if the server refuses. */
+/** A request added, with the attributes it addresses, or its title and description
+ * edited. Either is accepted by that act: the person wrote it. What was typed stays if
+ * the server refuses. */
 function RequestDialog({
   ids,
   row,
+  attributes,
+  preset,
   onClose,
   onDone,
-}: DialogProps & { row: RequestRow | null }) {
+}: DialogProps & {
+  row: RequestRow | null;
+  attributes: RequestsList["attributes"];
+  /** The attributes ticked when a new request is opened for one of them. */
+  preset: readonly string[];
+}) {
   const action = useRequestAction(ids);
   const id = useId();
+  const [checked, setChecked] = useState<ReadonlySet<string>>(new Set(preset));
   const [title, setTitle] = useState(row?.title ?? "");
   const [description, setDescription] = useState(row?.description ?? "");
   const [shows, setShows] = useState("");
@@ -954,9 +937,17 @@ function RequestDialog({
           description,
           objective: shows,
           necessity: "REQUIRED",
+          // In the attributes' order, in the same call.
+          attribute_ids: attributes
+            .filter((item) => checked.has(item.id))
+            .map((item) => item.id),
         })
       ) {
-        onDone("Request added. Choose the attributes it addresses.");
+        onDone(
+          checked.size > 0
+            ? "Request added."
+            : "Request added. Choose the attributes it addresses.",
+        );
       }
       return;
     }
@@ -1060,6 +1051,35 @@ function RequestDialog({
               onChange={(event) => setShows(event.target.value)}
             />
           </div>
+        ) : null}
+        {adding && attributes.length > 0 ? (
+          <fieldset className="dq-choices" disabled={action.pending}>
+            <legend>Attributes it addresses</legend>
+            {attributes.map((item) => (
+              <label key={item.id} className="dq-choice">
+                <input
+                  type="checkbox"
+                  checked={checked.has(item.id)}
+                  onChange={(event) => {
+                    const next = new Set(checked);
+                    if (event.target.checked) {
+                      next.add(item.id);
+                    } else {
+                      next.delete(item.id);
+                    }
+                    setChecked(next);
+                  }}
+                />
+                <span className="dr-code" aria-hidden="true">
+                  {item.letter}
+                </span>
+                <span>
+                  <span className="sr-only">{`Attribute ${item.letter}: `}</span>
+                  {item.text}
+                </span>
+              </label>
+            ))}
+          </fieldset>
         ) : null}
         <p className="tae-note" id={`${id}-note`}>
           {adding
@@ -1257,17 +1277,27 @@ function ReasonDialog({
   );
 }
 
-/** An attribute no request addresses, added to one of the requests. */
+/** The choice that is not one of the requests: a new one, written for the attribute. */
+const NEW_REQUEST = "new";
+
+/** An attribute no request addresses, added to one of the requests or to a new one. */
 function AssignDialog({
   ids,
   attribute,
   rows,
+  onNew,
   onClose,
   onDone,
-}: DialogProps & { attribute: UncoveredLine; rows: readonly RequestRow[] }) {
+}: DialogProps & {
+  attribute: UncoveredLine;
+  rows: readonly RequestRow[];
+  /** Opens a new request with this attribute already ticked. */
+  onNew: () => void;
+}) {
   const action = useRequestAction(ids);
   const [chosen, setChosen] = useState("");
   const target = rows.find((row) => row.id === chosen) ?? null;
+  const fresh = chosen === NEW_REQUEST;
 
   async function submit() {
     if (target === null || target.procedureIds === null) {
@@ -1301,7 +1331,9 @@ function AssignDialog({
         aria-busy={action.pending}
         onSubmit={(event) => {
           event.preventDefault();
-          if (target !== null && !action.pending) {
+          if (fresh) {
+            onNew();
+          } else if (target !== null && !action.pending) {
             void submit();
           }
         }}
@@ -1331,12 +1363,25 @@ function AssignDialog({
               </span>
             </label>
           ))}
+          <label className="dq-choice">
+            <input
+              type="radio"
+              name="request"
+              value={NEW_REQUEST}
+              checked={fresh}
+              onChange={() => setChosen(NEW_REQUEST)}
+            />
+            <span>
+              A new request
+              <small>Write a request that addresses this attribute</small>
+            </span>
+          </label>
         </fieldset>
         <Problem text={action.problem} />
         <DialogFoot
           busy={action.pending}
-          disabled={target === null || target.procedureIds === null}
-          save="Add to this request"
+          disabled={!fresh && (target === null || target.procedureIds === null)}
+          save={fresh ? "Write the request" : "Add to this request"}
           onClose={onClose}
         />
       </form>

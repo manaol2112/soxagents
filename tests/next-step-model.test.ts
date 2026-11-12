@@ -255,8 +255,10 @@ describe("the control's next step (product owner, 10 November 2026)", () => {
 
   // Old expectation: the D&I action was "Release the D&I evidence". New (product owner, 12
   // November 2026: "Why do I need to have the release button? Simplify the workflow."):
-  // no release is offered; a ready phase is a settled requests list, drafted on a person's
-  // request, and requests still to accept are named as that. Renamed from "offers the
+  // no release is offered; a ready phase is a settled requests list the server releases
+  // itself ("Yes. I don't want a separate D&I release."), so the card says the step is
+  // being prepared and asks nothing (the earlier fallback titled it "Draft the D&I
+  // requests"); requests still to accept are named as that. Renamed from "offers the
   // release and scope and sampling once the attributes are settled".
   it("offers the D&I requests and scope and sampling once the attributes are settled", () => {
     const input = fresh({
@@ -274,10 +276,21 @@ describe("the control's next step (product owner, 10 November 2026)", () => {
     assert.deepEqual(
       next.actions.map((action) => [action.key, action.title]),
       [
-        ["designevidence", "Draft the D&I requests"],
+        ["designevidence", "D&I Evidence is being prepared"],
         ["testdesign", "Approve scope and sampling"],
       ],
     );
+    const waiting = next.actions.find(
+      (action) => action.key === "designevidence",
+    );
+    assert.equal(waiting?.kind, "agent");
+    assert.match(waiting?.detail ?? "", /Nothing is needed from you yet/);
+    for (const action of next.actions) {
+      assert.doesNotMatch(
+        `${action.title} ${action.detail} ${action.label}`,
+        /Draft the D&I requests|Release/,
+      );
+    }
     const toAccept = {
       ...input,
       designRelease: {

@@ -1838,9 +1838,9 @@ function ControlRecord({
   );
   // The D&I requests list, the D&I Evidence step's one list until its requests are drafted
   // (product owner, 12 November 2026: no Release button; the agent proposes, a person
-  // accepts, and each request shows the attributes it addresses). The planner at work is
-  // the test plan's own state; the procedures a request serves are kept when a person
-  // changes the attributes it addresses.
+  // accepts, and each request shows the attributes it addresses). The plan says whether
+  // the planner is at work and which procedures each request serves; the test plan's own
+  // state and records are read only where it does not.
   const designRequests = requestsView({
     status: designPhase,
     approved: context?.approved ?? [],
@@ -1859,7 +1859,9 @@ function ControlRecord({
   });
   const requestsListed =
     designRequests.mode === "list" || designRequests.mode === "drafting";
-  if (requestsListed && designRequests.working) {
+  // The planner at work, the requests being drafted, or a settled list the server is
+  // about to release: the step is the agents', and nothing is asked of the person.
+  if (requestsListed && (designRequests.working || designRequests.settled)) {
     busy.add("designevidence");
   }
   // Step 01's record (10 November 2026): description, objective and risk come from the
@@ -2626,9 +2628,6 @@ function ControlRecord({
                     ids={ids}
                     view={designRequests}
                     canAct={canAct}
-                    canRelease={
-                      engagement.phaseProgress?.viewerCanRelease ?? false
-                    }
                     documents={{
                       line: governingLine,
                       body: setupFor(["documents"]),

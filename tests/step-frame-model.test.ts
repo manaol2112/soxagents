@@ -209,6 +209,19 @@ describe("what the panel says where nothing is needed from the person", () => {
     });
     assert.equal(drafting.line?.working, true);
     assert.match(drafting.line?.text ?? "", /^Drafting the requests\./);
+    // Accepted, the planner still at work: one quiet working line and no action ("Yes. I
+    // don't want a separate D&I release.").
+    const settled = frame({ tone: "idle", status: "Requests accepted" });
+    assert.deepEqual(settled.pill, {
+      label: "Requests accepted",
+      tone: "idle",
+    });
+    assert.equal(settled.line?.working, true);
+    assert.match(
+      settled.line?.text ?? "",
+      /^Drafting starts when the planner finishes\./,
+    );
+    assert.equal(settled.line?.link, undefined);
   });
 });
 

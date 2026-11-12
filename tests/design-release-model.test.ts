@@ -98,6 +98,7 @@ describe("the evidence list shows once, not twice (12 November 2026)", () => {
     acceptedAt: "2026-11-12T09:30:00Z",
     toAccept: false,
     personEdited: false,
+    procedureIds: null,
   };
   const view = (
     status: RequestsInput["status"],

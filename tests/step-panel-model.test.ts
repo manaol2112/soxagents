@@ -158,8 +158,10 @@ describe("a step's panel frame", () => {
   // with a "Review and release" action. New (product owner, 12 November 2026: "Why do I
   // need to have the release button? Simplify the workflow."): the panel asks for what its
   // requests list needs, in the list's words, and never for a release. A ready phase is a
-  // settled list; the server releases it on a person's request. Renamed from "asks for
-  // the D&I release when the evidence waits for it (B1)".
+  // settled list, which the server releases itself ("Yes. I don't want a separate D&I
+  // release."): the panel only says it waits; the earlier fallback, an act titled "Draft
+  // the D&I requests", is gone. Renamed from "asks for the D&I release when the evidence
+  // waits for it (B1)".
   it("asks for what the D&I requests list needs, never for a release", () => {
     const steps = workflowOf(
       midway({
@@ -168,12 +170,20 @@ describe("a step's panel frame", () => {
       }),
     );
     const frame = panelFrame("designevidence", steps, null);
-    assert.equal(frame.need.kind, "act");
-    assert.equal(frame.need.title, "Draft the D&I requests");
-    // Kept: each drafted request is still approved before it is sent.
-    assert.match(frame.need.detail, /approved before it is sent/);
-    // The list holds the step's one primary action, so the row carries none.
+    assert.equal(frame.need.kind, "agent");
+    assert.equal(frame.need.title, "Requests accepted");
+    assert.match(
+      frame.need.detail,
+      /^Drafting starts when the planner finishes\./,
+    );
+    // Kept: each drafted request is still approved before it goes out.
+    assert.match(frame.need.detail, /approved before it goes to the client/);
+    // Nothing is asked: no action, and no draft or release in its words.
     assert.equal(frame.need.action, undefined);
+    assert.doesNotMatch(
+      `${frame.need.title} ${frame.need.detail}`,
+      /Draft the D&I requests|release/i,
+    );
     // Requests the agent proposed: the panel asks a person to accept them.
     const toAccept = panelFrame(
       "designevidence",

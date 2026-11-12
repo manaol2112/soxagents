@@ -820,9 +820,12 @@ describe("the control's workflow", () => {
     );
     // Old expectation: "To release", the step waiting for a person to press Release. New:
     // a ready phase is a settled list (every request accepted, every attribute addressed),
-    // so the step reads "Requests accepted"; there is no Release button to wait for.
+    // so the step reads "Requests accepted"; there is no Release button to wait for. And
+    // it is at rest, not a person's to act on (product owner, 12 November 2026: "Yes. I
+    // don't want a separate D&I release."): the server releases it itself. (Between the
+    // two, this read ["attention", "Requests accepted"], with a fallback button to draft.)
     assert.deepEqual(state(ready, "designevidence"), [
-      "attention",
+      "idle",
       "Requests accepted",
     ]);
     assert.ok(ready.find((step) => step.key === "designevidence")?.next);
