@@ -64,7 +64,7 @@ from ai_workforce_api.control_context import (
     store_document,
 )
 from ai_workforce_api.db import transaction
-from ai_workforce_api.evidence_plans import attributes_run
+from ai_workforce_api.evidence_plans import attributes_rerun_useful, attributes_run
 from ai_workforce_api.model_providers import live_model, provider_for
 from ai_workforce_api.models import ModelProvider
 from ai_workforce_api.pbc_drafting import load_context
@@ -94,6 +94,11 @@ class ContextBody(BaseModel):
     attributes_run: Literal["PENDING", "WORKING", "STOPPED", ""] = ""
     # STOPPED: what happened to their last run and what a person does next.
     attributes_run_note: str = ""
+    # Whether running the agents again would do anything (evidence_plans.
+    # attributes_rerun_useful, B1h): something they read changed since their last finished
+    # run, or a run stopped before finishing work that is still needed. The step offers
+    # "Run again", and shows a stopped run's note, only then.
+    attributes_rerun_useful: bool = False
     # What they are doing: proposing attributes, tailoring criteria, or reviewing the set.
     attributes_stage: Literal["ATTRIBUTES", "CRITERIA", "REVIEW", ""] = ""
     note: str = ""
@@ -424,6 +429,12 @@ def register_control_context(
                         c, project_id, control_id,
                         "The agents are already updating the attributes.",
                     )  # fmt: skip
+                from ai_workforce_api.evidence_plans import NOTHING_CHANGED_NOTE
+
+                if not attributes_rerun_useful(c, project_id, control_id):
+                    # Nothing the agents read changed and their last run finished: no
+                    # agent is called and nothing is written (B1h).
+                    return _body(c, project_id, control_id, NOTHING_CHANGED_NOTE)
             note = generate_reviewed(c, model(), organization_id, project_id, control_id, p.id)
             return _body(c, project_id, control_id, note)
 
@@ -1293,6 +1304,7 @@ def _body(
         attributes_run=running,
         attributes_stage=stage,
         attributes_run_note=run_note,
+        attributes_rerun_useful=attributes_rerun_useful(connection, project_id, control_id),
         note=note,
     )
 

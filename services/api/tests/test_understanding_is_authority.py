@@ -1664,8 +1664,10 @@ def test_every_agent_that_reads_the_understanding_is_given_the_precedence(
         PLANNER_PROMPT_VERSION,
         # "engagement-planner/9" since 12 November 2026 (the planner proposes which attributes
         # every D&I request addresses); "/8" was this increment's own bump, and still stands
-        # for what this test is about: the planner reads confirmed_understanding.
-    ) == ("attributes/5", "attribute-review/3", "attribute-set-review/3", "engagement-planner/9")
+        # for what this test is about: the planner reads confirmed_understanding. "/10"
+        # since B1h the same day (the schema states its limits, a correction names the
+        # failing places): nothing this test reads changed.
+    ) == ("attributes/5", "attribute-review/3", "attribute-set-review/3", "engagement-planner/10")
     team, control, client, _a3 = _case(migrated, "uia-inputs")
     _walkthrough_confirmed(migrated, team, control, client)
     with connect(migrated.url) as connection:

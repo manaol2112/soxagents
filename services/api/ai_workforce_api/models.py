@@ -1,9 +1,10 @@
 """Provider-neutral model adapter. Providers propose. This module does not execute tools."""
 
 import json
+import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
@@ -23,6 +24,8 @@ from ai_workforce_api.authorization import (
 )
 from ai_workforce_api.db import transaction
 from ai_workforce_api.settings import Settings
+
+logger = logging.getLogger(__name__)
 
 ModelOperation = Literal["generate", "propose_tools"]
 _SECRET_TEXT = re.compile(
@@ -166,6 +169,9 @@ class ModelRaw:
     sources: tuple[tuple[str, str], ...] = ()
     # True when the web search ran; False when it was not asked for or was unavailable.
     searched: bool = False
+    # Why the provider stopped when it left no usable answer: "max_tokens" when the answer
+    # was cut off at the output limit; empty otherwise.
+    stopped: str = ""
 
 
 class ModelProvider(Protocol):
@@ -382,7 +388,17 @@ def outcome(provider: ModelProvider, request: ModelRequest, config: ModelConfig)
     status, raw, error, transient = _attempt(provider, request, config)
     if status == "SUCCEEDED" and request.operation == "generate":
         if raw.output is None:
-            return Outcome("MALFORMED", raw, "answer did not match the schema", False)
+            # A cut-off answer is said as one: more room is the remedy, not another wording.
+            reason = (
+                "answer was cut off at the output limit"
+                if raw.stopped == "max_tokens"
+                else "answer did not match the schema"
+            )
+            return Outcome("MALFORMED", raw, reason, False)
+        reread = unnested(request.output_schema, raw.output)
+        if reread is not raw.output:
+            logger.info("model answer re-read: a nested property arrived as JSON text")
+            raw = replace(raw, output=reread)
         where = _mismatch(request.output_schema, raw.output)
         if where is not None:
             # Where it broke the schema is recorded with the call (12 November 2026: a
@@ -857,6 +873,58 @@ def _mismatch(schema: dict[str, Any], value: object, path: str = "answer") -> st
     if fits.get(str(kind), False):
         return None
     return f"{path}: expected {kind}, got {_kind(value)}"
+
+
+def unnested(schema: dict[str, Any], value: dict[str, Any]) -> dict[str, Any]:
+    """The answer with a nested property that arrived as JSON text read as the JSON it is.
+
+    A model filling a large nested schema sometimes writes an object or a list as text, and
+    carries on inside that text with the properties that follow it: the planner's answer of
+    12 November 2026 had `understanding` as the text `{...},"phases":[...]` and no `phases`
+    (B1h). Every word of the answer is there, one level too deep. Such a text is read only
+    when it is exactly that: valid JSON for the property the schema declares, followed by
+    nothing but further properties of the same object that the answer does not already
+    have. Anything else is left as it arrived and fails the shape check as before. Nothing
+    is invented or dropped, and the caller's checks apply to what is read. Returns the same
+    object when there was nothing to read."""
+    properties = schema.get("properties")
+    if schema.get("type") != "object" or not isinstance(properties, dict):
+        return value
+    found = dict(value)
+    changed = False
+    for name, text in value.items():
+        declared = properties.get(name)
+        if not isinstance(text, str) or not isinstance(declared, dict):
+            continue
+        kind = declared.get("type")
+        if kind not in ("object", "array") or text.lstrip()[:1] not in ("{", "["):
+            continue
+        try:
+            read = json.loads("{" + json.dumps(name) + ":" + text + "}")
+        except ValueError:
+            continue
+        if not isinstance(read, dict) or _kind(read.get(name)) != kind:
+            continue
+        carried = [key for key in read if key != name]
+        if any(key not in properties or key in value or key in found for key in carried):
+            continue
+        found.update(read)
+        changed = True
+    for name, item in list(found.items()):
+        declared = properties.get(name)
+        if not isinstance(declared, dict):
+            continue
+        if isinstance(item, dict) and declared.get("type") == "object":
+            inner = unnested(declared, item)
+            if inner is not item:
+                found[name], changed = inner, True
+        elif isinstance(item, list) and isinstance(declared.get("items"), dict):
+            rows = [
+                unnested(declared["items"], row) if isinstance(row, dict) else row for row in item
+            ]
+            if any(new is not old for new, old in zip(rows, item, strict=True)):
+                found[name], changed = rows, True
+    return found if changed else value
 
 
 def _fill(schema: dict[str, Any]) -> object:

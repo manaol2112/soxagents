@@ -13,7 +13,7 @@ from test_testing_engine import _add, _base, _read_all, _year
 
 from ai_workforce_api.db import connect
 from ai_workforce_api.evidence_planning import PHASES, rules_plan
-from ai_workforce_api.evidence_plans import generate, load_facts, plan_body
+from ai_workforce_api.evidence_plans import KEPT_NOTE, generate, load_facts, plan_body
 from ai_workforce_api.master_plans import PendingRevisionDecision, decide_pending_revision
 from ai_workforce_api.models import ModelConfig, ModelRaw, ModelRequest
 
@@ -475,8 +475,17 @@ def test_the_agent_plans_when_its_plan_passes_the_checks(migrated: Database) -> 
     # neither the fast nor the critical set): a rejected model plan is FALLBACK, the rules'
     # plan standing in with the call linked, never RULES (M3a: a model failure is never
     # recorded as the rules' work). Before M3a this read "RULES".
-    assert body.source == "FALLBACK"
-    assert "rejected" in body.note and "select samples" in body.note
+    # Rewritten on 12 November 2026 (B1h, product owner: a failed or rejected planner run
+    # must never make a control's plan worse). Old: the rejected answer's fallback was
+    # written over the agent's plan (source FALLBACK, the rejection in the plan's note).
+    # New: the agent's plan stands exactly as it was (source MODEL, its note untouched) and
+    # the rejection is on record as a run that kept the plan. The M3a assertion is kept: the
+    # failure is recorded as FALLBACK with the failed call linked, never as the rules' work.
+    assert body.source == "MODEL" and body.note == ""
+    last = body.runs[0]
+    assert last.source == "FALLBACK" and last.note.startswith(KEPT_NOTE)
+    assert "rejected" in last.note and "select samples" in last.note
+    assert all(keys == [] for keys in last.changes.values())
     # Rewritten on 26 October 2026 (product owner: "agent should be smart enough to work on
     # this"): a rejected plan goes back to the planner with what was wrong, twice, before
     # the rules stand in. Old: 2 calls (the good plan, the rejected one). New: 4 (the good
@@ -659,4 +668,10 @@ def test_a_plan_that_misses_the_shape_check_is_judged_by_the_plan_checks(
         broken["understanding"]["summary"] = "You select the samples from the review list."
         generate(connection, _Planner(broken), org, project, control_id, team["owner_id"])
         rejected = plan_body(connection, project, control_id)
-        assert rejected.source == "FALLBACK" and "select samples" in rejected.note
+        # Rewritten on 12 November 2026 (B1h): old, the fallback was written over the
+        # agent's plan (source FALLBACK); new, the answer is still rejected by the plan's
+        # checks and the agent's plan is kept as it was, the rejection on the run's record.
+        assert rejected.source == "MODEL"
+        assert rejected.runs[0].source == "FALLBACK"
+        assert rejected.runs[0].note.startswith(KEPT_NOTE)
+        assert "select samples" in rejected.runs[0].note

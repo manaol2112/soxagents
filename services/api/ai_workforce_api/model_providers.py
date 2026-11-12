@@ -291,14 +291,16 @@ class AnthropicModelProvider:
                     ]  # fmt: skip
                 else:
                     searched = False
+        stopped = ""
         if getattr(message, "stop_reason", "") == "max_tokens":
             # The answer was cut off at the output limit: whatever reached the tool is
-            # partial and is not an answer. The caller sees MALFORMED with no output.
+            # partial and is not an answer. The caller sees MALFORMED with no output, and
+            # the call's record says it was cut off.
             logger.info("model answer cut off at max_tokens; not used")
-            output = None
+            output, stopped = None, "max_tokens"
         return ModelRaw(
             output, (), used[0], used[1],
-            sources=tuple(dict.fromkeys(sources)), searched=searched,
+            sources=tuple(dict.fromkeys(sources)), searched=searched, stopped=stopped,
         )  # fmt: skip
 
     def converse(

@@ -2069,10 +2069,10 @@ def check_plan(
     try:
         plan = output if isinstance(output, PlanOutput) else PlanOutput.model_validate(output)
     except ValidationError as error:
-        # Which fields broke which limit, so the planner can correct them (26 October 2026).
+        # Which fields broke which limit, so the planner can correct them (26 October 2026);
+        # each by its exact path in the answer (B1h). The message, never the value.
         found = "; ".join(
-            f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}"
-            for item in error.errors()[:4]
+            f"{answer_path(item['loc'])}: {item['msg']}" for item in error.errors()[:8]
         )
         raise ValueError(f"plan does not match the schema: {found}") from error
     if sorted(item.phase for item in plan.phases) != sorted(PHASES):
@@ -2408,11 +2408,23 @@ def _uncovered(phases: list[PhasePlan], facts: PlanFacts) -> list[str]:
     return notes[:4]
 
 
+def answer_path(loc: tuple[int | str, ...]) -> str:
+    """A place in the planner's answer as its JSON names it: phases[1].requirements[0].title."""
+    return "".join(f"[{part}]" if isinstance(part, int) else f".{part}" for part in loc).lstrip(".")
+
+
 def _check_links(item: PhasePlan, allowed: set[str]) -> None:
     procedures = {_normal(text) for text in item.procedures}
-    for link in item.links:
+    for index, link in enumerate(item.links):
         if _normal(link.procedure) not in procedures:
-            raise ValueError("plan links a procedure the phase does not have")
+            # Where, so the planner can correct it (B1h: reproduced on ITGC-AC-01, where a
+            # phase listed two procedures and linked four others).
+            raise ValueError(
+                "plan links a procedure the phase does not have: in the "
+                f"{item.phase} phase, links[{index}].procedure is not one of that phase's "
+                "procedures (every linked procedure must also be listed in procedures, "
+                "word for word)"
+            )
         if any(_normal(text) not in allowed for text in link.attributes):
             raise ValueError("plan names an attribute the control does not have")
 
@@ -2516,8 +2528,10 @@ def _normal(text: str) -> str:
 # The model planner
 
 
-def _text(limit: int, description: str = "") -> dict[str, Any]:
+def _text(limit: int, description: str = "", least: int = 0) -> dict[str, Any]:
     found: dict[str, Any] = {"type": "string", "maxLength": limit}
+    if least:
+        found["minLength"] = least
     if description:
         found["description"] = description
     return found
@@ -2542,11 +2556,12 @@ _REQUIREMENT_SCHEMA: dict[str, Any] = {
             "pattern": "^[a-z0-9][a-z0-9-]{1,59}$",
             "description": "Stable slug, prefixed by the phase: design-, interim-, rollforward-.",
         },
-        "title": _text(200, "The record, in at most eight plain words."),
+        "title": _text(200, "The record, in at most eight plain words.", 3),
         "description": _text(
             1500,
             "What to provide, as the process owner will read it: one or two short sentences, "
             "under 250 characters.",
+            10,
         ),
         "categories": {
             "type": "array",
@@ -2554,10 +2569,10 @@ _REQUIREMENT_SCHEMA: dict[str, Any] = {
             "maxItems": 3,
             "items": {"type": "string", "enum": list(CATEGORIES)},
         },
-        "objective": _text(500, "The testing objective this evidence supports."),
+        "objective": _text(500, "The testing objective this evidence supports.", 3),
         "attributes": _texts(20, 300, "Only attributes listed for the control, verbatim."),
         "risk": _text(1000),
-        "rationale": _text(1000, "Why this evidence is needed for this phase."),
+        "rationale": _text(1000, "Why this evidence is needed for this phase.", 10),
         "necessity": {"type": "string", "enum": ["REQUIRED", "CONDITIONAL", "OPTIONAL"]},
         "period_label": _text(200),
         "population_kind": {
@@ -2589,7 +2604,7 @@ PLAN_SCHEMA: dict[str, Any] = {
             "type": "object",
             "properties": {
                 "summary": _text(
-                    1500, "Your understanding of the control, in two to four sentences."
+                    1500, "Your understanding of the control, in two to four sentences.", 10
                 ),  # fmt: skip
                 "control_type": {
                     "type": "string",
@@ -2611,7 +2626,7 @@ PLAN_SCHEMA: dict[str, Any] = {
                         "type": "object",
                         "properties": {
                             "field": {"type": "string", "enum": list(FACT_FIELDS)},
-                            "value": _text(600),
+                            "value": _text(600, least=2),
                             "basis": {
                                 "type": "string",
                                 "enum": ["SOURCE", "PROPOSED", "JUDGMENT", "ASSUMPTION"],
@@ -2638,7 +2653,7 @@ PLAN_SCHEMA: dict[str, Any] = {
                         "type": "string",
                         "enum": ["APPLICABLE", "CONDITIONAL", "NOT_APPLICABLE", "PENDING"],
                     },
-                    "rationale": _text(1500),
+                    "rationale": _text(1500, least=10),
                     "condition": _text(500, "For CONDITIONAL: what must happen first."),
                     "open_question": _text(500, "For PENDING: the question to resolve."),
                     "objectives": _texts(8, 400),
@@ -2647,11 +2662,13 @@ PLAN_SCHEMA: dict[str, Any] = {
                         "type": "array",
                         "maxItems": 10,
                         "description": "For each procedure that tests the control's "
-                        "attributes: the procedure, verbatim, and the attributes it tests.",
+                        "attributes: the procedure, verbatim, and the attributes it tests. "
+                        "Every procedure named here is also an entry of procedures, word for "
+                        "word.",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "procedure": _text(1000),
+                                "procedure": _text(1000, least=3),
                                 "attributes": _texts(20, 300, "Verbatim, from the control."),
                             },
                             "required": ["procedure", "attributes"],
@@ -2684,10 +2701,10 @@ PLAN_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "attribute": _text(300, "Verbatim, from the control."),
-                    "condition": _text(1000),
-                    "pass_criteria": _text(1000),
-                    "fail_criteria": _text(1000),
+                    "attribute": _text(300, "Verbatim, from the control.", 1),
+                    "condition": _text(1000, least=10),
+                    "pass_criteria": _text(1000, least=10),
+                    "fail_criteria": _text(1000, least=10),
                     "judgment_required": {"type": "boolean"},
                     "automatable": {"type": "boolean"},
                 },

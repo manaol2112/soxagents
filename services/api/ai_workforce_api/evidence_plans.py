@@ -77,7 +77,11 @@ from ai_workforce_api.evidence_planning import (
     rules_plan,
     suite_wording,
 )
-from ai_workforce_api.model_providers import fallback_note, live_model, provider_for
+from ai_workforce_api.model_providers import (
+    call_note,
+    live_model,
+    provider_for,
+)
 from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.settings import Settings
@@ -390,6 +394,9 @@ class Planned:
     source: Literal["MODEL", "RULES", "FALLBACK", "SEEDED"]
     note: str
     call_id: UUID | None
+    # FALLBACK only: what happened to the planner's answer, with nothing about what stood
+    # in for it. A run that keeps the existing plan says this (generate, B1h).
+    problem: str = ""
 
 
 # The planner's prompt version, recorded on every call (Milestone 3a).
@@ -401,23 +408,35 @@ class Planned:
 # attribute (evidence_planning._instance_against_every_attribute enforces it).
 # /8 (12 November 2026, B1e): the confirmed understanding with its dates, newest first; the
 # planner follows it over the RCM record and the library's wording, the newer answer first.
-PLANNER_PROMPT_VERSION = "engagement-planner/9"
+# /10 (12 November 2026, B1h): the schema states every limit the plan is checked against,
+# a linked procedure is said to be one of the phase's procedures, and a correction names
+# the exact places that failed.
+PLANNER_PROMPT_VERSION = "engagement-planner/10"
 # Room for a whole plan: three phases, their procedures and evidence. At the provider's
 # default of 4,096 a plan built on an approved narrative was cut off and the rules stood in
-# (26 October 2026).
-PLANNER_TOKENS, PLANNER_SECONDS = 16000, 300
+# (26 October 2026). The limit also holds the model's reasoning: on ITGC-AC-01 an answer
+# with two evidence items a phase used 5,700 to 8,600 of 16,000 (12 November 2026), so a
+# plan at the schema's limit of four items a phase could have been cut off. 32,000 leaves
+# room for it twice over; the call's own budget estimate and timeout still bound it.
+PLANNER_TOKENS, PLANNER_SECONDS = 32000, 300
 # A rejected plan is sent back to the planner with what was wrong this many times.
 PLAN_CORRECTIONS = 2
 
 
 def _correction(facts: PlanFacts, previous: Any, problem: str) -> str:
-    """The planner's prompt again, with its rejected plan and why it was rejected."""
+    """The planner's prompt again, with its rejected plan and why it was rejected: the
+    exact places check_plan named (B1h), and the limits as the schema states them (it said
+    14 evidence items a phase where the schema allows four)."""
     return (
         f"{prompt_for(facts)}\n\n<your_previous_plan>\n"
         f"{json.dumps(previous, ensure_ascii=False, default=str)}\n</your_previous_plan>\n\n"
-        f"That plan was rejected: {problem}. Return the whole plan again with every problem "
-        "fixed and everything else kept. Keep within every length and count limit: at most "
-        "14 evidence items, 10 procedures and 8 objectives in a phase. Sample evidence must "
+        f"That plan was rejected: {problem}. Each place is named as it is in your answer "
+        "(for example phases[1].requirements[0].title). Return the whole plan again with "
+        "every problem fixed and everything else kept. understanding is an object and "
+        "phases a list of three objects, each passed as structured data, never as text. "
+        "Keep within every length and count limit the schema states: at most 4 evidence "
+        "items, 10 procedures and 8 objectives in a phase. Every procedure named in links "
+        "is also listed in that phase's procedures, word for word. Sample evidence must "
         "depend on the population evidence it is drawn from."
     )
 
@@ -475,17 +494,26 @@ def plan_for(
     # rejected plan goes back to the planner with what was wrong, up to PLAN_CORRECTIONS
     # times, before the rules stand in; every check still applies to the corrected plan
     # (product owner, 26 October 2026: "agent should be smart enough to work on this").
-    problem = ""
+    problem = happened = ""
     for attempt in range(PLAN_CORRECTIONS + 1):
         if call.status not in ("SUCCEEDED", "MALFORMED") or call.raw.output is None:
-            note = fallback_note(call.status, "the reviewed rules planned the evidence instead")
+            happened = (
+                "The planner's answer was cut off at the output limit."
+                if call.raw.stopped == "max_tokens"
+                else call_note(call.status)
+            )
+            note = (
+                f"{happened} The model did not produce this; the reviewed rules planned the "
+                "evidence instead."
+            )
             break
         try:
             return Planned(check_plan(call.raw.output, facts), "MODEL", "", call.call_id)
         except ValueError as error:
             problem = str(error)
+            happened = f"The agent's plan was rejected ({problem})."
             note = (
-                f"The agent's plan was rejected ({problem}). The model did not produce this "
+                f"{happened} The model did not produce this "
                 "plan; the reviewed rules planned the evidence instead."
             )
         if attempt == PLAN_CORRECTIONS:
@@ -497,11 +525,16 @@ def plan_for(
                 "control": None if control_id is None else str(control_id),
                 "control_ref": facts.control_ref,
                 "correction": attempt + 1,
+                # Why the answer before was rejected, kept with the call (B1h: only the
+                # last rejection was on record). check_plan's words, as the plan's
+                # note already keeps them: the rule and where in the answer it broke.
+                "rejected": problem[:300],
             },
         )
         call_id = call.call_id
     # The rules' plan stands in for the model's: FALLBACK, with the failed call linked.
-    return Planned(rules, "FALLBACK", note[:500], call_id)
+    # Whether it is written is generate's decision: never over a plan that stands.
+    return Planned(rules, "FALLBACK", note[:500], call_id, happened[:400])
 
 
 @dataclass
@@ -2360,6 +2393,22 @@ def queue_for_understanding(
     starts again. Returns the plan to run."""
     if not understanding_due(connection, project_id, control_id):
         return None
+    # A run that kept the plan because the planner's answer could not be used (generate)
+    # leaves the plan as generated before, so the understanding still reads as due. It is
+    # not asked again by itself on every save: only once the understanding has changed
+    # after that run. A person's "Run again" is not held by this.
+    kept = connection.execute(
+        "SELECT max(r.created_at) FROM evidence_plan_runs r JOIN evidence_plans p "
+        "ON p.id = r.plan_id WHERE p.project_id = %s AND p.engagement_control_id = %s "
+        "AND r.source = 'FALLBACK' AND r.output = '{}'::jsonb",
+        (project_id, control_id),
+    ).fetchone()
+    if (
+        kept is not None
+        and kept[0] is not None
+        and not understanding_due(connection, project_id, control_id, kept[0])
+    ):
+        return None
     with transaction(connection) as cursor:
         row = cursor.execute(
             f"""
@@ -2382,7 +2431,15 @@ def request_attributes_run(
     queue_for_understanding, whether or not anything changed, and over a run that failed or
     stopped before it finished (its lease ran out). Not while a run waits or works. The run
     is marked as one that starts with the attributes (run_stage), which run_plan reads.
-    Returns the plan to run, or None when there is no plan or a run is live."""
+    Returns the plan to run, or None when there is no plan or a run is live.
+
+    Nothing is queued, and nothing is written, when the run would have nothing to do
+    (attributes_rerun_useful, B1h): the attributes are settled, the understanding has not
+    changed since the planner agent's plan was generated, and the last run finished. The
+    attribute agent and the planner would be given what they were given before, and a
+    settled plan is not planned again from scratch. The caller says so (NOTHING_CHANGED_NOTE)."""
+    if not attributes_rerun_useful(connection, project_id, control_id):
+        return None
     with transaction(connection) as cursor:
         row = cursor.execute(
             f"""
@@ -2396,6 +2453,43 @@ def request_attributes_run(
             (project_id, control_id),
         ).fetchone()
     return None if row is None else UUID(str(row[0]))
+
+
+NOTHING_CHANGED_NOTE = (
+    "Nothing the agents read has changed since their last run, so the attributes and the "
+    "evidence plan were left as they are."
+)
+
+
+def attributes_rerun_useful(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> bool:
+    """Whether running the agents again on the control's attributes would do anything, for
+    "Run again" (request_attributes_run) and for the Attributes step, which shows a stopped
+    run's note only then (the context's `attributes_rerun_useful`).
+
+    True only when something the agents read changed since their last finished run, or a
+    run stopped before finishing work that is still needed: the control has no plan yet; a
+    client value or a confirmed walkthrough answer changed after the plan was generated; an
+    approved attribute the planner may write has no criteria; the planner agent has not
+    planned the control (the plan is the rules', RULES or FALLBACK: its answer is still
+    wanted); or the plan's last run failed or was interrupted. A run that kept the plan
+    because the planner's answer could not be used leaves the plan as generated before, so
+    it reads as useful exactly when one of these still holds. False while a run waits or
+    works: there is nothing to start."""
+    row = connection.execute(
+        f"""
+        SELECT NOT {_AGENTS_AT_WORK_SQL}
+               AND (p.source IN ('RULES', 'FALLBACK')
+                    OR p.run_status IN ('FAILED', 'WORKING')
+                    OR coalesce({_UNDERSTANDING_CHANGED_SQL} > p.generated_at, false)
+                    OR {_CRITERIA_MISSING_SQL})
+        FROM evidence_plans p
+        WHERE p.project_id = %s AND p.engagement_control_id = %s
+        """,
+        (project_id, control_id),
+    ).fetchone()
+    return True if row is None else bool(row[0])
 
 
 STOPPED_NOTE = "The run stopped before it finished. Run again."
@@ -2482,6 +2576,14 @@ def attributes_run(
     if stage != "" and status in ("WORKING", "FAILED"):
         return "STOPPED", "", STOPPED_NOTE
     if status == "IDLE" and row[4] == "FALLBACK" and str(row[5]).startswith(UNUSABLE_NOTE):
+        return "STOPPED", "", UNUSABLE_NOTE
+    if (
+        status == "IDLE"
+        and str(row[5]).startswith(KEPT_NOTE)
+        and attributes_rerun_useful(connection, UUID(str(row[6])), control_id)
+    ):
+        # The planner's answer could not be used and the plan was kept (generate): said
+        # only while something still waits on the planner, never on a settled control.
         return "STOPPED", "", UNUSABLE_NOTE
     if status == "FAILED" and understanding_due(connection, UUID(str(row[6])), control_id):
         # The planner's own run failed earlier (the launch's refinement, say), and the
@@ -2632,6 +2734,10 @@ def _plan_pass(
         # instead (plan_for): no criteria were tailored. Said first, in words the page
         # shows; the run still ends, and a person runs it again.
         attribute_note = f"{UNUSABLE_NOTE} {attribute_note}".strip()
+    if note.startswith(KEPT_NOTE):
+        # The answer could not be used and the plan was kept as it was (generate): said
+        # first, so the run's note starts with it (attributes_run reads it).
+        attribute_note, note = note, attribute_note
     # The independent reviewer reads the set as it now stands, before a person does.
     _run_stage(connection, control_id, "REVIEW")
     review_note = review_set(
@@ -3896,6 +4002,12 @@ def generate(
         connection, provider, facts, requester, organization_id, project_id, control_id
     )
     with transaction(connection) as cursor:
+        if planned.source == "FALLBACK":
+            kept = _keep_standing_plan(
+                cursor, organization_id, project_id, control_id, planned, requester
+            )
+            if kept:
+                return Changes([], [], [], [], []), [], kept
         changes = persist(
             cursor, organization_id, project_id, control_id, planned, facts, requester,
             settle=False,
@@ -3905,6 +4017,78 @@ def generate(
             cursor, organization_id, project_id, requester, control_id, issued.drafts
         )
     return changes, drafts, planned.note
+
+
+# A failed or rejected planner run never makes a control's plan worse (product owner, 12
+# November 2026, B1h: on ITGC-AC-01 the rules' fallback was written over the planner agent's
+# plan, removed its interim and roll-forward evidence and proposed removing two accepted,
+# already requested D&I requests).
+KEPT_NOTE = "The planner's answer could not be used, so the plan was kept as it was."
+
+# The plan stands: the planner agent (or the demo's seed) made it, or a person stands behind
+# something in it (the plan approved, a request accepted, criteria accepted), or something
+# of it is already out (a request requested, a phase released). SQL over evidence_plans `p`.
+_PLAN_STANDS_SQL = """
+    (p.source IN ('MODEL', 'SEEDED')
+     OR p.approved_by IS NOT NULL
+     OR EXISTS (SELECT 1 FROM evidence_requirements q
+                WHERE q.plan_id = p.id
+                  AND (q.accepted_by IS NOT NULL OR q.status = 'REQUESTED'))
+     OR EXISTS (SELECT 1 FROM phase_releases r
+                WHERE r.engagement_control_id = p.engagement_control_id)
+     OR EXISTS (SELECT 1 FROM control_attributes a
+                WHERE a.engagement_control_id = p.engagement_control_id
+                  AND a.status = 'APPROVED' AND a.criteria_accepted_at IS NOT NULL))
+"""
+
+
+def _keep_standing_plan(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    planned: Planned,
+    requester: UUID | None,
+) -> str:
+    """Whether the rules' fallback is left unwritten, as the note the run ends with; empty
+    when the fallback is to be written.
+
+    The fallback plans a control that has no usable plan yet: no plan, or the rules' own
+    plan (RULES, FALLBACK) that nobody accepted or approved anything in and nothing was
+    requested or released from. Over a plan that stands (_PLAN_STANDS_SQL) it is not
+    written at all: no requirement is added, removed, flagged or given a pending change, no
+    criteria and no plan content change, nothing is requested. So a fallback never proposes
+    removing or replacing a request a person accepted or one already requested, and never
+    touches a released phase. The run is on record: its row in the plan's runs (the failed
+    call linked, no output, no changes) and an audit event."""
+    plan = cursor.execute(
+        f"SELECT p.id, {_PLAN_STANDS_SQL} FROM evidence_plans p "
+        "WHERE p.project_id = %s AND p.engagement_control_id = %s FOR UPDATE",
+        (project_id, control_id),
+    ).fetchone()
+    if plan is None or not plan[1]:
+        return ""
+    plan_id = UUID(str(plan[0]))
+    note = f"{KEPT_NOTE} {planned.problem}".strip()[:500]
+    cursor.execute(
+        """
+        INSERT INTO evidence_plan_runs (
+            organization_id, project_id, plan_id, source, model_call_id, output, changes, note,
+            created_by
+        )
+        VALUES (%s, %s, %s, 'FALLBACK', %s, '{}'::jsonb, %s, %s, %s)
+        """,
+        (
+            organization_id, project_id, plan_id, planned.call_id,
+            Json(Changes([], [], [], [], []).as_json()), note, requester,
+        ),
+    )  # fmt: skip
+    _audit(
+        cursor, organization_id, project_id, requester, "evidence_plan.kept",
+        "evidence_plan", plan_id,
+        {"source": "FALLBACK", "model_call": str(planned.call_id) if planned.call_id else None},
+    )  # fmt: skip
+    return note
 
 
 def reconcile_info(
