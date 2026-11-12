@@ -208,6 +208,7 @@ def load_facts(
         needs_process_understanding,
     )
     from ai_workforce_api.pbc_drafting import load_context
+    from ai_workforce_api.understanding_authority import facts as understanding_facts
     from ai_workforce_api.walkthrough_answers import for_agents
 
     context = load_context(connection, project_id, control_id)
@@ -300,6 +301,7 @@ def load_facts(
         statement=statement_fields(connection, control_id),
         **narrative_facts(connection, control_id),
         walkthrough=for_agents(connection, control_id),
+        confirmed=understanding_facts(connection, control_id),
         rules=context.rules,
     )
 
@@ -380,7 +382,9 @@ class Planned:
 # evidence and the criteria (11 November 2026).
 # /7 (12 November 2026): the design item that shows the control performed once lists every
 # attribute (evidence_planning._instance_against_every_attribute enforces it).
-PLANNER_PROMPT_VERSION = "engagement-planner/7"
+# /8 (12 November 2026, B1e): the confirmed understanding with its dates, newest first; the
+# planner follows it over the RCM record and the library's wording, the newer answer first.
+PLANNER_PROMPT_VERSION = "engagement-planner/8"
 # Room for a whole plan: three phases, their procedures and evidence. At the provider's
 # default of 4,096 a plan built on an approved narrative was cut off and the rules stood in
 # (26 October 2026).

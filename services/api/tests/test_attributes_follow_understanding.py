@@ -395,7 +395,15 @@ def test_the_run_proposes_tailors_and_reviews_and_one_decision_accepts_each_attr
     assert _plan_run(migrated, control)[1:] == ("IDLE", "")
     # The reviewer read the control, its understanding, and the whole set with its criteria.
     given = agents.reviewed[0]
-    assert given["walkthrough_answers"] and given["control"]["control_ref"] == AC01
+    # Rewritten for B1e (the product owner, 12 November 2026: "Newer answer wins", so the
+    # agents get each fact with when it was confirmed). Old expectation: the reviewer was
+    # given the confirmed answers undated, as "walkthrough_answers". New: they are in
+    # "confirmed_understanding", each a WALKTHROUGH_ANSWER with its confirmed_at.
+    answers = [
+        fact for fact in given["confirmed_understanding"] if fact["kind"] == "WALKTHROUGH_ANSWER"
+    ]
+    assert answers and all(fact["confirmed_at"] for fact in answers)
+    assert "walkthrough_answers" not in given and given["control"]["control_ref"] == AC01
     assert {item["state"] for item in given["attributes"]} == {"APPROVED", "AGENT_ADDS"}
     person = next(item for item in given["attributes"] if item["id"] == str(kept_id))
     assert person["may_revise"] == [] and person["criteria_stated_by"] == "PERSON"
@@ -1211,8 +1219,11 @@ def test_a_duplicate_the_drafts_reviewer_returns_as_criteria_never_becomes_a_pro
     assert "it is a duplicate" in control_attributes.REVIEW_PROMPT
     assert "Never propose a duplicate" in control_attributes.SYSTEM_PROMPT
     assert "its approved wording copied exactly" in control_attributes.SYSTEM_PROMPT
+    # The versions moved with B1e (12 November 2026: the confirmed understanding is the
+    # authority): old "attributes/4" and "attribute-review/2". The duplicate rules above,
+    # which this test is about, are unchanged in both prompts.
     assert (control_attributes.PROMPT_VERSION, control_attributes.REVIEW_PROMPT_VERSION) == (
-        "attributes/4", "attribute-review/2",
+        "attributes/5", "attribute-review/3",
     )  # fmt: skip
 
 

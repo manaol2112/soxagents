@@ -937,12 +937,21 @@ def test_a_later_review_replaces_the_agents_earlier_conflicts(migrated: Database
               "text": "New access is approved by the IT director.", "control_ids": [control["id"]]},
     )  # fmt: skip
     document = written.json()["document"]["id"]
+    # Rewritten for B1e, rule 4 (the product owner, 12 November 2026, on a conflict that
+    # quoted only the RCM record: "shouldn't the attribute just follow what control
+    # understanding says so I won't get any conflict like this?"; decided: a CONFLICT is two
+    # sources that disagree where the understanding is silent). Old expectation: a conflict
+    # quoting one source was raised as a CONFLICT. New: it quotes both sides, each from its
+    # own source (here the policy and the RCM record); with one it would be ambiguity. What
+    # this test checks, that a later review replaces the agent's earlier conflict, is
+    # unchanged.
     conflict = {
         "attributes": [],
         "issues": [
             {"kind": "CONFLICT", "topic": "Approver", "detail": "The RCM and policy differ.",
              "why": "The approver is tested.", "resolve": "Ask the owner.",
-             "quotes": [{"source": document, "quote": "approved by the IT director"}]},
+             "quotes": [{"source": document, "quote": "approved by the IT director"},
+                        {"source": "control", "quote": control["control_ref"]}]},
         ],
     }  # fmt: skip
     with connect(migrated.url) as connection:
@@ -951,6 +960,10 @@ def test_a_later_review_replaces_the_agents_earlier_conflicts(migrated: Database
     first = _context(client, team, control["id"])
     [issue] = [i for i in first["issues"] if i["status"] == "OPEN"]
     assert (issue["kind"], issue["origin"]) == ("CONFLICT", "ATTRIBUTES")
+    assert {quote["source"] for quote in issue["quotes"]} == {document, "control"}
+    # Each side is offered as a statement to pick (rule 6): the sources' own words, when
+    # the agent gave none.
+    assert len(issue["suggestions"]) == 2
     assert first["readiness"]["state"] == "CONFLICT_REQUIRES_REVIEW"
     with connect(migrated.url) as connection:
         review_control(connection, _Provider([{"attributes": [], "issues": []}]), team["org"],
