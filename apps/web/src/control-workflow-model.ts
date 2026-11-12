@@ -212,7 +212,7 @@ export type WorkflowInput = {
       | "COMPLETE";
     /** What a waiting release waits on (11 November 2026): the attributes, once the
      * control is understood. Absent when not read. */
-    waitingOn?: "" | "UNDERSTANDING" | "ATTRIBUTES";
+    waitingOn?: "" | "UNDERSTANDING" | "ATTRIBUTES" | "EVIDENCE";
     /** What it waits for, in the server's sentence (phase_release.understanding_waits). */
     waitingFor?: string;
   } | null;
@@ -482,6 +482,14 @@ function attributesState(input: WorkflowInput, understanding: State): State {
   if (understanding.tone !== "done") {
     return waiting("understanding");
   }
+  // The agents are at work on the attributes and their criteria (12 November 2026): the
+  // server says so in what the release waits for, and the counts follow when they finish.
+  if (
+    input.designRelease?.waitingOn === "ATTRIBUTES" &&
+    /still updating/i.test(input.designRelease.waitingFor ?? "")
+  ) {
+    return { tone: "active", status: "Being updated" };
+  }
   if (proposed > 0) {
     return {
       tone: "attention",
@@ -666,7 +674,10 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
       ? waiting("understanding")
       : attributes.tone !== "done"
         ? waiting("attributes")
-        : { tone: "attention", status: TO_RELEASE }
+        : input.designRelease?.waitingOn === "EVIDENCE"
+          ? // No D&I item evidences an approved attribute: an exception, not a release.
+            { tone: "attention", status: "Not planned against the attributes" }
+          : { tone: "attention", status: TO_RELEASE }
     : evidenceState(
         phase(["DESIGN"]),
         "understanding",

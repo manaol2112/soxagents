@@ -23,14 +23,17 @@ import {
 } from "./client-walkthrough-model";
 import {
   ATTRIBUTE_MAX,
-  ATTRIBUTE_ROW_CHIPS,
   type Attribute,
   type AttributeDecisionKind,
   type AttributeDefinition,
+  acceptableRows,
+  acceptItems,
+  agentRan,
   attributeLetter,
-  attributeRowState,
   attributeSourceLine,
+  attributesStopped,
   attributesSummary,
+  attributesWorking,
   BASIS_LABELS,
   CLASSIFICATIONS,
   type Classification,
@@ -45,17 +48,23 @@ import {
   type DocumentKind,
   decidedNote,
   FREQUENCY_LABELS,
+  firstUnifiedToDecide,
   type LibraryUpdate,
   NATURE_LABELS,
-  openRows,
   PROCEDURE_PHASES,
   type ProcessStep,
+  reviewUnfinished,
   SECTION_HEADINGS,
   SOURCE_LABELS,
   selectionPlan,
   type Testing,
   TYPE_LABELS,
+  UNIFIED_CHIPS,
+  UNIFIED_ORIGINS,
   type Understanding,
+  type UnifiedRow,
+  unifiedRows,
+  unifiedState,
 } from "./control-context-model";
 import {
   type NarrativeAttribute,
@@ -1043,6 +1052,21 @@ export function AttributesPanel({
     }
   }
 
+  // One decision per row, or one for the set: the agent's change is approved and its
+  // criteria accepted in one call. Done is said only once the server has recorded it.
+  async function acceptRows(rows: UnifiedRow[]) {
+    setDone("");
+    const ok = await action.run(
+      rows.length === 1 ? `accept-${rows[0]?.item.id ?? ""}` : "accept-all",
+      { intent: "attributes-accept", items: acceptItems(rows) },
+    );
+    if (ok) {
+      setDone(
+        rows.length === 1 ? "Accepted." : `${rows.length} attributes accepted.`,
+      );
+    }
+  }
+
   function row(item: Attribute, letter: string | null) {
     const proposed = item.status === "PROPOSED";
     const target =
@@ -1256,16 +1280,12 @@ export function AttributesPanel({
         canAct={canAct}
         busy={action.pending}
         busyKey={action.busy}
-        selected={selected}
-        proposalsChosen={plan.proposals}
-        onChoose={(next) => setChosen(next)}
-        open={openRows(opened, [...context.approved, ...context.proposed])}
+        open={opened}
         onOpen={(next) => setOpened(next)}
         shown={shown}
         onShow={(next) => setShown(next)}
-        lastOne={lastOne}
         onDecide={(decision, item) => void decideOne(decision, item)}
-        onDecideMany={(decision, items) => void decideMany(decision, items)}
+        onAccept={(rows) => void acceptRows(rows)}
         onDialog={setDialog}
         onGenerate={() =>
           void action.run("generate", { intent: "attributes-generate" })
@@ -1559,16 +1579,12 @@ function EmbeddedAttributes({
   canAct,
   busy,
   busyKey,
-  selected,
-  proposalsChosen,
-  onChoose,
   open,
   onOpen,
   shown,
   onShow,
-  lastOne,
   onDecide,
-  onDecideMany,
+  onAccept,
   onDialog,
   onGenerate,
   status,
@@ -1580,18 +1596,17 @@ function EmbeddedAttributes({
   canAct: boolean;
   busy: boolean;
   busyKey: string;
-  selected: ReadonlySet<string>;
-  /** The chosen proposals, decided together. */
-  proposalsChosen: Attribute[];
-  onChoose: (next: Set<string>) => void;
-  open: ReadonlySet<string>;
+  /** The rows the person opened, or null until they open or close one: the first row that
+   * waits on them is open until then. */
+  open: ReadonlySet<string> | null;
   onOpen: (next: Set<string>) => void;
-  /** The rows whose standard's requirement is shown. */
+  /** The rows whose standard's requirement, or previous wording, is shown. */
   shown: ReadonlySet<string>;
   onShow: (next: Set<string>) => void;
-  lastOne: boolean;
+  /** Rejects an agent's change, or retires an approved attribute. */
   onDecide: (decision: AttributeDecisionKind, item: Attribute) => void;
-  onDecideMany: (decision: AttributeDecisionKind, items: Attribute[]) => void;
+  /** One decision per row: approves the agent's change and accepts its criteria. */
+  onAccept: (rows: UnifiedRow[]) => void;
   onDialog: (state: AttributeDialogState) => void;
   /** Asks the agent to read the sources and propose attributes. */
   onGenerate: () => void;
@@ -1600,10 +1615,34 @@ function EmbeddedAttributes({
   after: ReactNode;
 }) {
   const id = useId();
+  const router = useRouter();
   const approved = context.approved.length;
-  const proposals = context.proposed;
-  const allChosen =
-    proposals.length > 0 && proposals.every((item) => selected.has(item.id));
+  const rows = unifiedRows(context);
+  const working = attributesWorking(
+    context.attributesRun,
+    context.attributesStage,
+  );
+  const running = working !== null;
+  const stopped = attributesStopped(
+    context.attributesRun,
+    context.attributesRunNote,
+  );
+  // While the agents work, the page reads the attributes again every few seconds, in
+  // place; it stops by itself when the run ends.
+  useEffect(() => {
+    if (!running) {
+      return;
+    }
+    const timer = window.setInterval(() => router.refresh(), 3000);
+    return () => window.clearInterval(timer);
+  }, [running, router]);
+  const locked = busy || running;
+  const toAccept = acceptableRows(rows);
+  const unreviewed = reviewUnfinished(context.reviewSummary);
+  const first = running ? null : firstUnifiedToDecide(rows);
+  const opened = open ?? new Set(first !== null ? [first] : []);
+  // A control keeps at least one attribute: the last cannot be retired.
+  const lastOne = approved <= 1;
   const flip = (set: ReadonlySet<string>, each: string): Set<string> => {
     const next = new Set(set);
     if (next.has(each)) {
@@ -1613,22 +1652,23 @@ function EmbeddedAttributes({
     }
     return next;
   };
-  const letters = new Map(
-    context.approved.map((item, index) => [item.id, attributeLetter(index)]),
-  );
 
-  function row(item: Attribute, letter: string | null) {
-    const proposed = item.status === "PROPOSED";
-    const state = attributeRowState(item);
-    const chip = ATTRIBUTE_ROW_CHIPS[state];
-    const isOpen = open.has(item.id);
+  function row(each: UnifiedRow) {
+    const { item, kind, target, letter } = each;
+    const state = unifiedState(each, running);
+    const chip = UNIFIED_CHIPS[state];
+    const isOpen = opened.has(item.id);
     const standardShown = shown.has(item.id) && item.definition !== null;
-    const target =
-      item.replacesId !== null
-        ? (context.approved.find((each) => each.id === item.replacesId) ?? null)
-        : null;
-    const name = letter !== null ? `attribute ${letter}` : "the proposal";
+    const previousKey = `${item.id}:previous`;
+    const previousShown = shown.has(previousKey);
+    const name = `attribute ${letter}`;
     const bodyId = `${id}-${item.id}`;
+    const origin = UNIFIED_ORIGINS[kind];
+    const criteria = item.criteria;
+    const stated =
+      criteria.condition !== "" ||
+      criteria.passCriteria !== "" ||
+      criteria.failCriteria !== "";
     const standard =
       item.definition !== null ? (
         <button
@@ -1642,63 +1682,78 @@ function EmbeddedAttributes({
         </button>
       ) : null;
     const more =
-      !proposed && canAct ? (
-        <RowMenu
-          label={name}
-          items={[
-            {
-              label: "Edit wording",
-              icon: "compose",
-              onSelect: () =>
-                onDialog({
-                  mode: "edit",
-                  attribute: item,
-                  letter: letter ?? "",
-                }),
-            },
-            {
-              label: "Retire attribute",
-              icon: "trash",
-              danger: true,
-              unavailable: lastOne
-                ? "A control keeps at least one attribute."
-                : null,
-              onSelect: () => onDecide("RETIRE", item),
-            },
-          ]}
-        />
+      canAct && !running ? (
+        kind === "APPROVED" ? (
+          <RowMenu
+            label={name}
+            items={[
+              {
+                label: "Edit wording",
+                icon: "compose",
+                onSelect: () =>
+                  onDialog({
+                    mode: "edit",
+                    attribute: item,
+                    letter,
+                  }),
+              },
+              {
+                label: "Retire attribute",
+                icon: "trash",
+                danger: true,
+                unavailable: lastOne
+                  ? "A control keeps at least one attribute."
+                  : null,
+                onSelect: () => onDecide("RETIRE", item),
+              },
+            ]}
+          />
+        ) : (
+          <RowMenu
+            label={name}
+            items={[
+              {
+                label:
+                  kind === "REMOVAL"
+                    ? "Keep the attribute (reject)"
+                    : "Reject the agent's change",
+                icon: "x",
+                onSelect: () => onDecide("REJECT", item),
+              },
+            ]}
+          />
+        )
       ) : null;
     return (
       <li
         key={item.id}
-        className={`tar is-${state.toLowerCase()}${isOpen ? " is-open" : ""}${selected.has(item.id) ? " is-selected" : ""}${proposed && canAct ? " has-check" : ""}`}
+        className={`tar is-${state.toLowerCase()}${kind === "REMOVAL" ? " is-removal" : ""}${isOpen ? " is-open" : ""}`}
       >
-        {proposed && canAct ? (
-          <input
-            type="checkbox"
-            className="ta-check"
-            checked={selected.has(item.id)}
-            disabled={busy}
-            aria-label={`Select ${name}: ${item.text}`}
-            onChange={() => onChoose(flip(selected, item.id))}
-          />
-        ) : null}
         <button
           type="button"
           className="tar-head"
           aria-expanded={isOpen}
           aria-controls={bodyId}
-          onClick={() => onOpen(flip(open, item.id))}
+          onClick={() => onOpen(flip(opened, item.id))}
         >
           <span className="tar-letter" aria-hidden="true">
-            {letter ?? <UiIcon name="sparkles" size={13} />}
+            {letter}
           </span>
           <span className="tar-name">
-            <span className="sr-only">
-              {letter !== null ? `Attribute ${letter}: ` : "Proposed change: "}
+            <span className="sr-only">{`Attribute ${letter}: `}</span>
+            <span className="tar-text">
+              {kind === "REMOVAL" && target !== null ? target.text : item.text}
             </span>
-            <span className="tar-text">{item.text}</span>
-            <span className="tar-source">{attributeSourceLine(item)}</span>
+            <span className="tar-source">
+              {origin !== "" ? (
+                <span className="tar-origin">{origin}</span>
+              ) : (
+                attributeSourceLine(item)
+              )}
+              {origin !== "" && item.basis === "INFERRED" && kind !== "REMOVAL"
+                ? " · inferred"
+                : ""}
+            </span>
           </span>
           <span className={`tar-chip tone-${chip.tone}`}>{chip.label}</span>
           <span className="tar-caret" aria-hidden="true">
@@ -1707,70 +1762,22 @@ function EmbeddedAttributes({
         </button>
         {isOpen ? (
           <div className="tar-body" id={bodyId}>
-            {target !== null ? (
-              <p className="ta-replaces">
-                <span>
-                  {item.proposal === "RETIRE" ? "Retires" : "Replaces"}{" "}
-                  {letters.get(target.id) ?? ""}
-                </span>{" "}
-                {target.text}
+            {kind === "REWORDED" && target !== null && previousShown ? (
+              <p className="ta-replaces" id={`${bodyId}-previous`}>
+                <span>Previous wording</span> {target.text}
               </p>
             ) : null}
-            {item.sourceQuote !== "" ? (
+            {kind !== "APPROVED" && item.sourceQuote !== "" ? (
               <q className="ta-quote">{item.sourceQuote}</q>
             ) : null}
-            {proposed && item.note !== "" ? (
+            {kind !== "APPROVED" && item.note !== "" ? (
               <p className="ta-why">{item.note}</p>
             ) : null}
-            {proposed ? (
-              <div className="tc-row-acts">
-                {canAct ? (
-                  <>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      disabled={busy}
-                      onClick={() => onDecide("APPROVE", item)}
-                    >
-                      {busyKey === `decide-${item.id}`
-                        ? "Saving…"
-                        : item.proposal === "RETIRE"
-                          ? "Approve the retirement"
-                          : "Approve"}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      disabled={busy}
-                      onClick={() => onDecide("REJECT", item)}
-                    >
-                      Reject
-                    </button>
-                    {item.proposal !== "RETIRE" ? (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        disabled={busy}
-                        onClick={() =>
-                          onDialog({
-                            mode: "review",
-                            attribute: item,
-                            letter: "proposed",
-                          })
-                        }
-                      >
-                        Review wording
-                      </button>
-                    ) : null}
-                  </>
-                ) : null}
-                {standard}
-              </div>
-            ) : (
+            {kind === "APPROVED" ? (
               <TailoredCriteria
                 ids={ids}
                 item={item}
-                canAct={canAct}
+                canAct={canAct && !running}
                 flat
                 extra={
                   standard !== null || more !== null ? (
@@ -1781,6 +1788,88 @@ function EmbeddedAttributes({
                   ) : null
                 }
               />
+            ) : (
+              <div className="tc is-flat">
+                {kind === "REMOVAL" ? null : stated ||
+                  criteria.judgmentRequired === true ? (
+                  <dl className="tc-rules">
+                    {criteria.condition !== "" ? (
+                      <div>
+                        <dt>Tested</dt>
+                        <dd>{criteria.condition}</dd>
+                      </div>
+                    ) : null}
+                    <div className="is-pass">
+                      <dt>Passes</dt>
+                      <dd>{criteria.passCriteria || "Not stated"}</dd>
+                    </div>
+                    <div className="is-fail">
+                      <dt>Fails</dt>
+                      <dd>{criteria.failCriteria || "Not stated"}</dd>
+                    </div>
+                    {criteria.judgmentRequired === true ? (
+                      <div>
+                        <dt>Judgment</dt>
+                        <dd>Professional judgment required</dd>
+                      </div>
+                    ) : null}
+                  </dl>
+                ) : (
+                  <p className="tc-missing">
+                    The agent stated no criteria a tester could apply. Write
+                    them once the attribute is accepted.
+                  </p>
+                )}
+                <div className="tc-row-acts">
+                  {canAct ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        disabled={locked}
+                        onClick={() => onAccept([each])}
+                      >
+                        {busyKey === `accept-${item.id}`
+                          ? "Accepting…"
+                          : kind === "REMOVAL"
+                            ? "Accept the removal"
+                            : "Accept"}
+                      </button>
+                      {kind !== "REMOVAL" ? (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          disabled={locked}
+                          onClick={() =>
+                            onDialog({
+                              mode: "review",
+                              attribute: item,
+                              letter,
+                            })
+                          }
+                        >
+                          Edit wording
+                        </button>
+                      ) : null}
+                    </>
+                  ) : null}
+                  {kind === "REWORDED" && target !== null ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      aria-expanded={previousShown}
+                      aria-controls={`${bodyId}-previous`}
+                      onClick={() => onShow(flip(shown, previousKey))}
+                    >
+                      {previousShown
+                        ? "Hide the previous wording"
+                        : "Show the previous wording"}
+                    </button>
+                  ) : null}
+                  {standard}
+                  {more}
+                </div>
+              </div>
             )}
             {standardShown && item.definition !== null ? (
               <div className="ta-how" id={`${bodyId}-standard`}>
@@ -1798,35 +1887,45 @@ function EmbeddedAttributes({
   }
 
   return (
-    <div className="cc-attributes ta is-embedded" aria-busy={busy}>
+    <div className="cc-attributes ta is-embedded" aria-busy={locked}>
       <div className="ta-bar">
         <h4 className="ta-section-title">
-          {approved === 0
+          {rows.length === 0
             ? "No attributes yet"
-            : `${approved} attribute${approved === 1 ? "" : "s"}`}
+            : `${rows.length} attribute${rows.length === 1 ? "" : "s"}`}
         </h4>
         {canAct ? (
           <span className="ta-bar-acts">
-            <AcceptAllCriteria
-              ids={ids}
-              items={criteriaToAccept(context)}
-              compact
-            />
+            {toAccept.length >= 2 ? (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={locked}
+                title="Accepts each attribute as the agent prepared it: its change and its criteria, each recorded on its own."
+                onClick={() => onAccept(toAccept)}
+              >
+                {busyKey === "accept-all"
+                  ? "Accepting…"
+                  : `Accept all ${toAccept.length}`}
+              </button>
+            ) : null}
             <button
               type="button"
               className="btn btn-ghost btn-sm ta-quiet"
-              disabled={busy}
+              disabled={locked}
               onClick={onGenerate}
             >
               <UiIcon name="sparkles" size={13} />
               {busyKey === "generate"
                 ? "Reading the sources…"
-                : "Propose with the agent"}
+                : agentRan(context)
+                  ? "Run again"
+                  : "Propose with the agent"}
             </button>
             <button
               type="button"
               className="btn btn-ghost btn-sm ta-quiet"
-              disabled={busy}
+              disabled={locked}
               onClick={() => onDialog({ mode: "add" })}
             >
               <UiIcon name="plus" size={13} />
@@ -1835,87 +1934,49 @@ function EmbeddedAttributes({
           </span>
         ) : null}
       </div>
-      {canAct && proposals.length > 0 ? (
-        <fieldset className="ta-tools">
-          <legend className="sr-only">Proposed changes</legend>
-          <input
-            type="checkbox"
-            className="ta-check"
-            checked={allChosen}
-            disabled={busy}
-            aria-label="Select every proposed change"
-            onChange={() =>
-              onChoose(
-                allChosen
-                  ? new Set()
-                  : new Set(proposals.map((item) => item.id)),
-              )
-            }
-          />
-          <span className="ta-tools-count">
-            {proposalsChosen.length > 0
-              ? `${proposalsChosen.length} selected`
-              : `${proposals.length} proposed change${proposals.length === 1 ? "" : "s"} to decide`}
-          </span>
-          {proposalsChosen.length > 0 ? (
-            <span className="ta-tools-acts">
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                disabled={busy}
-                onClick={() => onDecideMany("APPROVE", proposalsChosen)}
-              >
-                {busyKey === "many-APPROVE"
-                  ? "Approving…"
-                  : `Approve ${proposalsChosen.length}`}
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                disabled={busy}
-                onClick={() => onDecideMany("REJECT", proposalsChosen)}
-              >
-                {busyKey === "many-REJECT"
-                  ? "Rejecting…"
-                  : `Reject ${proposalsChosen.length}`}
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                disabled={busyKey.startsWith("many-")}
-                onClick={() => onChoose(new Set())}
-              >
-                Clear
-              </button>
+      {working !== null ? (
+        <p className="ta-working">
+          <small className="ep-reading" role="status">
+            {working}
+            <span className="ep-dots" aria-hidden="true">
+              <i />
+              <i />
+              <i />
             </span>
-          ) : (
-            <span className="ta-tools-hint">
-              The approved attributes stay as they are until a change is
-              approved.
-            </span>
-          )}
-        </fieldset>
+          </small>
+        </p>
+      ) : stopped !== null ? (
+        <p className="ta-run-note tone-warning" role="status">
+          <UiIcon name="info" size={13} />
+          {stopped}
+        </p>
+      ) : unreviewed !== null ? (
+        <p className="ta-run-note tone-warning" role="status">
+          <UiIcon name="info" size={13} />
+          {unreviewed}
+        </p>
       ) : null}
       {status}
       <ul className="tar-list" aria-label="Testing attributes">
-        {context.approved.map((item, index) =>
-          row(item, attributeLetter(index)),
-        )}
-        {approved === 0 ? (
+        {rows.map((each) => row(each))}
+        {rows.length === 0 ? (
           <li className="tar-empty">
-            No approved attributes yet. Propose them with the agent, or add one.
+            {running
+              ? "The agents are preparing the attributes."
+              : "No approved attributes yet. Propose them with the agent, or add one."}
           </li>
         ) : null}
-        {proposals.map((item) => row(item, null))}
       </ul>
       <div className="ta-folds">
         <details className="ta-fold">
           <summary>How attributes work</summary>
           <p>
             Approved attributes are the testing criteria: the test checks each
-            one on every item, against its pass and fail criteria. A proposal
-            changes nothing until a person approves it, and a changed or retired
-            attribute keeps its earlier wording in the history.
+            one on every item, against its pass and fail criteria. The agents
+            prepare them from the understanding and a reviewer agent checks
+            them; nothing they wrote counts until a person accepts its row, and
+            a changed or retired attribute keeps its earlier wording in the
+            history.
           </p>
         </details>
         {folds}

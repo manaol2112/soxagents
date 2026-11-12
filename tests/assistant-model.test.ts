@@ -58,6 +58,10 @@ function context(overrides: Partial<ControlContext>): ControlContext {
     testing: null,
     libraryUpdate: null,
     design: null,
+    reviewSummary: null,
+    attributesRun: "",
+    attributesStage: "",
+    attributesRunNote: "",
     ...overrides,
   };
 }
@@ -102,6 +106,7 @@ const attribute = {
     acceptedAt: "",
     owned: false,
   },
+  review: null,
 };
 
 describe("the control assistant", () => {

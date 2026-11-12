@@ -1060,6 +1060,36 @@ button.tar-head:focus-visible:not(:disabled) {
   white-space: nowrap;
 }
 
+/* What the agent did to the row: violet, as all undecided agent output. */
+.tar-origin {
+  color: var(--ai);
+  font-weight: 600;
+}
+
+/* A retirement the agent suggests: the attribute still stands until a person accepts. */
+.tar.is-removal .tar-text {
+  color: var(--text-secondary);
+  text-decoration: line-through;
+}
+
+/* The agents at work, or a run that did not finish, above the list. */
+.ta-working,
+.ta-run-note {
+  margin: 0 0 0.5rem;
+  font-size: var(--fs-sm);
+}
+
+.ta-run-note {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+}
+
+.ta-run-note.tone-warning {
+  color: var(--warning);
+}
+
 .tar-chip {
   display: inline-flex;
   align-items: center;

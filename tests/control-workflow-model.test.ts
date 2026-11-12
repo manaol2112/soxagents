@@ -697,6 +697,55 @@ describe("the control's workflow", () => {
       "idle",
       "Waiting on the attributes",
     ]);
+    // No D&I item evidences an approved attribute (12 November 2026): the D&I Evidence
+    // step says so instead of offering the release.
+    const untraced = workflowOf(
+      fresh({
+        setup: understood,
+        attributes: settled,
+        designRelease: { step: "WAITING", waitingOn: "EVIDENCE" },
+      }),
+    );
+    assert.deepEqual(state(untraced, "attributes")[0], "done");
+    assert.deepEqual(state(untraced, "designevidence"), [
+      "attention",
+      "Not planned against the attributes",
+    ]);
+    // The agents are tailoring after the understanding (12 November 2026): the step reads
+    // as being updated whatever the counts still say, not "N need criteria".
+    const tailoring = workflowOf(
+      fresh({
+        setup: understood,
+        attributes: { approved: 6, proposed: 1, untailored: 6 },
+        designRelease: {
+          step: "WAITING",
+          waitingOn: "ATTRIBUTES",
+          waitingFor:
+            "The attributes are not settled: the agent is still updating them.",
+        },
+      }),
+    );
+    assert.deepEqual(state(tailoring, "attributes"), [
+      "active",
+      "Being updated",
+    ]);
+    // Once it finishes the counts speak again.
+    const tailored = workflowOf(
+      fresh({
+        setup: understood,
+        attributes: { approved: 6, proposed: 1, untailored: 6 },
+        designRelease: {
+          step: "WAITING",
+          waitingOn: "ATTRIBUTES",
+          waitingFor:
+            "The attributes are not settled: 1 proposed attribute waits for a decision.",
+        },
+      }),
+    );
+    assert.deepEqual(state(tailored, "attributes"), [
+      "attention",
+      "1 attribute to decide",
+    ]);
     const ready = workflowOf(
       fresh({
         setup: understood,

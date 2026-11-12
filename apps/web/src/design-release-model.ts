@@ -50,7 +50,10 @@ export type ReleaseView =
       /** Where the attributes came from, in a few words ("the control library"). */
       sources: string;
       /** What resolves an early release's wait: the step to open, with its label. */
-      resolve: { step: "understanding" | "attributes"; label: string } | null;
+      resolve: {
+        step: "understanding" | "attributes" | "testdesign";
+        label: string;
+      } | null;
     };
 
 type Attribute = { text: string; sourceKind: string };
@@ -200,6 +203,9 @@ export function releaseView(input: {
       ...lineOf(item),
     }));
   const understood = status.waitingOn !== "UNDERSTANDING";
+  // No D&I item evidences any approved attribute (12 November 2026): the evidence could
+  // not be tested against them, whatever the list below shows. A real exception.
+  const untraced = status.waitingOn === "EVIDENCE";
   // The server reads the attributes only once the control is understood; until then the
   // card words them from the records it holds, as the server will: approved, none proposed,
   // and each with criteria a person owns, tailored to the control.
@@ -237,12 +243,16 @@ export function releaseView(input: {
       label:
         items.length === 0
           ? "No evidence planned"
-          : `${plural(items.length, "item")} planned`,
-      done: items.length > 0,
+          : untraced
+            ? "No item evidences the attributes"
+            : `${plural(items.length, "item")} planned`,
+      done: items.length > 0 && !untraced,
       detail:
         items.length === 0
           ? "The planner has not planned D&I evidence yet."
-          : "",
+          : untraced
+            ? status.waitingFor
+            : "",
     },
   ];
   const sources = listed([
@@ -260,6 +270,20 @@ export function releaseView(input: {
       attributes,
       sources,
       resolve: null,
+    };
+  }
+  if (untraced) {
+    return {
+      mode: "early",
+      title: "Plan the evidence against the attributes first",
+      lead:
+        (status.waitingFor !== "" ? `${status.waitingFor} ` : "") +
+        "The D&I evidence is a test of one against the attributes, so a walkthrough instance that evidences none of them cannot be tested. You can release it early, with a reason.",
+      checks,
+      items,
+      attributes,
+      sources,
+      resolve: { step: "testdesign", label: "Open the test plan" },
     };
   }
   return {
@@ -281,6 +305,21 @@ export function releaseView(input: {
       ? { step: "attributes", label: "Decide the attributes" }
       : { step: "understanding", label: "Open Control Understanding" },
   };
+}
+
+/**
+ * Whether the step shows the evidence workspace (its list, tabs and detail). On D&I Evidence,
+ * before the release, the decision row's "Will be requested" list already shows each request
+ * to be drafted, so the workspace would list the same requests a second time (product owner,
+ * 12 November 2026: "I don't want duplications here"). It shows once the release has drafted
+ * them. Adding evidence then loses nothing: a request still waits for approval before
+ * anything goes to the client. Every other step shows it as before.
+ */
+export function showsEvidenceWorkspace(
+  step: string | null,
+  view: ReleaseView,
+): boolean {
+  return step !== "designevidence" || view.mode === "hidden";
 }
 
 /** The shortest reason an early release takes (phase_release.release). */

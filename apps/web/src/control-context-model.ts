@@ -115,7 +115,31 @@ export type Attribute = {
   /** The criteria tailored to this control (11 November 2026), what the testers judge
    * evidence against. */
   criteria: AttributeCriteria;
+  /** The reviewer agent's verdict on the attribute as it reads now (12 November 2026), or
+   * null when it was not reviewed or changed since. Agent output, never an approval. */
+  review: AttributeReview | null;
 };
+
+export type AttributeReview = {
+  verdict: "OK" | "REVISED" | "CONCERN";
+  note: string;
+};
+
+/** The reviewer agent's latest review of the control's attributes as a set. */
+export type AttributeReviewSummary = {
+  status: "REVIEWED" | "NOT_REVIEWED";
+  reviewedAt: string;
+  reviewer: string;
+  note: string;
+  findings: string[];
+  concerns: number;
+};
+
+/** Whether the agents are updating the attributes now, and what they are doing. */
+/** STOPPED: their last run did not finish (its process died, it failed, or the planner's
+ * answer could not be used); never shown as working. */
+export type AttributesRun = "" | "PENDING" | "WORKING" | "STOPPED";
+export type AttributesStage = "" | "ATTRIBUTES" | "CRITERIA" | "REVIEW";
 
 /** An attribute's criteria as tailored to the control: who stated them (a person, the
  * planner agent, or the demo), who accepted the agent's, and whether a person owns them
@@ -195,6 +219,202 @@ export const ATTRIBUTE_ROW_CHIPS: Record<
   MISSING: { label: "Needs criteria", tone: "warning" },
   ACCEPTED: { label: "Accepted", tone: "success" },
 };
+
+/** One list for the Attributes step (product owner, 12 November 2026: "I don't want it to
+ * show propose then the user would have to approve separately"): the attributes as the
+ * agent proposes them to stand. An addition is a row of its own, a rewording shows its new
+ * wording in the place of the attribute it replaces, and a retirement marks the attribute
+ * it would remove. The agent's changes are still proposals on the record until a person
+ * accepts the row; the list only shows them where they would land. */
+export type UnifiedKind = "APPROVED" | "ADDED" | "REWORDED" | "REMOVAL";
+
+export type UnifiedRow = {
+  /** The record the row's decision applies to: the approved attribute, or the proposal. */
+  item: Attribute;
+  kind: UnifiedKind;
+  /** The approved attribute a rewording replaces or a retirement removes. */
+  target: Attribute | null;
+  /** The row's letter: its place among the approved attributes; an addition takes the next
+   * letter after them, the one it will have once accepted (product owner, 12 November
+   * 2026: "if you are proposing, there should be an assigned letter"). */
+  letter: string;
+};
+
+export function unifiedRows(context: {
+  approved: Attribute[];
+  proposed: Attribute[];
+}): UnifiedRow[] {
+  const taken = new Set<string>();
+  const byTarget = new Map<string, Attribute>();
+  for (const proposal of context.proposed) {
+    const target = proposal.replacesId;
+    if (
+      (proposal.proposal === "CHANGE" || proposal.proposal === "RETIRE") &&
+      target !== null &&
+      !byTarget.has(target) &&
+      context.approved.some((item) => item.id === target)
+    ) {
+      byTarget.set(target, proposal);
+      taken.add(proposal.id);
+    }
+  }
+  const rows: UnifiedRow[] = context.approved.map((item, index) => {
+    const letter = attributeLetter(index);
+    const proposal = byTarget.get(item.id);
+    return proposal === undefined
+      ? { item, kind: "APPROVED", target: null, letter }
+      : {
+          item: proposal,
+          kind: proposal.proposal === "RETIRE" ? "REMOVAL" : "REWORDED",
+          target: item,
+          letter,
+        };
+  });
+  // Additions follow as rows of their own. So does a change or a retirement that has no
+  // row to sit in (its attribute was decided meanwhile, or it is a second proposal for the
+  // same attribute): it is shown as what it is, never as an addition.
+  let next = context.approved.length;
+  for (const proposal of context.proposed) {
+    if (!taken.has(proposal.id)) {
+      rows.push({
+        item: proposal,
+        kind:
+          proposal.proposal === "RETIRE"
+            ? "REMOVAL"
+            : proposal.proposal === "CHANGE"
+              ? "REWORDED"
+              : "ADDED",
+        target: null,
+        letter: attributeLetter(next),
+      });
+      next += 1;
+    }
+  }
+  return rows;
+}
+
+/** Where a row of the unified list stands. The agent's changes and its tailored criteria
+ * both wait for one acceptance; nothing an agent wrote reads as accepted. */
+export type UnifiedState = "UPDATING" | "TO_ACCEPT" | "MISSING" | "ACCEPTED";
+
+export function unifiedState(row: UnifiedRow, running: boolean): UnifiedState {
+  if (running) {
+    return "UPDATING";
+  }
+  if (row.kind !== "APPROVED") {
+    return "TO_ACCEPT";
+  }
+  const state = criteriaState(row.item.criteria);
+  return state === "OWNED" ? "ACCEPTED" : state;
+}
+
+export const UNIFIED_CHIPS: Record<
+  UnifiedState,
+  { label: string; tone: "ai" | "warning" | "success" }
+> = {
+  UPDATING: { label: "Updating…", tone: "ai" },
+  TO_ACCEPT: { label: "To accept", tone: "ai" },
+  MISSING: { label: "Needs criteria", tone: "warning" },
+  ACCEPTED: { label: "Accepted", tone: "success" },
+};
+
+/** What the agent did to the row, under its wording; "" for an attribute it left alone. */
+export const UNIFIED_ORIGINS: Record<UnifiedKind, string> = {
+  APPROVED: "",
+  ADDED: "Added by the agent",
+  REWORDED: "Reworded by the agent",
+  REMOVAL: "Agent suggests removing",
+};
+
+/** The rows one acceptance covers: every change the agent proposed, and every approved
+ * attribute whose tailored criteria wait. Each at the version shown. */
+export function acceptableRows(rows: readonly UnifiedRow[]): UnifiedRow[] {
+  return rows.filter((row) => unifiedState(row, false) === "TO_ACCEPT");
+}
+
+export function acceptItems(
+  rows: readonly UnifiedRow[],
+): Array<{ attribute_id: string; version: number }> {
+  return acceptableRows(rows).map((row) => ({
+    attribute_id: row.item.id,
+    version: row.item.version,
+  }));
+}
+
+/** The first row of the unified list that waits on a person, to start open. */
+export function firstUnifiedToDecide(
+  rows: readonly UnifiedRow[],
+): string | null {
+  return (
+    rows.find((row) => unifiedState(row, false) !== "ACCEPTED")?.item.id ?? null
+  );
+}
+
+/** When the reviewer agent's review did not finish: said as the run's status, so nobody
+ * takes the attributes as reviewed. Null otherwise. The reviewer's own notes (its verdicts,
+ * reasons and findings) are kept on the record and not shown here (product owner, 12
+ * November 2026: "I don't need to see this note from the reviewer agent. Any note from the
+ * reviewer."). */
+export function reviewUnfinished(
+  summary: AttributeReviewSummary | null,
+): string | null {
+  if (summary === null || summary.status === "REVIEWED") {
+    return null;
+  }
+  return "The reviewer agent did not finish, so these are not reviewed.";
+}
+
+/** What the agents are doing while they update the attributes, or null when they are not. */
+export function attributesWorking(
+  run: AttributesRun,
+  stage: AttributesStage,
+): string | null {
+  if (run === "" || run === "STOPPED") {
+    return null;
+  }
+  if (run === "PENDING") {
+    return "Queued: the agents will update the attributes from the understanding";
+  }
+  switch (stage) {
+    case "ATTRIBUTES":
+      return "Proposing attributes from the understanding";
+    case "CRITERIA":
+      return "Tailoring pass/fail criteria";
+    case "REVIEW":
+      return "Reviewing against the control and its understanding";
+    default:
+      return "The planner is tailoring the attributes and their criteria from the understanding";
+  }
+}
+
+/** What to say when the agents' last run did not finish, or null: the server's note, so
+ * the step never shows a run as working once nobody is working on it. */
+export function attributesStopped(
+  run: AttributesRun,
+  note: string,
+): string | null {
+  if (run !== "STOPPED") {
+    return null;
+  }
+  return note !== "" ? note : "The run stopped before it finished. Run again.";
+}
+
+/** Whether an agent has already worked on the attributes, so asking again is a re-run. */
+export function agentRan(context: {
+  approved: Attribute[];
+  proposed: Attribute[];
+  reviewSummary: AttributeReviewSummary | null;
+  attributesRun?: AttributesRun;
+}): boolean {
+  return (
+    context.attributesRun === "STOPPED" ||
+    context.reviewSummary !== null ||
+    context.proposed.some((item) => item.sourceKind !== "MANUAL") ||
+    context.approved.some(
+      (item) => item.criteria.origin === "AGENT" || item.sourceKind === "AGENT",
+    )
+  );
+}
 
 /** The row that starts open: the first, in the list's order, that waits on a person. */
 export function firstToDecide(
@@ -980,6 +1200,14 @@ export type ControlContext = {
   testing: Testing | null;
   libraryUpdate: LibraryUpdate | null;
   design: Design | null;
+  /** The reviewer agent's review of the attributes, or null when there was none. */
+  reviewSummary: AttributeReviewSummary | null;
+  /** The agents are updating the attributes and criteria now (the Attributes step shows
+   * it working and reads again). */
+  attributesRun: AttributesRun;
+  attributesStage: AttributesStage;
+  /** For a stopped run: what happened and what a person does next. */
+  attributesRunNote: string;
   note: string;
 };
 
@@ -1324,6 +1552,30 @@ function parseAttribute(item: Raw): Attribute {
       acceptedAt: str(item.criteria_accepted_at),
       owned: item.criteria_owned === true,
     },
+    review: isRecord(item.review)
+      ? {
+          verdict: oneOf(
+            item.review.verdict,
+            ["OK", "REVISED", "CONCERN"] as const,
+            "CONCERN",
+          ),
+          note: str(item.review.note),
+        }
+      : null,
+  };
+}
+
+function parseReviewSummary(value: unknown): AttributeReviewSummary | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return {
+    status: value.status === "REVIEWED" ? "REVIEWED" : "NOT_REVIEWED",
+    reviewedAt: str(value.reviewed_at),
+    reviewer: str(value.reviewer),
+    note: str(value.note),
+    findings: strings(value.findings).slice(0, 8),
+    concerns: num(value.concerns),
   };
 }
 
@@ -1539,6 +1791,18 @@ export function parseContext(value: unknown): ControlContext | null {
     testing: parseTesting(value.testing),
     libraryUpdate: parseUpdate(value.library_update),
     design: parseDesign(value.design),
+    reviewSummary: parseReviewSummary(attributes.review_summary),
+    attributesRun: oneOf(
+      value.attributes_run,
+      ["", "PENDING", "WORKING", "STOPPED"] as const,
+      "",
+    ),
+    attributesRunNote: str(value.attributes_run_note),
+    attributesStage: oneOf(
+      value.attributes_stage,
+      ["", "ATTRIBUTES", "CRITERIA", "REVIEW"] as const,
+      "",
+    ),
     note: str(value.note),
   };
 }
@@ -1550,6 +1814,7 @@ export type ContextIntent =
   | "attribute-retire"
   | "attribute-decide"
   | "attributes-decide"
+  | "attributes-accept"
   | "attributes-generate"
   | "library-adopt"
   | "values-set"
@@ -1691,6 +1956,30 @@ export function contextWrite(fields: Fields): ContextWrite {
         items.length <= 100 &&
         distinct.size === items.length
         ? ok("POST", `${control}/attributes/decide-many`, { items })
+        : { error: "invalid" };
+    }
+    case "attributes-accept": {
+      // One decision per attribute, one call for the set: the agent's change is approved
+      // and its criteria accepted together (12 November 2026). Every item checked here.
+      const raw = Array.isArray(fields.items) ? fields.items : [];
+      const items = raw.flatMap((item) => {
+        if (!isRecord(item)) {
+          return [];
+        }
+        const at = Number(item.version);
+        return typeof item.attribute_id === "string" &&
+          UUID.test(item.attribute_id) &&
+          Number.isInteger(at) &&
+          at >= 1
+          ? [{ attribute_id: item.attribute_id, version: at }]
+          : [];
+      });
+      const distinct = new Set(items.map((item) => item.attribute_id));
+      return items.length > 0 &&
+        items.length === raw.length &&
+        items.length <= 100 &&
+        distinct.size === items.length
+        ? ok("POST", `${control}/attributes/accept`, { items })
         : { error: "invalid" };
     }
     case "attributes-generate":

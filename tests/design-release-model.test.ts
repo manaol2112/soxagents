@@ -8,6 +8,7 @@ import {
   itemKind,
   itemsHeading,
   releaseView,
+  showsEvidenceWorkspace,
 } from "../apps/web/src/design-release-model.ts";
 import type { PhaseStatus } from "../apps/web/src/planning-model.ts";
 
@@ -120,6 +121,45 @@ describe("the D&I release card (product owner, 11 November 2026)", () => {
       "the control library and the agent, approved by the team",
     );
     assert.equal(view.resolve, null);
+  });
+
+  it("is an exception when no D&I item evidences the attributes, never ready", () => {
+    // Found on 12 November 2026: a re-plan left the walkthrough instance with no attribute
+    // links and the card still read "tested against 4 attributes".
+    const waitingFor =
+      "The D&I evidence is not planned against the attributes: no D&I item evidences any of the 3 approved attributes. Plan the evidence again.";
+    const view = releaseView({
+      status: status({ step: "WAITING", waitingOn: "EVIDENCE", waitingFor }),
+      approved,
+      proposed: 0,
+      items: [
+        { ...policy, attributes: [] },
+        { ...walkthrough, attributes: [] },
+      ],
+    });
+    assert.equal(view.mode, "early");
+    if (view.mode !== "early") {
+      return;
+    }
+    assert.equal(view.title, "Plan the evidence against the attributes first");
+    assert.equal(view.lead.startsWith(waitingFor), true);
+    assert.match(view.lead, /You can release it early, with a reason\.$/);
+    assert.deepEqual(view.resolve, {
+      step: "testdesign",
+      label: "Open the test plan",
+    });
+    // Understood and settled, but the planned items do not count as planned against them.
+    assert.deepEqual(
+      view.checks.map((check) => [check.key, check.done]),
+      [
+        ["understanding", true],
+        ["attributes", true],
+        ["items", false],
+      ],
+    );
+    const items = view.checks.find((check) => check.key === "items");
+    assert.equal(items?.label, "No item evidences the attributes");
+    assert.equal(items?.detail, waitingFor);
   });
 
   it("waits for the attributes, pointing to the Attributes step, with an early release offered", () => {
@@ -400,5 +440,45 @@ describe("the D&I release as the approved decision row and list (11 November 202
     assert.equal(enough.enabled, true);
     // While the release is with the server, it cannot be sent twice.
     assert.equal(at("x".repeat(EARLY_REASON_MIN), true).enabled, false);
+  });
+});
+
+describe("the evidence list shows once, not twice (12 November 2026)", () => {
+  const before = releaseView({
+    status: status(),
+    approved,
+    proposed: 0,
+    items: [policy, walkthrough],
+  });
+  const after = releaseView({
+    status: status({ step: "RELEASED", complete: false }),
+    approved,
+    proposed: 0,
+    items: [policy, walkthrough],
+  });
+
+  it("hides the D&I workspace while the release lists what will be requested", () => {
+    assert.notEqual(before.mode, "hidden");
+    assert.equal(showsEvidenceWorkspace("designevidence", before), false);
+    // A release that waits on the attributes still lists them: still one list.
+    const waiting = releaseView({
+      status: status({ step: "WAITING", waitingOn: "ATTRIBUTES" }),
+      approved,
+      proposed: 1,
+      items: [policy, walkthrough],
+    });
+    assert.notEqual(waiting.mode, "hidden");
+    assert.equal(showsEvidenceWorkspace("designevidence", waiting), false);
+  });
+
+  it("shows the workspace once the release has drafted the requests", () => {
+    assert.equal(after.mode, "hidden");
+    assert.equal(showsEvidenceWorkspace("designevidence", after), true);
+  });
+
+  it("leaves every other step's workspace as it was", () => {
+    for (const step of ["oeevidence", "oetesting", null]) {
+      assert.equal(showsEvidenceWorkspace(step, before), true);
+    }
   });
 });

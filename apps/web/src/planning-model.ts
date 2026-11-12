@@ -2165,8 +2165,9 @@ export type PhaseStatus = {
   reason: string;
   waitingFor: string;
   /** What the D&I release waits on: Control Understanding or the attributes (11 November
+   * 2026), or EVIDENCE when no D&I item evidences any approved attribute (12 November
    * 2026); empty otherwise. */
-  waitingOn: "" | "UNDERSTANDING" | "ATTRIBUTES";
+  waitingOn: "" | "UNDERSTANDING" | "ATTRIBUTES" | "EVIDENCE";
 };
 
 export type ControlPhases = {
@@ -2211,7 +2212,8 @@ function parseControlPhases(value: Json): ControlPhases {
         waitingFor: str(item.waiting_for),
         waitingOn:
           item.waiting_on === "UNDERSTANDING" ||
-          item.waiting_on === "ATTRIBUTES"
+          item.waiting_on === "ATTRIBUTES" ||
+          item.waiting_on === "EVIDENCE"
             ? item.waiting_on
             : "",
       };
