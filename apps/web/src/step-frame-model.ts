@@ -137,9 +137,12 @@ export function quietLineOf(need: PanelNeed): QuietLine | null {
   }
 }
 
-/** A step as the footer names it: "02 Control Understanding". */
-export function stepName(link: Pick<PanelLink, "number" | "title">): string {
-  return `${pad(link.number)} ${link.title}`;
+/** A step as the footer names it: by its title alone, "Control Understanding". The header
+ * and the canvas carry the step's number; in the footer the numbers ran across both branches
+ * and read as a jump ("Next · 04 D&I Evidence", "Next · 07 Scope & Sampling"; product owner,
+ * 12 November 2026: "the numbers here are not good. From 4 to 7?"). */
+export function stepName(link: Pick<PanelLink, "title">): string {
+  return link.title;
 }
 
 /**
@@ -162,14 +165,30 @@ export function basedOnSummary(basedOn: readonly PanelLink[]): {
   };
 }
 
+/** The branch a step sits in, as the workflow labels it ("D&I branch"), or null. */
+function branchOf(key: StepKey): string | null {
+  const group = STEPS.find((item) => item.key === key)?.group;
+  return group === "design" || group === "operating"
+    ? (GROUPS.find((each) => each.key === group)?.label ?? null)
+    : null;
+}
+
 /** The footer's "Next": each step that follows, with the outcome it follows on where the
- * step decides ("If effective"). */
+ * step decides ("If effective"). Where the work splits into both branches at once, as after
+ * the attributes, each says its branch ("D&I branch · D&I Evidence"). */
 export function nextLinks(
   next: ReadonlyArray<PanelLink & { when: string }>,
 ): Array<{ key: StepKey; label: string; title: string }> {
+  const branches = new Set(next.map((item) => branchOf(item.key)));
+  const forks = next.length > 1 && branches.size > 1;
   return next.map((item) => ({
     key: item.key,
-    label: item.when !== "" ? item.when : "Next",
+    label:
+      item.when !== ""
+        ? item.when
+        : forks
+          ? (branchOf(item.key) ?? "Next")
+          : "Next",
     title: stepName(item),
   }));
 }

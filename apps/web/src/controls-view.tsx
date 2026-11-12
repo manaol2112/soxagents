@@ -107,7 +107,7 @@ import { ControlsToolbar } from "./controls-toolbar";
 import { CoverageForm } from "./coverage-form";
 import { DesignConclusionPanel } from "./design-conclusion-panel";
 import { DesignReleaseCard, DesignReleaseItems } from "./design-release";
-import { releaseView } from "./design-release-model";
+import { releaseView, showsEvidenceWorkspace } from "./design-release-model";
 import { firstNameFrom } from "./engagement-guide-model";
 import {
   byApplication,
@@ -2088,9 +2088,12 @@ function ControlRecord({
             document: slot.document,
           }))}
         documents={walkthrough.documents}
+        // Each panel keeps its own key: ControlSetup places it beside its other children,
+        // and a stable key per step keeps React from warning or remounting it.
         panels={{
           process: (
             <ProcessPanel
+              key="process"
               ids={ids}
               context={context}
               canAct={canAct}
@@ -2099,6 +2102,7 @@ function ControlRecord({
           ),
           attributes: (
             <AttributesPanel
+              key="attributes"
               ids={ids}
               context={context}
               canAct={canAct}
@@ -2108,6 +2112,7 @@ function ControlRecord({
           ),
           documents: (
             <DocumentsPanel
+              key="documents"
               ids={ids}
               context={context}
               canAct={canAct}
@@ -2122,12 +2127,12 @@ function ControlRecord({
           plan:
             masterHere === null ||
             ["NOT_STARTED", "ANALYZING"].includes(masterHere.state) ? (
-              <p className="cs-empty">
+              <p key="plan-drafting" className="cs-empty">
                 The planning agent is drafting the test plan from the control's
                 understanding. It appears here to review once drafted.
               </p>
             ) : (
-              <div className="cs-plan">
+              <div key="plan" className="cs-plan">
                 <dl className="cs-plan-facts">
                   <div>
                     <dt>Procedures</dt>
@@ -2604,7 +2609,11 @@ function ControlRecord({
                     }}
                   />
                 ) : null}
-                {tab === "evidence" ? (
+                {/* Before the D&I release, "Will be requested" is the one list: the
+                    workspace shows the requests once the release drafts them (product
+                    owner, 12 November 2026: no duplicated evidence list). */}
+                {tab === "evidence" &&
+                showsEvidenceWorkspace(opened, designReleaseView) ? (
                   <EvidenceWorkspace
                     ids={stepIds}
                     only={

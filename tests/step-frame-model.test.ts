@@ -167,7 +167,8 @@ describe("the panel's footer", () => {
     const based = basedOnSummary(panelFrame("attributes", steps, null).basedOn);
     assert.ok(based !== null);
     assert.equal(based.first.key, "understanding");
-    assert.equal(based.label, "02 Control Understanding · Understood");
+    // By title alone: the header and canvas carry the numbers (12 November 2026).
+    assert.equal(based.label, "Control Understanding · Understood");
     assert.deepEqual(based.more, []);
     // The conclusion rests on both branches: the first, and the rest as a count.
     const conclusion = basedOnSummary(
@@ -187,14 +188,25 @@ describe("the panel's footer", () => {
     assert.deepEqual(
       nextLinks(panelFrame("designconclusion", steps, null).next),
       [
-        { key: "oeevidence", label: "If effective", title: "08 OE Evidence" },
+        { key: "oeevidence", label: "If effective", title: "OE Evidence" },
         {
           key: "conclusion",
           label: "If not effective",
-          title: "10 Control Conclusion",
+          title: "Control Conclusion",
         },
       ],
     );
+    // The attributes lead into both branches at once: each link says its branch, and no
+    // step number reads as a jump ("Next · 04", "Next · 07"; product owner, 12 November 2026).
+    assert.deepEqual(nextLinks(panelFrame("attributes", steps, null).next), [
+      { key: "designevidence", label: "D&I branch", title: "D&I Evidence" },
+      { key: "testdesign", label: "OE branch", title: "Scope & Sampling" },
+    ]);
+    for (const key of ["setup", "understanding", "attributes"] as const) {
+      for (const link of nextLinks(panelFrame(key, steps, null).next)) {
+        assert.doesNotMatch(link.title, /^\d/);
+      }
+    }
     assert.deepEqual(
       nextLinks(panelFrame("setup", steps, null).next).map(
         (item) => item.label,
