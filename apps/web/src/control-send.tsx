@@ -47,10 +47,15 @@ type Step =
 export function ControlSend({
   ids,
   titles = {},
+  handover = false,
 }: {
   ids: Ids;
   /** The requests as the list shows them (title and period), by request id. */
   titles?: Readonly<Record<string, ListedRequest>>;
+  /** Live email is off in this environment (the server says so; the D&I list, 12
+   * November 2026): the same check, review, tick and server confirmation, worded as
+   * "Approve and mark as handed over". Nothing here claims an email was sent. */
+  handover?: boolean;
 }) {
   const id = useId();
   const router = useRouter();
@@ -137,7 +142,7 @@ export function ControlSend({
     setStep(
       result === null
         ? { kind: "done", title, summary }
-        : { kind: "sent", report: sentReport(result) },
+        : { kind: "sent", report: sentReport(result, handover) },
     );
     startTransition(() => router.refresh());
   }
@@ -146,7 +151,7 @@ export function ControlSend({
     <>
       <button type="button" className="btn" onClick={() => void check(owner)}>
         <UiIcon name="mail" size={14} />
-        Approve and send
+        {handover ? "Approve and mark as handed over" : "Approve and send"}
       </button>
       <dialog
         ref={dialog}
@@ -160,12 +165,16 @@ export function ControlSend({
               <h2 id={`${id}-title`}>
                 {step.kind === "checking"
                   ? "Checking the requests…"
-                  : "Sending…"}
+                  : handover
+                    ? "Recording…"
+                    : "Sending…"}
               </h2>
               <p aria-live="polite">
                 {step.kind === "checking"
                   ? "Who each request goes to and whether it is ready."
-                  : "Approving each request and sending it to its owner."}
+                  : handover
+                    ? "Approving each request and recording it as handed over."
+                    : "Approving each request and sending it to its owner."}
               </p>
             </>
           ) : step.kind === "owner" ? (
@@ -182,6 +191,7 @@ export function ControlSend({
             <ReviewStep
               titleId={`${id}-title`}
               result={step.result}
+              handover={handover}
               onCancel={() => setStep({ kind: "closed" })}
               onSend={(routing, newOwner) =>
                 void send(newOwner ?? owner, routing)
@@ -221,11 +231,14 @@ export function ControlSend({
 function ReviewStep({
   titleId,
   result,
+  handover = false,
   onCancel,
   onSend,
 }: {
   titleId: string;
   result: SendResult;
+  /** Live email is off: approving records a handover and emails nothing. */
+  handover?: boolean;
   onCancel: () => void;
   /** The review's changes to who each request goes to, and a new owner when asked. */
   onSend: (
@@ -269,9 +282,15 @@ function ReviewStep({
         </span>
         <span className="co-head-text">
           <small className="rs-eyebrow">Request approval</small>
-          <h2 id={titleId}>Review and send requests</h2>
+          <h2 id={titleId}>
+            {handover
+              ? "Review and hand over requests"
+              : "Review and send requests"}
+          </h2>
           <span>
-            Confirm what will be sent now and what will remain scheduled.
+            {handover
+              ? "Confirm what will be handed over now and what will remain scheduled."
+              : "Confirm what will be sent now and what will remain scheduled."}
           </span>
         </span>
         <button
@@ -288,9 +307,13 @@ function ReviewStep({
           <header>
             <span className="rs-dot" aria-hidden="true" />
             <span>
-              <strong id={`${id}-now`}>Sending now</strong>
+              <strong id={`${id}-now`}>
+                {handover ? "Handing over now" : "Sending now"}
+              </strong>
               <small>
-                These requests will be approved and emailed immediately.
+                {handover
+                  ? "These requests will be approved and recorded as handed over. Nothing is emailed."
+                  : "These requests will be approved and emailed immediately."}
               </small>
             </span>
             <span className="rs-count">{requests(sending)}</span>
@@ -492,8 +515,9 @@ function ReviewStep({
         <>
           <p className="rs-info">
             <UiIcon name="info" size={16} />
-            Approval sends {plan.emails} email{plan.emails === 1 ? "" : "s"}{" "}
-            now. Replies and evidence will appear in the Evidence center.
+            {handover
+              ? "Email sending is off in this environment, so approval sends no email. Each request is recorded as handed over to its owner; upload what you receive on its row."
+              : `Approval sends ${plan.emails} email${plan.emails === 1 ? "" : "s"} now. Replies and evidence will appear in the Evidence center.`}
           </p>
           <label className="rs-check" htmlFor={`${id}-reviewed`}>
             <input
@@ -508,7 +532,7 @@ function ReviewStep({
       ) : null}
       <footer className="rs-foot">
         <p>
-          {sending} sending now
+          {sending} {handover ? "handed over now" : "sending now"}
           {held > 0 ? (
             <>
               <span aria-hidden="true"> · </span>
@@ -526,7 +550,9 @@ function ReviewStep({
               disabled={!reviewed}
               onClick={() => onSend(routingOf(plan.sending, edits), newOwner)}
             >
-              Approve &amp; send {requests(sending)}
+              {handover
+                ? "Approve and mark as handed over"
+                : `Approve & send ${requests(sending)}`}
               <UiIcon name="arrow" size={15} />
             </button>
           ) : null}

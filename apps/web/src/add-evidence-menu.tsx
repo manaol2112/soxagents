@@ -108,7 +108,7 @@ export function AddEvidenceMenu({
   );
 }
 
-function PolicyPicker({
+export function PolicyPicker({
   ids,
   itemId,
   documents,
@@ -220,7 +220,7 @@ function PolicyPicker({
   );
 }
 
-function HeldPicker({
+export function HeldPicker({
   held,
   onCancel,
   onLink,

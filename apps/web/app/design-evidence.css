@@ -1,0 +1,433 @@
+/* ==========================================================================
+   The D&I evidence list (product owner, 12 November 2026): the D&I Evidence step once
+   its requests are drafted. It is the requests list continued (design-requests.css: the
+   row, tile, letters, chip, coverage and folds), so only what differs is here: the card's
+   delivery line, a row's Upload beside its menu, the row as a drop target, and the
+   evidence a row opens to. Tokens only. The list answers to its own width (the `dq`
+   container), not the window's.
+   Motion: hover and drop feedback 120 ms, the caret 180 ms, the row's opening is the
+   shared one (200 ms); none under reduced motion.
+   ========================================================================== */
+
+/* The card: the delivery line, then the rows. */
+.de-card {
+  min-width: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+
+.de-card > .tar-list {
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0 0 11px 11px;
+}
+
+.dq.de .de-card .tar:first-child {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.de-delivery {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.65rem;
+  min-height: 40px;
+  padding: 0.3rem 0.5rem 0.3rem 0.9rem;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border-radius: 11px 11px 0 0;
+  font-size: var(--fs-sm);
+  line-height: 1.3;
+}
+
+/* Several requests (evidence in hand, a follow-up): one card each, the same card. */
+.de-card + .de-card {
+  margin-top: -0.15rem;
+}
+
+/* Nothing goes anywhere for these rows: the line only says so. */
+.de-delivery.is-quiet .de-delivery-to {
+  color: var(--text-secondary);
+}
+
+.de-delivery > svg {
+  flex: none;
+}
+
+.de-delivery-to {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.de-delivery-to strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.de-delivery-status {
+  color: var(--text-secondary);
+}
+
+.de-delivery-status.tone-success {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.de-delivery-status.tone-info {
+  color: var(--info);
+  font-weight: 600;
+}
+
+.de-delivery-status.tone-danger {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.de-change,
+button.de-link {
+  height: auto;
+  padding: 0;
+  color: var(--accent-text);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.de-change:hover,
+button.de-link:hover:not(:disabled) {
+  color: var(--accent-text);
+  background: transparent;
+  border: 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.de-change:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A row: its head, then Upload and its menu, then the caret; its body under all three. */
+.de-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: start;
+  min-width: 0;
+}
+
+.de-grid > .tar-body {
+  grid-column: 1 / -1;
+  padding-left: calc(0.9rem + 34px + 0.75rem);
+}
+
+button.tar-head.dq-head.de-head {
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  padding-right: 0.4rem;
+  border-radius: 0;
+}
+
+.de-acts {
+  gap: 0.25rem;
+  padding-right: 0;
+}
+
+button.de-caret {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 52px;
+  padding: 0 0.5rem 0 0;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+button.de-caret:hover {
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+}
+
+button.de-caret > svg {
+  transition: transform 180ms ease;
+}
+
+.tar.is-open button.de-caret > svg {
+  transform: rotate(90deg);
+}
+
+.de-row.is-aside .tar-text {
+  color: var(--text-secondary);
+}
+
+/* The row takes files dropped on it: the upload's own zone, drawn as the row. */
+.de-row > .request-upload {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+}
+
+/* The upload zone styles every button in it as a small inline one: the row's own
+   head and caret keep their shape. */
+.de-row > .request-upload button.tar-head {
+  display: grid;
+  gap: 0.75rem;
+  white-space: normal;
+}
+
+.de-row > .request-upload button.de-caret {
+  display: inline-grid;
+  gap: 0;
+}
+
+.de-row > .request-upload.is-over {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.de-row > .request-upload > .upload-note {
+  display: block;
+  padding: 0 0.9rem 0.6rem calc(0.9rem + 34px + 0.75rem);
+  white-space: normal;
+}
+
+/* The states the shared chip has no tone for yet. */
+.de .tar-chip.tone-info {
+  color: var(--info);
+  background: var(--info-soft);
+  border-color: var(--info-border);
+}
+
+.de .tar-chip.tone-danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+}
+
+.de .tar-chip.tone-neutral {
+  color: var(--neutral);
+  background: var(--neutral-soft);
+  border-color: var(--neutral-border);
+}
+
+/* Coverage: requested is an outline; evidence accepted is the green chip with its check. */
+.dq-cov.is-requested {
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+}
+
+/* Open: the request, then its evidence. */
+.de-request-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.9rem;
+  margin-top: 0.35rem;
+}
+
+.de-must {
+  min-width: 0;
+}
+
+.de-must > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.de-must > summary::-webkit-details-marker {
+  display: none;
+}
+
+.de-must > summary > svg {
+  transition: transform 180ms ease;
+}
+
+.de-must[open] > summary > svg {
+  transform: rotate(90deg);
+}
+
+.de-must > summary:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.de-must[open] {
+  flex-basis: 100%;
+}
+
+.de-guide {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.4rem 0 0;
+  padding: 0;
+}
+
+.de-evidence {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.de-evidence > p {
+  margin: 0;
+}
+
+.de-none {
+  color: var(--text-secondary);
+}
+
+.de-files {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.de-file {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.55rem 0.7rem;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+
+.de-file-main {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.de-file-main > svg {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.de-file-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.1rem 0.6rem;
+  min-width: 0;
+}
+
+.de-file-text .ep-file-name {
+  overflow-wrap: anywhere;
+  text-align: left;
+  white-space: normal;
+}
+
+.de-file-text small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+/* What the agent read: agent output, never styled as a decision. */
+.de-agent {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  color: var(--text);
+  background: var(--ai-soft);
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.de-agent > svg {
+  flex: none;
+  margin-top: 0.2rem;
+  color: var(--ai);
+}
+
+.de-agent p {
+  margin: 0;
+}
+
+.de-agent strong {
+  color: var(--ai);
+  font-weight: 600;
+}
+
+.de-ask {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.de-ask label {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.de-ask textarea {
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+}
+
+/* Narrow (the drawer, a phone): the primary action leads the bar at full width, the
+   letters and the state go under the title, and Upload keeps its icon only. */
+@container dq (max-width: 560px) {
+  .de-bar .ta-bar-acts {
+    width: 100%;
+  }
+
+  .de-bar .ta-bar-acts > button.btn:not(.btn-ghost) {
+    order: -1;
+    justify-content: center;
+    width: 100%;
+  }
+
+  button.tar-head.dq-head.de-head {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .de-grid > .tar-body {
+    padding-left: 0.9rem;
+  }
+
+  .de-upload-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  button.de-upload {
+    padding: 0 0.45rem;
+  }
+
+  .de-row > .request-upload > .upload-note {
+    padding-left: 0.9rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button.de-caret > svg,
+  .de-must > summary > svg {
+    transition: none;
+  }
+}

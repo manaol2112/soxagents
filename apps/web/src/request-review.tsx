@@ -10,7 +10,7 @@ import {
   useState,
   useTransition,
 } from "react";
-
+import { rereadsRequests } from "./design-evidence-model";
 import type { ControlRequest } from "./engagement-model";
 import type { RequestStage } from "./evidence-flow";
 import { RequestUpload } from "./evidence-intake";
@@ -127,7 +127,9 @@ function useReviewAction(ids: Ids, requestId: string) {
         ? `Approved, but not sent. ${refused}`
         : refused;
     setProblem(message);
-    if (message === null || approved) {
+    // Evidence in hand changed the request as it was approved or submitted (the D&I
+    // list, 12 November 2026): the sentence is shown and the requests are read again.
+    if (message === null || approved || rereadsRequests(detail)) {
       startTransition(() => router.refresh());
     }
     return message === null;
