@@ -261,11 +261,13 @@ function RequestsPanel({
     });
     if (ok) {
       setDone(
-        rows.length === 1
-          ? rows[0]?.change?.remove === true
-            ? "Removal accepted."
-            : "Accepted."
-          : `${rows.length} requests accepted.`,
+        label === "accept-list"
+          ? "List accepted."
+          : rows.length === 1
+            ? rows[0]?.change?.remove === true
+              ? "Removal accepted."
+              : "Accepted."
+            : `${rows.length} requests accepted.`,
       );
     }
   }
@@ -574,6 +576,21 @@ function RequestsPanel({
                 {action.busy === "accept-all"
                   ? "Accepting…"
                   : `Accept all ${view.accept.length}`}
+              </button>
+            ) : null}
+            {/* Every request is accepted, and the server asks a person to stand behind
+                the list: the one action, on the requests as they read. */}
+            {view.confirm.length > 0 ? (
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={locked}
+                title="Stands behind every request as it reads, each recorded as accepted by you."
+                onClick={() => void accept(view.rows, "accept-list")}
+              >
+                {action.busy === "accept-list"
+                  ? "Accepting…"
+                  : "Accept the list"}
               </button>
             ) : null}
             <button

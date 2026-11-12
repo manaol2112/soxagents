@@ -48,6 +48,7 @@ import {
   type EvidenceRow,
   type EvidenceStatus,
   evidenceCoverage,
+  evidenceLinksVersion,
   evidenceRows,
   evidenceSummary,
   type Fact,
@@ -5800,6 +5801,7 @@ function EvidenceForms({
                 requirement_id: item.id,
                 attribute_ids: [...attributes],
                 procedure_ids: [...procedures],
+                ...evidenceLinksVersion(item),
               });
               if (result.ok) {
                 setMode("none");

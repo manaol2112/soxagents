@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
@@ -11,6 +11,7 @@ import {
   EXCEPTION_REASON_MAX,
   EXCEPTION_REASON_MIN,
   firstToAccept,
+  HELD_LINES,
   LIST_CHANGED,
   NOT_CONFIRMED,
   POLL_EVERY_MS,
@@ -38,6 +39,7 @@ import {
 } from "../apps/web/src/design-requests-model.ts";
 import { parsePlan } from "../apps/web/src/evidence-plan-model.ts";
 import {
+  evidenceLinksVersion,
   parsePhaseProgress,
   planningWrite,
 } from "../apps/web/src/planning-model.ts";
@@ -129,6 +131,7 @@ const summary = (
   waitingFor: "",
   working: null,
   drafting: null,
+  toConfirm: false,
   ...extra,
 });
 
@@ -487,6 +490,29 @@ describe("the D&I requests list: acceptance", () => {
       requirements({ add: "yes" })[0]?.pendingChange?.add,
       undefined,
     );
+    // The server always sends the mark with a pending change: false is a change to an
+    // accepted request, never a proposed addition.
+    const changed = requirements({
+      add: false,
+      remove: false,
+      title: "Access policy, current version",
+      description: "",
+    });
+    assert.equal(changed[0]?.pendingChange?.add, undefined);
+    const change = listOf(
+      requestsView(
+        input({
+          requirements: changed.map((item) => ({
+            ...item,
+            title: "Access provisioning policy",
+            accepted: true,
+          })),
+        }),
+      ),
+    ).rows[0]?.change;
+    assert.equal(change?.add, false);
+    assert.equal(change?.line, "Agent proposes a change");
+    assert.equal(change?.title, "Access policy, current version");
     assert.equal(requirements(null)[0]?.pendingChange, null);
     assert.equal(
       listOf(requestsView(input({ requirements: requirements({ add: true }) })))
@@ -937,6 +963,240 @@ describe("the D&I requests list: where it stands", () => {
     );
   });
 
+  // The server's final seam (12 November 2026). Old expectation: the page looked for
+  // accepted rows marked to accept again. New: the plan says `to_confirm` when every
+  // request is accepted and addressed and nobody who may accept stands behind the list;
+  // the one action accepts the list as it reads.
+  it("asks a person to stand behind an accepted list where the server says so", () => {
+    const sentence =
+      "Every D&I request is accepted, but nobody who may accept them stands behind the list. Accept the list to release the D&I evidence.";
+    const view = listOf(
+      requestsView(
+        input({
+          status: {
+            step: "WAITING",
+            waitingOn: "REQUESTS",
+            waitingFor: sentence,
+            releasedAt: null,
+            stepLabel: "Requests to accept",
+          },
+          requirements: covered,
+          summary: summary({
+            ...nothingLeft,
+            working: false,
+            toConfirm: true,
+            waitingFor: sentence,
+          }),
+        }),
+      ),
+    );
+    // Every live request, at the version shown: the accept route takes them as the
+    // confirmation.
+    assert.deepEqual(view.confirm, [
+      { requirement_id: WALK, version: 5 },
+      { requirement_id: POLICY, version: 3 },
+    ]);
+    // The rows keep reading accepted, and nothing is in Accept all.
+    assert.deepEqual(
+      view.rows.map((row) => row.state),
+      ["ACCEPTED", "ACCEPTED"],
+    );
+    assert.deepEqual(view.accept, []);
+    // A person's to do: not a list the page only waits on.
+    assert.equal(view.settled, false);
+    assert.equal(view.working, false);
+    assert.deepEqual(view.header, {
+      tone: "attention",
+      status: "Requests to accept",
+      line: sentence,
+    });
+    const need = requestsNeed(
+      view.header.status,
+      view.header.tone,
+      view.header.line,
+    );
+    assert.equal(need?.kind, "act");
+    assert.equal(need?.detail, sentence);
+    // What it sends is a valid acceptance.
+    const write = requestsWrite({
+      organization_id: uuid(51),
+      project_id: uuid(52),
+      control_id: uuid(53),
+      intent: "requests-accept",
+      items: view.confirm,
+    });
+    assert.ok(!("error" in write));
+    assert.equal(write.method, "POST");
+    assert.match(write.path, /\/design-requests\/accept$/);
+    assert.deepEqual(write.body, { items: view.confirm });
+  });
+
+  it("asks for no confirmation unless the server does, or while anything else is open", () => {
+    const confirm = (extra: Partial<RequestsInput>) =>
+      listOf(requestsView(input(extra))).confirm;
+    // Absent or false: an accepted list only waits, as before.
+    assert.deepEqual(
+      confirm({ requirements: covered, summary: summary({ ...nothingLeft }) }),
+      [],
+    );
+    assert.deepEqual(confirm({ requirements: covered, summary: null }), []);
+    const waiting = listOf(
+      requestsView(
+        input({ requirements: covered, summary: summary({ ...nothingLeft }) }),
+      ),
+    );
+    assert.equal(waiting.settled, true);
+    assert.equal(waiting.header.status, "Requests accepted");
+    // The server's word, with a request still to accept or an attribute uncovered on
+    // the page: the ordinary acceptance, never a confirmation over it.
+    assert.deepEqual(confirm({ summary: summary({ toConfirm: true }) }), []);
+    assert.deepEqual(
+      confirm({
+        requirements: [walkthrough],
+        summary: summary({ toAccept: 0, uncovered: [B, D], toConfirm: true }),
+      }),
+      [],
+    );
+    // While the planner works or the requests are drafted, nothing is asked.
+    assert.deepEqual(
+      confirm({
+        requirements: covered,
+        summary: summary({ ...nothingLeft, toConfirm: true, working: true }),
+      }),
+      [],
+    );
+    assert.deepEqual(
+      confirm({
+        requirements: covered,
+        summary: summary({ ...nothingLeft, toConfirm: true, drafting: true }),
+      }),
+      [],
+    );
+  });
+
+  // The server's final seam: under waiting_on REQUESTS the phase may read "Requests not
+  // updated", "Engagement not running" or "Out of scope". The step shows the label and
+  // the sentence as given, and asks nothing of its own.
+  it("shows what holds the list from outside it, in the server's label and sentence", () => {
+    const held = (stepLabel: string, waitingFor: string) =>
+      listOf(
+        requestsView(
+          input({
+            status: {
+              step: "WAITING",
+              waitingOn: "REQUESTS",
+              waitingFor,
+              releasedAt: null,
+              stepLabel,
+            },
+            requirements: covered,
+            summary: summary({ ...nothingLeft, working: false, waitingFor }),
+          }),
+        ),
+      );
+    const stopped = held(
+      "Requests not updated",
+      "The planner's run stopped before it finished. Plan the evidence again.",
+    );
+    assert.deepEqual(stopped.header, {
+      tone: "attention",
+      status: "Requests not updated",
+      line: "The planner's run stopped before it finished. Plan the evidence again.",
+    });
+    // Not a list the page waits on, and nothing to confirm.
+    assert.equal(stopped.settled, false);
+    assert.deepEqual(stopped.confirm, []);
+    const need = requestsNeed(
+      stopped.header.status,
+      stopped.header.tone,
+      stopped.header.line,
+    );
+    assert.equal(need?.kind, "wait");
+    assert.equal(need?.title, "Requests not updated");
+    assert.equal(
+      need?.detail,
+      "The planner's run stopped before it finished. Plan the evidence again.",
+    );
+    for (const label of ["Engagement not running", "Out of scope"]) {
+      const view = held(label, `${label}: said by the server.`);
+      assert.deepEqual(view.header, {
+        tone: "idle",
+        status: label,
+        line: `${label}: said by the server.`,
+      });
+      assert.equal(requestsStanding(label, "idle"), "HELD");
+      // Plain words where the server sent no sentence.
+      assert.equal(requestsNeed(label, "idle")?.detail, HELD_LINES[label]);
+    }
+    assert.equal(requestsStanding("Requests not updated", "attention"), "HELD");
+    // The label wins over requests still to accept: accepting would be refused.
+    const toAccept = listOf(
+      requestsView(
+        input({
+          status: {
+            step: "WAITING",
+            waitingOn: "REQUESTS",
+            waitingFor: "The engagement is not running.",
+            releasedAt: null,
+            stepLabel: "Engagement not running",
+          },
+        }),
+      ),
+    );
+    assert.equal(toAccept.header.status, "Engagement not running");
+    // Any other label is the list's own to word, as before; so is one not under REQUESTS.
+    assert.equal(
+      listOf(
+        requestsView(
+          input({
+            status: {
+              step: "WAITING",
+              waitingOn: "REQUESTS",
+              waitingFor: "",
+              releasedAt: null,
+              stepLabel: "Requests to accept",
+            },
+          }),
+        ),
+      ).header.status,
+      "1 to accept",
+    );
+    assert.equal(
+      listOf(
+        requestsView(
+          input({
+            status: {
+              step: "WAITING",
+              waitingOn: "EVIDENCE",
+              waitingFor: "",
+              releasedAt: null,
+              stepLabel: "Out of scope",
+            },
+          }),
+        ),
+      ).header.status,
+      "1 to accept",
+    );
+    // The planner at work again: its own state, not the stopped run's label.
+    assert.equal(
+      listOf(
+        requestsView(
+          input({
+            status: {
+              step: "WAITING",
+              waitingOn: "REQUESTS",
+              waitingFor: "",
+              releasedAt: null,
+              stepLabel: "Requests not updated",
+            },
+            summary: summary({ working: true }),
+          }),
+        ),
+      ).header.status,
+      "Being updated",
+    );
+  });
+
   it("shows the list at rest while the requests are drafted, then gives way", () => {
     const released = (at: string | null, requirements = covered) =>
       requestsView(
@@ -1344,6 +1604,7 @@ describe("the D&I requests list: what the server sends", () => {
         waitingFor: "2 requests wait to be accepted.",
         working: true,
         drafting: false,
+        toConfirm: false,
       },
     );
     for (const missing of [undefined, null, "settled", [], 3]) {
@@ -1368,8 +1629,17 @@ describe("the D&I requests list: what the server sends", () => {
         waitingFor: "",
         working: null,
         drafting: null,
+        toConfirm: false,
       },
     );
+    // A person is asked to stand behind the list only on the server's own true.
+    assert.equal(parseDesignRequests({ to_confirm: true })?.toConfirm, true);
+    for (const other of [false, "true", 1, null, undefined]) {
+      assert.equal(
+        parseDesignRequests({ to_confirm: other })?.toConfirm,
+        false,
+      );
+    }
   });
 
   it("carries them on the parsed evidence plan", () => {
@@ -1714,6 +1984,45 @@ describe("the D&I requests list: actions", () => {
       attribute_ids: [A, C, D],
       procedure_ids: [uuid(21)],
     });
+    // So does the test plan review, for a D&I request only (the server requires it
+    // there, and the other phases' call is what it was).
+    assert.deepEqual(evidenceLinksVersion({ phase: "DESIGN", version: 7 }), {
+      version: 7,
+    });
+    assert.deepEqual(
+      evidenceLinksVersion({ phase: "INTERIM", version: 7 }),
+      {},
+    );
+    assert.deepEqual(
+      evidenceLinksVersion({ phase: "ROLLFORWARD", version: 7 }),
+      {},
+    );
+    const review = readFileSync(
+      new URL("../apps/web/src/planning-view.tsx", import.meta.url),
+      "utf8",
+    );
+    assert.match(
+      review,
+      /intent: "evidence-links",[\s\S]{0,260}\.\.\.evidenceLinksVersion\(item\)/,
+    );
+    // Every caller of the links call is one of these two files.
+    for (const name of readdirSync(
+      new URL("../apps/web/src/", import.meta.url),
+    )) {
+      if (!/\.tsx$/.test(name)) {
+        continue;
+      }
+      const source = readFileSync(
+        new URL(`../apps/web/src/${name}`, import.meta.url),
+        "utf8",
+      );
+      if (source.includes('intent: "evidence-links"')) {
+        assert.ok(
+          ["planning-view.tsx", "design-requests.tsx"].includes(name),
+          name,
+        );
+      }
+    }
     // Both of the list's dialogs send it.
     const view = readFileSync(
       new URL("../apps/web/src/design-requests.tsx", import.meta.url),
@@ -1835,6 +2144,22 @@ describe("the D&I requests list: actions", () => {
       "The reason needs at least 20 characters.",
     );
     assert.match(requestsProblem(422, "string_too_short") ?? "", /long enough/);
+    for (const sentence of [
+      "Accept the request first.",
+      "The planner's run stopped before it finished. Plan the evidence again.",
+      "This request changed after you opened the list. Read the list again, then change its attributes.",
+    ]) {
+      assert.equal(requestsProblem(409, sentence), sentence);
+      // And the list is read again, so the person decides on what is there now.
+      assert.equal(readsAgain(409), true);
+    }
+    assert.equal(
+      requestsProblem(
+        422,
+        "Send the request's version to change the attributes of a D&I request.",
+      ),
+      "Send the request's version to change the attributes of a D&I request.",
+    );
     assert.match(
       requestsProblem(422, "the text must not contain credentials") ?? "",
       /credentials/,
@@ -1875,6 +2200,10 @@ describe("the D&I requests list: actions", () => {
       "utf8",
     );
     assert.doesNotMatch(view, /Release early|>\s*Release\s*</);
+    // The one action where the server asks a person to stand behind the list: it sends
+    // the acceptance, on every request shown.
+    assert.match(view, /Accept the list/);
+    assert.match(view, /accept\(view\.rows, "accept-list"\)/);
     // Nor a draft button: the fallback that called the D&I release is gone ("I don't
     // want a separate D&I release.").
     assert.doesNotMatch(view, /Draft the requests|phase-release|canRelease/);

@@ -185,6 +185,15 @@ export const BASIS_TONES: Record<string, string> = {
   MISSING: "tone-danger",
 };
 
+/** What the links call adds for a D&I request: its version as the person saw it, which
+ * the server requires there (the D&I requests list, 12 November 2026: its attributes are
+ * never changed over a request that changed meanwhile). Nothing for the other phases. */
+export function evidenceLinksVersion(
+  item: Pick<Evidence, "phase" | "version">,
+): { version?: number } {
+  return item.phase === "DESIGN" ? { version: item.version } : {};
+}
+
 /** Who wrote an item, as the reviewer reads it. */
 export function originLabel(origin: string, personEdited = false): string {
   if (origin === "PERSON" || personEdited) {

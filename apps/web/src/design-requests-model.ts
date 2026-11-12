@@ -98,6 +98,10 @@ export type DesignRequestsState = {
   working: boolean | null;
   /** The phase is released and its requests are being drafted; null when not said. */
   drafting: boolean | null;
+  /** Every request is accepted and every attribute addressed, the list is unreleased,
+   * and nobody who may accept stands behind it (the last decider lost the permission, or
+   * no decision is on record): a person accepts the list as it stands to release it. */
+  toConfirm: boolean;
 };
 
 /** The plan's `design_requests`, or null when the server did not send it. */
@@ -131,6 +135,7 @@ export function parseDesignRequests(
     waitingFor: str(value.waiting_for),
     working: typeof value.working === "boolean" ? value.working : null,
     drafting: typeof value.drafting === "boolean" ? value.drafting : null,
+    toConfirm: value.to_confirm === true,
   };
 }
 
@@ -276,6 +281,9 @@ export type RequestsList = {
   rows: RequestRow[];
   /** What Accept all sends: every row that waits, at the version shown. */
   accept: AcceptItem[];
+  /** What "Accept the list" sends where the server asks a person to stand behind an
+   * accepted list: every request, at the version shown. Empty where it does not ask. */
+  confirm: AcceptItem[];
   coverage: CoverageChip[];
   coverageLine: string;
   uncovered: UncoveredLine[];
@@ -326,6 +334,8 @@ export type RequestsInput = {
     waitingOn: DesignWait;
     waitingFor: string;
     releasedAt: string | null;
+    /** The phase's state in the server's words ("Requests not updated"). */
+    stepLabel?: string;
   } | null;
   /** The approved attributes, in their order: the letters follow it. */
   approved: readonly Approved[];
@@ -362,6 +372,19 @@ export const WORKING_LINES = {
   drafting: "Drafting the requests",
   settled: "Drafting starts when the planner finishes",
 } as const;
+
+/** What holds the list for a reason outside it, in the server's own label for the phase
+ * (phase_release, under waiting_on REQUESTS): a planner run that stopped before it
+ * finished, an engagement that is not running, a control out of scope. The step shows
+ * the label and the server's sentence as given; each has plain words where none came. */
+export const HELD_LINES: Readonly<Record<string, string>> = {
+  "Requests not updated":
+    "The planner's run stopped before it finished. Plan the evidence again.",
+  "Engagement not running":
+    "The engagement is not running, so its requests are not drafted.",
+  "Out of scope":
+    "The control is out of scope, so its requests are not drafted.",
+};
 
 /** What an accepted list says while nothing is at work on it and the server gives no
  * sentence of its own: the server drafts it; nothing is asked of the person. */
@@ -681,50 +704,78 @@ export function requestsView(input: RequestsInput): RequestsView {
           item.pendingChange === null,
       ),
     );
+  // Held for a reason outside the list, in the server's own label: said as given.
+  const label = status.stepLabel ?? "";
+  const held =
+    !drafting &&
+    !planning &&
+    status.waitingOn === "REQUESTS" &&
+    HELD_LINES[label] !== undefined
+      ? label
+      : "";
+  // Accepted and addressed, and the server asks a person to stand behind it: the one
+  // action is to accept the list as it reads. Only on the server's word.
+  const toConfirm =
+    settled && !planning && held === "" && input.summary?.toConfirm === true;
   const header: RequestsHeader = drafting
     ? { tone: "active", status: REQUESTS_STATUS.accepted, line: "" }
-    : settled
-      ? planning
+    : held !== ""
+      ? {
+          tone: held === "Requests not updated" ? "attention" : "idle",
+          status: held,
+          line: sentence,
+        }
+      : toConfirm
         ? {
-            // The server releases it when the planner finishes: said only while the
-            // planner is at work.
-            tone: "active",
-            status: REQUESTS_STATUS.accepted,
-            line: `${WORKING_LINES.settled}. Each request is approved before it goes to the client.`,
+            tone: "attention",
+            status: REQUESTS_STATUS.toAccept,
+            line: sentence,
           }
-        : // At rest: the server is about to release it, or says what it waits for.
-          { tone: "idle", status: REQUESTS_STATUS.accepted, line: sentence }
-      : planning
-        ? {
-            tone: "active",
-            status:
-              rows.length === 0
-                ? REQUESTS_STATUS.planning
-                : REQUESTS_STATUS.updating,
-            line: "",
-          }
-        : rows.length === 0
-          ? { tone: "attention", status: REQUESTS_STATUS.empty, line: "" }
-          : accept.length > 0
+        : settled
+          ? planning
             ? {
-                tone: "attention",
-                status: `${accept.length} to accept`,
-                line: again ? sentence : "",
+                // The server releases it when the planner finishes: said only while the
+                // planner is at work.
+                tone: "active",
+                status: REQUESTS_STATUS.accepted,
+                line: `${WORKING_LINES.settled}. Each request is approved before it goes to the client.`,
               }
-            : {
-                tone: "attention",
+            : // At rest: the server is about to release it, or says what it waits for.
+              { tone: "idle", status: REQUESTS_STATUS.accepted, line: sentence }
+          : planning
+            ? {
+                tone: "active",
                 status:
-                  uncovered.length === 1
-                    ? `Attribute ${uncovered[0]?.letter ?? ""} is not addressed`
-                    : `${uncovered.length} attributes not addressed`,
+                  rows.length === 0
+                    ? REQUESTS_STATUS.planning
+                    : REQUESTS_STATUS.updating,
                 line: "",
-              };
+              }
+            : rows.length === 0
+              ? { tone: "attention", status: REQUESTS_STATUS.empty, line: "" }
+              : accept.length > 0
+                ? {
+                    tone: "attention",
+                    status: `${accept.length} to accept`,
+                    line: again ? sentence : "",
+                  }
+                : {
+                    tone: "attention",
+                    status:
+                      uncovered.length === 1
+                        ? `Attribute ${uncovered[0]?.letter ?? ""} is not addressed`
+                        : `${uncovered.length} attributes not addressed`,
+                    line: "",
+                  };
   return {
     mode: drafting ? "drafting" : "list",
     title:
       rows.length === 0 ? "No requests yet" : plural(rows.length, "request"),
     rows,
     accept,
+    confirm: toConfirm
+      ? rows.map((row) => ({ requirement_id: row.id, version: row.version }))
+      : [],
     coverage,
     coverageLine,
     uncovered,
@@ -747,7 +798,9 @@ export function requestsView(input: RequestsInput): RequestsView {
     ]),
     header,
     working,
-    settled,
+    // Waiting on the server alone: not where a person is asked to stand behind the
+    // list, and not where something outside the list holds it.
+    settled: settled && !toConfirm && held === "",
     empty: planning
       ? "The planner is preparing the requests."
       : "No D&I request is planned yet. Add one, then choose the attributes it addresses.",
@@ -777,7 +830,8 @@ export type RequestsStanding =
   | "EMPTY"
   | "TO_ACCEPT"
   | "UNCOVERED"
-  | "SETTLED";
+  | "SETTLED"
+  | "HELD";
 
 export function requestsStanding(
   status: string,
@@ -797,6 +851,9 @@ export function requestsStanding(
   }
   if (status === REQUESTS_STATUS.empty) {
     return "EMPTY";
+  }
+  if (HELD_LINES[status] !== undefined) {
+    return "HELD";
   }
   if (status === REQUESTS_STATUS.toAccept || /^\d+ to accept$/.test(status)) {
     return "TO_ACCEPT";
@@ -892,6 +949,14 @@ export function requestsNeed(
       // requests are drafted next. Never that the planner is finishing: that is said
       // only while the server says the planner is at work (the standing is DRAFTING then).
       return { kind: "wait", title: status, detail: line || SETTLED_LINE };
+    case "HELD":
+      // The server's label and its sentence, as given. The step has no action of its
+      // own for any of them.
+      return {
+        kind: "wait",
+        title: status,
+        detail: line || (HELD_LINES[status] ?? ""),
+      };
     default:
       return null;
   }
