@@ -159,6 +159,57 @@ describe("what the panel says where nothing is needed from the person", () => {
     assert.equal(line.working, true);
     assert.match(line.text, /The agent is preparing this step/);
   });
+
+  // The D&I requests list (product owner, 12 November 2026): the step's pill and its one
+  // line come from the list's state, not from a release card.
+  it("takes D&I Evidence's pill and line from its requests list", () => {
+    const frame = (
+      designRequests: NonNullable<WorkflowInput["designRequests"]>,
+    ) => {
+      const steps = workflowOf(
+        midway({
+          requirements: [{ phase: "DESIGN", state: "NOT_GENERATED" }],
+          designRelease: { step: "WAITING", waitingOn: "REQUESTS" },
+          designRequests,
+        }),
+      );
+      const step = steps.find((item) => item.key === "designevidence");
+      assert.ok(step !== undefined);
+      return {
+        pill: statusPill(step.tone, step.status),
+        line: quietLineOf(panelFrame("designevidence", steps, null).need),
+      };
+    };
+    // Requests to accept, or an attribute no request addresses: the decision row's.
+    const toAccept = frame({ tone: "attention", status: "2 to accept" });
+    assert.deepEqual(toAccept.pill, {
+      label: "2 to accept",
+      tone: "attention",
+    });
+    assert.equal(toAccept.line, null);
+    const uncovered = frame({
+      tone: "attention",
+      status: "Attribute D is not addressed",
+    });
+    assert.equal(uncovered.pill.label, "Attribute D is not addressed");
+    assert.equal(uncovered.line, null);
+    // The planner at work: one quiet line, with the reading treatment.
+    const planning = frame({ tone: "active", status: "Being updated" });
+    assert.deepEqual(planning.pill, { label: "Being updated", tone: "active" });
+    assert.equal(planning.line?.working, true);
+    assert.match(
+      planning.line?.text ?? "",
+      /planner is preparing the requests/,
+    );
+    // Accepted, and being drafted: one quiet line, never the status again.
+    const drafting = frame({ tone: "active", status: "Requests accepted" });
+    assert.deepEqual(drafting.pill, {
+      label: "Requests accepted",
+      tone: "active",
+    });
+    assert.equal(drafting.line?.working, true);
+    assert.match(drafting.line?.text ?? "", /^Drafting the requests\./);
+  });
 });
 
 describe("the panel's footer", () => {

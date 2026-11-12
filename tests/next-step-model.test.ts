@@ -253,7 +253,12 @@ describe("the control's next step (product owner, 10 November 2026)", () => {
     );
   });
 
-  it("offers the release and scope and sampling once the attributes are settled", () => {
+  // Old expectation: the D&I action was "Release the D&I evidence". New (product owner, 12
+  // November 2026: "Why do I need to have the release button? Simplify the workflow."):
+  // no release is offered; a ready phase is a settled requests list, drafted on a person's
+  // request, and requests still to accept are named as that. Renamed from "offers the
+  // release and scope and sampling once the attributes are settled".
+  it("offers the D&I requests and scope and sampling once the attributes are settled", () => {
     const input = fresh({
       setup: understood,
       attributes: { approved: 5, proposed: 0 },
@@ -269,7 +274,27 @@ describe("the control's next step (product owner, 10 November 2026)", () => {
     assert.deepEqual(
       next.actions.map((action) => [action.key, action.title]),
       [
-        ["designevidence", "Release the D&I evidence"],
+        ["designevidence", "Draft the D&I requests"],
+        ["testdesign", "Approve scope and sampling"],
+      ],
+    );
+    const toAccept = {
+      ...input,
+      designRelease: {
+        step: "WAITING" as const,
+        waitingOn: "REQUESTS" as const,
+      },
+      designRequests: { tone: "attention" as const, status: "2 to accept" },
+    };
+    const accepting = nextStep(workflowOf(toAccept), toAccept, about);
+    assert.equal(accepting.mode, "next");
+    if (accepting.mode !== "next") {
+      return;
+    }
+    assert.deepEqual(
+      accepting.actions.map((action) => [action.key, action.title]),
+      [
+        ["designevidence", "Accept the D&I requests"],
         ["testdesign", "Approve scope and sampling"],
       ],
     );

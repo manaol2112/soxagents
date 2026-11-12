@@ -7,6 +7,7 @@
  * may be approved: the API says what holds it.
  */
 
+import { type DesignWait, waitingOnOf } from "./design-requests-model.ts";
 import {
   groupApproveBody,
   implementationName,
@@ -2164,10 +2165,11 @@ export type PhaseStatus = {
   early: boolean;
   reason: string;
   waitingFor: string;
-  /** What the D&I release waits on: Control Understanding or the attributes (11 November
-   * 2026), or EVIDENCE when no D&I item evidences any approved attribute (12 November
-   * 2026); empty otherwise. */
-  waitingOn: "" | "UNDERSTANDING" | "ATTRIBUTES" | "EVIDENCE";
+  /** What the D&I phase waits on: Control Understanding or the attributes (11 November
+   * 2026), REQUESTS to accept, or EVIDENCE when an approved attribute is addressed by no
+   * D&I request and has no recorded reason (the requests list, 12 November 2026); empty
+   * otherwise. */
+  waitingOn: DesignWait;
 };
 
 export type ControlPhases = {
@@ -2210,12 +2212,7 @@ function parseControlPhases(value: Json): ControlPhases {
         early: item.early === true,
         reason: str(item.reason),
         waitingFor: str(item.waiting_for),
-        waitingOn:
-          item.waiting_on === "UNDERSTANDING" ||
-          item.waiting_on === "ATTRIBUTES" ||
-          item.waiting_on === "EVIDENCE"
-            ? item.waiting_on
-            : "",
+        waitingOn: waitingOnOf(item.waiting_on),
       };
     }),
   };
