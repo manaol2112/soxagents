@@ -12,7 +12,6 @@ import {
   SECTION_OF,
   STEPS,
   sidewaysLimits,
-  TO_RELEASE,
   type WorkflowInput,
   workflowFrame,
   workflowLayout,
@@ -658,8 +657,12 @@ describe("the control's workflow", () => {
   });
 
   // B1 (product owner, 8 November 2026): D&I evidence has its own release, once the control
-  // is understood. Until a person releases it, the step says so, and nothing of it is asked.
-  it("holds the D&I evidence for its own release", () => {
+  // is understood, and nothing of it is asked before. B2 (product owner, 12 November 2026:
+  // "Why do I need to have the release button? Simplify the workflow. After the attributes
+  // approval, list down the evidences so that I can add, modify or update, or delete."): no
+  // person presses Release. The server releases once the requests list is settled, so the
+  // step reads as its list does. Renamed from "holds the D&I evidence for its own release".
+  it("holds the D&I evidence until its requests list is settled", () => {
     const before = workflowOf(fresh({ designRelease: { step: "WAITING" } }));
     assert.deepEqual(state(before, "designevidence"), [
       "idle",
@@ -697,8 +700,12 @@ describe("the control's workflow", () => {
       "idle",
       "Waiting on the attributes",
     ]);
-    // No D&I item evidences an approved attribute (12 November 2026): the D&I Evidence
-    // step says so instead of offering the release.
+    // An approved attribute no D&I request addresses holds the step (12 November 2026).
+    // Old expectation: "Not planned against the attributes", when no item evidenced any
+    // attribute at all. New: EVIDENCE means any approved attribute is uncovered without a
+    // recorded reason ("For each request, I want to show which specific attributes it is
+    // addressing to make sure I get coverage"), so the step says attributes are not
+    // addressed, and names the attribute where the list was read.
     const untraced = workflowOf(
       fresh({
         setup: understood,
@@ -709,8 +716,66 @@ describe("the control's workflow", () => {
     assert.deepEqual(state(untraced, "attributes")[0], "done");
     assert.deepEqual(state(untraced, "designevidence"), [
       "attention",
-      "Not planned against the attributes",
+      "Attributes not addressed",
     ]);
+    const uncovered = workflowOf(
+      fresh({
+        setup: understood,
+        attributes: settled,
+        designRelease: { step: "WAITING", waitingOn: "EVIDENCE" },
+        designRequests: {
+          tone: "attention",
+          status: "Attribute D is not addressed",
+        },
+      }),
+    );
+    assert.deepEqual(state(uncovered, "designevidence"), [
+      "attention",
+      "Attribute D is not addressed",
+    ]);
+    // Requests the agent proposed wait for a person: the step says how many, as its list
+    // does, or that requests wait where the list was not read.
+    const toAccept = workflowOf(
+      fresh({
+        setup: understood,
+        attributes: settled,
+        designRelease: { step: "WAITING", waitingOn: "REQUESTS" },
+        designRequests: { tone: "attention", status: "3 to accept" },
+      }),
+    );
+    assert.deepEqual(state(toAccept, "designevidence"), [
+      "attention",
+      "3 to accept",
+    ]);
+    assert.ok(toAccept.find((step) => step.key === "designevidence")?.next);
+    assert.deepEqual(
+      state(
+        workflowOf(
+          fresh({
+            setup: understood,
+            attributes: settled,
+            designRelease: { step: "WAITING", waitingOn: "REQUESTS" },
+          }),
+        ),
+        "designevidence",
+      ),
+      ["attention", "Requests to accept"],
+    );
+    // The list never speaks before the steps it rests on: the attributes still hold it.
+    assert.deepEqual(
+      state(
+        workflowOf(
+          fresh({
+            setup: understood,
+            attributes: { approved: 4, proposed: 1 },
+            designRelease: { step: "WAITING", waitingOn: "ATTRIBUTES" },
+            designRequests: { tone: "attention", status: "3 to accept" },
+          }),
+        ),
+        "designevidence",
+      ),
+      ["idle", "Waiting on the attributes"],
+    );
     // The agents are tailoring after the understanding (12 November 2026): the step reads
     // as being updated whatever the counts still say, not "N need criteria".
     const tailoring = workflowOf(
@@ -753,7 +818,16 @@ describe("the control's workflow", () => {
         designRelease: { step: "READY" },
       }),
     );
-    assert.deepEqual(state(ready, "designevidence"), ["attention", TO_RELEASE]);
+    // Old expectation: "To release", the step waiting for a person to press Release. New:
+    // a ready phase is a settled list (every request accepted, every attribute addressed),
+    // so the step reads "Requests accepted"; there is no Release button to wait for. And
+    // it is at rest, not a person's to act on (product owner, 12 November 2026: "Yes. I
+    // don't want a separate D&I release."): the server releases it itself. (Between the
+    // two, this read ["attention", "Requests accepted"], with a fallback button to draft.)
+    assert.deepEqual(state(ready, "designevidence"), [
+      "idle",
+      "Requests accepted",
+    ]);
     assert.ok(ready.find((step) => step.key === "designevidence")?.next);
     // Released: the evidence items decide again, as before B1.
     const released = workflowOf(
@@ -763,7 +837,7 @@ describe("the control's workflow", () => {
         designRelease: { step: "RELEASED" },
       }),
     );
-    assert.notEqual(state(released, "designevidence")[1], TO_RELEASE);
+    assert.notEqual(state(released, "designevidence")[1], "Requests accepted");
     assert.deepEqual(
       state(released, "designevidence"),
       state(
@@ -781,6 +855,20 @@ describe("the control's workflow", () => {
     assert.deepEqual(state(early, "designevidence"), [
       "attention",
       "1 item to request",
+    ]);
+    // Just released, its requests being drafted: the list is still the step's, at rest.
+    const drafting = workflowOf(
+      fresh({
+        setup: understood,
+        attributes: settled,
+        designRelease: { step: "RELEASED" },
+        designRequests: { tone: "active", status: "Requests accepted" },
+        requirements: [{ phase: "DESIGN", state: "NOT_GENERATED" }],
+      }),
+    );
+    assert.deepEqual(state(drafting, "designevidence"), [
+      "active",
+      "Requests accepted",
     ]);
   });
 

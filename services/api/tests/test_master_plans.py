@@ -8,7 +8,7 @@ from uuid import UUID
 
 import psycopg
 import pytest
-from support import Database, sign_off_design
+from support import Database, release_design, sign_off_design
 from test_evidence_plans import _Planner
 from test_execution import _add_project_member, _add_user
 from test_outbound import _session, migrated
@@ -700,11 +700,13 @@ def test_the_planner_never_extends_an_approved_plan(migrated: Database) -> None:
         "SELECT pbc_request_id IS NOT NULL FROM evidence_requirements WHERE id = %s",
         requirement_id,
     ) == [(False,)]
-    released = team["owner"].post(
-        f"{_project(team)}/controls/{control}/phases/DESIGN/release",
-        json={"reason": "Released for the test: the walkthrough is scheduled this week."},
-    )
-    assert released.status_code == 200, released.text
+    # Rewritten 12 November 2026 (B1f, the D&I requests list; product owner: "Why do I need
+    # to have the release button? Simplify the workflow."). Old: an early D&I release
+    # through the route, with a reason, requested the item. New: there is no early D&I
+    # release; the release follows the acceptance of the D&I requests, recorded here by the
+    # setup (support.release_design). Unchanged: the accepted design item is requested by
+    # the D&I release, not by the plan's approval.
+    release_design(migrated, team["project"], [UUID(control)])
     assert _rows(
         migrated,
         "SELECT pbc_request_id IS NOT NULL FROM evidence_requirements WHERE id = %s",
@@ -735,9 +737,19 @@ def test_links_name_only_the_controls_own_records(migrated: Database) -> None:
         for f in after["findings"]
     )
     evidence = after["evidence"][0]
+    # Rewritten 12 November 2026 (B1f, after its independent review). Old: the links of any
+    # requirement were set with no version. New: a D&I request's links change accepts it,
+    # so it carries the version the person saw, as an acceptance does (the master plan's
+    # evidence item gives it); other phases' requirements are unchanged. Why: without it a
+    # person accepted whatever the request had become since they read it.
+    assert evidence["phase"] == "DESIGN"
     relinked = team["owner"].put(
         f"{base}/evidence/{evidence['id']}/links",
-        json={"attribute_ids": [plan["attributes"][0]["id"]], "procedure_ids": [procedure["id"]]},
+        json={
+            "attribute_ids": [plan["attributes"][0]["id"]],
+            "procedure_ids": [procedure["id"]],
+            "version": evidence["version"],
+        },
     )
     assert relinked.status_code == 200, relinked.text
     item = next(e for e in relinked.json()["evidence"] if e["id"] == evidence["id"])

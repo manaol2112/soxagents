@@ -10,7 +10,7 @@ from uuid import UUID
 
 import psycopg
 import pytest
-from support import Database, sign_off_design
+from support import Database, release_design, sign_off_design
 from test_onboarding import _base, _complete_setup, _new_engagement
 from test_outbound import migrated
 
@@ -122,11 +122,21 @@ def test_a_plan_waits_for_a_person_at_launch(migrated: Database) -> None:
     assert _rows(migrated, design_query, UUID(row["id"]))[0] == (0, 0)
     # Releasing the D&I evidence requests it. Every request still waits for an approver
     # before it is sent.
-    released = owner.post(
+    # Rewritten 12 November 2026 (B1f, the D&I requests list; product owner: "Why do I need
+    # to have the release button? Simplify the workflow."). Old: a person released D&I
+    # early through the route, with a reason, and the route answered 200. New: there is no
+    # early D&I release (the route refuses with what the list waits for); the release
+    # follows the acceptance of the D&I requests (test_design_requests.py), which the
+    # setup records here (support.release_design). What this test is about is unchanged:
+    # the plan's approval requests no design evidence, the D&I release does.
+    refused = owner.post(
         f"{_project(team)}/controls/{row['id']}/phases/DESIGN/release",
         json={"reason": "Released early for the test: the walkthrough is this week."},
     )
-    assert released.status_code == 200, released.text
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"].startswith("Control Understanding is not complete")
+    assert _rows(migrated, design_query, UUID(row["id"]))[0] == (0, 0)
+    release_design(migrated, team["project"], [UUID(row["id"])])
     assert _rows(migrated, design_query, UUID(row["id"]))[0] == (1, 0)
     # The other controls still wait, so nothing of theirs is requested.
     with connect(migrated.url) as connection:
@@ -278,11 +288,13 @@ def test_approving_the_plan_releases_design_then_operating_evidence(
         UUID(control),
     )
     assert phases == [("INTERIM",)], phases
-    released = owner.post(
-        f"{_project(team)}/controls/{control}/phases/DESIGN/release",
-        json={"reason": "Released early for the test: the walkthrough is this week."},
-    )
-    assert released.status_code == 200, released.text
+    # Rewritten 12 November 2026 (B1f; product owner: "Why do I need to have the release
+    # button? Simplify the workflow."). Old: an early D&I release through the route, with a
+    # reason, answered 200. New: no early D&I release; the release follows the acceptance
+    # of the D&I requests, recorded here by the setup (support.release_design). Unchanged:
+    # the design evidence is requested by its own release, after the operating evidence
+    # the plan's approval requested.
+    release_design(migrated, team["project"], [UUID(control)])
     phases = _rows(
         migrated,
         "SELECT DISTINCT testing_phase FROM pbc_requests WHERE engagement_control_id = %s "

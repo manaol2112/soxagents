@@ -106,8 +106,9 @@ import {
 import { ControlsToolbar } from "./controls-toolbar";
 import { CoverageForm } from "./coverage-form";
 import { DesignConclusionPanel } from "./design-conclusion-panel";
-import { DesignReleaseCard, DesignReleaseItems } from "./design-release";
-import { releaseView, showsEvidenceWorkspace } from "./design-release-model";
+import { showsEvidenceWorkspace } from "./design-release-model";
+import { DesignRequests } from "./design-requests";
+import { requestsView } from "./design-requests-model";
 import { firstNameFrom } from "./engagement-guide-model";
 import {
   byApplication,
@@ -1835,6 +1836,34 @@ function ControlRecord({
     ),
     "DESIGN",
   );
+  // The D&I requests list, the D&I Evidence step's one list until its requests are drafted
+  // (product owner, 12 November 2026: no Release button; the agent proposes, a person
+  // accepts, and each request shows the attributes it addresses). The plan says whether
+  // the planner is at work and which procedures each request serves; the test plan's own
+  // state and records are read only where it does not.
+  const designRequests = requestsView({
+    status: designPhase,
+    approved: context?.approved ?? [],
+    requirements:
+      evidencePlan?.phases.find((phase) => phase.phase === "DESIGN")
+        ?.requirements ?? [],
+    summary: evidencePlan?.designRequests ?? null,
+    working: masterHere?.state === "ANALYZING",
+    procedures:
+      masterHere === null
+        ? null
+        : Object.fromEntries(
+            masterHere.evidence.map((item) => [item.id, item.procedureIds]),
+          ),
+    now: Date.now(),
+  });
+  const requestsListed =
+    designRequests.mode === "list" || designRequests.mode === "drafting";
+  // The planner at work or the requests being drafted: the step is the agents'. An
+  // accepted list with nothing at work on it is not: it says what it waits for.
+  if (requestsListed && designRequests.working) {
+    busy.add("designevidence");
+  }
   // Step 01's record (10 November 2026): description, objective and risk come from the
   // library or the RCM; owner, frequency and nature are recorded on this system's control.
   const ownerLine = [control.ownerName, control.ownerEmail]
@@ -1917,6 +1946,7 @@ function ControlRecord({
       state: item.state,
     })),
     designRelease: designPhase,
+    designRequests: requestsListed ? designRequests.header : null,
     sheet:
       sheet === null
         ? null
@@ -1968,17 +1998,6 @@ function ControlRecord({
     workflowInput.setup.find((item) => item.key === "documents")?.summary ??
     "None linked"
   }`;
-  // The D&I release, the D&I Evidence step's one decision (11 November 2026): what it rests
-  // on, what will be requested and which attributes each item evidences.
-  const designReleaseView = releaseView({
-    status: designPhase,
-    approved: context?.approved ?? [],
-    proposed: context?.proposed.length ?? 0,
-    untailored: context === null ? 0 : untailoredCount(context),
-    items:
-      evidencePlan?.phases.find((phase) => phase.phase === "DESIGN")
-        ?.requirements ?? [],
-  });
   const workflow = workflowOf(workflowInput);
   // The control's next step, said above its workflow and marked on its node (product owner,
   // 10 November 2026: "not very clear what the user would do to begin").
@@ -2594,26 +2613,32 @@ function ControlRecord({
                     </PhasePanel>
                   ) : null
                 ) : null}
-                {/* The D&I release is the step's decision row, above (DesignReleaseCard);
-                  what it will request leads the work area, with the attributes and the
-                  optional governing documents as quiet rows under it (11 November 2026). */}
+                {/* Until its requests are drafted, the D&I Evidence step is one list:
+                  what will be requested, each request with the attributes it addresses
+                  and its acceptance, the coverage under it, and the attributes, the
+                  optional governing documents and the history as quiet rows (product
+                  owner, 12 November 2026: no Release button, no second list). */}
                 {tab === "evidence" &&
                 opened === "designevidence" &&
-                designReleaseView.mode !== "hidden" ? (
-                  <DesignReleaseItems
-                    view={designReleaseView}
-                    owner={control.ownerName || control.ownerEmail}
+                designRequests.mode !== "hidden" ? (
+                  <DesignRequests
+                    // What is open, typed or just done belongs to this control: a
+                    // sibling control opened next starts a fresh list.
+                    key={control.id}
+                    ids={ids}
+                    view={designRequests}
+                    canAct={canAct}
                     documents={{
                       line: governingLine,
                       body: setupFor(["documents"]),
                     }}
                   />
                 ) : null}
-                {/* Before the D&I release, "Will be requested" is the one list: the
-                    workspace shows the requests once the release drafts them (product
-                    owner, 12 November 2026: no duplicated evidence list). */}
+                {/* The requests list is the one list until then: the workspace shows the
+                    requests once they are drafted (product owner, 12 November 2026: no
+                    duplicated evidence list). */}
                 {tab === "evidence" &&
-                showsEvidenceWorkspace(opened, designReleaseView) ? (
+                showsEvidenceWorkspace(opened, designRequests) ? (
                   <EvidenceWorkspace
                     ids={stepIds}
                     only={
@@ -2743,12 +2768,12 @@ function ControlRecord({
                     rcmItems={control.pbcItems}
                   />
                 ) : null}
-                {/* Optional, so it folds under the evidence once released; before, it is a
-                  row under what will be requested (11 November 2026; moved here from Control
-                  Understanding, 9 November 2026). */}
+                {/* Optional, so it folds under the evidence once the requests are drafted;
+                  before, it is a row under the requests list (11 November 2026; moved here
+                  from Control Understanding, 9 November 2026). */}
                 {tab === "evidence" &&
                 opened === "designevidence" &&
-                designReleaseView.mode === "hidden" ? (
+                designRequests.mode === "hidden" ? (
                   <details className="stp-fold dr-docs">
                     <summary>
                       <span>
@@ -3199,21 +3224,6 @@ function ControlRecord({
         prepared={panelContent}
         details={stepDetails}
         bare={ownHeader}
-        decision={
-          openStep.key === "designevidence" &&
-          designReleaseView.mode !== "hidden" ? (
-            <DesignReleaseCard
-              // Its early-release reason and asking state belong to this control: a
-              // sibling control opened next starts a fresh card.
-              key={control.id}
-              ids={ids}
-              controlId={control.id}
-              view={designReleaseView}
-              canRelease={engagement.phaseProgress?.viewerCanRelease ?? false}
-              stepHrefs={stepHrefsWf}
-            />
-          ) : undefined
-        }
       />
     );
 

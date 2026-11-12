@@ -12,8 +12,10 @@ import {
   basisWords,
   changesSummary,
   criteriaToAccept,
+  DESIGN_RELEASE_LINE,
   decisionWords,
   describeQuestions,
+  designAwaitsRequests,
   evidenceCoverage,
   evidenceRows,
   evidenceSummary,
@@ -51,12 +53,14 @@ import {
   procedureRows,
   type QueueRow,
   questionsToSave,
+  RELEASED_PHASES,
   related,
   releasable,
   releaseIsEarly,
   releaseNote,
   standardStepsHref,
   statementParts,
+  stepLabelOf,
   TAB_LABELS,
   tabCounts,
   tabOfCode,
@@ -64,6 +68,7 @@ import {
   valueQuestions,
   valuesItems,
 } from "../apps/web/src/planning-model.ts";
+import { VIEW_NOTES } from "../apps/web/src/testing-hub-model.ts";
 import {
   joinAnswers,
   readAnswer,
@@ -664,17 +669,26 @@ describe("phase release", () => {
     // Waiting for interim testing: it can be released, early, with a reason.
     assert.equal(releasable(roll), true);
     assert.equal(releaseIsEarly(roll), true);
-    // Rewritten 9 November 2026 (B1, product owner: D&I evidence has its own approval).
-    // Before, design followed the plan's approval and was never released by hand; now it
-    // is released by a person, and a completed design is not released again.
+    // Rewritten 9 November 2026 (B1, product owner: D&I evidence has its own approval):
+    // design was released by a person. Rewritten again 12 November 2026 (product owner:
+    // "Yes. I don't want a separate D&I release."). Old expectation: a ready D&I phase was
+    // releasable by a person (true). New: the D&I phase is never released by a person,
+    // ready, waiting or complete; the server releases it once its requests are accepted.
     assert.equal(releasable(phaseStatus(row, "DESIGN")), false);
+    for (const step of ["READY", "WAITING"] as const) {
+      const design = { ...(phaseStatus(row, "DESIGN") as PhaseStatus), step };
+      assert.equal(releasable(design), false);
+      assert.equal(designAwaitsRequests(design), true);
+    }
+    // Released or complete, it waits for nothing; nor do the operating phases.
+    assert.equal(designAwaitsRequests(phaseStatus(row, "DESIGN")), false);
+    assert.equal(designAwaitsRequests(interim), false);
+    assert.equal(designAwaitsRequests(null), false);
     assert.equal(
-      releasable({
-        ...(phaseStatus(row, "DESIGN") as PhaseStatus),
-        step: "READY",
-      }),
-      true,
+      DESIGN_RELEASE_LINE,
+      "Released once its requests are accepted",
     );
+    assert.deepEqual([...RELEASED_PHASES], ["INTERIM", "ROLLFORWARD"]);
   });
 
   it("builds the release calls, and refuses what the API would refuse", () => {
@@ -690,19 +704,35 @@ describe("phase release", () => {
       one.path,
       `${BASE}/controls/${CONTROL}/phases/INTERIM/release`,
     );
-    // The D&I evidence is released the same way (B1; before, refused as invalid).
-    const design = planningWrite({
-      ...IDS,
-      intent: "phase-release",
-      control_id: CONTROL,
-      phase: "DESIGN",
-      reason: "",
-    });
-    assert.ok(!("error" in design));
-    assert.equal(
-      design.path,
-      `${BASE}/controls/${CONTROL}/phases/DESIGN/release`,
-    );
+    // Old expectation (B1): the D&I evidence was released the same way, to
+    // …/phases/DESIGN/release. New (product owner, 12 November 2026: "Yes. I don't want a
+    // separate D&I release."): the web never sends a D&I release, one control or many,
+    // with a reason or without.
+    for (const reason of [
+      "",
+      "Agreed with the client to start the walkthrough.",
+    ]) {
+      assert.deepEqual(
+        planningWrite({
+          ...IDS,
+          intent: "phase-release",
+          control_id: CONTROL,
+          phase: "DESIGN",
+          reason,
+        }),
+        { error: "invalid" },
+      );
+      assert.deepEqual(
+        planningWrite({
+          ...IDS,
+          intent: "phase-release-batch",
+          phase: "DESIGN",
+          control_ids: [CONTROL],
+          reason,
+        }),
+        { error: "invalid" },
+      );
+    }
     assert.deepEqual(
       planningWrite({
         ...IDS,
@@ -766,17 +796,54 @@ describe("the evidence release strip", () => {
     ...extra,
   });
 
-  it("offers the D&I release first, once the control is understood (B1)", () => {
+  // Old expectation (B1): the strip offered the D&I release first ("DESIGN"), and its
+  // note said releasing drafts the D&I requests. New (product owner, 12 November 2026:
+  // "Yes. I don't want a separate D&I release."): the strip never offers the D&I phase,
+  // ready or waiting; the next release is the first operating phase that can be released.
+  // Renamed from "offers the D&I release first, once the control is understood (B1)".
+  it("never offers the D&I release: the next release is an operating phase", () => {
     assert.equal(
       nextRelease([
         status("DESIGN", "READY"),
         status("INTERIM", "WAITING"),
         status("ROLLFORWARD", "WAITING"),
       ])?.phase,
-      "DESIGN",
+      "INTERIM",
     );
-    assert.match(releaseNote("DESIGN"), /approver before it is sent/);
+    assert.equal(
+      nextRelease([
+        status("DESIGN", "WAITING"),
+        status("INTERIM", "AWAITING_PLAN"),
+        status("ROLLFORWARD", "AWAITING_PLAN"),
+      ]),
+      null,
+    );
     assert.match(releaseNote("INTERIM"), /Nothing is sent/);
+    assert.match(releaseNote("ROLLFORWARD"), /Nothing is sent/);
+    // A ready D&I phase is a settled requests list, not something to release.
+    assert.equal(stepLabelOf(status("DESIGN", "READY")), "Requests accepted");
+    assert.equal(phaseNote(status("DESIGN", "READY")), "Requests accepted");
+    assert.equal(stepLabelOf(status("INTERIM", "READY")), "Ready to release");
+    assert.equal(stepLabelOf(status("DESIGN", "RELEASED")), "Released");
+  });
+
+  it("offers no way to release the D&I phase on the phases page or the strip", () => {
+    const view = readFileSync("apps/web/src/phases-view.tsx", "utf8");
+    // No D&I branch is left in the release controls, and the line and the link are there.
+    assert.doesNotMatch(
+      view,
+      /"DESIGN"\s*\?|=== "DESIGN"|D&I ready to release/,
+    );
+    assert.match(view, /DESIGN_RELEASE_LINE/);
+    assert.match(view, /controlStepHref\(/);
+    assert.match(view, /"designevidence"/);
+    assert.match(view, /designAwaitsRequests\(status\)/);
+    // The page's own description asks only for the operating phases' release.
+    assert.match(
+      VIEW_NOTES.phases,
+      /^Release each control's interim and roll-forward/,
+    );
+    assert.match(VIEW_NOTES.phases, /released once its requests are accepted/);
   });
 
   it("offers the first phase that can be released, in the audit's order", () => {

@@ -11,6 +11,7 @@ import type {
   DesignConclusionStatus,
   DesignVerdict,
 } from "./design-conclusion-model.ts";
+import { requestsFallback } from "./design-requests-model.ts";
 import type { RequirementState } from "./evidence-plan-model.ts";
 
 export type StepKey =
@@ -211,11 +212,18 @@ export type WorkflowInput = {
       | "RELEASED"
       | "COMPLETE";
     /** What a waiting release waits on (11 November 2026): the attributes, once the
-     * control is understood. Absent when not read. */
-    waitingOn?: "" | "UNDERSTANDING" | "ATTRIBUTES" | "EVIDENCE";
+     * control is understood; then its requests to accept, or an approved attribute no
+     * request addresses (the requests list, 12 November 2026). Absent when not read. */
+    waitingOn?: "" | "UNDERSTANDING" | "ATTRIBUTES" | "REQUESTS" | "EVIDENCE";
     /** What it waits for, in the server's sentence (phase_release.understanding_waits). */
     waitingFor?: string;
   } | null;
+  /** Where the D&I requests list stands, as the list's own header says it
+   * (design-requests-model.requestsView), so the node, the panel's pill and the list
+   * never disagree: while the list is the step's work, and while its requests are being
+   * drafted. Undefined or null when the list is not shown or the plan was not read: the
+   * phase's own state decides then. */
+  designRequests?: { tone: Tone; status: string; line?: string } | null;
   /** The interim test sheet: null until samples are drawn. */
   sheet: {
     method: "SAMPLE" | "TEST_OF_ONE";
@@ -264,6 +272,9 @@ export type WorkflowStep = (typeof STEPS)[number] & {
   agent: boolean;
   /** A step to take up next: one per branch while both are open. */
   next: boolean;
+  /** The step's one line, where its own records word it (the D&I requests list: what the
+   * server says an accepted list still waits for). Absent where the status says it all. */
+  note?: string;
 };
 
 const GONE: readonly RequirementState[] = [
@@ -302,9 +313,6 @@ function list(words: readonly string[]): string {
 }
 
 type State = { tone: Tone; status: string };
-
-/** The D&I Evidence step's state while its evidence waits for a person's release (B1). */
-export const TO_RELEASE = "To release";
 
 const waiting = (on: StepKey): State => ({
   tone: "idle",
@@ -664,28 +672,35 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
   const attributes = attributesState(input, understanding);
   const phase = (phases: readonly string[]) =>
     input.requirements.filter((item) => phases.includes(item.phase));
-  // D&I evidence has its own release, once the control is understood (B1) and its attributes
-  // are settled (11 November 2026): until a person releases it, nothing of it is requested.
+  // D&I evidence is released once the control is understood (B1), its attributes are
+  // settled (11 November 2026) and its requests list is settled: every request accepted
+  // by a person and every approved attribute addressed (12 November 2026; there is no
+  // Release button). Until then nothing of it is requested, and the step reads as its
+  // list does: requests to accept, an attribute no request addresses, or accepted.
   const unreleased =
     input.designRelease?.step === "READY" ||
     input.designRelease?.step === "WAITING";
+  const requests = input.designRequests ?? null;
   const designEvidence: State = unreleased
     ? understanding.tone !== "done"
       ? waiting("understanding")
       : attributes.tone !== "done"
         ? waiting("attributes")
-        : input.designRelease?.waitingOn === "EVIDENCE"
-          ? // No D&I item evidences an approved attribute: an exception, not a release.
-            { tone: "attention", status: "Not planned against the attributes" }
-          : { tone: "attention", status: TO_RELEASE }
-    : evidenceState(
+        : (requests ??
+          requestsFallback(
+            input.designRelease?.step ?? "",
+            input.designRelease?.waitingOn,
+          ) ?? { tone: "attention", status: "Requests to accept" })
+    : // Released, with the list still on the page: its requests are being drafted.
+      (requests ??
+      evidenceState(
         phase(["DESIGN"]),
         "understanding",
         // Released early, with the reason, the D&I evidence is under way before the
         // control is fully understood.
         understanding.tone === "done" ||
           input.designRelease?.step === "RELEASED",
-      );
+      ));
   const verdict = designVerdict(input);
   const oeItems = phase(["INTERIM", "ROLLFORWARD"]);
   // OE evidence requested, or OE samples drawn: OE work on record.
@@ -727,6 +742,11 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
     review: reviewState(input),
     workpaper: workpaperState(input),
   };
+  // The requests list's own sentence goes with its state, and only with it.
+  const designNote =
+    requests !== null && designEvidence === requests
+      ? (requests.line ?? "")
+      : "";
   const steps: WorkflowStep[] = STEPS.map((step, at) => ({
     ...step,
     number: at + 1,
@@ -734,6 +754,9 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
     status: states[step.key].status,
     agent: input.busy.has(step.key),
     next: false,
+    ...(step.key === "designevidence" && designNote !== ""
+      ? { note: designNote }
+      : {}),
   }));
   // The next steps: the first open step before the branches; once the attributes are settled,
   // the first open step in each branch as well (OE work flagged as started early is not one:

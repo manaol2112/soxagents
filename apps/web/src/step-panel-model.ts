@@ -7,13 +7,13 @@
 import {
   STEPS,
   type StepKey,
-  TO_RELEASE,
   type Tone,
   type WorkflowInput,
   type WorkflowStep,
   workflowLayout,
 } from "./control-workflow-model.ts";
 import type { DesignVerdict } from "./design-conclusion-model.ts";
+import { requestsNeed } from "./design-requests-model.ts";
 
 export type PanelNeed = {
   /** act: a person decides; agent: an agent is working; wait: an earlier step holds it;
@@ -175,6 +175,16 @@ function needOf(step: WorkflowStep, steps: readonly WorkflowStep[]): PanelNeed {
         : {}),
     };
   }
+  // D&I Evidence before its requests are drafted (12 November 2026): the panel says what
+  // its one list needs, in the list's words: requests to accept, an attribute no request
+  // addresses, the planner at work, or the requests being drafted. No Release button.
+  const requests =
+    step.key === "designevidence"
+      ? requestsNeed(step.status, step.tone, step.note ?? "")
+      : null;
+  if (requests !== null) {
+    return requests;
+  }
   if (step.agent) {
     return {
       kind: "agent",
@@ -185,15 +195,6 @@ function needOf(step: WorkflowStep, steps: readonly WorkflowStep[]): PanelNeed {
   }
   if (step.tone === "done") {
     return { kind: "done", title: step.status, detail: "" };
-  }
-  if (step.key === "designevidence" && step.status === TO_RELEASE) {
-    return {
-      kind: "act",
-      title: "Release the D&I evidence",
-      detail:
-        "The control is understood and its D&I evidence items are planned. Releasing them drafts each request; each is still approved before it is sent.",
-      action: { label: "Review and release", anchor: "stp-work" },
-    };
   }
   return {
     kind: "act",
@@ -300,14 +301,15 @@ export function agentNote(
         : []),
     ];
   };
-  // Before the release nothing is requested, so nothing is accepted yet either.
+  // Before its requests are drafted nothing is requested, so no evidence is accepted yet
+  // either: the requests are drafted once a person has accepted the list.
   const planned = (phases: readonly string[]) => {
     const live = input.requirements.filter(
       (item) => phases.includes(item.phase) && !GONE.includes(item.state),
     ).length;
     return live === 0
-      ? "No evidence items are planned yet."
-      : `${count(live, "evidence item")} planned, requested once released.`;
+      ? "No requests are planned yet."
+      : `${count(live, "request")} planned, drafted once the list is accepted.`;
   };
   const paper = (which: WorkflowInput["designPaper"], name: string) =>
     which === null
@@ -336,10 +338,13 @@ export function agentNote(
         found: [`${step.status}.`],
       };
     case "designevidence":
+      // Before its requests are drafted: while the phase is unreleased, and while the
+      // requests list is still the step's work (being drafted).
       return input.designRelease?.step === "READY" ||
-        input.designRelease?.step === "WAITING"
+        input.designRelease?.step === "WAITING" ||
+        (input.designRequests ?? null) !== null
         ? {
-            did: "Planned the D&I evidence from the control's understanding and its attributes.",
+            did: "Planned the D&I requests from the control's understanding, each against the attributes it addresses.",
             found: [planned(["DESIGN"])],
           }
         : {

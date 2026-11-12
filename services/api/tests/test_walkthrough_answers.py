@@ -410,8 +410,15 @@ def test_required_walkthrough_questions_hold_control_understanding(migrated: Dat
     walkthrough = {n["key"]: n for n in review["needs"] if n["kind"] == "WALKTHROUGH"}
     assert all(walkthrough[item.key]["status"] == "MISSING" for item in optional)
     assert review["evidence"]["ready"] is True
+    # Rewritten 12 November 2026 (B1f, the D&I requests list; product owner: "Why do I need
+    # to have the release button? Simplify the workflow."). Old: understood, with the
+    # attributes settled, the D&I release read READY. New: Control Understanding no longer
+    # holds the step, which waits for its D&I requests to be accepted; their acceptance
+    # releases the evidence (test_design_requests.py). What this test is about, that the
+    # walkthrough's last required answer completes the understanding, is unchanged.
     ready = _design_phase(team, control)
-    assert (ready["step"], ready["waiting_on"], ready["waiting_for"]) == ("READY", "", "")
+    assert (ready["step"], ready["waiting_on"]) == ("WAITING", "REQUESTS")
+    assert ready["waiting_for"].endswith("to be accepted.")
 
 
 def test_the_support_helper_answers_every_required_question(migrated: Database) -> None:

@@ -9,6 +9,13 @@
  * and an empty list of requests never reads as done.
  */
 
+import {
+  type DesignRequestsState,
+  parseDesignRequests,
+  parseRequestAcceptance,
+  type RequestAcceptance,
+} from "./design-requests-model.ts";
+
 export const PHASES = ["DESIGN", "INTERIM", "ROLLFORWARD"] as const;
 export type Phase = (typeof PHASES)[number];
 
@@ -346,7 +353,14 @@ export type PlanRequirement = {
   sufficiencyBy: string | null;
   waiveReason: string;
   origin: string;
-  pendingChange: { remove: boolean; title: string; description: string } | null;
+  pendingChange: {
+    remove: boolean;
+    title: string;
+    description: string;
+    /** The planner proposes this requirement as a new one, on a plan a person approved:
+     * it is not part of the plan until a person accepts it. Present only when it is. */
+    add?: true;
+  } | null;
   needsReview: boolean;
   coverageNote: string;
   version: number;
@@ -354,7 +368,10 @@ export type PlanRequirement = {
   /** Files on its request the reader found do not cover it: not its evidence. */
   passedOver: string[];
   assessment: Assessment;
-};
+  // The attributes it addresses and whether a person accepted it (the D&I requests list,
+  // 12 November 2026): attributeIds, accepted, acceptedBy, acceptedAt, toAccept,
+  // personEdited.
+} & RequestAcceptance;
 
 /** Whether an item waits on a person now: something arrived and no one has judged it, the
  * planner proposes a change to it, or it is flagged for review. */
@@ -447,6 +464,8 @@ export type EvidencePlan = {
     /** The plan's design and interim items it holds up (0 before planning). */
     waitingItems: number;
   } | null;
+  /** Where the D&I requests list stands (12 November 2026); null when not sent. */
+  designRequests: DesignRequestsState | null;
 };
 
 export const PLAN_STATUS_LABELS: Record<EvidencePlan["status"], string> = {
@@ -540,6 +559,7 @@ function parseRequirement(item: Raw): PlanRequirement {
             remove: change.remove === true,
             title: str(change.title),
             description: str(change.description),
+            ...(change.add === true ? { add: true as const } : {}),
           },
     needsReview: item.needs_review === true,
     coverageNote: str(item.coverage_note),
@@ -549,6 +569,7 @@ function parseRequirement(item: Raw): PlanRequirement {
     passedOver: Array.isArray(item.passed_over)
       ? item.passed_over.map((name) => str(name)).filter((name) => name !== "")
       : [],
+    ...parseRequestAcceptance(item),
   };
 }
 
@@ -727,6 +748,7 @@ export function parsePlan(value: unknown): EvidencePlan | null {
             waitingItems: num(value.reconcile.waiting_items),
           }
         : null,
+    designRequests: parseDesignRequests(value.design_requests),
   };
 }
 

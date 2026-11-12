@@ -7,6 +7,8 @@ import { formatDate } from "./format";
 import type { PlanningPageState } from "./load-planning";
 import {
   type ControlPhases,
+  DESIGN_RELEASE_LINE,
+  designAwaitsRequests,
   nextRelease,
   PHASE_SHORT,
   type Phase,
@@ -22,8 +24,10 @@ import {
   releaseIsEarly,
   releaseNote,
   STEP_TONES,
+  stepLabelOf,
 } from "./planning-model";
 import { implementationName } from "./shared-plans-model";
+import { controlStepHref } from "./testing-hub-model";
 import { UiIcon } from "./ui-icon";
 
 type Ids = {
@@ -113,8 +117,42 @@ function StepPill({ status }: { status: PhaseStatus | null }) {
   }
   return (
     <span className={`pill ${STEP_TONES[status.step]}`}>
-      {status.stepLabel}
+      {stepLabelOf(status)}
     </span>
+  );
+}
+
+/** Where the D&I phase stands in place of a release (product owner, 12 November 2026: "I
+ * don't want a separate D&I release."): one quiet line, and the way to the control's D&I
+ * Evidence step, where its requests are accepted. */
+function DesignNote({
+  ids,
+  controlId,
+  status,
+  linkClass,
+}: {
+  ids: Ids;
+  controlId: string;
+  status: PhaseStatus;
+  linkClass: string;
+}) {
+  return (
+    <>
+      <span className="pl-sub" title={status.waitingFor || undefined}>
+        {DESIGN_RELEASE_LINE}
+      </span>
+      <a
+        className={linkClass}
+        href={controlStepHref(
+          ids.organizationId,
+          ids.projectId,
+          controlId,
+          "designevidence",
+        )}
+      >
+        Open D&amp;I Evidence
+      </a>
+    </>
   );
 }
 
@@ -151,8 +189,13 @@ export function PhasesView({
   const progress = state?.phases ?? null;
   const action = useRelease(ids);
   const reasonId = useId();
+  // The operating phases are released here. The D&I phase is not: the server releases
+  // it once its requests are accepted, on the control's D&I Evidence step.
   const [phase, setPhase] = useState<Released>(
-    (state?.phases?.ready.DESIGN ?? 0) > 0 ? "DESIGN" : "INTERIM",
+    (state?.phases?.ready.INTERIM ?? 0) === 0 &&
+      (state?.phases?.ready.ROLLFORWARD ?? 0) > 0
+      ? "ROLLFORWARD"
+      : "INTERIM",
   );
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -199,17 +242,13 @@ export function PhasesView({
         <section className="card pl-recommend" aria-label="Recommended next">
           <UiIcon name="sparkles" size={16} />
           <p>{progress.recommendation}</p>
-          {can ? (
+          {can && progress.ready.INTERIM + progress.ready.ROLLFORWARD > 0 ? (
             <button
               type="button"
               className="btn btn-secondary btn-sm"
               onClick={() => {
                 const next: Released =
-                  progress.ready.DESIGN > 0
-                    ? "DESIGN"
-                    : progress.ready.INTERIM > 0
-                      ? "INTERIM"
-                      : "ROLLFORWARD";
+                  progress.ready.INTERIM > 0 ? "INTERIM" : "ROLLFORWARD";
                 setPhase(next);
                 setSelected(
                   new Set(
@@ -232,9 +271,9 @@ export function PhasesView({
           (
             [
               [
-                "D&I ready to release",
+                "D&I requests accepted",
                 progress.ready.DESIGN,
-                "Control understood",
+                "Drafted when the planner finishes",
               ],
               [
                 "Interim ready to release",
@@ -330,9 +369,7 @@ export function PhasesView({
               value={reason}
               placeholder={
                 early
-                  ? phase === "DESIGN"
-                    ? "Why release before Control Understanding is complete (required)"
-                    : "Why release before the earlier phase is complete (required)"
+                  ? "Why release before the earlier phase is complete (required)"
                   : "Reason (optional)"
               }
               onChange={(event) => setReason(event.target.value)}
@@ -514,7 +551,16 @@ function PhaseLine({
           return (
             <td key={item}>
               <StepPill status={status} />
-              <StepNote status={status} />
+              {status !== null && designAwaitsRequests(status) ? (
+                <DesignNote
+                  ids={ids}
+                  controlId={row.controlId}
+                  status={status}
+                  linkClass="pl-strip-link"
+                />
+              ) : (
+                <StepNote status={status} />
+              )}
             </td>
           );
         })
@@ -527,6 +573,8 @@ function PhaseLine({
  * A control's evidence release on its test plan review, drawn like the control record's
  * audit progress: one segment per phase with where it stands beneath, and the one release
  * the reviewer can make next. A later phase can still be released early from its segment.
+ * The D&I phase is never released here: its segment says it is released once its requests
+ * are accepted, with the way to the control's D&I Evidence step.
  */
 export function PhaseStrip({
   ids,
@@ -604,6 +652,14 @@ export function PhaseStrip({
             >
               {phaseNote(status)}
             </small>
+            {designAwaitsRequests(status) ? (
+              <DesignNote
+                ids={ids}
+                controlId={row.controlId}
+                status={status}
+                linkClass="pl-strip-link"
+              />
+            ) : null}
             {canRelease &&
             releasable(status) &&
             status !== next &&

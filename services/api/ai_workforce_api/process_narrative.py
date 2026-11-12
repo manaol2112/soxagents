@@ -467,6 +467,11 @@ def fail_run(connection: psycopg.Connection[Any], control_id: UUID) -> None:
             "WHERE engagement_control_id = %s AND run_status IN ('PENDING', 'WORKING')",
             (control_id,),
         )
+        # The run held the control's attributes while it was open: its end may be the last
+        # thing a D&I requests list a person had completed waited for.
+        from ai_workforce_api.phase_release import settle_after_run
+
+        settle_after_run(cursor.connection, control_id, "NARRATIVE_RUN")
 
 
 def narrative_runner(settings: Settings) -> Callable[[UUID], str]:
@@ -476,7 +481,13 @@ def narrative_runner(settings: Settings) -> Callable[[UUID], str]:
     def run(control_id: UUID) -> str:
         provider = provider_for(settings) if live_model(settings) else None
         with connect(settings.database_url) as connection:
-            return run_narrative(connection, provider, control_id)
+            outcome = run_narrative(connection, provider, control_id)
+            # The run held the control's attributes while it worked: its end may be the
+            # last thing a D&I requests list a person had completed waited for (B1f).
+            from ai_workforce_api.phase_release import settle_after_run
+
+            settle_after_run(connection, control_id, "NARRATIVE_RUN")
+            return outcome
 
     return run
 

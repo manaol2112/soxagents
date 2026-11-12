@@ -253,7 +253,17 @@ describe("the control's next step (product owner, 10 November 2026)", () => {
     );
   });
 
-  it("offers the release and scope and sampling once the attributes are settled", () => {
+  // Old expectation: the D&I action was "Release the D&I evidence". New (product owner, 12
+  // November 2026: "Why do I need to have the release button? Simplify the workflow."):
+  // no release is offered; a ready phase is a settled requests list the server releases
+  // itself ("Yes. I don't want a separate D&I release."), so the card asks nothing (the
+  // earlier fallback titled it "Draft the D&I requests"). It then read "D&I Evidence is
+  // being prepared", as if an agent were at work; now (review finding 4, 12 November 2026) it says
+  // an agent works only where the records say one does: an accepted list with nothing
+  // at work on it reads "Requests accepted" and waits. Requests still to accept are
+  // named as that. Renamed from "offers the release and scope and sampling once the
+  // attributes are settled".
+  it("offers the D&I requests and scope and sampling once the attributes are settled", () => {
     const input = fresh({
       setup: understood,
       attributes: { approved: 5, proposed: 0 },
@@ -269,7 +279,60 @@ describe("the control's next step (product owner, 10 November 2026)", () => {
     assert.deepEqual(
       next.actions.map((action) => [action.key, action.title]),
       [
-        ["designevidence", "Release the D&I evidence"],
+        ["designevidence", "Requests accepted"],
+        ["testdesign", "Approve scope and sampling"],
+      ],
+    );
+    const waiting = next.actions.find(
+      (action) => action.key === "designevidence",
+    );
+    // It waits: the card only opens the step, and never says "Start".
+    assert.match(waiting?.detail ?? "", /They are drafted next/);
+    assert.equal(waiting?.label, "Open D&I Evidence");
+    assert.equal(waiting?.flag, "Waiting");
+    // The planner still at work on an accepted list: the agents', as the records say.
+    const finishing = {
+      ...input,
+      designRequests: {
+        tone: "active" as const,
+        status: "Requests accepted",
+        line: "Drafting starts when the planner finishes. Each request is approved before it goes to the client.",
+      },
+      busy: new Set(["designevidence" as const]),
+    };
+    const prepared = nextStep(workflowOf(finishing), finishing, about);
+    assert.equal(prepared.mode, "next");
+    if (prepared.mode !== "next") {
+      return;
+    }
+    const agent = prepared.actions.find(
+      (action) => action.key === "designevidence",
+    );
+    assert.equal(agent?.kind, "agent");
+    assert.equal(agent?.title, "D&I Evidence is being prepared");
+    for (const action of next.actions) {
+      assert.doesNotMatch(
+        `${action.title} ${action.detail} ${action.label}`,
+        /Draft the D&I requests|Release/,
+      );
+    }
+    const toAccept = {
+      ...input,
+      designRelease: {
+        step: "WAITING" as const,
+        waitingOn: "REQUESTS" as const,
+      },
+      designRequests: { tone: "attention" as const, status: "2 to accept" },
+    };
+    const accepting = nextStep(workflowOf(toAccept), toAccept, about);
+    assert.equal(accepting.mode, "next");
+    if (accepting.mode !== "next") {
+      return;
+    }
+    assert.deepEqual(
+      accepting.actions.map((action) => [action.key, action.title]),
+      [
+        ["designevidence", "Accept the D&I requests"],
         ["testdesign", "Approve scope and sampling"],
       ],
     );

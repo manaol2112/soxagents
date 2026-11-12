@@ -1310,16 +1310,11 @@ class LocalDraftScheduler:
 
         for _ in range(RUN_ATTEMPTS):
             try:
-                if self._narrative(control_id) == "PLANNED":
-                    # The test plan was updated from the approved narrative: draft what
-                    # its evidence plan released, as a plan run does.
-                    with connect(self._settings.database_url) as connection:
-                        plan = connection.execute(
-                            "SELECT id FROM evidence_plans WHERE engagement_control_id = %s",
-                            (control_id,),
-                        ).fetchone()
-                    if plan is not None:
-                        self._draft_released(UUID(str(plan[0])))
+                self._narrative(control_id)
+                # The test plan may have been updated from the approved narrative, or the
+                # run's end may have released the control's D&I evidence (a list a person
+                # had completed): draft what is now requested, as a plan run does.
+                self._draft_narrative_released(control_id)
                 return
             except Exception:
                 logger.warning("a process narrative could not be drafted; retrying")
@@ -1335,6 +1330,21 @@ class LocalDraftScheduler:
                     logger.warning("a narrative run could not be reset for retry")
         with connect(self._settings.database_url) as connection:
             fail_run(connection, control_id)
+        self._draft_narrative_released(control_id)
+
+    def _draft_narrative_released(self, control_id: UUID) -> None:
+        """Draft what the control's evidence plan released when its narrative run ended."""
+        try:
+            with connect(self._settings.database_url) as connection:
+                plan = connection.execute(
+                    "SELECT id FROM evidence_plans WHERE engagement_control_id = %s",
+                    (control_id,),
+                ).fetchone()
+        except psycopg.Error:
+            logger.warning("the plan of a narrative's control could not be read")
+            return
+        if plan is not None:
+            self._draft_released(UUID(str(plan[0])))
 
     def _draft_released(self, plan_id: UUID) -> None:
         """Draft the requests a settled plan released."""

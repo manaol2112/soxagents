@@ -11,45 +11,161 @@ class Database:
 DESIGN_RELEASE_REASON = "Released in the test setup: the D&I release is not what this test covers."
 
 
+def record_design_release(
+    database: Database, project_id: object, controls: list[object] | None = None
+) -> list[tuple[object, object, object]]:
+    """Record the D&I release of the engagement's planned controls (or those named) as test
+    setup: every live D&I request accepted by the engagement's owner, and the release
+    recorded as theirs. Returns (organization, control, owner) for each control released
+    here, for the caller to request the Design items.
+
+    Rewritten 12 November 2026 (B1f, the D&I requests list; product owner: "Why do I need
+    to have the release button? Simplify the workflow."). Old: the setup released D&I early
+    through phase_release.release, with a reason, whatever the control's understanding and
+    attributes. New: there is no early D&I release; the product releases D&I only once the
+    requests list is settled (phase_release.settle_design), which needs the understanding,
+    the attributes and their criteria settled first. Tests of what follows the release are
+    not about any of that, so the setup records the acceptance and the release directly, as
+    sign_off_design records a D&I conclusion; tests of the list and of the release itself
+    (test_design_requests.py, test_design_release.py) go through the routes instead. As
+    before: a control whose plan run is waiting or working, or whose plan says the D&I
+    phase does not apply, is left; one already released is not released twice; and the
+    release is on the audit trail (phase.released)."""
+    from uuid import UUID
+
+    from ai_workforce_api.db import connect, transaction
+    from ai_workforce_api.phase_release import _record_design_release
+
+    released: list[tuple[object, object, object]] = []
+    with connect(database.url) as connection:
+        rows = connection.execute(
+            """
+            SELECT p.organization_id, p.engagement_control_id, j.owner_user_id, p.revision
+            FROM evidence_plans p
+            JOIN projects j ON j.id = p.project_id
+            JOIN evidence_plan_phases ph ON ph.plan_id = p.id AND ph.phase = 'DESIGN'
+            WHERE p.project_id = %s
+              AND (%s::uuid[] IS NULL OR p.engagement_control_id = ANY(%s::uuid[]))
+              AND p.run_status NOT IN ('PENDING', 'WORKING')
+              AND ph.applicability IN ('APPLICABLE', 'CONDITIONAL')
+              AND NOT EXISTS (SELECT 1 FROM phase_releases r
+                              WHERE r.engagement_control_id = p.engagement_control_id
+                                AND r.phase = 'DESIGN')
+            ORDER BY p.created_at
+            """,
+            (project_id, controls, controls),
+        ).fetchall()
+        for organization, control, owner, revision in rows:
+            with transaction(connection) as cursor:
+                cursor.execute(
+                    """
+                    UPDATE evidence_requirements
+                    SET accepted_by = %s, accepted_at = clock_timestamp()
+                    WHERE engagement_control_id = %s AND phase = 'DESIGN'
+                      AND status IN ('PLANNED', 'AWAITING_DEPENDENCY', 'REQUESTED')
+                      AND NOT coalesce((pending_change ->> 'add')::boolean, false)
+                      AND accepted_at IS NULL
+                    """,
+                    (owner, control),
+                )
+                _record_design_release(
+                    cursor, organization, UUID(str(project_id)), control, owner, revision,
+                    automatic=False, reason=DESIGN_RELEASE_REASON,
+                )  # fmt: skip
+            released.append((organization, control, owner))
+    return released
+
+
 def release_design(
     database: Database, project_id: object, controls: list[object] | None = None
 ) -> list[object]:
     """Release the D&I evidence of the engagement's planned controls (or those named), as the
     engagement's owner would, and request it (phase_release.request_released). D&I evidence
     has its own release since B1 (product owner, 8 November 2026), so tests of what follows it
-    use this; tests of the D&I release itself do not. Returns the drafts queued."""
+    use this; tests of the D&I release itself do not. Returns the drafts queued. Since 12
+    November 2026 the release is recorded with the requests accepted (record_design_release,
+    which says what changed and why)."""
     from uuid import UUID
 
     from ai_workforce_api.db import connect
-    from ai_workforce_api.evidence_plans import PlanState
-    from ai_workforce_api.phase_release import ReleaseBody, release, request_released
+    from ai_workforce_api.phase_release import request_released
 
     queued: list[object] = []
+    released = record_design_release(database, project_id, controls)
     with connect(database.url) as connection:
-        rows = connection.execute(
-            """
-            SELECT p.organization_id, p.engagement_control_id, j.owner_user_id
-            FROM evidence_plans p JOIN projects j ON j.id = p.project_id
-            WHERE p.project_id = %s
-              AND (%s::uuid[] IS NULL OR p.engagement_control_id = ANY(%s::uuid[]))
-            ORDER BY p.created_at
-            """,
-            (project_id, controls, controls),
-        ).fetchall()
-        project = UUID(str(project_id))
-        for organization, control, owner in rows:
-            try:
-                done = release(
-                    connection, organization, project, control, "DESIGN", owner,
-                    ReleaseBody(reason=DESIGN_RELEASE_REASON),
-                )  # fmt: skip
-            except PlanState:
-                continue
-            if done:
-                queued += request_released(
-                    connection, organization, project, control, "DESIGN", owner
-                )
+        for organization, control, owner in released:
+            queued += request_released(
+                connection, UUID(str(organization)), UUID(str(project_id)),
+                UUID(str(control)), "DESIGN", UUID(str(owner)),
+            )  # fmt: skip
     return queued
+
+
+def understand_and_settle_attributes(
+    database: Database, project_id: object, control_id: object
+) -> None:
+    """Everything the D&I requests list waits for before its requests, for one control, as
+    the engagement's owner would do it: its open questions resolved, the client values its
+    statement asks recorded, its required walkthrough questions answered (Control
+    Understanding complete), and the engagement's proposed attributes decided with
+    criteria a person owns (the attributes settled)."""
+    from uuid import UUID
+
+    from ai_workforce_api.control_design import ValuesBody, design_for, set_values
+    from ai_workforce_api.db import connect
+
+    settle_attributes(database, project_id)
+    tailor_criteria(database, project_id)
+    control = UUID(str(control_id))
+    with connect(database.url) as connection:
+        connection.execute(
+            "UPDATE control_context_issues SET status = 'RESOLVED', "
+            "resolution_note = 'Answered in the walkthrough.', resolved_at = clock_timestamp() "
+            "WHERE engagement_control_id = %s AND status = 'OPEN'",
+            (control,),
+        )
+        connection.commit()
+        owner_row = connection.execute(
+            "SELECT organization_id, owner_user_id FROM projects WHERE id = %s", (project_id,)
+        ).fetchone()
+        assert owner_row is not None
+        design = design_for(connection, control)
+        assert design is not None
+        values = {
+            slot.key: slot.options[0] if slot.options else "The IT security manager"
+            for slot in design.slots
+            if not slot.automatic and not slot.document and not slot.value.strip()
+        }
+        if values:
+            set_values(
+                connection, owner_row[0], UUID(str(project_id)), control, owner_row[1],
+                ValuesBody(values=values),
+            )  # fmt: skip
+    answer_walkthrough(database, project_id, [control])
+
+
+def accept_design_requests(
+    client: object, organization_id: object, project_id: object, control_id: object
+) -> dict[str, object]:
+    """Accept every D&I request of the control that waits for a person, through the API, as
+    one decision ("Accept all"). Returns the evidence plan as the route answers it: when the
+    acceptance settles the list, the D&I evidence is released in that request (B1f)."""
+    base = f"/organizations/{organization_id}/projects/{project_id}/controls/{control_id}"
+    plan = client.get(f"{base}/evidence-plan")  # type: ignore[attr-defined]
+    assert plan.status_code == 200, plan.text
+    items = [
+        {"requirement_id": item["id"], "version": item["version"]}
+        for phase in plan.json()["phases"]
+        for item in phase["requirements"]
+        if item["to_accept"]
+    ]
+    assert items, "no D&I request waits to be accepted"
+    accepted = client.post(  # type: ignore[attr-defined]
+        f"{base}/design-requests/accept", json={"items": items}
+    )
+    assert accepted.status_code == 200, accepted.text
+    body: dict[str, object] = accepted.json()
+    return body
 
 
 def sign_off_design(
@@ -229,12 +345,14 @@ def approve_plans_over_api(client: object, organization_id: object, project_id: 
     for row in rows:
         if not row.get("included"):
             continue
-        # D&I evidence has its own release (B1), through the route that hands its drafts to
-        # the background; a control not planned yet is skipped by the route.
-        client.post(  # type: ignore[attr-defined]
-            f"{base}/controls/{row['id']}/phases/DESIGN/release",
-            json={"reason": DESIGN_RELEASE_REASON},
-        )
+        # D&I evidence has its own release (B1). Rewritten 12 November 2026 (B1f). Old: the
+        # setup posted an early release, with a reason, to the release route, which handed
+        # the drafts to the background. New: there is no early D&I release, so the setup
+        # records it (record_design_release), and the Design items are requested, with
+        # their drafts handed to the background, by the routes below (the plan's approval
+        # and plan-missing, which request what the gate allows). A control not planned
+        # yet is skipped, as before.
+        record_design_release(Database(settings.database_url), project_id, [row["id"]])
         plan = client.get(f"{base}/controls/{row['id']}/evidence-plan")  # type: ignore[attr-defined]
         if plan.status_code != 200 or plan.json().get("status") != "PROPOSED":
             continue

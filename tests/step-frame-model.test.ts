@@ -159,6 +159,92 @@ describe("what the panel says where nothing is needed from the person", () => {
     assert.equal(line.working, true);
     assert.match(line.text, /The agent is preparing this step/);
   });
+
+  // The D&I requests list (product owner, 12 November 2026): the step's pill and its one
+  // line come from the list's state, not from a release card.
+  it("takes D&I Evidence's pill and line from its requests list", () => {
+    const frame = (
+      designRequests: NonNullable<WorkflowInput["designRequests"]>,
+    ) => {
+      const steps = workflowOf(
+        midway({
+          requirements: [{ phase: "DESIGN", state: "NOT_GENERATED" }],
+          designRelease: { step: "WAITING", waitingOn: "REQUESTS" },
+          designRequests,
+        }),
+      );
+      const step = steps.find((item) => item.key === "designevidence");
+      assert.ok(step !== undefined);
+      return {
+        pill: statusPill(step.tone, step.status),
+        line: quietLineOf(panelFrame("designevidence", steps, null).need),
+      };
+    };
+    // Requests to accept, or an attribute no request addresses: the decision row's.
+    const toAccept = frame({ tone: "attention", status: "2 to accept" });
+    assert.deepEqual(toAccept.pill, {
+      label: "2 to accept",
+      tone: "attention",
+    });
+    assert.equal(toAccept.line, null);
+    const uncovered = frame({
+      tone: "attention",
+      status: "Attribute D is not addressed",
+    });
+    assert.equal(uncovered.pill.label, "Attribute D is not addressed");
+    assert.equal(uncovered.line, null);
+    // The planner at work: one quiet line, with the reading treatment.
+    const planning = frame({ tone: "active", status: "Being updated" });
+    assert.deepEqual(planning.pill, { label: "Being updated", tone: "active" });
+    assert.equal(planning.line?.working, true);
+    assert.match(
+      planning.line?.text ?? "",
+      /planner is preparing the requests/,
+    );
+    // Accepted, and being drafted: one quiet line, never the status again.
+    const drafting = frame({ tone: "active", status: "Requests accepted" });
+    assert.deepEqual(drafting.pill, {
+      label: "Requests accepted",
+      tone: "active",
+    });
+    assert.equal(drafting.line?.working, true);
+    assert.match(drafting.line?.text ?? "", /^Drafting the requests\./);
+    // Accepted, the planner still at work: one quiet working line and no action ("Yes. I
+    // don't want a separate D&I release."). Said by the list's own line, so only while
+    // the server says the planner is at work (review finding 4, 12 November 2026).
+    const finishing = frame({
+      tone: "active",
+      status: "Requests accepted",
+      line: "Drafting starts when the planner finishes. Each request is approved before it goes to the client.",
+    });
+    assert.equal(finishing.line?.working, true);
+    assert.match(
+      finishing.line?.text ?? "",
+      /^Drafting starts when the planner finishes\./,
+    );
+    // Accepted, nothing at work: the server's sentence, at rest, with nothing to open.
+    const held = frame({
+      tone: "idle",
+      status: "Requests accepted",
+      line: "The requests wait for a person who may accept them to accept the list.",
+    });
+    assert.deepEqual(held.line, {
+      text: "The requests wait for a person who may accept them to accept the list.",
+      working: false,
+    });
+    const settled = frame({ tone: "idle", status: "Requests accepted" });
+    assert.deepEqual(settled.pill, {
+      label: "Requests accepted",
+      tone: "idle",
+    });
+    // No sentence from the server: plain words, at rest. Old expectation: the working
+    // treatment and "Drafting starts when the planner finishes", whether or not the
+    // planner was at work.
+    assert.equal(settled.line?.working, false);
+    assert.match(settled.line?.text ?? "", /They are drafted next/);
+    assert.doesNotMatch(settled.line?.text ?? "", /planner/);
+    assert.equal(settled.line?.link, undefined);
+  });
 });
 
 describe("the panel's footer", () => {

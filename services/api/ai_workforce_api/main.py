@@ -38,6 +38,7 @@ from ai_workforce_api.demo import register_demo
 from ai_workforce_api.demo_requests import register_demo_requests, register_library_summary
 from ai_workforce_api.demo_tour import register_demo_tour
 from ai_workforce_api.design_conclusions import register_design_conclusions
+from ai_workforce_api.design_requests import register_design_requests
 from ai_workforce_api.engagement_close import (
     register_closed_engagements,
     register_engagement_close,
@@ -269,6 +270,7 @@ def create_app(
     register_queue(app, resolved)
     register_plan_impact(app, resolved)
     register_phase_release(app, resolved, drafts)
+    register_design_requests(app, resolved, drafts)
     scans = drafts if isinstance(drafts, SystemScanScheduler) else None
     register_rcm_uploads(app, resolved, scans)
     register_workspace(app, resolved)
