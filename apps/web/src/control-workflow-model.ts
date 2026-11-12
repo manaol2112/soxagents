@@ -223,7 +223,7 @@ export type WorkflowInput = {
    * never disagree: while the list is the step's work, and while its requests are being
    * drafted. Undefined or null when the list is not shown or the plan was not read: the
    * phase's own state decides then. */
-  designRequests?: { tone: Tone; status: string } | null;
+  designRequests?: { tone: Tone; status: string; line?: string } | null;
   /** The interim test sheet: null until samples are drawn. */
   sheet: {
     method: "SAMPLE" | "TEST_OF_ONE";
@@ -272,6 +272,9 @@ export type WorkflowStep = (typeof STEPS)[number] & {
   agent: boolean;
   /** A step to take up next: one per branch while both are open. */
   next: boolean;
+  /** The step's one line, where its own records word it (the D&I requests list: what the
+   * server says an accepted list still waits for). Absent where the status says it all. */
+  note?: string;
 };
 
 const GONE: readonly RequirementState[] = [
@@ -739,6 +742,11 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
     review: reviewState(input),
     workpaper: workpaperState(input),
   };
+  // The requests list's own sentence goes with its state, and only with it.
+  const designNote =
+    requests !== null && designEvidence === requests
+      ? (requests.line ?? "")
+      : "";
   const steps: WorkflowStep[] = STEPS.map((step, at) => ({
     ...step,
     number: at + 1,
@@ -746,6 +754,9 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
     status: states[step.key].status,
     agent: input.busy.has(step.key),
     next: false,
+    ...(step.key === "designevidence" && designNote !== ""
+      ? { note: designNote }
+      : {}),
   }));
   // The next steps: the first open step before the branches; once the attributes are settled,
   // the first open step in each branch as well (OE work flagged as started early is not one:

@@ -210,17 +210,39 @@ describe("what the panel says where nothing is needed from the person", () => {
     assert.equal(drafting.line?.working, true);
     assert.match(drafting.line?.text ?? "", /^Drafting the requests\./);
     // Accepted, the planner still at work: one quiet working line and no action ("Yes. I
-    // don't want a separate D&I release.").
+    // don't want a separate D&I release."). Said by the list's own line, so only while
+    // the server says the planner is at work (review finding 4, 12 November 2026).
+    const finishing = frame({
+      tone: "active",
+      status: "Requests accepted",
+      line: "Drafting starts when the planner finishes. Each request is approved before it goes to the client.",
+    });
+    assert.equal(finishing.line?.working, true);
+    assert.match(
+      finishing.line?.text ?? "",
+      /^Drafting starts when the planner finishes\./,
+    );
+    // Accepted, nothing at work: the server's sentence, at rest, with nothing to open.
+    const held = frame({
+      tone: "idle",
+      status: "Requests accepted",
+      line: "The requests wait for a person who may accept them to accept the list.",
+    });
+    assert.deepEqual(held.line, {
+      text: "The requests wait for a person who may accept them to accept the list.",
+      working: false,
+    });
     const settled = frame({ tone: "idle", status: "Requests accepted" });
     assert.deepEqual(settled.pill, {
       label: "Requests accepted",
       tone: "idle",
     });
-    assert.equal(settled.line?.working, true);
-    assert.match(
-      settled.line?.text ?? "",
-      /^Drafting starts when the planner finishes\./,
-    );
+    // No sentence from the server: plain words, at rest. Old expectation: the working
+    // treatment and "Drafting starts when the planner finishes", whether or not the
+    // planner was at work.
+    assert.equal(settled.line?.working, false);
+    assert.match(settled.line?.text ?? "", /They are drafted next/);
+    assert.doesNotMatch(settled.line?.text ?? "", /planner/);
     assert.equal(settled.line?.link, undefined);
   });
 });

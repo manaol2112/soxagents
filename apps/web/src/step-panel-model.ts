@@ -179,7 +179,9 @@ function needOf(step: WorkflowStep, steps: readonly WorkflowStep[]): PanelNeed {
   // its one list needs, in the list's words: requests to accept, an attribute no request
   // addresses, the planner at work, or the requests being drafted. No Release button.
   const requests =
-    step.key === "designevidence" ? requestsNeed(step.status, step.tone) : null;
+    step.key === "designevidence"
+      ? requestsNeed(step.status, step.tone, step.note ?? "")
+      : null;
   if (requests !== null) {
     return requests;
   }

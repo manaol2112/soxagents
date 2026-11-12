@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
+  ACCEPT_FIRST,
   ACCEPT_MAX,
   ADD_KINDS,
   type DesignRequestsState,
@@ -12,8 +13,11 @@ import {
   firstToAccept,
   LIST_CHANGED,
   NOT_CONFIRMED,
+  POLL_EVERY_MS,
+  POLL_LIMIT_MS,
   parseDesignRequests,
   parseRequestAcceptance,
+  pollingOver,
   REQUEST_CHIPS,
   REQUESTS_STATUS,
   type RequestsInput,
@@ -27,6 +31,8 @@ import {
   requestsStanding,
   requestsView,
   requestsWrite,
+  SETTLED_LINE,
+  STALLED_LINE,
   waitingOnOf,
   withAttribute,
 } from "../apps/web/src/design-requests-model.ts";
@@ -143,6 +149,11 @@ const input = (extra: Partial<RequestsInput> = {}): RequestsInput => ({
   now: NOW,
   ...extra,
 });
+
+/** A header's pill: its tone and status, without the step's line. */
+function pill(header: { tone: string; status: string } | null) {
+  return header === null ? null : { tone: header.tone, status: header.status };
+}
 
 function listOf(view: RequestsView) {
   if (view.mode !== "list" && view.mode !== "drafting") {
@@ -337,6 +348,7 @@ describe("the D&I requests list: acceptance", () => {
         description: "The approved policy for granting access.",
       }),
       {
+        add: false,
         remove: false,
         title: "Access policy, current version",
         // The description would not change, so it is not shown as a change.
@@ -346,6 +358,7 @@ describe("the D&I requests list: acceptance", () => {
       },
     );
     assert.deepEqual(change({ remove: true, title: "", description: "" }), {
+      add: false,
       remove: true,
       title: "",
       description: "",
@@ -356,6 +369,129 @@ describe("the D&I requests list: acceptance", () => {
     assert.equal(
       change({ remove: false, title: "", description: "" })?.summary,
       "The agent proposes a change to what this request must show.",
+    );
+  });
+
+  // Review finding 5 (12 November 2026). Old behaviour: `pending_change.add` was dropped,
+  // so a request the planner proposed as a new one read "Agent proposes a change" and
+  // offered "Keep the accepted request", which deleted it. New: it reads as a proposed
+  // request, accepted or rejected, and nothing else until then.
+  it("shows a request the agent proposes as a new one, to accept or reject", () => {
+    const proposal = requirement({
+      id: CONFIG,
+      title: "Provisioning configuration",
+      categories: ["CONFIGURATION"],
+      attributeIds: [D],
+      // However the plan holds it until it is accepted: removed with the proposal on it.
+      state: "REMOVED",
+      pendingChange: { remove: false, title: "", description: "", add: true },
+    });
+    const view = listOf(
+      requestsView(input({ requirements: [policy, walkthrough, proposal] })),
+    );
+    const row = view.rows.find((each) => each.id === CONFIG);
+    assert.ok(row !== undefined);
+    assert.deepEqual(row.change, {
+      add: true,
+      remove: false,
+      title: "",
+      description: "",
+      summary: "The agent proposes this request.",
+      line: "Agent proposes this request",
+    });
+    assert.equal(row.state, "TO_ACCEPT");
+    // In the list and in Accept all, not in the history of deleted requests.
+    assert.deepEqual(view.history, []);
+    assert.ok(view.accept.some((each) => each.requirement_id === CONFIG));
+    assert.equal(view.title, "3 requests");
+    // The same, where the plan holds it as a planned item.
+    const planned = listOf(
+      requestsView(
+        input({ requirements: [{ ...proposal, state: "NOT_GENERATED" }] }),
+      ),
+    );
+    assert.equal(planned.rows[0]?.change?.add, true);
+    // A change or a removal the planner proposes on an accepted request is not one.
+    assert.equal(
+      listOf(
+        requestsView(
+          input({
+            requirements: [
+              requirement({
+                accepted: true,
+                pendingChange: { remove: true, title: "", description: "" },
+              }),
+            ],
+          }),
+        ),
+      ).rows[0]?.change?.add,
+      false,
+    );
+    assert.equal(ACCEPT_FIRST, "Accept the request first.");
+  });
+
+  it("counts a proposed request toward no attribute until a person accepts it", () => {
+    const proposal = requirement({
+      id: CONFIG,
+      attributeIds: [D],
+      pendingChange: { remove: false, title: "", description: "", add: true },
+    });
+    // The plan's summary was not sent: the page still does not read D as addressed.
+    const view = listOf(
+      requestsView(
+        input({ requirements: [policy, walkthrough, proposal], summary: null }),
+      ),
+    );
+    assert.deepEqual(
+      view.coverage.map((chip) => [chip.letter, chip.state, chip.requests]),
+      [
+        ["A", "COVERED", 1],
+        ["B", "COVERED", 1],
+        ["C", "COVERED", 1],
+        ["D", "UNCOVERED", 0],
+      ],
+    );
+    // The attribute's line says a proposed request would address it: no reason is
+    // recorded for it until that request is accepted or rejected.
+    assert.deepEqual(
+      view.uncovered.map((item) => [item.letter, item.proposed]),
+      [["D", true]],
+    );
+    assert.deepEqual(
+      listOf(requestsView(input())).uncovered.map((item) => item.proposed),
+      [false],
+    );
+  });
+
+  it("reads the addition from the plan body, and nothing where it is not said", () => {
+    const requirements = (pending: unknown) =>
+      parsePlan({
+        control_id: uuid(40),
+        phases: [
+          {
+            phase: "DESIGN",
+            requirements: [
+              { id: POLICY, phase: "DESIGN", pending_change: pending },
+            ],
+          },
+        ],
+      })?.phases.find((phase) => phase.phase === "DESIGN")?.requirements ?? [];
+    assert.equal(requirements({ add: true })[0]?.pendingChange?.add, true);
+    // Only the server's own true: a change or a removal carries no such mark.
+    assert.deepEqual(requirements({ remove: true })[0]?.pendingChange, {
+      remove: true,
+      title: "",
+      description: "",
+    });
+    assert.equal(
+      requirements({ add: "yes" })[0]?.pendingChange?.add,
+      undefined,
+    );
+    assert.equal(requirements(null)[0]?.pendingChange, null);
+    assert.equal(
+      listOf(requestsView(input({ requirements: requirements({ add: true }) })))
+        .rows[0]?.change?.line,
+      "Agent proposes this request",
     );
   });
 
@@ -404,6 +540,7 @@ describe("the D&I requests list: coverage", () => {
         letter: "D",
         text: "Access is granted within two days.",
         line: "Attribute D is not addressed by any request",
+        proposed: false,
       },
     ]);
     assert.deepEqual(view.exceptions, []);
@@ -540,7 +677,7 @@ describe("the D&I requests list: history", () => {
 
 describe("the D&I requests list: where it stands", () => {
   const header = (extra: Partial<RequestsInput>) =>
-    listOf(requestsView(input(extra))).header;
+    pill(listOf(requestsView(input(extra))).header);
   const covered = [
     walkthrough,
     requirement({
@@ -590,7 +727,7 @@ describe("the D&I requests list: where it stands", () => {
     const planning = listOf(
       requestsView(input({ working: true, requirements: [] })),
     );
-    assert.deepEqual(planning.header, {
+    assert.deepEqual(pill(planning.header), {
       tone: "active",
       status: "Being planned",
     });
@@ -602,7 +739,7 @@ describe("the D&I requests list: where it stands", () => {
     const view = listOf(
       requestsView(input({ requirements: [], summary: summary() })),
     );
-    assert.deepEqual(view.header, {
+    assert.deepEqual(pill(view.header), {
       tone: "attention",
       status: "No requests yet",
     });
@@ -642,9 +779,10 @@ describe("the D&I requests list: where it stands", () => {
     assert.equal(view.mode, "list");
     assert.equal(view.settled, true);
     assert.equal(view.working, false);
-    assert.equal(view.holds, "");
     assert.deepEqual(view.accept, []);
-    assert.deepEqual(view.header, {
+    // The server gives no sentence: the step says the requests are drafted next.
+    assert.equal(view.header.line, "");
+    assert.deepEqual(pill(view.header), {
       tone: "idle",
       status: "Requests accepted",
     });
@@ -678,51 +816,125 @@ describe("the D&I requests list: where it stands", () => {
     );
     assert.equal(view.settled, true);
     assert.equal(view.working, true);
-    assert.deepEqual(view.header, {
-      tone: "idle",
+    assert.deepEqual(pill(view.header), {
+      tone: "active",
       status: "Requests accepted",
     });
-    // The step's own line says it; the server's sentence is not repeated under the list.
-    assert.equal(view.holds, "");
+    // Said only because the server says the planner is at work.
+    assert.equal(
+      view.header.line,
+      "Drafting starts when the planner finishes. Each request is approved before it goes to the client.",
+    );
     assert.deepEqual(
       view.rows.map((row) => row.state),
       ["ACCEPTED", "ACCEPTED"],
     );
   });
 
-  // Old name: "never offers to draft a list the server still holds, and says what holds
-  // it". Nothing is offered in any state now; what the server waits for is still said.
-  it("says what the server still waits for on a list that reads settled here", () => {
+  // Review finding 4 (12 November 2026). Old expectation: an accepted list with nothing
+  // at work read "Drafting starts when the planner finishes" on the step, and the
+  // server's sentence sat under the list (`holds`). New: the step's one line is the
+  // server's own sentence; the planner is named only while the server says it works.
+  it("says what the server waits for on an accepted list, as the step's one line", () => {
     const view = listOf(
       requestsView(
         input({
           requirements: covered,
           summary: summary({
             ...nothingLeft,
-            waitingFor: "The control's plan is being read again.",
+            working: false,
+            waitingFor:
+              "The requests wait for a person who may accept them to accept the list.",
           }),
         }),
       ),
     );
     assert.equal(view.settled, true);
-    assert.equal(view.holds, "The control's plan is being read again.");
-    // The server calls it settled: nothing more to say.
+    assert.equal(view.working, false);
+    assert.deepEqual(view.header, {
+      tone: "idle",
+      status: "Requests accepted",
+      line: "The requests wait for a person who may accept them to accept the list.",
+    });
+    const need = requestsNeed(
+      view.header.status,
+      view.header.tone,
+      view.header.line,
+    );
+    assert.equal(need?.kind, "wait");
+    assert.equal(
+      need?.detail,
+      "The requests wait for a person who may accept them to accept the list.",
+    );
+    assert.doesNotMatch(need?.detail ?? "", /planner/);
+    // No sentence from the plan: the phase's own, then the step's plain words.
     assert.equal(
       listOf(
         requestsView(
           input({
+            status: {
+              step: "WAITING",
+              waitingOn: "REQUESTS",
+              waitingFor: "The list waits for a person to accept it.",
+              releasedAt: null,
+            },
             requirements: covered,
-            summary: summary({
-              ...nothingLeft,
-              settled: true,
-              waitingFor: "Stale.",
-            }),
+            summary: summary({ ...nothingLeft }),
           }),
         ),
-      ).holds,
-      "",
+      ).header.line,
+      "The list waits for a person to accept it.",
     );
-    assert.equal(listOf(requestsView(input())).holds, "");
+    assert.equal(
+      requestsNeed("Requests accepted", "idle")?.detail,
+      SETTLED_LINE,
+    );
+    assert.doesNotMatch(SETTLED_LINE, /planner/);
+  });
+
+  it("offers the acceptance again where the server lists accepted rows to accept", () => {
+    // The person whose acceptance stood no longer may accept: the server asks again.
+    const again = listOf(
+      requestsView(
+        input({
+          requirements: covered.map((item) => ({ ...item, toAccept: true })),
+          summary: summary({
+            toAccept: 2,
+            uncovered: [],
+            working: false,
+            waitingFor: "The requests wait for a person to accept them again.",
+          }),
+        }),
+      ),
+    );
+    assert.equal(again.settled, false);
+    assert.deepEqual(
+      again.rows.map((row) => row.state),
+      ["TO_ACCEPT", "TO_ACCEPT"],
+    );
+    assert.equal(again.accept.length, 2);
+    assert.deepEqual(again.header, {
+      tone: "attention",
+      status: "2 to accept",
+      line: "The requests wait for a person to accept them again.",
+    });
+    const need = requestsNeed(
+      again.header.status,
+      again.header.tone,
+      again.header.line,
+    );
+    assert.equal(need?.kind, "act");
+    assert.equal(need?.title, "Accept the D&I requests");
+    assert.equal(
+      need?.detail,
+      "The requests wait for a person to accept them again.",
+    );
+    // Requests the agent proposed, not yet accepted by anyone, keep the plain words.
+    assert.equal(listOf(requestsView(input())).header.line, "");
+    assert.match(
+      requestsNeed("1 to accept", "attention")?.detail ?? "",
+      /The agent proposes what to request/,
+    );
   });
 
   it("shows the list at rest while the requests are drafted, then gives way", () => {
@@ -744,7 +956,7 @@ describe("the D&I requests list: where it stands", () => {
     assert.equal(drafting.working, true);
     assert.equal(drafting.settled, false);
     assert.deepEqual(drafting.accept, []);
-    assert.deepEqual(drafting.header, {
+    assert.deepEqual(pill(drafting.header), {
       tone: "active",
       status: "Requests accepted",
     });
@@ -864,7 +1076,7 @@ describe("the D&I requests list: what the server says over the page's own readin
     // The server says so: no clock is read, however long ago the release was.
     const said = view(true, "RELEASED", "2026-11-12T08:00:00Z");
     assert.equal(said.mode, "drafting");
-    assert.deepEqual(listOf(said).header, {
+    assert.deepEqual(pill(listOf(said).header), {
       tone: "active",
       status: "Requests accepted",
     });
@@ -970,20 +1182,27 @@ describe("the D&I Evidence step's pill and decision row", () => {
   // releases a settled list itself (when the planner finishes, if it is still at work),
   // so the page never offers to draft or release it.
   // Old expectation: a settled list asked the person to "Draft the D&I requests" (kind
-  // act). New: one quiet working line, no action, and those words appear nowhere.
+  // act); then, after "I don't want a separate D&I release.", it read "Drafting starts
+  // when the planner finishes" in every settled state. New (review finding 4): that is
+  // said only where the list's own line says the planner is at work; otherwise the step
+  // waits in plain words, or in the server's sentence. No action in any of them.
   it("only waits on a settled list: no draft and no release is ever asked for", () => {
     const settled = requestsNeed(REQUESTS_STATUS.accepted, "idle");
-    assert.equal(settled?.kind, "agent");
+    assert.equal(settled?.kind, "wait");
     assert.equal(settled?.title, "Requests accepted");
+    assert.equal(settled?.detail, SETTLED_LINE);
+    assert.equal(settled !== null && "action" in settled, false);
+    // The planner still at work: the list's own line, with the reading treatment.
+    const finishing = requestsNeed(
+      REQUESTS_STATUS.accepted,
+      "active",
+      "Drafting starts when the planner finishes. Each request is approved before it goes to the client.",
+    );
+    assert.equal(finishing?.kind, "agent");
     assert.match(
-      settled?.detail ?? "",
+      finishing?.detail ?? "",
       /^Drafting starts when the planner finishes\./,
     );
-    assert.match(
-      settled?.detail ?? "",
-      /approved before it goes to the client/,
-    );
-    assert.equal(settled !== null && "action" in settled, false);
     const statuses: Array<[string, string]> = [
       ["3 to accept", "attention"],
       ["Attribute D is not addressed", "attention"],
@@ -998,7 +1217,7 @@ describe("the D&I Evidence step's pill and decision row", () => {
       assert.ok(need !== null, status);
       assert.doesNotMatch(
         `${need.title} ${need.detail}`,
-        /Draft the D&I requests|release/i,
+        /Draft the D&I requests|release|planner finishes/i,
         status,
       );
     }
@@ -1008,19 +1227,19 @@ describe("the D&I Evidence step's pill and decision row", () => {
 
   it("falls back to the phase's own state where the plan was not read", () => {
     // Old: tone attention, a settled list being a person's to draft. New: at rest.
-    assert.deepEqual(requestsFallback("READY", ""), {
+    assert.deepEqual(pill(requestsFallback("READY", "")), {
       tone: "idle",
       status: "Requests accepted",
     });
-    assert.deepEqual(requestsFallback("WAITING", "REQUESTS"), {
+    assert.deepEqual(pill(requestsFallback("WAITING", "REQUESTS")), {
       tone: "attention",
       status: "Requests to accept",
     });
-    assert.deepEqual(requestsFallback("WAITING", "EVIDENCE"), {
+    assert.deepEqual(pill(requestsFallback("WAITING", "EVIDENCE")), {
       tone: "attention",
       status: "Attributes not addressed",
     });
-    assert.deepEqual(requestsFallback("WAITING", undefined), {
+    assert.deepEqual(pill(requestsFallback("WAITING", undefined)), {
       tone: "attention",
       status: "Requests to accept",
     });
@@ -1458,6 +1677,78 @@ describe("the D&I requests list: actions", () => {
     assert.deepEqual(planningWrite({ ...fields, attribute_ids: "all" }), {
       error: "invalid",
     });
+  });
+
+  // Review finding 2 (12 November 2026). Old body: {attribute_ids, procedure_ids}. New,
+  // from the D&I requests list: the requirement's version as shown goes with them, so
+  // its attributes are never changed over a request that changed meanwhile.
+  it("changes a request's attributes at the version the person saw", () => {
+    const fields = {
+      organization_id: uuid(51),
+      project_id: uuid(52),
+      control_id: uuid(53),
+      intent: "evidence-links",
+      requirement_id: WALK,
+      attribute_ids: [A, C, D],
+      procedure_ids: [uuid(21)],
+    };
+    const linked = planningWrite({ ...fields, version: 5 });
+    assert.ok(!("error" in linked));
+    assert.equal(linked.method, "PUT");
+    assert.equal(linked.path, `${control}/master-plan/evidence/${WALK}/links`);
+    assert.deepEqual(linked.body, {
+      attribute_ids: [A, C, D],
+      procedure_ids: [uuid(21)],
+      version: 5,
+    });
+    // A version that is not one refuses the call; it is never sent without it.
+    for (const version of [0, "five", 1.5, null]) {
+      assert.deepEqual(planningWrite({ ...fields, version }), {
+        error: "invalid",
+      });
+    }
+    // The test plan's own review names no version, and its call is what it was.
+    const plain = planningWrite(fields);
+    assert.ok(!("error" in plain));
+    assert.deepEqual(plain.body, {
+      attribute_ids: [A, C, D],
+      procedure_ids: [uuid(21)],
+    });
+    // Both of the list's dialogs send it.
+    const view = readFileSync(
+      new URL("../apps/web/src/design-requests.tsx", import.meta.url),
+      "utf8",
+    );
+    assert.match(
+      view,
+      /version: row\.version,\s+\/\/ In the attributes' order/,
+    );
+    assert.match(
+      view,
+      /version: target\.version,\s+attribute_ids: withAttribute/,
+    );
+  });
+
+  // Review finding 9 (12 November 2026). Old behaviour: the list was read again every 3
+  // seconds for as long as the server said working or drafting, with its actions off.
+  // New: for ten minutes; then it stops and says so, with "Check again".
+  it("reads the list again for ten minutes at most while the work is on", () => {
+    assert.equal(POLL_EVERY_MS, 3000);
+    assert.equal(POLL_LIMIT_MS, 10 * 60 * 1000);
+    assert.equal(pollingOver(0), false);
+    assert.equal(pollingOver(POLL_LIMIT_MS - 1), false);
+    assert.equal(pollingOver(POLL_LIMIT_MS), true);
+    assert.equal(pollingOver(POLL_LIMIT_MS + POLL_EVERY_MS), true);
+    assert.match(STALLED_LINE, /stopped checking/);
+    const view = readFileSync(
+      new URL("../apps/web/src/design-requests.tsx", import.meta.url),
+      "utf8",
+    );
+    // The view's reading is the bounded one, and offers the one way to start it again.
+    assert.match(view, /pollingOver\(Date\.now\(\) - started\)/);
+    assert.match(view, /POLL_EVERY_MS/);
+    assert.doesNotMatch(view, /setInterval\(\(\) => router\.refresh\(\)/);
+    assert.match(view, /Check again/);
   });
 
   it("clears a recorded reason, with no body", () => {

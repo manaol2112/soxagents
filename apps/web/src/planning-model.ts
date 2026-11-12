@@ -1992,12 +1992,21 @@ export function planningWrite(fields: Fields): PlanningWrite {
       const requirementId = text(fields, "requirement_id");
       const attributes = ids(fields, "attribute_ids");
       const procedures = ids(fields, "procedure_ids");
+      // The D&I requests list sends the requirement's version as the person saw it, so
+      // its attributes are never changed over a request that changed meanwhile. A caller
+      // that names no version sends the call it always did.
+      const versioned = fields.version !== undefined;
       return UUID.test(requirementId) &&
         attributes !== null &&
-        procedures !== null
+        procedures !== null &&
+        (!versioned || at !== null)
         ? ok(
             `${control}/master-plan/evidence/${requirementId}/links`,
-            { attribute_ids: attributes, procedure_ids: procedures },
+            {
+              attribute_ids: attributes,
+              procedure_ids: procedures,
+              ...(versioned ? { version: at } : {}),
+            },
             "PUT",
           )
         : { error: "invalid" };

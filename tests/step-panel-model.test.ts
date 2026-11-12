@@ -160,8 +160,11 @@ describe("a step's panel frame", () => {
   // requests list needs, in the list's words, and never for a release. A ready phase is a
   // settled list, which the server releases itself ("Yes. I don't want a separate D&I
   // release."): the panel only says it waits; the earlier fallback, an act titled "Draft
-  // the D&I requests", is gone. Renamed from "asks for the D&I release when the evidence
-  // waits for it (B1)".
+  // the D&I requests", is gone. It then said "Drafting starts when the planner finishes"
+  // for every settled list; now (review finding 4, 12 November 2026) the planner is named
+  // only where the list's own line says it is at work, and otherwise the step waits in
+  // the server's sentence or in plain words. Renamed from "asks for the D&I release when
+  // the evidence waits for it (B1)".
   it("asks for what the D&I requests list needs, never for a release", () => {
     const steps = workflowOf(
       midway({
@@ -170,14 +173,44 @@ describe("a step's panel frame", () => {
       }),
     );
     const frame = panelFrame("designevidence", steps, null);
-    assert.equal(frame.need.kind, "agent");
+    assert.equal(frame.need.kind, "wait");
     assert.equal(frame.need.title, "Requests accepted");
-    assert.match(
-      frame.need.detail,
-      /^Drafting starts when the planner finishes\./,
-    );
+    assert.match(frame.need.detail, /They are drafted next/);
+    assert.doesNotMatch(frame.need.detail, /planner/);
     // Kept: each drafted request is still approved before it goes out.
     assert.match(frame.need.detail, /approved before it goes to the client/);
+    // The list's own line is the step's, where it has one.
+    const said = (line: string, tone: "active" | "idle") =>
+      panelFrame(
+        "designevidence",
+        workflowOf(
+          midway({
+            requirements: [{ phase: "DESIGN", state: "NOT_GENERATED" }],
+            designRelease: { step: "WAITING", waitingOn: "REQUESTS" },
+            designRequests: { tone, status: "Requests accepted", line },
+          }),
+        ),
+        null,
+      ).need;
+    const held = said(
+      "The requests wait for a person who may accept them to accept the list.",
+      "idle",
+    );
+    assert.equal(held.kind, "wait");
+    assert.equal(
+      held.detail,
+      "The requests wait for a person who may accept them to accept the list.",
+    );
+    assert.equal(held.action, undefined);
+    const finishing = said(
+      "Drafting starts when the planner finishes. Each request is approved before it goes to the client.",
+      "active",
+    );
+    assert.equal(finishing.kind, "agent");
+    assert.match(
+      finishing.detail,
+      /^Drafting starts when the planner finishes\./,
+    );
     // Nothing is asked: no action, and no draft or release in its words.
     assert.equal(frame.need.action, undefined);
     assert.doesNotMatch(
