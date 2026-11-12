@@ -3,9 +3,11 @@ import { describe, it } from "node:test";
 
 import type { Draft, Prefill } from "../apps/web/src/control-setup-model.ts";
 import {
+  ANSWER_MAX,
   afterTopicSave,
   answerDisplay,
   answeredTurns,
+  answerList,
   askSeparately,
   CARRIED,
   carriedCopy,
@@ -13,6 +15,7 @@ import {
   chatRequest,
   chosenStart,
   composeAnswer,
+  composeMultiple,
   confirmsByProposal,
   copiedNote,
   copyChoices,
@@ -26,6 +29,10 @@ import {
   greeting,
   ignoredNote,
   interviewProgress,
+  multipleAnswer,
+  multipleProblem,
+  multipleStart,
+  multipleValue,
   type Need,
   neededForLine,
   nextAfterUnderstanding,
@@ -39,6 +46,7 @@ import {
   otherSystemLabel,
   otherText,
   parseAnswer,
+  parseMultiple,
   parseNotes,
   parseReading,
   parseReview,
@@ -61,6 +69,7 @@ import {
   stepOpen,
   stepRequired,
   stepTopic,
+  toggleMultiple,
   topicAsks,
   topicBlocked,
   topicDone,
@@ -689,6 +698,7 @@ describe("the guided review: one point at a time (mock-up approved 9 November 20
     neededFor: ["EVIDENCE"],
     proposalId: null,
     required: true,
+    multiple: false,
     ...extra,
   });
   const review = (needs: Review["needs"]): Review => ({
@@ -3095,5 +3105,329 @@ describe("starting from the same control on another system (11 November 2026)", 
       "Confirm the answers from Oracle",
     );
     assert.equal(back.at, 0);
+  });
+});
+
+describe("statement questions that take more than one answer (12 November 2026)", () => {
+  // Product owner, on "Who in IT approves a change before it goes to production?": "This type
+  // of question could also have multiple answers, like business and IT. Why does this only
+  // allow 1?"
+  const APPROVERS = [
+    "IT Change Advisory Board",
+    "Change Manager",
+    "IT Applications Manager",
+    "IT Director",
+    "Application owner",
+    "Head of IT",
+  ];
+  const IAM = [
+    "Identity and access management team",
+    "Line manager",
+    "Access management team",
+  ];
+  const need = (key: string, extra: Record<string, unknown>) => ({
+    key,
+    kind: "ANSWER",
+    label: key,
+    question: `${key}?`,
+    value: "",
+    options: APPROVERS,
+    why: "",
+    status: "MISSING",
+    source: "NONE",
+    needed_for: ["EVIDENCE"],
+    proposal_id: null,
+    required: true,
+    ...extra,
+  });
+  const read = (needs: Array<Record<string, unknown>>): Review => {
+    const review = parseReview({
+      control_ref: "ITGC-CM-01",
+      system: "SAP S/4HANA",
+      statement: [
+        { text: "Changes are approved by ", key: null },
+        { text: "[Approver]", key: "change-approver" },
+      ],
+      needs,
+    });
+    assert.ok(review !== null);
+    return review;
+  };
+  const first = (needs: Array<Record<string, unknown>>): Need =>
+    read(needs).needs[0] as Need;
+
+  it("reads multiple from the API: true only when given true, and only on a statement question", () => {
+    assert.equal(first([need("a", { multiple: true })]).multiple, true);
+    assert.equal(first([need("a", { multiple: false })]).multiple, false);
+    assert.equal(first([need("a", {})]).multiple, false);
+    assert.equal(first([need("a", { multiple: "true" })]).multiple, false);
+    assert.equal(first([need("a", { multiple: 1 })]).multiple, false);
+    assert.equal(
+      first([need("a", { kind: "QUESTION", multiple: true })]).multiple,
+      false,
+    );
+  });
+
+  it("joins items as plain English, with no Oxford comma", () => {
+    assert.equal(answerList([]), "");
+    assert.equal(answerList(["A"]), "A");
+    assert.equal(answerList(["A", "B"]), "A and B");
+    assert.equal(answerList(["A", "B", "C"]), "A, B and C");
+    assert.equal(answerList(["A", "B", "C", "D"]), "A, B, C and D");
+    assert.equal(answerList(["  A ", "", " B"]), "A and B");
+  });
+
+  it("composes the options in their listed order, then the Other words last, trimmed", () => {
+    assert.equal(
+      composeMultiple(APPROVERS, { options: ["Change Manager"], other: null }),
+      "Change Manager",
+    );
+    assert.equal(
+      composeMultiple(APPROVERS, {
+        options: ["IT Director", "Change Manager"],
+        other: null,
+      }),
+      "Change Manager and IT Director",
+    );
+    assert.equal(
+      composeMultiple(APPROVERS, {
+        options: ["Head of IT", "IT Change Advisory Board", "IT Director"],
+        other: null,
+      }),
+      "IT Change Advisory Board, IT Director and Head of IT",
+    );
+    assert.equal(
+      composeMultiple(APPROVERS, {
+        options: ["Change Manager"],
+        other: "  the business process owner ",
+      }),
+      "Change Manager and the business process owner",
+    );
+    assert.equal(
+      composeMultiple(APPROVERS, {
+        options: ["Change Manager", "IT Director"],
+        other: "Finance",
+      }),
+      "Change Manager, IT Director and Finance",
+    );
+    assert.equal(
+      composeMultiple(APPROVERS, { options: [], other: "The CFO" }),
+      "The CFO",
+    );
+    assert.equal(composeMultiple(APPROVERS, { options: [], other: null }), "");
+    assert.equal(composeMultiple(APPROVERS, { options: [], other: "  " }), "");
+    // Other words that are one of the options count as that option: never named twice.
+    assert.equal(
+      composeMultiple(APPROVERS, {
+        options: ["Change Manager"],
+        other: "change  manager",
+      }),
+      "Change Manager",
+    );
+  });
+
+  it("reads a stored value back into the options and the Other words", () => {
+    const back = (value: string, options: readonly string[] = APPROVERS) =>
+      parseMultiple(options, value);
+    assert.deepEqual(back(""), { options: [], other: null });
+    assert.deepEqual(back("Change Manager"), {
+      options: ["Change Manager"],
+      other: null,
+    });
+    // Options in a different order come back in their listed order.
+    assert.deepEqual(back("Head of IT, IT Director and Change Manager"), {
+      options: ["Change Manager", "IT Director", "Head of IT"],
+      other: null,
+    });
+    // Extra spaces and another case.
+    assert.deepEqual(
+      back("  change   MANAGER ,  it director   AND head of it  "),
+      {
+        options: ["Change Manager", "IT Director", "Head of IT"],
+        other: null,
+      },
+    );
+    // An option holding "and" is taken whole (the longest first), not split at its "and".
+    assert.deepEqual(
+      back("Identity and access management team and Line manager", IAM),
+      {
+        options: ["Identity and access management team", "Line manager"],
+        other: null,
+      },
+    );
+    assert.deepEqual(back("Access management team", IAM), {
+      options: ["Access management team"],
+      other: null,
+    });
+    // Other words holding "and" keep it: only the list's separators are taken out.
+    assert.deepEqual(
+      back("Change Manager and the business process owner and finance"),
+      {
+        options: ["Change Manager"],
+        other: "the business process owner and finance",
+      },
+    );
+    assert.deepEqual(
+      back("Change Manager, IT Director and Research and Development"),
+      {
+        options: ["Change Manager", "IT Director"],
+        other: "Research and Development",
+      },
+    );
+    // An option is matched as a whole phrase, never inside a longer word.
+    assert.deepEqual(back("Application owners group"), {
+      options: [],
+      other: "Application owners group",
+    });
+    // A value from before the question took more than one answer: its words are the Other.
+    assert.deepEqual(back("The CFO"), { options: [], other: "The CFO" });
+  });
+
+  it("round-trips: a composed value reads back into the same pick", () => {
+    const picks = [
+      { options: ["Change Manager"], other: null },
+      { options: ["Change Manager", "IT Director"], other: null },
+      {
+        options: [
+          "IT Change Advisory Board",
+          "IT Applications Manager",
+          "Head of IT",
+        ],
+        other: null,
+      },
+      { options: ["Change Manager"], other: "the business process owner" },
+      {
+        options: ["IT Director", "Application owner"],
+        other: "Sales and Marketing",
+      },
+      { options: [], other: "The CFO and the CIO" },
+    ];
+    for (const pick of picks) {
+      const value = composeMultiple(APPROVERS, pick);
+      assert.deepEqual(parseMultiple(APPROVERS, value), pick, value);
+      assert.equal(
+        composeMultiple(APPROVERS, parseMultiple(APPROVERS, value)),
+        value,
+      );
+    }
+    const iam = {
+      options: ["Identity and access management team", "Line manager"],
+      other: "HR",
+    };
+    assert.deepEqual(parseMultiple(IAM, composeMultiple(IAM, iam)), iam);
+  });
+
+  it("pre-selects a proposal or the answer on record; nothing for a question not answered", () => {
+    for (const source of ["USUAL", "PRIOR_YEAR", "SYSTEM", "OTHER_SYSTEM"]) {
+      const proposed = first([
+        need("change-approver", {
+          multiple: true,
+          status: "PROPOSED",
+          source,
+          value: "Change Manager and the business process owner",
+          proposal_id: source === "PRIOR_YEAR" ? "p1" : null,
+        }),
+      ]);
+      assert.deepEqual(
+        multipleStart(proposed),
+        { options: ["Change Manager"], other: "the business process owner" },
+        source,
+      );
+      // Untouched, the proposal is confirmed in its own words (last year's through its
+      // proposal record, which compares the value).
+      assert.equal(
+        multipleAnswer(proposed, undefined),
+        "Change Manager and the business process owner",
+      );
+    }
+    const onRecord = first([
+      need("change-approver", {
+        multiple: true,
+        status: "CONFIRMED",
+        source: "PERSON",
+        value: "it director, change manager",
+      }),
+    ]);
+    assert.deepEqual(multipleStart(onRecord), {
+      options: ["Change Manager", "IT Director"],
+      other: null,
+    });
+    assert.equal(
+      multipleAnswer(onRecord, undefined),
+      "it director, change manager",
+    );
+    // Changed by the person: their pick, composed.
+    assert.equal(
+      multipleAnswer(
+        onRecord,
+        toggleMultiple(APPROVERS, multipleStart(onRecord), "Head of IT"),
+      ),
+      "Change Manager, IT Director and Head of IT",
+    );
+    const missing = first([
+      need("change-approver", { multiple: true, value: "Change Manager" }),
+    ]);
+    assert.deepEqual(multipleStart(missing), { options: [], other: null });
+    assert.equal(multipleAnswer(missing, undefined), "");
+  });
+
+  it("toggles an option, keeping the options in their listed order and the Other words", () => {
+    const start = { options: ["IT Director"], other: "Finance" };
+    const added = toggleMultiple(APPROVERS, start, "Change Manager");
+    assert.deepEqual(added, {
+      options: ["Change Manager", "IT Director"],
+      other: "Finance",
+    });
+    assert.deepEqual(toggleMultiple(APPROVERS, added, "IT Director"), {
+      options: ["Change Manager"],
+      other: "Finance",
+    });
+  });
+
+  it("holds the save back until something valid is chosen", () => {
+    const q = first([need("change-approver", { multiple: true })]);
+    assert.equal(multipleValue(q, { options: [], other: null }), "");
+    assert.equal(multipleProblem(q, { options: [], other: null }), "");
+    // Other ticked with no words: a problem that says how to recover, and nothing to save.
+    const blank = { options: ["Change Manager"], other: "   " };
+    assert.equal(
+      multipleProblem(q, blank),
+      "Describe the other answer, or untick Other (specify).",
+    );
+    assert.equal(multipleValue(q, blank), "");
+    assert.equal(multipleAnswer(q, blank), "");
+    // The Other words alone are enough.
+    assert.equal(
+      multipleValue(q, { options: [], other: "The CFO" }),
+      "The CFO",
+    );
+    // Longer than the values save takes: held back, with the count.
+    const long = { options: ["Change Manager"], other: "x".repeat(ANSWER_MAX) };
+    assert.match(
+      multipleProblem(q, long),
+      /^Keep the answer to 300 characters \(319 now\)/,
+    );
+    assert.equal(multipleValue(q, long), "");
+    assert.equal(
+      multipleValue(q, {
+        options: ["Change Manager", "Head of IT"],
+        other: null,
+      }),
+      "Change Manager and Head of IT",
+    );
+  });
+
+  it("leaves a single-choice statement question as it was", () => {
+    const single = first([
+      need("change-approver", {
+        status: "PROPOSED",
+        source: "USUAL",
+        value: "Change Manager",
+      }),
+    ]);
+    assert.equal(single.multiple, false);
+    assert.equal(single.value, "Change Manager");
+    assert.deepEqual(single.options, APPROVERS);
+    assert.equal(single.walkthrough, undefined);
   });
 });

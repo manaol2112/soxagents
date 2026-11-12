@@ -11,7 +11,7 @@ from ai_workforce_api.control_statements import Slot, render
 from ai_workforce_api.controls import LIBRARY
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.sample_traces import limit_of
-from ai_workforce_api.slot_options import MAX_OPTIONS, options_for
+from ai_workforce_api.slot_options import MAX_OPTIONS, MULTIPLE_SLOTS, options_for
 from ai_workforce_api.slot_questions import asks_for_document
 from ai_workforce_api.statement_registry import STATEMENTS
 
@@ -175,3 +175,57 @@ def test_typing_the_clients_own_answer_stays_open() -> None:
     # The client's own answer, not among them, is taken as written.
     own = _checked(_by_rules(asked, "Ivanti Neurons for ITSM"), asked)
     assert (own.intent, own.value) == ("ANSWER", "Ivanti Neurons for ITSM")
+
+
+# Every field of a statement that reads a value into the control's wording.
+_READ_FIELDS = (
+    "text", "operator", "reviewer", "owner", "authority", "precision", "investigation",
+    "evidence", "applies_when",
+)  # fmt: skip
+
+
+def test_the_values_that_take_several_answers_are_roles_and_tools_of_access_and_change() -> None:
+    """Product owner, 12 November 2026: a statement question "could also have multiple
+    answers, like business and IT". Only an approver, a reviewer, an administering role or a
+    tool takes several; an owner (one accountable role), a limit, a period, a document, the
+    control's own system and the sign-in settings take one."""
+    slots = _access_and_change()
+    assert {"it-approver", "access-tool", "change-tool"} <= MULTIPLE_SLOTS
+    for key in MULTIPLE_SLOTS:
+        assert key in slots, key
+        slot = slots[key]
+        assert slot.kind in ("ROLE", "SYSTEM"), (key, slot.kind)
+        assert not key.endswith("-owner") and not asks_for_document(slot), key
+        assert key not in EXCEPTIONS and key not in AUTOMATIC and key != PROFILE_TARGET, key
+    for key in ("access-owner", "change-owner", "ops-owner", "system", "removal-days"):
+        assert key not in MULTIPLE_SLOTS, key
+
+
+def test_a_value_with_several_answers_reads_in_every_sentence_it_fills() -> None:
+    """A list fills the wording as written ("approved by the business owner and Change
+    Manager and Application owner"), with no blank left, and is never the subject of a verb
+    in the singular, which would read "A and B approves"."""
+    joined: dict[str, str] = {}
+    for key in MULTIPLE_SLOTS:
+        first, second = options_for(_access_and_change()[key])[:2]
+        joined[key] = f"{first} and {second}"
+    read = 0
+    for control_key, statement in STATEMENTS.items():
+        labels = {slot.key: slot.label for slot in statement.slots}
+        values = {slot.key: joined.get(slot.key, slot.example or "x") for slot in statement.slots}
+        for name in _READ_FIELDS:
+            text: str = getattr(statement, name)
+            for key in MULTIPLE_SLOTS:
+                if f"{{{key}}}" not in text:
+                    continue
+                filled = render(text, values, labels)
+                assert joined[key] in filled, (control_key, name, key)
+                # No blank left: every value is filled, none in brackets.
+                assert not any(f"[{label}]" in filled for label in labels.values()), filled
+                assert "{" not in filled, (control_key, name, filled)
+                # The word after the value is not a verb in the singular ("reviews", "is").
+                after = re.search(rf"\{{{key}\}}(?: for \{{[a-z-]+\}})? ([a-z]+)", text)
+                verb = "" if after is None else after.group(1)
+                assert not verb.endswith("s"), (control_key, name, key, verb)
+                read += 1
+    assert read >= len(MULTIPLE_SLOTS)

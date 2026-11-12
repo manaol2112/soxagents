@@ -443,6 +443,36 @@ _EXPLICIT: dict[str, tuple[str, ...]] = {
     "tax-advisor": ("none", "the external tax advisor"),
 }
 
+# The values that take more than one answer (product owner, 12 November 2026: "could also
+# have multiple answers, like business and IT"), saved as one English list ("A", "A and B",
+# "A, B and C") that fills the control's wording as written. Only where more than one party
+# or tool commonly acts, and only where every sentence of the library reading the value
+# still reads with a list in it: after "by", "to", "in", "through", or before a modal
+# ("Only {data-admin} can"), never as the subject of a verb in the singular ("{admin-role}
+# grants" would read "A and B grants"). The rest take one answer: an owner is the one role
+# accountable for the control; a limit, a period, an amount, a report, the control's own
+# system, a document, the sign-in settings and free-text criteria are one answer each.
+MULTIPLE_SLOTS = frozenset({
+    # "approved by the business owner and {it-approver}": the CAB and a business approver.
+    "it-approver",
+    # "approved by {config-approver}": often the business process owner and IT.
+    "config-approver",
+    # "approved by {patch-approver}": often the infrastructure and application owners.
+    "patch-approver",
+    # "approved by {ff-approver}": often the role owner and IT security.
+    "ff-approver",
+    # "reviewed by {ff-reviewer}": often the business process owner and IT controls.
+    "ff-reviewer",
+    # "made by {data-admin}", "Only {data-admin} can": often DBAs and application support.
+    "data-admin",
+    # "limited to {infra-admin-role}": database and platform teams are often separate.
+    "infra-admin-role",
+    # "raised in {access-tool}": a ticketing tool and an identity tool are often both used.
+    "access-tool",
+    # "raised in {change-tool}": a ticketing tool and a DevOps tool are often both used.
+    "change-tool",
+})  # fmt: skip
+
 # The system values that name one of the engagement's own systems.
 _OWN_SYSTEM = frozenset({"system", "erp", "source-system"})
 # Kinds whose answer only the client's documents set: no suggestion stands in for them.

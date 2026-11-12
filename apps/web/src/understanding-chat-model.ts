@@ -465,6 +465,10 @@ export type Need = {
    * Active Directory"); "" or absent otherwise. */
   sourceDetail?: string;
   required: boolean;
+  /** Whether a statement question (kind ANSWER) takes more than one answer, such as the
+   * business and IT both approving (product owner, 12 November 2026); false for every other
+   * kind and when the API leaves it out. */
+  multiple: boolean;
   /** A walkthrough question's own facts (kind WALKTHROUGH only). */
   walkthrough?: Walkthrough;
 };
@@ -787,6 +791,7 @@ export function parseReview(body: unknown): Review | null {
         typeof need.proposal_id === "string" ? need.proposal_id : null,
       sourceDetail: text(need.source_detail).trim(),
       required: need.required !== false,
+      multiple: kind === "ANSWER" && need.multiple === true,
       ...(walkthrough === undefined ? {} : { walkthrough }),
     });
   }
@@ -2233,4 +2238,168 @@ export function topicHint(asked: readonly Need[], label: string): string {
         ? " A proposed answer is selected: confirm it by saving, or change it."
         : " Proposed answers are selected: confirm them by saving, or change them.";
   return `${count}${note}`;
+}
+
+// More than one answer to a statement question (product owner, 12 November 2026, on "Who in
+// IT approves a change before it goes to production?": "This type of question could also have
+// multiple answers, like business and IT. Why does this only allow 1?"). The server marks such
+// an ANSWER question `multiple`. Its value fills a blank in the control's statement, so it is
+// stored as plain English that still reads in the sentence: "A"; "A and B"; "A, B and C" (no
+// Oxford comma); the options chosen in their listed order, then the Other words, as typed
+// (trimmed), last. It is saved through the same values save as any other answer.
+
+/** The longest answer the values save takes (control-context-model, "values-set"). */
+export const ANSWER_MAX = 300;
+
+/** What is chosen on a question that takes more than one answer: the options, and the Other
+ * words as typed (null while Other is not chosen). */
+export type MultiplePick = { options: string[]; other: string | null };
+
+/** Items as one English list: "A", "A and B", "A, B and C". Blank items are left out. */
+export function answerList(items: readonly string[]): string {
+  const list = items.map((each) => each.trim()).filter((each) => each !== "");
+  if (list.length <= 1) {
+    return list[0] ?? "";
+  }
+  return `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`;
+}
+
+/** Text compared as the person means it: case and runs of spaces ignored. */
+function sameWords(a: string, b: string): boolean {
+  const norm = (text: string) => text.trim().replace(/\s+/g, " ").toLowerCase();
+  return norm(a) === norm(b);
+}
+
+/** The value of a question that takes more than one answer: the options chosen in their
+ * listed order, then the Other words (trimmed), joined as English. Other words that are one
+ * of the options count as that option, so it is never named twice. "" when nothing is
+ * chosen. */
+export function composeMultiple(
+  options: readonly string[],
+  pick: MultiplePick,
+): string {
+  const words = (pick.other ?? "").trim();
+  const same =
+    words === ""
+      ? undefined
+      : options.find((option) => sameWords(option, words));
+  const chosen = options.filter(
+    (option) => pick.options.includes(option) || option === same,
+  );
+  return answerList([...chosen, ...(same === undefined ? [words] : [])]);
+}
+
+const LETTER = "[\\p{L}\\p{N}]";
+/** The separators between the items of an English list, at the edges of what is left. */
+const LEADING = /^(?:[\s,;&]|\band\b)+/iu;
+const TRAILING = /(?:[\s,;&]|\band\b)+$/iu;
+/** Where an option was taken out of the value. */
+const TAKEN = "\u0000";
+
+/** An option as a whole phrase in a value: any case, any run of spaces between its words,
+ * and not part of a longer word ("Application owner" is not in "Application owners"). */
+function optionPattern(option: string): RegExp {
+  const words = option
+    .trim()
+    .split(/\s+/)
+    .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`(?<!${LETTER})${words.join("\\s+")}(?!${LETTER})`, "giu");
+}
+
+/** A stored value read back into what it was chosen from: each option it names (matched as
+ * a whole phrase, any case, the longest option first so one holding "and" is taken whole),
+ * in the options' listed order; whatever is left, less the list's separators (", " and
+ * " and "), is the Other words (null when nothing is left). */
+export function parseMultiple(
+  options: readonly string[],
+  value: string,
+): MultiplePick {
+  let rest = value;
+  const found: string[] = [];
+  const longestFirst = options
+    .filter((option) => option.trim() !== "")
+    .map((option, index) => ({ option, index }))
+    .sort(
+      (a, b) =>
+        b.option.trim().length - a.option.trim().length || a.index - b.index,
+    );
+  for (const { option } of longestFirst) {
+    const next = rest.replace(optionPattern(option), TAKEN);
+    if (next !== rest) {
+      found.push(option);
+      rest = next;
+    }
+  }
+  const left = rest
+    .split(TAKEN)
+    .map((part) => part.replace(LEADING, "").replace(TRAILING, "").trim())
+    .filter((part) => part !== "");
+  return {
+    options: options.filter((option) => found.includes(option)),
+    other: left.length === 0 ? null : answerList(left),
+  };
+}
+
+/** What a question that takes more than one answer starts with: its proposal (usual practice,
+ * last year's, this system's, another system's, the agents') or its answer on record, read
+ * back into its choices; nothing for a question not answered. */
+export function multipleStart(need: Need): MultiplePick {
+  if (need.status === "MISSING" || need.value.trim() === "") {
+    return { options: [], other: null };
+  }
+  return parseMultiple(need.options, need.value);
+}
+
+/** A pick with one option chosen or unchosen, the options kept in their listed order. */
+export function toggleMultiple(
+  options: readonly string[],
+  pick: MultiplePick,
+  option: string,
+): MultiplePick {
+  const on = !pick.options.includes(option);
+  return {
+    ...pick,
+    options: options.filter((each) =>
+      each === option ? on : pick.options.includes(each),
+    ),
+  };
+}
+
+/** Why a pick on a question that takes more than one answer cannot be saved, in words that
+ * say how to recover; "" when nothing holds it back. Nothing chosen is not a problem here:
+ * the save waits for a choice. */
+export function multipleProblem(need: Need, pick: MultiplePick): string {
+  if (pick.other !== null && pick.other.trim() === "") {
+    return "Describe the other answer, or untick Other (specify).";
+  }
+  const value = composeMultiple(need.options, pick);
+  if (value.length > ANSWER_MAX) {
+    return `Keep the answer to ${ANSWER_MAX} characters (${value.length} now): choose fewer, or shorten the other answer.`;
+  }
+  return "";
+}
+
+/** The value to save from a pick; "" when nothing is chosen or it cannot be saved. */
+export function multipleValue(need: Need, pick: MultiplePick): string {
+  return multipleProblem(need, pick) === ""
+    ? composeMultiple(need.options, pick)
+    : "";
+}
+
+/** The answer a point that takes more than one answer saves: the person's pick composed
+ * (`pick`), or, untouched (undefined), its proposal or answer on record in its own words, so
+ * confirming it accepts it as it stands (last year's through its proposal record). "" when
+ * nothing valid is chosen. */
+export function multipleAnswer(
+  need: Need,
+  pick: MultiplePick | undefined,
+): string {
+  if (pick !== undefined) {
+    return multipleValue(need, pick);
+  }
+  const kept = need.value.trim();
+  return multipleValue(need, multipleStart(need)) !== "" &&
+    kept.length <= ANSWER_MAX
+    ? kept
+    : "";
 }

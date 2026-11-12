@@ -702,3 +702,59 @@ def test_a_governing_document_is_proposed_only_when_this_control_has_it(
     )  # fmt: skip
     oracle = policy("Oracle EBS")
     assert (oracle["value"], oracle["status"], oracle["source"]) == ("", "MISSING", "NONE")
+
+
+def test_a_question_with_several_answers_saves_them_as_one_english_list(
+    migrated: Database,
+) -> None:
+    """Product owner, 12 November 2026, on "Who in IT approves a change before it goes to
+    production?": "This type of question could also have multiple answers, like business and
+    IT." Such a question is marked `multiple`; an owner, accountable alone, is not. The
+    answers are saved as one English list through the same values save, kept as written,
+    and fill the control's wording."""
+    team = _two_systems(migrated, "uc-multiple")
+    owner = team["owner"]
+    on = _on_systems(migrated, team["project"])
+    change = on[("change-approval", "SAP ERP")]
+    provisioning = on[("access-provisioning", "SAP ERP")]
+
+    def needs(control: str) -> dict[str, dict[str, Any]]:
+        return {need["key"]: need for need in _review(owner, team, control)["needs"]}
+
+    approver = needs(change)["it-approver"]
+    assert (approver["kind"], approver["multiple"]) == ("ANSWER", True)
+    access = needs(provisioning)
+    assert (access["access-owner"]["kind"], access["access-owner"]["multiple"]) == (
+        "ANSWER",
+        False,
+    )
+    # Only a statement question takes several answers.
+    assert not any(n["multiple"] for n in access.values() if n["kind"] != "ANSWER")
+
+    answer = "Change Manager and Application owner"
+    saved = owner.put(
+        f"{_control_path(team, change)}/values", json={"values": {"it-approver": answer}}
+    )
+    assert saved.status_code == 200, saved.text
+    review = _review(owner, team, change)
+    confirmed = next(n for n in review["needs"] if n["key"] == "it-approver")
+    assert (confirmed["value"], confirmed["status"], confirmed["source"]) == (
+        answer,
+        "CONFIRMED",
+        "PERSON",
+    )
+    assert confirmed["multiple"] is True
+    # The list fills the statement's blank as written.
+    part = next(p for p in review["statement"] if p["key"] == "it-approver")
+    assert part["text"] == answer
+    with connect(migrated.url) as connection:
+        stored = connection.execute(
+            "SELECT value FROM control_parameters WHERE engagement_control_id = %s "
+            "AND slot_key = 'it-approver'",
+            (change,),
+        ).fetchone()
+        activity = connection.execute(
+            "SELECT activity FROM engagement_controls WHERE id = %s", (change,)
+        ).fetchone()
+    assert stored is not None and stored[0] == answer
+    assert activity is not None and f"the business owner and {answer} in the tool" in activity[0]

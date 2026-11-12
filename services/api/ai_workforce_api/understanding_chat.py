@@ -31,6 +31,7 @@ from ai_workforce_api.control_design import CopyBody, SlotBody, copy_values, des
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
+from ai_workforce_api.slot_options import MULTIPLE_SLOTS
 from ai_workforce_api.walkthrough_questions import (
     TOPIC_LABELS,
     YES_NO,
@@ -476,6 +477,10 @@ class NeedBody(BaseModel):
     # new answer to its parent closes before saving (11 November 2026).
     when_key: str = ""
     when_value: str = ""
+    # A statement question that takes more than one answer (kind ANSWER only;
+    # slot_options.MULTIPLE_SLOTS, 12 November 2026), saved as one English list ("A and B")
+    # through the same values save.
+    multiple: bool = False
 
 
 class StatementPart(BaseModel):
@@ -961,7 +966,7 @@ def understanding_review(
                 question=body.question or body.label, value="", options=options,
                 why=body.why, status="MISSING", source="NONE", needed_for=for_what,
                 # Every question the statement asks is counted by the D&I release's gate.
-                required=True,
+                required=True, multiple=slot.key in MULTIPLE_SLOTS,
             )  # fmt: skip
             if value.strip():
                 need = base.model_copy(update={

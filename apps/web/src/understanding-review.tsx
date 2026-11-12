@@ -17,6 +17,7 @@ import { acceptProposal } from "./references-view";
 import { UiIcon } from "./ui-icon";
 import {
   AGENT_NAME,
+  ANSWER_MAX,
   afterTopicSave,
   answerDisplay,
   askSeparately,
@@ -36,6 +37,10 @@ import {
   type Interview,
   ignoredNote,
   interviewProgress,
+  type MultiplePick,
+  multipleAnswer,
+  multipleProblem,
+  multipleStart,
   type Need,
   type NotesResult,
   neededForLine,
@@ -65,6 +70,7 @@ import {
   statusLine,
   stepRequired,
   stepTopic,
+  toggleMultiple,
   topicAsks,
   topicBlocked,
   topicDone,
@@ -163,6 +169,12 @@ export function UnderstandingReview({
   // The choice made on each point before it is saved, and the text of "Other (specify)".
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [typed, setTyped] = useState<Record<string, string>>({});
+  // A point that takes more than one answer (12 November 2026): what is chosen there before
+  // it is saved; its Other words are also kept in `typed`, so unticking Other and ticking it
+  // again brings them back.
+  const [multiPicked, setMultiPicked] = useState<Record<string, MultiplePick>>(
+    {},
+  );
   // Known answers (last year's, this system's) unticked on the carried step: asked on
   // their own.
   const [unticked, setUnticked] = useState<Record<string, boolean>>({});
@@ -423,6 +435,10 @@ export function UnderstandingReview({
     setEditing((was) => ({ ...was, [need.key]: false }));
     setTyped((was) => ({ ...was, [need.key]: "" }));
     setPicked((was) => {
+      const { [need.key]: _gone, ...rest } = was;
+      return rest;
+    });
+    setMultiPicked((was) => {
       const { [need.key]: _gone, ...rest } = was;
       return rest;
     });
@@ -855,8 +871,174 @@ export function UnderstandingReview({
     setDocOpen(true);
   }
 
+  /** What is chosen on a point that takes more than one answer: the person's choices, or
+   * its proposal or answer on record read back into them. */
+  const multipleFor = (need: Need): MultiplePick =>
+    multiPicked[need.key] ?? multipleStart(need);
+
+  /** A point that takes more than one answer (12 November 2026): its options as tick chips
+   * (the walkthrough's), with "Other (specify)" opening a field for the client's own words.
+   * Native checkboxes underneath, so Tab moves between them and Space ticks. A proposal
+   * still untouched keeps the proposal's look: never shown as anyone's answer. */
+  const multipleChoices = (
+    need: Need,
+    id: string,
+    label: { labelledBy: string; describedBy: string } | null,
+  ) => {
+    const start = multipleStart(need);
+    const pick = multipleFor(need);
+    const locked = !canAct || busy;
+    const proposed =
+      need.status === "PROPOSED" &&
+      !(need.key in multiPicked) &&
+      (pick.options.length > 0 || pick.other !== null);
+    const issue = multipleProblem(need, pick);
+    const set = (next: MultiplePick) =>
+      setMultiPicked((was) => ({ ...was, [need.key]: next }));
+    const otherOn = pick.other !== null;
+    const box = (on: boolean) => (
+      <span className="ur-wt-box" aria-hidden="true">
+        {on ? <UiIcon name="check" size={11} /> : null}
+      </span>
+    );
+    return (
+      <>
+        <fieldset
+          className={`ur-wt-chips ur-multi${proposed ? " is-proposed" : ""}`}
+          {...(label === null
+            ? {
+                "aria-label": `Answers to: ${need.question || need.label} (choose all that apply)`,
+              }
+            : {
+                "aria-labelledby": label.labelledBy,
+                "aria-describedby": label.describedBy,
+              })}
+        >
+          {need.options.map((option) => {
+            const on = pick.options.includes(option);
+            return (
+              <label key={option} className={`ur-wt-chip${on ? " is-on" : ""}`}>
+                <input
+                  type="checkbox"
+                  name={id}
+                  value={option}
+                  checked={on}
+                  disabled={locked}
+                  onChange={() =>
+                    set(toggleMultiple(need.options, pick, option))
+                  }
+                />
+                {box(on)}
+                <span>{option}</span>
+              </label>
+            );
+          })}
+          <label className={`ur-wt-chip is-other${otherOn ? " is-on" : ""}`}>
+            <input
+              type="checkbox"
+              name={id}
+              value={OTHER}
+              checked={otherOn}
+              disabled={locked}
+              aria-controls={otherOn ? `${id}-other` : undefined}
+              onChange={() =>
+                set({
+                  ...pick,
+                  other: otherOn
+                    ? null
+                    : (typed[need.key] ?? start.other ?? ""),
+                })
+              }
+            />
+            {box(otherOn)}
+            <span>Other (specify)</span>
+          </label>
+        </fieldset>
+        {otherOn ? (
+          <div className="ur-wt-other">
+            <input
+              id={`${id}-other`}
+              className="ur-other"
+              type="text"
+              maxLength={ANSWER_MAX}
+              value={pick.other ?? ""}
+              disabled={locked}
+              placeholder="Type the client's answer"
+              aria-label={`Other answer to: ${need.question || need.label}`}
+              aria-describedby={`${id}-other-hint`}
+              aria-invalid={issue !== "" && (pick.other ?? "").trim() !== ""}
+              onChange={(event) => {
+                const words = event.target.value;
+                setTyped((was) => ({ ...was, [need.key]: words }));
+                set({ ...pick, other: words });
+              }}
+            />
+            <p
+              className={`ur-wt-other-hint${issue !== "" && (pick.other ?? "").trim() !== "" ? " is-error" : ""}`}
+              id={`${id}-other-hint`}
+              aria-live="polite"
+            >
+              {issue !== ""
+                ? issue
+                : "Added after the answers ticked, as typed."}
+            </p>
+          </div>
+        ) : issue !== "" ? (
+          <p className="ur-wt-other-hint is-error" aria-live="polite">
+            {issue}
+          </p>
+        ) : null}
+      </>
+    );
+  };
+
+  /** A point that takes more than one answer, changed in place from the record's fold. */
+  const recordMultiple = (need: Need) => {
+    const value = multipleAnswer(need, multiPicked[need.key]);
+    return (
+      <form
+        className="ur-answer"
+        autoComplete="off"
+        onSubmit={(event: FormEvent<HTMLFormElement>) => {
+          event.preventDefault();
+          void save(need, value, false);
+        }}
+      >
+        {multipleChoices(need, `ur-rec-${need.key}`, null)}
+        <div className="ur-answer-actions">
+          <button
+            type="submit"
+            className="btn btn-sm"
+            disabled={!canAct || busy || value === "" || value === need.value}
+          >
+            {saving === need.key ? "Saving…" : "Save"}
+          </button>
+          <button
+            type="button"
+            className="cs-link"
+            onClick={() => {
+              setEditing((was) => ({ ...was, [need.key]: false }));
+              setMultiPicked((was) => {
+                const { [need.key]: _gone, ...rest } = was;
+                return rest;
+              });
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
+    );
+  };
+
   /** An answer on record changed in place, from the record's fold. */
-  const recordEditor = (need: Need) => (
+  const recordEditor = (need: Need) =>
+    need.multiple && need.options.length > 0
+      ? recordMultiple(need)
+      : recordSingle(need);
+
+  /** An answer on record with one answer, changed in place. */
+  const recordSingle = (need: Need) => (
     <div className="ur-answer">
       {need.options.length > 0 ? (
         // biome-ignore lint/a11y/useSemanticElements: a row of answer buttons, not a fieldset
@@ -1300,11 +1482,17 @@ export function UnderstandingReview({
       !need.options.includes(preset)
         ? OTHER
         : preset);
-    const other = choice === OTHER || need.options.length === 0;
+    // More than one answer (12 November 2026): tick chips, composed into one English list.
+    const multiple = need.multiple && need.options.length > 0;
+    const other = !multiple && (choice === OTHER || need.options.length === 0);
     const text =
       typed[need.key] ??
       (choice === OTHER && !need.options.includes(preset) ? preset : "");
-    const answer = other ? text.trim() : choice;
+    const answer = multiple
+      ? multipleAnswer(need, multiPicked[need.key])
+      : other
+        ? text.trim()
+        : choice;
     const unchanged = onFile && answer === need.value;
     const forLine = neededForLine(need);
     const chips = (
@@ -1409,6 +1597,9 @@ export function UnderstandingReview({
               : need.status === "PROPOSED"
                 ? "A proposed answer is selected. Confirm it, or choose another."
                 : "";
+    const hintLine = multiple
+      ? `${hint.replace(/, or choose another\.$/, ", or change it.")}${hint !== "" ? " " : ""}Choose all that apply.`
+      : hint;
     const tagFor = (option: string) =>
       option !== need.value || onFile
         ? ""
@@ -1439,8 +1630,17 @@ export function UnderstandingReview({
       >
         {chips}
         {title}
-        {hint !== "" ? <p className="ur-hint">{hint}</p> : null}
-        {need.options.length > 0 ? (
+        {hintLine !== "" ? (
+          <p className="ur-hint" id="ur-hint">
+            {hintLine}
+          </p>
+        ) : null}
+        {multiple ? (
+          multipleChoices(need, name, {
+            labelledBy: "ur-q",
+            describedBy: "ur-hint",
+          })
+        ) : need.options.length > 0 ? (
           <fieldset className="ur-options" aria-labelledby="ur-q">
             {[...need.options, OTHER].map((option) => {
               const on = choice === option;

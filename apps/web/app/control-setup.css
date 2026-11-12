@@ -2597,6 +2597,21 @@
   gap: 8px;
 }
 
+/* A point that takes more than one answer, changed in place (12 November 2026): its tick
+   chips, then Save and Cancel on one line. */
+.ur-answer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.ur-record .ur-multi .ur-wt-chip {
+  min-height: 30px;
+  padding: 4px 12px;
+  font-size: var(--fs-sm);
+}
+
 /* The point being asked */
 .ur-ask {
   display: grid;
