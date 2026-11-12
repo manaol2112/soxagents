@@ -10,9 +10,12 @@ import {
 } from "react";
 import { AutoRefresh } from "./auto-refresh";
 import {
+  ACCEPT_FIRST,
   ADD_KINDS,
   EXCEPTION_REASON_MAX,
   firstToAccept,
+  POLL_EVERY_MS,
+  pollingOver,
   REQUEST_CHIPS,
   REQUEST_LIMITS,
   type RequestRow,
@@ -22,6 +25,7 @@ import {
   reasonCheck,
   requestReady,
   requestsProblem,
+  STALLED_LINE,
   type UncoveredLine,
   withAttribute,
 } from "./design-requests-model";
@@ -206,14 +210,29 @@ function RequestsPanel({
     version: number;
   } | null>(null);
   // While the planner works or the requests are drafted, the list is read again every few
-  // seconds, in place; it stops by itself when the work ends.
+  // seconds, in place; it stops by itself when the work ends. Not for ever: past the
+  // bound it stops asking and says so, and nothing is re-enabled on a guess. "Check
+  // again" reads once more and starts the bounded reading again while the work is on.
+  const [stalled, setStalled] = useState(false);
   useEffect(() => {
     if (!view.working) {
+      setStalled(false);
       return;
     }
-    const timer = window.setInterval(() => router.refresh(), 3000);
+    if (stalled) {
+      return;
+    }
+    const started = Date.now();
+    const timer = window.setInterval(() => {
+      if (pollingOver(Date.now() - started)) {
+        window.clearInterval(timer);
+        setStalled(true);
+        return;
+      }
+      router.refresh();
+    }, POLL_EVERY_MS);
     return () => window.clearInterval(timer);
-  }, [view.working, router]);
+  }, [view.working, stalled, router]);
 
   const locked = action.pending || view.working;
   const editable = canAct && !view.working;
@@ -242,11 +261,13 @@ function RequestsPanel({
     });
     if (ok) {
       setDone(
-        rows.length === 1
-          ? rows[0]?.change?.remove === true
-            ? "Removal accepted."
-            : "Accepted."
-          : `${rows.length} requests accepted.`,
+        label === "accept-list"
+          ? "List accepted."
+          : rows.length === 1
+            ? rows[0]?.change?.remove === true
+              ? "Removal accepted."
+              : "Accepted."
+            : `${rows.length} requests accepted.`,
       );
     }
   }
@@ -260,7 +281,11 @@ function RequestsPanel({
       version: row.version,
     });
     if (ok) {
-      setDone("Kept as accepted.");
+      // A request the agent proposed is rejected (it goes to the history); a change to
+      // an accepted request is dismissed, and the request stays as accepted.
+      setDone(
+        row.change?.add === true ? "Request rejected." : "Kept as accepted.",
+      );
     }
   }
 
@@ -306,6 +331,8 @@ function RequestsPanel({
     const bodyId = `${id}-${each.id}`;
     const waits = each.state !== "ACCEPTED";
     const menu = editable && !drafting;
+    // Proposed by the agent as a new request: accepted or rejected, nothing else yet.
+    const proposed = each.change?.add === true;
     return (
       <li
         key={each.id}
@@ -376,13 +403,15 @@ function RequestsPanel({
                 {
                   label: "Edit",
                   icon: "compose",
+                  unavailable: proposed ? ACCEPT_FIRST : null,
                   onSelect: () => setDialog({ mode: "edit", row: each }),
                 },
                 {
                   label: "Change attributes",
                   icon: "tag",
-                  unavailable:
-                    each.procedureIds === null
+                  unavailable: proposed
+                    ? ACCEPT_FIRST
+                    : each.procedureIds === null
                       ? "The test plan could not be read. Refresh the page."
                       : view.attributes.length === 0
                         ? "The control has no approved attributes."
@@ -393,6 +422,9 @@ function RequestsPanel({
                   label: "Delete",
                   icon: "trash",
                   danger: true,
+                  unavailable: proposed
+                    ? "It is not in the plan yet. Reject it instead."
+                    : null,
                   onSelect: () => void remove(each),
                 },
               ]}
@@ -405,9 +437,11 @@ function RequestsPanel({
               <div className="dq-change">
                 <p className="ta-why">
                   <span className="tar-origin">{each.change.summary}</span>{" "}
-                  {each.change.remove
-                    ? "It stays as it is until you accept the removal."
-                    : "Your accepted request stays as it is until you accept the change."}
+                  {each.change.add
+                    ? "It joins the requests once you accept it."
+                    : each.change.remove
+                      ? "It stays as it is until you accept the removal."
+                      : "Your accepted request stays as it is until you accept the change."}
                 </p>
                 {each.change.title !== "" ? (
                   <p className="ta-replaces">
@@ -477,7 +511,7 @@ function RequestsPanel({
                         ? "Accepting…"
                         : each.change?.remove === true
                           ? "Accept the removal"
-                          : each.change !== null
+                          : each.change !== null && !proposed
                             ? "Accept the change"
                             : "Accept"}
                     </button>
@@ -489,9 +523,13 @@ function RequestsPanel({
                       disabled={locked}
                       onClick={() => void keep(each)}
                     >
-                      {action.busy === `keep-${each.id}`
-                        ? "Keeping…"
-                        : "Keep the accepted request"}
+                      {proposed
+                        ? action.busy === `keep-${each.id}`
+                          ? "Rejecting…"
+                          : "Reject"
+                        : action.busy === `keep-${each.id}`
+                          ? "Keeping…"
+                          : "Keep the accepted request"}
                     </button>
                   ) : (
                     <button
@@ -540,6 +578,21 @@ function RequestsPanel({
                   : `Accept all ${view.accept.length}`}
               </button>
             ) : null}
+            {/* Every request is accepted, and the server asks a person to stand behind
+                the list: the one action, on the requests as they read. */}
+            {view.confirm.length > 0 ? (
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={locked}
+                title="Stands behind every request as it reads, each recorded as accepted by you."
+                onClick={() => void accept(view.rows, "accept-list")}
+              >
+                {action.busy === "accept-list"
+                  ? "Accepting…"
+                  : "Accept the list"}
+              </button>
+            ) : null}
             <button
               type="button"
               className="btn btn-ghost btn-sm ta-quiet"
@@ -584,10 +637,20 @@ function RequestsPanel({
       {/* Accepted and addressed, not drafted yet: nothing to do here. The server
           releases the phase itself, so the list is read again for a while, in place. */}
       {view.settled && !view.working ? <AutoRefresh /> : null}
-      {view.holds !== "" ? (
+      {stalled && view.working ? (
         <p className="ta-run-note" role="status">
           <UiIcon name="info" size={13} />
-          {view.holds}
+          <span>{STALLED_LINE}</span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => {
+              setStalled(false);
+              router.refresh();
+            }}
+          >
+            Check again
+          </button>
         </p>
       ) : null}
 
@@ -635,6 +698,12 @@ function RequestsPanel({
                   <p className="dq-gap-text">
                     <strong>{item.line}</strong>
                     <small>{item.text}</small>
+                    {item.proposed ? (
+                      <small>
+                        A request the agent proposes would address it. Accept or
+                        reject that request first.
+                      </small>
+                    ) : null}
                   </p>
                   {editable && !drafting ? (
                     <span className="dq-gap-acts">
@@ -652,7 +721,8 @@ function RequestsPanel({
                       <button
                         type="button"
                         className="btn btn-ghost btn-sm"
-                        disabled={locked}
+                        disabled={locked || item.proposed}
+                        title={item.proposed ? ACCEPT_FIRST : undefined}
                         aria-label={`Record why attribute ${item.letter} is not evidenced at D&I`}
                         onClick={() =>
                           setDialog({ mode: "reason", attribute: item })
@@ -1134,6 +1204,8 @@ function AttributesDialog({
       await action.run("save", "planning", {
         intent: "evidence-links",
         requirement_id: row.id,
+        // The request as the person saw it: refused if it changed meanwhile.
+        version: row.version,
         // In the attributes' order, and the procedures it serves as they were.
         attribute_ids: attributes
           .filter((item) => checked.has(item.id))
@@ -1307,6 +1379,7 @@ function AssignDialog({
       await action.run("save", "planning", {
         intent: "evidence-links",
         requirement_id: target.id,
+        version: target.version,
         attribute_ids: withAttribute(target, attribute.attributeId),
         procedure_ids: target.procedureIds,
       })
@@ -1349,16 +1422,18 @@ function AssignDialog({
                 name="request"
                 value={row.id}
                 checked={chosen === row.id}
-                disabled={row.procedureIds === null}
+                disabled={row.procedureIds === null || row.change?.add === true}
                 onChange={() => setChosen(row.id)}
               />
               <span>
                 {row.title}
                 <small>
                   {row.line}
-                  {row.letters.length > 0
-                    ? ` · ${row.addresses}`
-                    : " · addresses no attribute yet"}
+                  {row.change?.add === true
+                    ? " · proposed by the agent: accept it first"
+                    : row.letters.length > 0
+                      ? ` · ${row.addresses}`
+                      : " · addresses no attribute yet"}
                 </small>
               </span>
             </label>

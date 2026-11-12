@@ -1859,9 +1859,9 @@ function ControlRecord({
   });
   const requestsListed =
     designRequests.mode === "list" || designRequests.mode === "drafting";
-  // The planner at work, the requests being drafted, or a settled list the server is
-  // about to release: the step is the agents', and nothing is asked of the person.
-  if (requestsListed && (designRequests.working || designRequests.settled)) {
+  // The planner at work or the requests being drafted: the step is the agents'. An
+  // accepted list with nothing at work on it is not: it says what it waits for.
+  if (requestsListed && designRequests.working) {
     busy.add("designevidence");
   }
   // Step 01's record (10 November 2026): description, objective and risk come from the

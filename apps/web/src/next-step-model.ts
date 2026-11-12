@@ -88,6 +88,9 @@ function actionOf(
         : step.key === "setup" && need.kind === "act"
           ? `Complete ${about.ref}'s details`
           : need.title;
+  // Nothing to do on the step, and no agent at work on it either (an accepted D&I
+  // requests list waiting for the server): the card says so and only opens the step.
+  const waits = kind === "act" && need.kind === "wait";
   const detail =
     kind === "agent"
       ? "An agent is preparing this step. Nothing is needed from you yet; this card shows the next action when it is ready."
@@ -100,7 +103,7 @@ function actionOf(
     kind,
     kindLabel: KIND_LABELS[step.kind],
     label:
-      kind === "agent"
+      kind === "agent" || waits
         ? `Open ${step.title}`
         : several
           ? (need.action?.label ?? `Open ${step.title}`)
@@ -110,11 +113,13 @@ function actionOf(
         ? "Being prepared"
         : kind === "flag"
           ? "Needs attention"
-          : several
-            ? "Ready"
-            : fresh
-              ? "Start here"
-              : "Next",
+          : waits
+            ? "Waiting"
+            : several
+              ? "Ready"
+              : fresh
+                ? "Start here"
+                : "Next",
   };
 }
 

@@ -353,7 +353,14 @@ export type PlanRequirement = {
   sufficiencyBy: string | null;
   waiveReason: string;
   origin: string;
-  pendingChange: { remove: boolean; title: string; description: string } | null;
+  pendingChange: {
+    remove: boolean;
+    title: string;
+    description: string;
+    /** The planner proposes this requirement as a new one, on a plan a person approved:
+     * it is not part of the plan until a person accepts it. Present only when it is. */
+    add?: true;
+  } | null;
   needsReview: boolean;
   coverageNote: string;
   version: number;
@@ -552,6 +559,7 @@ function parseRequirement(item: Raw): PlanRequirement {
             remove: change.remove === true,
             title: str(change.title),
             description: str(change.description),
+            ...(change.add === true ? { add: true as const } : {}),
           },
     needsReview: item.needs_review === true,
     coverageNote: str(item.coverage_note),

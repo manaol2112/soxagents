@@ -98,6 +98,10 @@ export type DesignRequestsState = {
   working: boolean | null;
   /** The phase is released and its requests are being drafted; null when not said. */
   drafting: boolean | null;
+  /** Every request is accepted and every attribute addressed, the list is unreleased,
+   * and nobody who may accept stands behind it (the last decider lost the permission, or
+   * no decision is on record): a person accepts the list as it stands to release it. */
+  toConfirm: boolean;
 };
 
 /** The plan's `design_requests`, or null when the server did not send it. */
@@ -131,6 +135,7 @@ export function parseDesignRequests(
     waitingFor: str(value.waiting_for),
     working: typeof value.working === "boolean" ? value.working : null,
     drafting: typeof value.drafting === "boolean" ? value.drafting : null,
+    toConfirm: value.to_confirm === true,
   };
 }
 
@@ -173,9 +178,12 @@ export const REQUEST_ORIGINS: Record<RequestOrigin, string> = {
   EDITED: "Edited by the team",
 };
 
-/** A change the planner proposes to a request a person already accepted: it never
- * overwrites one, so the change waits on the row until a person accepts or keeps theirs. */
+/** What the planner proposes on a row, for a person to decide: a change to a request a
+ * person already accepted (it never overwrites one, so the change waits until a person
+ * accepts it or keeps theirs), its removal, or the request itself as a new one (add),
+ * which is no part of the plan until a person accepts it. */
 export type RequestChange = {
+  add: boolean;
   remove: boolean;
   /** The proposed title and description, or "" where they would not change. */
   title: string;
@@ -233,6 +241,9 @@ export type UncoveredLine = {
   letter: string;
   text: string;
   line: string;
+  /** A request the agent proposes, not accepted yet, would address it: accepting that
+   * request comes first, so no reason is recorded for the attribute meanwhile. */
+  proposed: boolean;
 };
 
 export type ExceptionLine = CoverageException & {
@@ -258,6 +269,10 @@ export type RequestAttribute = {
 export type RequestsHeader = {
   tone: "attention" | "active" | "idle";
   status: string;
+  /** The step's one line where the list's records word it and its standing alone cannot:
+   * what the server says an accepted list still waits for, or that drafting starts when
+   * the planner finishes. "" where the standing's own words say it. */
+  line: string;
 };
 
 export type RequestsList = {
@@ -266,6 +281,9 @@ export type RequestsList = {
   rows: RequestRow[];
   /** What Accept all sends: every row that waits, at the version shown. */
   accept: AcceptItem[];
+  /** What "Accept the list" sends where the server asks a person to stand behind an
+   * accepted list: every request, at the version shown. Empty where it does not ask. */
+  confirm: AcceptItem[];
   coverage: CoverageChip[];
   coverageLine: string;
   uncovered: UncoveredLine[];
@@ -281,9 +299,6 @@ export type RequestsList = {
    * drafted yet: nothing is asked of the person. The server releases the phase itself,
    * when the planner finishes if it is still at work; the page waits and reads again. */
   settled: boolean;
-  /** What the server says it still waits for when the list reads settled here, the
-   * planner is not at work and the server does not call it settled. */
-  holds: string;
   /** What an empty list says. */
   empty: string;
 };
@@ -319,6 +334,8 @@ export type RequestsInput = {
     waitingOn: DesignWait;
     waitingFor: string;
     releasedAt: string | null;
+    /** The phase's state in the server's words ("Requests not updated"). */
+    stepLabel?: string;
   } | null;
   /** The approved attributes, in their order: the letters follow it. */
   approved: readonly Approved[];
@@ -355,6 +372,42 @@ export const WORKING_LINES = {
   drafting: "Drafting the requests",
   settled: "Drafting starts when the planner finishes",
 } as const;
+
+/** What holds the list for a reason outside it, in the server's own label for the phase
+ * (phase_release, under waiting_on REQUESTS): a planner run that stopped before it
+ * finished, an engagement that is not running, a control out of scope. The step shows
+ * the label and the server's sentence as given; each has plain words where none came. */
+export const HELD_LINES: Readonly<Record<string, string>> = {
+  "Requests not updated":
+    "The planner's run stopped before it finished. Plan the evidence again.",
+  "Engagement not running":
+    "The engagement is not running, so its requests are not drafted.",
+  "Out of scope":
+    "The control is out of scope, so its requests are not drafted.",
+};
+
+/** What an accepted list says while nothing is at work on it and the server gives no
+ * sentence of its own: the server drafts it; nothing is asked of the person. */
+export const SETTLED_LINE =
+  "The requests are accepted and every attribute is addressed. They are drafted next, and each is approved before it goes to the client.";
+
+/** Why a request the agent proposes cannot be edited, re-linked or excepted yet: the
+ * server refuses each with this sentence until a person accepts the request. */
+export const ACCEPT_FIRST = "Accept the request first.";
+
+/** How often the list is read again while the planner works or the requests are drafted,
+ * and for how long: past it the page stops asking on its own and says so, with a way to
+ * check again. Nothing is re-enabled on a guess. */
+export const POLL_EVERY_MS = 3000;
+export const POLL_LIMIT_MS = 10 * 60 * 1000;
+
+/** Whether the list has been read again for as long as it is, with the work still on. */
+export function pollingOver(elapsedMs: number): boolean {
+  return elapsedMs >= POLL_LIMIT_MS;
+}
+
+export const STALLED_LINE =
+  "This is taking longer than expected, so the list has stopped checking by itself.";
 
 /** The header's words. One source: the step's node, its pill and its decision row read
  * the same state (requestsStanding). */
@@ -405,8 +458,19 @@ function changeOf(item: Requirement): RequestChange | null {
   if (change === null) {
     return null;
   }
+  if (change.add) {
+    return {
+      add: true,
+      remove: false,
+      title: "",
+      description: "",
+      summary: "The agent proposes this request.",
+      line: "Agent proposes this request",
+    };
+  }
   if (change.remove) {
     return {
+      add: false,
       remove: true,
       title: "",
       description: "",
@@ -423,6 +487,7 @@ function changeOf(item: Requirement): RequestChange | null {
       ? change.description
       : "";
   return {
+    add: false,
     remove: false,
     title,
     description,
@@ -442,9 +507,21 @@ function stateOf(item: Requirement, working: boolean): RequestState {
   return working ? "UPDATING" : "TO_ACCEPT";
 }
 
-/** A D&I request that is part of the plan: not removed, cancelled or waived. */
-function isLive(item: Pick<Requirement, "phase" | "state">): boolean {
-  return item.phase === "DESIGN" && !GONE.includes(item.state);
+/** A request the planner proposes as a new one, which no person has accepted. */
+function isProposed(item: Pick<Requirement, "pendingChange">): boolean {
+  return item.pendingChange?.add === true;
+}
+
+/** A D&I request the list shows: part of the plan (not removed, cancelled or waived), or
+ * proposed by the planner as a new one, however the plan holds it until it is accepted. */
+function isLive(
+  item: Pick<Requirement, "phase" | "state" | "pendingChange">,
+): boolean {
+  return (
+    item.phase === "DESIGN" &&
+    (!GONE.includes(item.state) ||
+      (item.state === "REMOVED" && isProposed(item)))
+  );
 }
 
 /** Whether the release is recent and none of its requests is drafted yet: the page's
@@ -553,8 +630,9 @@ export function requestsView(input: RequestsInput): RequestsView {
   );
   const flagged = new Set(input.summary?.uncovered ?? []);
   const coverage: CoverageChip[] = attributes.map((item) => {
-    const requests = rows.filter((row) =>
-      row.attributeIds.includes(item.id),
+    // A request the agent proposes addresses nothing until a person accepts it.
+    const requests = rows.filter(
+      (row) => row.change?.add !== true && row.attributeIds.includes(item.id),
     ).length;
     const state: CoverageState =
       flagged.has(item.id) || (requests === 0 && !reasons.has(item.id))
@@ -585,6 +663,11 @@ export function requestsView(input: RequestsInput): RequestsView {
       letter: item.letter,
       text: item.text,
       line: `Attribute ${item.letter} is not addressed by any request`,
+      proposed: rows.some(
+        (row) =>
+          row.change?.add === true &&
+          row.attributeIds.includes(item.attributeId),
+      ),
     }));
   const exceptions: ExceptionLine[] = attributes.flatMap((item) => {
     const reason = reasons.get(item.id);
@@ -606,43 +689,99 @@ export function requestsView(input: RequestsInput): RequestsView {
     rows.length > 0 &&
     rows.every((row) => row.state === "ACCEPTED") &&
     uncovered.length === 0;
-  const serverSettled =
-    status.step === "READY" || input.summary?.settled === true;
+  // What the server says the list waits for, in its own sentence.
+  const sentence = input.summary?.waitingFor || status.waitingFor;
+  // Every row that waits is one a person already accepted, with no change proposed: the
+  // server asks for the acceptance again (the person whose acceptance stood no longer
+  // may accept), and says so in its sentence.
+  const again =
+    accept.length > 0 &&
+    accept.every((each) =>
+      live.some(
+        (item) =>
+          item.id === each.requirement_id &&
+          item.accepted &&
+          item.pendingChange === null,
+      ),
+    );
+  // Held for a reason outside the list, in the server's own label: said as given.
+  const label = status.stepLabel ?? "";
+  const held =
+    !drafting &&
+    !planning &&
+    status.waitingOn === "REQUESTS" &&
+    HELD_LINES[label] !== undefined
+      ? label
+      : "";
+  // Accepted and addressed, and the server asks a person to stand behind it: the one
+  // action is to accept the list as it reads. Only on the server's word.
+  const toConfirm =
+    settled && !planning && held === "" && input.summary?.toConfirm === true;
   const header: RequestsHeader = drafting
-    ? { tone: "active", status: REQUESTS_STATUS.accepted }
-    : settled
-      ? { tone: "idle", status: REQUESTS_STATUS.accepted }
-      : planning
+    ? { tone: "active", status: REQUESTS_STATUS.accepted, line: "" }
+    : held !== ""
+      ? {
+          tone: held === "Requests not updated" ? "attention" : "idle",
+          status: held,
+          line: sentence,
+        }
+      : toConfirm
         ? {
-            tone: "active",
-            status:
-              rows.length === 0
-                ? REQUESTS_STATUS.planning
-                : REQUESTS_STATUS.updating,
+            tone: "attention",
+            status: REQUESTS_STATUS.toAccept,
+            line: sentence,
           }
-        : rows.length === 0
-          ? { tone: "attention", status: REQUESTS_STATUS.empty }
-          : accept.length > 0
-            ? { tone: "attention", status: `${accept.length} to accept` }
-            : {
-                tone: "attention",
+        : settled
+          ? planning
+            ? {
+                // The server releases it when the planner finishes: said only while the
+                // planner is at work.
+                tone: "active",
+                status: REQUESTS_STATUS.accepted,
+                line: `${WORKING_LINES.settled}. Each request is approved before it goes to the client.`,
+              }
+            : // At rest: the server is about to release it, or says what it waits for.
+              { tone: "idle", status: REQUESTS_STATUS.accepted, line: sentence }
+          : planning
+            ? {
+                tone: "active",
                 status:
-                  uncovered.length === 1
-                    ? `Attribute ${uncovered[0]?.letter ?? ""} is not addressed`
-                    : `${uncovered.length} attributes not addressed`,
-              };
+                  rows.length === 0
+                    ? REQUESTS_STATUS.planning
+                    : REQUESTS_STATUS.updating,
+                line: "",
+              }
+            : rows.length === 0
+              ? { tone: "attention", status: REQUESTS_STATUS.empty, line: "" }
+              : accept.length > 0
+                ? {
+                    tone: "attention",
+                    status: `${accept.length} to accept`,
+                    line: again ? sentence : "",
+                  }
+                : {
+                    tone: "attention",
+                    status:
+                      uncovered.length === 1
+                        ? `Attribute ${uncovered[0]?.letter ?? ""} is not addressed`
+                        : `${uncovered.length} attributes not addressed`,
+                    line: "",
+                  };
   return {
     mode: drafting ? "drafting" : "list",
     title:
       rows.length === 0 ? "No requests yet" : plural(rows.length, "request"),
     rows,
     accept,
+    confirm: toConfirm
+      ? rows.map((row) => ({ requirement_id: row.id, version: row.version }))
+      : [],
     coverage,
     coverageLine,
     uncovered,
     exceptions,
     history: design
-      .filter((item) => item.state === "REMOVED")
+      .filter((item) => item.state === "REMOVED" && !isProposed(item))
       .map((item) => ({
         id: item.id,
         version: item.version,
@@ -659,11 +798,9 @@ export function requestsView(input: RequestsInput): RequestsView {
     ]),
     header,
     working,
-    settled,
-    holds:
-      settled && !planning && !serverSettled
-        ? input.summary?.waitingFor || status.waitingFor
-        : "",
+    // Waiting on the server alone: not where a person is asked to stand behind the
+    // list, and not where something outside the list holds it.
+    settled: settled && !toConfirm && held === "",
     empty: planning
       ? "The planner is preparing the requests."
       : "No D&I request is planned yet. Add one, then choose the attributes it addresses.",
@@ -693,7 +830,8 @@ export type RequestsStanding =
   | "EMPTY"
   | "TO_ACCEPT"
   | "UNCOVERED"
-  | "SETTLED";
+  | "SETTLED"
+  | "HELD";
 
 export function requestsStanding(
   status: string,
@@ -706,12 +844,16 @@ export function requestsStanding(
     return "PLANNING";
   }
   if (status === REQUESTS_STATUS.accepted) {
-    // Being drafted reads as work in progress; accepted and waiting for the server to
-    // release it reads at rest.
+    // Agents at work on an accepted list (its requests being drafted, or the planner
+    // finishing before they are) read as work in progress; accepted, with nothing at
+    // work, reads at rest.
     return tone === "active" ? "DRAFTING" : "SETTLED";
   }
   if (status === REQUESTS_STATUS.empty) {
     return "EMPTY";
+  }
+  if (HELD_LINES[status] !== undefined) {
+    return "HELD";
   }
   if (status === REQUESTS_STATUS.toAccept || /^\d+ to accept$/.test(status)) {
     return "TO_ACCEPT";
@@ -733,7 +875,7 @@ export function requestsFallback(
   waitingOn: DesignWait | undefined,
 ): RequestsHeader | null {
   if (step === "READY") {
-    return { tone: "idle", status: REQUESTS_STATUS.accepted };
+    return { tone: "idle", status: REQUESTS_STATUS.accepted, line: "" };
   }
   if (step !== "WAITING") {
     return null;
@@ -744,6 +886,7 @@ export function requestsFallback(
       waitingOn === "EVIDENCE"
         ? REQUESTS_STATUS.uncovered
         : REQUESTS_STATUS.toAccept,
+    line: "",
   };
 }
 
@@ -751,12 +894,16 @@ export function requestsFallback(
  * list's state; null for a status that is not the list's. No action of its own: the list
  * below holds the one primary action (Accept all), so the step never shows two. And
  * never a release: a settled list is the server's to release (product owner, 12 November
- * 2026: "I don't want a separate D&I release."), so the panel only says it is waiting. */
+ * 2026: "I don't want a separate D&I release."), so the panel only says it is waiting.
+ * `line` is the list's own sentence for the state (RequestsHeader.line), where it has
+ * one: what the server says an accepted list waits for, never a guess that the planner
+ * is at work. */
 export function requestsNeed(
   status: string,
   tone: string,
+  line = "",
 ): {
-  kind: "act" | "agent";
+  kind: "act" | "agent" | "wait";
   title: string;
   detail: string;
 } | null {
@@ -771,7 +918,9 @@ export function requestsNeed(
       return {
         kind: "agent",
         title: status,
-        detail: `${WORKING_LINES.drafting}. Each one is approved before it goes to the client.`,
+        detail:
+          line ||
+          `${WORKING_LINES.drafting}. Each one is approved before it goes to the client.`,
       };
     case "EMPTY":
       return {
@@ -785,6 +934,7 @@ export function requestsNeed(
         kind: "act",
         title: "Accept the D&I requests",
         detail:
+          line ||
           "The agent proposes what to request and the attributes each request addresses. Accept each one, or change it. Once all are accepted and every attribute is addressed, the requests are drafted; each is still approved before it is sent.",
       };
     case "UNCOVERED":
@@ -795,10 +945,17 @@ export function requestsNeed(
           "Add it to a request, or record why it is not evidenced at D&I. The requests are drafted once every approved attribute is addressed.",
       };
     case "SETTLED":
+      // Nothing is at work and nothing is asked: the server's sentence, or that the
+      // requests are drafted next. Never that the planner is finishing: that is said
+      // only while the server says the planner is at work (the standing is DRAFTING then).
+      return { kind: "wait", title: status, detail: line || SETTLED_LINE };
+    case "HELD":
+      // The server's label and its sentence, as given. The step has no action of its
+      // own for any of them.
       return {
-        kind: "agent",
+        kind: "wait",
         title: status,
-        detail: `${WORKING_LINES.settled}. Each request is approved before it goes to the client.`,
+        detail: line || (HELD_LINES[status] ?? ""),
       };
     default:
       return null;
