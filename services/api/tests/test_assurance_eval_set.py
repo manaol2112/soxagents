@@ -290,7 +290,11 @@ def test_the_scorer_asks_as_the_database_run_does() -> None:
     again = score.request_for("system", "prompt", retry=True)
     assert (first.max_tokens, first.timeout_seconds) == (score.MAX_TOKENS, score.TIMEOUT_SECONDS)
     assert (first.max_tokens, first.timeout_seconds) == (8192, 240)
-    assert (again.max_tokens, again.timeout_seconds) == (score.RETRY_TOKENS, 300) == (16000, 300)
+    assert (
+        (again.max_tokens, again.timeout_seconds)
+        == (evidence_assurance.RETRY_TOKENS, 300)
+        == (16000, 300)
+    )
     # The reviewer on the assessor's own tier and configuration.
     source = inspect.getsource(evidence_assurance)
     assert "tier=assessor.tier" in source and "config=assessor.config" in source
