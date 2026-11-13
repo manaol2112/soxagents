@@ -92,7 +92,11 @@ def covered(cursor: psycopg.Cursor[Any], project_id: UUID, request_id: UUID) -> 
             named = str(item.get("requirement_id") or "")
             if named in planned:
                 found.add(planned.index(named))
-            elif isinstance(item.get("index"), int):
+            elif not named and isinstance(item.get("index"), int):
+                # Only an item that names no requirement counts by its place in the
+                # request's list. One that names another request's requirement (a file
+                # read against every D&I item of its control, evidence_wizard.py) is not
+                # this request's item, whatever its index.
                 found.add(item["index"])
     return all(index in found for index in range(wanted))
 

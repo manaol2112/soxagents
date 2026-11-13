@@ -50,6 +50,14 @@ from ai_workforce_api.evidence_receipts import (
 )
 from ai_workforce_api.evidence_review import review_decided
 from ai_workforce_api.evidence_withdrawn import in_force, is_withdrawn
+from ai_workforce_api.evidence_wizard import (
+    Scope,
+    WizardState,
+    place_on_upload,
+    record_batch,
+    refuse_wizard_batch,
+    upload_scope,
+)
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import StoreError, digest_of, open_store
 from ai_workforce_api.storage_sweep import discard
@@ -199,7 +207,7 @@ def register_evidence_intake(
         principal = _session_principal(request)
         try:
             return _call(settings, lambda connection: work(connection, principal))
-        except IntakeState as error:
+        except (IntakeState, WizardState) as error:
             raise HTTPException(status_code=409, detail=error.detail) from None
         except StoreError as error:
             raise HTTPException(status_code=503, detail=error.detail) from None
@@ -215,6 +223,7 @@ def register_evidence_intake(
         request_id: UUID | None = None,
         requirement_id: UUID | None = None,
         applications: str = "",
+        design_control_id: UUID | None = None,
     ) -> UploadBody:
         file_name = clean_name(name)
         folder = clean_folder(path)
@@ -238,6 +247,7 @@ def register_evidence_intake(
                 request_id,
                 requirement_id,
                 applications,
+                design_control_id,
             ),
         )
         await asyncio.to_thread(schedule_analyses, analyses, [] if queued is None else [queued])
@@ -367,10 +377,25 @@ def _upload(
     request_id: UUID | None = None,
     requirement_id: UUID | None = None,
     applications: str = "",
+    design_control_id: UUID | None = None,
 ) -> tuple[UploadBody, UUID | None]:
     """Store one file. Added on an item, it is for that item; with applications ("ALL", or
     one or more application ids, comma separated), the person says which of the control's
-    applications it applies to, which is never overwritten by the coordinator."""
+    applications it applies to, which is never overwritten by the coordinator. Added in
+    the D&I evidence wizard (design_control_id), it is for that control's D&I items: from a
+    row, for the row's item (requirement_id), on the request that carries it
+    (evidence_wizard.py)."""
+    scope: Scope | None = None
+    if design_control_id is not None:
+        # Checked before anything is stored, by whoever may add evidence here; the
+        # session's first upload records its batch.
+        _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
+        _require_active(connection, organization_id, project_id)
+        scope = upload_scope(connection, project_id, batch_id, design_control_id, requirement_id)
+        if request_id is not None and request_id != scope.request_id:
+            raise IntakeState("a wizard file is added on the control's items, not on a request")
+        request_id = scope.request_id
+        record_batch(connection, organization_id, project_id, scope, principal.id)
     chosen = _chosen_applications(applications)
     if chosen is not None and request_id is None:
         raise IntakeState("say which applications a file applies to on its request")
@@ -394,7 +419,7 @@ def _upload(
             raise IntakeState("the control does not cover that application")
     stored, queued = _store_upload(
         connection, store, principal, organization_id, project_id, batch_id, file_name,
-        folder, content_type, content, request_id, requirement_id,
+        folder, content_type, content, request_id, requirement_id, scope,
     )  # fmt: skip
     if chosen is not None:
         # Testing follows the file's reading, which places it by this choice.
@@ -433,16 +458,22 @@ def _store_upload(
     content: bytes,
     request_id: UUID | None = None,
     requirement_id: UUID | None = None,
+    scope: Scope | None = None,
 ) -> tuple[UploadBody, UUID | None]:
     _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
     _require_active(connection, organization_id, project_id)
+    if scope is None:
+        # A batch of the D&I evidence wizard takes the wizard's uploads only.
+        refuse_wizard_batch(connection, project_id, batch_id)
     # A file added on a request is filed to it by the person: nothing to match. One added
-    # on an item of the request is for that item only.
+    # on an item of the request is for that item only. In the wizard, a row's item not
+    # requested yet is linked to the file instead (evidence_wizard.place_on_upload).
     target = None if request_id is None else _request_target(connection, project_id, request_id)
     if requirement_id is not None:
-        if target is None:
+        if target is None and scope is None:
             raise IntakeState("an item's evidence is added on its request")
-        _request_item(connection, target[0], requirement_id)
+        if target is not None:
+            _request_item(connection, target[0], requirement_id)
     digest = digest_of(content)
     existing = _existing(connection, project_id, digest, folder, file_name)
     if existing is not None and is_withdrawn(connection, existing):
@@ -455,6 +486,13 @@ def _store_upload(
         return UploadBody(
             file_id=existing, file_name=file_name, folder_path=folder, duplicate=True
         ), queued_again
+    if existing is not None and scope is not None:
+        # Dropped in the wizard again: held on this control, it stays where it is (from a
+        # row it serves the row's item too); held elsewhere, it is not added here.
+        _wizard_duplicate(connection, principal, organization_id, project_id, scope, existing)
+        return UploadBody(
+            file_id=existing, file_name=file_name, folder_path=folder, duplicate=True
+        ), None
     if existing is not None:
         if requirement_id is not None and target is not None:
             # The file is held already: it serves this item too.
@@ -504,7 +542,27 @@ def _store_upload(
                     principal.id,
                 ),
             )
-            if target is None:
+            if scope is not None and target is None:
+                # A wizard file: filed to its control, on no request yet. Its reading places
+                # it on the control's D&I items; from a row it is linked to the row's item.
+                cursor.execute(
+                    """
+                    INSERT INTO evidence_matches (
+                        organization_id, project_id, evidence_file_id, status,
+                        engagement_control_id, filed_by, decided_by, reason
+                    )
+                    VALUES (%s, %s, %s, 'FILED', %s, 'PERSON', %s, %s)
+                    """,
+                    (
+                        organization_id,
+                        project_id,
+                        file_id,
+                        scope.control_id,
+                        principal.id,
+                        "Added in the D&I evidence wizard.",
+                    ),
+                )
+            elif target is None:
                 cursor.execute(
                     "INSERT INTO evidence_matches (organization_id, project_id, evidence_file_id) "
                     "VALUES (%s, %s, %s)",
@@ -554,11 +612,14 @@ def _store_upload(
                             "requirement_id": None
                             if requirement_id is None
                             else str(requirement_id),
+                            "design_control_id": None if scope is None else str(scope.control_id),
                         }
                     ),
                 ),
             )
             queued = queue_analysis(cursor, organization_id, project_id, file_id, principal.id)
+            if scope is not None:
+                place_on_upload(cursor, organization_id, project_id, scope, file_id, principal.id)
     except UniqueViolation:
         # The same file arrived twice at once: the first one is kept; this object goes.
         discard(store, key)
@@ -576,6 +637,34 @@ def _store_upload(
     return UploadBody(
         file_id=file_id, file_name=file_name, folder_path=folder, duplicate=False
     ), queued
+
+
+def _wizard_duplicate(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    scope: Scope,
+    file_id: UUID,
+) -> None:
+    """A file the engagement holds already, dropped in the wizard: on the wizard's control
+    it stays as it is, and from a row it serves the row's item too (linked to it, as a file
+    added again on an item is); held anywhere else, it is not added to this control."""
+    held = connection.execute(
+        "SELECT engagement_control_id FROM evidence_file_links "
+        "WHERE evidence_file_id = %s AND project_id = %s LIMIT 1",
+        (file_id, project_id),
+    ).fetchone()
+    if held is None or held[0] is None or UUID(str(held[0])) != scope.control_id:
+        raise IntakeState(
+            "this file is already held elsewhere in the engagement, so it was not added to "
+            "this control"
+        )
+    if scope.requirement_id is not None:
+        _serve_item(
+            connection, principal, organization_id, project_id, scope.control_id,
+            scope.requirement_id, file_id,
+        )  # fmt: skip
 
 
 def _request_item(connection: psycopg.Connection[Any], request_id: UUID, item: UUID) -> None:

@@ -112,6 +112,19 @@ from ai_workforce_api.evidence_review import (
     unable_review,
 )
 from ai_workforce_api.evidence_withdrawn import is_withdrawn
+from ai_workforce_api.evidence_wizard import (
+    Item,
+    Placing,
+    WizardFile,
+    design_items,
+    landed,
+    listed_items,
+    plan_placement,
+    reading_failed,
+    record_reading,
+    requested_item,
+    wizard_file,
+)
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.model_providers import (
     CLAUDE_CONFIG,
@@ -216,6 +229,7 @@ def run_analysis(
             UPDATE evidence_analyses a
             SET status = 'WORKING', attempts = attempts + 1,
                 lease_until = clock_timestamp() + make_interval(mins => %s),
+                started_at = clock_timestamp(), finished_at = NULL,
                 version = version + 1, updated_at = clock_timestamp()
             WHERE id = %s AND attempts < %s
               AND (status = 'PENDING'
@@ -253,8 +267,11 @@ def run_analysis(
         )
         # The assurance chain holds the file where it is D&I evidence: nothing of it is
         # checked against the attributes (docs/evidence-assurance.md, the gate's CUSTODY).
+        # A wizard file is not placed: it needs a person, with the gate's reason, and its
+        # batch's checks wait for the rest of its files (evidence_wizard).
         with transaction(connection) as cursor:
-            queue_after_reading(cursor, project_id, file_id, requester)
+            if not reading_failed(cursor, project_id, file_id, requester, "CUSTODY"):
+                queue_after_reading(cursor, project_id, file_id, requester)
         return "FAILED"
 
     # Every model call of this read goes through one caller: the reader's FAST tier, the
@@ -291,6 +308,11 @@ def run_analysis(
 
     request = file_request(connection, project_id, file_id)
     filing = _filing(connection, file_id) if source_kind == "UPLOAD" else None
+    # A file added in the D&I evidence wizard is read against every D&I item of its
+    # control, and placed from the reading (docs/evidence-wizard.md, 2.2 and 2.3).
+    wizard: WizardFile | None = (
+        wizard_file(connection, project_id, file_id) if source_kind == "UPLOAD" else None
+    )
     extraction = extract(content, str(file_name), str(content_type))
     ocr_engine: Engine | None = None
     ocr_call_id: UUID | None = None
@@ -319,9 +341,19 @@ def run_analysis(
                 decided[0].control.control_id,
                 evidence_hint(str(file_name), file_kind, extraction.text),
             )
-    context = _context(
-        connection, project_id, str(file_name), extraction, request, _added_for(connection, file_id)
-    )
+    items: list[Item] = []
+    listed: tuple[Item, ...] = ()
+    if wizard is not None:
+        items = design_items(connection, project_id, wizard.batch.control_id)
+        listed = listed_items(items, wizard.batch.requirement_id)
+        context = _wizard_context(
+            connection, project_id, str(file_name), extraction, wizard.batch.control_id, listed
+        )
+    else:
+        context = _context(
+            connection, project_id, str(file_name), extraction, request,
+            _added_for(connection, file_id),
+        )  # fmt: skip
     classification: Classification | None = None
     source = "RULES"
     note = "No model is configured." if model is None else ""
@@ -360,6 +392,16 @@ def run_analysis(
     if classification is None:
         classification = rules_classify(context)
     classification = with_requirements(classification, context)
+    placing: Placing | None = None
+    if wizard is not None:
+        # Code decides where the file goes; the reader only proposed. Placed, the file is
+        # read on from here as a file added on its item's request is.
+        placing = plan_placement(
+            connection, analysis_id, wizard, classification, source, extraction.text, listed,
+            len(items) > len(listed),
+        )  # fmt: skip
+        if placing.request is not None:
+            request = placing.request
     review: tuple[Review, str, ReviewContext, UUID | None, str, str] | None = None
     if is_screenshot(file_kind, bool(images)):
         review = _review(
@@ -380,12 +422,16 @@ def run_analysis(
     # A person cancelled the read while it worked: nothing of it is kept, and the record
     # says who stopped it. Reading the file again is the recovery.
     if reader is not None and cancel_requested(connection, "analysis", analysis_id):
-        finish_cancelled(
+        stopped = finish_cancelled(
             connection,
             "analysis",
             analysis_id,
             actor_agent_instance_id=reader.caller.job.agent_instance_id,
         )
+        if stopped and wizard is not None:
+            # Not read: the wizard file needs a person, and its batch's checks go on.
+            with transaction(connection) as cursor:
+                reading_failed(cursor, project_id, file_id, requester, "READ_FAILED")
         return "CANCELLED"
     with transaction(connection) as cursor:
         saved = cursor.execute(
@@ -396,6 +442,7 @@ def run_analysis(
                 extracted_text = %s, text_truncated = %s, content_redacted = %s,
                 page_count = %s, row_count = %s, columns = %s, classification = %s,
                 source = %s, model_call_id = %s, ocr_model_call_id = %s, note = %s,
+                finished_at = clock_timestamp(),
                 version = version + 1, updated_at = clock_timestamp()
             WHERE id = %s AND status = 'WORKING'
             RETURNING id
@@ -430,7 +477,11 @@ def run_analysis(
             cursor, organization_id, project_id, analysis_id, reader=reader_findings
         )
         reassess_on_reading(cursor, organization_id, project_id, analysis_id)
-        if filing is not None:
+        if wizard is not None and placing is not None:
+            # The wizard places the file and records the placement; the receipts of its
+            # batch follow once the batch has been read (evidence_wizard.landed).
+            record_reading(cursor, wizard, placing, analysis_id, requester)
+        elif filing is not None:
             filed = _save_filing(cursor, filing[0], decided, request)
             if filed is not None and request is not None:
                 apply_receipt(
@@ -505,9 +556,17 @@ def run_analysis(
             ),
         )
         # Which of the control's applications the file shows: Claude's answer, else rules;
-        # when neither can tell, the application of the request it came in on.
-        if request is not None and request[3] is not None:
-            apps = family_applications(cursor, project_id, request[3])
+        # when neither can tell, the application of the request it came in on. A wizard
+        # file not placed on an item is its batch's control's.
+        tagged = (
+            request[3]
+            if request is not None and request[3] is not None
+            else None
+            if wizard is None
+            else wizard.batch.control_id
+        )
+        if tagged is not None:
+            apps = family_applications(cursor, project_id, tagged)
             if apps:
                 tag = model_tag(apps, classification.application) if len(apps) > 1 else None
                 save_tag(
@@ -520,7 +579,7 @@ def run_analysis(
                         or rules_tag(
                             apps, str(file_name), str(folder), extraction.text, classification.kind
                         ),
-                        own_application(cursor, project_id, request[3]),
+                        own_application(cursor, project_id, tagged),
                     ),
                 )
         # The control's tester places the new file on its samples and tests them.
@@ -530,8 +589,15 @@ def run_analysis(
         # and the worker picks it up once this has committed. For a file the chain covers,
         # the reader's own model-derived findings are not proposed to a person: they were
         # never checked by a second reading. A reading by the rules is not the model's.
-        covered = queue_after_reading(cursor, project_id, file_id, requester)
-        if not (covered and source == "MODEL"):
+        # A wizard file waits for its batch: its checks are queued once the last of the
+        # batch's files has been read. The reader's own model-derived findings are never
+        # proposed for a wizard file: the chain judges D&I evidence once it is placed.
+        covered = (
+            queue_after_reading(cursor, project_id, file_id, requester)
+            if wizard is None
+            else landed(cursor, wizard, requester)
+        )
+        if not ((covered or wizard is not None) and source == "MODEL"):
             reader_findings.record(cursor)
     return "READY"
 
@@ -904,6 +970,41 @@ def _context(
     )
 
 
+def _wizard_context(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    file_name: str,
+    extraction: Extraction,
+    control_id: UUID,
+    listed: tuple[Item, ...],
+) -> ClassifyContext:
+    """A wizard file's reading: every D&I item of the control it may be placed on, each by
+    its requirement (evidence_wizard.listed_items), so what the file covers is recorded
+    against each item, with the control's own facts."""
+    from dataclasses import replace
+
+    from ai_workforce_api.pbc_drafting import load_context
+
+    base = _context(connection, project_id, file_name, extraction, None)
+    items = tuple(requested_item(item) for item in listed)
+    try:
+        loaded = load_context(connection, project_id, control_id)
+    except NotVisible:
+        return replace(base, items=items)
+    return replace(
+        base,
+        request_title=f"Design and implementation evidence for {loaded.control_ref}",
+        items=items,
+        control_ref=loaded.control_ref,
+        control_title=loaded.title,
+        control_activity=loaded.activity,
+        area=loaded.domain_label,
+        frequency=loaded.frequency_label or loaded.frequency,
+        systems=tuple(loaded.applications),
+        period=loaded.period,
+    )
+
+
 def fail_analysis(connection: psycopg.Connection[Any], analysis_id: UUID) -> None:
     """After the last retry, an analysis is failed so a person can run it again."""
     _fail(connection, analysis_id, "Reading the file did not finish.")
@@ -916,7 +1017,9 @@ def fail_analysis(connection: psycopg.Connection[Any], analysis_id: UUID) -> Non
     ).fetchone()
     if row is not None:
         with transaction(connection) as cursor:
-            queue_after_reading(cursor, row[0], row[1], row[2])
+            # A wizard file that could not be read needs a person, with the gate's reason.
+            if not reading_failed(cursor, row[0], row[1], row[2], "READ_FAILED"):
+                queue_after_reading(cursor, row[0], row[1], row[2])
 
 
 def _fail(connection: psycopg.Connection[Any], analysis_id: UUID, note: str) -> None:
@@ -925,6 +1028,7 @@ def _fail(connection: psycopg.Connection[Any], analysis_id: UUID, note: str) -> 
             """
             UPDATE evidence_analyses
             SET status = 'FAILED', lease_until = NULL, note = %s,
+                finished_at = clock_timestamp(),
                 version = version + 1, updated_at = clock_timestamp()
             WHERE id = %s AND status IN ('PENDING', 'WORKING')
             """,
@@ -1284,7 +1388,7 @@ def restart_analysis(cursor: psycopg.Cursor[Any], analysis_id: UUID, requester: 
             extracted_text = '', text_truncated = false, content_redacted = false,
             page_count = NULL, row_count = NULL, columns = '[]'::jsonb,
             classification = NULL, source = NULL, model_call_id = NULL,
-            ocr_model_call_id = NULL, note = '',
+            ocr_model_call_id = NULL, note = '', started_at = NULL, finished_at = NULL,
             version = version + 1, updated_at = clock_timestamp()
         WHERE id = %s
         """,
