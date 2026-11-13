@@ -1,0 +1,224 @@
+{
+  "name": "policy_draft_placeholders",
+  "title": "A draft procedure, unapproved, with placeholder approvers and sections",
+  "synthetic": true,
+  "company": "Northwind Fabrics",
+  "system": "SAP S/4HANA",
+  "period": "2026-01-01/2026-12-31",
+  "control": {
+    "ref": "ITGC-AC-01",
+    "title": "New and changed SAP S/4HANA access is approved before it is granted",
+    "activity": "New and changed user access to SAP S/4HANA production (PRD, client 100) is requested through a ServiceNow catalog item that names the user and each role. The user's line manager and the owner of each role approve the request in ServiceNow before SAP Security assigns the role. SAP Security, who neither request nor approve the access, assign only the roles approved.",
+    "domain": "ACCESS"
+  },
+  "categories": [
+    "PROCESS_DOCUMENTATION"
+  ],
+  "lens": "DESIGN_DOCUMENT",
+  "read_in_part": false,
+  "attributes": [
+    {
+      "code": "A",
+      "text": "A user access provisioning procedure for SAP S/4HANA is documented, approved by management and in effect for the audit period.",
+      "criteria": {
+        "condition": "A documented procedure for granting and changing user access to SAP S/4HANA exists and names SAP S/4HANA in its scope.",
+        "pass_when": "The document's approval record shows approval by an accountable manager, and its effective date is on or before 1 January 2026.",
+        "exception_when": "The document is a draft or carries placeholders, has no recorded approval, covers another system, or takes effect after 1 January 2026."
+      },
+      "expected": true
+    },
+    {
+      "code": "B",
+      "text": "The procedure requires access to be approved by the user's line manager and the role owner before it is granted.",
+      "criteria": {
+        "condition": "The procedure requires every new or changed SAP S/4HANA access request to be approved before the access is granted.",
+        "pass_when": "The procedure names both the user's line manager and the owner of each role requested as approvers.",
+        "exception_when": "Approval is optional, may follow the grant, or the approvers are not named."
+      },
+      "expected": true
+    },
+    {
+      "code": "C",
+      "text": "The procedure requires segregation between the requester, the approvers and the person who grants the access.",
+      "criteria": {
+        "condition": "The procedure prohibits a user from approving a request for their own access.",
+        "pass_when": "The procedure requires the person who grants the access to be someone other than the requester and the approvers.",
+        "exception_when": "The procedure is silent on self-approval or allows an approver to grant the access."
+      },
+      "expected": true
+    }
+  ],
+  "files": [
+    {
+      "name": "ITSEC-PRC-004 SAP S4HANA User Access Provisioning Procedure v0.3 DRAFT.txt",
+      "kind": "policy",
+      "lines": [
+        "NORTHWIND FABRICS LTD",
+        "SAP S/4HANA User Access Provisioning Procedure",
+        "DRAFT - FOR REVIEW - NOT YET APPROVED",
+        "Document ID: ITSEC-PRC-004",
+        "Version: 0.3 (draft)",
+        "Owner: [Owner name, title]",
+        "Classification: Internal",
+        "",
+        "Version history",
+        "Version | Date | Author | Summary of change | Approved by",
+        "0.1 | 3 February 2026 | Priya Raman | Outline | -",
+        "0.2 | 17 February 2026 | Priya Raman | Sections 1 to 4 drafted | -",
+        "0.3 | 2 March 2026 | Priya Raman | Comments from Finance Systems | [Approver name, title]",
+        "",
+        "Document approval",
+        "Approved by: [Approver name, title]",
+        "Approval date: [DD Month YYYY]",
+        "Effective date: [TBD]",
+        "",
+        "1. Purpose",
+        "This procedure will set out how user access to SAP S/4HANA is requested, approved and granted at Northwind Fabrics.",
+        "",
+        "2. Scope",
+        "2.1 This procedure will apply to every new or changed user access to SAP S/4HANA production (system PRD, client 100).",
+        "",
+        "3. Roles and responsibilities",
+        "[To be completed]",
+        "",
+        "4. Requesting and approving access",
+        "4.1 Every request for new or changed access to SAP S/4HANA must be raised as a ServiceNow \"SAP S/4HANA Access Request\" catalog item that names the user and each role requested.",
+        "4.2 Access must be approved by [APPROVER ROLE(S) - TBC with Finance] before it is granted.",
+        "",
+        "5. Granting access",
+        "5.1 [To be drafted by SAP Security]",
+        "",
+        "6. Segregation of duties",
+        "[Section to be completed by IT Security. Open point: whether role owners may assign roles themselves.]",
+        "",
+        "Comment [PR1]: Elena to confirm the approvers before this goes for sign-off."
+      ]
+    }
+  ],
+  "expected": {
+    "A": {
+      "verdict": "ISSUE",
+      "results": [
+        "PARTLY_MET",
+        "NOT_MET"
+      ],
+      "unsettled_acceptable": false,
+      "reason": "Version 0.3 is a draft: no approver, no approval date, effective date TBD.",
+      "answer": {
+        "reason": "The document names SAP S/4HANA but is an unapproved draft with no effective date.",
+        "elements": {
+          "condition": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "2.1 This procedure will apply to every new or changed user access to SAP S/4HANA production (system PRD, client 100).",
+                "basis": "REQUIREMENT"
+              }
+            ],
+            "absent": "",
+            "reason": "The draft names SAP S/4HANA production in its scope."
+          },
+          "pass": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "DRAFT - FOR REVIEW - NOT YET APPROVED",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Approved by: [Approver name, title]",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Effective date: [TBD]",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "A recorded management approval and an effective date on or before 1 January 2026.",
+            "reason": "The approval block is placeholders and the document is marked draft."
+          }
+        }
+      }
+    },
+    "B": {
+      "verdict": "ISSUE",
+      "results": [
+        "PARTLY_MET",
+        "NOT_MET"
+      ],
+      "unsettled_acceptable": false,
+      "reason": "The approvers are a placeholder ('[APPROVER ROLE(S) - TBC with Finance]').",
+      "answer": {
+        "reason": "Approval before the grant is drafted, but the approvers are not named.",
+        "elements": {
+          "condition": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "4.2 Access must be approved by [APPROVER ROLE(S) - TBC with Finance] before it is granted.",
+                "basis": "REQUIREMENT"
+              }
+            ],
+            "absent": "",
+            "reason": "The draft requires approval before the grant."
+          },
+          "pass": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "[APPROVER ROLE(S) - TBC with Finance]",
+                "basis": "REQUIREMENT"
+              }
+            ],
+            "absent": "The line manager and the role owner named as approvers.",
+            "reason": "The approvers are a placeholder."
+          }
+        }
+      }
+    },
+    "C": {
+      "verdict": "ISSUE",
+      "results": [
+        "NOT_MET",
+        "PARTLY_MET"
+      ],
+      "unsettled_acceptable": false,
+      "reason": "The segregation of duties section is a placeholder to be completed.",
+      "answer": {
+        "reason": "Section 6 is a placeholder; no segregation is required.",
+        "elements": {
+          "condition": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "[Section to be completed by IT Security. Open point: whether role owners may assign roles themselves.]",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "A prohibition of self-approval.",
+            "reason": "Section 6 is not written."
+          },
+          "pass": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Open point: whether role owners may assign roles themselves.",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "A requirement that the granter is neither the requester nor an approver.",
+            "reason": "Who may grant is an open point."
+          }
+        }
+      }
+    }
+  }
+}

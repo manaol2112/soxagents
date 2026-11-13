@@ -1,0 +1,245 @@
+{
+  "name": "policy_other_system",
+  "title": "An approved procedure, but for Oracle E-Business Suite, not SAP S/4HANA",
+  "synthetic": true,
+  "company": "Northwind Fabrics",
+  "system": "SAP S/4HANA",
+  "period": "2026-01-01/2026-12-31",
+  "control": {
+    "ref": "ITGC-AC-01",
+    "title": "New and changed SAP S/4HANA access is approved before it is granted",
+    "activity": "New and changed user access to SAP S/4HANA production (PRD, client 100) is requested through a ServiceNow catalog item that names the user and each role. The user's line manager and the owner of each role approve the request in ServiceNow before SAP Security assigns the role. SAP Security, who neither request nor approve the access, assign only the roles approved.",
+    "domain": "ACCESS"
+  },
+  "categories": [
+    "PROCESS_DOCUMENTATION"
+  ],
+  "lens": "DESIGN_DOCUMENT",
+  "read_in_part": false,
+  "attributes": [
+    {
+      "code": "A",
+      "text": "A user access provisioning procedure for SAP S/4HANA is documented, approved by management and in effect for the audit period.",
+      "criteria": {
+        "condition": "A documented procedure for granting and changing user access to SAP S/4HANA exists and names SAP S/4HANA in its scope.",
+        "pass_when": "The document's approval record shows approval by an accountable manager, and its effective date is on or before 1 January 2026.",
+        "exception_when": "The document is a draft or carries placeholders, has no recorded approval, covers another system, or takes effect after 1 January 2026."
+      },
+      "expected": true
+    },
+    {
+      "code": "B",
+      "text": "The procedure requires access to be approved by the user's line manager and the role owner before it is granted.",
+      "criteria": {
+        "condition": "The procedure requires every new or changed SAP S/4HANA access request to be approved before the access is granted.",
+        "pass_when": "The procedure names both the user's line manager and the owner of each role requested as approvers.",
+        "exception_when": "Approval is optional, may follow the grant, or the approvers are not named."
+      },
+      "expected": true
+    },
+    {
+      "code": "C",
+      "text": "The procedure requires segregation between the requester, the approvers and the person who grants the access.",
+      "criteria": {
+        "condition": "The procedure prohibits a user from approving a request for their own access.",
+        "pass_when": "The procedure requires the person who grants the access to be someone other than the requester and the approvers.",
+        "exception_when": "The procedure is silent on self-approval or allows an approver to grant the access."
+      },
+      "expected": true
+    }
+  ],
+  "files": [
+    {
+      "name": "RTL-ITSEC-011 Oracle EBS User Access Provisioning Procedure v3.1.txt",
+      "kind": "policy",
+      "lines": [
+        "NORTHWIND FABRICS LTD - RETAIL DIVISION",
+        "Oracle E-Business Suite User Access Provisioning Procedure",
+        "Document ID: RTL-ITSEC-011",
+        "Version: 3.1",
+        "Owner: Owen Fitzgerald, Retail Systems Manager",
+        "Classification: Internal",
+        "",
+        "Version history",
+        "Version | Date | Author | Summary of change | Approved by",
+        "3.0 | 14 October 2024 | Owen Fitzgerald | Rewritten for Oracle E-Business Suite R12.2 | Hannah Cole, Retail Finance Director",
+        "3.1 | 20 November 2025 | Owen Fitzgerald | Annual review, no change of substance | Hannah Cole, Retail Finance Director",
+        "",
+        "Document approval",
+        "Approved by: Hannah Cole, Retail Finance Director",
+        "Approval date: 20 November 2025",
+        "Effective date: 1 January 2026",
+        "",
+        "1. Purpose",
+        "This procedure sets out how user access to Oracle E-Business Suite is requested, approved and granted in the Retail division.",
+        "",
+        "2. Scope",
+        "2.1 This procedure applies to every new or changed user access to Oracle E-Business Suite R12.2 (instance RTLPROD) used by the Retail division.",
+        "2.2 It does not apply to SAP S/4HANA, whose access is governed by the Group IT Security procedures.",
+        "",
+        "3. Roles and responsibilities",
+        "- Line manager: the user's manager as recorded in the HR system.",
+        "- Responsibility owner: the business owner of an Oracle responsibility.",
+        "- Retail Systems administration: the team that assigns Oracle responsibilities.",
+        "",
+        "4. Requesting and approving access",
+        "4.1 Every request for new or changed Oracle E-Business Suite responsibilities must be raised as a ServiceNow \"Oracle EBS Access Request\" catalog item that names the user and each responsibility requested.",
+        "4.2 Access must be approved by the user's line manager and by the owner of each responsibility requested before it is granted.",
+        "",
+        "5. Granting access",
+        "5.1 Retail Systems administration assigns only the responsibilities approved in the ServiceNow request.",
+        "",
+        "6. Segregation of duties",
+        "6.1 No user may approve a request for their own access.",
+        "6.2 The person who grants the access must not be the requester or an approver of the same request.",
+        "",
+        "7. Records",
+        "ServiceNow requests and their approval records are retained for seven years."
+      ]
+    }
+  ],
+  "expected": {
+    "A": {
+      "verdict": "ISSUE",
+      "results": [
+        "NOT_MET",
+        "PARTLY_MET",
+        "NOT_ADDRESSED"
+      ],
+      "unsettled_acceptable": false,
+      "reason": "The procedure covers Oracle EBS and says it does not apply to SAP S/4HANA.",
+      "answer": {
+        "reason": "This is the Oracle E-Business Suite procedure; it excludes SAP S/4HANA.",
+        "elements": {
+          "condition": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "2.1 This procedure applies to every new or changed user access to Oracle E-Business Suite R12.2 (instance RTLPROD)",
+                "basis": "REQUIREMENT"
+              },
+              {
+                "file": 0,
+                "quote": "2.2 It does not apply to SAP S/4HANA, whose access is governed by the Group IT Security procedures.",
+                "basis": "REQUIREMENT"
+              }
+            ],
+            "absent": "A procedure whose scope is SAP S/4HANA.",
+            "reason": "The scope is Oracle EBS and excludes SAP S/4HANA."
+          },
+          "pass": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Approved by: Hannah Cole, Retail Finance Director",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "2.2 It does not apply to SAP S/4HANA, whose access is governed by the Group IT Security procedures.",
+                "basis": "REQUIREMENT"
+              }
+            ],
+            "absent": "An approved SAP S/4HANA procedure effective for 2026.",
+            "reason": "The approval shown is of the Oracle procedure, not of an SAP S/4HANA one."
+          }
+        }
+      }
+    },
+    "B": {
+      "verdict": "ISSUE",
+      "results": [
+        "NOT_MET",
+        "PARTLY_MET",
+        "NOT_ADDRESSED"
+      ],
+      "unsettled_acceptable": false,
+      "reason": "The approval requirement is for Oracle EBS responsibilities; nothing requires it for SAP S/4HANA.",
+      "answer": {
+        "reason": "Approval before the grant is required for Oracle EBS only.",
+        "elements": {
+          "condition": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "4.2 Access must be approved by the user's line manager and by the owner of each responsibility requested before it is granted.",
+                "basis": "REQUIREMENT"
+              },
+              {
+                "file": 0,
+                "quote": "2.2 It does not apply to SAP S/4HANA, whose access is governed by the Group IT Security procedures.",
+                "basis": "REQUIREMENT"
+              }
+            ],
+            "absent": "A requirement for SAP S/4HANA access requests.",
+            "reason": "The requirement is for Oracle EBS access; SAP S/4HANA is excluded."
+          },
+          "pass": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Responsibility owner: the business owner of an Oracle responsibility.",
+                "basis": "REQUIREMENT"
+              }
+            ],
+            "absent": "SAP S/4HANA line manager and role owner approvers.",
+            "reason": "The approvers named are for Oracle responsibilities."
+          }
+        }
+      }
+    },
+    "C": {
+      "verdict": "ISSUE",
+      "results": [
+        "NOT_MET",
+        "PARTLY_MET",
+        "NOT_ADDRESSED"
+      ],
+      "unsettled_acceptable": false,
+      "reason": "The segregation requirement is for Oracle EBS; nothing requires it for SAP S/4HANA.",
+      "answer": {
+        "reason": "Segregation is required for Oracle EBS only.",
+        "elements": {
+          "condition": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "6.1 No user may approve a request for their own access.",
+                "basis": "REQUIREMENT"
+              },
+              {
+                "file": 0,
+                "quote": "2.2 It does not apply to SAP S/4HANA, whose access is governed by the Group IT Security procedures.",
+                "basis": "REQUIREMENT"
+              }
+            ],
+            "absent": "A prohibition of self-approval for SAP S/4HANA access.",
+            "reason": "The prohibition applies to Oracle EBS access."
+          },
+          "pass": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "6.2 The person who grants the access must not be the requester or an approver of the same request.",
+                "basis": "REQUIREMENT"
+              },
+              {
+                "file": 0,
+                "quote": "2.2 It does not apply to SAP S/4HANA, whose access is governed by the Group IT Security procedures.",
+                "basis": "REQUIREMENT"
+              }
+            ],
+            "absent": "The granter rule for SAP S/4HANA access.",
+            "reason": "The granter rule applies to Oracle EBS access."
+          }
+        }
+      }
+    }
+  }
+}
