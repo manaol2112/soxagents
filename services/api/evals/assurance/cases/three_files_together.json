@@ -80,6 +80,7 @@
         "Role requested: Z_FI_AP_CLERK - Accounts Payable Clerk (vendor invoice entry)",
         "Business justification: Joined the Accounts Payable team on 8 June 2026; needs to post vendor invoices.",
         "Assignment group: SAP Security",
+        "Assigned to: Tomas Nguyen (TNGUYEN)",
         "State: Closed Complete",
         "Closed: 2026-06-09 08:41:55",
         "",
@@ -251,7 +252,7 @@
     "C": {
       "verdict": "SUPPORTED",
       "unsettled_acceptable": false,
-      "reason": "Requester Aisha Bello, approvers Grace Whitfield and Marcus Hale, granter Tomas Nguyen: four different people.",
+      "reason": "Requester Aisha Bello, approvers Grace Whitfield and Marcus Hale, and granter Tomas Nguyen, to whom the ticket is assigned in the SAP Security group: four different people.",
       "answer": {
         "reason": "Requester, both approvers and the person who assigned the role are different people.",
         "elements": {
@@ -292,6 +293,11 @@
               },
               {
                 "file": 0,
+                "quote": "Assignment group: SAP Security\nAssigned to: Tomas Nguyen (TNGUYEN)",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
                 "quote": "Grace Whitfield (GWHITFIELD) | Line manager approval | Approved | 2026-06-08 09:47:31",
                 "basis": "RECORD"
               },
@@ -302,7 +308,7 @@
               }
             ],
             "absent": "",
-            "reason": "The role was assigned by SAP Security, not by an approver."
+            "reason": "The role was assigned by Tomas Nguyen (TNGUYEN), the member of SAP Security the ticket is assigned to, who approved nothing; neither approver is the requester or the user."
           }
         }
       },

@@ -127,6 +127,22 @@ passage and nothing named absent (nothing is missing: the record shows the eleme
 met), never `CONTRADICTED`; absent names only what would have to be there and is not. All of an attribute's elements `NOT_ADDRESSED` needs a stated
 reason for an `expected` attribute.
 
+Decided by the product owner on 13 November 2026, after the first live run (prompts /5,
+both roles):
+
+- A placeholder where a document should name or state something the attribute requires
+  (an approver role, a deadline, an owner: "[APPROVER ROLE(S) - TBC]") is `NOT_MET`, a
+  deviation shown by the document, with nothing named absent. If an approved or final
+  version of the same document is also among the request's files, the element is judged
+  on that version, and the draft's placeholder is not a deviation ("Not met, unless
+  approved copy"; rule 5a of stage 4 keeps the code to it).
+- An element that compares people is judged on the people the records show. A missing
+  approval is the shortfall of the attribute that requires it, not of another attribute.
+- A person's team or role is shown only by the record's own designation of that person:
+  an approval step naming the role, the ticket's assignee within its assignment group, a
+  title beside the name, or the system user group; never by who wrote a note, closed the
+  ticket or made the change ("Record's own designation").
+
 The elements are set in code, so neither reading chooses what it is judged on: the
 criteria's **condition** and what **passes** at this client (keys `condition` and `pass`),
 where a person owns criteria; the wording alone otherwise (key `wording`). The same
@@ -136,7 +152,13 @@ description of failing, not as an element to be met.
 
 Each answer carries the exact words it rests on, with the index of the file they are in
 (and, where the same words occur more than once in the file, the words around them), or
-names what is absent.
+names what is absent. The readings are told the quote rule exactly as the code applies it
+(rule 1 of stage 4): at least four words or twenty characters, matched on whole words,
+starting at a not, no, never or without among the three words before it; a short value
+such as a record number is quoted with its label and the surrounding words on the same
+line (or, where the whole line is shorter, another record that shows the element is
+quoted). Before /5 the prompt allowed "a full value", which the match drops
+("Number: RITM0048213" is nineteen characters).
 
 ### Stage 3: the blind re-performance (one model call)
 
@@ -175,8 +197,10 @@ decides what stands (the rule of evidence_mapping.py).
    REQUIREMENT does, as does a RECORD the document carries. An unclassified passage is an
    ASSERTION. A concern wins: words the answer calls an ASSERTION or an INSTRUCTION
    anywhere are support nowhere in that answer. Code reads as an ASSERTION, whatever the
-   reading called it, a passage whose own clause (its line split at ". ", "; " and
-   " | ") opens, after any bullet, with Remark:, Note:, Summary:, Comment:, Conclusion: or
+   reading called it, a passage whose own clause (each line it covers, split at ". ", "; "
+   and " | "; the line break was added on 13 November 2026, so the second line of a quote
+   that runs over two is read on its own) opens, after any bullet, with Remark:, Note:,
+   Summary:, Comment:, Conclusion: or
    "<word> comment:", or says all of something was (or has been) obtained, approved or
    reviewed, or carries "per the <role>" or "according to" without a date, a time or a
    record id ("granted role per the approved request REQ-1041" stays a record). A line the
@@ -192,6 +216,18 @@ decides what stands (the rule of evidence_mapping.py).
    full (a self-approval plainly in a ticket). It stands whatever else
    the request holds (compare, below), but it never escapes rule 5: on a request with a
    file left out or read in part it goes to a person; anything else is absence-based.
+
+   5a. A placeholder ("Not met, unless approved copy", 13 November 2026): a `NOT_MET`
+   resting only on placeholder text (bracketed text on its line, such as "[Approver name,
+   title]", or TBD or TBC) is no deviation in a reading that rests any element of the same
+   attribute on a verified passage of another document of the request. The code cannot
+   tell an approved copy from another document, so any document the reading relies on
+   counts as possibly that copy; a deviation needs both readings, so one such reading
+   withdraws it, and where the other reading shows the element itself `MET` there never
+   was one. The element stays `NOT_MET` and is compared as any other answer, with its
+   reason saying why. The rule only ever withdraws an exception: it never makes support,
+   so it cannot make a false `SUPPORTED`. A deviation a document shows without a
+   placeholder (approval allowed after the grant) stands as before.
 6. One reading's result for the attribute: any `CONTRADICTED` gives `CONTRADICTED`;
    all `NOT_ADDRESSED` gives `NOT_ADDRESSED`; every element `MET` gives `MET`; at least one
    `MET` and the rest `NOT_ADDRESSED` gives `SHOWN_IN_PART` (no shortfall: the rest may be
@@ -211,11 +247,14 @@ Then the comparison, per attribute:
 | the same `CONTRADICTED` | | `ISSUE` |
 | the same `PARTLY_MET` or `NOT_MET`, attribute linked | | `ISSUE` |
 | the same `PARTLY_MET` or `NOT_MET`, attribute not linked | | `NOT_ADDRESSED`, "This request does not ask for this attribute; what the readings found is shown for reference.", both views |
+| `NOT_MET` | `PARTLY_MET` (or the other way round), attribute linked | `ISSUE` `PARTLY_MET` ("Issue: met in part", 13 November 2026): both readings find it falls short, one wholly and one in part; the issue keeps both readings' passages and what they name absent, and carries both views. Rule 5 comes first, and the reading that finds it not met answers an element `NOT_MET`, which keeps the issue wherever else the attribute is asked for |
+| `NOT_MET` | `PARTLY_MET` (or the other way round), attribute not linked | `NOT_ADDRESSED`, shown for reference with both views, as an agreed shortfall on it is (approved 13 November 2026: an unlinked attribute is an issue only for a deviation or a contradiction) |
 | `NOT_ADDRESSED` | `NOT_ADDRESSED` | `ISSUE` if linked (the evidence does not address what its request said it would), else `NOT_ADDRESSED` |
 | anything else, including either `CANNOT_TELL` | | `UNSETTLED` |
 
-`PARTLY_MET` against `NOT_MET`, `SHOWN_IN_PART` on different elements, and `PARTLY_MET` on
-different elements of an attribute another request also asks for, are `UNSETTLED`. A
+`PARTLY_MET` against `NOT_MET` was `UNSETTLED`, linked or not, before 13 November 2026.
+`SHOWN_IN_PART` on different elements, and `PARTLY_MET` on different elements of an
+attribute another request also asks for, are `UNSETTLED`. A
 requirement with no links at all has every attribute unlinked. `SUPPORTED` always carries
 the result `MET` and at least one verified passage from each reading. "Another D&I request
 links it" is part of the run's basis (`elsewhere_attribute_ids`): a change there puts the
@@ -225,10 +264,21 @@ accepted, not on a cancelled request, in a D&I phase that applies).
 
 There is no third agent and no tie-break. `UNSETTLED` goes to a person with both views.
 
-A reading that gives no usable answer (the call failed, was cut off, did not match the
-schema, or was rejected by the checks) settles nothing: the run is FAILED, nothing of it
-is shown, and a person runs it again. The second reading is not asked for when the first
-gave nothing.
+Both readings are asked with one request builder (`reading_request`, which the evaluation
+set's scorer uses too). An answer whose `attributes` arrives as the text of its JSON is
+read as the JSON it is (`models.unnested`, as the planner's answer is: the first live run,
+13 November 2026, lost three readings, and so three cases, to it); every check applies to what is
+read, and the call's record keeps what the provider returned and says it was re-read. A
+reading whose answer was cut off at its allowance of 8,192 output tokens (the provider's
+stop reason, or JSON text that ends part way) is asked once more with 16,000 and 300
+seconds, the same prompt, as a model call of its own through the same budgets and with the
+claim's lease extended; the cut-off call stays on record (`NOT_USED`, asked again) and is
+never read. An answer that is whole but of the wrong shape is not asked for again.
+
+A reading that gives no usable answer (the call failed, was cut off again, did not match
+the schema, or was rejected by the checks) settles nothing: the run is FAILED, nothing of
+it is shown, and a person runs it again. The second reading is not asked for when the
+first gave nothing.
 
 ### Stage 5: what a person sees
 
@@ -333,7 +383,9 @@ plan's revision.
 Every model call goes through `provenance.AgentCaller` (budgets, trial reservations,
 cancellation, the provenance record), both readings in one job. A run that cannot pay for
 both readings does not start the first one (`AgentCaller.refusal_for`): it is FAILED with
-the reason, and no call is made or recorded.
+the reason, and no call is made or recorded. A reading asked again after its answer was
+cut off is a further call in the same job (`inputs.retry_of` names the call it replaces);
+it is not in that first sum, and passes the budget checks itself when it is made.
 
 ## 5. Pure core (for tests and the evaluation set)
 
@@ -348,7 +400,7 @@ Role = Literal["ASSESSOR", "REVIEWER"]
 Shows = Literal["DESIGN", "IMPLEMENTATION"]
 PassageBasis = Literal["RECORD", "REQUIREMENT", "ASSERTION", "INSTRUCTION"]
 HeldCode = Literal["CUSTODY", "READ_FAILED", "UNREADABLE", "KIND_UNSURE", "POPULATION", "NO_ATTRIBUTES", "TOO_LARGE"]
-# Prompt versions: evidence-assurance-assessor/4, evidence-assurance-reviewer/4
+# Prompt versions: evidence-assurance-assessor/5, evidence-assurance-reviewer/5 (13 November 2026)
 
 @dataclass(frozen=True)
 class AttributeSpec: id: UUID; code: str; text: str; criteria: dict[str, Any] | None; expected: bool; linked_elsewhere: bool = False
@@ -372,6 +424,8 @@ def run_gate(files: Sequence[tuple[Held | None, int]], attributes: int) -> Held 
 def lens_for(categories: tuple[str, ...], kinds: Sequence[str]) -> Lens: ...
 def elements_of(attribute: AttributeSpec) -> tuple[tuple[str, str], ...]: ...   # (key, text)
 def prompt_for(chain: ChainInput, role: Role) -> tuple[str, str]: ...   # (system, prompt)
+def reading_request(system: str, prompt: str, *, retry: bool = False) -> ModelRequest: ...   # both readings, database run and scorer
+def cut_off(status: str, raw: ModelRaw, schema: dict[str, Any] = OPINION_SCHEMA) -> bool: ...   # ask again with more room
 def check_opinion(output: dict[str, Any], chain: ChainInput) -> Opinion: ...   # rules 1 to 6
 def attribute_result(elements: Sequence[ElementView]) -> Result: ...   # rule 6
 def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome, ...]: ...
@@ -451,8 +505,10 @@ empty) where it has none.
   about to be queued).
 - Every `file_id` (in `file_ids`, `held_files` and each passage) is the evidence file id
   the evidence plan's requirement body lists in `files[].file_id`.
-- `views` is empty unless UNSETTLED or shown for reference (an unlinked attribute's
-  agreed shortfall); a view's `passages` are filled only for an exception shown on a
+- `views` is empty unless UNSETTLED, shown for reference (an unlinked attribute's
+  agreed shortfall), or an ISSUE the readings split on (one `NOT_MET`, one `PARTLY_MET`;
+  the D&I screen's model, apps/web/src/evidence-assurance-model.ts, still keeps views only
+  for UNSETTLED and NOT_ADDRESSED); a view's `passages` are filled only for an exception shown on a
   request with a file not checked (the passages each reading rests it on); `attributes` is empty unless the run is REVIEWED (nothing of a run is
   shown before it finishes, and nothing of one that is out of date). `SUPPORTED` always
   carries `result` `MET` and at least one passage. `shows` is set only for `SUPPORTED` and
@@ -509,7 +565,10 @@ missing one required element, a draft with placeholders, a document for another 
 walkthrough instance that shows every attribute, one with the approval after the grant, a
 self-approval, a period outside the audit period, two records that contradict, a summary
 that asserts without records, a file carrying instructions aimed at the agent, a file read
-in part, and a file whose request links the wrong attributes.
+in part, a file whose request links the wrong attributes, and (from 13 November 2026)
+`assigner_team_not_designated`: the complete walkthrough with the role assigned by someone
+no record designates as a member of SAP Security (the ticket in the SAP Security queue
+and closed by him, no assignee, no title), so C is an `ISSUE`, met in part.
 
 - With scripted model answers (in the fast and critical tiers): the code's rules. A false
   quote never supports; an unverified `MET` never stands; disagreement is `UNSETTLED`; the
@@ -519,12 +578,82 @@ in part, and a file whose request links the wrong attributes.
   most), false `ISSUE`, `UNSETTLED` rate, and the cost per file. The first live figures
   are recorded here with their date, model and prompt versions.
 
+### The first live run, 13 November 2026
+
+All 20 cases, `claude-sonnet-5-5` (the BALANCED tier) for both readings, prompts
+`evidence-assurance-assessor/4` and `evidence-assurance-reviewer/4`, a $5 cap: $2.19 spent
+(697,833 input and 79,918 output tokens, $0.067 a file).
+
+| Measure | Result |
+| --- | --- |
+| Cases scored | 17 of 20; 3 failed (a reading's `attributes` arrived as JSON text) |
+| Attributes scored, correct | 64, 52 |
+| False `SUPPORTED`, false `IMPLEMENTATION` | 0, 0 |
+| False `ISSUE` | 7, all attribute C, both readings `PARTLY_MET` |
+| Missed `ISSUE`; `ISSUE` with a result the case does not accept | 1; 1 |
+| `UNSETTLED` | 10 (15.6%), 4 of them not acceptable |
+| Readings agree | 59 of 64 (92.2%) |
+
+What it showed, and what was done the same day:
+
+- The three failed cases (`policy_complete` and `three_files_together`, the second
+  reading; `walkthrough_approver_granted`, the first): "answer.attributes: expected array,
+  got string", at 1,039 to 3,581 output tokens, well inside the allowance. Mended in the
+  request (stage 4): read as written, and a reading cut off is asked once more with more
+  room.
+- The seven false issues: attribute C ("The requester, the approvers and the person who
+  granted the access are different people"), whose criteria pass when "Neither approver is
+  the requester or the user who receives the access, and the role was assigned by a member
+  of SAP Security who did not approve the request." In each of the seven cases (and in
+  `three_files_together`) no record designated the person who assigned the role (Tomas
+  Nguyen, TNGUYEN) as a member of SAP Security: the ticket held only "Assignment group: SAP
+  Security" (the queue, not the person), and his activity (a work note, the closure, the
+  SAP change document) shows what he did, not his team. The careful reader's answer said "The role was
+  assigned by SAP Security" and quoted nothing that shows it. The readings did accept the
+  records' own designations elsewhere (the approval step "Role owner approval -
+  Z_FI_AP_CLERK", the ticket's HR manager field: B was supported by both in
+  `walkthrough_complete`). The fault was the cases': a ServiceNow requested item names its
+  assignee beside its assignment group, and the eight cases now carry "Assigned to: Tomas
+  Nguyen (TNGUYEN)", which the careful answer quotes. No prompt or rule changed. Reading a
+  team from who worked or closed a ticket is no designation and was not adopted: in
+  `walkthrough_approver_granted` an approver outside SAP Security worked and closed a
+  ticket assigned to SAP Security.
+- Left for the product owner that day, decided later the same day and built as prompts /5
+  (stage 2, rule 5a and the comparison table): `policy_draft_placeholders` B (`ISSUE`
+  `PARTLY_MET`, the case expects `NOT_MET`): a placeholder where the approvers should be
+  named is a deviation in code under `DESIGN_DOCUMENT`, but the prompt's list of
+  deviations did not name a placeholder, so the readings most likely named the approvers
+  as absent ("Not met, unless approved copy"). `remark_all_approvals_obtained` B (missed):
+  `NOT_MET` against `PARTLY_MET` on an absence (no record of the role owner's step at all)
+  was `UNSETTLED` by the comparison table ("Issue: met in part").
+  `remark_all_approvals_obtained` A and `split_request_ticket_only` A (`UNSETTLED`): each
+  second reading lost exactly one quote to the strict match; the prompt allowed "at least
+  four words or a full value", the match needs four words or twenty characters, and the
+  ticket's own "Number: RITM0048213" (19 characters) is dropped (likely, not proven: the
+  result file did not keep the readings' answers; it does now) (the quote rule stated
+  exactly). `single_word_inside_unapproved` D (`UNSETTLED`): D's condition reads "the
+  role approved in the ticket", and with the role owner's step Unapproved the second
+  reading found D met only in part, B's shortfall read into D's wording (a missing
+  approval is its own attribute's shortfall). The designation rule ("Record's own
+  designation") states what the cases' correction above relied on.
+
+What the /5 rules changed in the set's expectations (13 November 2026): the new case
+`assigner_team_not_designated` (C an `ISSUE` `PARTLY_MET`); `policy_draft_placeholders`
+C's careful answer names nothing absent for its placeholder section, as the placeholder
+rule asks (its verdict, `ISSUE` `NOT_MET`, now rests on the deviation); and C in
+`instructions_to_ai`, `remark_all_approvals_obtained` and `single_word_inside_unapproved`
+no longer accepts `UNSETTLED`, since the missing role owner approval is now stated to be
+B's shortfall, not C's. No other verdict changed: `remark_all_approvals_obtained` B already
+accepted `PARTLY_MET`.
+
 ## 9. Status
 
 | Increment | State |
 | --- | --- |
 | The chain on D&I evidence: gate, assessment, blind re-performance, comparison, records, API, findings | in progress, 12 November 2026 |
 | The D&I list shows each file's check and its results per attribute | in progress, 12 November 2026 |
-| The evaluation set and the live scoring command | planned next |
+| The evaluation set and the live scoring command | built; first live run 13 November 2026 (section 8) |
+| Readings read as written and asked again when cut off; the eight cases' assignee | built 13 November 2026, a live re-run of the wrong cases to follow |
+| Prompts /5: the quote rule, placeholders, a split shortfall, shortfall attribution, designation; the case `assigner_team_not_designated` | built 13 November 2026, the same live re-run to follow |
 | Prompt caching of the file text across the two readings (models.py) | planned, after the chain is measured |
 | Interim and roll-forward evidence | planned |

@@ -908,7 +908,9 @@ def unnested(
     """The answer with a property that arrived as JSON text read as the JSON it is, and
     the names of the properties read that way (none: the answer is returned as it came).
 
-    Only for a call that asks for it (ModelRequest.unnest; the planner alone). A model
+    Only for a call that asks for it (ModelRequest.unnest: the planner, and since 13
+    November 2026 the evidence assurance readings, whose `attributes` arrived as text in
+    three readings of the live run that day). A model
     filling a large nested schema sometimes writes an object or a list as text and carries
     on inside that text with the properties that follow: the planner's answer of 12
     November 2026 had `understanding` as the text `{...},"phases":[...]` and no `phases`

@@ -80,6 +80,7 @@
         "Role requested: Z_FI_AP_CLERK - Accounts Payable Clerk (vendor invoice entry)",
         "Business justification: Joined the Accounts Payable team on 2 March 2026; needs to post vendor invoices.",
         "Assignment group: SAP Security",
+        "Assigned to: Tomas Nguyen (TNGUYEN)",
         "State: Closed Complete",
         "Closed: 2026-03-03 11:05:52",
         "",
@@ -209,8 +210,8 @@
     },
     "C": {
       "verdict": "SUPPORTED",
-      "unsettled_acceptable": true,
-      "reason": "Requester, the approving line manager and the SAP Security analyst are different people (the missing approval is B's issue).",
+      "unsettled_acceptable": false,
+      "reason": "Requester, the approving line manager and the SAP Security analyst the ticket is assigned to, who assigned the role, are different people (the missing approval is B's issue).",
       "answer": {
         "reason": "Requester, approver and the person who assigned the role are different people.",
         "elements": {
@@ -245,13 +246,18 @@
                 "basis": "RECORD"
               },
               {
+                "file": 0,
+                "quote": "Assignment group: SAP Security\nAssigned to: Tomas Nguyen (TNGUYEN)",
+                "basis": "RECORD"
+              },
+              {
                 "file": 1,
                 "quote": "03.03.2026 | 10:57:36 | TNGUYEN | Tomas Nguyen | DOKAFOR | Role assigned | Z_FI_AP_CLERK | 03.03.2026 | 31.12.9999 | RITM0048213",
                 "basis": "RECORD"
               }
             ],
             "absent": "",
-            "reason": "The approver is neither requester nor user, and SAP Security assigned the role."
+            "reason": "The approver is neither requester nor user, and the role was assigned by Tomas Nguyen (TNGUYEN), the member of SAP Security the ticket is assigned to, who approved nothing."
           }
         }
       },

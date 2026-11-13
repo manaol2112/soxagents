@@ -19,13 +19,22 @@ Audit integrity (critical tier):
 - a changed file, attribute or link marks the run out of date and queues a new one; the
   same basis is never run twice;
 - a budget that cannot cover both readings starts neither; a model failure is a failed
-  check, never a guess;
+  check, never a guess; an answer sent one level too deep is read as written, and a
+  reading cut off at its allowance is asked once more with a larger one, as a model call
+  of its own (cut off again, the check fails);
+- prompts /5: both readings are told the quote rule the strict match applies and the
+  placeholder, shortfall-attribution and designation rules; a placeholder is an exception
+  shown unless a reading relies on another document of the request, and never support;
+  NOT_MET against PARTLY_MET on a linked attribute is an ISSUE met in part, rule 5 first,
+  and on an unlinked one is shown for reference; a quote over two lines is read line by
+  line for assertion markers;
 - another firm sees nothing, and a Reviewer reads and cannot rerun.
 """
 
 import json
 import re
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -41,10 +50,15 @@ from ai_workforce_api import evidence_assurance as chain_module
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.evidence_analysis import run_analysis
 from ai_workforce_api.evidence_assurance import (
+    CUT_OFF_TWICE,
     FILE_NOT_CHECKED,
     HELD_REASONS,
     MAX_READING_TEXT,
     READ_IN_PART,
+    READING_SECONDS,
+    READING_TOKENS,
+    RETRY_SECONDS,
+    RETRY_TOKENS,
     UNLINKED_TEXT,
     UNSETTLED_TEXT,
     AttributeSpec,
@@ -56,6 +70,7 @@ from ai_workforce_api.evidence_assurance import (
     Opinion,
     check_opinion,
     compare,
+    cut_off,
     elements_of,
     follow_control,
     gate,
@@ -420,12 +435,30 @@ def test_every_row_of_the_comparison_table(first: str, second: str) -> None:
     agreed CONTRADICTED stands as an ISSUE for it. Why: a request is judged against what
     it asked for; raising an issue on an attribute the request never asked about is a
     false issue, the second error the product owner's objective names. Every other row is
-    unchanged."""
+    unchanged.
+
+    Rewritten again on 13 November 2026, for the rows PARTLY_MET against NOT_MET (either
+    reading first). Old expectation: UNSETTLED, a person's, with both views, linked or
+    not. New expectation: on an attribute the request links, an ISSUE with the result
+    PARTLY_MET, keeping both readings' passages and what they name absent, and both views;
+    on one it does not link, still UNSETTLED. Why: the product owner's decision of 13
+    November 2026 ("Issue: met in part"): both readings find the attribute falls short, one
+    wholly and one in part, and the first live run sent such a real issue to a person as
+    a disagreement (remark_all_approvals_obtained, attribute B). Every other row is
+    unchanged.
+
+    Rewritten a third time the same day, for those two rows on an attribute the request
+    does not link. Old expectation: UNSETTLED, a person's, with both views. New: shown for
+    reference (verdict NOT_ADDRESSED, no result, both views, no passages, nothing absent),
+    as an agreed shortfall on such an attribute is. Why: approved by the product owner for
+    consistency with the decided rule that an unlinked attribute is an issue only for a
+    deviation or a contradiction; asking a person to judge a shortfall both readings find,
+    on an attribute the request never asked for, is a judgment nobody needs."""
     for expected in (True, False):
         chain = _chain(expected=(expected, False))
         outcome = compare(_opinion(first, chain), _opinion(second, chain), chain)[0]
         wanted: tuple[str, str | None]
-        reference = False
+        reference = split = False
         if first == second == "MET":
             wanted = ("SUPPORTED", "MET")
         elif first == second == "CONTRADICTED":
@@ -433,12 +466,17 @@ def test_every_row_of_the_comparison_table(first: str, second: str) -> None:
         elif first == second and first in ("PARTLY_MET", "NOT_MET"):
             reference = not expected
             wanted = ("ISSUE", first) if expected else ("NOT_ADDRESSED", None)
+        elif {first, second} == {"PARTLY_MET", "NOT_MET"}:
+            # Both short, one wholly and one in part: met in part, with both views; on an
+            # attribute the request does not link, shown for reference.
+            split, reference = expected, not expected
+            wanted = ("ISSUE", "PARTLY_MET") if expected else ("NOT_ADDRESSED", None)
         elif first == second == "NOT_ADDRESSED":
             # The file does not address what its request said it would: an issue.
             wanted = ("ISSUE" if expected else "NOT_ADDRESSED", "NOT_ADDRESSED")
         else:
-            # Either reading unable to tell, or the two disagreeing (PARTLY_MET against
-            # NOT_MET included): a person's, with both views.
+            # Either reading unable to tell, or the two disagreeing: a person's, with both
+            # views.
             wanted = ("UNSETTLED", None)
         assert (outcome.verdict, outcome.result) == wanted, (first, second, expected)
         assert outcome.expected is expected and outcome.code == "A"
@@ -448,6 +486,15 @@ def test_every_row_of_the_comparison_table(first: str, second: str) -> None:
             ]  # fmt: skip
             assert outcome.summary == (UNLINKED_TEXT if reference else UNSETTLED_TEXT)
             assert outcome.passages == () and outcome.absent == ()
+        elif split:
+            assert [(v.role, v.result) for v in outcome.views] == [
+                ("ASSESSOR", first), ("REVIEWER", second),
+            ]  # fmt: skip
+            assert outcome.summary == chain_module.SPLIT_SHORTFALL.format(code="A")
+            # The issue keeps the passage the reading met in part rests on, and what both
+            # name absent.
+            assert [p.quote for p in outcome.passages] == [APPROVAL]
+            assert set(outcome.absent) == {"the grant", "No record of the approval."}
         else:
             assert outcome.views == ()
         if outcome.verdict == "SUPPORTED":
@@ -1547,8 +1594,14 @@ def test_a_deviation_shown_by_a_record_stands_and_is_an_exception() -> None:
         assert "CONTRADICTED is only for two records that disagree with each other" in system
         assert "a self-approval" in system
         assert "absent left empty" in system
-    assert chain_module.ASSESSOR_PROMPT_VERSION.endswith("/4")
-    assert chain_module.REVIEWER_PROMPT_VERSION.endswith("/4")
+    # Rewritten 13 November 2026. Old expectation: both prompt versions end in /4, the
+    # version that brought this rule in. New: the versions are /4 or later, and the rule is
+    # still in both roles' instructions (asserted just above); the current version, /5, is
+    # pinned in test_the_readings_are_told_the_rules_the_code_applies. Why: prompts /5
+    # revised the instructions for the product owner's decisions of that day and kept this
+    # rule word for word, so a pin to /4 tested the version number, not the rule.
+    for version in (chain_module.ASSESSOR_PROMPT_VERSION, chain_module.REVIEWER_PROMPT_VERSION):
+        assert int(version.rsplit("/", 1)[1]) >= 4, version
 
 
 def test_an_assertion_is_not_support_wherever_it_is_quoted_and_whatever_it_is_called() -> None:
@@ -2326,3 +2379,427 @@ def test_only_requests_that_still_expect_evidence_count_as_asking_elsewhere(
         links = chain_module._linked(connection, UUID(bench.control))
         assert UUID(other) not in links.expecting
         assert links.get(UUID(other))
+
+
+# --- After the live run of 13 November 2026 ---------------------------------------------
+
+Turn = Callable[[dict[str, Any]], ModelRaw]
+
+
+class _Turns(_Readings):
+    """Readings whose raw replies come in turn, per role, each built from the request's
+    own facts (a reply cut off at the allowance, then a whole one); the last answers any
+    further request."""
+
+    def __init__(self, assessor: list[Turn], reviewer: list[Turn]) -> None:
+        super().__init__(None, None)
+        self.turns = {"ASSESSOR": list(assessor), "REVIEWER": list(reviewer)}
+
+    def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
+        del config
+        self.requests.append(request)
+        role = "REVIEWER" if "independent reviewer" in request.system[:60] else "ASSESSOR"
+        self.roles.append(role)
+        found = re.search(
+            r"<control_and_attributes>\n(.*?)\n</control_and_attributes>", request.prompt, re.S
+        )
+        assert found is not None
+        turns = self.turns[role]
+        turn = turns.pop(0) if len(turns) > 1 else turns[0]
+        return turn(json.loads(found.group(1)))
+
+
+def _whole(script: Callable[[dict[str, Any]], dict[str, Any]]) -> Turn:
+    return lambda facts: ModelRaw(script(facts), (), 900, 300)
+
+
+def _as_text(script: Callable[[dict[str, Any]], dict[str, Any]], cut: int = 0) -> Turn:
+    """The answer's `attributes` sent as the text of its JSON (the live run's shape), or,
+    with `cut`, that text with its last characters missing and no stop reason given."""
+
+    def reply(facts: dict[str, Any]) -> ModelRaw:
+        text = json.dumps(script(facts)["attributes"])
+        return ModelRaw({"attributes": text[: len(text) - cut]}, (), 900, 300)
+
+    return reply
+
+
+def _stopped(_facts: dict[str, Any]) -> ModelRaw:
+    """What the provider gives for an answer cut off at its output limit."""
+    return ModelRaw(None, (), 900, READING_TOKENS, stopped="max_tokens")
+
+
+def _run_calls(bench: _Bench, run_id: UUID) -> list[tuple[Any, ...]]:
+    return bench.rows(
+        "SELECT id, agent_key, status, error, inputs, config FROM model_calls "
+        "WHERE target_type = 'evidence_requirement' AND target_id = %s "
+        "AND inputs ->> 'assessment' = %s ORDER BY created_at, id",
+        UUID(bench.item_id), str(run_id),
+    )  # fmt: skip
+
+
+def _current_run(bench: _Bench) -> UUID:
+    return UUID(str(bench.entry()["run_id"]))
+
+
+def test_cut_off_is_the_stop_reason_or_json_text_that_ends_part_way() -> None:
+    whole = json.dumps([{"code": "A", "reason": 'Shown "in" part [1] {x}', "elements": []}])
+    assert cut_off("MALFORMED", ModelRaw(None, (), 1, READING_TOKENS, stopped="max_tokens"))
+    # Cut anywhere: inside a string, after an escape, between values.
+    for at in range(1, len(whole)):
+        assert cut_off("MALFORMED", ModelRaw({"attributes": whole[:at]}, (), 1, 1)), at
+    # Complete JSON, or text broken in another way, was not cut off: more room would not
+    # mend it, so it is never asked for again.
+    for complete in (whole, whole + " and more", "all met", "", "[1, 2]}", '{"a": 1}]', '"[1'):
+        assert not cut_off("MALFORMED", ModelRaw({"attributes": complete}, (), 1, 1)), complete
+    # Only a property the schema declares as a list or an object, and only a malformed call.
+    assert not cut_off("MALFORMED", ModelRaw({"reason": whole[:9]}, (), 1, 1))
+    assert not cut_off("MALFORMED", ModelRaw(None, (), 1, 1))
+    for status in ("SUCCEEDED", "TIMEOUT", "BUDGET_EXCEEDED"):
+        assert not cut_off(status, ModelRaw(None, (), 1, READING_TOKENS, stopped="max_tokens"))
+    # Both askings read a nested answer as written; the second has more room and time.
+    first = chain_module.reading_request("system", "prompt")
+    again = chain_module.reading_request("system", "prompt", retry=True)
+    assert first.unnest and again.unnest and first.output_schema is chain_module.OPINION_SCHEMA
+    assert (first.max_tokens, first.timeout_seconds) == (READING_TOKENS, READING_SECONDS)
+    assert (again.max_tokens, again.timeout_seconds) == (RETRY_TOKENS, RETRY_SECONDS)
+    assert READING_TOKENS == 8192 and RETRY_TOKENS > READING_TOKENS
+    assert again == replace(first, max_tokens=RETRY_TOKENS, timeout_seconds=RETRY_SECONDS)
+
+
+def test_a_reading_sent_one_level_too_deep_is_read_as_written(migrated: Database) -> None:
+    """The live run of 13 November 2026: three readings sent `attributes` as the text of
+    its JSON, and their cases failed. They are read as the planner's answer is
+    (models.unnested): what is read goes through every check, and the call's record says
+    it was re-read."""
+    bench = _Bench(migrated, "nested")
+    ticket = bench.add("ticket REQ-1041.txt", TICKET)
+    bench.read_next(_reading("walkthrough"))
+    good = _first_met_rest("MET")
+    readings = _Turns([_as_text(good)], [_whole(good)])
+    assert bench.check(readings) == ["READY"]
+    # Two readings, no second asking: the answer was whole, only one level too deep.
+    assert readings.roles == ["ASSESSOR", "REVIEWER"]
+    for request in readings.requests:
+        assert request.unnest is True
+        assert (request.max_tokens, request.timeout_seconds) == (READING_TOKENS, READING_SECONDS)
+    calls = _run_calls(bench, _current_run(bench))
+    assert [(c[1], c[2]) for c in calls] == [
+        ("itgc-access-tester", "SUCCEEDED"), ("independent-reviewer", "SUCCEEDED"),
+    ]  # fmt: skip
+    assert calls[0][4]["unnested"] == ["attributes"] and "unnested" not in calls[1][4]
+    # Read as the same answer sent as structured data is: A shown, B an issue.
+    done = bench.entry()
+    assert done["status"] == "REVIEWED"
+    by_code = {a["code"]: a for a in done["attributes"]}
+    assert (by_code["A"]["verdict"], by_code["A"]["result"]) == ("SUPPORTED", "MET")
+    assert {(p["file_id"], p["quote"]) for p in by_code["A"]["passages"]} == {(ticket, APPROVAL)}
+    assert (by_code["B"]["verdict"], by_code["B"]["result"]) == ("ISSUE", "NOT_MET")
+
+
+def test_a_reading_cut_off_at_its_allowance_is_asked_once_more_with_more_room(
+    migrated: Database,
+) -> None:
+    """A reading cut off at its answer allowance (the provider's stop reason, or JSON text
+    that ends part way) is asked once more with a larger one, as a model call of its own
+    through the same budgets. Cut off again, the reading gives nothing and the check
+    fails, never a guess; an answer that is whole but of the wrong shape is not asked
+    for again."""
+    bench = _Bench(migrated, "cut-off")
+    bench.add("ticket REQ-1041.txt", TICKET)
+    bench.read_next(_reading("walkthrough"))
+    good = _first_met_rest("MET")
+
+    # The second reading is cut off, then cut off again with more room.
+    twice = _Turns([_whole(good)], [_stopped])
+    assert bench.check(twice) == ["FAILED"]
+    assert twice.roles == ["ASSESSOR", "REVIEWER", "REVIEWER"]
+    assert [r.max_tokens for r in twice.requests] == [READING_TOKENS, READING_TOKENS, RETRY_TOKENS]
+    entry = bench.entry()
+    assert (entry["status"], entry["stage"], entry["attributes"]) == ("FAILED", "VERIFY", [])
+    assert "second reading did not finish" in entry["note"] and CUT_OFF_TWICE in entry["note"]
+    assert bench.findings() == []
+    calls = _run_calls(bench, _current_run(bench))
+    assert [(c[1], c[2]) for c in calls] == [
+        ("itgc-access-tester", "SUCCEEDED"),
+        ("independent-reviewer", "MALFORMED"),
+        ("independent-reviewer", "MALFORMED"),
+    ]
+    assert {c[3] for c in calls[1:]} == {"answer was cut off at the output limit"}
+    assert calls[2][4]["retry_of"] == str(calls[1][0])
+    assert [c[5]["max_tokens"] for c in calls] == [READING_TOKENS, READING_TOKENS, RETRY_TOKENS]
+
+    # Whole but of the wrong shape: not cut off, so not asked for again.
+    assert bench.rerun().status_code == 202
+    prose = _Turns(
+        [lambda _facts: ModelRaw({"attributes": "all met"}, (), 900, 300)], [_whole(good)]
+    )
+    assert bench.check(prose) == ["FAILED"] and prose.roles == ["ASSESSOR"]
+    entry = bench.entry()
+    assert (entry["status"], entry["stage"]) == ("FAILED", "ASSESS")
+    assert CUT_OFF_TWICE not in entry["note"] and "required format" in entry["note"]
+
+    # Cut off once, each reading (JSON text ending part way; then the stop reason), and
+    # whole when asked again: the check stands on the second answers.
+    assert bench.rerun().status_code == 202
+    once = _Turns([_as_text(good, cut=40), _whole(good)], [_stopped, _whole(good)])
+    assert bench.check(once) == ["READY"]
+    assert once.roles == ["ASSESSOR", "ASSESSOR", "REVIEWER", "REVIEWER"]
+    assert [(r.max_tokens, r.timeout_seconds) for r in once.requests] == [
+        (READING_TOKENS, READING_SECONDS), (RETRY_TOKENS, RETRY_SECONDS),
+    ] * 2  # fmt: skip
+    # The same prompt, asked again: nothing of the first answer is carried.
+    assert once.requests[1].prompt == once.requests[0].prompt
+    assert once.requests[3].prompt == once.requests[2].prompt
+    run_id = _current_run(bench)
+    calls = _run_calls(bench, run_id)
+    assert [(c[1], c[2]) for c in calls] == [
+        ("itgc-access-tester", "MALFORMED"), ("itgc-access-tester", "SUCCEEDED"),
+        ("independent-reviewer", "MALFORMED"), ("independent-reviewer", "SUCCEEDED"),
+    ]  # fmt: skip
+    assert calls[1][4]["retry_of"] == str(calls[0][0])
+    assert calls[3][4]["retry_of"] == str(calls[2][0])
+    assert "retry_of" not in calls[0][4] and "retry_of" not in calls[2][4]
+    # The cut-off answers are on record and were never read; the run keeps the second.
+    outcomes = dict(
+        bench.rows(
+            "SELECT model_call_id, outcome FROM model_call_outcomes WHERE model_call_id = ANY(%s)",
+            [c[0] for c in calls],
+        )
+    )
+    for first in (calls[0][0], calls[2][0]):
+        assert outcomes[first] == {
+            "validation": "NOT_USED", "reason": "MALFORMED", "asked_again": "cut off",
+        }  # fmt: skip
+    assert outcomes[calls[1][0]]["validation"] == outcomes[calls[3][0]]["validation"] == "ACCEPTED"
+    assert bench.rows(
+        "SELECT assessor_call_id, reviewer_call_id FROM evidence_assessments WHERE id = %s",
+        run_id,
+    ) == [(calls[1][0], calls[3][0])]
+    done = bench.entry()
+    assert (done["status"], done["note"]) == ("REVIEWED", "")
+    by_code = {a["code"]: a for a in done["attributes"]}
+    assert by_code["A"]["verdict"] == "SUPPORTED" and by_code["B"]["verdict"] == "ISSUE"
+
+
+# --- Prompts /5: the product owner's decisions of 13 November 2026 ----------------------
+
+
+def test_the_readings_are_told_the_rules_the_code_applies() -> None:
+    """Both roles' instructions carry the quote rule exactly as the strict match applies
+    it (item 1), the placeholder rule (item 2), the attribution of a shortfall (item 4)
+    and a team or role only by the record's own designation (item 5)."""
+    from ai_workforce_api.console_citations import (
+        MIN_PASSAGE_CHARS,
+        MIN_PASSAGE_WORDS,
+        find_passage,
+    )
+
+    assert chain_module.ASSESSOR_PROMPT_VERSION == "evidence-assurance-assessor/5"
+    assert chain_module.REVIEWER_PROMPT_VERSION == "evidence-assurance-reviewer/5"
+    for role in ("ASSESSOR", "REVIEWER"):
+        system, _prompt = prompt_for(_chain(), role)
+        flat = " ".join(system.split())
+        for rule in (
+            "at least four words or twenty characters, matched on whole words",
+            "with not, no, never or without among the three words before it",
+            "quote it with its label and the surrounding words on the same line",
+            "is NOT_MET, a deviation shown by the document",
+            "judge the element on that version: the draft's placeholder is then not a deviation",
+            "An element that compares people is judged on the people the records show.",
+            "A missing approval is the shortfall of the attribute that requires it, not of "
+            "another attribute.",
+            "A person's team or role is shown only by the record's own designation of that "
+            "person: an approval step naming the role, the ticket's assignee within its "
+            "assignment group, a title beside the name, or the system user group; never by "
+            "who wrote a note, closed the ticket or made the change.",
+        ):
+            assert rule in flat, (role, rule)
+        # The old wording invited quotes the match drops ("Number: RITM0048213").
+        assert "a full value" not in flat
+    # What the instructions say is what the strict match does.
+    assert (MIN_PASSAGE_WORDS, MIN_PASSAGE_CHARS) == (4, 20)
+    assert find_passage("Number: RITM0048213\n", "Number: RITM0048213") is None
+    line = "Request REQ-1041 approved by Priya Shah on 2026-03-03\n"
+    assert find_passage(line, "REQ-1041") is None
+    assert find_passage(line, "Request REQ-1041 approved by") is not None
+    assert find_passage(line, "quest REQ-1041 approved by Priya") is None
+    denied = "Access not approved by the line manager before the grant\n"
+    assert find_passage(denied, "approved by the line manager") is None
+    assert find_passage(denied, "not approved by the line manager") is not None
+
+
+DRAFT = (
+    "Access Procedure ITSEC-PRC-004 v0.3 DRAFT - NOT YET APPROVED\n"
+    "4.1 Access must be approved before it is granted.\n"
+    "4.2 Approvers: [APPROVER ROLE(S) - TBC with Finance]\n"
+)
+FINAL = (
+    "Access Procedure ITSEC-PRC-004 v1.0, approved by the CISO on 2026-01-10\n"
+    "4.1 Access must be approved by the approvers below before it is granted.\n"
+    "4.2 Approvers: the user's line manager and the owner of each role\n"
+    "4.3 In an emergency, approval may follow the grant within one business day.\n"
+)
+RULED = "4.1 Access must be approved before it is granted"
+RULED_FINAL = "4.1 Access must be approved by the approvers below before it is granted"
+PLACEHOLDER_LINE = "4.2 Approvers: [APPROVER ROLE(S) - TBC with Finance]"
+NAMED = "4.2 Approvers: the user's line manager and the owner of each role"
+AFTER = "4.3 In an emergency, approval may follow the grant within one business day"
+APPROVERS = {
+    "condition": "The procedure requires access to be approved before it is granted.",
+    "pass_when": "The procedure names the user's line manager and the role owner as approvers.",
+    "exception_when": "Approval may follow the grant, or the approvers are not named.",
+}
+
+
+def _procedure(*texts: str, expected: bool = True) -> ChainInput:
+    files = tuple(
+        _file(text, UUID(int=20 + index), f"procedure {index}.txt", kind="policy")
+        for index, text in enumerate(texts)
+    )
+    return _chain(
+        files=files, lens="DESIGN_DOCUMENT", expected=(expected, False), criteria=APPROVERS,
+        categories=("PROCESS_DOCUMENTATION",),
+    )  # fmt: skip
+
+
+def _approvers(condition: tuple[int, str], passing: tuple[str, int, str]) -> dict[str, Any]:
+    """A reading of attribute A: the condition shown by `condition` (file, quote), the
+    approvers element answered `passing` (result, file, quote), nothing named absent."""
+    result, index, quote = passing
+    return _says(
+        A=[
+            _element("MET", [(condition[0], condition[1], "REQUIREMENT")], key="condition"),
+            _element(result, [(index, quote, "REQUIREMENT")], key="pass"),
+        ],
+        B=_met(RULED, 0, "REQUIREMENT"),
+    )
+
+
+def test_a_placeholder_is_not_met_unless_an_approved_copy_is_relied_on() -> None:
+    """Item 2 ("Not met, unless approved copy"). A placeholder where the procedure should
+    name its approvers is a deviation shown by the document: an ISSUE whether or not the
+    request links the attribute. Where a reading relies on another document of the request
+    for the attribute (the approved copy may be there), a NOT_MET resting only on the
+    placeholder is no exception shown: it is compared as any other answer. Nothing here is
+    ever support unless both readings show the element MET."""
+    draft = _approvers((0, RULED), ("NOT_MET", 0, PLACEHOLDER_LINE))
+    # The draft alone: the placeholder is a deviation, linked or not.
+    for expected in (True, False):
+        alone = _procedure(DRAFT, expected=expected)
+        seen = check_opinion(draft, alone)
+        assert seen.views[0].elements[1].candidate
+        outcome = compare(seen, seen, alone)[0]
+        assert (outcome.verdict, outcome.result) == ("ISSUE", "NOT_MET"), expected
+        assert [e.key for e in outcome.elements if e.deviation] == ["pass"]
+        assert [p.quote for p in outcome.passages] == [PLACEHOLDER_LINE]
+    # The draft beside the approved copy, which both readings rely on for the condition
+    # while citing the draft's placeholder: no exception shown.
+    for expected in (True, False):
+        both = _procedure(DRAFT, FINAL, expected=expected)
+        relied = check_opinion(_approvers((1, RULED_FINAL), ("NOT_MET", 0, PLACEHOLDER_LINE)), both)
+        approvers = relied.views[0].elements[1]
+        assert (approvers.result, approvers.candidate, approvers.records) == ("NOT_MET", False, ())
+        assert chain_module.PLACEHOLDER_YIELDS in approvers.reason
+        outcome = compare(relied, relied, both)[0]
+        assert not any(e.deviation for e in outcome.elements)
+        # Compared as any answer: both find it met in part, an issue on the request that
+        # asks for it; for reference on one that does not.
+        wanted = ("ISSUE", "PARTLY_MET") if expected else ("NOT_ADDRESSED", None)
+        assert (outcome.verdict, outcome.result) == wanted
+        # One reading relying on the approved copy is enough: a deviation needs both.
+        alone_reading = check_opinion(draft, both)
+        assert alone_reading.views[0].elements[1].candidate
+        assert not any(e.deviation for e in compare(alone_reading, relied, both)[0].elements)
+    both = _procedure(DRAFT, FINAL)
+    # One reading judges the approvers on the approved copy, the other on the placeholder:
+    # a person's, never support and never an issue.
+    named = check_opinion(_approvers((1, RULED_FINAL), ("MET", 1, NAMED)), both)
+    placeholder = check_opinion(draft, both)
+    for one, two in ((named, placeholder), (placeholder, named)):
+        assert compare(one, two, both)[0].verdict == "UNSETTLED"
+    # Both judge it on the approved copy: support, the design shown.
+    shown = compare(named, named, both)[0]
+    assert (shown.verdict, shown.result, shown.shows) == ("SUPPORTED", "MET", "DESIGN")
+    # A deviation the approved copy itself shows is no placeholder: it stands.
+    late = check_opinion(_approvers((1, RULED_FINAL), ("NOT_MET", 1, AFTER)), both)
+    assert late.views[0].elements[1].candidate
+    assert (compare(late, late, both)[0].verdict, compare(late, late, both)[0].result) == (
+        "ISSUE", "NOT_MET",
+    )  # fmt: skip
+
+
+def test_a_split_shortfall_is_an_issue_met_in_part() -> None:
+    """Item 3 ("Issue: met in part"): one reading finds the attribute NOT_MET and the
+    other PARTLY_MET. Rule 5 comes first, and an element NOT_MET keeps the issue wherever
+    else the attribute is asked for (third review); on an unlinked attribute it is shown
+    for reference."""
+    partly = _says(A=[
+        _element("MET", [(0, APPROVAL, "RECORD")], key="condition"),
+        _element("NOT_MET", absent="The record of the grant.", key="pass"),
+    ], B=_met())  # fmt: skip
+    wholly = _says(A=[
+        _element("NOT_MET", absent="An approval by the manager.", key="condition"),
+        _element("NOT_MET", absent="The record of the grant.", key="pass"),
+    ], B=_met())  # fmt: skip
+    for elsewhere in ((False, False), (True, False)):
+        chain = _chain(criteria=OWNED, elsewhere=elsewhere)
+        one, two = check_opinion(partly, chain), check_opinion(wholly, chain)
+        assert (one.views[0].result, two.views[0].result) == ("PARTLY_MET", "NOT_MET")
+        for first, second in ((one, two), (two, one)):
+            outcome = compare(first, second, chain)[0]
+            assert (outcome.verdict, outcome.result) == ("ISSUE", "PARTLY_MET"), elsewhere
+            assert {v.result for v in outcome.views} == {"PARTLY_MET", "NOT_MET"}
+            assert outcome.summary == chain_module.SPLIT_SHORTFALL.format(code="A")
+            assert set(outcome.absent) == {
+                "The record of the grant.", "An approval by the manager.",
+            }  # fmt: skip
+            # What the two agree on element by element: the grant not shown.
+            assert [(e.key, e.result) for e in outcome.elements] == [
+                ("condition", None), ("pass", "NOT_MET"),
+            ]  # fmt: skip
+    # Rule 5 first: with a file left out, an absence cannot be told: a person's.
+    held = _chain(criteria=OWNED, left_out=True)
+    assert compare(check_opinion(partly, held), check_opinion(wholly, held), held)[0].verdict == (
+        "UNSETTLED"
+    )
+    # An attribute the request does not ask for. Rewritten the same day: old expectation,
+    # UNSETTLED (a person's); new, shown for reference with both views, as an agreed
+    # shortfall there is. Why: approved for consistency with the decided rule that an
+    # unlinked attribute is an issue only for a deviation or a contradiction.
+    unlinked = _chain(expected=(False, False), criteria=OWNED)
+    outcome = compare(check_opinion(partly, unlinked), check_opinion(wholly, unlinked), unlinked)
+    assert (outcome[0].verdict, outcome[0].result, outcome[0].summary) == (
+        "NOT_ADDRESSED", None, UNLINKED_TEXT,
+    )  # fmt: skip
+    assert [v.result for v in outcome[0].views] == ["PARTLY_MET", "NOT_MET"]
+    assert outcome[0].passages == () and outcome[0].absent == ()
+
+
+def test_each_line_a_quote_covers_is_read_for_assertion_markers() -> None:
+    """Approved 13 November 2026, as it can only reduce support: a clause ends at a line
+    break too, so a quote that runs over two lines is read line by line. A second line
+    opening with Note:, Remark:, Summary:, Comment:, Conclusion: or "<word> comment:" is an
+    assertion, and "per the <role>" on a line of its own is someone's account whatever
+    date the line before carries. Before, the two lines were one clause and a marker not
+    at its start was missed, so the quote stood as a record."""
+    approval = "Approved by: Priya Shah, line manager, on 2026-03-03"
+    for marker in ("Note:", "Remark:", "Summary:", "Comment:", "Conclusion:", "Manager comment:"):
+        noted = f"{marker} the role owner approved by phone"
+        text = f"Access request REQ-2051\n{approval}\n{noted}\n"
+        quote = f"{approval}\n{noted}"
+        start = text.index(approval)
+        assert chain_module.clauses_of(text, start, start + len(quote)) == [approval, noted]
+        assert chain_module.asserts(quote), marker
+        chain = _chain(files=(_file(text),))
+        # The two lines quoted as one passage and called a record: an assertion in code,
+        # so never support.
+        assert _result(_says(A=_met(quote)), chain).result == "CANNOT_TELL", marker
+        # The approval's own line, quoted alone, is still a record.
+        assert _result(_says(A=_met(approval)), chain).result == "MET", marker
+    said = "Granted FI_AP_CLERK on 2026-03-04 09:12\nper the role owner, the approval was given"
+    assert chain_module.asserts(said)
+    assert not chain_module.asserts("Granted FI_AP_CLERK on 2026-03-04 09:12 per the role owner")
+    # Lines of record stay records, and one line is read as before.
+    assert not chain_module.asserts("Number: RITM0048213\nRequest: REQ0039127")
+    assert chain_module.clauses_of("A | Note: b | c", 4, 11) == ["Note: b"]

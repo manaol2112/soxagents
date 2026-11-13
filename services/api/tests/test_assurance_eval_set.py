@@ -10,7 +10,9 @@ and no false ISSUE, and every verdict and what it shows is the auditor's: the ca
 and the code's rules agree.
 A fabricated quote, a single word, a word cut out of another, an instruction in a file
 or a remark that all approvals were obtained never supports anything, and one line
-quoted twice is not a contradiction.
+quoted twice is not a contradiction. The scorer builds each reading's request with the
+database run's own builder: an answer sent one level too deep is read as written, and a
+reading cut off at its allowance is asked once more with a larger one.
 
 The live scoring command (evals/assurance/score.py) is never part of a tier.
 """
@@ -74,6 +76,8 @@ REQUIRED = {
     "long_file_read_in_part",
     "wrong_attribute_links",
     "three_files_together",
+    # Prompts /5: the role assigned by someone no record designates as SAP Security.
+    "assigner_team_not_designated",
 }
 MARKER = "ASSESSOR-ONLY-7f3c"
 Answerer = Callable[[EvalCase], dict[str, Any]]
@@ -116,6 +120,21 @@ class _Scripted:
         return ModelRaw(copy.deepcopy(answer), (), max(1, len(request.prompt) // 4), 600)
 
 
+class _Turns:
+    """A provider that replies to each exact prompt in turn with the raw replies given
+    for it (an answer cut off at the allowance, then a whole one); the last one again."""
+
+    def __init__(self, replies: dict[tuple[str, str], list[ModelRaw]]) -> None:
+        self.replies = replies
+        self.requests: list[ModelRequest] = []
+
+    def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
+        del config
+        self.requests.append(request)
+        given = self.replies[(request.system, request.prompt)]
+        return copy.deepcopy(given.pop(0) if len(given) > 1 else given[0])
+
+
 def _answers(
     cases: list[EvalCase], by_role: Mapping[Role, Answerer] | None = None
 ) -> dict[tuple[str, str], dict[str, Any]]:
@@ -133,7 +152,7 @@ def _answers(
 
 
 def _run(
-    tmp_path: Path, cases: list[EvalCase], provider: _Scripted, cap: str = "100"
+    tmp_path: Path, cases: list[EvalCase], provider: _Scripted | _Turns, cap: str = "100"
 ) -> tuple[int, dict[str, Any], str]:
     out = io.StringIO()
     argv = ["--max-cost-usd", cap]
@@ -244,27 +263,37 @@ def test_prompts_build_and_the_reviewer_sees_nothing_of_the_assessor(case: EvalC
 
 
 def test_the_scorer_asks_as_the_database_run_does() -> None:
-    # The database run builds each reading's request in a nested request_of (no importable
-    # builder), so the scorer mirrors it and this check holds the mirror to it.
-    source = inspect.getsource(evidence_assurance)
-    assert source.count("def request_of(") == 1
-    built = source[source.index("def request_of(") :]
-    built = built[: built.index("\n\n")]
-    for piece in (
-        'operation="generate"',
-        "output_schema=OPINION_SCHEMA",
-        "allowed_tool_ids=()",
-        f"timeout_seconds={score.TIMEOUT_SECONDS}",
-        "cancelled=False",
-        "system=system",
-        f"max_tokens={score.MAX_TOKENS}",
-    ):
-        assert piece in built, piece
-    assert "images=" not in built and "unnest=" not in built and "web_search=" not in built
+    # Rewritten 13 November 2026. Old expectation: the database run built each reading's
+    # request in a nested request_of with no importable builder, the scorer mirrored it,
+    # and this check held the mirror to that source text, which asked for no unnest. New:
+    # both build every reading's request, the first asking and the second, with the one
+    # builder evidence_assurance.reading_request, which reads an answer sent one level too
+    # deep as written (unnest) and gives a reading cut off at its allowance a larger one.
+    # Why: the live run of 13 November 2026 lost three readings to `attributes` sent as
+    # JSON text (the planner's fault of 12 November, mended the same way), and one builder
+    # makes the scorer ask exactly as the database run asks by construction. Kept: the same
+    # schema, tools, timeout and allowance, no images or web search, and the reviewer on
+    # the assessor's own tier and configuration.
+    assessing = inspect.getsource(evidence_assurance._assess)
+    assert "ModelRequest(" not in assessing and "request_of" not in assessing
+    assert "reading_request(system, prompt)" in assessing
+    assert "reading_request(system, prompt, retry=True)" in assessing
+    assert "ModelRequest(" not in inspect.getsource(score)
+    for retry in (False, True):
+        request = score.request_for("system", "prompt", retry=retry)
+        assert request == evidence_assurance.reading_request("system", "prompt", retry=retry)
+        assert request.output_schema is OPINION_SCHEMA and request.operation == "generate"
+        assert (request.allowed_tool_ids, request.cancelled) == ((), False)
+        assert request.system == "system" and request.prompt == "prompt"
+        assert request.unnest is True and request.images == () and request.web_search == 0
+    first = score.request_for("system", "prompt")
+    again = score.request_for("system", "prompt", retry=True)
+    assert (first.max_tokens, first.timeout_seconds) == (score.MAX_TOKENS, score.TIMEOUT_SECONDS)
+    assert (first.max_tokens, first.timeout_seconds) == (8192, 240)
+    assert (again.max_tokens, again.timeout_seconds) == (score.RETRY_TOKENS, 300) == (16000, 300)
     # The reviewer on the assessor's own tier and configuration.
+    source = inspect.getsource(evidence_assurance)
     assert "tier=assessor.tier" in source and "config=assessor.config" in source
-    request = score.request_for("system", "prompt")
-    assert request.output_schema is OPINION_SCHEMA and request.operation == "generate"
     setup = score.setup_for(BY_NAME["walkthrough_complete"], _settings())
     assert (setup.assessor_agent, setup.reviewer_agent) == ("itgc-access-tester", REVIEWER_AGENT)
     assert setup.tier == "BALANCED" and setup.config.input_nanos_per_token > 0
@@ -361,6 +390,77 @@ def test_perfect_answers_score_no_false_supported_and_no_false_issue(tmp_path: P
     shown = {a["shows"] for a in _attributes(report) if a["verdict"] == "SUPPORTED"}
     assert shown == {"DESIGN", "IMPLEMENTATION"}
     assert any(a["verdict"] == "PARTLY_SUPPORTED" for a in _attributes(report))
+
+
+def test_a_nested_answer_is_read_and_a_cut_off_reading_asked_again(tmp_path: Path) -> None:
+    """The live run of 13 November 2026, as the database run now meets it: `attributes`
+    sent as the text of its JSON is read as written; a reading cut off at its allowance is
+    asked once more with the larger one, as a call of its own; cut off again, the case
+    fails and is not scored, never a guess. The readings' checked answers are kept."""
+    case = BY_NAME["three_files_together"]
+    chain = chain_of(case)
+    perfect = scripted_answer(case)
+    nested = ModelRaw({"attributes": json.dumps(perfect["attributes"])}, (), 4000, 600)
+    cut = ModelRaw(None, (), 4000, score.MAX_TOKENS, stopped="max_tokens")
+    whole = ModelRaw(perfect, (), 4000, 600)
+    provider = _Turns({
+        prompt_for(chain, "ASSESSOR"): [nested],
+        prompt_for(chain, "REVIEWER"): [cut, whole],
+    })  # fmt: skip
+    _code, report, _text = _run(tmp_path / "once", [case], provider)
+    record = report["cases"][0]
+    assert record["scored"] and report["totals"]["correct"] == len(case.attributes)
+    assert report["totals"]["false_supported"] == report["totals"]["false_issue"] == 0
+    assert [(c["role"], c["status"], c["retry"], c["cut_off"]) for c in record["calls"]] == [
+        ("ASSESSOR", "SUCCEEDED", False, False),
+        ("REVIEWER", "MALFORMED", False, True),
+        ("REVIEWER", "SUCCEEDED", True, False),
+    ]
+    assert [r.max_tokens for r in provider.requests] == [8192, 8192, 16000]
+    assert all(r.unnest for r in provider.requests)
+    # The cut-off call is counted in the case's cost, as the database run's budget is.
+    assert record["cost_micros"] == sum(c["cost_micros"] for c in record["calls"])
+    # Each reading's checked answer, element by element, for the diagnosis of a mismatch.
+    for role in ("ASSESSOR", "REVIEWER"):
+        views = record["readings"][role]["attributes"]
+        assert [v["code"] for v in views] == [a.code for a in case.attributes]
+        assert all(e["result"] == e["claimed"] for v in views for e in v["elements"])
+    # Cut off again with the larger allowance: failed, nothing scored.
+    twice = _Turns({prompt_for(chain, "ASSESSOR"): [whole], prompt_for(chain, "REVIEWER"): [cut]})
+    _code, report, _text = _run(tmp_path / "twice", [case], twice)
+    record = report["cases"][0]
+    assert record["failed"].startswith("REVIEWER") and not record.get("scored")
+    assert record["attributes"] == [] and report["totals"]["cases_failed"] == 1
+    assert [(c["role"], c["retry"]) for c in record["calls"]] == [
+        ("ASSESSOR", False), ("REVIEWER", False), ("REVIEWER", True),
+    ]  # fmt: skip
+
+
+def test_a_team_no_record_designates_is_not_shown() -> None:
+    """Prompts /5 (the product owner, 13 November 2026: "Record's own designation"): a
+    person's team is shown only by the record's own designation of that person. The new
+    case is walkthrough_complete without the line that designates Tomas Nguyen (the
+    ticket's assignee in the SAP Security group): with the careful reader's answers, C is
+    SUPPORTED where the ticket names him, and an ISSUE, met in part, where it does not.
+    Everything else is the same."""
+    named, bare = BY_NAME["walkthrough_complete"], BY_NAME["assigner_team_not_designated"]
+    assignee = "Assigned to: Tomas Nguyen (TNGUYEN)"
+    assert [line for line in named.files[0].lines if line != assignee] == bare.files[0].lines
+    assert assignee in named.files[0].lines and named.files[1:] == bare.files[1:]
+    assert (bare.control, bare.attributes, bare.categories) == (
+        named.control, named.attributes, named.categories,
+    )  # fmt: skip
+    for code in ("A", "B", "D"):
+        assert bare.expected[code] == named.expected[code]
+    expectation = bare.expected["C"]
+    assert (expectation.verdict, expectation.results) == ("ISSUE", ["PARTLY_MET"])
+    assert not expectation.unsettled_acceptable
+    assert "SAP Security" in expectation.answer.elements["pass"].absent
+    for case, wanted in ((named, ("SUPPORTED", "MET")), (bare, ("ISSUE", "PARTLY_MET"))):
+        answer = scripted_answer(case)
+        outcomes = run_chain(lambda *_, given=answer: given, chain_of(case)).outcomes
+        c = next(outcome for outcome in outcomes if outcome.code == "C")
+        assert (c.verdict, c.result) == wanted, case.name
 
 
 def test_design_credited_as_implementation_is_counted_on_its_own() -> None:
