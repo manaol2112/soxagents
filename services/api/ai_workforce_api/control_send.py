@@ -88,6 +88,9 @@ class SendTarget(BaseModel):
     # Empty when the text cannot be rendered (the send then refuses it with its reason).
     subject: str = ""
     body: str = ""
+    # The same email laid out as the recipient's mail client shows it (email_html.to_html,
+    # the layout the live send attaches): built only from the subject and text above.
+    html: str = ""
 
 
 class OwnerChoice(BaseModel):
@@ -163,6 +166,7 @@ def _with_email(
     groups: dict[UUID, Any],
 ) -> None:
     """Each target that goes now, with its email's subject and text as the send renders it."""
+    from ai_workforce_api.email_html import to_html
     from ai_workforce_api.evidence_groups import _pbcs, render_group, sections_for
     from ai_workforce_api.outbound import _engagement, _read_pbc, render_request
 
@@ -184,7 +188,13 @@ def _with_email(
                 message = render_request(connection, request, engagement)
         except ValueError, KeyError, IndexError, NotVisible:
             continue
-        shown[key] = target.model_copy(update={"subject": message.subject, "body": message.body})
+        shown[key] = target.model_copy(
+            update={
+                "subject": message.subject,
+                "body": message.body,
+                "html": to_html(message.subject, message.body),
+            }
+        )
 
 
 def _check_routing(routing: list[Routing]) -> None:

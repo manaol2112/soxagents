@@ -169,6 +169,10 @@ ABSENT_LIMIT = 300
 # fit: the run is held as TOO_LARGE and a person reads the files.
 MAX_READING_TEXT = 400_000
 UNSETTLED_TEXT = "The two readings do not agree. Your judgment is needed."
+UNCHECKED_EXCEPTION = (
+    "An exception is shown by the evidence, but a file on this request has not been "
+    "checked. Your judgment is needed."
+)
 UNLINKED_TEXT = (
     "This request does not ask for this attribute; what the readings found is shown for reference."
 )
@@ -182,17 +186,27 @@ SEVERAL_PLACES = "found in several places"
 # it: a remark, a note, a summary, or "all ... were obtained". An ASSERTION whatever the
 # reading called it.
 # Wherever a sentence starts: at the line's start, after ". " or "; ", or after a bullet.
+# At the clause's start, after a bullet if there is one.
 _ASSERTION_MARK = re.compile(
-    r"(?:^|[.;]\s+|^\s*(?:[-*\u2022\u00b7]|\d+[.)])\s*)\W*"
+    r"^\s*(?:(?:[-*\u2022\u00b7]|\d+[.)])\s*)?\W*"
     r"(?:remarks?|notes?|summary|comments?|conclusions?)\s*:",
-    re.I | re.M,
+    re.I,
 )
 _ASSERTION_ALL = re.compile(
     r"\ball\b[^.\n]{0,80}?\b(?:were|was|have been|has been)\s+(?:obtained|approved|reviewed)\b",
     re.I,
 )
-# "Manager comment:", "per the role owner", "according to ...": someone's account of it.
-_ASSERTION_SAID = re.compile(r"\b\w+\s+comments?\s*:|\bper the \w+|\baccording to\b", re.I)
+# "Manager comment:": someone's account of it.
+_ASSERTION_COMMENT = re.compile(r"^\W*\w+\s+comments?\s*:", re.I)
+# "per the role owner", "according to ...": someone's account of it, unless the clause
+# carries what a record carries (a date, a time, a record id).
+_ASSERTION_SAID = re.compile(r"\bper the \w+|\baccording to\b", re.I)
+_RECORD_MARK = re.compile(
+    r"\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b|\b\d{1,2}:\d{2}\b"
+    r"|\b[A-Z]{2,}[-_]?\d{2,}\b"
+)
+# Where a clause ends within a line.
+_CLAUSE_END = re.compile(r"\.\s+|;\s+|\s\|\s|\t")
 # The prompt's own delimiters, neutralised wherever the files (or anything else from the
 # engagement) carry them, so that no text can close a block or open another.
 # The angle bracket and its look-alikes (fullwidth, small, CJK and mathematical angle
@@ -210,13 +224,38 @@ def neutral(text: str) -> str:
     return _DELIMITER.sub(lambda found: "‹" + found.group(1) + found.group(2), text)
 
 
-def asserts(line: str) -> bool:
-    """Whether a line of evidence is, in code's reading, an assertion: it opens as a
-    remark, note, summary, comment or conclusion, or says that all of something was
-    obtained, approved or reviewed."""
+def _clause_asserts(clause: str) -> bool:
     return bool(
-        _ASSERTION_MARK.search(line) or _ASSERTION_ALL.search(line) or _ASSERTION_SAID.search(line)
+        _ASSERTION_MARK.search(clause)
+        or _ASSERTION_COMMENT.search(clause)
+        or _ASSERTION_ALL.search(clause)
+        or (_ASSERTION_SAID.search(clause) and not _RECORD_MARK.search(clause))
     )
+
+
+def clauses_of(text: str, start: int, end: int) -> list[str]:
+    """The clauses of its line a passage sits in: the line split at ". ", "; ", " | " and
+    tabs, keeping those the passage overlaps."""
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", end)
+    line = text[line_start : len(text) if line_end < 0 else line_end]
+    found: list[str] = []
+    at = 0
+    for cut in [*_CLAUSE_END.finditer(line), None]:
+        stop = len(line) if cut is None else cut.start()
+        if at < end - line_start and start - line_start < stop + 1:
+            found.append(line[at:stop])
+        if cut is not None:
+            at = cut.end()
+    return found or [line]
+
+
+def asserts(text: str) -> bool:
+    """Whether evidence text is, in code's reading, an assertion: one of its clauses
+    opens as a remark, note, summary, comment or conclusion ("Manager comment:" too),
+    says that all of something was obtained, approved or reviewed, or gives someone's
+    account ("per the", "according to") without a date, a time or a record id."""
+    return any(_clause_asserts(clause) for clause in _CLAUSE_END.split(text))
 
 
 @dataclass(frozen=True)
@@ -392,9 +431,17 @@ class View:
     role: Role
     result: Result
     reason: str
+    # The passages the reading rests it on, where they are shown with the view (an
+    # exception shown on a request with a file not checked).
+    passages: tuple[Passage, ...] = ()
 
     def as_json(self) -> dict[str, Any]:
-        return {"role": self.role, "result": self.result, "reason": self.reason}
+        return {
+            "role": self.role,
+            "result": self.result,
+            "reason": self.reason,
+            "passages": [passage.as_json() for passage in self.passages],
+        }
 
 
 @dataclass(frozen=True)
@@ -814,7 +861,13 @@ def _find(quote: _Quote, chain: ChainInput) -> _Found | None:
         file=file,
         match=match,
         flagged=any(untrusted_kind(line) is not None for line in lines),
-        asserted=any(asserts(line) for line in lines),
+        # The assertion markers on the clauses it sits in only: "Approved by Priya Shah.
+        # Note: ..." keeps its approval a record.
+        asserted=any(
+            _clause_asserts(clause)
+            for span in match.occurrences
+            for clause in clauses_of(file.text, span[0], span[1])
+        ),
     )
 
 
@@ -1100,6 +1153,16 @@ def _shows(one: AttributeView, two: AttributeView, chain: ChainInput) -> Shows:
     return "IMPLEMENTATION" if shown and each else "DESIGN"
 
 
+def _defers(view: AttributeView) -> bool:
+    """Whether what a reading does not find shown may be another request's evidence: its
+    elements are shown, not borne on by these files (NOT_ADDRESSED), or half shown (an
+    element PARTLY_MET, resting on absence). An element it answers NOT_MET bears on these
+    files and is not shown by them: that is this request's shortfall."""
+    return all(
+        element.result in ("MET", "PARTLY_MET", "NOT_ADDRESSED") for element in view.elements
+    )
+
+
 def _met_keys(view: AttributeView) -> frozenset[str]:
     return frozenset(element.key for element in view.elements if element.result == "MET")
 
@@ -1182,10 +1245,26 @@ def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome
         rest = tuple(element.text for element in one.elements if element.key not in _met_keys(one))
         # SUPPORTED is an agreed MET that both readings rest on passages for: never
         # without a verified passage, whatever the two results say.
-        if deviations:
-            # An exception shown by a record, in both readings: NOT_MET whatever else the
-            # request holds and whether or not it links the attribute. A contradiction in
-            # either reading is a contradiction, and the readings must then agree on it.
+        unchecked: tuple[View, ...] = ()
+        if deviations and chain.absence_unknown:
+            # An exception both readings show, on a request with a file left out or read
+            # in part: what the unread part holds could answer it (an approval recorded
+            # elsewhere). It never escapes rule 5: a person's, with both readings'
+            # passages.
+            summary = UNCHECKED_EXCEPTION
+            pair: tuple[tuple[Role, AttributeView], ...] = (("ASSESSOR", one), ("REVIEWER", two))
+            unchecked = tuple(
+                View(role, view.result, view.reason, _distinct(
+                    p for element in view.elements if element.key in deviations
+                    for p in element.records
+                ))
+                for role, view in pair
+            )  # fmt: skip
+        elif deviations:
+            # An exception shown by a record, in both readings, every file read in full:
+            # NOT_MET whatever else the request holds and whether or not it links the
+            # attribute. A contradiction in either reading is a contradiction, and the
+            # readings must then agree on it.
             mine: Result = "CONTRADICTED" if one.result == "CONTRADICTED" else "NOT_MET"
             theirs: Result = "CONTRADICTED" if two.result == "CONTRADICTED" else "NOT_MET"
             if mine == theirs:
@@ -1225,7 +1304,13 @@ def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome
             and one.result in ("SHOWN_IN_PART", "PARTLY_MET")
             and same_part
             and (
-                one.result == "SHOWN_IN_PART" or (attribute.expected and attribute.linked_elsewhere)
+                one.result == "SHOWN_IN_PART"
+                or (
+                    attribute.expected
+                    and attribute.linked_elsewhere
+                    and _defers(one)
+                    and _defers(two)
+                )
             )
         ):
             # The same elements shown by both and the rest not shown by this request's
@@ -1243,6 +1328,8 @@ def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome
             one.result == two.result == "PARTLY_MET"
             and attribute.expected
             and attribute.linked_elsewhere
+            and _defers(one)
+            and _defers(two)
         ):
             # Shown in part on different elements, where another request may show the
             # rest: the readings disagree on what this request shows. A person's.
@@ -1273,7 +1360,9 @@ def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome
                     "request did not say it would."
                 )
         views: tuple[View, ...] = ()
-        if verdict == "UNSETTLED" or reference:
+        if unchecked:
+            views, passages, absent = unchecked, (), ()
+        elif verdict == "UNSETTLED" or reference:
             views = (
                 View("ASSESSOR", one.result, one.reason),
                 View("REVIEWER", two.result, two.reason),
@@ -1783,33 +1872,59 @@ def _requests(
     return found
 
 
-def _linked(connection: psycopg.Connection[Any], control_id: UUID) -> dict[UUID, set[UUID]]:
+@dataclass(frozen=True)
+class _Links:
+    """The attributes each DESIGN requirement of the control links, and which of those
+    requirements still expect evidence."""
+
+    by_requirement: dict[UUID, set[UUID]]
+    # Planned, waiting on another or requested; not waived or removed, not a proposed
+    # addition nobody accepted, not on a cancelled request, in a D&I phase that applies.
+    expecting: frozenset[UUID]
+
+    def get(self, requirement_id: UUID) -> set[UUID]:
+        return self.by_requirement.get(requirement_id, set())
+
+
+def _linked(connection: psycopg.Connection[Any], control_id: UUID) -> _Links:
     """The attributes each DESIGN requirement of the control links
-    (evidence_requirement_attributes), for a removed requirement none."""
+    (evidence_requirement_attributes), for a removed requirement none, and which of them
+    still expect evidence (what "another request asks for it" counts)."""
     found: dict[UUID, set[UUID]] = {}
-    for requirement_id, attribute_id in connection.execute(
-        "SELECT l.requirement_id, l.attribute_id FROM evidence_requirement_attributes l "
-        "JOIN evidence_requirements q ON q.id = l.requirement_id "
-        "WHERE l.engagement_control_id = %s AND q.phase = 'DESIGN' AND q.status <> 'REMOVED'",
+    expecting: set[UUID] = set()
+    for requirement_id, attribute_id, still in connection.execute(
+        """
+        SELECT l.requirement_id, l.attribute_id,
+               q.status IN ('PLANNED', 'AWAITING_DEPENDENCY', 'REQUESTED')
+               AND NOT coalesce((q.pending_change ->> 'add')::boolean, false)
+               AND coalesce(r.status, '') <> 'CANCELLED'
+               AND coalesce(ph.applicability, '') <> 'NOT_APPLICABLE'
+        FROM evidence_requirement_attributes l
+        JOIN evidence_requirements q ON q.id = l.requirement_id
+        LEFT JOIN pbc_requests r ON r.id = q.pbc_request_id
+        LEFT JOIN evidence_plan_phases ph ON ph.plan_id = q.plan_id AND ph.phase = q.phase
+        WHERE l.engagement_control_id = %s AND q.phase = 'DESIGN' AND q.status <> 'REMOVED'
+        """,
         (control_id,),
     ).fetchall():
-        found.setdefault(UUID(str(requirement_id)), set()).add(UUID(str(attribute_id)))
-    return found
+        key = UUID(str(requirement_id))
+        found.setdefault(key, set()).add(UUID(str(attribute_id)))
+        if still:
+            expecting.add(key)
+    return _Links(found, frozenset(expecting))
 
 
-def _basis(
-    request: _Request, control: _Control, attributes: Attributes, links: dict[UUID, set[UUID]]
-) -> _Basis:
+def _basis(request: _Request, control: _Control, attributes: Attributes, links: _Links) -> _Basis:
     """What a run of the requirement would read now: every file in force on it (a file
     whose reading has not ended is named with nothing read yet), the control's facts, the
     attributes, the links (this requirement's, and which attributes another DESIGN
     requirement of the control asks for too) and the lens."""
     ids = tuple(a[0] for a in attributes)
-    linked = links.get(request.requirement_id, set())
+    linked = links.get(request.requirement_id)
     elsewhere = {
         attribute
-        for requirement_id, linked_there in links.items()
-        if requirement_id != request.requirement_id
+        for requirement_id, linked_there in links.by_requirement.items()
+        if requirement_id != request.requirement_id and requirement_id in links.expecting
         for attribute in linked_there
     }
     included = request.included
@@ -2519,15 +2634,26 @@ def backfill(connection: psycopg.Connection[Any], limit: int = 50) -> list[UUID]
     files are still being read, say) is not tried again until something changes
     (evidence_assessment_backfill). Returns the runs queued."""
     try:
-        controls = connection.execute(
+        candidates = connection.execute(
             """
-            SELECT DISTINCT q.engagement_control_id, q.project_id
+            SELECT q.engagement_control_id, q.project_id, q.id
             FROM evidence_requirements q
             JOIN projects p ON p.id = q.project_id
+            LEFT JOIN evidence_assessment_backfill b ON b.requirement_id = q.id
             WHERE q.phase = 'DESIGN' AND q.status <> 'REMOVED'
               AND p.deleted_at IS NULL AND p.status <> 'ARCHIVED'
               AND NOT EXISTS (SELECT 1 FROM evidence_assessments s
                               WHERE s.requirement_id = q.id AND s.stale_at IS NULL)
+              -- A file in force on it: on its request (not withdrawn), or linked to it by
+              -- a person. The exact set (and a sibling's shared file) is read below.
+              AND (EXISTS (SELECT 1 FROM evidence_file_links l
+                           WHERE l.pbc_request_id = q.pbc_request_id)
+                   OR EXISTS (SELECT 1 FROM evidence_requirement_files ef
+                              JOIN evidence_file_links l
+                                ON l.evidence_file_id = ef.evidence_file_id
+                              WHERE ef.requirement_id = q.id AND ef.status = 'LINKED'))
+            -- Never tried first, then the oldest requirement.
+            ORDER BY (b.requirement_id IS NOT NULL), q.created_at, q.id
             LIMIT %s
             """,
             (max(limit, 1) * 4,),
@@ -2535,12 +2661,16 @@ def backfill(connection: psycopg.Connection[Any], limit: int = 50) -> list[UUID]
     except psycopg.Error:
         logger.warning("D&I requests without a check could not be looked for")
         return []
+    controls: dict[tuple[UUID, UUID], set[UUID]] = {}
+    for control_id, project_id, requirement_id in candidates:
+        controls.setdefault((UUID(str(control_id)), UUID(str(project_id))), set()).add(
+            UUID(str(requirement_id))
+        )
     queued: list[UUID] = []
     tried = 0
-    for control_id, project_id in controls:
+    for (control_key, project), wanted in controls.items():
         if tried >= limit:
             break
-        project, control_key = UUID(str(project_id)), UUID(str(control_id))
         try:
             control = _control(connection, project, control_key)
             if control is None:
@@ -2566,6 +2696,8 @@ def backfill(connection: psycopg.Connection[Any], limit: int = 50) -> list[UUID]
                 ).fetchall()
             }
             for request in requests:
+                if request.requirement_id not in wanted:
+                    continue
                 if request.requirement_id in current or tried >= limit:
                     continue
                 basis = _basis(request, control, attributes, links).sha256
@@ -3216,6 +3348,9 @@ class ViewBody(BaseModel):
     role: Role
     result: Result
     reason: str
+    # The passages the reading rests it on, where shown with the view: an exception shown
+    # on a request with a file not checked. Empty otherwise.
+    passages: list[PassageBody] = Field(default_factory=list)
 
 
 class ElementBody(BaseModel):
@@ -3428,7 +3563,20 @@ def read_assurance(
                         ],
                         absent=[str(a) for a in item.get("absent") or []],
                         views=[
-                            ViewBody(**view)
+                            ViewBody(
+                                role=view["role"],
+                                result=view["result"],
+                                reason=str(view.get("reason") or ""),
+                                passages=[
+                                    PassageBody(
+                                        quote=str(p.get("quote") or ""),
+                                        file_id=p["file_id"],
+                                        location=p.get("location") or {},
+                                    )
+                                    for p in view.get("passages") or []
+                                    if isinstance(p, dict)
+                                ],
+                            )
                             for view in item.get("views") or []
                             if isinstance(view, dict)
                         ],

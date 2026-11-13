@@ -226,6 +226,90 @@ export function ControlSend({
 }
 
 /**
+ * The email as its recipient will see it, under the request it belongs to: a mail window
+ * with who it goes to and its subject, then the message laid out by the same layout the
+ * send attaches (product owner, 13 November 2026: the first preview crammed the plain text
+ * into the request's narrow text column). The layout is the server's, built only from the
+ * approved text; it is shown in a frame that runs no script and follows no link.
+ */
+function EmailPreview({
+  email,
+  to,
+  cc,
+  open,
+  handover,
+}: {
+  email: { subject: string; body: string; html: string } | null;
+  to: string;
+  cc: string[];
+  open: boolean;
+  handover: boolean;
+}) {
+  const [plain, setPlain] = useState(false);
+  if (email === null) {
+    return (
+      <p className="rs-mail-none">
+        The email could not be shown here. Open the request to read it before
+        approving.
+      </p>
+    );
+  }
+  const laidOut = email.html !== "" && !plain;
+  return (
+    <details className="rs-mail" open={open}>
+      <summary>
+        <UiIcon name="mail" size={14} />
+        <span>{handover ? "Preview the request" : "Preview the email"}</span>
+        <span className="rs-mail-subject-line">{email.subject}</span>
+      </summary>
+      <div className="rs-mail-window">
+        <dl className="rs-mail-head">
+          <div>
+            <dt>To</dt>
+            <dd>{to}</dd>
+          </div>
+          {cc.length > 0 ? (
+            <div>
+              <dt>Cc</dt>
+              <dd>{cc.join(", ")}</dd>
+            </div>
+          ) : null}
+          <div>
+            <dt>Subject</dt>
+            <dd className="rs-mail-subject">{email.subject}</dd>
+          </div>
+        </dl>
+        {laidOut ? (
+          <iframe
+            className="rs-mail-frame"
+            title={`Email preview: ${email.subject}`}
+            sandbox=""
+            srcDoc={email.html}
+          />
+        ) : (
+          <div className="rs-mail-plain">{email.body}</div>
+        )}
+        <p className="rs-mail-foot">
+          <span>
+            The secure upload link is added when it is sent. To change the
+            wording, close this and use Change on the request.
+          </span>
+          {email.html !== "" ? (
+            <button
+              type="button"
+              className="text-link is-plain"
+              onClick={() => setPlain((value) => !value)}
+            >
+              {plain ? "Show as the recipient sees it" : "Show plain text"}
+            </button>
+          ) : null}
+        </p>
+      </div>
+    </details>
+  );
+}
+
+/**
  * Review and send requests (the product owner's reference, 28 October 2026): what is
  * sent now and to whom, what stays scheduled for its phase, and what a check holds back;
  * sent only once the reviewer confirms they checked the recipients and details.
@@ -443,32 +527,17 @@ function ReviewStep({
                         Also carries {item.others.join(", ")} in the same email
                       </small>
                     ) : null}
-                    {item.email !== null ? (
-                      // The text as it goes, open while there are few to read.
-                      <details className="rs-email" open={sending <= 2}>
-                        <summary>
-                          {handover ? "The request's wording" : "The email"}
-                        </summary>
-                        <p className="rs-email-subject">
-                          <span>Subject</span> {item.email.subject}
-                        </p>
-                        <div className="rs-email-body">{item.email.body}</div>
-                        <small>
-                          The secure upload link is added when it is sent. To
-                          change the wording, close this and use Change on the
-                          request.
-                        </small>
-                      </details>
-                    ) : (
-                      <small>
-                        The email could not be shown here. Open the request to
-                        read it before approving.
-                      </small>
-                    )}
                   </span>
                   <span className="pill pill-dot tone-success">
                     Ready to send
                   </span>
+                  <EmailPreview
+                    email={item.email}
+                    to={edit.recipient}
+                    cc={edit.cc}
+                    open={sending <= 2}
+                    handover={handover}
+                  />
                 </li>
               );
             })}

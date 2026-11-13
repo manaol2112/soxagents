@@ -85,6 +85,10 @@ def test_a_control_without_an_owner_asks_for_one_then_sends_to_them(
     # (product owner, 12 November 2026: the email was hard to find before approving).
     going = [t for t in preview["targets"] if t["ok"]]
     assert going and all(t["subject"].strip() and t["body"].strip() for t in going), going
+    # And as the recipient's mail client lays it out, from that same text and nothing else.
+    from ai_workforce_api.email_html import to_html
+
+    assert all(t["html"] == to_html(t["subject"], t["body"]) for t in going)
 
     # Sent: the owner is the control's, each draft goes to them, approved and sent.
     sent = _send(owner, team, control, preview=False, **named)

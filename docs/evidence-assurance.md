@@ -59,8 +59,10 @@ out of date, when the plan is made again or approved or a plan run ends (require
 created, removed or reshaped), when a requirement's links or an attribute's wording or
 criteria change, when a file is linked to or taken off a requirement, withdrawn, replaced
 or restored, when a file's kind is confirmed, and when the control's description changes.
-On start-up a bounded backfill (`backfill`, 50 requirements a pass) queues a run for each
-DESIGN requirement with files in force on it (its requirement files) and no current run; a
+On start-up a bounded backfill (`backfill`, 50 requirements a pass, never-tried and
+oldest requirements first) queues a run for each DESIGN requirement with files in force on
+it (its requirement files, filtered in the query and read exactly per control) and no
+current run; a
 requirement a pass already tried at the very same basis (its files still being read, say)
 is not tried again until what it would read changes (`evidence_assessment_backfill`).
 
@@ -152,8 +154,10 @@ decides what stands (the rule of evidence_mapping.py).
 1. Every quote is found in the stored text of **the file it names**, strictly
    (`console_citations.find_passage`, beside the console's looser `find_quote`): on word
    boundaries at both ends, at least four words or twenty characters after folding, never
-   where the word just before it on the same line negates it (not, no, never, without) and
-   never where it ends inside a token (a trailing `-`, `/`, `:` or `.` followed by a
+   where one of the three words before it in its clause negates it (not, no, never,
+   without; the look-back stops at a cell separator ` | `, a tab, `:`, `;` or `.`, and
+   "no" before a number or a full stop is a number's abbreviation) and never where it
+   ends inside a token (a trailing `-`, `/`, `:` or `.` followed by a
    letter or digit). A
    quote that file does not hold is dropped, whichever other file may hold it. Where the
    words occur more than once in the file, the occurrence its context points to is the
@@ -171,10 +175,11 @@ decides what stands (the rule of evidence_mapping.py).
    REQUIREMENT does, as does a RECORD the document carries. An unclassified passage is an
    ASSERTION. A concern wins: words the answer calls an ASSERTION or an INSTRUCTION
    anywhere are support nowhere in that answer. Code reads as an ASSERTION, whatever the
-   reading called it, a passage on a line where a sentence (at the line's start, after
-   ". " or "; ", or after a bullet) opens with Remark:, Note:, Summary:, Comment: or
-   Conclusion:, or that carries "<word> comment:", "per the <role>" or "according to", or
-   that says all of something was (or has been) obtained, approved or reviewed. A line the
+   reading called it, a passage whose own clause (its line split at ". ", "; " and
+   " | ") opens, after any bullet, with Remark:, Note:, Summary:, Comment:, Conclusion: or
+   "<word> comment:", or says all of something was (or has been) obtained, approved or
+   reviewed, or carries "per the <role>" or "according to" without a date, a time or a
+   record id ("granted role per the approved request REQ-1041" stays a record). A line the
    deterministic guards flag is never support.
 5. For an attribute the request asks for (`expected`), when a file's stored text was cut
    or a file of the request was left out by the gate, a result that rests on absence (a
@@ -183,8 +188,10 @@ decides what stands (the rule of evidence_mapping.py).
    checked". An attribute the request does not link is not held to this rule. A
    **deviation** is the one exception: an element both readings find `NOT_MET`, each
    naming nothing absent for it and resting it on overlapping verified RECORD passages
-   (under `DESIGN_DOCUMENT` also the document's own REQUIREMENT) from files read in full (a self-approval plainly in a ticket). It stands whatever else
-   the request holds (compare, below); anything else is absence-based.
+   (under `DESIGN_DOCUMENT` also the document's own REQUIREMENT) from files read in
+   full (a self-approval plainly in a ticket). It stands whatever else
+   the request holds (compare, below), but it never escapes rule 5: on a request with a
+   file left out or read in part it goes to a person; anything else is absence-based.
 6. One reading's result for the attribute: any `CONTRADICTED` gives `CONTRADICTED`;
    all `NOT_ADDRESSED` gives `NOT_ADDRESSED`; every element `MET` gives `MET`; at least one
    `MET` and the rest `NOT_ADDRESSED` gives `SHOWN_IN_PART` (no shortfall: the rest may be
@@ -197,10 +204,10 @@ Then the comparison, per attribute:
 
 | Assessor | Reviewer | Verdict |
 | --- | --- | --- |
-| a deviation on an element | the same deviation (overlapping records) | `ISSUE` `NOT_MET`, linked or not (both `CONTRADICTED` instead: `ISSUE` `CONTRADICTED`) |
+| a deviation on an element | the same deviation (overlapping records) | every file read in full: `ISSUE` `NOT_MET`, linked or not (both `CONTRADICTED` instead: `ISSUE` `CONTRADICTED`); a file left out or read in part: `UNSETTLED`, "An exception is shown by the evidence, but a file on this request has not been checked. Your judgment is needed.", both readings' passages in `views` |
 | `MET` | `MET` (both with verified passages) | `SUPPORTED` |
 | `SHOWN_IN_PART` | `SHOWN_IN_PART`, on the same elements | `PARTLY_SUPPORTED`, except: linked and no other D&I request of the control links it: `ISSUE` `PARTLY_MET`, naming the elements not shown |
-| `PARTLY_MET` | `PARTLY_MET`, on the same elements, linked, another D&I request links it too | `PARTLY_SUPPORTED` (result `SHOWN_IN_PART`; the elements not met count as not shown) |
+| `PARTLY_MET` | `PARTLY_MET`, on the same elements, linked, another D&I request links it too, and every element answered `MET`, `NOT_ADDRESSED` or `PARTLY_MET` (half shown) | `PARTLY_SUPPORTED` (result `SHOWN_IN_PART`; the elements not met count as not shown). An element answered `NOT_MET` bears on these files and is not shown by them: `ISSUE` `PARTLY_MET` |
 | the same `CONTRADICTED` | | `ISSUE` |
 | the same `PARTLY_MET` or `NOT_MET`, attribute linked | | `ISSUE` |
 | the same `PARTLY_MET` or `NOT_MET`, attribute not linked | | `NOT_ADDRESSED`, "This request does not ask for this attribute; what the readings found is shown for reference.", both views |
@@ -212,7 +219,9 @@ different elements of an attribute another request also asks for, are `UNSETTLED
 requirement with no links at all has every attribute unlinked. `SUPPORTED` always carries
 the result `MET` and at least one verified passage from each reading. "Another D&I request
 links it" is part of the run's basis (`elsewhere_attribute_ids`): a change there puts the
-run out of date.
+run out of date. Only a DESIGN requirement that still expects evidence counts (planned,
+waiting on another or requested; not waived or removed, not a proposed addition nobody
+accepted, not on a cancelled request, in a D&I phase that applies).
 
 There is no third agent and no tie-break. `UNSETTLED` goes to a person with both views.
 
@@ -410,8 +419,8 @@ The reviewer's prompt never contains anything from the assessor's answer. A test
                           "location": { "label": "Page 3", "page": 3, "sheet": null,
                                         "row": null, "column": null, "cell": null } } ],
           "absent": [ "…" ],
-          "views": [ { "role": "ASSESSOR", "result": "MET", "reason": "…" },
-                     { "role": "REVIEWER", "result": "NOT_MET", "reason": "…" } ],
+          "views": [ { "role": "ASSESSOR", "result": "MET", "reason": "…", "passages": [] },
+                     { "role": "REVIEWER", "result": "NOT_MET", "reason": "…", "passages": [ … ] } ],
           "elements": [ { "key": "condition", "text": "…", "result": "MET | … | null",
                           "passages": [ … ], "absent": [ "…" ] } ],
           "finding_id": "… or null",
@@ -443,7 +452,8 @@ empty) where it has none.
 - Every `file_id` (in `file_ids`, `held_files` and each passage) is the evidence file id
   the evidence plan's requirement body lists in `files[].file_id`.
 - `views` is empty unless UNSETTLED or shown for reference (an unlinked attribute's
-  agreed shortfall); `attributes` is empty unless the run is REVIEWED (nothing of a run is
+  agreed shortfall); a view's `passages` are filled only for an exception shown on a
+  request with a file not checked (the passages each reading rests it on); `attributes` is empty unless the run is REVIEWED (nothing of a run is
   shown before it finishes, and nothing of one that is out of date). `SUPPORTED` always
   carries `result` `MET` and at least one passage. `shows` is set only for `SUPPORTED` and
   `PARTLY_SUPPORTED`.

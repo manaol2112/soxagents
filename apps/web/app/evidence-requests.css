@@ -1554,50 +1554,149 @@
   min-width: 0;
 }
 
-/* The email as it goes, read before approving: plain text, its own line breaks kept. */
-.rs-email {
-  margin-top: 0.4rem;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--surface);
+/* The email as its recipient sees it: a mail window under the request, the dialog's
+   full width, never inside the request's text column. */
+.cs-dialog:has(.rs-mail) {
+  width: min(calc(100% - 2rem), 54rem);
 }
 
-.rs-email > summary {
-  padding: 0.4rem 0.65rem;
+.rs-item.is-routed {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.rs-mail,
+.rs-mail-none {
+  flex: 0 0 100%;
+  min-width: 0;
+  margin: 0;
+}
+
+.rs-mail-none {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.rs-mail > summary {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  min-width: 0;
+  padding: 0.45rem 0.1rem;
   color: var(--accent-text);
   font-size: var(--fs-sm);
   font-weight: 600;
   cursor: pointer;
+  border-top: 1px solid var(--border-subtle);
 }
 
-.rs-email > :not(summary) {
-  margin: 0 0.65rem 0.5rem;
+.rs-mail > summary > svg {
+  flex: none;
 }
 
-.rs-text .rs-email-subject,
-.rs-email-subject {
-  color: var(--text);
+.rs-mail > summary > span:first-of-type {
+  flex: none;
+}
+
+.rs-mail-subject-line {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rs-mail[open] .rs-mail-subject-line {
+  display: none;
+}
+
+.rs-mail-window {
+  overflow: hidden;
+  margin-top: 0.35rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.rs-mail-head {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0.7rem 0.9rem;
+  border-bottom: 1px solid var(--border-subtle);
   font-size: var(--fs-sm);
+}
+
+.rs-mail-head > div {
+  display: grid;
+  grid-template-columns: 3.75rem minmax(0, 1fr);
+  gap: 0.5rem;
+}
+
+.rs-mail-head dt {
+  color: var(--text-tertiary);
+}
+
+.rs-mail-head dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.rs-mail-head dd.rs-mail-subject {
+  color: var(--text-strong);
   font-weight: 600;
 }
 
-.rs-email-subject > span {
-  margin-right: 0.35rem;
-  color: var(--text-secondary);
-  font-weight: 500;
+/* The email keeps its own light canvas, as a mail client shows it, in both themes. */
+.rs-mail-frame {
+  display: block;
+  width: 100%;
+  height: min(60vh, 34rem);
+  background: #f1f3f6;
+  border: 0;
 }
 
-.rs-email-body {
-  max-height: 18rem;
+.rs-mail-plain {
+  max-height: min(60vh, 34rem);
   overflow: auto;
-  padding: 0.55rem 0.65rem;
+  padding: 0.9rem 1rem;
   color: var(--text);
-  font-size: var(--fs-sm);
-  line-height: 1.5;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   background: var(--surface-muted);
-  border-radius: 6px;
+}
+
+.rs-mail-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 0;
+  padding: 0.55rem 0.9rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.rs-mail-foot > span {
+  flex: 1 1 18rem;
+}
+
+.rs-mail-foot button.text-link {
+  height: auto;
+  padding: 0;
+  color: var(--accent-text);
+  background: none;
+  border: 0;
+  box-shadow: none;
+  font-size: var(--fs-xs);
+  font-weight: 600;
 }
 
 .rs-text strong {
