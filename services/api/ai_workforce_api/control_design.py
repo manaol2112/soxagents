@@ -520,6 +520,12 @@ def refresh_statement(cursor: psycopg.Cursor[Any], control_id: UUID) -> None:
             (render(statement.text, values, labels), title, control_id,
              render(statement.text, values, labels), title),
         )  # fmt: skip
+        if cursor.rowcount:
+            # The D&I checks read the control's description: those that read the earlier
+            # one are out of date (docs/evidence-assurance.md).
+            from ai_workforce_api.evidence_assurance import description_changed
+
+            description_changed(cursor, control_id)
     changed = False
     for slot in statement.slots:
         value = values.get(slot.key, "").strip()

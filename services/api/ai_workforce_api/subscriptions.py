@@ -426,6 +426,36 @@ def reserve_call(
         return UUID(str(row[0])), ""
 
 
+def allowance_refusal(caller: Any, organization_id: UUID, estimate_micros: int) -> str:
+    """Why the firm's allowance cannot cover a cost, before anything is reserved; empty
+    when it can, or when the firm is not on a trial (its project budgets still apply).
+    A read only: nothing is reserved or locked, so a job that needs several calls can ask
+    whether all of them fit before it makes the first (evidence_assurance: a run that
+    cannot pay for both readings starts neither). Each call is still reserved on its own
+    when it is made (reserve_call)."""
+    if not isinstance(caller, psycopg.Connection):
+        return ""
+    sub = load(caller, organization_id)
+    if sub is None:
+        return "the firm has no subscription"
+    if not sub.writable:
+        return str(inactive_detail(sub.state)["detail"])
+    if not sub.trial or sub.limits.ai_budget_micros is None:
+        return ""
+    row = caller.execute(
+        "SELECT coalesce(sum(coalesce(settled_micros, estimate_micros)), 0) "
+        "FROM model_call_reservations WHERE organization_id = %s",
+        (organization_id,),
+    ).fetchone()
+    spent = 0 if row is None else int(row[0])
+    if spent + estimate_micros > sub.limits.ai_budget_micros:
+        return (
+            f"the trial's AI allowance of ${sub.limits.ai_budget_micros / 1e6:.2f} cannot "
+            f"cover it (${spent / 1e6:.2f} spent or reserved)"
+        )
+    return ""
+
+
 def release_abandoned(cursor: Any, organization_id: UUID, after_seconds: int) -> int:
     """Settle the firm's reservations left open longer than a run may last, at their
     estimate: the worst case stays charged, and the run stops counting as in progress.

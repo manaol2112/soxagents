@@ -50,6 +50,10 @@ from ai_workforce_api.evidence_analysis import (
     analysis_runner,
     register_evidence_analysis,
 )
+from ai_workforce_api.evidence_assurance import (
+    assessment_runner,
+    register_evidence_assurance,
+)
 from ai_workforce_api.evidence_center import register_evidence_center
 from ai_workforce_api.evidence_findings import register_evidence_findings
 from ai_workforce_api.evidence_groups import register_evidence_groups
@@ -226,6 +230,7 @@ def create_app(
     register_evidence_reviews(app, resolved)
     register_evidence_mapping(app, resolved, model_provider)
     register_evidence_findings(app, resolved)
+    register_evidence_assurance(app, resolved, drafts)
     register_walkthrough_instances(app, resolved)
     register_sample_traces(app, resolved)
     register_methodology(app, resolved)
@@ -342,6 +347,7 @@ def _lifespan(
             prior_year_runner(settings),
             narrative_runner(settings),
             policy_evidence_runner(settings),
+            assessment_runner(settings),
         ):
             yield
 

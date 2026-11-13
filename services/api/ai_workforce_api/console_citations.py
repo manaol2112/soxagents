@@ -68,12 +68,12 @@ class Citation:
         }
 
 
-def _folded(text: str) -> tuple[str, list[int]]:
+def _folded(text: str, table: dict[int, str] = _FOLD) -> tuple[str, list[int]]:
     """The text folded for matching, and where each folded character came from."""
     out: list[str] = []
     origin: list[int] = []
     space = False
-    for index, char in enumerate(text.translate(_FOLD)):
+    for index, char in enumerate(text.translate(table)):
         if char.isspace():
             if not space and out:
                 out.append(" ")
@@ -97,6 +97,90 @@ def find_quote(text: str, quote: str) -> tuple[int, int] | None:
     if at < 0:
         return None
     return origin[at], origin[at + len(needle) - 1] + 1
+
+
+# A passage that supports a finding of fact (evidence_assurance.py) is matched more
+# strictly than a citation: on word boundaries at both ends, at least four words or twenty
+# characters long, and placed where it occurs more than once. The prompt's neutralised
+# angle brackets fold back to the stored text's own.
+_FOLD_STRICT = str.maketrans(
+    {
+        "\u2019": "'", "\u2018": "'", "\u201c": '"', "\u201d": '"', "\u2013": "-",
+        "\u2014": "-", "\u00a0": " ", "\u2039": "<", "\u203a": ">",
+    }
+)  # fmt: skip
+MIN_PASSAGE_WORDS = 4
+MIN_PASSAGE_CHARS = 20
+
+
+@dataclass(frozen=True)
+class PassageMatch:
+    """Where a passage is in a text, matched strictly (find_passage)."""
+
+    # The occurrence the passage stands for: the only one, the one its context points
+    # to, or (when that cannot be told) the first.
+    start: int
+    end: int
+    # Every place it occurs, as (start, end) offsets of the original text.
+    occurrences: tuple[tuple[int, int], ...]
+    # Whether start and end are known to be the occurrence meant.
+    placed: bool
+
+
+def _bounded(folded: str, at: int, length: int, needle: str) -> bool:
+    """Whether a match starts and ends on word boundaries, where the needle itself starts
+    or ends with a letter or digit."""
+    before = folded[at - 1] if at > 0 else " "
+    after = folded[at + length] if at + length < len(folded) else " "
+    return not (needle[0].isalnum() and before.isalnum()) and not (
+        needle[-1].isalnum() and after.isalnum()
+    )
+
+
+def _all(folded: str, needle: str) -> list[int]:
+    found: list[int] = []
+    at = folded.find(needle)
+    while at >= 0:
+        found.append(at)
+        at = folded.find(needle, at + 1)
+    return found
+
+
+def find_passage(text: str, quote: str, context: str = "") -> PassageMatch | None:
+    """Where a quoted passage is in the text, matched strictly: folded as find_quote
+    folds (spacing, case, quote marks, dashes), but only on word boundaries at both ends,
+    and only for a passage of at least four words or twenty characters after folding.
+    None when it is not there, or too short to stand for anything. Where it occurs more
+    than once, `context` (words around it in the text) picks the occurrence meant; when
+    it does not pick exactly one, the match says it is not placed. find_quote, which the
+    console's citations use, is unchanged."""
+    folded, origin = _folded(text, _FOLD_STRICT)
+    needle = _folded(quote.strip(), _FOLD_STRICT)[0].strip(" .\u2026")
+    if not needle or (len(needle.split()) < MIN_PASSAGE_WORDS and len(needle) < MIN_PASSAGE_CHARS):
+        return None
+    spans = [
+        (at, at + len(needle))
+        for at in _all(folded, needle)
+        if _bounded(folded, at, len(needle), needle)
+    ]
+    if not spans:
+        return None
+    occurrences = tuple((origin[a], origin[b - 1] + 1) for a, b in spans)
+    if len(spans) == 1:
+        return PassageMatch(occurrences[0][0], occurrences[0][1], occurrences, True)
+    around = _folded(context.strip(), _FOLD_STRICT)[0].strip(" .\u2026")
+    meant: set[int] = set()
+    if around and needle in around:
+        for at in _all(folded, around):
+            meant |= {
+                index
+                for index, (start, end) in enumerate(spans)
+                if at <= start and end <= at + len(around)
+            }
+    if len(meant) == 1:
+        start, end = occurrences[meant.pop()]
+        return PassageMatch(start, end, occurrences, True)
+    return PassageMatch(occurrences[0][0], occurrences[0][1], occurrences, False)
 
 
 def location_of(text: str, offset: int) -> str:

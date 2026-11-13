@@ -470,6 +470,34 @@ class PbcDraftWorkflow:
         return str(result)
 
 
+class AssessmentRequest(TypedDict):
+    run_id: str
+
+
+@workflow.defn(name="evidence_assessment")
+class EvidenceAssessmentWorkflow:
+    """Checks one evidence file against its control's attributes (the assurance chain,
+    docs/evidence-assurance.md), with retries."""
+
+    @workflow.run
+    async def run(self, payload: AssessmentRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "assess_evidence_file",
+                args=[payload["run_id"]],
+                start_to_close_timeout=timedelta(minutes=12),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_evidence_assessment",
+                args=[payload["run_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
 class PolicyEvidenceRequest(TypedDict):
     project_id: str
 

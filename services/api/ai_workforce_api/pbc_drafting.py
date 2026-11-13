@@ -1116,6 +1116,7 @@ class LocalDraftScheduler:
         prior: Callable[[UUID], str] | None = None,
         narrative: Callable[[UUID], str] | None = None,
         policy: Callable[[UUID], str] | None = None,
+        assess: Callable[[UUID], str] | None = None,
     ) -> None:
         from ai_workforce_api.console import console_runner
         from ai_workforce_api.evidence_analysis import analysis_runner
@@ -1159,6 +1160,9 @@ class LocalDraftScheduler:
         from ai_workforce_api.policy_evidence import policy_evidence_runner
 
         self._policy = policy if policy is not None else policy_evidence_runner(settings)
+        from ai_workforce_api.evidence_assurance import assessment_runner
+
+        self._assess = assess if assess is not None else assessment_runner(settings)
         self._pool = ThreadPoolExecutor(
             max_workers=settings.local_worker_threads, thread_name_prefix="pbc-draft"
         )
@@ -1179,6 +1183,43 @@ class LocalDraftScheduler:
     def schedule_evidence_analyses(self, analysis_ids: list[UUID]) -> None:
         for analysis_id in analysis_ids:
             self._pool.submit(self._attempt_analysis, analysis_id)
+
+    def schedule_evidence_assessments(self, run_ids: list[UUID]) -> None:
+        """The assurance chain's runs (docs/evidence-assurance.md)."""
+        for run_id in run_ids:
+            self._pool.submit(self._attempt_assessment, run_id)
+
+    def _schedule_open_assessments(
+        self, *, analysis_id: UUID | None = None, run_id: UUID | None = None
+    ) -> None:
+        """Hand over the queued runs of the engagement a reading or a run belongs to."""
+        from ai_workforce_api.evidence_assurance import open_assessments, project_of
+
+        try:
+            with connect(self._settings.database_url) as connection:
+                project = project_of(connection, analysis_id=analysis_id, run_id=run_id)
+                if project is not None:
+                    self.schedule_evidence_assessments(open_assessments(connection, project))
+        except psycopg.Error:
+            logger.warning("open evidence assessments could not be scheduled")
+
+    def _attempt_assessment(self, run_id: UUID) -> None:
+        from ai_workforce_api.evidence_assurance import (
+            MAX_ATTEMPTS as ASSESS_ATTEMPTS,
+        )
+        from ai_workforce_api.evidence_assurance import fail_assessment
+
+        for _ in range(ASSESS_ATTEMPTS):
+            try:
+                # A run found out of date left what stands now queued.
+                if self._assess(run_id) == "STALE":
+                    self._schedule_open_assessments(run_id=run_id)
+                return
+            except Exception:
+                # The run reset itself to queued with its own claim (run_assessment).
+                logger.warning("checking evidence against its attributes failed; retrying")
+        with connect(self._settings.database_url) as connection:
+            fail_assessment(connection, run_id)
 
     def schedule_workpaper_drafts(self, workpaper_ids: list[UUID]) -> None:
         for workpaper_id in workpaper_ids:
@@ -1274,6 +1315,7 @@ class LocalDraftScheduler:
             try:
                 self._plan(plan_id)
                 self._draft_released(plan_id)
+                self._assess_planned(plan_id)
                 return
             except Exception:
                 logger.warning("planning a control's evidence failed; retrying")
@@ -1372,6 +1414,16 @@ class LocalDraftScheduler:
         with connect(self._settings.database_url) as connection:
             fail_run(connection, control_id)
         self._draft_narrative_released(control_id)
+
+    def _assess_planned(self, plan_id: UUID) -> None:
+        """The plan run may have created or reshaped D&I requests: their checks follow."""
+        from ai_workforce_api.evidence_assurance import follow_plan
+
+        try:
+            with connect(self._settings.database_url) as connection:
+                self.schedule_evidence_assessments(follow_plan(connection, plan_id))
+        except psycopg.Error:
+            logger.warning("the checks of a planned control could not be queued")
 
     def _draft_narrative_released(self, control_id: UUID) -> None:
         """Draft what the control's evidence plan released when its narrative run ended."""
@@ -1492,6 +1544,7 @@ class LocalDraftScheduler:
         from ai_workforce_api.console import open_turns
         from ai_workforce_api.control_reviews import open_reperformances
         from ai_workforce_api.evidence_analysis import open_analyses
+        from ai_workforce_api.evidence_assurance import backfill, open_assessments
         from ai_workforce_api.evidence_plans import (
             open_plan_runs,
             reclaim_interrupted_plan_runs,
@@ -1522,7 +1575,12 @@ class LocalDraftScheduler:
             priors = open_prior_year(connection)
             narratives = open_narratives(connection)
             policies = open_policies(connection)
+            # A D&I request with files and no check (filed before the chain, or whose
+            # queueing failed) gets one, a bounded number a start.
+            backfill(connection)
+            assessments = open_assessments(connection)
         self.schedule_drafts(ids)
+        self.schedule_evidence_assessments(assessments)
         self.schedule_plan_runs(plans)
         self.schedule_prior_year_runs(priors)
         self.schedule_narrative_runs(narratives)
@@ -1549,6 +1607,7 @@ class LocalDraftScheduler:
             + len(priors)
             + len(narratives)
             + len(policies)
+            + len(assessments)
         )
 
     def shutdown(self) -> None:
@@ -1603,6 +1662,8 @@ class LocalDraftScheduler:
                 # its first read file gives the drafting agent the walkthrough to write.
                 self._schedule_open_tests()
                 self._draft_design(analysis_id)
+                # The reading has committed: the assurance run it recorded, if any, starts.
+                self._schedule_open_assessments(analysis_id=analysis_id)
                 return
             except Exception:
                 logger.warning("reading an evidence file failed; retrying")
@@ -1613,6 +1674,8 @@ class LocalDraftScheduler:
                     logger.warning("an evidence analysis could not be reset for retry")
         with connect(self._settings.database_url) as connection:
             fail_analysis(connection, analysis_id)
+        # Its request is checked on its other files now, with this one left out.
+        self._schedule_open_assessments(analysis_id=analysis_id)
 
     def _draft_design(self, analysis_id: UUID) -> None:
         from ai_workforce_api.workpaper_service import draft_design_after_analysis

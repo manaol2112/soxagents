@@ -2849,6 +2849,16 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
 
         settle_design(c, organization_id, project_id, control_id, "REQUEST", p.id, scheduler)
 
+    def followed(
+        c: psycopg.Connection[Any], p: Principal, project_id: UUID, control_id: UUID
+    ) -> None:
+        """The person changed what the assurance chain's runs rest on (the attributes a
+        D&I request addresses, or an attribute's criteria): the runs that no longer hold
+        are marked out of date and queued again (docs/evidence-assurance.md)."""
+        from ai_workforce_api.evidence_assurance import follow_control
+
+        follow_control(c, project_id, control_id, p.id, scheduler)
+
     def allowed(
         connection: psycopg.Connection[Any],
         principal: Principal,
@@ -3229,6 +3239,7 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
             allowed(c, p, organization_id, project_id, control_id, Action.TASK_UPDATE)
             link_requirement(c, organization_id, project_id, control_id, requirement_id, p.id,
                              body)  # fmt: skip
+            followed(c, p, project_id, control_id)
             settled(c, p, organization_id, project_id, control_id)
             return read(c, p, organization_id, project_id, control_id)
 
@@ -3242,6 +3253,7 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
         def work(c: psycopg.Connection[Any], p: Principal) -> MasterPlanBody:
             allowed(c, p, organization_id, project_id, control_id, Action.TASK_UPDATE)
             set_criteria(c, organization_id, project_id, control_id, attribute_id, p.id, body)
+            followed(c, p, project_id, control_id)
             settled(c, p, organization_id, project_id, control_id)
             return read(c, p, organization_id, project_id, control_id)
 

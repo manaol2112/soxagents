@@ -21,7 +21,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
@@ -73,7 +73,7 @@ from ai_workforce_api.models import (
     record_call,
 )
 from ai_workforce_api.settings import Settings
-from ai_workforce_api.subscriptions import reserve_call, settle_call
+from ai_workforce_api.subscriptions import allowance_refusal, reserve_call, settle_call
 
 logger = logging.getLogger(__name__)
 
@@ -389,6 +389,28 @@ class AgentCaller:
         )  # fmt: skip
         settle_call(self._connection, reservation, call_id, cost)
         return reply
+
+    def refusal_for(self, requests: Sequence[ModelRequest]) -> str:
+        """Why this job cannot pay for all of these calls together, asked before any of
+        them is made; empty when it can. The worst case of each is checked against the
+        limit a call, their sum against the job's and the engagement's month, and against
+        a trial firm's allowance. Nothing is sent, reserved or recorded: a job whose calls
+        only mean something together (the two readings of evidence_assurance) asks this
+        first, and starts none when it cannot pay for all. Each call still passes its own
+        checks when it is made."""
+        estimates = [estimate_micros(self.config, request) for request in requests]
+        limits = self._limits
+        for estimate in estimates:
+            if limits.call and estimate > limits.call:
+                return f"a call would cost about ${estimate / 1e6:.2f}, over the ${limits.call / 1e6:.2f} limit a call"  # noqa: E501
+        total = sum(estimates)
+        if limits.job and self.spent + total > limits.job:
+            return f"the calls would cost about ${total / 1e6:.2f} together, over the ${limits.job / 1e6:.2f} limit a job"  # noqa: E501
+        if limits.engagement_month:
+            spent = month_spend(self._connection, self.job.project_id)
+            if spent + total > limits.engagement_month:
+                return f"the engagement has spent ${spent / 1e6:.2f} this month and the calls would pass the ${limits.engagement_month / 1e6:.2f} limit"  # noqa: E501
+        return allowance_refusal(self._connection, self.job.organization_id, total)
 
     def _reserve(self, estimate: int) -> tuple[UUID | None, str]:
         return reserve_call(

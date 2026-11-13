@@ -9,7 +9,12 @@ Findings are derived, never decided here:
   deterministic checks on the read text (placeholder text, a policy whose version or
   effective date the text does not establish, dates outside the phase's window);
 - from a mapping run (`derive_from_mapping`): the records an attribute still lacks, the
-  conflicts between passages, and the passages kept apart as concerns.
+  conflicts between passages, and the passages kept apart as concerns;
+- from an assurance run (`record_assurance_findings`, docs/evidence-assurance.md): an
+  attribute both independent readings of a file find not met, partly met, contradicted
+  or, where its request said the file would address it, not addressed. For a file the
+  assurance chain covers, the reader's own model-derived findings are held, not proposed:
+  they were never checked by a second reading (`ReaderFindings`, `hold_reader_findings`).
 
 A finding is pinned to the plan revision and the file's hash; a later approval of the
 plan or a replaced file marks it stale. A later reading on the same request, or the
@@ -25,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date
 from typing import Any, Literal
 from uuid import UUID
@@ -48,11 +54,14 @@ from ai_workforce_api.db import transaction
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.settings import Settings
 
-Source = Literal["READER", "RULES", "MAPPING", "TRACE"]
+Source = Literal["READER", "RULES", "MAPPING", "TRACE", "ASSURANCE"]
 Kind = Literal[
     "GAP", "PARTIAL", "NOT_COVERED", "PLACEHOLDER", "VERSION", "PERIOD",
     "MISSING", "CONFLICT", "CONCERN", "LATE", "NOT_TRACED", "ACTIVITY",
+    "NOT_MET", "PARTLY_MET", "CONTRADICTED", "NOT_ADDRESSED",
 ]  # fmt: skip
+# The kinds only the assurance chain records (migration 0155).
+AssuranceKind = Literal["NOT_MET", "PARTLY_MET", "CONTRADICTED", "NOT_ADDRESSED"]
 Status = Literal[
     "PROPOSED", "ACCEPTED", "DISMISSED", "SENT", "ANSWERED", "RESOLVED",
     "CLARIFICATION_ACCEPTED", "MORE_NEEDED", "NOT_APPLICABLE", "ESCALATED",
@@ -215,15 +224,45 @@ def period_dates(period: str) -> list[date]:
     return found
 
 
+class ReaderFindings:
+    """The reader's own findings of one reading (source READER), kept back until the
+    reading's transaction knows whether the assurance chain covers the file
+    (docs/evidence-assurance.md, stage 5). `record` proposes them as before; a caller that
+    finds the file covered does not call it, and they are never proposed: the reader's
+    answer stays on the reading's record."""
+
+    def __init__(self) -> None:
+        self._drafts: list[_Draft] = []
+        self._context: dict[str, Any] | None = None
+
+    def __len__(self) -> int:
+        return len(self._drafts)
+
+    def keep(self, drafts: list[_Draft], **context: Any) -> None:
+        self._drafts = drafts
+        self._context = context
+
+    def record(self, cursor: psycopg.Cursor[Any]) -> list[UUID]:
+        if self._context is None or not self._drafts:
+            return []
+        drafts, self._drafts = self._drafts, []
+        return _record_drafts(cursor, drafts=drafts, **self._context)
+
+
 def derive_from_analysis(
     cursor: psycopg.Cursor[Any],
     organization_id: UUID,
     project_id: UUID,
     analysis_id: UUID,
+    *,
+    reader: ReaderFindings | None = None,
 ) -> list[UUID]:
     """The findings a finished reading gives. Idempotent: a finding already on record
     for the same content is left as it is; one proposed from an earlier reading of the
-    same file and not found again is marked stale."""
+    same file and not found again is marked stale. With `reader`, the reader's own
+    findings (source READER) are handed to it instead of being recorded here, for the
+    caller to record or to hold; the deterministic checks (source RULES) are always
+    recorded here."""
     row = cursor.execute(
         """
         SELECT a.evidence_file_id, a.pbc_request_id, a.classification, a.extracted_text,
@@ -379,8 +418,17 @@ def derive_from_analysis(
                     )
                 )
 
+    now = drafts
+    if reader is not None:
+        now = [draft for draft in drafts if draft.source != "READER"]
+        reader.keep(
+            [draft for draft in drafts if draft.source == "READER"],
+            organization_id=organization_id, project_id=project_id, control_id=control_id,
+            analysis_id=analysis_id, mapping_run_id=None, request_id=request_id,
+            plan_revision=_plan_revision(cursor, control_id), digest=digest,
+        )  # fmt: skip
     created = _record_drafts(
-        cursor, organization_id, project_id, control_id, drafts,
+        cursor, organization_id, project_id, control_id, now,
         analysis_id=analysis_id, mapping_run_id=None, request_id=request_id,
         plan_revision=_plan_revision(cursor, control_id), digest=digest,
     )  # fmt: skip
@@ -631,6 +679,7 @@ def _record_drafts(
     plan_revision: int | None,
     digest: str,
     instance_id: UUID | None = None,
+    assessment_id: UUID | None = None,
 ) -> list[UUID]:
     created: list[UUID] = []
     for draft in drafts:
@@ -641,11 +690,11 @@ def _record_drafts(
                 analysis_id, mapping_run_id, requirement_id, pbc_request_id, attribute_index,
                 attribute_id, attribute_code,
                 source, kind, fingerprint, title, observation, question, expected, citation,
-                plan_revision, file_sha256, walkthrough_instance_id
+                plan_revision, file_sha256, walkthrough_instance_id, assessment_id
             )
             VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s
+                %s, %s, %s
             )
             ON CONFLICT (engagement_control_id, fingerprint) DO NOTHING
             RETURNING id
@@ -673,6 +722,7 @@ def _record_drafts(
                 plan_revision,
                 digest,
                 instance_id,
+                assessment_id,
             ),  # fmt: skip
         ).fetchone()
         if row is None:
@@ -680,8 +730,8 @@ def _record_drafts(
         finding_id = UUID(str(row[0]))
         _event(
             cursor, finding_id, organization_id, project_id, "PROPOSED",
-            "AGENT" if draft.source in ("READER", "MAPPING") else "SYSTEM", None, "PROPOSED",
-            "PROPOSED",
+            "AGENT" if draft.source in ("READER", "MAPPING", "ASSURANCE") else "SYSTEM", None,
+            "PROPOSED", "PROPOSED",
             note="", question=draft.question,
             points_at={
                 k: v
@@ -689,6 +739,7 @@ def _record_drafts(
                     ("analysis_id", None if analysis_id is None else str(analysis_id)),
                     ("run_id", None if mapping_run_id is None else str(mapping_run_id)),
                     ("walkthrough_instance_id", None if instance_id is None else str(instance_id)),
+                    ("assessment_id", None if assessment_id is None else str(assessment_id)),
                 )
                 if v is not None
             },
@@ -766,11 +817,16 @@ def _mark_stale(
 def mark_stale_for_control(
     cursor: psycopg.Cursor[Any], control_id: UUID, revision: int, reason: str
 ) -> int:
-    """The plan was approved again: open findings pinned to an earlier revision are stale."""
+    """The plan was approved again: open findings pinned to an earlier revision are stale.
+    Not the assurance chain's: those are pinned to their run's basis (the file, the
+    attributes, the requirement's links), and go stale with their run when it changes
+    (mark_stale_for_assessment), so an issue both readings found never goes stale while
+    its run still stands."""
     rows = cursor.execute(
         """
         SELECT id, status FROM evidence_findings
         WHERE engagement_control_id = %s AND NOT stale AND status = ANY(%s)
+          AND source <> 'ASSURANCE'
           AND (plan_revision IS NULL OR plan_revision < %s)
         """,
         (control_id, list(OPEN), revision),
@@ -791,6 +847,248 @@ def mark_stale_for_file(
     ).fetchall()
     for finding_id, status in rows:
         _mark_stale(cursor, UUID(str(finding_id)), str(status), reason, points_at)
+    return len(rows)
+
+
+# --- The assurance chain's findings (docs/evidence-assurance.md, stage 5) --------------
+
+HELD_FOR_ASSURANCE = (
+    "The file is checked against the attributes by two independent readings; the "
+    "reader's own finding was not checked by a second reading."
+)
+
+
+@dataclass(frozen=True)
+class AssuranceIssue:
+    """An attribute both readings of a file agree is not met, partly met, contradicted,
+    or not addressed where its request said it would be."""
+
+    kind: AssuranceKind
+    attribute_id: UUID
+    attribute_code: str
+    title: str
+    observation: str
+    question: str
+    expected: str
+    citation: dict[str, Any] | None
+    # The file the finding points at (the cited passage's, or the only file read) and its
+    # content hash; None where the issue rests on several files and no passage.
+    file_id: UUID | None = None
+    digest: str = ""
+
+
+def assurance_fingerprint(
+    requirement_id: UUID, attribute_id: UUID, basis_sha256: str, assessment_id: UUID | None = None
+) -> str:
+    """An assurance finding's fingerprint: the requirement, the attribute and the basis;
+    with a run, that run's own (see record_assurance_findings)."""
+    parts = ["ASSURANCE", str(requirement_id), str(attribute_id), basis_sha256]
+    return _fingerprint(*parts, *([] if assessment_id is None else [str(assessment_id)]))
+
+
+@dataclass(frozen=True)
+class AssuranceFindingRef:
+    id: UUID
+    fingerprint: str
+    requirement_id: UUID | None
+    attribute_id: UUID | None
+    assessment_id: UUID | None
+    status: str
+    stale: bool
+
+
+def assurance_findings(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> list[AssuranceFindingRef]:
+    """The control's assurance findings, oldest first."""
+    return [
+        AssuranceFindingRef(
+            id=UUID(str(row[0])),
+            fingerprint=str(row[1]),
+            requirement_id=None if row[2] is None else UUID(str(row[2])),
+            attribute_id=None if row[3] is None else UUID(str(row[3])),
+            assessment_id=None if row[4] is None else UUID(str(row[4])),
+            status=str(row[5]),
+            stale=bool(row[6]),
+        )
+        for row in connection.execute(
+            "SELECT id, fingerprint, requirement_id, attribute_id, assessment_id, status, stale "
+            "FROM evidence_findings "
+            "WHERE engagement_control_id = %s AND project_id = %s AND source = 'ASSURANCE' "
+            "ORDER BY created_at, id",
+            (control_id, project_id),
+        ).fetchall()
+    ]
+
+
+def in_hand(status: str) -> bool:
+    """A finding a person has acted on and not closed: accepted, sent, answered, asked
+    again, escalated. A new check never marks it stale; its result is attached to it."""
+    return status in OPEN and status != "PROPOSED"
+
+
+def attach_assurance_result(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    requirement_id: UUID,
+    attribute_id: UUID,
+    attribute_code: str,
+    assessment_id: UUID,
+    verdict: str,
+) -> bool:
+    """A new run's result for an attribute, attached to the issue on it a person already
+    has in hand (accepted, sent, answered...), from an earlier run of the same request.
+    A new run that supports the attribute proposes ANSWERED; any other result is noted on
+    the finding's history and leaves its status. Nothing is closed, and the finding is
+    never marked stale by the new run: a person decides. Returns whether such a finding
+    is in hand (the new run then records no finding of its own for the attribute). Once
+    per finding and run."""
+    rows = cursor.execute(
+        """
+        SELECT id, status FROM evidence_findings f
+        WHERE source = 'ASSURANCE' AND requirement_id = %s AND attribute_id = %s
+          AND NOT stale AND status = ANY(%s) AND assessment_id <> %s
+          AND NOT EXISTS (
+              SELECT 1 FROM evidence_finding_events v
+              WHERE v.finding_id = f.id AND v.event = 'REASSESSED'
+                AND v.points_at ->> 'assessment_id' = %s::text
+          )
+        FOR UPDATE
+        """,
+        (
+            requirement_id, attribute_id, [x for x in OPEN if x != "PROPOSED"], assessment_id,
+            str(assessment_id),
+        ),
+    ).fetchall()  # fmt: skip
+    for finding_id, status in rows:
+        after = str(status)
+        if verdict == "SUPPORTED":
+            after = "ANSWERED"
+            note = (
+                f"A new check of the request's evidence finds attribute {attribute_code} "
+                "supported by both readings. A person decides whether this resolves it."
+            )
+            if status != "ANSWERED":
+                cursor.execute(
+                    "UPDATE evidence_findings SET status = 'ANSWERED', version = version + 1 "
+                    "WHERE id = %s",
+                    (finding_id,),
+                )
+        elif verdict == "ISSUE":
+            note = (
+                f"A new check of the request's evidence still finds attribute "
+                f"{attribute_code} not shown. A person decides."
+            )
+        else:
+            note = (
+                f"A new check of the request's evidence does not settle attribute "
+                f"{attribute_code}. A person decides."
+            )
+        _event(
+            cursor, UUID(str(finding_id)), organization_id, project_id, "REASSESSED", "AGENT",
+            None, str(status), after, note=note,
+            points_at={"assessment_id": str(assessment_id), "verdict": verdict},
+        )  # fmt: skip
+    in_hand_now = cursor.execute(
+        "SELECT 1 FROM evidence_findings WHERE source = 'ASSURANCE' AND requirement_id = %s "
+        "AND attribute_id = %s AND NOT stale AND status = ANY(%s) AND assessment_id <> %s "
+        "LIMIT 1",
+        (requirement_id, attribute_id, [x for x in OPEN if x != "PROPOSED"], assessment_id),
+    ).fetchone()
+    return in_hand_now is not None
+
+
+def record_assurance_findings(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    assessment_id: UUID,
+    issues: list[AssuranceIssue],
+    *,
+    requirement_id: UUID,
+    request_id: UUID | None,
+    basis_sha256: str,
+) -> list[UUID]:
+    """The findings of one reviewed assurance run: one per requirement, attribute and
+    basis, pinned to the run. Saving the same run again adds nothing, and neither does a
+    run that copies an earlier one of the same basis while that finding stands (open, or
+    disposed of by a person: what they closed on this very basis is not raised again). A
+    run on a changed basis records its own, and the earlier run's go stale with it. Where
+    the finding of this basis went stale (the basis changed and came back), the issue is
+    recorded again for this run, so an issue both readings agree on is never left without
+    a finding a person can act on. A person accepts, edits, sends and resolves them as any
+    other finding."""
+    created: list[UUID] = []
+    for issue in issues:
+        fingerprint = assurance_fingerprint(requirement_id, issue.attribute_id, basis_sha256)
+        earlier = cursor.execute(
+            "SELECT stale, assessment_id FROM evidence_findings "
+            "WHERE engagement_control_id = %s AND fingerprint = %s",
+            (control_id, fingerprint),
+        ).fetchone()
+        if earlier is not None and earlier[0] and earlier[1] != assessment_id:
+            fingerprint = assurance_fingerprint(
+                requirement_id, issue.attribute_id, basis_sha256, assessment_id
+            )
+        draft = _Draft(
+            source="ASSURANCE",
+            kind=issue.kind,
+            fingerprint=fingerprint,
+            title=_title(issue.title),
+            observation=issue.observation,
+            question=issue.question,
+            expected=issue.expected,
+            citation=issue.citation,
+            requirement_id=requirement_id,
+            attribute_id=issue.attribute_id,
+            attribute_code=issue.attribute_code,
+            file_id=issue.file_id,
+        )
+        created += _record_drafts(
+            cursor, organization_id, project_id, control_id, [draft],
+            analysis_id=None, mapping_run_id=None, request_id=request_id,
+            plan_revision=_plan_revision(cursor, control_id), digest=issue.digest,
+            assessment_id=assessment_id,
+        )  # fmt: skip
+    return created
+
+
+def mark_stale_for_assessment(cursor: psycopg.Cursor[Any], assessment_id: UUID, reason: str) -> int:
+    """The assurance run went out of date: its findings nobody has acted on are stale. One
+    a person has in hand (accepted, sent, answered...) is not: a client's reply or upload
+    does not take it from them before they decide; the next run's result is attached to
+    it instead (attach_assurance_result)."""
+    rows = cursor.execute(
+        "SELECT id, status FROM evidence_findings "
+        "WHERE assessment_id = %s AND NOT stale AND status = 'PROPOSED'",
+        (assessment_id,),
+    ).fetchall()
+    for finding_id, status in rows:
+        _mark_stale(
+            cursor, UUID(str(finding_id)), str(status), reason,
+            {"assessment_id": str(assessment_id)},
+        )  # fmt: skip
+    return len(rows)
+
+
+def hold_reader_findings(cursor: psycopg.Cursor[Any], file_id: UUID) -> int:
+    """The assurance chain now covers the file: the reader's own findings on it that
+    nobody has decided are no longer proposed. They stay on record, marked stale with
+    the reason; a finding a person already accepted, sent or closed is theirs and is
+    left as it is. The deterministic checks (source RULES) stay."""
+    rows = cursor.execute(
+        "SELECT id, status FROM evidence_findings "
+        "WHERE evidence_file_id = %s AND source = 'READER' AND NOT stale "
+        "AND status = 'PROPOSED'",
+        (file_id,),
+    ).fetchall()
+    for finding_id, status in rows:
+        _mark_stale(
+            cursor, UUID(str(finding_id)), str(status), HELD_FOR_ASSURANCE,
+            {"file_id": str(file_id)},
+        )  # fmt: skip
     return len(rows)
 
 
@@ -822,12 +1120,29 @@ def reassess_on_reading(
         for item in classification.get("items") or []
         if isinstance(item, dict) and item.get("coverage") == "COVERED"
     }
+    # An assurance finding rests on all of a requirement's files, often with no single
+    # file of its own: it is matched on its requirement, whichever request carries it now.
     open_rows = cursor.execute(
         """
         SELECT id, status, requirement_id FROM evidence_findings
-        WHERE pbc_request_id = %s AND status = ANY(%s) AND evidence_file_id <> %s
+        WHERE status = ANY(%(statuses)s)
+          AND (evidence_file_id <> %(file)s
+               OR (source = 'ASSURANCE' AND evidence_file_id IS NULL))
+          AND (
+              pbc_request_id = %(request)s
+              OR (source = 'ASSURANCE' AND requirement_id IN (
+                  SELECT q.id FROM evidence_requirements q WHERE q.pbc_request_id = %(request)s
+                  UNION
+                  SELECT m.requirement_id FROM evidence_matches m
+                  WHERE m.evidence_file_id = %(file)s AND m.requirement_id IS NOT NULL
+              ))
+          )
         """,
-        (request_id, ["ACCEPTED", "SENT", "ANSWERED", "MORE_NEEDED", "ESCALATED"], file_id),
+        {
+            "request": request_id,
+            "statuses": ["ACCEPTED", "SENT", "ANSWERED", "MORE_NEEDED", "ESCALATED"],
+            "file": file_id,
+        },
     ).fetchall()
     for finding_id, status, requirement_id in open_rows:
         covers = requirement_id is not None and str(requirement_id) in covered
@@ -1201,6 +1516,8 @@ class FindingBody(BaseModel):
     file_name: str
     analysis_id: UUID | None
     mapping_run_id: UUID | None
+    # The assurance run a finding of source ASSURANCE rests on (migration 0155).
+    assessment_id: UUID | None = None
     requirement_id: UUID | None
     requirement_title: str
     request_id: UUID | None
@@ -1259,7 +1576,7 @@ def list_findings(
                f.expected, f.citation, f.plan_revision, f.status, f.stale, f.stale_reason,
                f.sent_message_id, f.answered_by_message_id, f.answered_by_file_id,
                u.display_name, f.decided_at, f.decision_note, f.created_at, f.updated_at,
-               f.version, f.attribute_id, f.attribute_code
+               f.version, f.attribute_id, f.attribute_code, f.assessment_id
         FROM evidence_findings f
         LEFT JOIN evidence_files e ON e.id = f.evidence_file_id
         LEFT JOIN evidence_requirements q ON q.id = f.requirement_id
@@ -1301,6 +1618,7 @@ def list_findings(
             file_name=str(row[2]),
             analysis_id=row[3],
             mapping_run_id=row[4],
+            assessment_id=row[31],
             requirement_id=row[5],
             requirement_title=str(row[6]),
             request_id=row[7],
