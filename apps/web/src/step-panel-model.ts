@@ -175,6 +175,13 @@ function needOf(step: WorkflowStep, steps: readonly WorkflowStep[]): PanelNeed {
         : {}),
     };
   }
+  // D&I Evidence once its requests are drafted (product owner, 12 November 2026: one
+  // list): the list's own decision line, with no button in it. The list holds the one
+  // primary action (Approve and send), and each row its own (Upload, Accept), so the
+  // panel never offers a "Review evidence" jump to what is already under it.
+  if (step.key === "designevidence" && step.need !== undefined) {
+    return step.need;
+  }
   // D&I Evidence before its requests are drafted (12 November 2026): the panel says what
   // its one list needs, in the list's words: requests to accept, an attribute no request
   // addresses, the planner at work, or the requests being drafted. No Release button.
@@ -338,6 +345,11 @@ export function agentNote(
         found: [`${step.status}.`],
       };
     case "designevidence":
+      // Once its requests are drafted the evidence list words the agent's line itself,
+      // for the state the rows are in (design-evidence-model).
+      if (step.need !== undefined && (input.designEvidence ?? null) !== null) {
+        return input.designEvidence?.agent ?? { did: "", found: [] };
+      }
       // Before its requests are drafted: while the phase is unreleased, and while the
       // requests list is still the step's work (being drafted).
       return input.designRelease?.step === "READY" ||

@@ -1451,10 +1451,13 @@ def bulk(
                     version=current.version, reason=reason or "Reviewed and approved."
                 )
                 approved = _approve_draft(
-                    connection, settings, principal, organization_id, project_id, item.id, note
-                )
+                    connection, settings, principal, organization_id, project_id, item.id, note,
+                    mailbox or open_mailbox,
+                )  # fmt: skip
                 if not sending:
-                    outcome(True, "Approved. Not sent.")
+                    # With email off the approval recorded a hand-over, or said why
+                    # not: said as the single route says it.
+                    outcome(True, approved.notice or "Approved. Not sent.")
                     continue
                 outcome(*_send_approved(
                     connection, settings, principal, organization_id, project_id, item.id,
@@ -1626,7 +1629,12 @@ def _send_approved(
 ) -> tuple[bool, str]:
     """Send a request just approved, with that approval: whether it went, and what to say.
     The approval stands whatever the send does."""
-    from ai_workforce_api.outbound import OutboundState, send_request
+    from ai_workforce_api.outbound import (
+        HANDED_OVER,
+        NOT_HANDED_OVER,
+        OutboundState,
+        send_request,
+    )
 
     try:
         sent = send_request(
@@ -1634,6 +1642,17 @@ def _send_approved(
             approval_id, mailbox or open_mailbox, timer,
         )  # fmt: skip
     except OutboundState as error:
+        if error.detail == "live email is off":
+            handed = connection.execute(
+                "SELECT handed_over_approval_id = %s FROM pbc_requests "
+                "WHERE id = %s AND project_id = %s",
+                (approval_id, request_id, project_id),
+            ).fetchone()
+            if handed is not None and handed[0] is True:
+                # The approval recorded the hand-over (outbound.hand_over): said as it is,
+                # and still not counted as sent.
+                return False, HANDED_OVER
+            return False, NOT_HANDED_OVER
         return False, f"Approved, but not sent: {_sentence(error.detail)}"
     except AccessDenied, NotVisible:
         return False, "Approved, but your role does not permit sending it."

@@ -397,6 +397,9 @@ def return_for_revision(
     if match is None:
         return None
     request_id = UUID(match.group(1))
+    from ai_workforce_api.pbc import handover_of, record_handover_withdrawn
+
+    handed = handover_of(cursor, project_id, request_id)
     row = cursor.execute(
         """
         UPDATE pbc_requests r
@@ -431,6 +434,11 @@ def return_for_revision(
             Json({"approval_id": str(approval.id), "reason": reason, "status": "DRAFT"}),
         ),
     )
+    if handed is not None:
+        record_handover_withdrawn(
+            cursor, organization_id, project_id, request_id, approver_id, handed,
+            "an approval of it was rejected",
+        )  # fmt: skip
     return request_id
 
 

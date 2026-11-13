@@ -79,6 +79,7 @@ from ai_workforce_api.evidence_planning import (
 )
 from ai_workforce_api.model_providers import fallback_note, live_model, provider_for
 from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.pbc import Delivery, delivery_of
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.settings import Settings
 
@@ -1567,8 +1568,11 @@ def issue(
     control_id: UUID,
     requester: UUID,
     source: str,
+    only: list[UUID] | None = None,
 ) -> Issued:
-    """Request every planned requirement of the control's applicable phases."""
+    """Request every planned requirement of the control's applicable phases. With `only`,
+    just those requirements, under the same gates, and nothing else of the control is
+    touched (evidence_receipts._request_again)."""
     # The plan's row before any of its requirements, as every writer takes them (one order,
     # so two requests on the same control wait for each other and never deadlock).
     cursor.execute(
@@ -1600,9 +1604,9 @@ def issue(
             coverage_note = 'Its earlier request was withdrawn.', version = q.version + 1
         FROM pbc_requests r
         WHERE r.id = q.pbc_request_id AND q.engagement_control_id = %s
-          AND q.status = 'REQUESTED' AND r.status = 'CANCELLED'
+          AND q.status = 'REQUESTED' AND r.status = 'CANCELLED' AND %s
         """,
-        (control_id,),
+        (control_id, only is None),
     )
     created: list[UUID] = []
     rewritten: set[UUID] = set()
@@ -1615,7 +1619,8 @@ def issue(
         (project_id, control_id),
     ).fetchall()
     for phase, applicability, end in phases:
-        _link_dependents(cursor, project_id, control_id, str(phase))
+        if only is None:
+            _link_dependents(cursor, project_id, control_id, str(phase))
         if applicability != "APPLICABLE":
             continue
         if gate_reason(cursor.connection, control_id, str(phase)) is not None:
@@ -1639,10 +1644,11 @@ def issue(
                       WHERE ef.requirement_id = q.id AND ef.status = 'LINKED'
                   )
               )
+              AND (%s::uuid[] IS NULL OR q.id = ANY(%s::uuid[]))
             ORDER BY q.created_at, q.requirement_key
             FOR UPDATE OF q
             """,
-            (control_id, phase),
+            (control_id, phase, only, only),
         ).fetchall()
         if not waiting:
             continue
@@ -1938,14 +1944,23 @@ def render(
 
 
 def render_into(
-    cursor: psycopg.Cursor[Any], project_id: UUID, control_id: UUID, request_id: UUID
+    cursor: psycopg.Cursor[Any],
+    project_id: UUID,
+    control_id: UUID,
+    request_id: UUID,
+    *,
+    unsent: bool = False,
 ) -> None:
-    """Rewrite a draft request from the requirements it carries. A sent one stays."""
+    """Rewrite a draft request from the requirements it carries. A sent one stays.
+    `unsent` also rewrites one awaiting approval: only for a request that is being taken
+    out of the approval it awaits in the same transaction (evidence_receipts._set_aside),
+    never one that could still be sent on that approval."""
     request = cursor.execute(
         "SELECT status, testing_phase FROM pbc_requests WHERE id = %s AND project_id = %s",
         (request_id, project_id),
     ).fetchone()
-    if request is None or request[0] != "DRAFT" or request[1] not in PHASES:
+    allowed = ("DRAFT", "APPROVAL_PENDING") if unsent else ("DRAFT",)
+    if request is None or request[0] not in allowed or request[1] not in PHASES:
         return
     phase = str(request[1])
     lines = requirement_lines(cursor, request_id)
@@ -1958,8 +1973,8 @@ def render_into(
     window = _window(cursor, project_id, control_id, phase, request_id)
     cursor.execute(
         "UPDATE pbc_requests SET evidence_description = %s, version = version + 1, "
-        "updated_at = clock_timestamp() WHERE id = %s AND status = 'DRAFT'",
-        (render(str(control[0]), str(control[1]), phase, lines, window), request_id),
+        "updated_at = clock_timestamp() WHERE id = %s AND status = ANY(%s)",
+        (render(str(control[0]), str(control[1]), phase, lines, window), request_id, list(allowed)),
     )
 
 
@@ -3057,6 +3072,13 @@ class RequirementBody(BaseModel):
     # change the planner proposed (pending_change; `add` true for a proposed addition, which
     # a person accepts or rejects, and nothing else is done to before then).
     to_accept: bool = False
+    # Evidence for it is already in hand (B1g, product owner, 12 November 2026): a file
+    # serves this item itself (added on it, on its request and not read as missing it,
+    # shared by a sibling, or linked by a person) and nothing asked the owner for it: it
+    # is not requested, or the request carrying it was never emailed nor handed over.
+    # Nothing needs sending for it. False for evidence the owner returned on a request
+    # that was emailed or handed over, which is received.
+    in_hand: bool = False
     files: list[RequirementFile] = Field(default_factory=list)
     # Files on its request the reader found do not cover it: not its evidence, and named
     # so a person can link one that does.
@@ -3069,6 +3091,13 @@ class PhaseRequest(BaseModel):
     reference: str
     status: str
     requirements: int
+    # What the D&I requests list shows of the request and acts on (B1g): who it goes to,
+    # when it is due, its version (what an approval is made at), and how it reached its
+    # owner: by email, or handed over while email was off; None when neither (pbc.Delivery).
+    recipient: str = ""
+    due_at: datetime | None = None
+    version: int = 0
+    delivery: Delivery | None = None
 
 
 class PhaseBody(BaseModel):
@@ -3188,6 +3217,10 @@ class EvidencePlanBody(BaseModel):
     version: int
     # The D&I requests list (B1f): what it waits for, and whether it is released.
     design_requests: DesignRequests = Field(default_factory=DesignRequests)
+    # Whether a message can be sent now (outbound.email_on). False: approving a request
+    # records a hand-over and sends nothing (B1g). Set by the routes that answer with the
+    # plan; a body built elsewhere leaves it False.
+    live_email: bool = False
 
 
 def requirement_state(
@@ -3541,7 +3574,8 @@ def _requirements(connection: psycopg.Connection[Any], plan_id: UUID) -> list[Re
                                 '{}'::uuid[])
                 FROM evidence_requirement_procedures rp
                 JOIN plan_procedures pp ON pp.id = rp.procedure_id
-                WHERE rp.requirement_id = q.id AND pp.status = 'ACTIVE')
+                WHERE rp.requirement_id = q.id AND pp.status = 'ACTIVE'),
+               r.outbound_message_id IS NOT NULL OR r.handed_over_at IS NOT NULL
         FROM evidence_requirements q
         LEFT JOIN pbc_requests r ON r.id = q.pbc_request_id
         LEFT JOIN pbc_drafts d ON d.pbc_request_id = q.pbc_request_id
@@ -3614,6 +3648,10 @@ def _requirements(connection: psycopg.Connection[Any], plan_id: UUID) -> list[Re
                 accepted_by=None if not accepted or r[34] is None else str(r[34]),
                 accepted_at=r[35] if accepted else None,
                 to_accept=listed and (not accepted or r[26] is not None),
+                # Its own evidence is on file and the owner was not asked for it.
+                in_hand=str(r[15]) in ("PLANNED", "REQUESTED")
+                and (bool(r[31]) or bool(r[32]))
+                and not bool(r[38]),
             )
         )  # fmt: skip
     return found
@@ -3803,7 +3841,19 @@ def _phase_requests(
     rows = connection.execute(
         """
         SELECT r.id, r.status, r.testing_phase,
-               (SELECT count(*) FROM evidence_requirements q WHERE q.pbc_request_id = r.id)
+               (SELECT count(*) FROM evidence_requirements q WHERE q.pbc_request_id = r.id),
+               r.recipient, r.due_at, r.version, r.outbound_message_id,
+               (SELECT o.created_at FROM outbound_messages o
+                WHERE o.project_id = r.project_id
+                  AND o.provider_message_id = r.outbound_message_id
+                ORDER BY o.created_at LIMIT 1),
+               (SELECT u.display_name FROM outbound_messages o
+                JOIN users u ON u.id = o.actor_user_id
+                WHERE o.project_id = r.project_id
+                  AND o.provider_message_id = r.outbound_message_id
+                ORDER BY o.created_at LIMIT 1),
+               r.handed_over_at,
+               (SELECT u.display_name FROM users u WHERE u.id = r.handed_over_by)
         FROM pbc_requests r
         WHERE r.project_id = %s AND r.engagement_control_id = %s
           AND r.testing_phase IN ('DESIGN', 'INTERIM', 'ROLLFORWARD')
@@ -3819,6 +3869,11 @@ def _phase_requests(
                 reference=reference(row[0]),
                 status=str(row[1]),
                 requirements=int(row[3]),
+                recipient=str(row[4] or ""),
+                due_at=row[5],
+                version=int(row[6]),
+                # One rule with the request's own body (pbc.delivery_of).
+                delivery=delivery_of(row[7], row[8], row[9], row[10], row[11]),
             )
         )
     return found
@@ -5370,6 +5425,17 @@ def _audit(
 # Routes
 
 
+def with_live_email[T](settings: Settings, result: T) -> T:
+    """A route's answer that carries the evidence plan says whether email is on (B1g): one
+    place for every route that answers with the plan (here and the D&I requests list's)."""
+    from ai_workforce_api.outbound import email_on
+
+    plan = result[0] if isinstance(result, tuple) and result else result
+    if isinstance(plan, EvidencePlanBody):
+        plan.live_email = email_on(settings)
+    return result
+
+
 def register_evidence_plans(
     app: FastAPI,
     settings: Settings,
@@ -5390,8 +5456,9 @@ def register_evidence_plans(
             # What the work hands over with after_commit (the drafts of a D&I release
             # that followed the person's change, settled below) goes to the worker once
             # the request has committed.
-            return committed(
-                lambda: _call(settings, lambda connection: work(connection, principal))
+            return with_live_email(
+                settings,
+                committed(lambda: _call(settings, lambda connection: work(connection, principal))),
             )
         except PlanState as error:
             raise HTTPException(status_code=409, detail=error.detail) from None

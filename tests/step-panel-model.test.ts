@@ -395,3 +395,97 @@ describe("Scope & Sampling holds one primary action (11 November 2026)", () => {
     assert.equal(frame.need.action, undefined);
   });
 });
+
+describe("D&I Evidence once its requests are drafted (12 November 2026)", () => {
+  // Product owner, 12 November 2026: "This view is again so heavy and a lot of duplicates
+  // labels and purpose. Just simplify this". Old expectation: a released D&I phase asked
+  // the person to "Decide the D&I evidence", with a "Review evidence" button that jumped
+  // to the work under it, and the agent's strip counted items ("2 evidence items planned,
+  // 1 accepted."). New, where the step's evidence list is read: the list's own decision
+  // line with no button in it (the list holds Approve and send; each row its Upload and
+  // Accept), and the agent's line for the state the rows are in. Where the list is not
+  // read, the old wording still stands (asserted above: "Decide the D&I evidence").
+  const header: NonNullable<WorkflowInput["designEvidence"]> = {
+    tone: "attention",
+    status: "1 file to review",
+    need: {
+      kind: "act",
+      title: "Review 1 file.",
+      detail:
+        "The agent read it and proposes: sufficient. Nothing is accepted until you accept it.",
+    },
+    agent: {
+      did: "Read 1 file: 1 sufficient.",
+      found: ["2 requests against 2 approved attributes."],
+    },
+  };
+
+  it("takes the list's decision line, with no button in it", () => {
+    const input = midway({
+      designRelease: { step: "RELEASED" },
+      designEvidence: header,
+    });
+    const steps = workflowOf(input);
+    const frame = panelFrame("designevidence", steps, null);
+    assert.equal(frame.need.action, undefined);
+    assert.deepEqual(frame.need, header.need);
+    const step = steps.find((item) => item.key === "designevidence");
+    assert.ok(step !== undefined);
+    assert.equal(step.status, "1 file to review");
+    assert.equal(step.tone, "attention");
+    assert.deepEqual(agentNote(step, input), header.agent);
+  });
+
+  it("is quiet while the owner has the requests, and when all is accepted", () => {
+    const waiting = workflowOf(
+      midway({
+        designRelease: { step: "RELEASED" },
+        designEvidence: {
+          tone: "active",
+          status: "2 with the owner",
+          need: {
+            kind: "wait",
+            title: "With the owner",
+            detail:
+              "With Maria Keller since Nov 12, 2026, due Nov 26, 2026. Upload what you receive on its row.",
+          },
+          agent: { did: "Reads each file as it arrives.", found: [] },
+        },
+      }),
+    );
+    const need = panelFrame("designevidence", waiting, null).need;
+    assert.equal(need.kind, "wait");
+    assert.equal(need.action, undefined);
+    assert.match(need.detail, /^With Maria Keller since/);
+    const done = workflowOf(
+      midway({
+        designRelease: { step: "COMPLETE" },
+        designEvidence: {
+          tone: "done",
+          status: "2 of 2 accepted",
+          need: { kind: "done", title: "2 of 2 accepted", detail: "" },
+          agent: {
+            did: "Read 2 files; all accepted by a person.",
+            found: [],
+          },
+        },
+      }),
+    );
+    assert.equal(panelFrame("designevidence", done, null).need.kind, "done");
+  });
+
+  it("keeps the requests list's own words until the requests are drafted", () => {
+    // The phase is not released: the evidence list's header is not the step's yet.
+    const input = midway({
+      requirements: [{ phase: "DESIGN", state: "NOT_GENERATED" }],
+      designRelease: { step: "WAITING", waitingOn: "REQUESTS" },
+      designEvidence: header,
+    });
+    const steps = workflowOf(input);
+    const step = steps.find((item) => item.key === "designevidence");
+    assert.ok(step !== undefined);
+    assert.equal(step.need, undefined);
+    assert.notEqual(step.status, "1 file to review");
+    assert.notDeepEqual(agentNote(step, input), header.agent);
+  });
+});

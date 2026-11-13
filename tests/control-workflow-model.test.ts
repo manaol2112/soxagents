@@ -1396,3 +1396,97 @@ describe("returnStep", () => {
     }
   });
 });
+
+describe("D&I Evidence once its requests are drafted (12 November 2026)", () => {
+  // Product owner, 12 November 2026: one list, one status. Old expectation: after the
+  // release the node counted evidence items ("1 item to review", "2 with the client",
+  // "1 accepted · 1 later"). New, where the evidence list is read: the node and the
+  // drawer's pill say what the list's header says ("2 requests to send", "1 file to
+  // review", "2 of 2 accepted"), and the step is done only when every request's evidence
+  // is accepted. Where the list is not read, the items decide as before (tested above).
+  const listed = (
+    tone: "attention" | "active" | "done",
+    status: string,
+    kind: "act" | "wait" | "done",
+  ) => ({
+    tone,
+    status,
+    need: { kind, title: status, detail: "" },
+    agent: { did: "Reads each file as it arrives.", found: [] },
+  });
+  const released = (overrides: Partial<WorkflowInput>) =>
+    workflowOf(
+      fresh({
+        setup: understood,
+        attributes: { approved: 5, proposed: 0 },
+        designRelease: { step: "RELEASED" },
+        ...overrides,
+      }),
+    );
+
+  it("reads the node from the list's header", () => {
+    const toSend = released({
+      requirements: [
+        { phase: "DESIGN", state: "DRAFT" },
+        { phase: "DESIGN", state: "DRAFT" },
+      ],
+      designEvidence: listed("attention", "2 requests to send", "act"),
+    });
+    assert.deepEqual(state(toSend, "designevidence"), [
+      "attention",
+      "2 requests to send",
+    ]);
+    assert.equal(by(toSend, "designevidence")?.next, true);
+    assert.equal(by(toSend, "designevidence")?.need?.kind, "act");
+    // The assessment still waits on the evidence.
+    assert.deepEqual(state(toSend, "designassessment"), [
+      "idle",
+      "Waiting on D&I evidence",
+    ]);
+  });
+
+  it("is done only when the list says every request's evidence is accepted", () => {
+    // One accepted, one not requested yet: by the items alone this read as done
+    // ("1 accepted · 1 later"); the list says a request still waits to be sent.
+    const requirements = [
+      { phase: "DESIGN", state: "ACCEPTED" },
+      { phase: "DESIGN", state: "NOT_GENERATED" },
+    ] as const;
+    assert.equal(
+      by(released({ requirements }), "designevidence")?.tone,
+      "done",
+    );
+    assert.deepEqual(
+      state(
+        released({
+          requirements,
+          designEvidence: listed("attention", "1 request to send", "act"),
+        }),
+        "designevidence",
+      ),
+      ["attention", "1 request to send"],
+    );
+    const done = released({
+      requirements: [{ phase: "DESIGN", state: "ACCEPTED" }],
+      designEvidence: listed("done", "1 of 1 accepted", "done"),
+    });
+    assert.deepEqual(state(done, "designevidence"), [
+      "done",
+      "1 of 1 accepted",
+    ]);
+    assert.deepEqual(state(done, "designassessment"), ["idle", "Not started"]);
+  });
+
+  it("gives way to the requests list while it is still the step's work", () => {
+    // Being drafted: the requests list's header stands, not the evidence list's.
+    const drafting = released({
+      designRequests: { tone: "active", status: "Requests accepted" },
+      designEvidence: listed("attention", "2 requests to send", "act"),
+    });
+    assert.deepEqual(state(drafting, "designevidence"), [
+      "active",
+      "Requests accepted",
+    ]);
+    assert.equal(by(drafting, "designevidence")?.need, undefined);
+  });
+});
