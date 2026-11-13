@@ -1350,6 +1350,60 @@ function elementFacts(request: AssuredRequest): AttributeElements[] {
     });
 }
 
+/** A request with files the server sent no entry for: it has not been checked against
+ * the attributes (the server always sends at least NOT_CHECKED; where it does not, the
+ * row says so and offers Check now, and nothing of it evidences). */
+export function notChecked(requirementId: string): AssuredRequest {
+  return {
+    requirementId,
+    runId: null,
+    status: "NOT_CHECKED",
+    stage: null,
+    held: null,
+    heldFiles: [],
+    fileIds: [],
+    lens: null,
+    readInPart: false,
+    attributes: [],
+    outOfDate: [],
+    note: "",
+    finishedAt: null,
+  };
+}
+
+/** The read, with a not-checked entry for each request with files it does not list. */
+export function withNotChecked(
+  assurance: EvidenceAssurance,
+  requirementIds: readonly string[],
+): EvidenceAssurance {
+  const listed = new Set(assurance.requests.map((item) => item.requirementId));
+  return {
+    ...assurance,
+    requests: [
+      ...assurance.requests,
+      ...requirementIds
+        .filter((id) => !listed.has(id))
+        .map((id) => notChecked(id)),
+    ],
+  };
+}
+
+/** The attributes some request of the control sends with their elements. */
+export function keyedOf(assurance: EvidenceAssurance | null): Set<string> {
+  return new Set(
+    (assurance?.requests ?? []).flatMap((request) =>
+      request.attributes
+        .filter((item) => item.attributeId !== "" && item.elements.length > 0)
+        .map((item) => item.attributeId),
+    ),
+  );
+}
+
+/** Beside Accept, where accepting the request evidences an attribute only together
+ * with other requests. */
+export const SAME_INSTANCE =
+  "Check that these requests show the same instance.";
+
 export type AttributeCoverage = {
   /** EVIDENCED: every element shown by the records of an instance in an accepted
    * request. DESIGN_ONLY: every element the instances do not show is documented in an
@@ -1359,14 +1413,20 @@ export type AttributeCoverage = {
   /** The elements no accepted request shows from the records of an instance, by their
    * text. Empty where the elements were not sent. */
   missing: string[];
+  /** For an evidenced attribute, how many accepted requests its elements are shown
+   * across: 1 where one request shows them all; 2 or more where they are combined (the
+   * person checks that those requests show the same instance). 0 otherwise. */
+  across: number;
 };
 
 /**
  * Whether an attribute is evidenced at D&I, combining its elements across the control's
  * requests by key: only when every element is shown with `shows: IMPLEMENTATION` by
  * some accepted request (docs/evidence-assurance.md, section 3). A request's check whose
- * attribute came without its elements counts as one element, the whole attribute: it
- * covers every element when it supports the attribute whole.
+ * attribute came without its elements counts as one element, the whole attribute; it
+ * covers the attribute only where no request sends the attribute's elements. Where one
+ * does, a check without them covers nothing (no wildcard): which elements it showed is
+ * not known.
  */
 export function attributeCoverage(
   attributeId: string,
@@ -1378,7 +1438,7 @@ export function attributeCoverage(
       .map((fact) => ({ accepted: entry.accepted, fact })),
   );
   if (facts.length === 0) {
-    return { state: "UNKNOWN", missing: [] };
+    return { state: "UNKNOWN", missing: [], across: 0 };
   }
   const texts = new Map<string, string>();
   for (const { fact } of facts) {
@@ -1393,19 +1453,35 @@ export function attributeCoverage(
   const accepted = facts
     .filter((item) => item.accepted)
     .map((item) => item.fact);
+  // The elements of the universe one fact shows: none from a check without its
+  // elements where others sent them.
+  const shownBy = (
+    fact: AttributeElements,
+    pick: (each: AttributeElements) => string[],
+  ) => universe.filter((key) => pick(fact).includes(key));
   const by = (pick: (fact: AttributeElements) => string[]) => {
-    const keys = new Set(accepted.flatMap(pick));
-    // Whole support (key "") shows every element.
-    return (key: string) => keys.has(key) || keys.has("");
+    const keys = new Set(accepted.flatMap((fact) => shownBy(fact, pick)));
+    return (key: string) => keys.has(key);
   };
-  const implemented = by((fact) => fact.implementation);
+  const implementation = (fact: AttributeElements) => fact.implementation;
+  const implemented = by(implementation);
   const designed = by((fact) => fact.design);
   const missing = universe.filter((key) => !implemented(key));
   const words = missing
     .map((key) => texts.get(key) ?? "")
     .filter((text) => text !== "");
   if (missing.length === 0) {
-    return { state: "EVIDENCED", missing: [] };
+    const alone = accepted.some(
+      (fact) => shownBy(fact, implementation).length === universe.length,
+    );
+    return {
+      state: "EVIDENCED",
+      missing: [],
+      across: alone
+        ? 1
+        : accepted.filter((fact) => shownBy(fact, implementation).length > 0)
+            .length,
+    };
   }
   const anyShown = universe.some((key) => implemented(key) || designed(key));
   return {
@@ -1415,6 +1491,7 @@ export function attributeCoverage(
         ? "DESIGN_ONLY"
         : "PARTLY",
     missing: words,
+    across: 0,
   };
 }
 
@@ -1442,6 +1519,9 @@ export function assuranceRow(input: {
   /** The control's approved attributes, with the list's letters, in order. */
   attributes: readonly Lettered[];
   span: Span;
+  /** Attributes some request of the control sends with their elements (keyedOf): a
+   * check of one without them does not show it whole. */
+  keyed?: ReadonlySet<string>;
 }): AssuranceRow | null {
   const request =
     input.assurance?.requests.find(
@@ -1500,7 +1580,11 @@ export function assuranceRow(input: {
       return false;
     }
     const shown = new Set(fact.implementation);
-    return fact.all.every((element) => shown.has(element.key) || shown.has(""));
+    const unkeyed = fact.all.every((element) => element.key === "");
+    if (unkeyed && input.keyed?.has(fact.attributeId) === true) {
+      return false;
+    }
+    return fact.all.every((element) => shown.has(element.key));
   };
   const implemented = lettersOf("IMPLEMENTED");
   return {

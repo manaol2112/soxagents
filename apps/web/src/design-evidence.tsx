@@ -668,6 +668,10 @@ export function DesignEvidence({
                 {chip.state === "EVIDENCED" ? (
                   <span className="dq-cov-state" aria-hidden="true">
                     <UiIcon name="check" size={12} />
+                    {/* Combined from several requests: said, never a plain check. */}
+                    {chip.across >= 2
+                      ? ` Shown across ${chip.across} requests`
+                      : null}
                   </span>
                 ) : chip.state === "REQUESTED" ? null : chip.state ===
                   "DESIGN_ONLY" ? (
@@ -1041,7 +1045,7 @@ function Row({
       { kind: "FOLLOW_UP_REQUIRED" },
       // The reader's own follow-up points start the text only where the chain has not
       // checked the row: they were never checked by a second reading.
-      assured != null
+      !row.readerShown
         ? ""
         : item.assessment.followUps.join("; ").slice(0, 1000),
     );
