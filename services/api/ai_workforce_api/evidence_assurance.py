@@ -148,8 +148,10 @@ _RESTS_ON_ABSENCE: frozenset[str] = frozenset({"NOT_MET", "NOT_ADDRESSED", "PART
 # 3 (the same day, from the evaluation set): an element NOT_ADDRESSED is one this
 # request's files do not bear on; a deviation shown by a record is NOT_MET, and
 # CONTRADICTED is only for two records that disagree.
-ASSESSOR_PROMPT_VERSION = "evidence-assurance-assessor/3"
-REVIEWER_PROMPT_VERSION = "evidence-assurance-reviewer/3"
+# 4 (the same day, the second independent review): a deviation shown by a record is
+# answered with that record and nothing named absent; absent is only for what is missing.
+ASSESSOR_PROMPT_VERSION = "evidence-assurance-assessor/4"
+REVIEWER_PROMPT_VERSION = "evidence-assurance-reviewer/4"
 PROMPT_VERSIONS: dict[Role, str] = {
     "ASSESSOR": ASSESSOR_PROMPT_VERSION,
     "REVIEWER": REVIEWER_PROMPT_VERSION,
@@ -179,14 +181,27 @@ SEVERAL_PLACES = "found in several places"
 # Lines that state that something was done or is in order, without being the record of
 # it: a remark, a note, a summary, or "all ... were obtained". An ASSERTION whatever the
 # reading called it.
-_ASSERTION_MARK = re.compile(r"^\W*(?:remarks?|notes?|summary|comments?|conclusions?)\s*:", re.I)
+# Wherever a sentence starts: at the line's start, after ". " or "; ", or after a bullet.
+_ASSERTION_MARK = re.compile(
+    r"(?:^|[.;]\s+|^\s*(?:[-*\u2022\u00b7]|\d+[.)])\s*)\W*"
+    r"(?:remarks?|notes?|summary|comments?|conclusions?)\s*:",
+    re.I | re.M,
+)
 _ASSERTION_ALL = re.compile(
     r"\ball\b[^.\n]{0,80}?\b(?:were|was|have been|has been)\s+(?:obtained|approved|reviewed)\b",
     re.I,
 )
+# "Manager comment:", "per the role owner", "according to ...": someone's account of it.
+_ASSERTION_SAID = re.compile(r"\b\w+\s+comments?\s*:|\bper the \w+|\baccording to\b", re.I)
 # The prompt's own delimiters, neutralised wherever the files (or anything else from the
 # engagement) carry them, so that no text can close a block or open another.
-_DELIMITER = re.compile(r"<(\s*/?\s*)(file|evidence|control_and_attributes)\b", re.I)
+# The angle bracket and its look-alikes (fullwidth, small, CJK and mathematical angle
+# brackets, and the HTML entity).
+_DELIMITER = re.compile(
+    r"(?:<|&lt;|\uff1c|\ufe64|\u3008|\u2329|\u27e8)(\s*/?\s*)"
+    r"(file|evidence|control_and_attributes)\b",
+    re.I,
+)
 
 
 def neutral(text: str) -> str:
@@ -199,7 +214,9 @@ def asserts(line: str) -> bool:
     """Whether a line of evidence is, in code's reading, an assertion: it opens as a
     remark, note, summary, comment or conclusion, or says that all of something was
     obtained, approved or reviewed."""
-    return bool(_ASSERTION_MARK.search(line) or _ASSERTION_ALL.search(line))
+    return bool(
+        _ASSERTION_MARK.search(line) or _ASSERTION_ALL.search(line) or _ASSERTION_SAID.search(line)
+    )
 
 
 @dataclass(frozen=True)
@@ -209,6 +226,9 @@ class AttributeSpec:
     text: str
     criteria: dict[str, Any] | None
     expected: bool
+    # Another DESIGN requirement of the control links the attribute too: what this request
+    # does not show may be that one's evidence.
+    linked_elsewhere: bool = False
 
 
 @dataclass(frozen=True)
@@ -259,6 +279,12 @@ class Passage:
     end: int
     # Every place the passage occurs in its file; more than one where it is not placed.
     spans: tuple[tuple[int, int], ...] = ()
+    # Where each line it sits on starts (one per place).
+    lines: tuple[int, ...] = ()
+
+    def shares_a_line(self, other: Passage) -> bool:
+        """Whether two passages of one file sit on the same line, in any of their places."""
+        return self.file_id == other.file_id and bool(set(self.lines) & set(other.lines))
 
     def overlaps(self, other: Passage) -> bool:
         if self.file_id != other.file_id:
@@ -288,9 +314,12 @@ class ElementView:
     passages: tuple[Passage, ...]
     absent: str
     reason: str
-    # A NOT_MET that rests on a passage showing the deviation (a record, or a document's
-    # own requirement under DESIGN_DOCUMENT, from a file read in full), not on absence.
-    deviation: bool = False
+    # A NOT_MET this reading rests on verified RECORD passages from files read in full,
+    # naming nothing absent: a deviation, if the other reading rests the same element on
+    # the same record (compare). Until then it is absence-based: under rule 5 its result
+    # is CANNOT_TELL, and `records` keeps the passages for the comparison.
+    candidate: bool = False
+    records: tuple[Passage, ...] = ()
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -301,7 +330,8 @@ class ElementView:
             "passages": [passage.as_json() for passage in self.passages],
             "absent": self.absent,
             "reason": self.reason,
-            "deviation": self.deviation,
+            "deviation_candidate": self.candidate,
+            "records": [passage.as_json() for passage in self.records],
         }
 
 
@@ -377,6 +407,8 @@ class ElementOutcome:
     result: ElementResult | None
     passages: tuple[Passage, ...]
     absent: tuple[str, ...]
+    # Both readings rest the element's NOT_MET on the same record: an exception shown.
+    deviation: bool = False
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -385,6 +417,7 @@ class ElementOutcome:
             "result": self.result,
             "passages": [passage.as_json() for passage in self.passages],
             "absent": list(self.absent),
+            "deviation": self.deviation,
         }
 
 
@@ -474,8 +507,10 @@ attribute's reason. An attribute marked expected is one this request said its ev
 would address, so NOT_ADDRESSED for all of it needs that reason. An attribute not expected \
 is answered all the same, for reference.
 - A late approval, a self-approval, a wrong approver or a date outside the period, shown \
-by a record, is NOT_MET, with that record's passage. CONTRADICTED is only for two records \
-that disagree with each other.
+by a record, is NOT_MET, with that record's passage, and absent left empty: nothing is \
+missing, the record shows the element is not met. Name something in absent only where it \
+would have to be there and is not. CONTRADICTED is only for two records that disagree with \
+each other, on different lines or in different files.
 - Quote a file's exact words, at least four words or a full value, and give the index of \
 the file the words are in. Where the same words occur more than once in the file, give in \
 context the sentence or line around them, so the passage can be placed. A quote you cannot \
@@ -835,14 +870,16 @@ def _checked_element(
             set_aside += 1
             continue
         match = located.match
+        stored = located.file.text
         passage = Passage(
-            quote=clean_line(located.file.text[match.start : match.end], QUOTE_LIMIT),
+            quote=clean_line(stored[match.start : match.end], QUOTE_LIMIT),
             file_id=located.file.id,
-            location=_where(located.file.text, match.start, match.end, match.placed),
+            location=_where(stored, match.start, match.end, match.placed),
             basis=quote.basis,
             start=match.start,
             end=match.end,
             spans=match.occurrences,
+            lines=tuple(stored.rfind("\n", 0, start) + 1 for start, _end in match.occurrences),
         )
         # An assertion in code's reading, or words the answer calls an assertion or an
         # instruction anywhere else, are an assertion here too.
@@ -871,10 +908,13 @@ def _checked_element(
                 "out as support under this lens."
             )
     elif result == "CONTRADICTED":
-        # Rule 3: two passages that do not overlap, at least one of them support under
-        # the lens (a record; or a document's own requirement under DESIGN_DOCUMENT).
+        # Rule 3: two passages that do not overlap and sit on different lines or in
+        # different files (two pieces of one line are one record), at least one of them
+        # support under the lens (a record; or a document's own requirement under
+        # DESIGN_DOCUMENT).
         pair = any(
             not first.overlaps(second)
+            and not first.shares_a_line(second)
             and (first.basis in _SUPPORTS[chain.lens] or second.basis in _SUPPORTS[chain.lens])
             for at, first in enumerate(conflicting)
             for second in conflicting[at + 1 :]
@@ -884,8 +924,8 @@ def _checked_element(
         else:
             result = "CANNOT_TELL"
             why = (
-                "The reading claimed a contradiction without two separate passages of the "
-                "files that check out, one of them a record."
+                "The reading claimed a contradiction without two separate records of the "
+                "files that check out, on different lines or in different files."
             )
     elif result == "NOT_MET":
         if absent or passages:
@@ -893,19 +933,21 @@ def _checked_element(
         else:
             result = "CANNOT_TELL"
             why = "The reading named neither a passage nor what is absent."
-    # A NOT_MET that rests on a record of the deviation, from a file read in full (a
-    # self-approval plainly in a ticket), is not an absence: it stands whatever else the
-    # request holds.
+    # A NOT_MET resting on records of the deviation, from files read in full, that names
+    # nothing absent (a self-approval plainly in a ticket) may be an exception shown, not
+    # an absence: it is one only if the other reading rests the element on the same
+    # record (compare). Until then it is absence-based, like any other NOT_MET.
     whole = {file.id for file in chain.files if not file.truncated}
-    deviation = result == "NOT_MET" and any(
-        p.basis in _SUPPORTS[chain.lens] and p.file_id in whole for p in shown
-    )
+    # The record of the deviation: a RECORD; under DESIGN_DOCUMENT also the document's own
+    # requirement (a placeholder where the approver should be named is the design's own
+    # words showing the element is not met).
+    records = tuple(p for p in shown if p.basis in _SUPPORTS[chain.lens] and p.file_id in whole)
+    candidate = result == "NOT_MET" and not absent and bool(records)
     # Rule 5, for an attribute the request asks for: an answer that rests on absence (a
-    # NOT_MET with no record of the deviation, a NOT_ADDRESSED, a PARTLY_MET's missing
-    # part) cannot be told from files read in part, nor from a request with a file left
-    # out.
+    # NOT_MET, a NOT_ADDRESSED, a PARTLY_MET's missing part) cannot be told from files
+    # read in part, nor from a request with a file left out.
     unknown = chain.absence_unknown if expected else ""
-    if unknown and result in _RESTS_ON_ABSENCE and not deviation:
+    if unknown and result in _RESTS_ON_ABSENCE:
         result = "CANNOT_TELL"
         why = unknown
         shown = ()
@@ -919,7 +961,8 @@ def _checked_element(
             # What is absent is kept only where the element stands as not, or partly, met.
             absent=absent if result in ("NOT_MET", "PARTLY_MET") else "",
             reason=_joined(why, clean_line(given.reason, TEXT_LIMIT)),
-            deviation=deviation,
+            candidate=candidate,
+            records=records if candidate else (),
         ),
         dropped,
         set_aside,
@@ -946,19 +989,17 @@ def weakest(results: Sequence[ElementResult]) -> Result:
 
 
 def attribute_result(elements: Sequence[ElementView]) -> Result:
-    """Rule 6: an attribute's result for the request, from its elements. A contradiction
-    is CONTRADICTED. A deviation shown by a record is NOT_MET (an exception), whatever
-    else is shown. All NOT_ADDRESSED is NOT_ADDRESSED. Every element MET is MET; some MET
-    and the rest not borne on by these files (NOT_ADDRESSED) is SHOWN_IN_PART, which is no
-    shortfall: the rest may be another request's evidence. Otherwise the weakest of the
-    elements answered (PARTLY_MET is kept for shortfalls that rest on absence)."""
+    """Rule 6: one reading's result for the attribute on the request, from its elements.
+    A contradiction is CONTRADICTED. All NOT_ADDRESSED is NOT_ADDRESSED. Every element MET
+    is MET; some MET and the rest not borne on by these files (NOT_ADDRESSED) is
+    SHOWN_IN_PART, which is no shortfall: the rest may be another request's evidence.
+    Otherwise the weakest of the elements answered. A deviation shown by a record makes
+    the attribute NOT_MET, but only where both readings show it (compare)."""
     results = [element.result for element in elements]
     if not results:
         return "CANNOT_TELL"
     if "CONTRADICTED" in results:
         return "CONTRADICTED"
-    if any(element.deviation for element in elements):
-        return "NOT_MET"
     if all(result == "NOT_ADDRESSED" for result in results):
         return "NOT_ADDRESSED"
     if all(result in ("MET", "NOT_ADDRESSED") for result in results):
@@ -1063,13 +1104,39 @@ def _met_keys(view: AttributeView) -> frozenset[str]:
     return frozenset(element.key for element in view.elements if element.result == "MET")
 
 
-def _agreed_elements(one: AttributeView, two: AttributeView) -> tuple[ElementOutcome, ...]:
+def _deviations(one: AttributeView, two: AttributeView) -> frozenset[str]:
+    """The elements both readings find not met on the same record (overlapping verified
+    RECORD passages from files read in full), each naming nothing absent: an exception
+    shown, which stands whatever else the request holds."""
+    theirs = {element.key: element for element in two.elements}
+    return frozenset(
+        mine.key
+        for mine in one.elements
+        if mine.candidate
+        and (other := theirs.get(mine.key)) is not None
+        and other.candidate
+        and any(p.overlaps(q) for p in mine.records for q in other.records)
+    )
+
+
+def _agreed_elements(
+    one: AttributeView, two: AttributeView, deviations: frozenset[str] = frozenset()
+) -> tuple[ElementOutcome, ...]:
     """Each element as both readings stand on it: its result where they agree (with the
-    passages both rest on, and what is absent), None where they differ."""
+    passages both rest on, and what is absent), None where they differ; NOT_MET, with the
+    record, for an exception both readings show."""
     theirs = {element.key: element for element in two.elements}
     found: list[ElementOutcome] = []
     for mine in one.elements:
         other = theirs.get(mine.key)
+        if other is not None and mine.key in deviations:
+            found.append(
+                ElementOutcome(
+                    mine.key, mine.text, "NOT_MET",
+                    _distinct((*mine.records, *other.records)), (), deviation=True,
+                )
+            )  # fmt: skip
+            continue
         if other is None or other.result != mine.result:
             found.append(ElementOutcome(mine.key, mine.text, None, (), ()))
             continue
@@ -1088,11 +1155,15 @@ def _agreed_elements(one: AttributeView, two: AttributeView) -> tuple[ElementOut
 
 def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome, ...]:
     """The verdict per attribute from the two checked answers. Only an agreed MET, with a
-    verified passage, is SUPPORTED. For an attribute the request asks for, the same
-    shortfall from both is an ISSUE, as is both finding it NOT_ADDRESSED. For one it does
-    not ask for, only an agreed contradiction is an ISSUE: an agreed shortfall is shown for
-    reference (NOT_ADDRESSED, both views), never raised as an issue the request never asked
-    about. Anything else is UNSETTLED, with both views."""
+    verified passage, is SUPPORTED. An exception both readings show on the same record is
+    an ISSUE (NOT_MET), whether or not the request links the attribute, as is an agreed
+    contradiction. For an attribute the request asks for, the same shortfall from both is
+    an ISSUE, as is both finding it NOT_ADDRESSED; where another D&I request of the
+    control also asks for it, part of it shown (SHOWN_IN_PART, or a PARTLY_MET resting on
+    absence) is PARTLY_SUPPORTED: the rest may be that request's evidence; where none
+    does, it is an ISSUE (PARTLY_MET), naming what is not shown. For one it does not ask
+    for, an agreed shortfall is shown for reference (NOT_ADDRESSED, both views). Anything
+    else is UNSETTLED, with both views."""
     outcomes: list[Outcome] = []
     for attribute in chain.attributes:
         one = first.view(attribute.id) or _missing_view(attribute)
@@ -1105,9 +1176,31 @@ def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome
         shows: Shows | None = None
         reference = False
         both = one.passages and two.passages
+        deviations = _deviations(one, two)
+        # Part of the attribute shown by the same elements in both readings.
+        same_part = bool(both) and _met_keys(one) == _met_keys(two)
+        rest = tuple(element.text for element in one.elements if element.key not in _met_keys(one))
         # SUPPORTED is an agreed MET that both readings rest on passages for: never
         # without a verified passage, whatever the two results say.
-        if one.result == "MET" and two.result == "MET" and both:
+        if deviations:
+            # An exception shown by a record, in both readings: NOT_MET whatever else the
+            # request holds and whether or not it links the attribute. A contradiction in
+            # either reading is a contradiction, and the readings must then agree on it.
+            mine: Result = "CONTRADICTED" if one.result == "CONTRADICTED" else "NOT_MET"
+            theirs: Result = "CONTRADICTED" if two.result == "CONTRADICTED" else "NOT_MET"
+            if mine == theirs:
+                verdict, result = "ISSUE", mine
+                summary = _SUMMARY[mine].format(code=attribute.code)
+                if mine == "NOT_MET":
+                    passages = _distinct(
+                        p
+                        for view in (one, two)
+                        for element in view.elements
+                        if element.key in deviations
+                        for p in element.records
+                    )
+                    absent = ()
+        elif one.result == "MET" and two.result == "MET" and both:
             verdict, result = "SUPPORTED", "MET"
             absent = ()
             shows = _shows(one, two, chain)
@@ -1119,11 +1212,26 @@ def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome
             )
         elif (
             one.result == two.result == "SHOWN_IN_PART"
-            and both
-            and _met_keys(one) == _met_keys(two)
+            and same_part
+            and (attribute.expected and not attribute.linked_elsewhere)
         ):
-            # The same elements shown by both, and the rest not borne on by this
-            # request's files: support for part of the attribute, never an issue.
+            # Part shown and no other D&I request asks for the attribute: nothing else
+            # will show the rest, so what is not shown is an issue.
+            verdict, result = "ISSUE", "PARTLY_MET"
+            summary = _SUMMARY["PARTLY_MET"].format(code=attribute.code)
+            absent = rest
+        elif (
+            one.result == two.result
+            and one.result in ("SHOWN_IN_PART", "PARTLY_MET")
+            and same_part
+            and (
+                one.result == "SHOWN_IN_PART" or (attribute.expected and attribute.linked_elsewhere)
+            )
+        ):
+            # The same elements shown by both and the rest not shown by this request's
+            # files, where another request may show it: support for part of the attribute,
+            # never an issue. (A PARTLY_MET on an attribute no other request asks for, or
+            # one the request does not ask for, is handled below.)
             verdict, result = "PARTLY_SUPPORTED", "SHOWN_IN_PART"
             absent = ()
             shows = _shows(one, two, chain)
@@ -1131,6 +1239,14 @@ def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome
                 f"Both readings find this request's evidence shows part of attribute "
                 f"{attribute.code}; the rest is not in these files."
             )
+        elif (
+            one.result == two.result == "PARTLY_MET"
+            and attribute.expected
+            and attribute.linked_elsewhere
+        ):
+            # Shown in part on different elements, where another request may show the
+            # rest: the readings disagree on what this request shows. A person's.
+            pass
         elif one.result == two.result and one.result in ISSUE_RESULTS:
             if attribute.expected or one.result == "CONTRADICTED":
                 verdict, result = "ISSUE", one.result
@@ -1176,7 +1292,7 @@ def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome
                 views=views,
                 summary=summary,
                 shows=shows,
-                elements=_agreed_elements(one, two),
+                elements=_agreed_elements(one, two, deviations),
             )
         )
     return tuple(outcomes)
@@ -1511,6 +1627,8 @@ class _Basis:
     attributes_sha256: str
     attribute_ids: tuple[UUID, ...]
     linked_attribute_ids: tuple[UUID, ...]
+    # The attributes another DESIGN requirement of the control links too.
+    elsewhere_attribute_ids: tuple[UUID, ...]
     lens: Lens
     read_in_part: bool
     # The model configuration the run would use (expected_models).
@@ -1530,6 +1648,7 @@ class _Basis:
                 self.control_sha256,
                 self.attributes_sha256,
                 [str(item) for item in self.linked_attribute_ids],
+                [str(item) for item in self.elsewhere_attribute_ids],
                 self.lens,
                 ASSESSOR_PROMPT_VERSION,
                 REVIEWER_PROMPT_VERSION,
@@ -1665,11 +1784,13 @@ def _requests(
 
 
 def _linked(connection: psycopg.Connection[Any], control_id: UUID) -> dict[UUID, set[UUID]]:
-    """The attributes each requirement of the control links (evidence_requirement_attributes)."""
+    """The attributes each DESIGN requirement of the control links
+    (evidence_requirement_attributes), for a removed requirement none."""
     found: dict[UUID, set[UUID]] = {}
     for requirement_id, attribute_id in connection.execute(
-        "SELECT requirement_id, attribute_id FROM evidence_requirement_attributes "
-        "WHERE engagement_control_id = %s",
+        "SELECT l.requirement_id, l.attribute_id FROM evidence_requirement_attributes l "
+        "JOIN evidence_requirements q ON q.id = l.requirement_id "
+        "WHERE l.engagement_control_id = %s AND q.phase = 'DESIGN' AND q.status <> 'REMOVED'",
         (control_id,),
     ).fetchall():
         found.setdefault(UUID(str(requirement_id)), set()).add(UUID(str(attribute_id)))
@@ -1677,12 +1798,20 @@ def _linked(connection: psycopg.Connection[Any], control_id: UUID) -> dict[UUID,
 
 
 def _basis(
-    request: _Request, control: _Control, attributes: Attributes, linked: set[UUID]
+    request: _Request, control: _Control, attributes: Attributes, links: dict[UUID, set[UUID]]
 ) -> _Basis:
     """What a run of the requirement would read now: every file in force on it (a file
     whose reading has not ended is named with nothing read yet), the control's facts, the
-    attributes, the links and the lens."""
+    attributes, the links (this requirement's, and which attributes another DESIGN
+    requirement of the control asks for too) and the lens."""
     ids = tuple(a[0] for a in attributes)
+    linked = links.get(request.requirement_id, set())
+    elsewhere = {
+        attribute
+        for requirement_id, linked_there in links.items()
+        if requirement_id != request.requirement_id
+        for attribute in linked_there
+    }
     included = request.included
     files = tuple(
         {
@@ -1708,6 +1837,7 @@ def _basis(
         attributes_sha256=_sha([[str(a[0]), a[1], a[2], a[3]] for a in attributes]),
         attribute_ids=ids,
         linked_attribute_ids=tuple(sorted((a for a in ids if a in linked), key=str)),
+        elsewhere_attribute_ids=tuple(sorted((a for a in ids if a in elsewhere), key=str)),
         lens=lens_for(request.categories, [file.kind for file in included]),
         read_in_part=any(file.truncated for file in included),
         models=expected_models(control.domain),
@@ -1746,15 +1876,17 @@ class _Run:
     # A run still marked working whose lease ran out, or one queued with no attempt left:
     # it stopped before it finished.
     stopped: bool
+    elsewhere_attribute_ids: tuple[UUID, ...] = ()
 
 
-_RUN_COLUMNS = """
+_RUN_COLUMNS = f"""
     id, requirement_id, status, stage, held_code, held_reason, basis_sha256, files, file_ids,
     control_sha256, attributes_sha256, attribute_ids, linked_attribute_ids, lens,
     assessor_prompt_version, reviewer_prompt_version, read_in_part, outcome, note, stale_at,
     stale_reason, finished_at, models,
     (status = 'WORKING' AND lease_until < clock_timestamp())
-        OR (status = 'PENDING' AND attempts >= 3)
+        OR (status = 'PENDING' AND attempts >= {MAX_ATTEMPTS}),
+    elsewhere_attribute_ids
 """
 
 
@@ -1784,6 +1916,7 @@ def _run(row: tuple[Any, ...]) -> _Run:
         finished_at=row[21],
         models=row[22] if isinstance(row[22], dict) else {},
         stopped=bool(row[23]),
+        elsewhere_attribute_ids=tuple(UUID(str(item)) for item in (row[24] or [])),
     )
 
 
@@ -1830,6 +1963,8 @@ def _changed(connection: psycopg.Connection[Any], run: _Run, basis: _Basis) -> l
         reasons.append("An attribute's wording or criteria changed.")
     if set(run.linked_attribute_ids) != set(basis.linked_attribute_ids):
         reasons.append("The attributes this request addresses changed.")
+    if set(run.elsewhere_attribute_ids) != set(basis.elsewhere_attribute_ids):
+        reasons.append("Which other requests ask for these attributes changed.")
     if run.control_sha256 != basis.control_sha256:
         reasons.append("The control's description changed.")
     if run.models != basis.models:
@@ -1920,7 +2055,8 @@ def _insert(
         INSERT INTO evidence_assessments (
             organization_id, project_id, engagement_control_id, requirement_id, requested_by,
             files, file_ids, control_sha256, attributes_sha256, attribute_ids,
-            linked_attribute_ids, lens, assessor_prompt_version, reviewer_prompt_version,
+            linked_attribute_ids, elsewhere_attribute_ids, lens, assessor_prompt_version,
+            reviewer_prompt_version,
             basis_sha256, status, stage, held_code, held_reason, read_in_part,
             assessor_agent, assessor_opinion, assessor_call_id, reviewer_opinion,
             reviewer_call_id, outcome, reused_from_id, models, ran_with, finished_at
@@ -1928,7 +2064,8 @@ def _insert(
         VALUES (
             %(organization)s, %(project)s, %(control)s, %(requirement)s, %(actor)s,
             %(files)s, %(file_ids)s::uuid[], %(control_sha)s, %(attributes_sha)s,
-            %(attribute_ids)s::uuid[], %(linked)s::uuid[], %(lens)s, %(assessor_version)s,
+            %(attribute_ids)s::uuid[], %(linked)s::uuid[], %(elsewhere)s::uuid[], %(lens)s,
+            %(assessor_version)s,
             %(reviewer_version)s, %(basis)s, %(status)s, %(stage)s, %(held_code)s,
             %(held_reason)s, %(read_in_part)s, %(agent)s, %(first)s, %(first_call)s,
             %(second)s, %(second_call)s, %(outcome)s, %(reused)s, %(models)s, %(ran_with)s,
@@ -1949,6 +2086,7 @@ def _insert(
             "attributes_sha": basis.attributes_sha256,
             "attribute_ids": list(basis.attribute_ids),
             "linked": list(basis.linked_attribute_ids),
+            "elsewhere": list(basis.elsewhere_attribute_ids),
             "lens": basis.lens,
             "assessor_version": ASSESSOR_PROMPT_VERSION,
             "reviewer_version": REVIEWER_PROMPT_VERSION,
@@ -2020,7 +2158,8 @@ def _refresh(cursor: psycopg.Cursor[Any], run_id: UUID, basis: _Basis, held: Hel
         """
         UPDATE evidence_assessments
         SET files = %s, file_ids = %s::uuid[], control_sha256 = %s, attributes_sha256 = %s,
-            attribute_ids = %s::uuid[], linked_attribute_ids = %s::uuid[], lens = %s,
+            attribute_ids = %s::uuid[], linked_attribute_ids = %s::uuid[],
+            elsewhere_attribute_ids = %s::uuid[], lens = %s,
             assessor_prompt_version = %s, reviewer_prompt_version = %s, basis_sha256 = %s,
             models = %s, read_in_part = %s, status = %s, held_code = %s, held_reason = %s,
             attempts = 0,
@@ -2034,6 +2173,7 @@ def _refresh(cursor: psycopg.Cursor[Any], run_id: UUID, basis: _Basis, held: Hel
             basis.attributes_sha256,
             list(basis.attribute_ids),
             list(basis.linked_attribute_ids),
+            list(basis.elsewhere_attribute_ids),
             basis.lens,
             ASSESSOR_PROMPT_VERSION,
             REVIEWER_PROMPT_VERSION,
@@ -2117,7 +2257,7 @@ def reconcile(
     attributes = _approved(connection, control_id)
     linked = _linked(connection, control_id)
     for request in requests:
-        basis = _basis(request, control, attributes, linked.get(request.requirement_id, set()))
+        basis = _basis(request, control, attributes, linked)
         held = _gate_of(request, len(attributes))
         on_record = current.get(request.requirement_id)
         same = on_record is not None and on_record.basis_sha256 == basis.sha256
@@ -2371,40 +2511,82 @@ def project_of(
 
 
 def backfill(connection: psycopg.Connection[Any], limit: int = 50) -> list[UUID]:
-    """On start-up: a DESIGN requirement with files in force and no current run (one
-    filed before the chain existed, or one whose queueing failed) gets its run, so no
-    request is silently left unchecked. At most `limit` requirements a pass; idempotent
-    (a requirement with a current run is not looked at again). Returns the runs queued."""
+    """On start-up: a DESIGN requirement with files in force on it (its requirement files:
+    on its request and serving it, linked by a person, or shared by a sibling) and no
+    current run (one filed before the chain existed, or one whose queueing failed) gets
+    its run, so no request is silently left unchecked. At most `limit` requirements are
+    tried a pass, and one a pass already tried at the very same basis (a request whose
+    files are still being read, say) is not tried again until something changes
+    (evidence_assessment_backfill). Returns the runs queued."""
     try:
         controls = connection.execute(
             """
-            SELECT q.engagement_control_id, q.project_id, q.id
+            SELECT DISTINCT q.engagement_control_id, q.project_id
             FROM evidence_requirements q
             JOIN projects p ON p.id = q.project_id
             WHERE q.phase = 'DESIGN' AND q.status <> 'REMOVED'
               AND p.deleted_at IS NULL AND p.status <> 'ARCHIVED'
               AND NOT EXISTS (SELECT 1 FROM evidence_assessments s
                               WHERE s.requirement_id = q.id AND s.stale_at IS NULL)
-              AND (EXISTS (SELECT 1 FROM evidence_file_links l
-                           WHERE l.pbc_request_id = q.pbc_request_id)
-                   OR EXISTS (SELECT 1 FROM evidence_requirement_files ef
-                              WHERE ef.requirement_id = q.id AND ef.status = 'LINKED'))
-            ORDER BY q.created_at
             LIMIT %s
             """,
-            (limit,),
+            (max(limit, 1) * 4,),
         ).fetchall()
     except psycopg.Error:
         logger.warning("D&I requests without a check could not be looked for")
         return []
     queued: list[UUID] = []
-    for control_id, project_id, requirement_id in controls:
+    tried = 0
+    for control_id, project_id in controls:
+        if tried >= limit:
+            break
+        project, control_key = UUID(str(project_id)), UUID(str(control_id))
         try:
-            with transaction(connection) as cursor:
-                queued += reconcile(
-                    cursor, UUID(str(project_id)), UUID(str(control_id)),
-                    only_requirement=UUID(str(requirement_id)),
-                ).queued  # fmt: skip
+            control = _control(connection, project, control_key)
+            if control is None:
+                continue
+            requests = _requests(connection, project, control_key)
+            attributes = _approved(connection, control_key)
+            links = _linked(connection, control_key)
+            current = {
+                UUID(str(row[0]))
+                for row in connection.execute(
+                    "SELECT requirement_id FROM evidence_assessments "
+                    "WHERE engagement_control_id = %s AND stale_at IS NULL",
+                    (control_key,),
+                ).fetchall()
+            }
+            before = {
+                UUID(str(row[0])): str(row[1])
+                for row in connection.execute(
+                    "SELECT b.requirement_id, b.basis_sha256 FROM evidence_assessment_backfill b "
+                    "JOIN evidence_requirements q ON q.id = b.requirement_id "
+                    "WHERE q.engagement_control_id = %s",
+                    (control_key,),
+                ).fetchall()
+            }
+            for request in requests:
+                if request.requirement_id in current or tried >= limit:
+                    continue
+                basis = _basis(request, control, attributes, links).sha256
+                if before.get(request.requirement_id) == basis:
+                    continue
+                tried += 1
+                with transaction(connection) as cursor:
+                    queued += reconcile(
+                        cursor, project, control_key, only_requirement=request.requirement_id
+                    ).queued
+                    cursor.execute(
+                        """
+                        INSERT INTO evidence_assessment_backfill (
+                            requirement_id, organization_id, project_id, basis_sha256
+                        )
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (requirement_id) DO UPDATE
+                        SET basis_sha256 = EXCLUDED.basis_sha256, tried_at = clock_timestamp()
+                        """,
+                        (request.requirement_id, control.organization_id, project, basis),
+                    )
         except Exception as error:
             logger.warning("a control's checks could not be queued (%s)", type(error).__name__)
     return queued
@@ -2549,6 +2731,7 @@ def _record_findings(
         if attribute_id and attach_assurance_result(
             cursor, control.organization_id, project_id, request.requirement_id,
             UUID(attribute_id), code, run_id, str(item.get("verdict") or ""),
+            str(item.get("result") or ""),
         ):  # fmt: skip
             continue
         if item.get("verdict") != "ISSUE" or kind not in _KIND_PHRASES:
@@ -2560,7 +2743,7 @@ def _record_findings(
         deviations = [
             element
             for element in item.get("elements") or []
-            if isinstance(element, dict) and element.get("result") == "NOT_MET"
+            if isinstance(element, dict) and element.get("deviation")
             and element.get("passages")
         ]  # fmt: skip
         first = passages[0] if passages else None
@@ -2735,7 +2918,7 @@ def _assess(
         if control is None or request is None
         else _basis(
             request, control, attributes,
-            _linked(connection, control_id).get(requirement_id, set()),
+            _linked(connection, control_id),
         )
     )  # fmt: skip
     texts: dict[UUID, str] = {}
@@ -2787,6 +2970,7 @@ def _assess(
                 text=a[2],
                 criteria=a[3],
                 expected=a[0] in basis.linked_attribute_ids,
+                linked_elsewhere=a[0] in basis.elsewhere_attribute_ids,
             )
             for a in attributes
         ),  # fmt: skip
@@ -3180,7 +3364,7 @@ def read_assurance(
                 RequestBody(
                     requirement_id=request.requirement_id, run_id=None, status="NOT_CHECKED",
                     stage="GATE", held=None, lens=_basis(
-                        request, control, attributes, linked.get(request.requirement_id, set())
+                        request, control, attributes, linked
                     ).lens,
                     read_in_part=False,
                 )
@@ -3195,7 +3379,7 @@ def read_assurance(
             # its worker makes the same comparison before it reads anything.
             reasons = _changed(
                 connection, run,
-                _basis(request, control, attributes, linked.get(request.requirement_id, set())),
+                _basis(request, control, attributes, linked),
             )  # fmt: skip
         status: RequestStatus = (
             "OUT_OF_DATE" if reasons else "FAILED" if run.stopped else _STATUS[run.status]

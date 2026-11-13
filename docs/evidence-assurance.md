@@ -59,8 +59,10 @@ out of date, when the plan is made again or approved or a plan run ends (require
 created, removed or reshaped), when a requirement's links or an attribute's wording or
 criteria change, when a file is linked to or taken off a requirement, withdrawn, replaced
 or restored, when a file's kind is confirmed, and when the control's description changes.
-On start-up a bounded backfill (`backfill`, 50 requirements a pass, idempotent) queues a run
-for each DESIGN requirement with files in force and no current run.
+On start-up a bounded backfill (`backfill`, 50 requirements a pass) queues a run for each
+DESIGN requirement with files in force on it (its requirement files) and no current run; a
+requirement a pass already tried at the very same basis (its files still being read, say)
+is not tried again until what it would read changes (`evidence_assessment_backfill`).
 
 ### Stage 1: the gate (code only, no model call)
 
@@ -110,7 +112,8 @@ file, `MAX_READING_TEXT` the request), each numbered by an index, with:
 
 The prompt's delimiters (`<file`, `</file>`, `<evidence>`, `<control_and_attributes>`)
 are neutralised (`‹file`) wherever they occur in a file's text or name, or in the control's
-data, so no file can close its block, open another, or forge the attributes.
+data, written with `<`, `&lt;` or a look-alike bracket (`＜`, `﹤`, `〈`, `〈`, `⟨`), so no
+file can close its block, open another, or forge the attributes.
 
 For each attribute it answers, per **element**, one of:
 
@@ -118,7 +121,8 @@ For each attribute it answers, per **element**, one of:
 `CANNOT_TELL`, or `NOT_ADDRESSED` (this request's files contain nothing about the element;
 another request may hold that evidence). A late approval, a self-approval, a wrong
 approver or a date outside the period, shown by a record, is `NOT_MET` with that record's
-passage, never `CONTRADICTED`. All of an attribute's elements `NOT_ADDRESSED` needs a stated
+passage and nothing named absent (nothing is missing: the record shows the element is not
+met), never `CONTRADICTED`; absent names only what would have to be there and is not. All of an attribute's elements `NOT_ADDRESSED` needs a stated
 reason for an `expected` attribute.
 
 The elements are set in code, so neither reading chooses what it is judged on: the
@@ -147,34 +151,41 @@ decides what stands (the rule of evidence_mapping.py).
 
 1. Every quote is found in the stored text of **the file it names**, strictly
    (`console_citations.find_passage`, beside the console's looser `find_quote`): on word
-   boundaries at both ends, at least four words or twenty characters after folding. A
+   boundaries at both ends, at least four words or twenty characters after folding, never
+   where the word just before it on the same line negates it (not, no, never, without) and
+   never where it ends inside a token (a trailing `-`, `/`, `:` or `.` followed by a
+   letter or digit). A
    quote that file does not hold is dropped, whichever other file may hold it. Where the
    words occur more than once in the file, the occurrence its context points to is the
    one located; when that cannot be told the passage still counts, located as "found in
    several places".
 2. `MET` and `PARTLY_MET` need a verified quote for each element they claim. Without
    one, the element is `CANNOT_TELL`.
-3. `CONTRADICTED` needs two verified passages that do not overlap, at least one of them
-   support under the lens (a RECORD; or a REQUIREMENT under `DESIGN_DOCUMENT`). Otherwise
-   `CANNOT_TELL`.
+3. `CONTRADICTED` needs two verified passages that do not overlap and sit on different
+   lines or in different files (two pieces of one line are one record), at least one of
+   them support under the lens (a RECORD; or a REQUIREMENT under `DESIGN_DOCUMENT`).
+   Otherwise `CANNOT_TELL`.
 4. Passages are classified RECORD, REQUIREMENT, ASSERTION or INSTRUCTION (the first, third
    and fourth as evidence_mapping does; a REQUIREMENT is a document's own rule). Only a
    RECORD supports an element under `INSTANCE_RECORD`; under `DESIGN_DOCUMENT` a
    REQUIREMENT does, as does a RECORD the document carries. An unclassified passage is an
    ASSERTION. A concern wins: words the answer calls an ASSERTION or an INSTRUCTION
    anywhere are support nowhere in that answer. Code reads as an ASSERTION, whatever the
-   reading called it, a passage on a line that opens with Remark:, Note:, Summary:,
-   Comment: or Conclusion:, or that says all of something was (or has been) obtained,
-   approved or reviewed. A line the deterministic guards flag is never support.
+   reading called it, a passage on a line where a sentence (at the line's start, after
+   ". " or "; ", or after a bullet) opens with Remark:, Note:, Summary:, Comment: or
+   Conclusion:, or that carries "<word> comment:", "per the <role>" or "according to", or
+   that says all of something was (or has been) obtained, approved or reviewed. A line the
+   deterministic guards flag is never support.
 5. For an attribute the request asks for (`expected`), when a file's stored text was cut
    or a file of the request was left out by the gate, a result that rests on absence (a
-   `NOT_MET` with no record of the deviation, a `NOT_ADDRESSED`, and the missing part of a
-   `PARTLY_MET`) becomes `CANNOT_TELL`, with "a file was read in part" or "a file on this
-   request has not been checked". A `NOT_MET` resting on a verified passage that shows the
-   deviation (a RECORD, or a REQUIREMENT under `DESIGN_DOCUMENT`, from a file read in full)
-   stands. An attribute the request does not link is not held to this rule.
-6. An attribute's result for the request: any `CONTRADICTED` gives `CONTRADICTED`; any
-   `NOT_MET` that shows a deviation gives `NOT_MET` (an exception), whatever else is shown;
+   `NOT_MET`, a `NOT_ADDRESSED`, and the missing part of a `PARTLY_MET`) becomes
+   `CANNOT_TELL`, with "a file was read in part" or "a file on this request has not been
+   checked". An attribute the request does not link is not held to this rule. A
+   **deviation** is the one exception: an element both readings find `NOT_MET`, each
+   naming nothing absent for it and resting it on overlapping verified RECORD passages
+   (under `DESIGN_DOCUMENT` also the document's own REQUIREMENT) from files read in full (a self-approval plainly in a ticket). It stands whatever else
+   the request holds (compare, below); anything else is absence-based.
+6. One reading's result for the attribute: any `CONTRADICTED` gives `CONTRADICTED`;
    all `NOT_ADDRESSED` gives `NOT_ADDRESSED`; every element `MET` gives `MET`; at least one
    `MET` and the rest `NOT_ADDRESSED` gives `SHOWN_IN_PART` (no shortfall: the rest may be
    another request's evidence); otherwise the weakest of the elements answered (the
@@ -186,17 +197,22 @@ Then the comparison, per attribute:
 
 | Assessor | Reviewer | Verdict |
 | --- | --- | --- |
+| a deviation on an element | the same deviation (overlapping records) | `ISSUE` `NOT_MET`, linked or not (both `CONTRADICTED` instead: `ISSUE` `CONTRADICTED`) |
 | `MET` | `MET` (both with verified passages) | `SUPPORTED` |
-| `SHOWN_IN_PART` | `SHOWN_IN_PART`, on the same elements | `PARTLY_SUPPORTED` |
+| `SHOWN_IN_PART` | `SHOWN_IN_PART`, on the same elements | `PARTLY_SUPPORTED`, except: linked and no other D&I request of the control links it: `ISSUE` `PARTLY_MET`, naming the elements not shown |
+| `PARTLY_MET` | `PARTLY_MET`, on the same elements, linked, another D&I request links it too | `PARTLY_SUPPORTED` (result `SHOWN_IN_PART`; the elements not met count as not shown) |
 | the same `CONTRADICTED` | | `ISSUE` |
 | the same `PARTLY_MET` or `NOT_MET`, attribute linked | | `ISSUE` |
 | the same `PARTLY_MET` or `NOT_MET`, attribute not linked | | `NOT_ADDRESSED`, "This request does not ask for this attribute; what the readings found is shown for reference.", both views |
 | `NOT_ADDRESSED` | `NOT_ADDRESSED` | `ISSUE` if linked (the evidence does not address what its request said it would), else `NOT_ADDRESSED` |
 | anything else, including either `CANNOT_TELL` | | `UNSETTLED` |
 
-`PARTLY_MET` against `NOT_MET`, and `SHOWN_IN_PART` on different elements, are `UNSETTLED`.
-A requirement with no links at all has every attribute unlinked. `SUPPORTED` always
-carries the result `MET` and at least one verified passage from each reading.
+`PARTLY_MET` against `NOT_MET`, `SHOWN_IN_PART` on different elements, and `PARTLY_MET` on
+different elements of an attribute another request also asks for, are `UNSETTLED`. A
+requirement with no links at all has every attribute unlinked. `SUPPORTED` always carries
+the result `MET` and at least one verified passage from each reading. "Another D&I request
+links it" is part of the run's basis (`elsewhere_attribute_ids`): a change there puts the
+run out of date.
 
 There is no third agent and no tie-break. `UNSETTLED` goes to a person with both views.
 
@@ -218,16 +234,17 @@ gave nothing.
   element is shown (implementation) by some accepted request.
 - `ISSUE`: recorded as an evidence finding (source `ASSURANCE`), once per requirement,
   attribute and basis, so the existing accept, edit, follow-up and resolve loop applies.
-  The finding states the attribute's letter and what is not shown; for an exception shown
-  by a record it names the element and quotes the passage ("Not met: approved by someone
-  other than the requester. The ticket shows “...”."). The question it proposes for the
+  The finding states the attribute's letter and what is not shown (for part shown, the
+  elements not shown); for a deviation it names the element and quotes the record ("Not
+  met: approved by someone other than the requester. The ticket shows “...”."). The question it proposes for the
   control owner is written from the firm's own attribute wording, never from the model's
   words.
 - An issue a person already has in hand (accepted, sent, answered, asked again,
   escalated) is never marked stale by a client's reply or upload: the reading that arrives
   attaches to it (matched on its requirement where it rests on several files) and proposes
-  ANSWERED, and the next run's result is attached to it on its history (a run that
-  supports the attribute proposes ANSWERED, "a person decides"); no second finding is
+  ANSWERED, and the next run's result is attached to it on its history, named as it is
+  (supported, contradicted, not met, met in part, not settled; a run that supports the
+  attribute proposes ANSWERED, "a person decides"); no second finding is
   raised for the attribute. No agent closes a finding. A finding nobody acted on goes stale
   with its run.
 - `UNSETTLED`: shown as "The two readings do not agree. Your judgment is needed.", with
@@ -258,7 +275,9 @@ except to be marked out of date:
   id, name, content hash, the hash of its stored text, its kind, whether it was read in
   part, and the gate's code and sentence where it was left out), the files the readings
   include (`file_ids`), a hash of the attributes as assessed (each id, letter, wording
-  and criteria), the requirement's linked attribute ids, the control's facts, the lens,
+  and criteria), the requirement's linked attribute ids, the attributes another DESIGN
+  requirement of the control links too (`elsewhere_attribute_ids`, migration 0156), the
+  control's facts, the lens,
   both prompt versions, the model configuration the run would use (`models`), and one
   hash over all of it;
 - state: `PENDING`, `WORKING`, `HELD`, `READY`, `FAILED`; the stage reached; lease and
@@ -274,7 +293,8 @@ except to be marked out of date:
 - `stale_at` and `stale_reason` when a file is added to, replaced on or withdrawn from
   the requirement, a file is read again with another text or kind, an attribute's wording
   or criteria changes, the attribute list changes, the requirement's links change, the
-  control's description changes, or the model configuration changes. A stale run is shown
+  attributes other D&I requests link change, the control's description changes, or the
+  model configuration changes. A stale run is shown
   as out of date and a new run is queued while a file is still in force on the
   requirement.
 
@@ -283,7 +303,9 @@ out-of-date run is never changed (a trigger refuses both); a run is never delete
 still queued is brought up to date in place.
 
 Idempotent: there is one current run per requirement, and the same basis is never run
-twice; asking again returns the run on record. When a basis comes back (a link removed
+twice; asking again returns the run on record. The start-up
+backfill keeps, per DESIGN requirement, the basis it last tried
+(`evidence_assessment_backfill`, migration 0156), bookkeeping that decides nothing. When a basis comes back (a link removed
 and restored), the earlier reviewed run of that basis is copied into a new run
 (`reused_from_id`), with no model call, only where it ran on the very model configuration
 the basis names (a model change never reuses a run). Partial reuse of single attributes'
@@ -317,9 +339,10 @@ Role = Literal["ASSESSOR", "REVIEWER"]
 Shows = Literal["DESIGN", "IMPLEMENTATION"]
 PassageBasis = Literal["RECORD", "REQUIREMENT", "ASSERTION", "INSTRUCTION"]
 HeldCode = Literal["CUSTODY", "READ_FAILED", "UNREADABLE", "KIND_UNSURE", "POPULATION", "NO_ATTRIBUTES", "TOO_LARGE"]
+# Prompt versions: evidence-assurance-assessor/4, evidence-assurance-reviewer/4
 
 @dataclass(frozen=True)
-class AttributeSpec: id: UUID; code: str; text: str; criteria: dict[str, Any] | None; expected: bool
+class AttributeSpec: id: UUID; code: str; text: str; criteria: dict[str, Any] | None; expected: bool; linked_elsewhere: bool = False
 
 @dataclass(frozen=True)
 class FileSpec: id: UUID; name: str; kind: str; text: str; truncated: bool; sha256: str
@@ -350,7 +373,8 @@ def run_chain(ask: Callable[[Role, str, str], dict[str, Any] | None], chain: Cha
 None when the readings differ or what they agree on is shown for reference), `passages`
 (each with its `file_id`), `absent`, `views` (both, when unsettled or for reference),
 `summary` (one sentence, written in code), `shows`, and `elements` (each element as the
-readings agree on it: `key`, `text`, `result` or None, `passages`, `absent`). `ChainResult`
+readings agree on it: `key`, `text`, `result` or None, `passages`, `absent`, and
+`deviation` where both readings rest its NOT_MET on the same record). `ChainResult`
 has `outcomes`, `first`, `second` (the two checked `Opinion`s), and `failed` and `reason`
 when a reading gave no usable answer. `run_chain` is the gate's successor stages only
 (assess, re-perform, compare); an `ask` that returns None for either role gives every
