@@ -1,3 +1,10 @@
+import {
+  failureNoteOf,
+  failureSentence,
+  plainNote,
+  withNext,
+} from "./run-failure.ts";
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type DraftItem = {
@@ -23,6 +30,9 @@ export type RequestDraft = {
   questions: string[];
   assumptions: string[];
   note: string;
+  /** The server's failure sentence for a drafting that ended without a usable answer
+   * (run-failure.ts); absent otherwise. */
+  failureNote?: string;
 };
 
 const STATUSES: ReadonlyArray<RequestDraft["status"]> = [
@@ -92,9 +102,40 @@ export function parseDrafts(value: unknown): Map<string, RequestDraft> {
       questions: strings(content?.questions),
       assumptions: strings(content?.assumptions),
       note: str(item.note),
+      ...(failureNoteOf(item) !== ""
+        ? { failureNote: failureNoteOf(item) }
+        : {}),
     });
   }
   return drafts;
+}
+
+/** A draft's one sentence when the drafting ended without a usable answer, or null: it
+ * failed (the request's wording stands as it was), or the model did not answer and the
+ * rules drafted it from the RCM. The server's failure sentence leads, then its note. */
+export function runFailureLine(
+  draft: Pick<RequestDraft, "status" | "source" | "note" | "failureNote">,
+  failureNote: string = draft.failureNote ?? "",
+): string | null {
+  if (draft.status === "FAILED") {
+    const note = plainNote(draft.note);
+    return failureSentence(
+      note !== ""
+        ? withNext(
+            note,
+            "The request's wording is kept as it was. Draft it again, or edit the request yourself.",
+          )
+        : "The request could not be drafted, so its wording is kept as it was. Draft it again, or edit the request yourself.",
+      failureNote,
+    );
+  }
+  if (draft.status === "DRAFTED" && draft.source === "FALLBACK") {
+    return failureSentence(
+      "The model did not answer, so the request was drafted from the RCM. Draft it again, or edit the request yourself.",
+      failureNote,
+    );
+  }
+  return null;
 }
 
 /** A short status for the request row. */

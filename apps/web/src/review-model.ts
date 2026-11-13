@@ -1,12 +1,44 @@
 // The independent review of a control instance (Milestone 9.1): the agent's
 // re-performance, the review notes, and the reviewer's sign-off.
 
+import { failureNoteOf, plainNote } from "./run-failure.ts";
 import {
   type CancelState,
   parseCancelState,
   parseRunState,
   type RunState,
 } from "./run-state.ts";
+
+// The server's note on a re-performance that gave up (control_reviews.REPERFORM_FAILED),
+// read where it sends no failure sentence of its own.
+const REPERFORM_GAVE_UP = /\bdid not finish\b/i;
+
+/** The review's one sentence when the agent's re-performance ended without a usable
+ * answer, or null while it works or when it finished: why (the server's failure sentence,
+ * else its note), that the testing stands as the preparer left it, and "Re-perform", the
+ * step's action beside it. */
+export function runFailureLine(
+  review: Pick<
+    ControlReview,
+    "reperforming" | "reperformState" | "reperformNote" | "failureNote"
+  >,
+  failureNote: string = review.failureNote ?? "",
+): string | null {
+  if (review.reperforming || review.reperformState !== "IDLE") {
+    return null;
+  }
+  const said = plainNote(failureNote);
+  if (said !== "") {
+    return said;
+  }
+  if (!REPERFORM_GAVE_UP.test(review.reperformNote)) {
+    return null;
+  }
+  return (
+    plainNote(review.reperformNote) ||
+    "The re-performance did not finish, so the testing stands as the preparer left it. Re-perform to try again."
+  );
+}
 
 export type NoteSeverity = "MUST_FIX" | "SHOULD_FIX" | "OBSERVATION";
 export type NoteStatus =
@@ -79,6 +111,9 @@ export type ControlReview = {
   /** FALLBACK: the rules' checks stand; the model did not re-perform the items. */
   reperformSource: "MODEL" | "RULES" | "FALLBACK" | "SEEDED" | null;
   reperformNote: string;
+  /** The server's failure sentence for a re-performance that ended without a usable
+   * answer (run-failure.ts); absent otherwise. */
+  failureNote?: string;
   cancelState?: CancelState;
   sheetStatus: string | null;
   sheetSignedBy: string | null;
@@ -229,6 +264,9 @@ export function parseReviews(value: unknown): ControlReview[] | null {
           ? item.reperform_source
           : null,
       reperformNote: str(item.reperform_note),
+      ...(failureNoteOf(item) !== ""
+        ? { failureNote: failureNoteOf(item) }
+        : {}),
       cancelState: parseCancelState(item.cancel_state),
       sheetStatus: maybe(item.sheet_status),
       sheetSignedBy: maybe(item.sheet_signed_by),

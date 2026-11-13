@@ -4,6 +4,7 @@ import { formatDate } from "./format";
 import { type SheetTab, SheetTabs } from "./sheet-tabs";
 import { UiIcon } from "./ui-icon";
 import {
+  runFailureLine as draftFailureLine,
   RATIONALE_KEY,
   rationalePending,
   rowsToText,
@@ -420,7 +421,13 @@ function WorkpaperCard({
                 {old ? " · an earlier version" : ""}
               </span>
             ) : null}
-            {paper.draftNote !== "" ? (
+            {draftFailureLine(paper) !== null ? (
+              // The draft ended without a usable answer: why, what is kept, and "Draft
+              // again" (the step's action).
+              <span className="wp-note" role="status">
+                {draftFailureLine(paper)}
+              </span>
+            ) : paper.draftNote !== "" ? (
               <span className="wp-note">{paper.draftNote}</span>
             ) : null}
           </p>

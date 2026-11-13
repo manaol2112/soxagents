@@ -31,7 +31,6 @@ import {
   agentRan,
   attributeLetter,
   attributeSourceLine,
-  attributesStopped,
   attributesSummary,
   attributesWorking,
   BASIS_LABELS,
@@ -52,10 +51,12 @@ import {
   firstUnifiedToDecide,
   type LibraryUpdate,
   NATURE_LABELS,
+  needingCriteria,
   offersAgentRun,
   PROCEDURE_PHASES,
   type ProcessStep,
   reviewUnfinished,
+  runFailureLine,
   SECTION_HEADINGS,
   SOURCE_LABELS,
   selectionPlan,
@@ -1628,11 +1629,32 @@ function EmbeddedAttributes({
     context.attributesStage,
   );
   const running = working !== null;
-  const stopped = attributesStopped(
-    context.attributesRun,
-    context.attributesRunNote,
-    context.attributesRerunUseful ?? null,
-  );
+  // A run that ended without a usable answer: one sentence, with its ways on beside it
+  // (run again, or write the criteria the run did not write). Never "Needs criteria" on
+  // the rows and nothing else.
+  const failure = runFailureLine(context);
+  const toWrite = needingCriteria(context)[0]?.item ?? null;
+  // The row whose criteria form "Write criteria" opened.
+  const [writing, setWriting] = useState<string | null>(null);
+  // Once the row's criteria are written (or nothing is missing), its form opens only on
+  // the person's own Edit again.
+  const toWriteId = toWrite?.id ?? null;
+  useEffect(() => {
+    if (writing !== null && toWriteId !== writing) {
+      setWriting(null);
+    }
+  }, [writing, toWriteId]);
+  function writeCriteria(item: Attribute) {
+    setWriting(item.id);
+    const next = new Set(opened);
+    next.add(item.id);
+    onOpen(next);
+    window.requestAnimationFrame(() =>
+      document
+        .getElementById(`${id}-${item.id}`)
+        ?.scrollIntoView({ block: "nearest" }),
+    );
+  }
   // While the agents work, the page reads the attributes again every few seconds, in
   // place; it stops by itself when the run ends.
   useEffect(() => {
@@ -1797,9 +1819,11 @@ function EmbeddedAttributes({
             ) : null}
             {kind === "APPROVED" ? (
               <TailoredCriteria
+                key={writing === item.id ? "writing" : "shown"}
                 ids={ids}
                 item={item}
                 canAct={canAct && !running}
+                startEditing={writing === item.id}
                 flat
                 extra={
                   standard !== null || more !== null ? (
@@ -1972,11 +1996,43 @@ function EmbeddedAttributes({
             </span>
           </small>
         </p>
-      ) : stopped !== null ? (
-        <p className="ta-run-note tone-warning" role="status">
+      ) : failure !== null ? (
+        <div className="ta-run-note tone-warning has-acts" role="status">
           <UiIcon name="info" size={13} />
-          {stopped}
-        </p>
+          <span>{failure}</span>
+          {canAct ? (
+            <span className="ta-run-acts">
+              {/* One "Run again" on the step: here only where the bar above does not
+                  offer it (nothing the agents read changed), and then on purpose all
+                  the same (force), since the run did not do its work. */}
+              {!offersAgentRun(
+                agentRan(context),
+                context.attributesRerunUseful,
+              ) ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={locked}
+                  onClick={() => onGenerate(true)}
+                >
+                  <UiIcon name="retry" size={13} />
+                  {busyKey === "generate" ? "Starting…" : "Run again"}
+                </button>
+              ) : null}
+              {toWrite !== null ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={locked}
+                  onClick={() => writeCriteria(toWrite)}
+                >
+                  <UiIcon name="compose" size={13} />
+                  Write criteria
+                </button>
+              ) : null}
+            </span>
+          ) : null}
+        </div>
       ) : unreviewed !== null ? (
         <p className="ta-run-note tone-warning" role="status">
           <UiIcon name="info" size={13} />

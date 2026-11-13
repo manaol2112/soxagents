@@ -9,6 +9,7 @@ import {
   REVIEW_NOTICES,
   type ReviewNote,
   type ReviewNotice,
+  runFailureLine as reperformFailureLine,
   SEVERITY_LABEL,
   TARGET_LABEL,
 } from "./review-model";
@@ -174,7 +175,11 @@ export function ReviewTab({
           {REVIEW_NOTICES[notice]}
         </Banner>
       ) : null}
-      {review.reperformNote !== "" ? (
+      {reperformFailureLine(review) !== null ? (
+        // The re-performance ended without a usable answer: said as a warning, with
+        // "Re-perform" below, never as information.
+        <Banner tone="warning">{reperformFailureLine(review)}</Banner>
+      ) : review.reperformNote !== "" ? (
         <Banner tone="info">{review.reperformNote}</Banner>
       ) : null}
       <div className="card-body review-body">

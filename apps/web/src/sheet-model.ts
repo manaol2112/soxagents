@@ -6,6 +6,7 @@
 
 import type { EvidenceCitation } from "./evidence-preview-model.ts";
 import { type Automation, executionOf } from "./execution-model.ts";
+import { failureNoteOf, plainNote, withNext } from "./run-failure.ts";
 import {
   type CancelState,
   parseCancelState,
@@ -177,6 +178,9 @@ export type TestSheet = {
   /** Why the last run stopped before finishing, or "" (an agent execution failure, not
    * a testing failure: exceptions in the results are results). */
   runNote: string;
+  /** The server's failure sentence for the tester's run that ended without a usable
+   * answer (run-failure.ts); absent otherwise. */
+  failureNote?: string;
   /** A person's cancellation of the run, when one is pending or was the last outcome. */
   cancelState?: CancelState;
   proposedConclusion: "EFFECTIVE" | "NOT_EFFECTIVE" | "INCOMPLETE";
@@ -244,6 +248,7 @@ export function parseSheets(value: unknown): TestSheet[] | null {
       running: raw.running === true,
       runState: parseRunState(raw.run_state, raw.running === true),
       runNote: typeof raw.run_note === "string" ? raw.run_note : "",
+      ...(failureNoteOf(raw) !== "" ? { failureNote: failureNoteOf(raw) } : {}),
       cancelState: parseCancelState(raw.cancel_state),
       proposedConclusion:
         raw.proposed_conclusion === "EFFECTIVE" ||
@@ -371,6 +376,35 @@ export function sheetFor(
   );
 }
 
+/** The test sheet's one sentence when the tester's run ended without finishing, or null:
+ * why (the server's failure sentence, else the run's note), what is kept (the results so
+ * far), and the next action, "Test again", which the sheet offers beside it. An exception
+ * in the results is a result, never this. */
+export function runFailureLine(
+  sheet: Pick<
+    TestSheet,
+    "running" | "status" | "runNote" | "failureNote" | "counts"
+  >,
+  failureNote: string = sheet.failureNote ?? "",
+): string | null {
+  if (sheet.running || sheet.status === "SIGNED_OFF") {
+    return null;
+  }
+  const why = plainNote(failureNote) || plainNote(sheet.runNote);
+  if (why === "") {
+    return null;
+  }
+  const untested = Math.max(
+    0,
+    sheet.counts.items - sheet.counts.tested - sheet.counts.noEvidence,
+  );
+  const kept =
+    untested > 0
+      ? `${untested} ${untested === 1 ? "item is" : "items are"} untested; the results so far are kept.`
+      : "The results so far are kept.";
+  return withNext(why, `${kept} Test again.`);
+}
+
 /** The headline for a sheet: where it stands, in one line. A queued or working run is
  * "running" only when an agent worker exists (execution-model); otherwise automation is
  * unavailable and the headline says so. */
@@ -386,7 +420,7 @@ export function sheetHeadline(
       ? { label: "Signed off · effective", tone: "success" }
       : { label: "Signed off · not effective", tone: "danger" };
   }
-  if (!sheet.running && sheet.runNote !== "") {
+  if (!sheet.running && (sheet.runNote !== "" || runFailureLine(sheet))) {
     return { label: "Tester run stopped · run again", tone: "warning" };
   }
   if (sheet.running) {

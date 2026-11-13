@@ -12,6 +12,7 @@ import {
   type EvidenceSettings,
   REVIEW_CHECK_LABELS,
   type ReviewCheck,
+  runFailureLine as readingFailureLine,
   readingLabel,
 } from "./analysis-model";
 import { formatDate } from "./format";
@@ -117,7 +118,7 @@ export function AnalysisPanel({
       <div className="analysis">
         <p className="analysis-head">
           <span className="pill pill-dot tone-danger">Not read</span>
-          <small>{analysis.note || "Reading the file did not finish."}</small>
+          <small>{readingFailureLine(analysis)}</small>
         </p>
         {canAct ? (
           <form

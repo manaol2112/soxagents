@@ -15,6 +15,7 @@ import {
 
 import {
   agentWorking,
+  runFailureLine as answerFailureLine,
   type Block,
   blocks,
   type Citation,
@@ -1098,8 +1099,8 @@ function Message({
         <div className="cv-failed" role="status">
           <UiIcon name="risk" size={15} />
           <div>
-            <strong>{message.content}</strong>
-            {message.note !== "" ? <span>{message.note}</span> : null}
+            {/* One sentence: what happened and what to do, never an empty bubble. */}
+            <strong>{answerFailureLine(message)}</strong>
           </div>
           {message.canRetry ? (
             <button

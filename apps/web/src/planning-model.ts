@@ -8,6 +8,7 @@
  */
 
 import { type DesignWait, waitingOnOf } from "./design-requests-model.ts";
+import { failureNoteOf, failureSentence } from "./run-failure.ts";
 import {
   groupApproveBody,
   implementationName,
@@ -28,6 +29,23 @@ export const PLANNING_STATES = [
   "CHANGES_REQUESTED",
 ] as const;
 export type PlanningState = (typeof PLANNING_STATES)[number];
+
+/** The master test plan's one sentence when the planner's last run ended without a usable
+ * answer (it failed), or null while it runs or once it finished: the server's failure
+ * sentence, else that the plan is kept as it was and how to go on. The plan's state never
+ * reads as analysing then (master_plans.state_of). */
+export function runFailureLine(
+  plan: { runStatus: string; failureNote?: string },
+  failureNote: string = plan.failureNote ?? "",
+): string | null {
+  if (plan.runStatus !== "FAILED") {
+    return null;
+  }
+  return failureSentence(
+    "The planner's last run did not finish, so the plan is kept as it was. Plan it again, or change the plan yourself.",
+    failureNote,
+  );
+}
 
 export const STATE_LABELS: Record<PlanningState, string> = {
   NOT_STARTED: "Not started",
@@ -431,6 +449,9 @@ export type MasterPlan = {
   state: PlanningState;
   status: string | null;
   runStatus: string;
+  /** The server's failure sentence for the planner's run that ended without a usable
+   * answer (run-failure.ts); absent otherwise. */
+  failureNote?: string;
   revision: number;
   approvedRevision: number | null;
   revisedSinceApproval: boolean;
@@ -869,6 +890,9 @@ export function parseMasterPlan(value: unknown): MasterPlan | null {
     state: stateOf(value.state),
     status: strOrNull(value.status),
     runStatus: str(value.run_status),
+    ...(failureNoteOf(value) !== ""
+      ? { failureNote: failureNoteOf(value) }
+      : {}),
     revision: num(value.revision),
     approvedRevision:
       typeof value.approved_revision === "number"

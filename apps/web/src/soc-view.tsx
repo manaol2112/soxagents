@@ -10,6 +10,7 @@ import {
   type SetupSystem,
   SOC_STATUS_LABELS,
   type SocReport,
+  runFailureLine as socFailureLine,
   wizardProblem,
 } from "./onboarding-model";
 import { UiIcon } from "./ui-icon";
@@ -188,7 +189,7 @@ export function SocReports({
               {report.status === "READING"
                 ? "Being read by the agent…"
                 : report.status === "FAILED"
-                  ? "Not read"
+                  ? socFailureLine(report, "soc")
                   : [
                       report.serviceOrganization,
                       report.reportType

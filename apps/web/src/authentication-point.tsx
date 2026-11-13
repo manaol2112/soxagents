@@ -17,6 +17,7 @@ import { UiIcon } from "./ui-icon";
 import {
   type NotesResult,
   notesChosen,
+  runFailureLine as notesFailureLine,
   notesSummary,
   parseNotes,
 } from "./understanding-chat-model";
@@ -235,7 +236,9 @@ export function AuthenticationPoint({
         <h3 className="ur-q" id="ur-q">
           The settings the policy states
         </h3>
-        <p className="ur-hint">{notesSummary(found, "policy")}</p>
+        <p className="ur-hint">
+          {notesFailureLine(found, "policy") ?? notesSummary(found, "policy")}
+        </p>
         {found.answers.length > 0 ? (
           <ul className="ur-proposals">
             {found.answers.map((answer) => (

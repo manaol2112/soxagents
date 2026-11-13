@@ -25,6 +25,7 @@ import {
   type FindingStatus,
 } from "./evidence-findings-model.ts";
 import type { IconName } from "./icon-name.ts";
+import { failureNoteOf, plainNote } from "./run-failure.ts";
 
 type Raw = Record<string, unknown>;
 const isRecord = (value: unknown): value is Raw =>
@@ -175,6 +176,9 @@ export type AssuredRequest = {
   outOfDate: string[];
   /** Why a failed check failed, in one plain sentence; "" otherwise. */
   note: string;
+  /** The server's failure sentence for a failed check, where it sent one
+   * (run-failure.ts); absent otherwise. */
+  failureNote?: string;
   finishedAt: string | null;
 };
 
@@ -489,6 +493,9 @@ function parseRequest(value: unknown): AssuredRequest | null {
         : [],
     outOfDate,
     note: status === "FAILED" ? str(value.note).slice(0, 300) : "",
+    ...(status === "FAILED" && failureNoteOf(value) !== ""
+      ? { failureNote: failureNoteOf(value) }
+      : {}),
     finishedAt: str(value.finished_at) || null,
   };
 }
@@ -1043,6 +1050,25 @@ export type RequestCheck = {
 const sentence = (text: string) =>
   text === "" || /[.!?…]$/.test(text) ? text : `${text}.`;
 
+/** The check's one sentence for a run that ended without a usable answer (it failed), or
+ * null: nothing of the run is shown, and the server's reason (its failure sentence, else
+ * the run's note). The next action is the check's own "Check again", beside it
+ * (requestCheck's action). */
+export function runFailureLine(
+  request: Pick<AssuredRequest, "status" | "note" | "failureNote">,
+  failureNote: string = request.failureNote ?? "",
+): string | null {
+  if (request.status !== "FAILED") {
+    return null;
+  }
+  return [
+    "The check did not finish, so nothing of it is shown.",
+    plainNote(failureNote) || plainNote(request.note),
+  ]
+    .filter((part) => part !== "")
+    .join(" ");
+}
+
 /** Letters as a person says them ("A to C", "A and C"), in the list's own way. */
 export type Span = (letters: readonly string[]) => string;
 
@@ -1159,12 +1185,7 @@ export function requestCheck(
     return {
       ...base,
       standing: "FAILED",
-      line: [
-        "The check did not finish, so nothing of it is shown.",
-        sentence(request.note),
-      ]
-        .filter((part) => part !== "")
-        .join(" "),
+      line: runFailureLine(request) ?? "",
       action: rerun("Check again"),
     };
   }

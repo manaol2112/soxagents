@@ -1112,6 +1112,23 @@ button.tar-head:focus-visible:not(:disabled) {
   color: var(--warning);
 }
 
+/* A run that ended without a usable answer: its sentence, then its two ways on. */
+.ta-run-note.has-acts {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.ta-run-note.has-acts > span:first-of-type {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.ta-run-acts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
 .tar-chip {
   display: inline-flex;
   align-items: center;

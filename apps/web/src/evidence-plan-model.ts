@@ -15,7 +15,22 @@ import {
   parseDesignRequests,
   parseRequestAcceptance,
   type RequestAcceptance,
+  runFailureLine as requestsRunFailureLine,
 } from "./design-requests-model.ts";
+import { failureNoteOf } from "./run-failure.ts";
+
+/** The test plan's one sentence for the planner's run that ended without a usable answer
+ * (its answer could not be used and the plan was kept, or the rules planned in its
+ * place), or null: the same sentence the D&I requests list shows. */
+export function runFailureLine(
+  plan: Pick<
+    EvidencePlan,
+    "status" | "source" | "keptNote" | "failureNote"
+  > | null,
+  failureNote: string = plan?.failureNote ?? "",
+): string | null {
+  return requestsRunFailureLine(plan, false, failureNote);
+}
 
 export const PHASES = ["DESIGN", "INTERIM", "ROLLFORWARD"] as const;
 export type Phase = (typeof PHASES)[number];
@@ -482,6 +497,12 @@ export type EvidencePlan = {
   } | null;
   /** Where the D&I requests list stands (12 November 2026); null when not sent. */
   designRequests: DesignRequestsState | null;
+  /** The planner's latest run could not use its answer and kept the plan as it was: the
+   * server's note (`kept_note`), or "". */
+  keptNote?: string;
+  /** The server's sentence for the planner's run that ended without a usable answer, or
+   * "" (run-failure.ts). */
+  failureNote?: string;
   /** Whether live email is on in this environment (the mock mailbox counts as on);
    * absent when the server did not say. */
   liveEmail?: boolean | null;
@@ -782,6 +803,8 @@ export function parsePlan(value: unknown): EvidencePlan | null {
           }
         : null,
     designRequests: parseDesignRequests(value.design_requests),
+    keptNote: str(value.kept_note),
+    failureNote: failureNoteOf(value),
     ...(readSeam(value).liveEmail !== null
       ? { liveEmail: readSeam(value).liveEmail }
       : {}),

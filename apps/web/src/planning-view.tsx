@@ -84,6 +84,7 @@ import {
   type PlanningState,
   type Procedure,
   type ProcedureRow,
+  runFailureLine as planFailureLine,
   planningHref,
   planningProblem,
   planQuestions,
@@ -1417,6 +1418,13 @@ export function PlanReview({
             </span>
           </div>
         )}
+        {planFailureLine(plan) !== null ? (
+          // The planner's last run ended without a usable answer: said over the plan
+          // it would have changed, never only by a state that stopped analysing.
+          <p className="cc-note tone-warning" role="status">
+            {planFailureLine(plan)}
+          </p>
+        ) : null}
         {clientQuestions !== null ? (
           <PlanSummary
             ids={ids}

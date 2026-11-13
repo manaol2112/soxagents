@@ -8,6 +8,8 @@
  * proposes from it. Nothing here decides: it reads what the API returns and says it.
  */
 
+import { failureNoteOf, failureSentence } from "./run-failure.ts";
+
 export type GoverningKind = "POLICY" | "PROCEDURE" | "NARRATIVE" | "FLOWCHART";
 
 /** Policies and procedures govern; process narratives and flow diagrams describe (the
@@ -98,8 +100,28 @@ export type PriorYearReference = {
   createdAt: string;
   runStatus: "PENDING" | "WORKING" | "IDLE" | "FAILED";
   runNote: string;
+  /** The server's failure sentence for a run that ended without a usable answer
+   * (run-failure.ts); absent otherwise. */
+  failureNote?: string;
   matches: Match[];
 };
+
+/** A prior-year reference's one sentence when the agent's analysis ended without a usable
+ * answer (it failed), or null: the server's failure sentence, else the run's note, else
+ * that what it matched stays. "Analyse again" sits beside it. */
+export function runFailureLine(
+  reference: { runStatus: string; runNote: string; failureNote?: string },
+  failureNote: string = reference.failureNote ?? "",
+): string | null {
+  if (reference.runStatus !== "FAILED") {
+    return null;
+  }
+  return failureSentence(
+    "The agent could not finish this reference, so what it matched stays. Analyse it again.",
+    failureNote,
+    reference.runNote,
+  );
+}
 
 const str = (value: unknown): string =>
   typeof value === "string" ? value : "";
@@ -244,6 +266,7 @@ export function parseReference(value: unknown): PriorYearReference | null {
       "IDLE",
     ),
     runNote: str(item.run_note),
+    ...(failureNoteOf(item) !== "" ? { failureNote: failureNoteOf(item) } : {}),
     matches: Array.isArray(item.matches)
       ? item.matches
           .map(parseMatch)

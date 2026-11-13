@@ -5,6 +5,7 @@
  */
 
 import type { Citation } from "./console-model.ts";
+import { failureNoteOf, plainNote, withNext } from "./run-failure.ts";
 import {
   type CancelState,
   parseCancelState,
@@ -59,6 +60,40 @@ export type WorkpaperTab = {
   reference: string;
 };
 
+// The server's note on a draft that gave up (workpaper_service.DRAFT_FAILED), read where
+// it sends no failure sentence of its own.
+const DRAFT_GAVE_UP = /\bcould not finish\b/i;
+
+/** A workpaper's one sentence when its draft ended without a usable answer, or null while
+ * it drafts or when the draft finished: why (the server's failure sentence, else its
+ * note), what is kept (the version on record, if any), and "Draft again", the step's
+ * action beside it. */
+export function runFailureLine(
+  paper: Pick<
+    Workpaper,
+    "drafting" | "draftNote" | "failureNote" | "currentVersion"
+  >,
+  failureNote: string = paper.failureNote ?? "",
+): string | null {
+  if (paper.drafting) {
+    return null;
+  }
+  const said = plainNote(failureNote);
+  const note = DRAFT_GAVE_UP.test(paper.draftNote)
+    ? plainNote(paper.draftNote)
+    : "";
+  const why = said || note;
+  if (why === "") {
+    return null;
+  }
+  // The version on record stands; with none, the server's sentence says it all.
+  const kept =
+    paper.currentVersion > 0
+      ? `Version ${paper.currentVersion} is kept as it was. `
+      : "";
+  return withNext(why.replace(/\s*Draft again\.$/, ""), `${kept}Draft again.`);
+}
+
 export type WorkpaperVersion = {
   number: number;
   source: string;
@@ -75,6 +110,9 @@ export type Workpaper = {
   drafting: boolean;
   draftState: RunState;
   draftNote: string;
+  /** The server's failure sentence for a draft that ended without a usable answer
+   * (run-failure.ts); absent otherwise. */
+  failureNote?: string;
   cancelState?: CancelState;
   currentVersion: number;
   shownVersion: number;
@@ -214,6 +252,7 @@ export function parseWorkpapers(value: unknown): Workpaper[] | null {
       drafting: raw.drafting === true,
       draftState: parseRunState(raw.draft_state, raw.drafting === true),
       draftNote: str(raw.draft_note),
+      ...(failureNoteOf(raw) !== "" ? { failureNote: failureNoteOf(raw) } : {}),
       cancelState: parseCancelState(raw.cancel_state),
       currentVersion: num(raw.current_version),
       shownVersion: num(raw.shown_version),

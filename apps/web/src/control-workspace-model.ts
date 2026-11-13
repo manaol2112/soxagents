@@ -10,7 +10,10 @@ import {
   type AssistantBrief,
   stepAnchor,
 } from "./assistant-model.ts";
-import type { ControlContext } from "./control-context-model.ts";
+import {
+  runFailureLine as attributesFailureLine,
+  type ControlContext,
+} from "./control-context-model.ts";
 import type {
   ControlFiles,
   ControlRow,
@@ -20,12 +23,18 @@ import type {
 import { requestStage } from "./evidence-flow.ts";
 import type { EvidencePlan, Phase, PlanPhase } from "./evidence-plan-model.ts";
 import type { Automation } from "./execution-model.ts";
-import type { ControlReview } from "./review-model.ts";
+import {
+  type ControlReview,
+  runFailureLine as reperformFailureLine,
+} from "./review-model.ts";
 import type { TestRound } from "./round-model.ts";
 import type { RunState } from "./run-state.ts";
 import type { TestSheet } from "./sheet-model.ts";
 import type { ControlTest } from "./testing-model.ts";
-import type { Workpaper } from "./workpaper-model.ts";
+import {
+  runFailureLine as draftFailureLine,
+  type Workpaper,
+} from "./workpaper-model.ts";
 
 export type RecordTab =
   | "overview"
@@ -1050,12 +1059,30 @@ export function agentLanes(input: WorkspaceInput): AgentLane[] {
       steps > 0;
     const mapToConfirm =
       context.processRequired && context.understanding.status === "DRAFT";
+    // The agents' run on the attributes and their criteria: working, queued, or ended
+    // without a usable answer, said in the Attributes step's own sentence.
+    const attributesFailure =
+      context.attributesRun === undefined
+        ? null
+        : attributesFailureLine(context);
     lanes.push({
       key: "context",
       agent: "Control analyst",
       job: "Reads the control, its sources, and its process",
-      run: "idle",
-      runNote: "",
+      run:
+        context.attributesRun === "WORKING"
+          ? "running"
+          : context.attributesRun === "PENDING"
+            ? "queued"
+            : attributesFailure !== null
+              ? "stopped"
+              : "idle",
+      runNote:
+        context.attributesRun === "WORKING"
+          ? "Updating the attributes and their criteria"
+          : context.attributesRun === "PENDING"
+            ? "Attributes run queued"
+            : (attributesFailure ?? ""),
       waitsFor: "",
       output: join([
         proposed > 0 ? `Proposed ${plural(proposed, "attribute change")}` : "",
@@ -1236,10 +1263,8 @@ export function agentLanes(input: WorkspaceInput): AgentLane[] {
     gate: string,
     from: string,
   ): AgentLane => {
-    const failedDraft =
-      paper !== undefined &&
-      !paper.drafting &&
-      paper.draftNote.includes("could not finish");
+    // The draft ended without a usable answer, in the workpaper's own sentence.
+    const failedDraft = paper === undefined ? null : draftFailureLine(paper);
     return {
       key,
       agent: key === "design" ? "Design drafter" : "Testing workpaper drafter",
@@ -1250,14 +1275,14 @@ export function agentLanes(input: WorkspaceInput): AgentLane[] {
       run:
         paper === undefined
           ? "idle"
-          : failedDraft
+          : failedDraft !== null
             ? "stopped"
             : runOf(paper.draftState, input.automation ?? null),
       runNote:
         paper === undefined
           ? ""
-          : failedDraft
-            ? paper.draftNote
+          : failedDraft !== null
+            ? failedDraft
             : paper.draftState === "RUNNING"
               ? `Drafting version ${paper.currentVersion + 1}`
               : paper.draftState === "QUEUED"
@@ -1416,10 +1441,8 @@ export function agentLanes(input: WorkspaceInput): AgentLane[] {
   ).length;
   const count = (status: string) =>
     notes.filter((note) => note.status === status).length;
-  const reviewStopped =
-    review !== null &&
-    review.reperformState === "IDLE" &&
-    review.reperformNote.includes("did not finish");
+  // The re-performance ended without a usable answer, in the review's own sentence.
+  const reviewStopped = review === null ? null : reperformFailureLine(review);
   lanes.push({
     key: "reviewer",
     agent: "Reviewer agent",
@@ -1427,14 +1450,14 @@ export function agentLanes(input: WorkspaceInput): AgentLane[] {
     run:
       review === null
         ? "idle"
-        : reviewStopped
+        : reviewStopped !== null
           ? "stopped"
           : runOf(review.reperformState, input.automation ?? null),
     runNote:
       review === null
         ? ""
-        : reviewStopped
-          ? review.reperformNote
+        : reviewStopped !== null
+          ? reviewStopped
           : review.reperformState === "RUNNING"
             ? "Re-performing the testing"
             : review.reperformState === "QUEUED"

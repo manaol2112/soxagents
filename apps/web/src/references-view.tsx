@@ -37,6 +37,7 @@ import {
   previewOf,
   priorYearTile,
   proposalGroups,
+  runFailureLine as referenceFailureLine,
   referencesTile,
   running,
   summarize,
@@ -1468,7 +1469,14 @@ function ReferenceCard({
           )}
         </span>
       </header>
-      {reference.runNote !== "" && !working ? (
+      {!working && referenceFailureLine(reference) !== null ? (
+        // The analysis ended without a usable answer: what happened, what stays, and
+        // "Analyse again" below.
+        <p className="ry-note" role="status">
+          <UiIcon name="info" size={12} />
+          {referenceFailureLine(reference)}
+        </p>
+      ) : reference.runNote !== "" && !working ? (
         <p className="ry-note">
           <UiIcon name="sparkles" size={12} />
           {reference.runNote}
