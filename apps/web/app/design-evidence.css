@@ -469,6 +469,19 @@ button.de-caret > svg {
   flex: none;
 }
 
+/* A file left out of the readings: named, with why and the action that clears it. */
+.de-left-out {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.de-left-out > li > svg {
+  color: var(--warning);
+}
+
 .de-check-part {
   color: var(--warning);
   font-weight: 600;
@@ -629,6 +642,14 @@ button.de-caret > svg {
   gap: 0.15rem 0.75rem;
   color: var(--text-secondary);
   font-size: var(--fs-xs);
+}
+
+/* Which of the request's files a passage is in. */
+.de-where-file {
+  min-width: 0;
+  color: var(--text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .de-absent {

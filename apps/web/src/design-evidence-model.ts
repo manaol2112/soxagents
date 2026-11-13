@@ -877,15 +877,18 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
         ? null
         : assuranceRow({
             requirementId: item.id,
-            fileIds: item.files.map((file) => file.fileId),
+            files: item.files.map((file) => ({
+              id: file.fileId,
+              name: file.name,
+            })),
             assurance: input.assurance,
             attributes,
             span: (some) => lettersSpan(some, allLetters),
           });
-    // Where the chain covers every file of the row, its two readings stand in for the
+    // Where the chain has an entry for the request, its two readings stand in for the
     // reader's single one: the reader's proposal and its follow-up points were never
     // checked by a second reading, so they are not put to the person.
-    const single = assured === null || !assured.covered;
+    const single = assured === null;
     return {
       id: item.id,
       version: item.version,
@@ -1202,7 +1205,7 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
     now: input.now,
     drafted,
     assured:
-      input.assurance == null || input.assurance.files.length === 0
+      input.assurance == null || input.assurance.requests.length === 0
         ? null
         : assuranceCounts(input.assurance),
   });

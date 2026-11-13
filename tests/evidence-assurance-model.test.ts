@@ -9,7 +9,7 @@ import {
   type Requirement,
 } from "../apps/web/src/design-evidence-model.ts";
 import {
-  type AssuredFile,
+  type AssuredRequest,
   acceptNote,
   assuranceCounts,
   assurancePill,
@@ -18,12 +18,14 @@ import {
   assuranceSentence,
   assuranceWrite,
   type EvidenceAssurance,
-  fileCheck,
+  NOT_LISTED,
   offeredAction,
   parseAssurance,
   READ_IN_PART,
   READINGS_DISAGREE,
   RESULT_UNREAD,
+  type RowFile,
+  requestCheck,
   resultWords,
   STATE_WORDS,
 } from "../apps/web/src/evidence-assurance-model.ts";
@@ -33,15 +35,16 @@ import type { RequirementFile } from "../apps/web/src/evidence-plan-model.ts";
 // The evidence assurance chain on the D&I list (docs/evidence-assurance.md, sections 6
 // and 7; product owner, 12 November 2026: "no room for error ... before providing
 // feedback to the user, another agent should review whether that result is accurate").
-// The page reads what the server decided and words it. Three errors matter, in order:
-// a false "supported", a false issue, and a file or attribute skipped without saying so.
+// One run per request: its in-force files are read together, as one walkthrough. The
+// page reads what the server decided and words it. Three errors matter, in order: a
+// false "supported", a false issue, and a file or attribute skipped without saying so.
 
 const uuid = (n: number) =>
   `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const [A, B, C, D, E] = [uuid(1), uuid(2), uuid(3), uuid(4), uuid(5)] as const;
 const [POLICY, WALK] = [uuid(11), uuid(12)] as const;
 const REQUEST = uuid(21);
-const [FILE, SECOND] = [uuid(31), uuid(32)] as const;
+const [FILE, SECOND, THIRD] = [uuid(31), uuid(32), uuid(33)] as const;
 const FINDING = uuid(41);
 const [ORG, PROJECT, CONTROL] = [uuid(51), uuid(52), uuid(53)] as const;
 const NOW = Date.parse("2026-11-14T12:00:00Z");
@@ -54,10 +57,15 @@ const lettered = [A, B, C, D, E].map((id, at) => ({
 const ALL = lettered.map((item) => item.letter);
 const span = (letters: readonly string[]) => lettersSpan(letters, ALL);
 
-const passage = {
+const POLICY_FILE: RowFile = { id: FILE, name: "Access_Procedure_v3.pdf" };
+const TICKET: RowFile = { id: SECOND, name: "Ticket_4711.pdf" };
+const LOG: RowFile = { id: THIRD, name: "Change_log.xlsx" };
+
+const passage = (fileId: string | null = FILE) => ({
   quote: "approved by the line manager",
+  ...(fileId === null ? {} : { file_id: fileId }),
   location: { page: 3 },
-};
+});
 
 /** One attribute as the API sends it. */
 function attribute(over: Record<string, unknown> = {}) {
@@ -68,7 +76,7 @@ function attribute(over: Record<string, unknown> = {}) {
     verdict: "SUPPORTED",
     result: "MET",
     summary: "The procedure requires line-manager approval before access.",
-    passages: [{ ...passage, file_id: FILE }],
+    passages: [passage()],
     absent: [],
     views: [],
     finding_id: null,
@@ -76,15 +84,16 @@ function attribute(over: Record<string, unknown> = {}) {
   };
 }
 
-/** One file's entry as the API sends it. */
+/** One request's entry as the API sends it. */
 function entry(over: Record<string, unknown> = {}) {
   return {
-    file_id: FILE,
     requirement_id: POLICY,
     run_id: uuid(61),
     status: "REVIEWED",
     stage: "DONE",
     held: null,
+    held_files: [],
+    file_ids: [FILE],
     lens: "DESIGN_DOCUMENT",
     read_in_part: false,
     attributes: [attribute()],
@@ -94,21 +103,19 @@ function entry(over: Record<string, unknown> = {}) {
   };
 }
 
-const body = (files: unknown[], summary: unknown = undefined) => ({
-  files,
-  ...(summary === undefined ? {} : { summary }),
-});
-
-function parsed(files: unknown[], summary: unknown = undefined) {
-  const read = parseAssurance(body(files, summary));
+function parsed(requests: unknown[], summary: unknown = undefined) {
+  const read = parseAssurance({
+    requests,
+    ...(summary === undefined ? {} : { summary }),
+  });
   assert.ok(read !== null);
   return read;
 }
 
-const only = (read: EvidenceAssurance): AssuredFile => {
-  const [file] = read.files;
-  assert.ok(file !== undefined);
-  return file;
+const only = (read: EvidenceAssurance): AssuredRequest => {
+  const [request] = read.requests;
+  assert.ok(request !== undefined);
+  return request;
 };
 
 const ISSUE = attribute({
@@ -143,29 +150,32 @@ const OFF_TOPIC = attribute({
   expected: false,
   verdict: "NOT_ADDRESSED",
   result: "NOT_ADDRESSED",
-  summary: "The file does not bear on terminations.",
+  summary: "The evidence does not bear on terminations.",
   passages: [],
 });
 
 describe("parseAssurance (section 6)", () => {
-  it("reads a finished check with its attributes, passages and summary", () => {
+  it("reads a finished check with its files, attributes, passages and summary", () => {
     const read = parsed([entry({ read_in_part: true })], {
       checking: 0,
       held: 0,
+      failed: 0,
+      out_of_date: 0,
       supported: 1,
       issues: 0,
       unsettled: 0,
     });
-    const file = only(read);
-    assert.equal(file.fileId, FILE);
-    assert.equal(file.requirementId, POLICY);
-    assert.equal(file.status, "REVIEWED");
-    assert.equal(file.stage, "DONE");
-    assert.equal(file.held, null);
-    assert.equal(file.lens, "DESIGN_DOCUMENT");
-    assert.equal(file.readInPart, true);
-    assert.equal(file.finishedAt, "2026-11-14T10:00:00Z");
-    assert.deepEqual(file.attributes[0], {
+    const request = only(read);
+    assert.equal(request.requirementId, POLICY);
+    assert.equal(request.status, "REVIEWED");
+    assert.equal(request.stage, "DONE");
+    assert.equal(request.held, null);
+    assert.deepEqual(request.heldFiles, []);
+    assert.deepEqual(request.fileIds, [FILE]);
+    assert.equal(request.lens, "DESIGN_DOCUMENT");
+    assert.equal(request.readInPart, true);
+    assert.equal(request.finishedAt, "2026-11-14T10:00:00Z");
+    assert.deepEqual(request.attributes[0], {
       attributeId: A,
       code: "A",
       expected: true,
@@ -188,28 +198,32 @@ describe("parseAssurance (section 6)", () => {
     assert.deepEqual(read.summary, {
       checking: 0,
       held: 0,
+      failed: 0,
+      outOfDate: 0,
       supported: 1,
       issues: 0,
       unsettled: 0,
     });
   });
 
-  it("is null for a body that is not the answer, and drops what names no file", () => {
+  it("is null for a body that is not the answer, and keeps one entry per request", () => {
     assert.equal(parseAssurance(null), null);
     assert.equal(parseAssurance({ nope: true }), null);
-    assert.equal(parseAssurance({ files: "x" }), null);
+    assert.equal(parseAssurance({ requests: "x" }), null);
+    // The per-file shape of before is not this answer.
+    assert.equal(parseAssurance({ files: [entry()] }), null);
     const read = parsed([
-      entry({ file_id: "not-a-uuid" }),
+      entry({ requirement_id: "not-a-uuid" }),
+      { ...entry(), requirement_id: undefined },
       "text",
       null,
       entry(),
-      // The same file on the same request twice keeps its first entry.
+      // The same request twice keeps its first entry.
       entry({ status: "FAILED" }),
-      // The same file on another request is checked for that request too.
       entry({ requirement_id: WALK }),
     ]);
     assert.deepEqual(
-      read.files.map((file) => [file.requirementId, file.status]),
+      read.requests.map((item) => [item.requirementId, item.status]),
       [
         [POLICY, "REVIEWED"],
         [WALK, "REVIEWED"],
@@ -219,18 +233,19 @@ describe("parseAssurance (section 6)", () => {
 
   it("reads a status it does not know as still being checked: nothing of it shows", () => {
     for (const status of ["DONE", "PASSED", "", null, undefined, 7]) {
-      const file = only(parsed([entry({ status })]));
-      assert.equal(file.status, "CHECKING", String(status));
-      assert.deepEqual(file.attributes, [], String(status));
+      const request = only(parsed([entry({ status })]));
+      assert.equal(request.status, "CHECKING", String(status));
+      assert.deepEqual(request.attributes, [], String(status));
     }
-    // An entry that says nothing but the file is still being checked.
-    const bare = only(parsed([{ file_id: FILE }]));
+    // An entry that says nothing but the request is still being checked.
+    const bare = only(parsed([{ requirement_id: POLICY }]));
     assert.equal(bare.status, "CHECKING");
-    assert.equal(bare.requirementId, null);
     assert.equal(bare.stage, null);
     assert.equal(bare.lens, null);
     assert.equal(bare.readInPart, false);
     assert.equal(bare.held, null);
+    assert.deepEqual(bare.heldFiles, []);
+    assert.deepEqual(bare.fileIds, []);
     assert.deepEqual(bare.attributes, []);
     assert.deepEqual(bare.outOfDate, []);
     assert.equal(bare.finishedAt, null);
@@ -244,11 +259,11 @@ describe("parseAssurance (section 6)", () => {
       "FAILED",
       "OUT_OF_DATE",
     ]) {
-      const file = only(parsed([entry({ status })]));
-      assert.equal(file.status, status);
-      assert.deepEqual(file.attributes, [], status);
+      const request = only(parsed([entry({ status })]));
+      assert.equal(request.status, status);
+      assert.deepEqual(request.attributes, [], status);
     }
-    // Finished, and marked out of date by the server: out of date.
+    // Finished, and marked out of date: out of date.
     const stale = only(
       parsed([entry({ out_of_date: ["Attribute B's wording changed."] })]),
     );
@@ -257,19 +272,15 @@ describe("parseAssurance (section 6)", () => {
     assert.deepEqual(stale.outOfDate, ["Attribute B's wording changed."]);
   });
 
-  it("keeps the gate's code and sentence only for a held check", () => {
-    const held = only(
-      parsed([
-        entry({
-          status: "HELD",
-          held: { code: "KIND_UNSURE", reason: "The file's type is unsure." },
-        }),
-      ]),
-    );
-    assert.deepEqual(held.held, {
-      code: "KIND_UNSURE",
-      reason: "The file's type is unsure.",
-    });
+  it("keeps the gate's code and sentence only for a held request", () => {
+    for (const code of ["KIND_UNSURE", "TOO_LARGE", "NO_ATTRIBUTES"]) {
+      assert.deepEqual(
+        only(
+          parsed([entry({ status: "HELD", held: { code, reason: "Why." } })]),
+        ).held,
+        { code, reason: "Why." },
+      );
+    }
     // A code this page does not know, or no code at all: held, with no action.
     for (const said of [{ code: "NEW_GATE", reason: "x" }, null, "x", {}]) {
       assert.equal(
@@ -282,6 +293,28 @@ describe("parseAssurance (section 6)", () => {
       only(parsed([entry({ held: { code: "CUSTODY", reason: "x" } })])).held,
       null,
     );
+  });
+
+  it("reads the files left out, and the files the readings included", () => {
+    const request = only(
+      parsed([
+        entry({
+          file_ids: [FILE, SECOND, FILE, "x", 3],
+          held_files: [
+            { file_id: THIRD, code: "KIND_UNSURE", reason: "Type unsure." },
+            { file_id: THIRD, code: "CUSTODY", reason: "dup" },
+            { file_id: uuid(34), code: "SOMETHING_NEW" },
+            { file_id: "x", code: "CUSTODY" },
+            "text",
+          ],
+        }),
+      ]),
+    );
+    assert.deepEqual(request.fileIds, [FILE, SECOND]);
+    assert.deepEqual(request.heldFiles, [
+      { fileId: THIRD, code: "KIND_UNSURE", reason: "Type unsure." },
+      { fileId: uuid(34), code: "OTHER", reason: "" },
+    ]);
   });
 
   it("never reads an unknown verdict as supported: it is the person's judgment", () => {
@@ -327,13 +360,11 @@ describe("parseAssurance (section 6)", () => {
       assert.equal(read?.verdict, "ISSUE", String(result));
       assert.equal(read?.findingId, FINDING);
     }
-    // An unknown result on an issue is dropped; the issue stands on the verdict.
     const [odd] = only(
       parsed([entry({ attributes: [{ ...ISSUE, result: "BROKEN" }] })]),
     ).attributes;
     assert.equal(odd?.verdict, "ISSUE");
     assert.equal(odd?.result, null);
-    // An issue, or "not addressed", whose result says "met" is neither.
     for (const verdict of ["ISSUE", "NOT_ADDRESSED"]) {
       const [read] = only(
         parsed([entry({ attributes: [{ ...ISSUE, verdict, result: "MET" }] })]),
@@ -344,8 +375,30 @@ describe("parseAssurance (section 6)", () => {
     }
   });
 
+  it("keeps one answer per attribute", () => {
+    const request = only(
+      parsed([
+        entry({
+          attributes: [
+            attribute(),
+            { ...ISSUE, attribute_id: A, code: "A" },
+            attribute({ attribute_id: null, code: "F" }),
+            attribute({ attribute_id: null, code: "F", verdict: "ISSUE" }),
+          ],
+        }),
+      ]),
+    );
+    assert.deepEqual(
+      request.attributes.map((item) => [item.code, item.verdict]),
+      [
+        ["A", "SUPPORTED"],
+        ["F", "SUPPORTED"],
+      ],
+    );
+  });
+
   it("reads both views only for an unsettled attribute, and a finding only for an issue", () => {
-    const file = only(
+    const request = only(
       parsed([
         entry({
           attributes: [
@@ -368,9 +421,9 @@ describe("parseAssurance (section 6)", () => {
         }),
       ]),
     );
-    assert.deepEqual(file.attributes[0]?.views, []);
-    assert.equal(file.attributes[0]?.findingId, null);
-    assert.deepEqual(file.attributes[1]?.views, [
+    assert.deepEqual(request.attributes[0]?.views, []);
+    assert.equal(request.attributes[0]?.findingId, null);
+    assert.deepEqual(request.attributes[1]?.views, [
       { role: "ASSESSOR", result: "MET", reason: "Section 4 sets the review." },
       {
         role: "REVIEWER",
@@ -378,19 +431,22 @@ describe("parseAssurance (section 6)", () => {
         reason: "Section 4 names no reviewer.",
       },
     ]);
-    // A role this page does not know is dropped; a result it does not know is none.
-    assert.deepEqual(file.attributes[2]?.views, [
+    assert.deepEqual(request.attributes[2]?.views, [
       { role: "REVIEWER", result: null, reason: "" },
     ]);
-    assert.equal(file.attributes[2]?.findingId, null);
+    assert.equal(request.attributes[2]?.findingId, null);
   });
 
-  it("reads where a passage sits, however the server says it", () => {
+  it("reads which file a passage is in, and where in it", () => {
     const where = (location: unknown) =>
       only(
         parsed([
           entry({
-            attributes: [attribute({ passages: [{ quote: "q", location }] })],
+            attributes: [
+              attribute({
+                passages: [{ quote: "q", file_id: FILE, location }],
+              }),
+            ],
           }),
         ]),
       ).attributes[0]?.passages[0];
@@ -423,10 +479,23 @@ describe("parseAssurance (section 6)", () => {
         ["", null],
       );
     }
+    // A passage that names no file: the request's one file, else not known.
+    const unnamed = (fileIds: string[]) =>
+      only(
+        parsed([
+          entry({
+            file_ids: fileIds,
+            attributes: [attribute({ passages: [passage(null)] })],
+          }),
+        ]),
+      ).attributes[0]?.passages[0]?.fileId;
+    assert.equal(unnamed([FILE]), FILE);
+    assert.equal(unnamed([FILE, SECOND]), null);
+    assert.equal(unnamed([]), null);
   });
 
   it("drops an attribute that names neither an id nor a letter, and keeps one with a letter", () => {
-    const file = only(
+    const request = only(
       parsed([
         entry({
           attributes: [
@@ -438,37 +507,49 @@ describe("parseAssurance (section 6)", () => {
       ]),
     );
     assert.deepEqual(
-      file.attributes.map((item) => [item.attributeId, item.code]),
+      request.attributes.map((item) => [item.attributeId, item.code]),
       [["", "B"]],
     );
   });
 
-  it("takes the summary only when every count is a whole number", () => {
+  it("takes each count of the summary only when it is a whole number", () => {
     const good = {
       checking: 1,
       held: 2,
-      supported: 3,
-      issues: 4,
-      unsettled: 5,
+      failed: 3,
+      out_of_date: 4,
+      supported: 5,
+      issues: 6,
+      unsettled: 7,
     };
-    assert.deepEqual(parsed([], good).summary, good);
-    for (const bad of [
-      undefined,
-      null,
-      "x",
-      { ...good, issues: "4" },
-      { ...good, held: -1 },
-      { ...good, unsettled: 1.5 },
-      { checking: 1 },
-    ]) {
+    assert.deepEqual(parsed([], good).summary, {
+      checking: 1,
+      held: 2,
+      failed: 3,
+      outOfDate: 4,
+      supported: 5,
+      issues: 6,
+      unsettled: 7,
+    });
+    const odd = parsed([], {
+      ...good,
+      issues: "6",
+      held: -1,
+      failed: 1.5,
+    }).summary;
+    assert.deepEqual(
+      [odd?.issues, odd?.held, odd?.failed, odd?.unsettled],
+      [null, null, null, 7],
+    );
+    for (const bad of [undefined, null, "x", [1]]) {
       assert.equal(parsed([], bad).summary, null);
     }
   });
 });
 
-describe("a file's check, in every status", () => {
-  const check = (over: Record<string, unknown>) =>
-    fileCheck(only(parsed([entry(over)])), lettered, span);
+describe("a request's check, in every status", () => {
+  const check = (over: Record<string, unknown>, files = [POLICY_FILE]) =>
+    requestCheck(only(parsed([entry(over)])), lettered, files, span);
 
   it("is one quiet working line naming the letters being checked", () => {
     const queued = check({ status: "QUEUED", stage: "GATE" });
@@ -477,7 +558,6 @@ describe("a file's check, in every status", () => {
     assert.equal(queued.stage, "");
     assert.equal(queued.action, null);
     const working = check({ status: "CHECKING", stage: "VERIFY" });
-    assert.equal(working.standing, "CHECKING");
     assert.equal(working.line, "Checking against attributes A to E");
     assert.equal(working.stage, "second, independent reading");
     assert.equal(
@@ -489,76 +569,122 @@ describe("a file's check, in every status", () => {
       "comparing the two readings",
     );
     assert.equal(check({ status: "CHECKING", stage: "???" }).stage, "");
-    // Nothing of a run is shown before it finishes.
     assert.deepEqual(working.attributes, []);
     assert.deepEqual(working.notAddressed, []);
     assert.equal(working.readInPart, null);
-    // One attribute, and none.
+    const request = only(parsed([entry({ status: "CHECKING" })]));
     assert.equal(
-      fileCheck(
-        only(parsed([entry({ status: "CHECKING" })])),
-        lettered.slice(0, 1),
-        span,
-      ).line,
+      requestCheck(request, lettered.slice(0, 1), [POLICY_FILE], span).line,
       "Checking against attribute A",
     );
     assert.equal(
-      fileCheck(only(parsed([entry({ status: "CHECKING" })])), [], span).line,
+      requestCheck(request, [], [POLICY_FILE], span).line,
       "Checking against the attributes",
     );
   });
 
-  it("held: the reason and the single action that clears it", () => {
-    const held = (code: string, reason = "") =>
-      check({ status: "HELD", held: { code, reason } });
+  it("held: the reason and the single action that clears it, on the request's file", () => {
+    const held = (code: string, reason = "", files = [POLICY_FILE]) =>
+      check({ status: "HELD", held: { code, reason } }, files);
     assert.deepEqual(held("KIND_UNSURE").action, {
       kind: "CONFIRM_TYPE",
       label: "Confirm the file's type",
+      fileId: FILE,
     });
     assert.deepEqual(held("UNREADABLE").action, {
       kind: "REPLACE",
       label: "Replace the file",
+      fileId: FILE,
     });
     assert.deepEqual(held("CUSTODY").action, {
       kind: "REPLACE",
       label: "Replace the file",
+      fileId: FILE,
     });
     assert.deepEqual(held("POPULATION").action, {
       kind: "PICK_INSTANCE",
       label: "Pick the walkthrough instance",
+      fileId: FILE,
     });
-    assert.equal(held("NO_ATTRIBUTES").action, null);
-    assert.equal(held("SOMETHING_NEW").action, null);
+    // No action of its own: too large together, no attribute, or a code not known.
+    for (const code of ["TOO_LARGE", "NO_ATTRIBUTES", "SOMETHING_NEW"]) {
+      assert.equal(held(code).action, null, code);
+    }
+    // With several files and no file named, which file to act on is not plain.
+    assert.equal(held("KIND_UNSURE", "", [POLICY_FILE, TICKET]).action, null);
     for (const code of [
       "KIND_UNSURE",
       "UNREADABLE",
       "CUSTODY",
       "POPULATION",
       "NO_ATTRIBUTES",
+      "TOO_LARGE",
       "SOMETHING_NEW",
     ]) {
       const view = held(code);
       assert.equal(view.standing, "HELD");
       assert.deepEqual(view.attributes, []);
-      // The page's own sentence where the gate sent none: a sentence, no code.
       assert.match(view.line, /^[A-Z].*\.$/);
       assert.ok(!view.line.includes(code), code);
     }
+    assert.equal(
+      held("TOO_LARGE").line,
+      "The request's files are too large together to be read in one check, so they have not been checked against the attributes.",
+    );
     // The gate's own sentence is shown as it is, closed with a full stop.
     assert.equal(
-      held("KIND_UNSURE", "The reader was not sure this is a policy").line,
-      "The reader was not sure this is a policy.",
+      held("TOO_LARGE", "The four files together exceed one reading").line,
+      "The four files together exceed one reading.",
     );
   });
 
-  it("failed and out of date: one line and Check again", () => {
+  it("held because of named files: each file's own line carries its action", () => {
+    const view = check(
+      {
+        status: "HELD",
+        held: { code: "KIND_UNSURE", reason: "" },
+        file_ids: [],
+        held_files: [
+          { file_id: FILE, code: "KIND_UNSURE", reason: "" },
+          { file_id: SECOND, code: "UNREADABLE", reason: "" },
+        ],
+      },
+      [POLICY_FILE, TICKET],
+    );
+    assert.equal(view.action, null);
+    assert.deepEqual(
+      view.leftOut.map((item) => [
+        item.line,
+        item.action?.kind,
+        item.action?.fileId,
+      ]),
+      [
+        [
+          "Left out of the check, Access_Procedure_v3.pdf: Its type is not confirmed.",
+          "CONFIRM_TYPE",
+          FILE,
+        ],
+        [
+          "Left out of the check, Ticket_4711.pdf: Nothing readable could be taken from it.",
+          "REPLACE",
+          SECOND,
+        ],
+      ],
+    );
+  });
+
+  it("failed and out of date: one line and Check again, the request's", () => {
     const failed = check({ status: "FAILED" });
     assert.equal(failed.standing, "FAILED");
     assert.equal(
       failed.line,
       "The check did not finish, so nothing of it is shown.",
     );
-    assert.deepEqual(failed.action, { kind: "RERUN", label: "Check again" });
+    assert.deepEqual(failed.action, {
+      kind: "RERUN",
+      label: "Check again",
+      fileId: null,
+    });
     const stale = check({
       status: "OUT_OF_DATE",
       out_of_date: ["Attribute B's wording changed"],
@@ -568,21 +694,33 @@ describe("a file's check, in every status", () => {
       stale.line,
       "The check is out of date, so its results are not shown. Attribute B's wording changed.",
     );
-    assert.deepEqual(stale.action, { kind: "RERUN", label: "Check again" });
+    assert.deepEqual(stale.action?.kind, "RERUN");
     assert.deepEqual(stale.attributes, []);
   });
 
   it("an action is offered only to a person who may act, and a replacement only where one can be made", () => {
-    const rerun = { kind: "RERUN", label: "Check again" } as const;
-    const replace = { kind: "REPLACE", label: "Replace the file" } as const;
-    const can = { canAct: true, replaceable: true };
+    const rerun = {
+      kind: "RERUN",
+      label: "Check again",
+      fileId: null,
+    } as const;
+    const replace = {
+      kind: "REPLACE",
+      label: "Replace the file",
+      fileId: FILE,
+    } as const;
+    const can = { canAct: true, replaceable: () => true };
     assert.deepEqual(offeredAction(rerun, can), rerun);
     assert.equal(offeredAction(rerun, { ...can, canAct: false }), null);
     assert.equal(offeredAction(replace, { ...can, canAct: false }), null);
-    assert.equal(offeredAction(replace, { ...can, replaceable: false }), null);
+    assert.equal(
+      offeredAction(replace, { ...can, replaceable: () => false }),
+      null,
+    );
+    assert.equal(offeredAction({ ...replace, fileId: null }, can), null);
     assert.deepEqual(offeredAction(replace, can), replace);
     assert.deepEqual(
-      offeredAction(rerun, { ...can, replaceable: false }),
+      offeredAction(rerun, { ...can, replaceable: () => false }),
       rerun,
     );
     assert.equal(offeredAction(null, can), null);
@@ -599,8 +737,9 @@ describe("a file's check, in every status", () => {
       "Checked against attributes A to D by two independent readings.",
     );
     assert.equal(view.readInPart, READ_IN_PART);
-    assert.equal(view.readInPart, "The file was read in part.");
+    assert.equal(view.readInPart, "The evidence was read in part.");
     assert.equal(view.action, null);
+    assert.deepEqual(view.leftOut, []);
     assert.deepEqual(
       view.attributes.map((line) => [
         line.letter,
@@ -643,20 +782,135 @@ describe("a file's check, in every status", () => {
         reason: "Section 4 names no reviewer.",
       },
     ]);
-    assert.equal(supported?.passages[0]?.location, "Page 3");
-    assert.deepEqual(supported?.readings, []);
-    assert.equal(supported?.judgment, null);
-    // No "read in part" where the server did not say so.
+    // One file: the passage does not name it, and opens in it.
+    assert.deepEqual(supported?.passages[0], {
+      quote: "approved by the line manager",
+      fileId: FILE,
+      location: "Page 3",
+      page: 3,
+      fileLabel: "",
+      opens: true,
+    });
     assert.equal(check({}).readInPart, null);
   });
 
-  it("names an issue by what both readings agree the file shows", () => {
+  it("with several files read together, a passage names the file it is in", () => {
+    const view = check(
+      {
+        file_ids: [FILE, SECOND],
+        attributes: [
+          attribute({
+            passages: [passage(SECOND), passage(uuid(99)), passage(null)],
+          }),
+        ],
+      },
+      [POLICY_FILE, TICKET],
+    );
+    assert.equal(
+      view.line,
+      "Checked against attribute A by two independent readings, reading 2 files together.",
+    );
+    assert.deepEqual(
+      view.attributes[0]?.passages.map((item) => [item.fileLabel, item.opens]),
+      [
+        ["Ticket_4711.pdf", true],
+        ["A file no longer on this request", false],
+        ["The file is not named", false],
+      ],
+    );
+  });
+
+  it("a held file on a checked request: named, with its reason and its action", () => {
+    const view = check(
+      {
+        file_ids: [FILE, SECOND],
+        held_files: [
+          {
+            file_id: THIRD,
+            code: "KIND_UNSURE",
+            reason: "The reader was not sure this is a change log",
+          },
+        ],
+      },
+      [POLICY_FILE, TICKET, LOG],
+    );
+    assert.equal(view.standing, "REVIEWED");
+    assert.deepEqual(view.leftOut, [
+      {
+        fileId: THIRD,
+        line: "Checked without Change_log.xlsx: The reader was not sure this is a change log.",
+        action: {
+          kind: "CONFIRM_TYPE",
+          label: "Confirm the file's type",
+          fileId: THIRD,
+        },
+      },
+    ]);
+    // The page's own reason where the server sent none, for every code.
+    const reason = (code: string) =>
+      check({ held_files: [{ file_id: THIRD, code }] }, [POLICY_FILE, LOG])
+        .leftOut[0]?.line;
+    assert.equal(
+      reason("UNREADABLE"),
+      "Checked without Change_log.xlsx: Nothing readable could be taken from it.",
+    );
+    assert.equal(
+      reason("CUSTODY"),
+      "Checked without Change_log.xlsx: It did not pass its custody check.",
+    );
+    assert.equal(
+      reason("POPULATION"),
+      "Checked without Change_log.xlsx: It is a population: the walkthrough instance is picked first.",
+    );
+    assert.equal(
+      reason("TOO_LARGE"),
+      "Checked without Change_log.xlsx: It is too large to be read with the other files.",
+    );
+    assert.equal(
+      reason("NEW_CODE"),
+      "Checked without Change_log.xlsx: It was not checked.",
+    );
+    // While the check works, the file left out is said too.
+    assert.equal(
+      check(
+        {
+          status: "CHECKING",
+          held_files: [{ file_id: THIRD, code: "CUSTODY" }],
+        },
+        [POLICY_FILE, LOG],
+      ).leftOut[0]?.line,
+      "Being checked without Change_log.xlsx: It did not pass its custody check.",
+    );
+  });
+
+  it("a file of the row the finished check does not list is said, never passed over", () => {
+    const view = check({ file_ids: [FILE] }, [POLICY_FILE, TICKET]);
+    assert.deepEqual(view.leftOut, [
+      {
+        fileId: SECOND,
+        line: `Checked without Ticket_4711.pdf: ${NOT_LISTED}`,
+        action: null,
+      },
+    ]);
+    assert.equal(NOT_LISTED, "It is not part of this check.");
+    // Not while the check works: the files are still being read.
+    assert.deepEqual(
+      check({ status: "CHECKING", file_ids: [FILE] }, [POLICY_FILE, TICKET])
+        .leftOut,
+      [],
+    );
+  });
+
+  it("names an issue by what both readings agree the evidence shows", () => {
     const label = (result: unknown) =>
       check({ attributes: [{ ...ISSUE, result }] }).attributes[0]?.label;
     assert.equal(label("NOT_MET"), "Issue: not shown");
     assert.equal(label("PARTLY_MET"), "Issue: shown in part");
-    assert.equal(label("CONTRADICTED"), "Issue: contradicted in the file");
-    assert.equal(label("NOT_ADDRESSED"), "Issue: not addressed by the file");
+    assert.equal(label("CONTRADICTED"), "Issue: contradicted in the evidence");
+    assert.equal(
+      label("NOT_ADDRESSED"),
+      "Issue: not addressed by the evidence",
+    );
     assert.equal(label(null), "Issue");
   });
 
@@ -694,40 +948,38 @@ describe("words for a reading's result", () => {
     assert.equal(resultWords("MET"), "Shown");
     assert.equal(resultWords("PARTLY_MET"), "Shown in part");
     assert.equal(resultWords("NOT_MET"), "Not shown");
-    assert.equal(resultWords("CONTRADICTED"), "Contradicted in the file");
+    assert.equal(resultWords("CONTRADICTED"), "Contradicted in the evidence");
     assert.equal(resultWords("CANNOT_TELL"), "Could not tell");
-    assert.equal(resultWords("NOT_ADDRESSED"), "Not addressed by the file");
+    assert.equal(resultWords("NOT_ADDRESSED"), "Not addressed by the evidence");
     assert.equal(resultWords(null), "Could not tell");
   });
 });
 
 describe("a request row", () => {
-  const row = (files: unknown[], fileIds: string[] = [FILE]) =>
+  const row = (requests: unknown[], files: RowFile[] = [POLICY_FILE]) =>
     assuranceRow({
       requirementId: POLICY,
-      fileIds,
-      assurance: parsed(files),
+      files,
+      assurance: parsed(requests),
       attributes: lettered,
       span,
     });
 
-  it("is null where the chain has no entry for the row's files", () => {
+  it("is matched on the request only, and null where the chain has no entry for it", () => {
     assert.equal(row([]), null);
-    assert.equal(row([entry({ file_id: SECOND })]), null);
-    // The file's check on another request is not this row's.
     assert.equal(row([entry({ requirement_id: WALK })]), null);
     assert.equal(
       assuranceRow({
         requirementId: POLICY,
-        fileIds: [FILE],
+        files: [POLICY_FILE],
         assurance: null,
         attributes: lettered,
         span,
       }),
       null,
     );
-    // An entry that names no request is the file's own.
-    assert.notEqual(row([entry({ requirement_id: null })]), null);
+    // The request's entry is the row's, whatever files it lists.
+    assert.notEqual(row([entry({ file_ids: [uuid(99)] })], []), null);
   });
 
   it("reads Checking against the attributes while a run works, and is read again", () => {
@@ -746,7 +998,7 @@ describe("a request row", () => {
   it("names where a held, failed or out-of-date check stands, and marks nothing", () => {
     const cases: Array<[Record<string, unknown>, string, string]> = [
       [
-        { status: "HELD", held: { code: "CUSTODY", reason: "" } },
+        { status: "HELD", held: { code: "TOO_LARGE", reason: "" } },
         "HELD",
         "Check on hold",
       ],
@@ -767,7 +1019,7 @@ describe("a request row", () => {
     }
   });
 
-  it("puts each letter under its state in words, and marks only what is supported", () => {
+  it("puts each letter under its one state in words, and marks only what is supported", () => {
     const view = row([
       entry({
         attributes: [
@@ -781,8 +1033,6 @@ describe("a request row", () => {
     ]);
     assert.equal(view?.standing, "REVIEWED");
     assert.equal(view?.fact, "Checked by two readings");
-    assert.equal(view?.covered, true);
-    assert.equal(view?.working, false);
     assert.deepEqual(
       view?.states.map((group) => [group.state, group.label, group.icon]),
       [
@@ -800,12 +1050,61 @@ describe("a request row", () => {
       view?.acceptNote,
       "Accepting marks attributes A and E as evidenced. Both readings found an issue on B. The readings do not agree on C: your judgment is needed. You can still accept; accepting does not settle these.",
     );
+    // Every letter stands under exactly one state.
+    const letters = (view?.states ?? []).flatMap((group) => group.letters);
+    assert.equal(new Set(letters).size, letters.length);
+  });
+
+  it("a ticket and a change log read together: one state per letter", () => {
+    const view = row(
+      [
+        entry({
+          file_ids: [SECOND, THIRD],
+          attributes: [
+            attribute({ passages: [passage(SECOND)] }),
+            attribute({
+              attribute_id: B,
+              code: "B",
+              passages: [passage(THIRD)],
+            }),
+          ],
+        }),
+      ],
+      [TICKET, LOG],
+    );
+    assert.equal(view?.spoken, "A and B supported");
+    assert.deepEqual(view?.supportedIds, [A, B]);
+    assert.equal(
+      view?.acceptNote,
+      "Accepting marks attributes A and B as evidenced.",
+    );
+  });
+
+  it("says on the row's line, and beside Accept, that a file was left out", () => {
+    const view = row(
+      [
+        entry({
+          file_ids: [SECOND],
+          held_files: [{ file_id: THIRD, code: "UNREADABLE", reason: "" }],
+          attributes: [attribute({ passages: [passage(SECOND)] })],
+        }),
+      ],
+      [TICKET, LOG],
+    );
+    assert.equal(view?.fact, "Checked by two readings, 1 file left out");
+    assert.equal(
+      view?.acceptNote,
+      "Accepting marks attribute A as evidenced. 1 file was not part of the check.",
+    );
+    assert.equal(
+      view?.check.leftOut[0]?.line,
+      "Checked without Change_log.xlsx: Nothing readable could be taken from it.",
+    );
   });
 
   it("never presents an unsettled attribute as support or as an issue", () => {
     const cautious = [
       UNSETTLED,
-      // Unknown values read cautiously land in the same place.
       attribute({ attribute_id: A, code: "A", verdict: "FINE" }),
       attribute({ attribute_id: B, code: "B", result: null }),
       attribute({ attribute_id: D, code: "D", passages: [] }),
@@ -813,7 +1112,7 @@ describe("a request row", () => {
     const assurance = parsed([entry({ attributes: cautious })]);
     const view = assuranceRow({
       requirementId: POLICY,
-      fileIds: [FILE],
+      files: [POLICY_FILE],
       assurance,
       attributes: lettered,
       span,
@@ -829,78 +1128,26 @@ describe("a request row", () => {
       /^Accepting marks no attribute as evidenced/,
     );
     assert.ok(!(view?.acceptNote ?? "").includes("issue"));
-    const [check] = view?.files ?? [];
-    for (const line of check?.attributes ?? []) {
+    for (const line of view?.check.attributes ?? []) {
       assert.equal(line.state, "JUDGMENT");
       assert.equal(line.label, "Your judgment needed");
       assert.equal(line.tone, "warning");
       assert.equal(line.findingId, null);
       assert.notEqual(line.judgment, null);
     }
-    // Counted for the person's judgment, never among the issues.
     const counts = assuranceCounts(assurance);
     assert.equal(counts.issues, 0);
     assert.equal(counts.unsettled, 4);
-  });
-
-  it("with several files, leaves nothing a file shows off the row", () => {
-    const view = row(
-      [
-        entry({ attributes: [attribute(), ISSUE] }),
-        entry({
-          file_id: SECOND,
-          attributes: [
-            // The second file supports B, and has an issue on A.
-            attribute({ attribute_id: B, code: "B" }),
-            { ...ISSUE, attribute_id: A, code: "A", finding_id: null },
-          ],
-        }),
-      ],
-      [FILE, SECOND],
-    );
-    assert.equal(view?.spoken, "A and B supported, A and B issue");
-    assert.deepEqual(view?.supportedIds, [A, B]);
-    assert.equal(
-      view?.acceptNote,
-      "Accepting marks attributes A and B as evidenced. Both readings found an issue on A and B. You can still accept; accepting does not settle these.",
-    );
-  });
-
-  it("puts a check at work, then one that needs the person, before the finished ones", () => {
-    const mixed = row(
-      [
-        entry(),
-        entry({ file_id: SECOND, status: "QUEUED" }),
-        entry({ file_id: uuid(33), status: "FAILED" }),
-      ],
-      [FILE, SECOND, uuid(33), uuid(34)],
-    );
-    assert.equal(mixed?.standing, "CHECKING");
-    assert.equal(mixed?.working, true);
-    // A file with no entry: the chain does not cover the whole row.
-    assert.equal(mixed?.covered, false);
-    assert.equal(mixed?.files.length, 3);
-    assert.equal(
-      mixed?.acceptNote,
-      "Accepting marks attribute A as evidenced. 1 file is still being checked. 1 file has not been checked.",
-    );
-    const held = row(
-      [entry(), entry({ file_id: SECOND, status: "HELD" })],
-      [FILE, SECOND],
-    );
-    assert.equal(held?.standing, "HELD");
-    assert.equal(held?.covered, true);
   });
 });
 
 describe("beside Accept", () => {
   const facts = {
-    reviewed: 1,
-    checking: 0,
-    unchecked: 0,
+    standing: "REVIEWED" as const,
     supported: [] as string[],
     issues: [] as string[],
     judged: [] as string[],
+    leftOut: 0,
     span,
   };
 
@@ -932,78 +1179,89 @@ describe("beside Accept", () => {
 
   it("says what was not checked", () => {
     assert.equal(
-      acceptNote({ ...facts, supported: ["A"], checking: 2, unchecked: 2 }),
-      "Accepting marks attribute A as evidenced. 2 files are still being checked. 2 files have not been checked.",
+      acceptNote({ ...facts, supported: ["A"], leftOut: 2 }),
+      "Accepting marks attribute A as evidenced. 2 files were not part of the check.",
     );
     assert.equal(
-      acceptNote({ ...facts, reviewed: 0, checking: 1 }),
+      acceptNote({ ...facts, standing: "CHECKING" }),
       "The check is still running, so what accepting marks as evidenced is not known yet.",
     );
-    assert.equal(
-      acceptNote({ ...facts, reviewed: 0, unchecked: 1 }),
-      "This evidence has not been checked against the attributes, so accepting marks no attribute as evidenced.",
-    );
+    for (const standing of ["HELD", "FAILED", "OUT_OF_DATE"] as const) {
+      assert.equal(
+        acceptNote({ ...facts, standing, supported: ["A"] }),
+        "This evidence has not been checked against the attributes, so accepting marks no attribute as evidenced.",
+      );
+    }
   });
 });
 
 describe("the step's counts, pill and line", () => {
-  const files = [
+  const requests = [
     entry({ attributes: [attribute(), ISSUE, UNSETTLED] }),
-    entry({ file_id: SECOND, status: "CHECKING" }),
-    entry({ file_id: uuid(33), status: "HELD" }),
-    entry({ file_id: uuid(34), status: "FAILED" }),
-    entry({ file_id: uuid(35), status: "OUT_OF_DATE" }),
+    entry({ requirement_id: uuid(13), status: "CHECKING" }),
+    entry({ requirement_id: uuid(14), status: "HELD" }),
+    entry({ requirement_id: uuid(15), status: "FAILED" }),
+    entry({ requirement_id: uuid(16), status: "OUT_OF_DATE" }),
   ];
 
-  it("counts checking, held, issues and unsettled from the server's summary", () => {
+  it("counts from the server's summary: requests, and attribute verdicts", () => {
     const counts = assuranceCounts(
-      parsed(files, {
+      parsed(requests, {
         checking: 3,
         held: 2,
+        failed: 2,
+        out_of_date: 1,
         supported: 9,
         issues: 4,
         unsettled: 5,
       }),
     );
     assert.deepEqual(counts, {
-      files: 5,
+      requests: 5,
       checking: 3,
       held: 2,
+      again: 3,
       issues: 4,
       unsettled: 5,
-      // Not in the summary: counted from the files.
-      again: 2,
     });
   });
 
-  it("never counts below what the files on the page show", () => {
+  it("never counts below what the requests on the page show", () => {
     const zero = {
       checking: 0,
       held: 0,
+      failed: 0,
+      out_of_date: 0,
       supported: 0,
       issues: 0,
       unsettled: 0,
     };
-    for (const summary of [zero, undefined, "broken"]) {
-      const counts = assuranceCounts(parsed(files, summary));
+    for (const summary of [zero, undefined, "broken", { issues: "x" }]) {
+      const counts = assuranceCounts(parsed(requests, summary));
       assert.deepEqual(
-        [counts.checking, counts.held, counts.issues, counts.unsettled],
-        [1, 1, 1, 1],
+        [
+          counts.checking,
+          counts.held,
+          counts.again,
+          counts.issues,
+          counts.unsettled,
+        ],
+        [1, 1, 2, 1, 1],
       );
     }
     assert.deepEqual(assuranceCounts(null), {
-      files: 0,
+      requests: 0,
       checking: 0,
       held: 0,
+      again: 0,
       issues: 0,
       unsettled: 0,
-      again: 0,
     });
   });
 
   it("the pill names what needs the person first", () => {
     const base = {
-      files: 3,
+      requests: 3,
       checking: 0,
       held: 0,
       issues: 0,
@@ -1030,14 +1288,14 @@ describe("the step's counts, pill and line", () => {
 
   it("the line says what the checks found and what still waits", () => {
     const base = {
-      files: 3,
+      requests: 3,
       checking: 0,
       held: 0,
       issues: 0,
       unsettled: 0,
       again: 0,
     };
-    assert.equal(assuranceSentence({ ...base, files: 0 }), "");
+    assert.equal(assuranceSentence({ ...base, requests: 0 }), "");
     assert.equal(
       assuranceSentence(base),
       "Two independent readings checked the evidence against the attributes: no issue, and nothing left for your judgment. What each row supports is on the row.",
@@ -1050,15 +1308,15 @@ describe("the step's counts, pill and line", () => {
         held: 1,
         checking: 1,
       }),
-      "Two independent readings checked the evidence against the attributes: 1 issue, 2 results for your judgment. See each row. 1 file on hold until you act on its row, 1 file still being checked.",
+      "Two independent readings checked the evidence against the attributes: 1 issue, 2 results for your judgment. See each row. 1 request on hold until you act on its row, 1 request still being checked.",
     );
     assert.equal(
-      assuranceSentence({ ...base, files: 2, checking: 2 }),
-      "2 files still being checked.",
+      assuranceSentence({ ...base, requests: 2, checking: 2 }),
+      "2 requests still being checked.",
     );
     assert.equal(
-      assuranceSentence({ ...base, files: 3, held: 2, again: 1 }),
-      "2 files on hold until you act on their row, 1 check to run again.",
+      assuranceSentence({ ...base, requests: 3, held: 2, again: 1 }),
+      "2 requests on hold until you act on their row, 1 check to run again.",
     );
   });
 });
@@ -1069,7 +1327,7 @@ describe("the step's counts, pill and line", () => {
 function file(overrides: Partial<RequirementFile> = {}): RequirementFile {
   return {
     fileId: FILE,
-    name: "SAP_Access_Provisioning_Procedure_v3.2.pdf",
+    name: "Access_Procedure_v3.pdf",
     via: "REQUEST",
     sharedFrom: null,
     linkId: null,
@@ -1150,6 +1408,8 @@ const reviewed = () =>
   parsed([entry({ attributes: [attribute(), ISSUE, UNSETTLED, OFF_TOPIC] })], {
     checking: 0,
     held: 0,
+    failed: 0,
+    out_of_date: 0,
     supported: 1,
     issues: 1,
     unsettled: 1,
@@ -1161,7 +1421,7 @@ describe("the D&I list with the chain", () => {
     for (const assurance of [
       null,
       parsed([]),
-      parsed([entry({ file_id: SECOND })]),
+      parsed([entry({ requirement_id: WALK })]),
     ]) {
       const view = list({ assurance });
       assert.equal(view.rows[0]?.assurance, null);
@@ -1169,8 +1429,8 @@ describe("the D&I list with the chain", () => {
       assert.deepEqual(view.rows[0]?.agent, before.rows[0]?.agent);
       assert.deepEqual(view.coverage, before.coverage);
       assert.equal(view.coverageLine, before.coverageLine);
-      assert.equal(view.header.status, "1 file to review");
     }
+    assert.equal(list({ assurance: null }).header.status, "1 file to review");
     assert.equal(before.rows[0]?.agent?.lead, "Agent proposes: a follow-up.");
     assert.match(before.rows[0]?.sub ?? "", /Agent: a follow-up$/);
   });
@@ -1185,7 +1445,6 @@ describe("the D&I list with the chain", () => {
     );
     assert.equal(working.rows[0]?.agent, null);
     assert.equal(working.rows[0]?.proposal, "NONE");
-    // Accept stays the person's while the check works.
     assert.equal(working.rows[0]?.canAccept, true);
     const done = list({ assurance: reviewed() });
     assert.equal(
@@ -1194,7 +1453,6 @@ describe("the D&I list with the chain", () => {
     );
     assert.equal(done.rows[0]?.agent, null);
     assert.equal(done.rows[0]?.canAccept, true);
-    // The reader's proposal is nowhere on the step's notes either.
     assert.ok(!done.header.agent.found.join(" ").includes("Agent proposes"));
     assert.ok(
       done.header.agent.found.includes(
@@ -1215,29 +1473,23 @@ describe("the D&I list with the chain", () => {
       "Two independent readings checked the evidence against the attributes: 1 issue, 1 result for your judgment. See each row. Nothing is accepted until you accept it.",
     );
     const working = list({
-      assurance: parsed([entry({ status: "CHECKING" })], {
-        checking: 1,
-        held: 0,
-        supported: 0,
-        issues: 0,
-        unsettled: 0,
-      }),
+      assurance: parsed([entry({ status: "CHECKING" })], { checking: 1 }),
     });
     assert.equal(working.header.status, "1 file to review · 1 being checked");
     assert.equal(
       working.header.need.detail,
-      "1 file still being checked. Nothing is accepted until you accept it.",
+      "1 request still being checked. Nothing is accepted until you accept it.",
     );
     const held = list({
       assurance: parsed(
-        [entry({ status: "HELD", held: { code: "KIND_UNSURE", reason: "" } })],
-        { checking: 0, held: 1, supported: 0, issues: 0, unsettled: 0 },
+        [entry({ status: "HELD", held: { code: "TOO_LARGE", reason: "" } })],
+        { held: 1 },
       ),
     });
     assert.equal(held.header.status, "1 file to review · 1 on hold");
     assert.equal(
       held.header.need.detail,
-      "1 file on hold until you act on its row. Nothing is accepted until you accept it.",
+      "1 request on hold until you act on its row. Nothing is accepted until you accept it.",
     );
   });
 
@@ -1246,7 +1498,6 @@ describe("the D&I list with the chain", () => {
       Object.fromEntries(
         view.coverage.map((chip) => [chip.letter, chip.state]),
       );
-    // Supported by the agents, not accepted: ready to accept, not evidenced.
     const waiting = list({ assurance: reviewed() });
     assert.deepEqual(state(waiting), {
       A: "REQUESTED",
@@ -1259,8 +1510,6 @@ describe("the D&I list with the chain", () => {
       waiting.coverageLine,
       "0 of 5 attributes evidenced · accepting this file covers A · D and E not addressed by any request",
     );
-    // Accepted: only what the check supports is evidenced, not the issue (B) nor the
-    // attribute the readings do not agree on (C).
     const accepted = list({
       requirements: [requirement({ state: "ACCEPTED" })],
       assurance: reviewed(),
@@ -1280,7 +1529,6 @@ describe("the D&I list with the chain", () => {
       accepted.coverageLine,
       "1 of 5 attributes evidenced · B and C accepted without support from the check · D and E not addressed by any request",
     );
-    // Accepted while the check has not finished: nothing is evidenced yet.
     const early = list({
       requirements: [requirement({ state: "ACCEPTED" })],
       assurance: parsed([entry({ status: "CHECKING" })]),
@@ -1289,7 +1537,6 @@ describe("the D&I list with the chain", () => {
       early.coverage.filter((chip) => chip.state === "EVIDENCED"),
       [],
     );
-    // Accepted where the chain has no entry: as before the chain.
     const legacy = list({
       requirements: [requirement({ state: "ACCEPTED" })],
       assurance: parsed([]),
@@ -1317,6 +1564,38 @@ describe("the D&I list with the chain", () => {
     });
     assert.equal(view.coverage[4]?.state, "EVIDENCED");
   });
+
+  it("a row with two files reads their check as one, and names a file left out", () => {
+    const view = list({
+      requirements: [
+        requirement({
+          files: [
+            file({ fileId: SECOND, name: "Ticket_4711.pdf" }),
+            file({ fileId: THIRD, name: "Change_log.xlsx" }),
+          ],
+        }),
+      ],
+      assurance: parsed([
+        entry({
+          file_ids: [SECOND],
+          held_files: [{ file_id: THIRD, code: "KIND_UNSURE", reason: "" }],
+          attributes: [attribute({ passages: [passage(SECOND)] })],
+        }),
+      ]),
+    });
+    assert.equal(
+      view.rows[0]?.sub,
+      "Policy or procedure · 2 files · Checked by two readings, 1 file left out",
+    );
+    assert.equal(
+      view.rows[0]?.assurance?.check.leftOut[0]?.line,
+      "Checked without Change_log.xlsx: Its type is not confirmed.",
+    );
+    assert.equal(
+      view.rows[0]?.assurance?.check.attributes[0]?.passages[0]?.fileLabel,
+      "Ticket_4711.pdf",
+    );
+  });
 });
 
 describe("Check again", () => {
@@ -1324,18 +1603,19 @@ describe("Check again", () => {
     organization_id: ORG,
     project_id: PROJECT,
     control_id: CONTROL,
-    file_id: FILE,
+    requirement_id: POLICY,
     intent: "rerun",
   };
 
-  it("posts the rerun of one file, and nothing else", () => {
+  it("posts the rerun of one request, and nothing else", () => {
     assert.deepEqual(assuranceWrite(fields), {
-      path: `/organizations/${ORG}/projects/${PROJECT}/controls/${CONTROL}/evidence-assurance/${FILE}/rerun`,
+      path: `/organizations/${ORG}/projects/${PROJECT}/controls/${CONTROL}/evidence-assurance/${POLICY}/rerun`,
     });
     for (const bad of [
       { ...fields, intent: "accept" },
       { ...fields, intent: undefined },
-      { ...fields, file_id: "../../admin" },
+      { ...fields, requirement_id: "../../admin" },
+      { ...fields, requirement_id: undefined, file_id: FILE },
       { ...fields, control_id: "" },
       { ...fields, organization_id: 7 },
       {},
@@ -1344,17 +1624,19 @@ describe("Check again", () => {
     }
   });
 
-  it("is confirmed only by the server, and a refusal says how to recover", () => {
+  it("is confirmed only by the server; its refusal is shown as it says it", () => {
     assert.equal(assuranceProblem(200), null);
-    assert.match(assuranceProblem(409) ?? "", /already at work/);
     assert.equal(
-      assuranceProblem(409, "A check is at work on this file."),
-      "A check is at work on this file.",
+      assuranceProblem(409, "A check is already at work on this request."),
+      "A check is already at work on this request.",
     );
-    // A refusal not worded for people is not shown raw.
-    assert.match(
-      assuranceProblem(409, "run in progress") ?? "",
-      /already at work/,
+    assert.equal(
+      assuranceProblem(409, "a check is at work"),
+      "a check is at work.",
+    );
+    assert.equal(
+      assuranceProblem(409),
+      "The check cannot be run again now. The row is refreshed.",
     );
     assert.equal(
       assuranceProblem(403),
@@ -1369,40 +1651,54 @@ describe("Check again", () => {
 
 describe("plain words on screen", () => {
   it("never shows an internal code", () => {
+    const codes = [
+      "KIND_UNSURE",
+      "UNREADABLE",
+      "CUSTODY",
+      "POPULATION",
+      "NO_ATTRIBUTES",
+      "TOO_LARGE",
+    ];
     const assurance = parsed(
       [
-        entry({ attributes: [attribute(), ISSUE, UNSETTLED, OFF_TOPIC] }),
-        entry({ file_id: SECOND, status: "CHECKING", stage: "VERIFY" }),
-        ...[
-          "KIND_UNSURE",
-          "UNREADABLE",
-          "CUSTODY",
-          "POPULATION",
-          "NO_ATTRIBUTES",
-        ].map((code, at) =>
-          entry({
+        entry({
+          file_ids: [FILE, SECOND],
+          held_files: codes.map((code, at) => ({
             file_id: uuid(70 + at),
+            code,
+          })),
+          attributes: [attribute(), ISSUE, UNSETTLED, OFF_TOPIC],
+        }),
+        entry({
+          requirement_id: uuid(13),
+          status: "CHECKING",
+          stage: "VERIFY",
+        }),
+        ...codes.map((code, at) =>
+          entry({
+            requirement_id: uuid(80 + at),
             status: "HELD",
             held: { code, reason: "" },
           }),
         ),
-        entry({ file_id: uuid(80), status: "FAILED" }),
-        entry({ file_id: uuid(81), status: "OUT_OF_DATE" }),
-        entry({ file_id: uuid(82), status: "QUEUED" }),
+        entry({ requirement_id: uuid(90), status: "FAILED" }),
+        entry({ requirement_id: uuid(91), status: "OUT_OF_DATE" }),
+        entry({ requirement_id: uuid(92), status: "QUEUED" }),
       ],
-      { checking: 2, held: 5, supported: 1, issues: 1, unsettled: 1 },
+      { checking: 2, held: 6, supported: 1, issues: 1, unsettled: 1 },
     );
-    const fileIds = assurance.files.map((each) => each.fileId);
-    const view = assuranceRow({
-      requirementId: POLICY,
-      fileIds,
-      assurance,
-      attributes: lettered,
-      span,
-    });
+    const rows = assurance.requests.map((item) =>
+      assuranceRow({
+        requirementId: item.requirementId,
+        files: [POLICY_FILE, TICKET],
+        assurance,
+        attributes: lettered,
+        span,
+      }),
+    );
     const counts = assuranceCounts(assurance);
     const shown = JSON.stringify([
-      view,
+      rows,
       assurancePill(counts),
       assuranceSentence(counts),
       Object.values(STATE_WORDS).map((words) => words.label),
@@ -1414,11 +1710,7 @@ describe("plain words on screen", () => {
       "UNSETTLED",
       "ASSESSOR",
       "REVIEWER",
-      "KIND_UNSURE",
-      "UNREADABLE",
-      "CUSTODY",
-      "POPULATION",
-      "NO_ATTRIBUTES",
+      ...codes,
       "NOT_ADDRESSED",
       "SUPPORTED",
       "NOT_MET",
@@ -1471,24 +1763,26 @@ describe("the screen's own files", () => {
     );
     assert.match(reduced, /\.de-attr-body \{\s*animation: none;/);
     assert.match(reduced, /\.de-attr-caret > svg/);
-    // Tokens only: no colour value of its own.
     assert.equal(/#[0-9a-fA-F]{3,8}\b/.test(css), false);
   });
 
   it("runs a check again through the list's action pattern, with no page reload", () => {
     assert.match(view, /fetch\("\/workspace\/evidence-assurance"/);
+    assert.match(view, /requirement_id: requirementId/);
     assert.match(view, /router\.refresh\(\)/);
     assert.equal(
       /location\.reload|window\.location\.href\s*=/.test(view),
       false,
     );
-    // The proxy sends only what the model built, as the signed-in person.
     assert.match(route, /assuranceWrite\(fields\)/);
     assert.match(route, /method: "POST"/);
+    // The server's 202 is its confirmation.
+    assert.match(route, /response\.ok \? 200 : response\.status/);
   });
 
-  it("shows an issue as its finding, with the finding's own actions", () => {
+  it("shows one check per request, and an issue as its finding", () => {
+    assert.match(view, /<CheckOfRequest\b/);
+    assert.equal(/CheckOfFile/.test(view), false);
     assert.match(view, /<FindingRecords\s+findings=\{\[finding\]\}/);
-    assert.match(view, /offeredAction\(check\.action,/);
   });
 });

@@ -149,8 +149,8 @@ export const FINDING_KIND_LABELS: Record<FindingKind, string> = {
   ACTIVITY: "Activity after the event",
   NOT_MET: "Not shown",
   PARTLY_MET: "Shown in part",
-  CONTRADICTED: "Contradicted in the file",
-  NOT_ADDRESSED: "Not addressed by the file",
+  CONTRADICTED: "Contradicted in the evidence",
+  NOT_ADDRESSED: "Not addressed by the evidence",
 };
 
 export const FINDING_SOURCE_LABELS: Record<FindingSource, string> = {

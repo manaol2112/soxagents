@@ -32,8 +32,9 @@ import {
   type AttributeLine,
   assuranceProblem,
   type CheckAction,
-  type FileCheck,
   offeredAction,
+  type RequestCheck,
+  type RowFile,
 } from "./evidence-assurance-model";
 import { centerHref, DEFAULT_QUERY } from "./evidence-center-model";
 import { type DialogOpen, EvidenceDialog } from "./evidence-dialog";
@@ -120,7 +121,7 @@ const MENU_ICONS: Record<MenuKey, IconName> = {
 };
 
 /**
- * "Check again" on a file whose check failed or is out of date
+ * "Check again" on a request whose check failed or is out of date
  * (docs/evidence-assurance.md): one call, as the list's other actions make theirs.
  * Success is said only once the server has answered, and the checks are then read again
  * in place (no reload; open rows and filters stay). A refusal because the check changed
@@ -131,8 +132,8 @@ function useAssuranceAction(ids: Ids) {
   const [pending, startTransition] = useTransition();
   const [busy, setBusy] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
-  async function run(fileId: string): Promise<boolean> {
-    setBusy(fileId);
+  async function run(requirementId: string): Promise<boolean> {
+    setBusy(requirementId);
     setProblem(null);
     let status = 0;
     let detail = "";
@@ -145,7 +146,7 @@ function useAssuranceAction(ids: Ids) {
           project_id: ids.projectId,
           control_id: ids.controlId,
           intent: "rerun",
-          file_id: fileId,
+          requirement_id: requirementId,
         }),
       });
       const body = (await response.json()) as {
@@ -893,15 +894,13 @@ function Row({
   } | null>(null);
   // A change to one of its files, confirmed by the server.
   const [fileDone, setFileDone] = useState<string | null>(null);
-  // The assurance chain's check of each file, and the findings its issues are.
+  // The assurance chain's check of the request, and the findings its issues are.
   const assured = row.assurance;
   const findingsAction = useFindingsAction(ids);
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const issueIds = new Set(
-    (assured?.files ?? []).flatMap((check) =>
-      check.attributes.flatMap((line) =>
-        line.findingId === null ? [] : [line.findingId],
-      ),
+    (assured?.check.attributes ?? []).flatMap((line) =>
+      line.findingId === null ? [] : [line.findingId],
     ),
   );
   const toSend = (findings ?? []).filter(
@@ -940,30 +939,45 @@ function Row({
       { kind: "FOLLOW_UP_REQUIRED" },
       // The reader's own follow-up points start the text only where the chain has not
       // checked the row: they were never checked by a second reading.
-      assured?.covered === true
+      assured != null
         ? ""
         : item.assessment.followUps.join("; ").slice(0, 1000),
     );
 
-  async function checkAgain(fileId: string) {
-    if (await checks.run(fileId)) {
+  async function checkAgain() {
+    if (await checks.run(item.id)) {
       onDone("The check was started again.");
     }
   }
 
-  /** The one action that clears a hold, or runs a check again. */
-  const actOn = (fileId: string, act: CheckAction) => {
+  /** The one action that clears a hold, or runs the check again. */
+  const actOn = (act: CheckAction) => {
     if (act.kind === "RERUN") {
-      void checkAgain(fileId);
+      void checkAgain();
+    } else if (act.fileId === null) {
+      return;
     } else if (act.kind === "REPLACE") {
-      setFileForm({ fileId, form: "replace" });
+      setFileForm({ fileId: act.fileId, form: "replace" });
       setFileDone(null);
     } else {
       // The file's type is confirmed, and a walkthrough instance picked, in the
       // evidence dialog.
-      onDialog({ mode: "review", fileId });
+      onDialog({ mode: "review", fileId: act.fileId });
     }
   };
+  const rowFiles: RowFile[] = item.files.map((file) => ({
+    id: file.fileId,
+    name: file.name,
+  }));
+  /** An action as this person is offered it. */
+  const offer = (act: CheckAction | null) =>
+    offeredAction(act, {
+      canAct,
+      replaceable: (fileId) => {
+        const held = files.find((each) => each.id === fileId);
+        return held !== undefined && (held.blocked ?? null) === null;
+      },
+    });
 
   async function accept() {
     const ok = await action.run(`judge-${item.id}`, {
@@ -1387,13 +1401,6 @@ function Row({
                               ]
                             : []),
                         ];
-                        const check =
-                          assured?.files.find(
-                            (each) => each.fileId === file.fileId,
-                          ) ?? null;
-                        const onRegister = files.find(
-                          (each) => each.id === file.fileId,
-                        );
                         return (
                           <li
                             key={file.fileId}
@@ -1436,43 +1443,38 @@ function Row({
                                 <RowMenu label={file.name} items={fileMenu} />
                               ) : null}
                             </div>
-                            {check !== null && !reading ? (
-                              <CheckOfFile
-                                ids={ids}
-                                check={check}
-                                fileName={file.name}
-                                action={offeredAction(check.action, {
-                                  canAct,
-                                  replaceable:
-                                    onRegister !== undefined &&
-                                    (onRegister.blocked ?? null) === null,
-                                })}
-                                busy={checks.busy === file.fileId}
-                                disabled={locked || checks.pending}
-                                onAct={(act) => actOn(file.fileId, act)}
-                                findings={findings}
-                                findingsAction={findingsAction}
-                                canAct={canAct}
-                                picked={picked}
-                                onPick={(findingId, on) =>
-                                  setPicked((current) => {
-                                    const next = new Set(current);
-                                    if (on) {
-                                      next.add(findingId);
-                                    } else {
-                                      next.delete(findingId);
-                                    }
-                                    return next;
-                                  })
-                                }
-                              />
-                            ) : null}
                             {line?.form ?? null}
                           </li>
                         );
                       })}
                     </ul>
                   )}
+                  {assured !== null && row.reading === 0 ? (
+                    <CheckOfRequest
+                      ids={ids}
+                      check={assured.check}
+                      files={rowFiles}
+                      offer={offer}
+                      busy={checks.busy === item.id}
+                      disabled={locked || checks.pending}
+                      onAct={actOn}
+                      findings={findings}
+                      findingsAction={findingsAction}
+                      canAct={canAct}
+                      picked={picked}
+                      onPick={(findingId, on) =>
+                        setPicked((current) => {
+                          const next = new Set(current);
+                          if (on) {
+                            next.add(findingId);
+                          } else {
+                            next.delete(findingId);
+                          }
+                          return next;
+                        })
+                      }
+                    />
+                  ) : null}
                   {traced ? (
                     <SampleTrace
                       ids={action.ids}
@@ -1657,18 +1659,19 @@ function Row({
 }
 
 /**
- * A file's check by the assurance chain (docs/evidence-assurance.md, section 7): one
- * quiet line while it works; held, failed or out of date, one line with the single
- * action that clears it; finished, each attribute with its state in words and a mark,
- * opening to what the two readings rest on, what is absent, and both readings side by
- * side where they do not agree. An issue is its evidence finding, with the finding's own
- * actions. Nothing of a check is shown before it finishes.
+ * A request's check by the assurance chain (docs/evidence-assurance.md, section 7): its
+ * files are read together, as one walkthrough. One quiet line while it works; held,
+ * failed or out of date, one line with the single action that clears it; a file left out
+ * of the readings, named with why and its own action; finished, each attribute with its
+ * state in words and a mark, opening to what the two readings rest on, what is absent,
+ * and both readings side by side where they do not agree. An issue is its evidence
+ * finding, with the finding's own actions. Nothing of a check is shown before it ends.
  */
-function CheckOfFile({
+function CheckOfRequest({
   ids,
   check,
-  fileName,
-  action,
+  files,
+  offer,
   busy,
   disabled,
   onAct,
@@ -1679,10 +1682,11 @@ function CheckOfFile({
   onPick,
 }: {
   ids: Ids;
-  check: FileCheck;
-  fileName: string;
-  /** The action as this person is offered it; null when there is none for them. */
-  action: CheckAction | null;
+  check: RequestCheck;
+  /** The row's in-force files. */
+  files: RowFile[];
+  /** An action as this person is offered it; null when there is none for them. */
+  offer: (action: CheckAction | null) => CheckAction | null;
   busy: boolean;
   disabled: boolean;
   onAct: (action: CheckAction) => void;
@@ -1692,6 +1696,35 @@ function CheckOfFile({
   picked: Set<string>;
   onPick: (findingId: string, on: boolean) => void;
 }) {
+  const action = offer(check.action);
+  const actButton = (act: CheckAction, about: string) => (
+    <button
+      type="button"
+      className="btn btn-secondary btn-sm"
+      disabled={disabled}
+      aria-label={`${act.label}: ${about}`}
+      onClick={() => onAct(act)}
+    >
+      {busy && act.kind === "RERUN" ? "Starting…" : act.label}
+    </button>
+  );
+  const leftOut =
+    check.leftOut.length === 0 ? null : (
+      <ul className="de-left-out">
+        {check.leftOut.map((item) => {
+          const act = offer(item.action);
+          const name =
+            files.find((file) => file.id === item.fileId)?.name ?? "the file";
+          return (
+            <li key={item.fileId} className="de-check-line">
+              <UiIcon name="info" size={13} />
+              <span>{item.line}</span>
+              {act !== null ? actButton(act, name) : null}
+            </li>
+          );
+        })}
+      </ul>
+    );
   if (check.standing === "CHECKING") {
     return (
       <div className="de-check is-checking">
@@ -1707,6 +1740,7 @@ function CheckOfFile({
             </span>
           </span>
         </p>
+        {leftOut}
       </div>
     );
   }
@@ -1719,18 +1753,15 @@ function CheckOfFile({
             size={13}
           />
           <span>{check.line}</span>
-          {action !== null ? (
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              disabled={disabled}
-              aria-label={`${action.label}: ${fileName}`}
-              onClick={() => onAct(action)}
-            >
-              {busy ? "Starting…" : action.label}
-            </button>
-          ) : null}
+          {action !== null
+            ? actButton(
+                action,
+                files.find((file) => file.id === action.fileId)?.name ??
+                  "this request",
+              )
+            : null}
         </div>
+        {leftOut}
       </div>
     );
   }
@@ -1745,6 +1776,7 @@ function CheckOfFile({
           ) : null}
         </span>
       </p>
+      {leftOut}
       {check.attributes.length > 0 ? (
         <ul className="de-attrs">
           {check.attributes.map((line) => (
@@ -1752,8 +1784,7 @@ function CheckOfFile({
               key={line.key}
               ids={ids}
               line={line}
-              fileId={check.fileId}
-              fileName={fileName}
+              files={files}
               finding={
                 line.findingId === null
                   ? null
@@ -1773,7 +1804,7 @@ function CheckOfFile({
         <p className="de-unaddressed">
           <span className="de-state tone-neutral">
             <UiIcon name="minus" size={12} />
-            Not addressed by this file
+            Not addressed by this evidence
           </span>
           {check.notAddressed.map((line) => (
             <span
@@ -1797,8 +1828,7 @@ function CheckOfFile({
 function AttributeCheck({
   ids,
   line,
-  fileId,
-  fileName,
+  files,
   finding,
   findingsAction,
   canAct,
@@ -1807,8 +1837,8 @@ function AttributeCheck({
 }: {
   ids: Ids;
   line: AttributeLine;
-  fileId: string;
-  fileName: string;
+  /** The row's in-force files: a passage opens in its own. */
+  files: RowFile[];
   /** The evidence finding an issue is; null when it has none, or it was not read. */
   finding: EvidenceFinding | null;
   findingsAction: ReturnType<typeof useFindingsAction>;
@@ -1875,23 +1905,37 @@ function AttributeCheck({
               {line.passages.length > 0 ? (
                 <ul className="de-passages">
                   {line.passages.map((passage) => (
-                    <li key={`${passage.location}-${passage.quote}`}>
+                    <li
+                      key={`${passage.fileId ?? ""}-${passage.location}-${passage.quote}`}
+                    >
                       <q>{passage.quote}</q>
                       <span className="de-where">
+                        {passage.fileLabel !== "" ? (
+                          <span className="de-where-file">
+                            {passage.fileLabel}
+                          </span>
+                        ) : null}
                         <span>
                           {passage.location !== ""
                             ? passage.location
                             : "In the file"}
                         </span>
-                        {passage.fileId === fileId ? (
+                        {passage.opens && passage.fileId !== null ? (
                           <PreviewButton
                             organizationId={ids.organizationId}
                             projectId={ids.projectId}
-                            files={[{ id: fileId, fileName }]}
+                            files={files.map((file) => ({
+                              id: file.id,
+                              fileName: file.name,
+                            }))}
+                            startFileId={passage.fileId}
                             citations={[
                               {
-                                fileId,
-                                fileName,
+                                fileId: passage.fileId,
+                                fileName:
+                                  files.find(
+                                    (file) => file.id === passage.fileId,
+                                  )?.name ?? "",
                                 quote: passage.quote,
                                 found: true,
                                 location: passage.location,
@@ -1912,7 +1956,7 @@ function AttributeCheck({
               ) : null}
               {line.absent.length > 0 ? (
                 <div className="de-absent">
-                  <span>Not in the file</span>
+                  <span>Not in the evidence</span>
                   <ul>
                     {line.absent.map((point) => (
                       <li key={point}>{point}</li>
@@ -1923,7 +1967,7 @@ function AttributeCheck({
               {line.findingId !== null ? (
                 <p className="de-absent">
                   The finding that records this issue could not be shown here.
-                  Open the file to act on it.
+                  Open its file to act on it.
                 </p>
               ) : null}
             </>

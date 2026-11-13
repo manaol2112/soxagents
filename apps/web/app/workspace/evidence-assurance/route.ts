@@ -4,10 +4,10 @@ import { NextResponse } from "next/server";
 import { assuranceWrite } from "../../../src/evidence-assurance-model";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 
-/** "Check again" on a D&I evidence file whose check failed or is out of date
+/** "Check again" on a D&I request whose check failed or is out of date
  * (docs/evidence-assurance.md, section 6). Called in the background; answers as JSON
- * with the API's status, and the page reads the checks again once it is 200. The API
- * decides who may run it and refuses while a check is at work. */
+ * with the API's status (its 202 said as 200), and the page reads the checks again once
+ * it is confirmed. The API decides who may run it and refuses while a check is at work. */
 export async function POST(request: Request) {
   let fields: Record<string, unknown> = {};
   try {
@@ -37,7 +37,7 @@ export async function POST(request: Request) {
       // The run is queued and worked in the background: the call itself is short.
       signal: AbortSignal.timeout(30000),
     });
-    // The contract names no success code: any 2xx is the server's confirmation.
+    // The server answers 202 with the request's entry: any 2xx is its confirmation.
     status = response.ok ? 200 : response.status;
     if (status !== 200) {
       const body = (await response.json()) as unknown;
