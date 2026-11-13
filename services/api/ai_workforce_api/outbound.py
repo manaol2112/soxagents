@@ -69,6 +69,7 @@ from ai_workforce_api.policy import evaluate
 from ai_workforce_api.request_email import (
     Facts,
     control_line,
+    one_name,
     tidy,
     values_for_request,
 )
@@ -184,6 +185,7 @@ PBC_REMINDER_V3 = MessageTemplate(
         "$greeting\n\n"
         "This is reminder $sequence of $limit for the evidence the $team asked for. If "
         "you have already uploaded it, thank you, and you can ignore this reminder.\n\n"
+        "$opening"
         "$facts\n\n"
         "WHAT WE NEED\n\n"
         "$items\n\n"
@@ -679,10 +681,53 @@ def render_request(
     engagement: str,
     *,
     version: int | None = None,
+    approval_id: UUID | None = None,
+    proposed: dict[str, str] | None = None,
 ) -> RenderedMessage:
-    """render, with the facts the request's records hold: every caller renders a request
-    the same way, so what is approved is what the send renders again."""
-    return render(request, engagement, request_facts(connection, request), version=version)
+    """render, with the request's facts. For an approval (`approval_id`: its send, a
+    resumed send, its hand-over, its preview while it awaits the send), the facts kept
+    with it when it was asked (approved_facts), so a contact or a control's name changed
+    since never changes or blocks the approved message. Otherwise the facts its records
+    hold now, with `proposed` names for addresses not saved yet (a review before send)."""
+    facts = approved_facts(connection, approval_id).get(request.id) if approval_id else None
+    if facts is None:
+        facts = request_facts(connection, request, proposed)
+    return render(request, engagement, facts, version=version)
+
+
+def approved_facts(connection: psycopg.Connection[Any], approval_id: UUID) -> dict[UUID, Facts]:
+    """The facts an approval's message was rendered with, by request (migration 0157);
+    empty for an approval that keeps none (asked before version 3)."""
+    row = connection.execute(
+        "SELECT facts FROM approved_message_facts WHERE approval_id = %s", (approval_id,)
+    ).fetchone()
+    if row is None or not isinstance(row[0], dict):
+        return {}
+    return {UUID(str(key)): Facts.from_json(value) for key, value in row[0].items()}
+
+
+def keep_facts(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    approval_id: UUID,
+    facts: dict[UUID, Facts],
+) -> None:
+    """Keep, with the approval just asked, the facts its message was rendered with.
+    Written once; never changed (the table refuses it)."""
+    cursor.execute(
+        """
+        INSERT INTO approved_message_facts (approval_id, organization_id, project_id, facts)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (approval_id) DO NOTHING
+        """,
+        (
+            approval_id,
+            organization_id,
+            project_id,
+            Json({str(key): value.as_json() for key, value in facts.items()}),
+        ),
+    )
 
 
 def _copied(request: PbcBody) -> tuple[str, ...]:
@@ -785,7 +830,6 @@ def _compose_v3(
     with room for the link within 4,000 characters, else every item in brief with the
     note that the full wording is on the secure link."""
     reference = f"PBC-{request.id.hex[-8:].upper()}"
-    reminder = template.template_id == PBC_REMINDER.template_id
 
     def text(brief: bool) -> tuple[str, str]:
         values = values_for_request(
@@ -798,7 +842,6 @@ def _compose_v3(
             facts=facts,
             brief=brief,
             note=SUMMARY_NOTE,
-            reminder=reminder,
         )
         values.update({"upload_link": LINK_PLACEHOLDER, **extra})
         return (
@@ -815,9 +858,15 @@ def _compose_v3(
     return reference, subject, body
 
 
-def request_facts(connection: psycopg.Connection[Any], request: PbcBody) -> Facts:
-    """What the email names besides the wording: the control's name, a line describing
-    it, its system, and the recipient's name when a record holds it."""
+def request_facts(
+    connection: psycopg.Connection[Any],
+    request: PbcBody,
+    proposed: dict[str, str] | None = None,
+) -> Facts:
+    """What the email names besides the wording, as the records hold it now: the
+    control's name, a line describing it, its system, and the recipient's name when a
+    record holds one person's. Read when a message is rendered for a new approval, and
+    kept with that approval (keep_facts)."""
     title = frequency = system = ""
     if request.engagement_control_id is not None:
         row = connection.execute(
@@ -833,7 +882,11 @@ def request_facts(connection: psycopg.Connection[Any], request: PbcBody) -> Fact
         control_line=control_line(title, frequency, system),
         system=system[:120],
         recipient_name=recipient_name(
-            connection, request.project_id, request.recipient, request.engagement_control_id
+            connection,
+            request.project_id,
+            request.recipient,
+            request.engagement_control_id,
+            proposed,
         ),
     )
 
@@ -843,35 +896,44 @@ def recipient_name(
     project_id: UUID,
     recipient: str,
     control_id: UUID | None,
+    proposed: dict[str, str] | None = None,
 ) -> str:
-    """The recipient's name as a record holds it: the request's control owner, a client
+    """The recipient's name as the records hold it: the request's control owner, a client
     contact of the engagement, its evidence coordinator, or the owner of another of its
-    controls, at that address. Empty when none does; never made up from the address."""
+    controls, at that address (whatever its capitals). Empty when none does, when a name
+    is not a person's, or when the address is held under more than one name (a shared
+    mailbox): never made up from the address. `proposed` names an address whose owner is
+    about to be saved on the request's control, in place of the one saved there now."""
     address = recipient.strip().lower()
     if not address:
         return ""
-    row = connection.execute(
+    rows = connection.execute(
         """
-        SELECT name FROM (
+        SELECT rank, name FROM (
             SELECT 1 AS rank, owner_name AS name FROM engagement_controls
             WHERE id = %s AND project_id = %s AND lower(btrim(owner_email)) = %s
             UNION ALL
-            SELECT 2, name FROM engagement_contacts WHERE project_id = %s AND email = %s
+            SELECT 2, name FROM engagement_contacts
+            WHERE project_id = %s AND lower(btrim(email)) = %s
             UNION ALL
             SELECT 3, client_coordinator_name FROM engagement_settings
             WHERE project_id = %s AND lower(btrim(client_coordinator_email)) = %s
             UNION ALL
             SELECT 4, owner_name FROM engagement_controls
             WHERE project_id = %s AND included AND lower(btrim(owner_email)) = %s
+              AND id IS DISTINCT FROM %s
         ) named
         WHERE btrim(coalesce(name, '')) <> ''
         ORDER BY rank, name
-        LIMIT 1
         """,
         (control_id, project_id, address, project_id, address, project_id, address,
-         project_id, address),
-    ).fetchone()  # fmt: skip
-    return "" if row is None else " ".join(str(row[0]).split())[:200]
+         project_id, address, control_id),
+    ).fetchall()  # fmt: skip
+    names = [str(row[1]) for row in rows]
+    given = {key.strip().lower(): value for key, value in (proposed or {}).items()}
+    if address in given:
+        names = [given[address], *(str(row[1]) for row in rows if row[0] != 1)]
+    return one_name(names)
 
 
 _ITEM = re.compile(r"^\d{1,2}\. \S")
@@ -937,7 +999,7 @@ def _preview(
     pbc = _read_pbc(connection, organization_id, project_id, request_id)
     # A request awaiting its send is shown as its approval binds it, on the version it
     # was approved on; any other, as a new approval would render it.
-    version = None
+    version = latest = None
     if pbc.status == "APPROVAL_PENDING":
         latest = _latest_approval(connection, organization_id, project_id, request_id)
         if latest is not None:
@@ -946,7 +1008,7 @@ def _preview(
         settings,
         render_request(
             connection, pbc, _engagement(connection, organization_id, project_id),
-            version=version,
+            version=version, approval_id=latest,
         ),
     )  # fmt: skip
 
@@ -1030,9 +1092,11 @@ def _submit(
     body: SubmitBody,
     *,
     template_version: int | None = None,
+    carried_from: UUID | None = None,
 ) -> SubmitResult:
-    """Ask for the approval of the request's message, on the current template version,
-    or on the version given (a message carried over from an earlier approval)."""
+    """Ask for the approval of the request's message, on the current template version
+    with the facts its records hold now; or, for a message carried over from an earlier
+    approval (`carried_from`), on that approval's version with the facts kept with it."""
     authorize(
         connection,
         principal=principal,
@@ -1054,8 +1118,11 @@ def _submit(
     if pbc.recipient.strip() == "":
         # Drafted with no owner email and no evidence coordinator to address it to.
         raise OutboundState("set who the request goes to first")
-    message = render_request(
-        connection, pbc, _engagement(connection, organization_id, project_id),
+    facts = approved_facts(connection, carried_from).get(pbc.id) if carried_from else None
+    if facts is None:
+        facts = request_facts(connection, pbc)
+    message = render(
+        pbc, _engagement(connection, organization_id, project_id), facts,
         version=template_version,
     )  # fmt: skip
     if not recipients_allowed(settings, message):
@@ -1068,6 +1135,8 @@ def _submit(
         project_id,
         ApprovalCreate(action_id=ACTION_ID, parameters=message.parameters()),
     )
+    with transaction(connection) as cursor:
+        keep_facts(cursor, organization_id, project_id, approval.id, {pbc.id: facts})
     updated = pbc
     if pbc.status == "DRAFT":
         with transaction(connection) as cursor:
@@ -1179,7 +1248,8 @@ def _approve_draft(
         raise OutboundState(held)
     if pbc.recipient.strip() == "":
         raise OutboundState("set who the request goes to first")
-    message = render_request(connection, pbc, _engagement(connection, organization_id, project_id))
+    facts = request_facts(connection, pbc)
+    message = render(pbc, _engagement(connection, organization_id, project_id), facts)
     if not recipients_allowed(settings, message):
         raise OutboundState("recipient is not allowed")
     _check(connection, settings, organization_id, project_id, request_id, None)
@@ -1209,6 +1279,7 @@ def _approve_draft(
         ).fetchone()
         if row is None:
             raise OutboundState("pbc request changed")
+        keep_facts(cursor, organization_id, project_id, asked.id, {pbc.id: facts})
         approve_agent_request(cursor, organization_id, project_id, principal.id, asked.id, reason)
         _pbc_audit(
             cursor, organization_id, project_id, principal.id, request_id, "APPROVAL_PENDING"
@@ -1315,6 +1386,7 @@ def hand_over(
             message = render_request(
                 connection, pbc, _engagement(connection, organization_id, project_id),
                 version=approved_version(connection, approval_id, PBC_REQUEST.template_id),
+                approval_id=approval_id,
             )  # fmt: skip
             if not recipients_allowed(settings, message):
                 return False
@@ -1447,12 +1519,15 @@ def submit_reminder(
     follow_up = read_follow_up(connection, organization_id, project_id, request_id, follow_up_id)
     if follow_up.status != "DUE":
         raise OutboundState("reminder is not due")
+    facts = reminder_facts(connection, pbc)
     message = _reminder(
         connection,
         pbc,
         _engagement(connection, organization_id, project_id),
         follow_up.id,
         follow_up.sequence,
+        None,
+        facts,
     )
     if not recipients_allowed(settings, message):
         raise OutboundState("recipient is not allowed")
@@ -1463,6 +1538,8 @@ def submit_reminder(
         project_id,
         ApprovalCreate(action_id=REMINDER_ACTION_ID, parameters=message.parameters()),
     )
+    with transaction(connection) as cursor:
+        keep_facts(cursor, organization_id, project_id, approval.id, facts)
     updated = mark_submitted(
         connection, organization_id, project_id, principal.id, follow_up, approval.id
     )
@@ -1662,6 +1739,7 @@ def resend_request(
             connection, settings, principal, organization_id, project_id, request_id,
             SubmitBody(version=pbc.version),
             template_version=approved_version(connection, approval_id, PBC_REQUEST.template_id),
+            carried_from=approval_id,
         )  # fmt: skip
         approval_id = submitted.approval.id
     elif state[0] != "PENDING":
@@ -1785,6 +1863,7 @@ def _record_reminder(
                 follow_up.id,
                 follow_up.sequence,
                 approved_template(connection, approval_id),
+                approved_facts(connection, approval_id) or None,
             )
             if not recipients_allowed(settings, message):
                 raise OutboundState("recipient is not allowed")
@@ -1827,6 +1906,7 @@ def _record(
             message = render_request(
                 connection, pbc, _engagement(connection, organization_id, project_id),
                 version=approved_version(connection, approval_id, PBC_REQUEST.template_id),
+                approval_id=approval_id,
             )  # fmt: skip
             if not recipients_allowed(settings, message):
                 raise OutboundState("recipient is not allowed")
@@ -1920,13 +2000,13 @@ def _resume(
 ) -> OutboundBody:
     if current.status not in _OPEN:
         return current
-    _require_policy(
-        connection,
-        principal,
-        organization_id,
-        project_id,
-        _message_for(connection, organization_id, project_id, current),
-    )
+    try:
+        again = _message_for(connection, organization_id, project_id, current)
+    except ValueError:
+        # Recorded on a template version nothing renders any more, or no longer fitting
+        # one email: it cannot be checked against what was approved, so it is not sent.
+        return _fail(connection, principal, organization_id, project_id, current, "invalid_message")
+    _require_policy(connection, principal, organization_id, project_id, again)
     with transaction(connection) as cursor:
         row = cursor.execute(
             f"""
@@ -2325,13 +2405,17 @@ def _message_for(
         # On the version the message was recorded with, which its approval bound.
         if outbound.template_id != PBC_REQUEST.template_id:
             raise ValueError("unknown template")
-        return render_request(connection, pbc, engagement, version=outbound.template_version)
+        return render_request(
+            connection, pbc, engagement, version=outbound.template_version,
+            approval_id=outbound.approval_id,
+        )  # fmt: skip
     follow_up = read_follow_up(
         connection, organization_id, project_id, outbound.pbc_request_id, outbound.follow_up_id
     )
     return _reminder(
         connection, pbc, engagement, follow_up.id, follow_up.sequence,
         (outbound.template_id, outbound.template_version),
+        approved_facts(connection, outbound.approval_id) or None,
     )  # fmt: skip
 
 
@@ -2342,10 +2426,12 @@ def _reminder(
     follow_up_id: UUID,
     sequence: int,
     approved: tuple[str, int] | None = None,
+    facts: dict[UUID, Facts] | None = None,
 ) -> RenderedMessage:
     """A request's reminder; for a request sent in a group, the group's (its lead's). On
     the template version `approved` names (the approval's or the recorded message's), or
-    the current one for a new reminder."""
+    the current one for a new reminder; with the `facts` kept with its approval, or those
+    its records hold now for a new reminder (reminder_facts)."""
     from ai_workforce_api.evidence_groups import GROUP_REMINDER_TEMPLATE_ID, reminder_for
 
     def version(template_id: str) -> int | None:
@@ -2357,14 +2443,26 @@ def _reminder(
 
     grouped = reminder_for(
         connection, pbc, engagement, follow_up_id, sequence,
-        version=lambda: version(GROUP_REMINDER_TEMPLATE_ID),
+        version=lambda: version(GROUP_REMINDER_TEMPLATE_ID), frozen=facts,
     )  # fmt: skip
     if grouped is not None:
         return grouped  # type: ignore[no-any-return]
+    own = (facts or {}).get(pbc.id)
     return render_reminder(
-        pbc, engagement, follow_up_id, sequence, request_facts(connection, pbc),
+        pbc, engagement, follow_up_id, sequence,
+        own if own is not None else request_facts(connection, pbc),
         version=version(PBC_REMINDER.template_id),
     )  # fmt: skip
+
+
+def reminder_facts(connection: psycopg.Connection[Any], pbc: PbcBody) -> dict[UUID, Facts]:
+    """The facts a new reminder is rendered with, as the records hold them now: the
+    request's, or, for a sent group's lead, those of each request still open in it."""
+    from ai_workforce_api.evidence_groups import open_members, sent_group_of
+
+    group = sent_group_of(connection, pbc.id)
+    members = [pbc] if group is None else open_members(connection, group)
+    return {member.id: request_facts(connection, member) for member in members}
 
 
 def _remindable(connection: psycopg.Connection[Any], pbc: PbcBody) -> bool:

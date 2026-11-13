@@ -18,8 +18,10 @@ import {
   requests,
   reviewPlan,
   routingOf,
+  type Seen,
   type SendResult,
   type SentReport,
+  seenOf,
   sendBody,
   sendProblem,
   sentReport,
@@ -82,6 +84,7 @@ export function ControlSend({
     preview: boolean,
     named: { name: string; email: string } | null,
     routing: readonly Routing[] = [],
+    seen: readonly Seen[] = [],
   ): Promise<{ result: SendResult | null; title: string; summary: string }> {
     try {
       const response = await fetch("/workspace/control-send", {
@@ -91,7 +94,7 @@ export function ControlSend({
           organization_id: ids.organizationId,
           project_id: ids.projectId,
           control_id: ids.controlId,
-          ...sendBody(preview, named, routing),
+          ...sendBody(preview, named, routing, seen),
         }),
       });
       const answer = (await response.json()) as {
@@ -136,9 +139,10 @@ export function ControlSend({
   async function send(
     named: { name: string; email: string } | null,
     routing: readonly Routing[] = [],
+    seen: readonly Seen[] = [],
   ) {
     setStep({ kind: "sending" });
-    const { result, title, summary } = await call(false, named, routing);
+    const { result, title, summary } = await call(false, named, routing, seen);
     setStep(
       result === null
         ? { kind: "done", title, summary }
@@ -196,7 +200,7 @@ export function ControlSend({
               handover={handover}
               onCancel={() => setStep({ kind: "closed" })}
               onSend={(routing, newOwner) =>
-                void send(newOwner ?? owner, routing)
+                void send(newOwner ?? owner, routing, seenOf(step.result))
               }
             />
           ) : step.kind === "sent" ? (

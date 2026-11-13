@@ -5,16 +5,19 @@ request and its reminder version 2 (outbound.py, evidence_groups.py).
 The approved text is still the system of record: what the approver reads is what the
 plain-text part carries, word for word, and the send renders it again and refuses
 anything else. This module only composes that text, deterministically, from the request
-as it stands: a greeting by name when the recipient's name is on record, the agent's
-opening, a few facts (control, system, stage, due date, reference), "WHAT WE NEED" with
-every item, "HOW TO SEND IT", and the signature. The HTML part (email_html.py) lays the
-same words out; it adds only a fixed frame.
+as it stands and the facts its approval holds (migration 0157): a greeting by name when
+a record holds a person's name for the recipient, the agent's opening, a few facts
+(control, system, stage, due date, reference), "WHAT WE NEED" with every item, "HOW TO
+SEND IT", and the signature. The HTML part (email_html.py) lays the same words out; it
+adds only a fixed frame.
 
-The request's own wording is read back tolerantly (parse): an item's labels are renamed
-in words an owner understands (Period becomes Covers, Include becomes Make sure it shows,
-Completeness becomes Complete when), and a list inside an item stays inside it as
-indented "- " lines, also for a draft saved before the drafter indented its inner lists
-(an unindented list numbered from 1 that restarts inside an item belongs to that item).
+The request's own wording is read back tolerantly (parse) and never shortened here: every
+line of it is in the email, in its order. An item's labels are renamed in words an owner
+understands (Period becomes Covers, Include becomes Make sure it shows, Completeness
+becomes Complete when). A list inside an item stays inside it as indented "- " lines,
+also for a draft saved before the drafter indented its inner lists: within an item's own
+paragraph, an unindented list numbered from 1 belongs to the item. A new paragraph that
+starts with a number is always a new item.
 """
 
 import re
@@ -47,185 +50,261 @@ FREQUENCY_WORDS: dict[str, str] = {
     "WEEKLY": "Weekly",
     "DAILY": "Daily",
 }
-HOW_TO_SEND = (
-    "Enter the one-time code we email to this address, then upload each file against its "
-    "item. Please do not send evidence as email attachments."
-)
 QUESTIONS = "Questions for you:"
+# The lines the templates head their sections with. The HTML part finds the sections by
+# them, so a line of the wording that is one of them is written in sentence case: the
+# same words, and never a section of the email.
+SECTION_MARKERS: dict[str, str] = {
+    "WHAT WE NEED": "What we need",
+    "HOW TO SEND IT": "How to send it",
+}
 
 _ITEM = re.compile(r"^(\d{1,2})\.\s+(\S.*)$")
 _INNER = re.compile(r"^(?:\d{1,2}[.)]|[-•*])\s+(\S.*)$")
 _LABELLED = re.compile(r"^(Period|Include|Format|Show|Completeness|If not available):\s*(.*)$")
 _FREQUENCY_WORD = frozenset({"periodic", "annual", "quarterly", "monthly", "weekly", "daily"})
+_REFERENCE = re.compile(r"(?i)\bPBC-(?=[0-9A-F]{8}\b)")
 _EMAIL = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+_HONORIFIC = re.compile(
+    r"^(?:(?:dr|mr|mrs|ms|miss|mx|prof|professor|sir|madam|mme)\.?\s+)+", re.IGNORECASE
+)
+_PARTICLES = frozenset({"de", "da", "di", "du", "del", "der", "la", "le", "van", "von", "bin", "y"})
 # Words that make a contact's name a role, a team or a mailbox rather than a person's.
 _ROLE_WORDS = frozenset(
     {
-        "access", "accounting", "accounts", "admin", "administrator", "administrators",
-        "analyst", "approver", "audit", "compliance", "contact", "control", "controller",
-        "coordinator", "department", "desk", "engineering", "finance", "group", "helpdesk",
-        "hr", "infrastructure", "it", "lead", "mailbox", "manager", "office", "operations",
-        "ops", "owner", "owners", "payroll", "process", "reviewer", "security", "service",
-        "services", "support", "system", "team", "the", "user", "users",
+        "access", "accounting", "accounts", "admin", "administration", "administrator",
+        "administrators", "advisory", "analyst", "approver", "audit", "basis", "board",
+        "cloud", "committee", "compliance", "contact", "control", "controller",
+        "coordinator", "database", "department", "desk", "engineering", "finance",
+        "function", "group", "helpdesk", "hr", "inbox", "infrastructure", "it", "lead",
+        "legal", "mailbox", "manager", "network", "office", "operations", "ops", "owner",
+        "owners", "payables", "payroll", "platform", "process", "procurement",
+        "receivables", "reviewer", "sales", "security", "service", "services", "shared",
+        "support", "system", "systems", "tax", "team", "the", "treasury", "unit", "user",
+        "users",
     }
 )  # fmt: skip
 
 
 @dataclass(frozen=True)
 class Facts:
-    """What the email names besides the request's own wording, read from its records:
-    the control's name, a short line describing it, its system, and the recipient's name
-    when a record holds it (never one made up from the address)."""
+    """What the email names besides the request's own wording, read from its records
+    when the message is first rendered for an approval and kept with that approval
+    (migration 0157): the control's name, a short line describing it, its system, and
+    the recipient's name as a record holds it (never one made up from the address)."""
 
     control_title: str = ""
     control_line: str = ""
     system: str = ""
     recipient_name: str = ""
 
+    def as_json(self) -> dict[str, str]:
+        return {
+            "control_title": self.control_title,
+            "control_line": self.control_line,
+            "system": self.system,
+            "recipient_name": self.recipient_name,
+        }
+
+    @staticmethod
+    def from_json(value: Any) -> Facts:
+        held = value if isinstance(value, dict) else {}
+        return Facts(
+            control_title=str(held.get("control_title", "")),
+            control_line=str(held.get("control_line", "")),
+            system=str(held.get("system", "")),
+            recipient_name=str(held.get("recipient_name", "")),
+        )
+
 
 @dataclass
 class Item:
     number: int
     title: str
-    # The item's text and inner list, in order; an inner list entry is "- text".
-    body: list[str] = field(default_factory=list)
-    # Its labelled lines, under the email's labels.
-    rows: list[tuple[str, str]] = field(default_factory=list)
-    # The next number of an unindented inner list in progress, if any.
+    # The item's lines in their order, as the email writes them: its text, an entry of
+    # its own list ("- text"), or a labelled line under the email's label ("Covers: ...").
+    lines: list[str] = field(default_factory=list)
+    # Which of them are labelled lines read from the wording's own labels.
+    rows: list[int] = field(default_factory=list)
+    # The next number of an unindented list inside the item, within its paragraph.
     inner_next: int | None = None
 
     def text(self, *, brief: bool = False) -> str:
-        lines = [f"{self.number}. {self.title}"]
-        if brief:
-            lines.extend(f"   {key}: {value}" for key, value in self.rows if key == "Covers")
-        else:
-            lines.extend(f"   {line}" for line in self.body)
-            lines.extend(f"   {key}: {value}" for key, value in self.rows)
-        return "\n".join(lines)
+        out = [f"{self.number}. {self.title}"]
+        for index, line in enumerate(self.lines):
+            if not brief or (index in self.rows and line.startswith("Covers:")):
+                out.append(f"   {line}")
+        return "\n".join(out)
+
+
+@dataclass
+class Text:
+    """A paragraph of the wording that is no item's: kept where it stands."""
+
+    lines: list[str] = field(default_factory=list)
+
+    def text(self) -> str:
+        return "\n".join(self.lines)
+
+
+@dataclass
+class Questions:
+    entries: list[str] = field(default_factory=list)
+
+    def text(self) -> str:
+        return "\n".join([QUESTIONS, *(f"- {entry}" for entry in self.entries)])
 
 
 @dataclass
 class Wording:
+    # The paragraphs before the first item.
     opening: list[str] = field(default_factory=list)
-    items: list[Item] = field(default_factory=list)
-    questions: list[str] = field(default_factory=list)
-    # Paragraphs after the items that belong to none of them (a closing line).
-    after: list[str] = field(default_factory=list)
+    # Everything from the first item on, in its order.
+    blocks: list[Item | Text | Questions] = field(default_factory=list)
+
+    @property
+    def items(self) -> list[Item]:
+        return [block for block in self.blocks if isinstance(block, Item)]
+
+
+def _plain(text: str) -> str:
+    """A line of the wording as the email writes it: one that is a section heading of
+    the email, in sentence case."""
+    return SECTION_MARKERS.get(text, text)
 
 
 def _feed(item: Item, line: str) -> None:
-    """One line of an item's detail: a labelled line, an inner list entry, or text."""
+    """One line of an item: a labelled line, an entry of its own list, or text."""
     text = line.strip()
-    if not text:
-        return
     labelled = _LABELLED.match(text)
     if labelled is not None:
-        item.rows.append((LABELS[labelled.group(1)], labelled.group(2).strip()))
+        item.rows.append(len(item.lines))
+        item.lines.append(f"{LABELS[labelled.group(1)]}: {labelled.group(2).strip()}".rstrip())
         item.inner_next = None
         return
     inner = _INNER.match(text)
-    if inner is not None:
-        item.body.append(f"- {inner.group(1)}")
-        return
-    item.body.append(text)
-
-
-def _inner_entry(item: Item | None, number: int) -> bool:
-    """Whether an unindented numbered line belongs to the open item's own list: it goes
-    on with the list in progress, or restarts from 1 after the item's first detail
-    line. Otherwise it is the next item."""
-    if item is None:
-        return False
-    if item.inner_next is not None and number == item.inner_next:
-        item.inner_next += 1
-        return True
-    if number == 1 and item.body:
-        item.inner_next = 2
-        return True
-    return False
+    item.lines.append(f"- {inner.group(1)}" if inner is not None else _plain(text))
 
 
 def parse(description: str) -> Wording:
-    """The request's wording read into its opening, items, questions and closing. A
-    wording with no numbered items comes back as its opening alone."""
+    """The request's wording read into its opening, then its items, questions and other
+    paragraphs in their order. No line is left out. A wording with no numbered items
+    comes back as its opening and whatever follows it."""
     wording = Wording()
     current: Item | None = None
-    in_questions = False
-    paragraphs: list[list[str]] = []
-    for block in description.replace("\r\n", "\n").strip().split("\n\n"):
-        lines = [line.rstrip() for line in block.split("\n") if line.strip()]
-        if lines:
-            paragraphs.append(lines)
-    for lines in paragraphs:
-        first = lines[0].strip()
-        if first == QUESTIONS.strip():
-            in_questions = True
-            wording.questions.extend(_bullets(lines[1:]))
+    questions: Questions | None = None
+    text: Text | None = None
+    opening: list[str] | None = None
+    fresh = True  # the next line starts a paragraph
+    for raw in description.replace("\r\n", "\n").replace("\r", "\n").strip().split("\n"):
+        line = raw.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            fresh = True
+            if current is not None:
+                # An item's own list goes on only within its paragraph.
+                current.inner_next = None
             continue
-        if in_questions and all(line.strip().startswith("- ") for line in lines):
-            wording.questions.extend(_bullets(lines))
+        starts, fresh = fresh, False
+        indented = line[:1] in (" ", "\t")
+        numbered = None if indented else _ITEM.match(line)
+        if stripped == QUESTIONS:
+            questions = Questions()
+            wording.blocks.append(questions)
+            current = text = opening = None
             continue
-        in_questions = False
-        rest = lines
-        head = _ITEM.match(lines[0]) if not lines[0].startswith(" ") else None
-        if head is not None:
-            if current is not None and _inner_entry(current, int(head.group(1))):
-                current.body.append(f"- {head.group(2).strip()}")
-            else:
-                current = Item(int(head.group(1)), head.group(2).strip())
-                wording.items.append(current)
-            rest = lines[1:]
-        elif current is None:
-            wording.opening.append("\n".join(line.strip() for line in lines))
-            continue
-        elif (
-            head is None
-            and not lines[0].startswith(" ")
-            and len(lines) == 1
-            and first.endswith("Thank you.")
-        ):
-            # A one-line closing after the items: not part of the last item. The
-            # signature thanks the reader, so a bare "Thank you." is not repeated.
-            if first != "Thank you.":
-                wording.after.append(first)
-            continue
-        if current is None:
-            continue
-        for line in rest:
-            numbered = _ITEM.match(line) if not line.startswith(" ") else None
-            if numbered is not None and not _inner_entry(current, int(numbered.group(1))):
-                current = Item(int(numbered.group(1)), numbered.group(2).strip())
-                wording.items.append(current)
+        if questions is not None:
+            bullet = re.match(r"^[-•*]\s+(\S.*)$", stripped)
+            if bullet is not None:
+                questions.entries.append(_plain(bullet.group(1)))
                 continue
-            if numbered is not None:
-                current.body.append(f"- {numbered.group(2).strip()}")
+            if numbered is not None and (not starts or not questions.entries):
+                questions.entries.append(_plain(numbered.group(2).strip()))
                 continue
+            if not starts:
+                # A question that runs on to the next line, or one written with no dash.
+                if questions.entries:
+                    questions.entries[-1] = f"{questions.entries[-1]} {stripped}"
+                else:
+                    questions.entries.append(_plain(stripped))
+                continue
+            questions = None
+        if numbered is not None:
+            number, title = int(numbered.group(1)), numbered.group(2).strip()
+            if current is not None and not starts:
+                if current.inner_next is not None and number == current.inner_next:
+                    current.inner_next += 1
+                    current.lines.append(f"- {title}")
+                    continue
+                if number == 1 and current.lines:
+                    current.inner_next = 2
+                    current.lines.append(f"- {title}")
+                    continue
+                if number != current.number + 1:
+                    # A sentence that wrapped onto a line starting with a number.
+                    current.lines.append(_plain(stripped))
+                    continue
+            current = Item(number, _plain(title))
+            wording.blocks.append(current)
+            text = opening = None
+            continue
+        if current is not None and (indented or not starts):
             _feed(current, line)
+            continue
+        current = None
+        if not wording.blocks:
+            if opening is None or starts:
+                opening = []
+                wording.opening.append("")
+            opening.append(_plain(stripped))
+            wording.opening[-1] = "\n".join(opening)
+            continue
+        if text is None or starts:
+            text = Text()
+            wording.blocks.append(text)
+        text.lines.append(_plain(stripped))
     return wording
-
-
-def _bullets(lines: list[str]) -> list[str]:
-    return [line.strip()[2:].strip() for line in lines if line.strip().startswith("- ")]
 
 
 # The parts the templates carry
 
 
 def first_name(name: str) -> str:
-    """The first word of a person's name a record holds. Empty for none, for an address,
-    and for a name that is a role or a team ("Access administrator", "IT Service Desk"):
-    "Hello," then, never "Hello Access,". A person's name is capitalized word by word."""
-    clean = " ".join(name.split())
-    if not clean or "@" in clean or _EMAIL.fullmatch(clean):
+    """The first name to greet by, from a name a record holds; empty ("Hello,") unless it
+    reads as one person's name: at least two words once a title (Dr, Mr, Ms, Prof) and
+    anything in brackets are set aside, each capitalized (particles such as "de" and
+    "bin" apart), written first name first (no comma), naming one person (no "/", "&" or
+    "and"), with a first word that is a word (not a letter, an initial or all capitals),
+    and no word that makes it a role, a team or a mailbox ("Access administrator",
+    "Treasury", "AP Shared Inbox")."""
+    clean = " ".join(re.sub(r"\([^)]*\)", " ", name).split())
+    if not clean or "@" in clean or any(mark in clean for mark in (",", "/", "&", ";", ":")):
         return ""
-    words = [w.strip(",;:.()") for w in clean.split(" ")]
-    if any(w.lower() in _ROLE_WORDS for w in words):
+    clean = _HONORIFIC.sub("", clean)
+    words = clean.split(" ")
+    if len(words) < 2 or any(w.lower() in ("and", "or") for w in words):
         return ""
-    particles = {"de", "da", "di", "du", "del", "der", "la", "le", "van", "von", "bin", "y"}
-    if not all(w[:1].isupper() or w in particles for w in words if w and w[:1].isalpha()):
+    if any(w.lower().strip(".") in _ROLE_WORDS for w in words):
         return ""
-    word = words[0]
-    return word[:60] if word[:1].isalpha() else ""
+    if not all(w[:1].isupper() or w.lower() in _PARTICLES for w in words):
+        return ""
+    first = words[0]
+    if len(first) < 2 or first.endswith(".") or first.isupper() or not first[:1].isupper():
+        return ""
+    if not all(ch.isalpha() or ch in "-'’" for ch in first):
+        return ""
+    return first[:60]
+
+
+def one_name(names: list[str]) -> str:
+    """The name to greet an address by, from every name the records hold for it: the
+    first of them when all name the same person by first name; none when a name is not a
+    person's, or the address is held by more than one (a shared mailbox)."""
+    held = [" ".join(name.split()) for name in names if name.strip()]
+    firsts = {first_name(name).casefold() for name in held}
+    if not held or "" in firsts or len(firsts) != 1:
+        return ""
+    return held[0][:200]
 
 
 def greeting(facts_name: str) -> str:
@@ -260,35 +339,42 @@ def count_words(count: int) -> str:
 
 
 def subject(title: str, refs: str, count: int, due: datetime, reference: str) -> str:
-    """ "<title> (<refs>): <N> items due <D Mon YYYY> [<reference>]", the title shortened
-    to keep the subject within 200 characters. The bracketed reference is what a reply
-    is matched on (inbound.references)."""
+    """ "<title> (<refs>): <N> items due <D Mon YYYY> [<reference>]", never over 200
+    characters: the references are left out when they do not fit, then the title is
+    shortened. The bracketed reference is what a reply is matched on
+    (inbound.references)."""
     tail = f": {count_words(count)} due {due_short(due)} [{reference}]"
-    clean = " ".join(title.replace("[", "(").replace("]", ")").split())
-    named = f" ({refs})" if refs and refs != clean else ""
-    room = 200 - len(tail) - len(named)
+    clean, named = (
+        # Nothing in the title reads as a reference of its own: a reply is matched on
+        # the one in brackets.
+        " ".join(_REFERENCE.sub("PBC ", part.replace("[", "(").replace("]", ")")).split())
+        for part in (title, refs)
+    )
     if not clean:
-        return f"{refs or 'Evidence request'}{tail}"[:200]
+        clean, named = named or "Evidence request", ""
+    if named == clean or len(named) > 200 - len(tail) - 3 - min(len(clean), 40):
+        named = ""
+    shown = f" ({named})" if named else ""
+    room = max(200 - len(tail) - len(shown), 1)
     if len(clean) > room:
-        clean = clean[: max(room, 1)].rsplit(" ", 1)[0].rstrip(" ,;:-") or clean[:room]
-    return f"{clean}{named}{tail}"
+        clean = clean[:room].rsplit(" ", 1)[0].rstrip(" ,;:-") or clean[:room]
+    return f"{clean}{shown}{tail}"
 
 
 def control_line(title: str, frequency: str, system: str) -> str:
-    """A short line describing the control, from its name, frequency and system:
-    "Quarterly Active Directory user access review" for the "Periodic User Access
-    Review" of Active Directory, performed quarterly. Empty when nothing is known."""
+    """A short line describing the control, from its frequency, its system and its name
+    as written: "Quarterly Active Directory User Access Review" for the "Periodic User
+    Access Review" of Active Directory, performed quarterly. The name keeps its own
+    capitals. Empty when nothing is known."""
     words = title.split()
     when = FREQUENCY_WORDS.get(frequency.strip().upper(), "")
     if when and words and words[0].lower() in _FREQUENCY_WORD:
         words = words[1:]
-    words = [w.lower() if w[:1].isupper() and w[1:].islower() else w for w in words]
     named = " ".join(words)
     where = system.strip()
     if where and where.lower() in title.lower():
         where = ""
-    line = " ".join(part for part in (when, where, named) if part)
-    return (line[:1].upper() + line[1:])[:200] if line else ""
+    return " ".join(part for part in (when, where, named) if part)[:200]
 
 
 def facts_block(rows: list[tuple[str, str]]) -> str:
@@ -302,16 +388,12 @@ def control_fact(control_ref: str, facts: Facts) -> str:
     return f"{ref}, {line}" if ref and line else ref or line
 
 
-def items_text(wording: Wording, *, brief: bool, note: str = "") -> str:
-    """WHAT WE NEED: each item (in brief: its title and what it covers), the questions,
-    and any closing line; for a wording with no items, the wording itself."""
-    parts: list[str] = []
-    if wording.items:
-        parts.extend(item.text(brief=brief) for item in wording.items)
-    if wording.questions:
-        parts.append("\n".join([QUESTIONS, *(f"- {q}" for q in wording.questions)]))
-    if wording.after:
-        parts.extend(wording.after)
+def need_text(blocks: list[Item | Text | Questions], *, brief: bool, note: str = "") -> str:
+    """WHAT WE NEED: every block in its order; in brief, an item is its title and what
+    it covers, and the note says where the full wording is."""
+    parts = [
+        block.text(brief=brief) if isinstance(block, Item) else block.text() for block in blocks
+    ]
     if brief and note:
         parts.append(note)
     return "\n\n".join(parts)
@@ -333,19 +415,16 @@ def values_for_request(
     facts: Facts,
     brief: bool,
     note: str,
-    reminder: bool,
 ) -> dict[str, Any]:
     """The template values of a single request's email (outbound.PBC_REQUEST_V3 and
     PBC_REMINDER_V3)."""
     wording = parse(description)
-    if not wording.items:
-        # Wording a person wrote freely: it is what we need, as written.
-        need = Wording(opening=[], items=[], after=list(wording.opening))
-        need.questions = wording.questions
-        opening: list[str] = []
+    if wording.items:
+        opening, blocks = wording.opening, wording.blocks
     else:
-        need = wording
-        opening = wording.opening
+        # Wording a person wrote freely: it is what we need, as written.
+        opening = []
+        blocks = [*(Text(p.split("\n")) for p in wording.opening), *wording.blocks]
     stage = PHASE_WORDS.get(str(phase or ""), "")
     rows = [
         ("Control", control_fact(control_ref, facts)),
@@ -355,13 +434,14 @@ def values_for_request(
         ("Reference", reference),
     ]
     title = facts.control_title.strip()[:160]
+    count = len(wording.items)
     return {
-        "subject_line": subject(title, control_ref.strip()[:120], len(need.items), due, reference),
+        "subject_line": subject(title, control_ref.strip()[:120], count, due, reference),
         "greeting": greeting(facts.recipient_name),
-        "opening": "" if reminder else "".join(f"{p}\n\n" for p in opening),
+        "opening": "".join(f"{p}\n\n" for p in opening),
         "facts": facts_block(rows),
-        "items": items_text(need, brief=brief, note=note),
+        "items": need_text(blocks, brief=brief, note=note),
         "team": team(engagement),
         "reference": reference,
-        "count": str(len(need.items)),
+        "count": str(count),
     }

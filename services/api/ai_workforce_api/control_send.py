@@ -12,6 +12,7 @@ request (evidence_groups), as it would from the Evidence center; the preview say
 The requests are the Evidence center's own records, so they appear there as sent.
 """
 
+import hashlib
 import re
 from collections.abc import Callable
 from datetime import UTC
@@ -57,6 +58,24 @@ class Routing(BaseModel):
     cc: list[str] = Field(default_factory=list, max_length=10)
 
 
+class Seen(BaseModel):
+    """An email as the review showed it: the request it is (as the review named it) and
+    the fingerprint of its subject and text (SendTarget.digest)."""
+
+    id: UUID
+    digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+# The email that would go is not the one the review showed (who it goes to was changed in
+# the review, so it greets someone else, or it now travels with other requests). Decided
+# with the review of the redesign (13 November 2026): what is read is what is sent, so
+# it is not approved; the changes are kept, and the next review shows the email as it goes.
+REVIEW_AGAIN = (
+    "Who this goes to was changed, and the email now reads differently from the one you "
+    "reviewed. Your changes are saved: review the email again, then send it."
+)
+
+
 class ControlSendBody(BaseModel):
     # Only check: say what would go, to whom, and with what; change nothing.
     preview: bool = True
@@ -66,6 +85,9 @@ class ControlSendBody(BaseModel):
     # to no one go to them.
     owner_name: str | None = Field(default=None, max_length=200)
     owner_email: str | None = Field(default=None, max_length=200)
+    # The emails as the review showed them. With a send: a request whose email would now
+    # read differently is not approved (REVIEW_AGAIN). None given: nothing is compared.
+    seen: list[Seen] = Field(default_factory=list, max_length=100)
 
 
 class SendTarget(BaseModel):
@@ -91,6 +113,9 @@ class SendTarget(BaseModel):
     # The same email laid out as the recipient's mail client shows it (email_html.to_html,
     # the layout the live send attaches): built only from the subject and text above.
     html: str = ""
+    # The fingerprint of the subject and text above: sent back with the send (Seen), so
+    # the email approved is the one that was read.
+    digest: str = ""
 
 
 class OwnerChoice(BaseModel):
@@ -164,13 +189,33 @@ def _with_email(
     project_id: UUID,
     shown: dict[UUID, SendTarget],
     groups: dict[UUID, Any],
+    routing: list[Routing] | None = None,
+    proposed: dict[str, str] | None = None,
 ) -> None:
-    """Each target that goes now, with its email's subject and text as the send renders it."""
+    """Each target that goes now, with its email's subject and text as the send renders
+    it: to the recipient the send will use (the review's change, else the request's own,
+    else the control's owner) and, for an owner named in the review and not saved yet,
+    with that name (`proposed`)."""
     from ai_workforce_api.email_html import to_html
     from ai_workforce_api.evidence_groups import _pbcs, render_group, sections_for
     from ai_workforce_api.outbound import _engagement, _read_pbc, render_request
 
     engagement = _engagement(connection, organization_id, project_id)
+    changes = {change.id: change for change in routing or []}
+
+    def addressed(request: Any, key: UUID, fallback: str) -> Any:
+        change = changes.get(key)
+        if change is not None:
+            return request.model_copy(
+                update={
+                    "recipient": change.recipient.strip().lower(),
+                    "cc_recipients": [a.strip().lower() for a in change.cc],
+                }
+            )
+        if request.recipient.strip() == "":
+            return request.model_copy(update={"recipient": fallback})
+        return request
+
     for key, target in shown.items():
         if target.waiting or not target.ok:
             continue
@@ -179,22 +224,31 @@ def _with_email(
             if grouped is not None:
                 members = [m for m, _ in grouped.members]
                 pbcs = _pbcs(connection, organization_id, project_id, members)
+                going = [addressed(pbcs[m], key, target.recipient) for m in members]
                 message = render_group(
-                    key, members[0], sections_for(connection, [pbcs[m] for m in members]),
-                    engagement,
-                )  # fmt: skip
+                    key, members[0], sections_for(connection, going, None, proposed), engagement
+                )
             else:
-                request = _read_pbc(connection, organization_id, project_id, key)
-                message = render_request(connection, request, engagement)
+                request = addressed(
+                    _read_pbc(connection, organization_id, project_id, key), key, target.recipient
+                )
+                message = render_request(connection, request, engagement, proposed=proposed)
         except ValueError, KeyError, IndexError, NotVisible:
             continue
         shown[key] = target.model_copy(
             update={
+                "recipient": message.recipient or target.recipient,
                 "subject": message.subject,
                 "body": message.body,
                 "html": to_html(message.subject, message.body),
+                "digest": text_digest(message.subject, message.body),
             }
         )
+
+
+def text_digest(subject: str, body: str) -> str:
+    """The fingerprint of an email's subject and text, as the review shows them."""
+    return hashlib.sha256(f"{subject}\n{body}".encode()).hexdigest()
 
 
 def _check_routing(routing: list[Routing]) -> None:
@@ -382,8 +436,23 @@ def control_send(
             recipient=recipient or owner_email,
             other_controls=[], ok=True, detail="", phase=str(current.testing_phase or ""),
         )  # fmt: skip
+    changed: list[SendTarget] = []
     if body.preview:
+        _with_email(
+            connection, organization_id, project_id, shown, groups, body.routing,
+            None if given is None else {owner_email: owner_name},
+        )  # fmt: skip
+    elif body.seen:
+        # The owner and the review's changes are saved: each email as it goes now,
+        # against the one the review showed.
         _with_email(connection, organization_id, project_id, shown, groups)
+        seen = {item.id: item.digest for item in body.seen}
+        for key, target in list(shown.items()):
+            if target.ok and not target.waiting and target.digest not in ("", seen.get(key)):
+                shown[key] = target.model_copy(update={"ok": False, "detail": REVIEW_AGAIN})
+                changed.append(shown[key])
+        refused = {target.id for target in changed}
+        items = [item for item in items if item.id not in refused]
     waiting = [target for target in shown.values() if target.waiting]
     # The engagement's people at the client, for changing who a request goes to.
     choices: list[OwnerChoice] = []
@@ -399,7 +468,7 @@ def control_send(
             preview=body.preview, control_ref=control_ref, control_title=control_title,
             contacts=choices, domains=domains,
             needs_owner=False, owner_name=owner_name, owner_email=owner_email,
-            drafts=len(drafts), targets=waiting, done=0, refused=0,
+            drafts=len(drafts), targets=[*waiting, *changed], done=0, refused=len(changed),
         )  # fmt: skip
     if body.preview and unaddressed:
         # Addressed only when sent: say where they will go, nothing checked yet.
@@ -427,7 +496,7 @@ def control_send(
         contacts=choices, domains=domains,
             needs_owner=False, owner_name=owner_name,
         owner_email=owner_email, drafts=len(drafts), targets=list(shown.values()),
-        done=result.done, refused=result.refused,
+        done=result.done, refused=result.refused + len(changed),
     )  # fmt: skip
 
 

@@ -213,36 +213,44 @@ def section_of(
     )
 
 
-def sections_for(connection: Any, pbcs: list[PbcBody]) -> list[Section]:
+def sections_for(
+    connection: Any,
+    pbcs: list[PbcBody],
+    frozen: dict[UUID, Any] | None = None,
+    proposed: dict[str, str] | None = None,
+) -> list[Section]:
     """The members as the email shows them, by their controls' names and systems, with
-    the recipient's name as a record holds it."""
-    from ai_workforce_api.outbound import recipient_name
+    the recipient's name. For an approved group or reminder (`frozen`: the facts kept
+    with its approval, outbound.approved_facts), as it was approved; otherwise as the
+    records hold them now (outbound.request_facts), with `proposed` names for addresses
+    not saved yet."""
+    from ai_workforce_api.outbound import request_facts
 
-    names = {
-        UUID(str(row[0])): (str(row[1]), str(row[2]))
-        for row in connection.execute(
-            "SELECT c.id, c.title, coalesce(a.name, '') FROM engagement_controls c "
-            "LEFT JOIN engagement_applications a ON a.id = c.engagement_application_id "
-            "WHERE c.id = ANY(%s)",
-            ([p.engagement_control_id for p in pbcs if p.engagement_control_id is not None],),
-        ).fetchall()
-    }
-    people: dict[str, str] = {}
     found: list[Section] = []
     for p in pbcs:
-        title, system = (
-            names.get(p.engagement_control_id, ("", "")) if p.engagement_control_id else ("", "")
-        )
-        address = p.recipient.strip().lower()
-        if address not in people:
-            lead = next(
-                (q.engagement_control_id for q in pbcs
-                 if q.recipient.strip().lower() == address and q.engagement_control_id),
-                None,
-            )  # fmt: skip
-            people[address] = recipient_name(connection, p.project_id, address, lead)
-        found.append(section_of(p, title, system, people[address]))
+        facts = (frozen or {}).get(p.id)
+        if facts is None:
+            facts = request_facts(connection, p, proposed)
+        found.append(section_of(p, facts.control_title, facts.system, facts.recipient_name))
     return found
+
+
+def facts_of(sections: list[Section]) -> dict[UUID, Any]:
+    """What the sections were rendered with, to keep with the approval of their email."""
+    from ai_workforce_api.request_email import Facts
+
+    return {
+        s.id: Facts(control_title=s.control_title, system=s.system, recipient_name=s.recipient_name)
+        for s in sections
+    }
+
+
+def frozen_facts(connection: Any, approval_id: UUID) -> dict[UUID, Any] | None:
+    """The facts kept with an approval, or None when it keeps none (approved before
+    they were kept: such a message renders from the records, as it always did)."""
+    from ai_workforce_api.outbound import approved_facts
+
+    return approved_facts(connection, approval_id) or None
 
 
 def reference_of(group_id: UUID) -> str:
@@ -1312,8 +1320,9 @@ def review(
         ).fetchone()
         try:
             message = render_group(
-                group.id, group.lead_request_id, sections_for(connection, members), engagement,
-                version=approved_version(connection, group.id),
+                group.id, group.lead_request_id,
+                sections_for(connection, members, frozen_facts(connection, group.lead_approval_id)),
+                engagement, version=approved_version(connection, group.id),
             )  # fmt: skip
             body = message.body
         except ValueError:
@@ -1529,8 +1538,9 @@ def _approve(
         pbcs = _pbcs(connection, organization_id, project_id, ids)
         members = [pbcs[i] for i in ids]
         engagement = _engagement(connection, organization_id, project_id)
+        sections = sections_for(connection, members)
         try:
-            message = render_group(group_id, ids[0], sections_for(connection, members), engagement)
+            message = render_group(group_id, ids[0], sections, engagement)
         except ValueError:
             raise GroupState("The request does not fit one email. Send fewer controls.") from None
         if not recipients_allowed(settings, message):
@@ -1569,6 +1579,11 @@ def _approve(
             )
             for p in members
         ]
+        from ai_workforce_api.outbound import keep_facts
+
+        # What the email was rendered with, kept with the lead's approval: the send
+        # renders it from there, whatever a contact or a control is renamed to since.
+        keep_facts(cursor, organization_id, project_id, approvals[0].id, facts_of(sections))
         cursor.execute(
             """
             INSERT INTO evidence_request_groups (
@@ -1847,7 +1862,7 @@ def _send_problem(
         message = render_group(
             group.id,
             group.lead_request_id,
-            sections_for(connection, members),
+            sections_for(connection, members, frozen_facts(connection, group.lead_approval_id)),
             _engagement(connection, organization_id, project_id),
             version=approved_version(connection, group.id),
         )
@@ -1918,7 +1933,7 @@ def _record(
             message = render_group(
                 group.id,
                 group.lead_request_id,
-                sections_for(connection, members),
+                sections_for(connection, members, frozen_facts(connection, group.lead_approval_id)),
                 _engagement(connection, organization_id, project_id),
                 version=approved_version(connection, group.id),
             )
@@ -2049,7 +2064,11 @@ def message_for(
     return render_group(
         group.id,
         group.lead_request_id,
-        sections_for(connection, [pbcs[m] for m in group.members]),
+        sections_for(
+            connection,
+            [pbcs[m] for m in group.members],
+            frozen_facts(connection, group.lead_approval_id),
+        ),
         _engagement(connection, organization_id, project_id),
         version=int(outbound.template_version),
     )
@@ -2108,6 +2127,7 @@ def reminder_for(
     sequence: int,
     *,
     version: Callable[[], int | None] | None = None,
+    frozen: dict[UUID, Any] | None = None,
 ) -> Any | None:
     """The group's reminder when the request leads a sent group; None otherwise. A member
     that does not lead is never reminded on its own. `version` gives the template version
@@ -2122,7 +2142,7 @@ def reminder_for(
     return render_group_reminder(
         group.id,
         pbc,
-        sections_for(connection, open_members(connection, group)),
+        sections_for(connection, open_members(connection, group), frozen),
         engagement,
         follow_up_id,
         sequence,

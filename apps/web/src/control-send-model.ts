@@ -24,6 +24,8 @@ export type SendTarget = {
   body: string;
   /** The same email as a mail client lays it out; "" when the server sent none. */
   html: string;
+  /** The fingerprint of the subject and text shown; "" when the server sent none. */
+  digest: string;
 };
 
 /** A request not sent, and why; held means it only waits for its phase. */
@@ -102,6 +104,7 @@ export function parseSendResult(value: unknown): SendResult | null {
         subject: str(t.subject),
         body: str(t.body),
         html: str(t.html),
+        digest: /^[0-9a-f]{64}$/.test(str(t.digest)) ? str(t.digest) : "",
       })),
     done: num(v.done),
     refused: num(v.refused),
@@ -127,12 +130,25 @@ export function checkOwner(
 /** A change made in the review: who one request goes to, and who is copied. */
 export type Routing = { id: string; recipient: string; cc: string[] };
 
-/** The body the page sends: a check first, then the send, with the owner when named and
- * the review's changes to who each request goes to. */
+/** An email as the review showed it: the request and its text's fingerprint. */
+export type Seen = { id: string; digest: string };
+
+/** The emails the review showed, to send back with the send: the server approves a
+ * request only when its email still reads as the one that was read (a recipient changed
+ * in the review can change the greeting), and says to review it again otherwise. */
+export function seenOf(result: SendResult): Seen[] {
+  return result.targets
+    .filter((t) => t.ok && !t.waiting && t.digest !== "")
+    .map((t) => ({ id: t.id, digest: t.digest }));
+}
+
+/** The body the page sends: a check first, then the send, with the owner when named,
+ * the review's changes to who each request goes to, and the emails as reviewed. */
 export function sendBody(
   preview: boolean,
   owner: { name: string; email: string } | null,
   routing: readonly Routing[] = [],
+  seen: readonly Seen[] = [],
 ): Record<string, unknown> {
   return {
     preview,
@@ -140,6 +156,7 @@ export function sendBody(
       ? {}
       : { owner_name: owner.name, owner_email: owner.email }),
     ...(routing.length === 0 ? {} : { routing }),
+    ...(preview || seen.length === 0 ? {} : { seen }),
   };
 }
 

@@ -46,6 +46,19 @@ export async function POST(request: Request) {
           : [],
       }));
   }
+  // The emails as the review showed them: the API approves only what still reads so.
+  if (Array.isArray(rest.seen)) {
+    send.seen = rest.seen
+      .filter(
+        (item): item is Record<string, unknown> =>
+          typeof item === "object" && item !== null,
+      )
+      .slice(0, 100)
+      .map((item) => ({
+        id: String(item.id ?? ""),
+        digest: String(item.digest ?? ""),
+      }));
+  }
   const session = sessionToken((await cookies()).get("aw_session")?.value);
   try {
     const headers = new Headers({ "content-type": "application/json" });

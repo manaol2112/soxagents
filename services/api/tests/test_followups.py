@@ -1,4 +1,5 @@
 import hashlib
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -18,6 +19,7 @@ from ai_workforce_api.authorization import Principal, PrincipalKind
 from ai_workforce_api.db import connect
 from ai_workforce_api.durable import TASK_QUEUE, activities_for, follow_up_workflow_id
 from ai_workforce_api.durable_workflow import FollowUpRequest, FollowUpWorkflow
+from ai_workforce_api.evidence_portal import LINK_PLACEHOLDER
 from ai_workforce_api.followups import DONE, HOLD_SECONDS, Occurrence, advance, plan
 from ai_workforce_api.mailbox import MailboxProvider, open_mailbox
 from ai_workforce_api.outbound import (
@@ -33,7 +35,7 @@ _APPROVED_REMINDER = "38f73066ede3f916e7eef8f3c0bb52f1f62d2bf629ffecb9e032ae9745
 _SENT_AT = datetime(2026, 10, 1, 9, tzinfo=UTC)
 
 
-_APPROVED_REMINDER_V3 = "b2458ac460006dcceb6beffa0616b7fcf736b85afd0ede031efd292e5adaaa9b"
+_APPROVED_REMINDER_V3 = "34d708882709b98d09c735be3206952a02bb47cb882738e98abfba262f93992b"
 
 
 def test_the_reminder_template_is_the_reviewed_version() -> None:
@@ -554,3 +556,51 @@ def _audit_text(database: Database) -> str:
     with connect(database.url) as connection:
         rows = connection.execute("SELECT payload::text FROM audit_events").fetchall()
     return str(rows)
+
+
+def test_a_reminder_goes_out_as_approved_whatever_a_contact_is_renamed_to(
+    migrated: Database,
+) -> None:
+    """The reminder's text names the recipient from the engagement's contacts. What it
+    was rendered with is kept with its approval (migration 0157), so a contact renamed
+    after the reminder was asked for neither changes the reminder nor blocks its send."""
+    seeded, project_id, owner, admin = _team(migrated, "reminder-frozen")
+    request_id = _sent(migrated, seeded, project_id, owner, admin)
+    _advance(migrated, seeded, project_id, request_id, days=4)
+    due = _follow_ups(owner, seeded, project_id)[0]
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "INSERT INTO engagement_contacts (organization_id, project_id, name, email, "
+            "created_by) VALUES (%s, %s, 'Dana Lee', 'client@example.com', %s)",
+            (seeded["organization_id"], project_id, seeded["user_id"]),
+        )
+    submitted = owner.post(_reminder(seeded, project_id, request_id, due["id"], "submit"))
+    assert submitted.status_code == 200, submitted.text
+    approved = submitted.json()["preview"]
+    assert approved["body"].startswith("Hello Dana,\n\nThis is reminder 1 of ")
+    with connect(migrated.url) as connection:
+        connection.execute("UPDATE engagement_contacts SET name = 'Sam Other'")
+        # What was kept can be neither changed nor removed.
+        for statement in (
+            "UPDATE approved_message_facts SET facts = '{}'",
+            "DELETE FROM approved_message_facts",
+        ):
+            with pytest.raises(psycopg.Error):
+                connection.execute(statement)
+            connection.rollback()
+    _decide(admin, seeded, project_id, submitted.json()["approval"]["id"], "APPROVED")
+    sent = owner.post(
+        _reminder(seeded, project_id, request_id, due["id"], "send"),
+        json={"approval_id": submitted.json()["approval"]["id"]},
+    )
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["status"] == "ACCEPTED"
+    with connect(migrated.url) as connection:
+        stored = connection.execute(
+            "SELECT body FROM mailbox_messages WHERE provider_message_id = %s",
+            (sent.json()["provider_message_id"],),
+        ).fetchone()
+    assert stored is not None
+    link = re.search(r"https?://\S+/upload/\S+", stored[0])
+    assert link is not None
+    assert stored[0].replace(link.group(0), LINK_PLACEHOLDER) == approved["body"]

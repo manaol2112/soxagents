@@ -837,3 +837,35 @@ def test_a_message_approved_on_version_2_is_sent_exactly_as_approved(
 
 
 _LINK = re.compile(r"https?://\S+/upload/[A-Za-z0-9_-]+")
+
+
+def test_a_resumed_send_that_can_no_longer_be_rendered_fails_as_invalid(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A recorded message whose template version nothing renders any more (or that no
+    longer fits one email) cannot be checked against what was approved: the resumed send
+    fails as an invalid message. It was an unhandled error before."""
+    from ai_workforce_api import outbound
+
+    seeded, project_id, owner, admin = _team(migrated, "resume-invalid")
+    request_id, approval_id = _approved_request(migrated, seeded, project_id, owner, admin)
+
+    def times_out(
+        settings: Settings, connection: psycopg.Connection[Any], org: UUID, project: UUID
+    ) -> Any:
+        return _TimesOut(migrated.url, org, project, deliver=False)
+
+    first = _send_direct(migrated, seeded, project_id, request_id, approval_id, times_out)
+    assert (first.status, first.error_code) == ("UNKNOWN", "timeout")
+
+    def unknown(*_args: Any, **_kwargs: Any) -> Any:
+        raise ValueError("unknown template version")
+
+    monkeypatch.setattr(outbound, "_message_for", unknown)
+    retried = owner.post(_send(seeded, project_id, request_id), json={"approval_id": approval_id})
+    assert retried.status_code == 200, retried.text
+    assert (retried.json()["status"], retried.json()["error_code"]) == (
+        "FAILED",
+        "invalid_message",
+    )
+    assert _count(migrated, "mailbox_messages") == 0

@@ -5,6 +5,7 @@ record holds exactly what was approved; the email is sent once, durably; nothing
 group sends or reminds on its own."""
 
 import hashlib
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -32,6 +33,7 @@ from ai_workforce_api.evidence_groups import (
     propose,
     render_group,
 )
+from ai_workforce_api.evidence_portal import LINK_PLACEHOLDER
 from ai_workforce_api.followups import DONE, advance, remindable_requests
 from ai_workforce_api.mailbox import MailboxState, MockMailbox
 from ai_workforce_api.settings import Settings
@@ -686,6 +688,67 @@ def test_a_group_approved_on_version_1_is_sent_exactly_as_approved(
                     team["project"])  # fmt: skip
     assert outbound == [approved]
     assert body.startswith("Hello,\n\nThe audit team for SOX 2027 needs the evidence below by")
+
+
+def test_an_approved_group_goes_out_as_approved_whatever_its_recipient_is_renamed_to(
+    migrated: Database,
+) -> None:
+    """The group's email names each control and its system and greets the recipient from
+    other records. What it was rendered with is kept with the lead's approval (migration
+    0157): the recipient renamed and a contact added after the approval change neither the
+    review of the approved request nor the email, and the send is not refused. (A control
+    whose own record changes its evidence specification still returns the group to draft:
+    that is the plan's freshness rule, not the email's.)"""
+    team = _ready(migrated, "eg-frozen")
+    owner = team["owner"]
+    standard, _ = _personal_split(owner, team)
+    first = _review(owner, team, standard["id"]).json()
+    with connect(migrated.url) as connection:
+        # The recipient is on record by a person's name: the email greets them by it.
+        connection.execute(
+            "UPDATE engagement_controls SET owner_name = 'Dana Lee' WHERE project_id = %s "
+            "AND lower(owner_email) = %s",
+            (team["project"], first["recipient"].lower()),
+        )
+    view = _review(owner, team, standard["id"]).json()
+    assert view["body"].startswith("Hello Dana,\n")
+    with connect(migrated.url) as connection:
+        _approve(
+            connection, _settings(migrated), _principal(team), team["org"], team["project"],
+            UUID(view["id"]), ApproveSendBody(members=[SeenMember(**m) for m in _seen(view)]),
+            "Reviewed and approved.",
+        )  # fmt: skip
+        connection.commit()
+    approved = _review(owner, team, view["id"]).json()
+    assert (
+        approved["status"] == "APPROVED"
+        and view["members"][0]["control_title"] in (approved["body"])
+    )
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE engagement_controls SET owner_name = 'Kim Else' WHERE project_id = %s "
+            "AND lower(owner_email) = %s",
+            (team["project"], approved["recipient"].lower()),
+        )
+        connection.execute(
+            "INSERT INTO engagement_contacts (organization_id, project_id, name, email, "
+            "created_by) VALUES (%s, %s, 'Zed Other', %s, %s) "
+            "ON CONFLICT (project_id, email) DO UPDATE SET name = 'Zed Other'",
+            (team["org"], team["project"], approved["recipient"].lower(), team["owner_id"]),
+        )
+    # Still shown, and sent, as approved.
+    after = _review(owner, team, view["id"]).json()
+    assert (after["subject"], after["body"]) == (approved["subject"], approved["body"])
+    assert after["body"].startswith("Hello Dana,\n")
+    sent = owner.post(f"{_project(team)}/evidence-groups/{view['id']}/send")
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["status"] == "SENT"
+    with connect(migrated.url) as connection:
+        body = _one(connection, "SELECT body FROM mailbox_messages WHERE project_id = %s",
+                    team["project"])  # fmt: skip
+    link = re.search(r"https?://\S+/upload/\S+", body)
+    assert link is not None
+    assert body.replace(link.group(0), LINK_PLACEHOLDER) == approved["body"]
 
 
 def test_a_change_after_approval_is_not_sent_and_the_requests_return_to_draft(

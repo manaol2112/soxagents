@@ -2,6 +2,7 @@
 product owner on 28 October 2026). The drafts go through the Evidence center's own approval
 and send; a control with no owner asks for one before anything goes."""
 
+import re
 from typing import Any
 from uuid import UUID
 
@@ -12,6 +13,7 @@ from test_evidence_owners import _unaddress
 from test_outbound import migrated
 
 from ai_workforce_api.db import connect
+from ai_workforce_api.evidence_portal import LINK_PLACEHOLDER
 
 __all__ = ["migrated"]
 
@@ -41,6 +43,21 @@ def _state(migrated: Database, control: str) -> tuple[list[tuple[str, str]], tup
         ).fetchone()
     assert owner is not None
     return drafts, (str(owner[0]), str(owner[1]))
+
+
+def _delivered(migrated: Database, control: str) -> dict[str, str]:
+    """Each email delivered for the control's engagement, by subject, with the link taken
+    back out: the text as it was approved."""
+    with connect(migrated.url) as connection:
+        rows = connection.execute(
+            "SELECT subject, body FROM mailbox_messages WHERE project_id = "
+            "(SELECT project_id FROM engagement_controls WHERE id = %s)",
+            (UUID(control),),
+        ).fetchall()
+    return {
+        str(subject): re.sub(r"https?://\S+/upload/\S+", LINK_PLACEHOLDER, str(body))
+        for subject, body in rows
+    }
 
 
 def _send(client: Any, team: dict[str, Any], control: str, **body: Any) -> dict[str, Any]:
@@ -90,8 +107,14 @@ def test_a_control_without_an_owner_asks_for_one_then_sends_to_them(
 
     assert all(t["html"] == to_html(t["subject"], t["body"]) for t in going)
 
-    # Sent: the owner is the control's, each draft goes to them, approved and sent.
-    sent = _send(owner, team, control, preview=False, **named)
+    # The review renders the email for the owner about to be saved: greeted by the name
+    # the send will use (it showed "Hello," and sent "Hello Dana," before).
+    assert all(t["body"].startswith("Hello Dana,\n") for t in going), going
+
+    # Sent: the owner is the control's, each draft goes to them, approved and sent, with
+    # the emails as the review showed them.
+    seen = [{"id": t["id"], "digest": t["digest"]} for t in going]
+    sent = _send(owner, team, control, preview=False, seen=seen, **named)
     assert sent["refused"] == 0, sent["targets"]
     assert sent["done"] == len(sent["targets"]) >= 1
     drafts, recorded = _state(migrated, control)
@@ -112,6 +135,9 @@ def test_a_control_without_an_owner_asks_for_one_then_sends_to_them(
             ).fetchall()
         }
     assert {t["subject"] for t in going} <= subjects, (going, subjects)
+    # And the same text, word for word, with only the link put in its place.
+    delivered = _delivered(migrated, control)
+    assert all(delivered.get(t["subject"]) == t["body"] for t in going), (going, delivered)
     # Nothing left to send.
     again = _send(owner, team, control, preview=True)
     assert (again["drafts"], again["targets"]) == (0, [])
@@ -246,3 +272,107 @@ def test_the_review_can_change_who_a_request_goes_to_and_copy_others(
     assert routed, "the changed request went to the new recipient"
     assert all(str(r[0]) == "SENT" for r in routed)
     assert all(list(r[2]) == ["dana.reyes@client.example"] for r in routed)
+
+
+def test_a_recipient_changed_in_the_review_is_reviewed_again_before_it_is_sent(
+    migrated: Database,
+) -> None:
+    """What is read is what is sent. The review shows the email for the recipient it
+    will go to; a recipient changed in the review after the email was shown can change
+    how it reads (the greeting), so the send saves the change and approves nothing, and
+    the next review shows the email as it will go."""
+    from ai_workforce_api.control_send import REVIEW_AGAIN
+
+    team = _ready(migrated, "cs-changed")
+    owner = team["owner"]
+    rows = [r for r in _all(owner, team) if r["control_ref"] == "ITGC-AC-03"]
+    control = _control_of(migrated, rows[0]["id"])
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "INSERT INTO engagement_contacts (organization_id, project_id, name, email, "
+            "created_by) VALUES (%s, %s, 'Sam Ortiz', 'sam.ortiz@client.example', %s)",
+            (team["org"], team["project"], team["owner_id"]),
+        )
+    first = [t for t in _send(owner, team, control, preview=True)["targets"] if t["ok"]]
+    assert first and not any(t["body"].startswith("Hello Sam,") for t in first)
+    seen = [{"id": t["id"], "digest": t["digest"]} for t in first]
+    routing = [{"id": t["id"], "recipient": "sam.ortiz@client.example", "cc": []} for t in first]
+    # A review asked with the change shows the email as it would go.
+    shown = _send(owner, team, control, preview=True, routing=routing)["targets"]
+    assert all(t["body"].startswith("Hello Sam,\n") for t in shown if t["ok"])
+    # Sent with the change, against the email read before it: saved, not approved.
+    refused = _send(owner, team, control, preview=False, routing=routing, seen=seen)
+    assert refused["done"] == 0 and refused["refused"] >= 1, refused
+    assert {t["detail"] for t in refused["targets"] if not t["waiting"]} == {REVIEW_AGAIN}
+    assert _delivered(migrated, control) == {}
+    drafts, _ = _state(migrated, control)
+    assert all(status == "DRAFT" for status, _ in drafts), drafts
+    assert "sam.ortiz@client.example" in {recipient for _, recipient in drafts}
+    # Reviewed again, it reads as it will go, and goes exactly so.
+    again = [t for t in _send(owner, team, control, preview=True)["targets"] if t["ok"]]
+    assert again and all(t["body"].startswith("Hello Sam,\n") for t in again)
+    sent = _send(
+        owner, team, control, preview=False,
+        seen=[{"id": t["id"], "digest": t["digest"]} for t in again],
+    )  # fmt: skip
+    assert sent["refused"] == 0 and sent["done"] >= 1, sent["targets"]
+    delivered = _delivered(migrated, control)
+    assert all(delivered.get(t["subject"]) == t["body"] for t in again), (again, delivered)
+
+
+def test_an_approved_request_goes_out_as_approved_whatever_changes_around_it(
+    migrated: Database,
+) -> None:
+    """The email names the control and greets its recipient from other records. What it
+    was rendered with is kept with its approval (migration 0157): a contact added and
+    the control renamed after the approval change neither the preview of the request
+    awaiting its send nor the email, and the send is not refused (it answered 409 for
+    good before, and the preview showed text nobody approved)."""
+    from ai_workforce_api.outbound import _engagement, _read_pbc, render_request
+
+    team = _ready(migrated, "cs-frozen")
+    owner = team["owner"]
+    base = _project(team)
+    approved: dict[str, Any] = {}
+    for row in [r for r in _all(owner, team) if r["status"] == "DRAFT" and r["recipient"]]:
+        answer = owner.post(
+            f"{base}/pbc-requests/{row['id']}/approve",
+            json={"version": row["version"], "reason": "Read it; asks for the right items."},
+        )
+        if answer.status_code == 200:
+            approved = {"row": row, **answer.json()}
+            break
+    assert approved, "an agent's draft is approved"
+    request_id = approved["row"]["id"]
+    text = (approved["preview"]["subject"], approved["preview"]["body"])
+    assert "WHAT WE NEED" in text[1]
+    control = _control_of(migrated, request_id)
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "INSERT INTO engagement_contacts (organization_id, project_id, name, email, "
+            "created_by) VALUES (%s, %s, 'Zed Other', %s, %s) "
+            "ON CONFLICT (project_id, email) DO UPDATE SET name = 'Zed Other'",
+            (team["org"], team["project"], approved["row"]["recipient"].lower(), team["owner_id"]),
+        )
+        connection.execute(
+            "UPDATE engagement_controls SET title = 'Renamed Since', owner_name = 'Kim Else' "
+            "WHERE id = %s",
+            (UUID(control),),
+        )
+        connection.commit()
+        # As the records stand now, the email would read differently.
+        pbc = _read_pbc(connection, team["org"], team["project"], UUID(request_id))
+        live = render_request(
+            connection, pbc, _engagement(connection, team["org"], team["project"])
+        )
+        assert (live.subject, live.body) != text and "Renamed Since" in live.subject
+    # Awaiting its send, it is shown as approved.
+    shown = owner.get(f"{base}/pbc-requests/{request_id}/outbound-preview").json()
+    assert (shown["subject"], shown["body"]) == text
+    sent = owner.post(
+        f"{base}/pbc-requests/{request_id}/send",
+        json={"approval_id": approved["approval"]["id"]},
+    )
+    assert sent.status_code == 200, sent.text
+    assert (sent.json()["status"], sent.json()["subject"]) == ("ACCEPTED", text[0])
+    assert _delivered(migrated, control)[text[0]] == text[1]

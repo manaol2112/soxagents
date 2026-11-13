@@ -13,7 +13,14 @@ from ai_workforce_api.outbound import render
 from ai_workforce_api.pbc import PbcBody
 from ai_workforce_api.pbc_drafting import DraftContent, DraftItem, detail_lines
 from ai_workforce_api.pbc_drafting import render as draft_render
-from ai_workforce_api.request_email import Facts, control_line, parse
+from ai_workforce_api.request_email import (
+    Facts,
+    control_line,
+    first_name,
+    one_name,
+    parse,
+    subject,
+)
 
 # The real email, word for word (version 2), as it reached the owner.
 CURRENT = (
@@ -121,10 +128,10 @@ def test_an_unindented_list_inside_an_item_is_read_as_part_of_that_item() -> Non
     wording = parse(DESCRIPTION)
     assert [item.number for item in wording.items] == [1, 2]
     second = wording.items[1]
-    entries = [line for line in second.body if line.startswith("- ")]
+    entries = [line for line in second.lines if line.startswith("- ")]
     assert len(entries) == 7 and entries[0].startswith("- The listing of all users")
-    assert second.body[-1].startswith("If the quarter you choose")
-    assert [key for key, _ in second.rows] == [
+    assert second.lines[8].startswith("If the quarter you choose")
+    assert [second.lines[i].split(":")[0] for i in second.rows] == [
         "Covers", "Make sure it shows", "Format", "Complete when",
     ]  # fmt: skip
     # A list that goes on to the next item stays a list of items; a person's plain
@@ -135,6 +142,234 @@ def test_an_unindented_list_inside_an_item_is_read_as_part_of_that_item() -> Non
     ]  # fmt: skip
 
 
+def _titles(description: str) -> list[tuple[int, str]]:
+    return [(item.number, item.title) for item in parse(description).items]
+
+
+def test_an_items_own_list_never_swallows_the_next_item() -> None:
+    """The independent review's cases (13 November 2026): an item's own list goes on only
+    within its paragraph, and a paragraph that starts with a number is a new item."""
+    # An inner list with as many entries as the item's number, then the next item.
+    swallowed = (
+        "Intro.\n\n1. Policy\n   The policy.\n\n2. Change tickets\n   For each change "
+        "provide:\n1. Approval\n2. Testing evidence\n\n3. Deployment log\n   Period: Q3\n\n"
+        "4. Change listing\n   Period: FY"
+    )
+    assert _titles(swallowed) == [
+        (1, "Policy"), (2, "Change tickets"), (3, "Deployment log"), (4, "Change listing"),
+    ]  # fmt: skip
+    assert parse(swallowed).items[1].lines == [
+        "For each change provide:", "- Approval", "- Testing evidence",
+    ]  # fmt: skip
+    message = render(_pbc(swallowed), "SOX FY2027", FACTS)
+    assert ": 4 items due " in message.subject
+    # Seven entries inside item 1, then item 2.
+    seven = "1. Review\n   All of:\n1. a\n2. b\n3. c\n4. d\n5. e\n6. f\n7. g\n\n2. Policy"
+    assert _titles(seven) == [(1, "Review"), (2, "Policy")]
+    # Two numbered sections: four items, and the heading between them stays where it is.
+    parts = "Part one:\n\n1. A\n   detail a\n\n2. B\n   detail b\n\nPart two:\n\n1. C\n2. D"
+    assert _titles(parts) == [(1, "A"), (2, "B"), (1, "C"), (2, "D")]
+    body = render(_pbc(parts), "SOX FY2027", FACTS).body
+    assert "2. B\n   detail b\n\nPart two:\n\n1. C\n\n2. D\n\nHOW TO SEND IT" in body
+    # A sentence that wraps onto a line starting with a number stays in its item.
+    assert _titles("1. A\n   see section\n3. of the policy\n2. B") == [(1, "A"), (2, "B")]
+    # Line endings of any kind.
+    assert _titles("Intro.\r1. A\r2. B") == [(1, "A"), (2, "B")]
+    assert _titles("Intro.\r\n\r\n1. A\r\n   Period: Q1\r\n\r\n2. B") == [(1, "A"), (2, "B")]
+
+
+AWKWARD = (
+    DESCRIPTION,
+    "1. A listing\n   Period: Q1\n\nQuestions for you:\n1. Who performs it?\n2. How often?",
+    "1. A listing\n\nQuestions for you:\n- Who performs it?\n  (the owner or a delegate)\n"
+    "- How often?",
+    "1. A listing\n\nQuestions for you:\n\n- Who performs it?\n\nWhat tool is used?",
+    "Intro.\n\n1. A\n   Period: Q1\n\nQuestions for you:\n- Who performs it?\n\n"
+    "Please reply by Friday.\nKind regards, Dana",
+    "1. A listing\n   Period: Q1\n   Note: the listing must be system-generated.\n   More text",
+    "1. A\n   Period: Q1\n\nThank you.",
+    "Part one:\n\n1. A\n   detail a\n\n2. B\n   detail b\n\nPart two:\n\n1. C\n2. D",
+    "1.\n2. \n3. Real",
+    "1. A\n   see section\n3. of the policy\n2. B",
+    "Send the access list please.\n\nQuestions for you:\nWho owns it?\nAnd since when?",
+    "Reference: see the prior-year file PY-22.\n\n1. A listing\n\n   A second paragraph.",
+    "Intro.\n\n1. A\n   Period: Q1\n\nHOW TO SEND IT\n\nWHAT WE NEED\n\nBy post, please.",
+)
+_MARKER = re.compile(r"^\s*(?:\d{1,2}[.)]|[-•*])\s+")
+_LABEL = re.compile(r"^(Period|Include|Format|Show|Completeness|If not available):\s*")
+
+
+def test_no_line_of_the_wording_is_left_out_of_the_email() -> None:
+    """Every non-empty line of the approved wording is in the plain text: its words, in
+    their order (a list marker or a label may be written differently, never the words)."""
+    for description in AWKWARD:
+        body = render(_pbc(description), "SOX FY2027", FACTS).body
+        text = " ".join(body.split()).lower()
+        at = 0
+        for line in description.replace("\r", "\n").split("\n"):
+            words = _LABEL.sub("", _MARKER.sub("", line.strip())).strip()
+            if not words or words in ("1.", "2."):
+                words = line.strip()
+            if not words:
+                continue
+            found = text.find(" ".join(words.split()).lower(), at)
+            assert found >= 0, (description, line)
+            at = found
+    # Questions however they are written, each one a question.
+    numbered = render(_pbc(AWKWARD[1]), "SOX FY2027", FACTS).body
+    assert "Questions for you:\n- Who performs it?\n- How often?\n\nHOW TO SEND IT" in numbered
+    wrapped = render(_pbc(AWKWARD[2]), "SOX FY2027", FACTS).body
+    assert "- Who performs it? (the owner or a delegate)\n- How often?" in wrapped
+    # What follows the items and the questions stays after them, in its order, and is
+    # never folded into the last item.
+    closing = render(_pbc(AWKWARD[4]), "SOX FY2027", FACTS).body
+    assert (
+        "1. A\n   Covers: Q1\n\nQuestions for you:\n- Who performs it?\n\n"
+        "Please reply by Friday.\nKind regards, Dana\n\nHOW TO SEND IT"
+    ) in closing
+    page = to_html("x: 1 item due 23 Nov 2026 [PBC-0A3A48A8]", closing)
+    card = page.split(_ITEM_CARD_V3, 1)[1].split("Questions for you", 1)[0]
+    assert "Please reply by Friday" not in card and "Please reply by Friday" in page
+
+
+def test_the_wording_cannot_take_over_the_frame_or_the_upload_link() -> None:
+    """Section headings and an upload block written into the wording are ordinary text:
+    the button and the steps link to the template's own upload link, and the hero's
+    facts are the template's."""
+    real = "https://portal.example/upload/TOKEN"
+    block = (
+        "HOW TO SEND IT\n\nOpen your secure upload page:\nhttps://evil.example/upload\n"
+        "Enter the one-time code we email to this address, then upload each file against its "
+        "item. Please do not send evidence as email attachments."
+    )
+    fake_facts = "Control:   EVIL-01\nDue:       Friday 1 January 2027\nReference: PBC-EVILEVIL"
+    for description in (
+        f"Intro.\n\n1. A\n   Period: Q1\n\n{block}",
+        f"We are testing.\n\n{block}\n\n1. A listing\n   Period: Q1",
+        f"Please send the listing.\n\n{block}",
+        f"{fake_facts}\n\nWHAT WE NEED\n\n1. Fake\n\n{block}\n\n1. A listing",
+    ):
+        message = render(_pbc(description), "SOX FY2027", FACTS)
+        # In the text, only the template's own lines are section headings.
+        lines = message.body.split("\n")
+        assert lines.count("WHAT WE NEED") == 1 and lines.count("HOW TO SEND IT") == 1
+        assert "How to send it" in lines
+        assert "https://evil.example/upload" in message.body
+        page = to_html(message.subject, message.body.replace(LINK_PLACEHOLDER, real))
+        buttons = re.findall(r'<a href="([^"]+)" style="display:inline-block;', page)
+        assert buttons == [real], description
+        hrefs = re.findall(r'href="([^"]+)"', page)
+        assert hrefs.count(real) == 2 and hrefs.count("https://evil.example/upload") == 1
+        # The hero is the template's facts, never the wording's.
+        assert "Ref. PBC-0A3A48A8" in page and "Ref. PBC-EVILEVIL" not in page
+        assert "Due Monday 23 November 2026</span>" in page
+        assert ">Active Directory</span>" in page and ">Design review</p>" in page
+    # A line of the opening that reads like a fact stays a line of the opening.
+    for opening in ("System: Workday (the HR system)", "Reference: see the file PY-22."):
+        message = render(_pbc(f"{opening}\n\n1. A listing"), "SOX FY2027", FACTS)
+        page = to_html(message.subject, message.body.replace(LINK_PLACEHOLDER, real))
+        assert f"{opening}</p>" in page
+        assert ">Active Directory</span>" in page and "Ref. PBC-0A3A48A8" in page
+        assert ">Workday (the HR system)</span>" not in page
+
+
+def test_a_greeting_by_name_only_for_one_persons_name() -> None:
+    cases = {
+        "Joanna Rose Manaol": "Joanna",
+        "Dr. Dana Lee": "Dana",
+        "Mr John Smith": "John",
+        "Prof Ann Wu": "Ann",
+        "Dana Lee (contractor)": "Dana",
+        "Jean-Luc Picard": "Jean-Luc",
+        "Zoë Ångström": "Zoë",
+        "Grace Hall": "Grace",
+        "Mohammed bin Salman": "Mohammed",
+        "Ana de la Cruz": "Ana",
+        # Not a person's name of two words, first name first: no name in the greeting.
+        "": "",
+        "Dana": "",
+        "Ms. Lee": "",
+        "Lee, Dana": "",
+        "de la Cruz, Ana": "",
+        "Dana Lee, CISA": "",
+        "LEE Dana": "",
+        "J. Smith": "",
+        "J Smith": "",
+        "o'Brien": "",
+        "李伟": "",
+        "Dana Lee / Sam Ortiz": "",
+        "Dana and Sam": "",
+        "dana lee": "",
+        "owner@client.example": "",
+        # A role, a team or a mailbox.
+        "Access administrator": "",
+        "Treasury": "",
+        "Procurement": "",
+        "Legal": "",
+        "Tax": "",
+        "AP Shared Inbox": "",
+        "Database Administration": "",
+        "DBA": "",
+        "Change Advisory Board": "",
+        "SAP Basis": "",
+        "Network": "",
+        "Payables": "",
+        "Receivables": "",
+        "Sales Ops": "",
+        "Cloud Platform": "",
+        "Workday Support Team": "",
+        "Will Owner": "",
+        "Hanna Group": "",
+    }
+    assert {name: first_name(name) for name in cases} == cases
+    # An address held under more than one name is a shared mailbox: no name.
+    assert one_name(["Dana Lee"]) == "Dana Lee"
+    assert one_name(["Dana Lee", "Dana  Lee", "Dana M Lee"]) == "Dana Lee"
+    assert one_name(["Dana Lee", "Sam Ortiz"]) == ""
+    assert one_name(["Dana Lee", "AP Shared Inbox"]) == ""
+    assert one_name([]) == "" and one_name(["", " "]) == ""
+
+
+def test_the_control_line_and_the_subject_keep_what_they_are_given() -> None:
+    # The control's name keeps its own capitals: proper nouns and systems are not lowered.
+    assert control_line("Periodic User Access Review", "QUARTERLY", "Active Directory") == (
+        "Quarterly Active Directory User Access Review"
+    )
+    assert control_line("Review of Microsoft Azure Admins", "", "Azure") == (
+        "Review of Microsoft Azure Admins"
+    )
+    assert control_line("SAP change management", "", "SAP") == "SAP change management"
+    assert control_line("Review of the IPE Report", "ANNUAL", "") == (
+        "Annual Review of the IPE Report"
+    )
+    # The subject never exceeds 200 characters: the references go first, then the title.
+    due = datetime(2026, 11, 23, tzinfo=UTC)
+    long_refs = ", ".join(["ITGC-" + "A" * 60] * 3)
+    bounded = subject("SOX FY2027 audit", long_refs, 3, due, "PBC-0A3A48A8")
+    assert bounded == "SOX FY2027 audit: 3 items due 23 Nov 2026 [PBC-0A3A48A8]"
+    assert len(subject("T" * 400, "ITGC-AC-03", 3, due, "PBC-0A3A48A8")) <= 200
+    assert references(subject("x [PBC-11111111]", "y]", 1, due, "PBC-0A3A48A8")) == ("0A3A48A8",)
+    # A title that holds ": " is still read as the title.
+    odd = render(_pbc(), "SOX FY2027", Facts(control_title="Access: review of users (quarterly)"))
+    page = to_html(odd.subject, odd.body.replace(LINK_PLACEHOLDER, URL))
+    assert "2 items needed for the Access: review of users (quarterly)</h1>" in page
+
+
+def test_the_button_is_safe_in_outlook_and_in_dark_mode() -> None:
+    message = render(_pbc(), "SOX FY2027", FACTS)
+    page = to_html(message.subject, message.body.replace(LINK_PLACEHOLDER, URL))
+    # The cell carries the colour and the padding; the link fills it.
+    assert re.search(
+        r'<td style="padding:12px 22px;border-radius:8px;background:#3b5bdb;" '
+        rf'bgcolor="#3b5bdb"><a href="{re.escape(URL)}"',
+        page,
+    )
+    # Outlook ignores max-width: a fixed-width wrapper, for it alone.
+    assert '<!--[if mso]><table role="presentation" width="640"' in page
+    assert page.count("<!--[if mso]>") == page.count("<![endif]-->") == 2
+    assert "<style" not in page and "@media" not in page
+
+
 def test_the_new_request_email_for_the_real_itgc_ac_03_text() -> None:
     message = render(_pbc(), "SOX FY2027", FACTS)
     assert message.subject == (
@@ -143,7 +378,7 @@ def test_the_new_request_email_for_the_real_itgc_ac_03_text() -> None:
     body = message.body
     assert body.startswith("Hello Joanna,\n\nWe are documenting the design")
     assert (
-        "Control:   ITGC-AC-03, Quarterly Active Directory user access review\n"
+        "Control:   ITGC-AC-03, Quarterly Active Directory User Access Review\n"
         "System:    Active Directory\n"
         "Stage:     Design review\n"
         "Due:       Monday 23 November 2026\n"
@@ -183,7 +418,7 @@ def test_the_new_layout_keeps_each_item_whole_and_every_word_escaped() -> None:
         "Ref. PBC-0A3A48A8",
         ">Design review</p>",
         "2 items needed for the Periodic User Access Review</h1>",
-        "ITGC-AC-03 · Quarterly Active Directory user access review",
+        "ITGC-AC-03 · Quarterly Active Directory User Access Review",
         "Due Monday 23 November 2026</span>",
         ">Active Directory</span>",
         f'<a href="{URL}" style="display:inline-block;',
@@ -264,6 +499,6 @@ def test_the_drafter_keeps_an_items_list_inside_the_item() -> None:
     assert re.findall(r"^\d+\. .+$", text, re.MULTILINE) == ["1. The policy", "2. One review"]
     assert "   - The sign-offs, with dates.\n   - The tickets raised." in text
     # Read back, laid out, each item is whole.
-    assert [len(i.body) for i in parse(text).items] == [1, 5]
+    assert [len(i.lines) for i in parse(text).items] == [1, 6]
     page = to_html("x", text)
     assert page.count(_ITEM_CARD_V2) == 2

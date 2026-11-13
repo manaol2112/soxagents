@@ -17,6 +17,7 @@ import {
   requests,
   reviewPlan,
   routingOf,
+  seenOf,
   sendBody,
   sendProblem,
   sentReport,
@@ -522,6 +523,25 @@ describe("changing who a request goes to in the review (28 October 2026)", () =>
       },
     );
     assert.deepEqual(sendBody(false, null, []), { preview: false });
+  });
+
+  it("sends back the emails as reviewed, so what was read is what is approved", () => {
+    const digest = "a".repeat(64);
+    const result = parseSendResult({
+      ...answer,
+      targets: [
+        { ...answer.targets[0], ok: true, waiting: false, digest },
+        { ...answer.targets[0], id: "w1", ok: false, waiting: true, digest },
+        { ...answer.targets[0], id: "n1", ok: true, digest: "not-a-digest" },
+      ],
+    });
+    assert.ok(result !== null);
+    const seen = seenOf(result);
+    assert.deepEqual(seen, [{ id: result.targets[0].id, digest }]);
+    assert.deepEqual(sendBody(false, null, [], seen), { preview: false, seen });
+    // A check never carries them; nothing reviewed, nothing sent back.
+    assert.deepEqual(sendBody(true, null, [], seen), { preview: true });
+    assert.deepEqual(sendBody(false, null, [], []), { preview: false });
   });
 
   it("offers the contacts not already on the request, then a typed address", () => {

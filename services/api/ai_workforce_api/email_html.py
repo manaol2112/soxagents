@@ -211,7 +211,7 @@ def _blocks(body: str) -> list[list[str]]:
     """The text as blocks separated by blank lines."""
     blocks: list[list[str]] = []
     current: list[str] = []
-    for line in body.replace("\r\n", "\n").split("\n"):
+    for line in body.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         if line.strip() == "":
             if current:
                 blocks.append(current)
@@ -365,10 +365,13 @@ _FACT = re.compile(r"^(Control|Controls|System|Systems|Stage|Due|Reference):\s+(
 _ROW = re.compile(
     r"^(Covers|Make sure it shows|Format|Show|Complete when|If not available):\s*(.*)$"
 )
+# "<title> (<refs>): <N> items due <D Mon YYYY> [<reference>]", read from its end, so a
+# title may hold ": " itself.
 _SUBJECT = re.compile(
-    r"^(?P<reminder>Reminder: )?(?P<title>.+?)(?: \((?P<refs>[^()]+)\))?: "
-    r"(?:(?P<count>\d+) items?|evidence) due (?P<due>.+?) \[(?P<reference>[^\]]{1,40})\]$"
+    r"^(?P<reminder>Reminder: )?(?P<head>.+): (?:(?P<count>\d+) items?|evidence) due "
+    r"(?P<due>[^\[\]:]+) \[(?P<reference>[^\[\]]{1,40})\]$"
 )
+_SUBJECT_REFS = re.compile(r"^(?P<title>.+) \((?P<refs>[^()]+)\)$")
 _SIGNATURE = re.compile(r"^The (?P<team>.+) team$")
 _REMINDER = re.compile(r"^This is reminder (\d+) of (\d+)\b")
 _MEMBER = re.compile(r"^(?P<text>.+\)(?:, due [^:]{1,40})?):$")
@@ -381,9 +384,40 @@ _STEPS_TEXT = (
 )
 
 
+def _frame(blocks: list[list[str]]) -> tuple[int, int] | None:
+    """Where the template's own sections stand in a request email, or None for any other
+    text: "WHAT WE NEED" right after the block of facts, and, at the end, in their fixed
+    places, "HOW TO SEND IT", the upload block, the signature and the questions line.
+    The sections are found by these places only, never by a line of the wording that
+    reads like one of them (request_email writes such a line in sentence case): the
+    upload link is the one in the template's own block, the fourth block from the end."""
+    total = len(blocks)
+    if total < 7:
+        return None
+    send = total - 4
+    upload = [line.strip() for line in blocks[send + 1]]
+    signed = [line.strip() for line in blocks[send + 2]]
+    if (
+        [line.strip() for line in blocks[send]] != [_SEND]
+        or len(upload) != 3
+        or _OPEN_PAGE.match(upload[0]) is None
+        or upload[2] != _STEPS_TEXT
+        or len(signed) != 2
+        or signed[0] != "Thank you,"
+        or _SIGNATURE.match(signed[1]) is None
+        or not blocks[send + 3][0].strip().startswith("Questions? Reply to this email")
+    ):
+        return None
+    for index in range(1, send):
+        if [line.strip() for line in blocks[index]] == [_NEED] and all(
+            _FACT.match(line.strip()) for line in blocks[index - 1]
+        ):
+            return index, send
+    return None
+
+
 def _is_request(body: str) -> bool:
-    lines = {line.strip() for line in body.replace("\r\n", "\n").split("\n")}
-    return _NEED in lines and _SEND in lines
+    return _frame(_blocks(body)) is not None
 
 
 @dataclass
@@ -394,55 +428,37 @@ class _Request:
     facts: dict[str, str] = field(default_factory=dict)
     need: list[list[str]] = field(default_factory=list)
     send: list[list[str]] = field(default_factory=list)
-
-    @property
-    def url(self) -> str:
-        for block in self.send:
-            for line in block:
-                if _URL.fullmatch(line.strip()):
-                    return line.strip()
-        return ""
-
-    @property
-    def team(self) -> str:
-        for block in self.send:
-            if len(block) == 2 and block[0].strip() == "Thank you,":
-                found = _SIGNATURE.match(block[1].strip())
-                if found is not None:
-                    return found.group("team")
-        return ""
+    # The upload link: the one in the template's own upload block, nowhere else.
+    url: str = ""
+    team: str = ""
 
 
 def _read(subject: str, body: str) -> _Request:
     request = _Request(subject=subject)
-    part = "intro"
-    for block in _blocks(body):
-        stripped = [line.strip() for line in block]
-        if stripped == [_NEED]:
-            part = "need"
-            continue
-        if stripped == [_SEND]:
-            part = "send"
-            continue
-        if part == "need":
-            request.need.append(block)
-        elif part == "send":
-            request.send.append(block)
-        elif (
-            not request.greeting
-            and not request.intro
-            and len(block) == 1
-            and stripped[0].startswith("Hello")
-            and stripped[0].endswith(",")
-        ):
-            request.greeting = stripped[0]
-        elif all(_FACT.match(line) for line in stripped):
-            for line in stripped:
-                fact = _FACT.match(line)
-                if fact is not None:
-                    request.facts[fact.group(1)] = fact.group(2)
-        else:
-            request.intro.append(" ".join(stripped))
+    blocks = _blocks(body)
+    frame = _frame(blocks)
+    if frame is None:
+        return request
+    need, send = frame
+    opening = blocks[: need - 1]
+    if opening and len(opening[0]) == 1:
+        first = opening[0][0].strip()
+        if first.startswith("Hello") and first.endswith(","):
+            request.greeting = first
+            opening = opening[1:]
+    # Only the block right before WHAT WE NEED is the facts: a line of the opening that
+    # reads like one ("Reference: see ...") stays a line of the opening.
+    request.intro = [" ".join(line.strip() for line in block) for block in opening]
+    for line in blocks[need - 1]:
+        fact = _FACT.match(line.strip())
+        if fact is not None:
+            request.facts[fact.group(1)] = fact.group(2)
+    request.need = blocks[need + 1 : send]
+    request.send = blocks[send + 1 :]
+    link = blocks[send + 1][1].strip()
+    request.url = link if _URL.fullmatch(link) else ""
+    signed = _SIGNATURE.match(blocks[send + 2][1].strip())
+    request.team = signed.group("team") if signed is not None else ""
     return request
 
 
@@ -669,11 +685,7 @@ def _send_part(request: _Request) -> str:
         if stripped[0].startswith("Questions?"):
             out.append(_para(" ".join(stripped), size=14, color=_MUTED))
             continue
-        for line in stripped:
-            if _URL.fullmatch(line):
-                out.append(_button(line, "Open the secure upload page"))
-            else:
-                out.append(_para(line, size=14))
+        out.extend(_para(line, size=14) for line in stripped)
     return "".join(out)
 
 
@@ -716,10 +728,12 @@ def _hero(request: _Request, count: str, title: str, refs: str, reminder: str) -
                 f'color:{_TEXT};font-size:13px;">{html.escape(chip)}</span>'
             )
     url = request.url
+    # Outlook draws a link's padding badly: the cell carries the colour and the padding,
+    # and the link fills it. The link names its own background too, so its white text is
+    # never on nothing in a mail client's dark mode.
     look = (
-        "display:inline-block;padding:12px 22px;font-size:15px;font-weight:600;"
-        f"line-height:1.2;color:#ffffff;text-decoration:none;border-radius:8px;"
-        f"background:{_ACCENT};"
+        "display:inline-block;font-size:15px;font-weight:600;line-height:1.2;"
+        f"color:#ffffff;text-decoration:none;background:{_ACCENT};"
     )
     button = (
         f'<a href="{html.escape(url, quote=True)}" style="{look}">Upload evidence</a>'
@@ -739,7 +753,10 @@ def _hero(request: _Request, count: str, title: str, refs: str, reminder: str) -
         f"{html.escape(heading)}</h1>"
         f"{described}"
         f'<p style="margin:16px 0 10px;line-height:1;">{"".join(chips)}</p>'
-        + _table("<tr>" + _cell(button, "border-radius:8px;", _ACCENT) + "</tr>", width=False)
+        + _table(
+            "<tr>" + _cell(button, "padding:12px 22px;border-radius:8px;", _ACCENT) + "</tr>",
+            width=False,
+        )
         + f'<p style="margin:10px 0 0;font-size:12.5px;line-height:1.5;color:{_FAINT};">'
         "Opens your secure upload page. A one-time code is sent to this address when you "
         "open it.</p>"
@@ -753,11 +770,14 @@ def _request_html(subject: str, body: str) -> str:
     title = refs = count = reminder = ""
     reference = request.facts.get("Reference", "")
     if match is not None:
-        title = match.group("title")
-        refs = match.group("refs") or ""
+        title = match.group("head")
+        with_refs = _SUBJECT_REFS.match(title)
+        if with_refs is not None:
+            title, refs = with_refs.group("title"), with_refs.group("refs")
         count = match.group("count") or ""
         reference = reference or match.group("reference")
-    for paragraph in request.intro:
+    # The template's own reminder sentence comes first, before any of the wording.
+    for paragraph in request.intro[:1]:
         found = _REMINDER.match(paragraph)
         if found is not None:
             reminder = f"Reminder {found.group(1)} of {found.group(2)}"
@@ -842,7 +862,11 @@ def _request_html(subject: str, body: str) -> str:
     )
     page = _table(
         '<tr><td align="center" bgcolor="' + _PAGE + '" style="padding:24px 12px;'
-        f'background:{_PAGE};">{card}</td></tr>',
+        f'background:{_PAGE};">'
+        '<!--[if mso]><table role="presentation" width="640" align="center" cellpadding="0" '
+        'cellspacing="0" border="0"><tr><td><![endif]-->'
+        f"{card}"
+        "<!--[if mso]></td></tr></table><![endif]--></td></tr>",
         f"background:{_PAGE};font-family:{_FONT};",
     )
     return (
