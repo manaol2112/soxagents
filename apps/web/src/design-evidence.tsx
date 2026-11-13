@@ -2,7 +2,13 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type ReactNode, useEffect, useId, useState } from "react";
+import {
+  type ReactNode,
+  useEffect,
+  useId,
+  useState,
+  useTransition,
+} from "react";
 import { HeldPicker, PolicyPicker } from "./add-evidence-menu";
 import { AutoRefresh } from "./auto-refresh";
 import { ControlSend } from "./control-send";
@@ -22,8 +28,25 @@ import {
   useRequestAction,
 } from "./design-requests";
 import type { RequestRow as RequestsRow } from "./design-requests-model";
+import {
+  type AttributeLine,
+  assuranceProblem,
+  type CheckAction,
+  offeredAction,
+  type RequestCheck,
+  type RowFile,
+} from "./evidence-assurance-model";
 import { centerHref, DEFAULT_QUERY } from "./evidence-center-model";
 import { type DialogOpen, EvidenceDialog } from "./evidence-dialog";
+import {
+  type EvidenceFinding,
+  SENDABLE_STATUSES,
+} from "./evidence-findings-model";
+import {
+  FindingRecords,
+  FollowUpComposer,
+  useFindingsAction,
+} from "./evidence-findings-view";
 import { evidenceHref } from "./evidence-flow";
 import { RequestUpload } from "./evidence-intake";
 import type { Intelligence } from "./evidence-intelligence-view";
@@ -38,6 +61,7 @@ import {
   Problem,
   usePlanAction,
 } from "./evidence-plan-view";
+import { PreviewButton } from "./evidence-preview";
 import { formatOf, wordingOf } from "./evidence-requests-model";
 import type { HeldFile } from "./evidence-workspace-model";
 import { linkableFiles } from "./evidence-workspace-model";
@@ -95,6 +119,55 @@ const MENU_ICONS: Record<MenuKey, IconName> = {
   reopen: "retry",
   delete: "trash",
 };
+
+/**
+ * "Check again" on a request whose check failed or is out of date
+ * (docs/evidence-assurance.md): one call, as the list's other actions make theirs.
+ * Success is said only once the server has answered, and the checks are then read again
+ * in place (no reload; open rows and filters stay). A refusal because the check changed
+ * under the person (409) reads them again too.
+ */
+function useAssuranceAction(ids: Ids) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [busy, setBusy] = useState("");
+  const [problem, setProblem] = useState<string | null>(null);
+  async function run(requirementId: string): Promise<boolean> {
+    setBusy(requirementId);
+    setProblem(null);
+    let status = 0;
+    let detail = "";
+    try {
+      const response = await fetch("/workspace/evidence-assurance", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          organization_id: ids.organizationId,
+          project_id: ids.projectId,
+          control_id: ids.controlId,
+          intent: "rerun",
+          requirement_id: requirementId,
+        }),
+      });
+      const body = (await response.json()) as {
+        status?: unknown;
+        detail?: unknown;
+      };
+      status = typeof body.status === "number" ? body.status : 0;
+      detail = typeof body.detail === "string" ? body.detail : "";
+    } catch {
+      status = 0;
+    }
+    setBusy("");
+    const message = assuranceProblem(status, detail);
+    setProblem(message);
+    if (message === null || status === 409) {
+      startTransition(() => router.refresh());
+    }
+    return message === null;
+  }
+  return { run, busy, pending: pending || busy !== "", problem };
+}
 
 /** A row as the pre-release list's dialogs read it (edit, change attributes). */
 function asRequest(row: EvidenceRow): RequestsRow {
@@ -180,6 +253,7 @@ export function DesignEvidence({
   const action = usePlanAction(ids);
   const list = useRequestAction(ids);
   const policies = usePolicyEvidence(ids);
+  const checks = useAssuranceAction(ids);
   const requirements = new Map(
     plan.phases
       .flatMap((phase) => phase.requirements)
@@ -243,7 +317,7 @@ export function DesignEvidence({
     window.addEventListener(REQUESTS_CHANGED_EVENT, onChanged);
     return () => window.removeEventListener(REQUESTS_CHANGED_EVENT, onChanged);
   }, []);
-  const problem = action.problem ?? list.problem;
+  const problem = action.problem ?? list.problem ?? checks.problem;
   const events = evidenceActivity(activity);
 
   async function remove(row: EvidenceRow) {
@@ -449,6 +523,9 @@ export function DesignEvidence({
                       wording={wording}
                       attributeCount={view.attributes.length}
                       onDialog={setEvidence}
+                      findings={intelligence.findings ?? null}
+                      controlRef={controlRef}
+                      checks={checks}
                       onCoverage={() =>
                         document
                           .getElementById(`${id}-coverage`)
@@ -482,7 +559,13 @@ export function DesignEvidence({
 
       {/* While the agent reads a file the list is read again, in place, so the row
           moves from Reading… to To review by itself; it stops when the reading ends. */}
-      {view.rows.some((row) => row.reading > 0) ? <AutoRefresh /> : null}
+      {view.rows.some((row) => row.reading > 0) ? (
+        <AutoRefresh />
+      ) : view.rows.some((row) => row.assurance?.working === true) ? (
+        // The same while a file is checked against the attributes: two readings take
+        // longer than one, so the list is read again less often and for longer.
+        <AutoRefresh key="checks" seconds={5} limit={60} />
+      ) : null}
 
       {view.coverage.length > 0 ? (
         <section className="dq-coverage" aria-labelledby={`${id}-coverage`}>
@@ -760,6 +843,9 @@ function Row({
   wording,
   attributeCount,
   onDialog,
+  findings,
+  controlRef,
+  checks,
   onCoverage,
   onEdit,
   onAttributes,
@@ -784,6 +870,11 @@ function Row({
   wording: ReadonlyMap<string, { letter: string; text: string }>;
   attributeCount: number;
   onDialog: (open: DialogOpen) => void;
+  /** The control's evidence findings: an issue the check found is one of them. */
+  findings: EvidenceFinding[] | null;
+  controlRef: string;
+  /** "Check again" on a file of the row. */
+  checks: ReturnType<typeof useAssuranceAction>;
   /** Shows which attributes the requests cover (the coverage under the list). */
   onCoverage: () => void;
   onEdit: () => void;
@@ -803,6 +894,21 @@ function Row({
   } | null>(null);
   // A change to one of its files, confirmed by the server.
   const [fileDone, setFileDone] = useState<string | null>(null);
+  // The assurance chain's check of the request, and the findings its issues are.
+  const assured = row.assurance;
+  const findingsAction = useFindingsAction(ids);
+  const [picked, setPicked] = useState<Set<string>>(() => new Set());
+  const issueIds = new Set(
+    (assured?.check.attributes ?? []).flatMap((line) =>
+      line.findingId === null ? [] : [line.findingId],
+    ),
+  );
+  const toSend = (findings ?? []).filter(
+    (finding) =>
+      issueIds.has(finding.id) &&
+      picked.has(finding.id) &&
+      SENDABLE_STATUSES.includes(finding.status),
+  );
   const held = linkableFiles(item, files);
   const documents = choosable(policies, item.id);
   const onFile = proposalsFor(policies, item.id);
@@ -831,8 +937,47 @@ function Row({
   const followUp = () =>
     ask(
       { kind: "FOLLOW_UP_REQUIRED" },
-      item.assessment.followUps.join("; ").slice(0, 1000),
+      // The reader's own follow-up points start the text only where the chain has not
+      // checked the row: they were never checked by a second reading.
+      assured != null
+        ? ""
+        : item.assessment.followUps.join("; ").slice(0, 1000),
     );
+
+  async function checkAgain() {
+    if (await checks.run(item.id)) {
+      onDone("The check was started again.");
+    }
+  }
+
+  /** The one action that clears a hold, or runs the check again. */
+  const actOn = (act: CheckAction) => {
+    if (act.kind === "RERUN") {
+      void checkAgain();
+    } else if (act.fileId === null) {
+      return;
+    } else if (act.kind === "REPLACE") {
+      setFileForm({ fileId: act.fileId, form: "replace" });
+      setFileDone(null);
+    } else {
+      // The file's type is confirmed, and a walkthrough instance picked, in the
+      // evidence dialog.
+      onDialog({ mode: "review", fileId: act.fileId });
+    }
+  };
+  const rowFiles: RowFile[] = item.files.map((file) => ({
+    id: file.fileId,
+    name: file.name,
+  }));
+  /** An action as this person is offered it. */
+  const offer = (act: CheckAction | null) =>
+    offeredAction(act, {
+      canAct,
+      replaceable: (fileId) => {
+        const held = files.find((each) => each.id === fileId);
+        return held !== undefined && (held.blocked ?? null) === null;
+      },
+    });
 
   async function accept() {
     const ok = await action.run(`judge-${item.id}`, {
@@ -975,6 +1120,19 @@ function Row({
         <span className="tar-name">
           <span className="tar-text">{row.title}</span>
           <span className="tar-source">{row.sub}</span>
+          {assured !== null && assured.states.length > 0 ? (
+            <span className="de-states">
+              {assured.states.map((group) => (
+                <span
+                  key={group.state}
+                  className={`de-state tone-${group.tone}`}
+                >
+                  <UiIcon name={group.icon} size={12} />
+                  {group.label}
+                </span>
+              ))}
+            </span>
+          ) : null}
         </span>
         <span className="dq-meta">
           <span className="dq-letters">
@@ -1291,6 +1449,32 @@ function Row({
                       })}
                     </ul>
                   )}
+                  {assured !== null && row.reading === 0 ? (
+                    <CheckOfRequest
+                      ids={ids}
+                      check={assured.check}
+                      files={rowFiles}
+                      offer={offer}
+                      busy={checks.busy === item.id}
+                      disabled={locked || checks.pending}
+                      onAct={actOn}
+                      findings={findings}
+                      findingsAction={findingsAction}
+                      canAct={canAct}
+                      picked={picked}
+                      onPick={(findingId, on) =>
+                        setPicked((current) => {
+                          const next = new Set(current);
+                          if (on) {
+                            next.add(findingId);
+                          } else {
+                            next.delete(findingId);
+                          }
+                          return next;
+                        })
+                      }
+                    />
+                  ) : null}
                   {traced ? (
                     <SampleTrace
                       ids={action.ids}
@@ -1385,26 +1569,45 @@ function Row({
                       onSubmit={() => void submitAsk()}
                     />
                   ) : null}
+                  {/* The follow-up a person sends from the issues' findings they
+                      ticked: the findings' own, as in the evidence dialog. */}
+                  {canAct && item.requestId !== null ? (
+                    <FollowUpComposer
+                      findings={toSend}
+                      requestId={item.requestId}
+                      controlRef={controlRef}
+                      controlTitle=""
+                      action={findingsAction}
+                      onSent={() => setPicked(new Set())}
+                    />
+                  ) : null}
                   {canAct && asking === null && row.canAccept ? (
-                    <div className="tc-row-acts">
-                      <button
-                        type="button"
-                        className="btn btn-sm"
-                        disabled={locked}
-                        onClick={() => void accept()}
-                      >
-                        {action.busy === `judge-${item.id}`
-                          ? "Accepting…"
-                          : "Accept"}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        disabled={locked}
-                        onClick={followUp}
-                      >
-                        Ask a follow-up
-                      </button>
+                    <div className="de-accept">
+                      {/* What accepting marks as evidenced, and what it leaves
+                          open: it informs, and never holds the person back. */}
+                      {assured !== null && assured.acceptNote !== "" ? (
+                        <p className="de-accept-note">{assured.acceptNote}</p>
+                      ) : null}
+                      <div className="tc-row-acts">
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          disabled={locked}
+                          onClick={() => void accept()}
+                        >
+                          {action.busy === `judge-${item.id}`
+                            ? "Accepting…"
+                            : "Accept"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          disabled={locked}
+                          onClick={followUp}
+                        >
+                          Ask a follow-up
+                        </button>
+                      </div>
                     </div>
                   ) : null}
                 </dd>
@@ -1451,6 +1654,326 @@ function Row({
       ) : (
         content(null, false)
       )}
+    </li>
+  );
+}
+
+/**
+ * A request's check by the assurance chain (docs/evidence-assurance.md, section 7): its
+ * files are read together, as one walkthrough. One quiet line while it works; held,
+ * failed or out of date, one line with the single action that clears it; a file left out
+ * of the readings, named with why and its own action; finished, each attribute with its
+ * state in words and a mark, opening to what the two readings rest on, what is absent,
+ * and both readings side by side where they do not agree. An issue is its evidence
+ * finding, with the finding's own actions. Nothing of a check is shown before it ends.
+ */
+function CheckOfRequest({
+  ids,
+  check,
+  files,
+  offer,
+  busy,
+  disabled,
+  onAct,
+  findings,
+  findingsAction,
+  canAct,
+  picked,
+  onPick,
+}: {
+  ids: Ids;
+  check: RequestCheck;
+  /** The row's in-force files. */
+  files: RowFile[];
+  /** An action as this person is offered it; null when there is none for them. */
+  offer: (action: CheckAction | null) => CheckAction | null;
+  busy: boolean;
+  disabled: boolean;
+  onAct: (action: CheckAction) => void;
+  findings: EvidenceFinding[] | null;
+  findingsAction: ReturnType<typeof useFindingsAction>;
+  canAct: boolean;
+  picked: Set<string>;
+  onPick: (findingId: string, on: boolean) => void;
+}) {
+  const action = offer(check.action);
+  const actButton = (act: CheckAction, about: string) => (
+    <button
+      type="button"
+      className="btn btn-secondary btn-sm"
+      disabled={disabled}
+      aria-label={`${act.label}: ${about}`}
+      onClick={() => onAct(act)}
+    >
+      {busy && act.kind === "RERUN" ? "Starting…" : act.label}
+    </button>
+  );
+  const leftOut =
+    check.leftOut.length === 0 ? null : (
+      <ul className="de-left-out">
+        {check.leftOut.map((item) => {
+          const act = offer(item.action);
+          const name =
+            files.find((file) => file.id === item.fileId)?.name ?? "the file";
+          return (
+            <li key={item.fileId} className="de-check-line">
+              <UiIcon name="info" size={13} />
+              <span>{item.line}</span>
+              {act !== null ? actButton(act, name) : null}
+            </li>
+          );
+        })}
+      </ul>
+    );
+  if (check.standing === "CHECKING") {
+    return (
+      <div className="de-check is-checking">
+        <p className="de-check-line">
+          <UiIcon name="sparkles" size={13} />
+          <span className="ep-reading" role="status">
+            {check.line}
+            {check.stage !== "" ? ` · ${check.stage}` : ""}
+            <span className="ep-dots" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+          </span>
+        </p>
+        {leftOut}
+      </div>
+    );
+  }
+  if (check.standing !== "REVIEWED") {
+    return (
+      <div className={`de-check is-${check.standing.toLowerCase()}`}>
+        <div className="de-check-line">
+          <UiIcon
+            name={check.standing === "HELD" ? "info" : "retry"}
+            size={13}
+          />
+          <span>{check.line}</span>
+          {action !== null
+            ? actButton(
+                action,
+                files.find((file) => file.id === action.fileId)?.name ??
+                  "this request",
+              )
+            : null}
+        </div>
+        {leftOut}
+      </div>
+    );
+  }
+  return (
+    <div className="de-check is-reviewed">
+      <p className="de-check-line">
+        <UiIcon name="shield" size={13} />
+        <span>
+          {check.line}
+          {check.readInPart !== null ? (
+            <strong className="de-check-part"> {check.readInPart}</strong>
+          ) : null}
+        </span>
+      </p>
+      {leftOut}
+      {check.attributes.length > 0 ? (
+        <ul className="de-attrs">
+          {check.attributes.map((line) => (
+            <AttributeCheck
+              key={line.key}
+              ids={ids}
+              line={line}
+              files={files}
+              finding={
+                line.findingId === null
+                  ? null
+                  : ((findings ?? []).find(
+                      (finding) => finding.id === line.findingId,
+                    ) ?? null)
+              }
+              findingsAction={findingsAction}
+              canAct={canAct}
+              picked={picked}
+              onPick={onPick}
+            />
+          ))}
+        </ul>
+      ) : null}
+      {check.notAddressed.length > 0 ? (
+        <p className="de-unaddressed">
+          <span className="de-state tone-neutral">
+            <UiIcon name="minus" size={12} />
+            Not addressed by this evidence
+          </span>
+          {check.notAddressed.map((line) => (
+            <span
+              key={line.key}
+              className="dr-code"
+              title={[line.text, line.summary]
+                .filter((part) => part !== "")
+                .join(" ")}
+            >
+              {line.letter}
+            </span>
+          ))}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** One attribute of a finished check: its letter, its state in words with a mark, and
+ * one line on it; open, what the readings rest on. */
+function AttributeCheck({
+  ids,
+  line,
+  files,
+  finding,
+  findingsAction,
+  canAct,
+  picked,
+  onPick,
+}: {
+  ids: Ids;
+  line: AttributeLine;
+  /** The row's in-force files: a passage opens in its own. */
+  files: RowFile[];
+  /** The evidence finding an issue is; null when it has none, or it was not read. */
+  finding: EvidenceFinding | null;
+  findingsAction: ReturnType<typeof useFindingsAction>;
+  canAct: boolean;
+  picked: Set<string>;
+  onPick: (findingId: string, on: boolean) => void;
+}) {
+  return (
+    <li className={`de-attr is-${line.state.toLowerCase()}`}>
+      <details open={line.open || undefined}>
+        <summary>
+          <span className="dr-code" aria-hidden="true">
+            {line.letter}
+          </span>
+          <span className="sr-only">{`Attribute ${line.letter}: `}</span>
+          <span className={`de-state tone-${line.tone}`}>
+            <UiIcon name={line.icon} size={12} />
+            {line.label}
+          </span>
+          <span className="de-attr-summary">
+            {line.summary !== "" ? line.summary : line.text}
+          </span>
+          <span className="de-attr-caret" aria-hidden="true">
+            <UiIcon name="chevron" size={12} />
+          </span>
+        </summary>
+        <div className="de-attr-body">
+          {line.text !== "" && line.summary !== "" ? (
+            <p className="de-attr-text">
+              <span>Attribute {line.letter}</span> {line.text}
+            </p>
+          ) : null}
+          {line.judgment !== null ? (
+            <p className="de-judgment">{line.judgment}</p>
+          ) : null}
+          {line.readings.length > 0 ? (
+            <div className="de-views">
+              {line.readings.map((reading) => (
+                <div key={reading.who} className="de-view">
+                  <strong>{reading.who}</strong>
+                  <span className="de-view-result">{reading.result}</span>
+                  <p>
+                    {reading.reason !== ""
+                      ? reading.reason
+                      : "It gave no reason."}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {finding !== null ? (
+            // The issue is this finding: shown once, with the finding's own actions.
+            <FindingRecords
+              findings={[finding]}
+              canAct={canAct}
+              action={findingsAction}
+              picked={picked}
+              onPick={onPick}
+              onShow={() => {}}
+              focused={null}
+            />
+          ) : (
+            <>
+              {line.passages.length > 0 ? (
+                <ul className="de-passages">
+                  {line.passages.map((passage) => (
+                    <li
+                      key={`${passage.fileId ?? ""}-${passage.location}-${passage.quote}`}
+                    >
+                      <q>{passage.quote}</q>
+                      <span className="de-where">
+                        {passage.fileLabel !== "" ? (
+                          <span className="de-where-file">
+                            {passage.fileLabel}
+                          </span>
+                        ) : null}
+                        <span>
+                          {passage.location !== ""
+                            ? passage.location
+                            : "In the file"}
+                        </span>
+                        {passage.opens && passage.fileId !== null ? (
+                          <PreviewButton
+                            organizationId={ids.organizationId}
+                            projectId={ids.projectId}
+                            files={files.map((file) => ({
+                              id: file.id,
+                              fileName: file.name,
+                            }))}
+                            startFileId={passage.fileId}
+                            citations={[
+                              {
+                                fileId: passage.fileId,
+                                fileName:
+                                  files.find(
+                                    (file) => file.id === passage.fileId,
+                                  )?.name ?? "",
+                                quote: passage.quote,
+                                found: true,
+                                location: passage.location,
+                                page: passage.page,
+                                box: null,
+                                label: line.letter,
+                              },
+                            ]}
+                            sourcesTitle="What the readings rest on"
+                            label="Open in the file"
+                            className="de-link"
+                          />
+                        ) : null}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {line.absent.length > 0 ? (
+                <div className="de-absent">
+                  <span>Not in the evidence</span>
+                  <ul>
+                    {line.absent.map((point) => (
+                      <li key={point}>{point}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {line.findingId !== null ? (
+                <p className="de-absent">
+                  The finding that records this issue could not be shown here.
+                  Open its file to act on it.
+                </p>
+              ) : null}
+            </>
+          )}
+        </div>
+      </details>
     </li>
   );
 }

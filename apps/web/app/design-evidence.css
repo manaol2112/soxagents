@@ -380,6 +380,323 @@ button.de-caret > svg {
   font-weight: 600;
 }
 
+/* The assurance chain's check of a file (docs/evidence-assurance.md, section 7): a state
+   is always its words with a mark; the colour repeats them and never replaces them.
+   On the row's own line, each letter under its state; in the file, one line while the
+   check works, is held or must run again, then each attribute, opening (200 ms) to what
+   the two readings rest on. */
+.de-states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.1rem 0.7rem;
+  min-width: 0;
+  margin-top: 0.15rem;
+}
+
+.de-state {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.45rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 20px;
+  white-space: nowrap;
+  border-radius: 999px;
+}
+
+/* Its tone (text on its own tint) is the shared one (globals.css, .tone-*). */
+.de-state > svg {
+  flex: none;
+}
+
+.de-check {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.de-check-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.5rem;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.de-check-line > svg {
+  flex: none;
+  color: var(--text-tertiary);
+}
+
+.de-check-line > span {
+  flex: 1 1 9rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The upload zone a row is draws every button in it as a small one on one line: an
+   issue's finding keeps its own shape, and its words wrap. */
+.de-row .de-check button.ei-finding-main {
+  display: grid;
+  white-space: normal;
+}
+
+/* A check at work is the agent's: its mark in the agent's colour, the words beside it. */
+.de-check.is-checking .de-check-line > svg {
+  color: var(--ai);
+}
+
+.de-check.is-checking .ep-reading {
+  flex-wrap: wrap;
+  font-size: var(--fs-sm);
+}
+
+.de-check.is-held .de-check-line > svg,
+.de-check.is-failed .de-check-line > svg,
+.de-check.is-out_of_date .de-check-line > svg {
+  color: var(--warning);
+}
+
+.de-check-line > button {
+  flex: none;
+}
+
+/* A file left out of the readings: named, with why and the action that clears it. */
+.de-left-out {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.de-left-out > li > svg {
+  color: var(--warning);
+}
+
+.de-check-part {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.de-attrs {
+  display: grid;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.de-attr {
+  min-width: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.de-attr > details > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.2rem 0.55rem;
+  padding: 0.4rem 0;
+  font-size: var(--fs-sm);
+  line-height: 20px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.de-attr > details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.de-attr > details > summary:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.de-attr-summary {
+  flex: 1 1 14rem;
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.de-attr-caret {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  color: var(--text-tertiary);
+}
+
+.de-attr-caret > svg {
+  transition: transform 180ms ease;
+}
+
+.de-attr > details[open] .de-attr-caret > svg {
+  transform: rotate(90deg);
+}
+
+.de-attr-body {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0 0 0.6rem calc(20px + 0.55rem);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  animation: tar-open 200ms ease;
+}
+
+.de-attr-body p {
+  margin: 0;
+}
+
+.de-attr-text {
+  color: var(--text-secondary);
+}
+
+.de-attr-text > span {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.de-judgment {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+/* Both readings, side by side: neither is the answer. */
+.de-views {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.de-view {
+  display: grid;
+  align-content: start;
+  gap: 0.15rem;
+  min-width: 0;
+  padding: 0.5rem 0.65rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+}
+
+.de-view > strong {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.de-view-result {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.de-view > p {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.de-passages {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.de-passages > li {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+  padding: 0.4rem 0.65rem;
+  background: var(--surface-muted);
+  border-left: 3px solid var(--border-strong);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.de-passages q {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.de-where {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 0.75rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+/* Which of the request's files a passage is in. */
+.de-where-file {
+  min-width: 0;
+  color: var(--text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.de-absent {
+  color: var(--text-secondary);
+}
+
+.de-absent > span {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.de-absent > ul {
+  margin: 0.1rem 0 0;
+  padding-left: 1.1rem;
+  color: var(--text);
+}
+
+.de-unaddressed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.4rem;
+  margin: 0;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.de-unaddressed .dr-code {
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+}
+
+/* Accept, with what accepting marks as evidenced said first. */
+.de-accept {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.de-accept-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
 .de-ask {
   display: grid;
   gap: 0.35rem;
@@ -435,11 +752,32 @@ button.de-caret > svg {
   .de-row > .request-upload > .upload-note {
     padding-left: 0.9rem;
   }
+
+  /* The two readings go one under the other, and an attribute's detail takes the
+     row's width. */
+  .de-views {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .de-attr-body {
+    padding-left: 0;
+  }
+
+  /* The letter, its state and the caret keep one line; the summary reads under it. */
+  .de-attr-summary {
+    flex-basis: 100%;
+    order: 1;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   button.de-caret > svg,
-  .de-must > summary > svg {
+  .de-must > summary > svg,
+  .de-attr-caret > svg {
     transition: none;
+  }
+
+  .de-attr-body {
+    animation: none;
   }
 }
