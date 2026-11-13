@@ -76,6 +76,8 @@ REQUIRED = {
     "long_file_read_in_part",
     "wrong_attribute_links",
     "three_files_together",
+    # Prompts /5: the role assigned by someone no record designates as SAP Security.
+    "assigner_team_not_designated",
 }
 MARKER = "ASSESSOR-ONLY-7f3c"
 Answerer = Callable[[EvalCase], dict[str, Any]]
@@ -432,6 +434,33 @@ def test_a_nested_answer_is_read_and_a_cut_off_reading_asked_again(tmp_path: Pat
     assert [(c["role"], c["retry"]) for c in record["calls"]] == [
         ("ASSESSOR", False), ("REVIEWER", False), ("REVIEWER", True),
     ]  # fmt: skip
+
+
+def test_a_team_no_record_designates_is_not_shown() -> None:
+    """Prompts /5 (the product owner, 13 November 2026: "Record's own designation"): a
+    person's team is shown only by the record's own designation of that person. The new
+    case is walkthrough_complete without the line that designates Tomas Nguyen (the
+    ticket's assignee in the SAP Security group): with the careful reader's answers, C is
+    SUPPORTED where the ticket names him, and an ISSUE, met in part, where it does not.
+    Everything else is the same."""
+    named, bare = BY_NAME["walkthrough_complete"], BY_NAME["assigner_team_not_designated"]
+    assignee = "Assigned to: Tomas Nguyen (TNGUYEN)"
+    assert [line for line in named.files[0].lines if line != assignee] == bare.files[0].lines
+    assert assignee in named.files[0].lines and named.files[1:] == bare.files[1:]
+    assert (bare.control, bare.attributes, bare.categories) == (
+        named.control, named.attributes, named.categories,
+    )  # fmt: skip
+    for code in ("A", "B", "D"):
+        assert bare.expected[code] == named.expected[code]
+    expectation = bare.expected["C"]
+    assert (expectation.verdict, expectation.results) == ("ISSUE", ["PARTLY_MET"])
+    assert not expectation.unsettled_acceptable
+    assert "SAP Security" in expectation.answer.elements["pass"].absent
+    for case, wanted in ((named, ("SUPPORTED", "MET")), (bare, ("ISSUE", "PARTLY_MET"))):
+        answer = scripted_answer(case)
+        outcomes = run_chain(lambda *_, given=answer: given, chain_of(case)).outcomes
+        c = next(outcome for outcome in outcomes if outcome.code == "C")
+        assert (c.verdict, c.result) == wanted, case.name
 
 
 def test_design_credited_as_implementation_is_counted_on_its_own() -> None:

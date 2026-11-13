@@ -22,6 +22,10 @@ Audit integrity (critical tier):
   check, never a guess; an answer sent one level too deep is read as written, and a
   reading cut off at its allowance is asked once more with a larger one, as a model call
   of its own (cut off again, the check fails);
+- prompts /5: both readings are told the quote rule the strict match applies and the
+  placeholder, shortfall-attribution and designation rules; a placeholder is an exception
+  shown unless a reading relies on another document of the request, and never support;
+  NOT_MET against PARTLY_MET on a linked attribute is an ISSUE met in part, rule 5 first;
 - another firm sees nothing, and a Reviewer reads and cannot rerun.
 """
 
@@ -429,12 +433,22 @@ def test_every_row_of_the_comparison_table(first: str, second: str) -> None:
     agreed CONTRADICTED stands as an ISSUE for it. Why: a request is judged against what
     it asked for; raising an issue on an attribute the request never asked about is a
     false issue, the second error the product owner's objective names. Every other row is
+    unchanged.
+
+    Rewritten again on 13 November 2026, for the rows PARTLY_MET against NOT_MET (either
+    reading first). Old expectation: UNSETTLED, a person's, with both views, linked or
+    not. New expectation: on an attribute the request links, an ISSUE with the result
+    PARTLY_MET, keeping both readings' passages and what they name absent, and both views;
+    on one it does not link, still UNSETTLED. Why: the product owner's decision of 13
+    November 2026 ("Issue: met in part"): both readings find the attribute falls short, one
+    wholly and one in part, and the first live run sent such a real issue to a person as
+    a disagreement (remark_all_approvals_obtained, attribute B). Every other row is
     unchanged."""
     for expected in (True, False):
         chain = _chain(expected=(expected, False))
         outcome = compare(_opinion(first, chain), _opinion(second, chain), chain)[0]
         wanted: tuple[str, str | None]
-        reference = False
+        reference = split = False
         if first == second == "MET":
             wanted = ("SUPPORTED", "MET")
         elif first == second == "CONTRADICTED":
@@ -442,12 +456,17 @@ def test_every_row_of_the_comparison_table(first: str, second: str) -> None:
         elif first == second and first in ("PARTLY_MET", "NOT_MET"):
             reference = not expected
             wanted = ("ISSUE", first) if expected else ("NOT_ADDRESSED", None)
+        elif {first, second} == {"PARTLY_MET", "NOT_MET"} and expected:
+            # Both short, one wholly and one in part: met in part, with both views.
+            split = True
+            wanted = ("ISSUE", "PARTLY_MET")
         elif first == second == "NOT_ADDRESSED":
             # The file does not address what its request said it would: an issue.
             wanted = ("ISSUE" if expected else "NOT_ADDRESSED", "NOT_ADDRESSED")
         else:
             # Either reading unable to tell, or the two disagreeing (PARTLY_MET against
-            # NOT_MET included): a person's, with both views.
+            # NOT_MET on an attribute the request does not link included): a person's,
+            # with both views.
             wanted = ("UNSETTLED", None)
         assert (outcome.verdict, outcome.result) == wanted, (first, second, expected)
         assert outcome.expected is expected and outcome.code == "A"
@@ -457,6 +476,15 @@ def test_every_row_of_the_comparison_table(first: str, second: str) -> None:
             ]  # fmt: skip
             assert outcome.summary == (UNLINKED_TEXT if reference else UNSETTLED_TEXT)
             assert outcome.passages == () and outcome.absent == ()
+        elif split:
+            assert [(v.role, v.result) for v in outcome.views] == [
+                ("ASSESSOR", first), ("REVIEWER", second),
+            ]  # fmt: skip
+            assert outcome.summary == chain_module.SPLIT_SHORTFALL.format(code="A")
+            # The issue keeps the passage the reading met in part rests on, and what both
+            # name absent.
+            assert [p.quote for p in outcome.passages] == [APPROVAL]
+            assert set(outcome.absent) == {"the grant", "No record of the approval."}
         else:
             assert outcome.views == ()
         if outcome.verdict == "SUPPORTED":
@@ -1556,8 +1584,14 @@ def test_a_deviation_shown_by_a_record_stands_and_is_an_exception() -> None:
         assert "CONTRADICTED is only for two records that disagree with each other" in system
         assert "a self-approval" in system
         assert "absent left empty" in system
-    assert chain_module.ASSESSOR_PROMPT_VERSION.endswith("/4")
-    assert chain_module.REVIEWER_PROMPT_VERSION.endswith("/4")
+    # Rewritten 13 November 2026. Old expectation: both prompt versions end in /4, the
+    # version that brought this rule in. New: the versions are /4 or later, and the rule is
+    # still in both roles' instructions (asserted just above); the current version, /5, is
+    # pinned in test_the_readings_are_told_the_rules_the_code_applies. Why: prompts /5
+    # revised the instructions for the product owner's decisions of that day and kept this
+    # rule word for word, so a pin to /4 tested the version number, not the rule.
+    for version in (chain_module.ASSESSOR_PROMPT_VERSION, chain_module.REVIEWER_PROMPT_VERSION):
+        assert int(version.rsplit("/", 1)[1]) >= 4, version
 
 
 def test_an_assertion_is_not_support_wherever_it_is_quoted_and_whatever_it_is_called() -> None:
@@ -2536,3 +2570,190 @@ def test_a_reading_cut_off_at_its_allowance_is_asked_once_more_with_more_room(
     assert (done["status"], done["note"]) == ("REVIEWED", "")
     by_code = {a["code"]: a for a in done["attributes"]}
     assert by_code["A"]["verdict"] == "SUPPORTED" and by_code["B"]["verdict"] == "ISSUE"
+
+
+# --- Prompts /5: the product owner's decisions of 13 November 2026 ----------------------
+
+
+def test_the_readings_are_told_the_rules_the_code_applies() -> None:
+    """Both roles' instructions carry the quote rule exactly as the strict match applies
+    it (item 1), the placeholder rule (item 2), the attribution of a shortfall (item 4)
+    and a team or role only by the record's own designation (item 5)."""
+    from ai_workforce_api.console_citations import (
+        MIN_PASSAGE_CHARS,
+        MIN_PASSAGE_WORDS,
+        find_passage,
+    )
+
+    assert chain_module.ASSESSOR_PROMPT_VERSION == "evidence-assurance-assessor/5"
+    assert chain_module.REVIEWER_PROMPT_VERSION == "evidence-assurance-reviewer/5"
+    for role in ("ASSESSOR", "REVIEWER"):
+        system, _prompt = prompt_for(_chain(), role)
+        flat = " ".join(system.split())
+        for rule in (
+            "at least four words or twenty characters, matched on whole words",
+            "with not, no, never or without among the three words before it",
+            "quote it with its label and the surrounding words on the same line",
+            "is NOT_MET, a deviation shown by the document",
+            "judge the element on that version: the draft's placeholder is then not a deviation",
+            "An element that compares people is judged on the people the records show.",
+            "A missing approval is the shortfall of the attribute that requires it, not of "
+            "another attribute.",
+            "A person's team or role is shown only by the record's own designation of that "
+            "person: an approval step naming the role, the ticket's assignee within its "
+            "assignment group, a title beside the name, or the system user group; never by "
+            "who wrote a note, closed the ticket or made the change.",
+        ):
+            assert rule in flat, (role, rule)
+        # The old wording invited quotes the match drops ("Number: RITM0048213").
+        assert "a full value" not in flat
+    # What the instructions say is what the strict match does.
+    assert (MIN_PASSAGE_WORDS, MIN_PASSAGE_CHARS) == (4, 20)
+    assert find_passage("Number: RITM0048213\n", "Number: RITM0048213") is None
+    line = "Request REQ-1041 approved by Priya Shah on 2026-03-03\n"
+    assert find_passage(line, "REQ-1041") is None
+    assert find_passage(line, "Request REQ-1041 approved by") is not None
+    assert find_passage(line, "quest REQ-1041 approved by Priya") is None
+    denied = "Access not approved by the line manager before the grant\n"
+    assert find_passage(denied, "approved by the line manager") is None
+    assert find_passage(denied, "not approved by the line manager") is not None
+
+
+DRAFT = (
+    "Access Procedure ITSEC-PRC-004 v0.3 DRAFT - NOT YET APPROVED\n"
+    "4.1 Access must be approved before it is granted.\n"
+    "4.2 Approvers: [APPROVER ROLE(S) - TBC with Finance]\n"
+)
+FINAL = (
+    "Access Procedure ITSEC-PRC-004 v1.0, approved by the CISO on 2026-01-10\n"
+    "4.1 Access must be approved by the approvers below before it is granted.\n"
+    "4.2 Approvers: the user's line manager and the owner of each role\n"
+    "4.3 In an emergency, approval may follow the grant within one business day.\n"
+)
+RULED = "4.1 Access must be approved before it is granted"
+RULED_FINAL = "4.1 Access must be approved by the approvers below before it is granted"
+PLACEHOLDER_LINE = "4.2 Approvers: [APPROVER ROLE(S) - TBC with Finance]"
+NAMED = "4.2 Approvers: the user's line manager and the owner of each role"
+AFTER = "4.3 In an emergency, approval may follow the grant within one business day"
+APPROVERS = {
+    "condition": "The procedure requires access to be approved before it is granted.",
+    "pass_when": "The procedure names the user's line manager and the role owner as approvers.",
+    "exception_when": "Approval may follow the grant, or the approvers are not named.",
+}
+
+
+def _procedure(*texts: str, expected: bool = True) -> ChainInput:
+    files = tuple(
+        _file(text, UUID(int=20 + index), f"procedure {index}.txt", kind="policy")
+        for index, text in enumerate(texts)
+    )
+    return _chain(
+        files=files, lens="DESIGN_DOCUMENT", expected=(expected, False), criteria=APPROVERS,
+        categories=("PROCESS_DOCUMENTATION",),
+    )  # fmt: skip
+
+
+def _approvers(condition: tuple[int, str], passing: tuple[str, int, str]) -> dict[str, Any]:
+    """A reading of attribute A: the condition shown by `condition` (file, quote), the
+    approvers element answered `passing` (result, file, quote), nothing named absent."""
+    result, index, quote = passing
+    return _says(
+        A=[
+            _element("MET", [(condition[0], condition[1], "REQUIREMENT")], key="condition"),
+            _element(result, [(index, quote, "REQUIREMENT")], key="pass"),
+        ],
+        B=_met(RULED, 0, "REQUIREMENT"),
+    )
+
+
+def test_a_placeholder_is_not_met_unless_an_approved_copy_is_relied_on() -> None:
+    """Item 2 ("Not met, unless approved copy"). A placeholder where the procedure should
+    name its approvers is a deviation shown by the document: an ISSUE whether or not the
+    request links the attribute. Where a reading relies on another document of the request
+    for the attribute (the approved copy may be there), a NOT_MET resting only on the
+    placeholder is no exception shown: it is compared as any other answer. Nothing here is
+    ever support unless both readings show the element MET."""
+    draft = _approvers((0, RULED), ("NOT_MET", 0, PLACEHOLDER_LINE))
+    # The draft alone: the placeholder is a deviation, linked or not.
+    for expected in (True, False):
+        alone = _procedure(DRAFT, expected=expected)
+        seen = check_opinion(draft, alone)
+        assert seen.views[0].elements[1].candidate
+        outcome = compare(seen, seen, alone)[0]
+        assert (outcome.verdict, outcome.result) == ("ISSUE", "NOT_MET"), expected
+        assert [e.key for e in outcome.elements if e.deviation] == ["pass"]
+        assert [p.quote for p in outcome.passages] == [PLACEHOLDER_LINE]
+    # The draft beside the approved copy, which both readings rely on for the condition
+    # while citing the draft's placeholder: no exception shown.
+    for expected in (True, False):
+        both = _procedure(DRAFT, FINAL, expected=expected)
+        relied = check_opinion(_approvers((1, RULED_FINAL), ("NOT_MET", 0, PLACEHOLDER_LINE)), both)
+        approvers = relied.views[0].elements[1]
+        assert (approvers.result, approvers.candidate, approvers.records) == ("NOT_MET", False, ())
+        assert chain_module.PLACEHOLDER_YIELDS in approvers.reason
+        outcome = compare(relied, relied, both)[0]
+        assert not any(e.deviation for e in outcome.elements)
+        # Compared as any answer: both find it met in part, an issue on the request that
+        # asks for it; for reference on one that does not.
+        wanted = ("ISSUE", "PARTLY_MET") if expected else ("NOT_ADDRESSED", None)
+        assert (outcome.verdict, outcome.result) == wanted
+        # One reading relying on the approved copy is enough: a deviation needs both.
+        alone_reading = check_opinion(draft, both)
+        assert alone_reading.views[0].elements[1].candidate
+        assert not any(e.deviation for e in compare(alone_reading, relied, both)[0].elements)
+    both = _procedure(DRAFT, FINAL)
+    # One reading judges the approvers on the approved copy, the other on the placeholder:
+    # a person's, never support and never an issue.
+    named = check_opinion(_approvers((1, RULED_FINAL), ("MET", 1, NAMED)), both)
+    placeholder = check_opinion(draft, both)
+    for one, two in ((named, placeholder), (placeholder, named)):
+        assert compare(one, two, both)[0].verdict == "UNSETTLED"
+    # Both judge it on the approved copy: support, the design shown.
+    shown = compare(named, named, both)[0]
+    assert (shown.verdict, shown.result, shown.shows) == ("SUPPORTED", "MET", "DESIGN")
+    # A deviation the approved copy itself shows is no placeholder: it stands.
+    late = check_opinion(_approvers((1, RULED_FINAL), ("NOT_MET", 1, AFTER)), both)
+    assert late.views[0].elements[1].candidate
+    assert (compare(late, late, both)[0].verdict, compare(late, late, both)[0].result) == (
+        "ISSUE", "NOT_MET",
+    )  # fmt: skip
+
+
+def test_a_split_shortfall_is_an_issue_met_in_part() -> None:
+    """Item 3 ("Issue: met in part"): one reading finds the attribute NOT_MET and the
+    other PARTLY_MET. Rule 5 comes first, and an element NOT_MET keeps the issue wherever
+    else the attribute is asked for (third review); an unlinked attribute stays a
+    person's."""
+    partly = _says(A=[
+        _element("MET", [(0, APPROVAL, "RECORD")], key="condition"),
+        _element("NOT_MET", absent="The record of the grant.", key="pass"),
+    ], B=_met())  # fmt: skip
+    wholly = _says(A=[
+        _element("NOT_MET", absent="An approval by the manager.", key="condition"),
+        _element("NOT_MET", absent="The record of the grant.", key="pass"),
+    ], B=_met())  # fmt: skip
+    for elsewhere in ((False, False), (True, False)):
+        chain = _chain(criteria=OWNED, elsewhere=elsewhere)
+        one, two = check_opinion(partly, chain), check_opinion(wholly, chain)
+        assert (one.views[0].result, two.views[0].result) == ("PARTLY_MET", "NOT_MET")
+        for first, second in ((one, two), (two, one)):
+            outcome = compare(first, second, chain)[0]
+            assert (outcome.verdict, outcome.result) == ("ISSUE", "PARTLY_MET"), elsewhere
+            assert {v.result for v in outcome.views} == {"PARTLY_MET", "NOT_MET"}
+            assert outcome.summary == chain_module.SPLIT_SHORTFALL.format(code="A")
+            assert set(outcome.absent) == {
+                "The record of the grant.", "An approval by the manager.",
+            }  # fmt: skip
+            # What the two agree on element by element: the grant not shown.
+            assert [(e.key, e.result) for e in outcome.elements] == [
+                ("condition", None), ("pass", "NOT_MET"),
+            ]  # fmt: skip
+    # Rule 5 first: with a file left out, an absence cannot be told: a person's.
+    held = _chain(criteria=OWNED, left_out=True)
+    assert compare(check_opinion(partly, held), check_opinion(wholly, held), held)[0].verdict == (
+        "UNSETTLED"
+    )
+    # An attribute the request does not ask for: unchanged, a person's.
+    unlinked = _chain(expected=(False, False), criteria=OWNED)
+    outcome = compare(check_opinion(partly, unlinked), check_opinion(wholly, unlinked), unlinked)
+    assert (outcome[0].verdict, outcome[0].result) == ("UNSETTLED", None)

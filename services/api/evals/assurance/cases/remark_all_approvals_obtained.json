@@ -210,7 +210,7 @@
     },
     "C": {
       "verdict": "SUPPORTED",
-      "unsettled_acceptable": true,
+      "unsettled_acceptable": false,
       "reason": "Requester, the approving line manager and the SAP Security analyst the ticket is assigned to, who assigned the role, are different people (the missing approval is B's issue).",
       "answer": {
         "reason": "Requester, approver and the person who assigned the role are different people.",

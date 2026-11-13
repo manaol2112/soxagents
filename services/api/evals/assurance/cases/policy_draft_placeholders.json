@@ -199,8 +199,8 @@
                 "basis": "RECORD"
               }
             ],
-            "absent": "A prohibition of self-approval.",
-            "reason": "Section 6 is not written."
+            "absent": "",
+            "reason": "Section 6 is a placeholder: the draft does not yet prohibit self-approval."
           },
           "pass": {
             "result": "NOT_MET",
@@ -211,8 +211,8 @@
                 "basis": "RECORD"
               }
             ],
-            "absent": "A requirement that the granter is neither the requester nor an approver.",
-            "reason": "Who may grant is an open point."
+            "absent": "",
+            "reason": "Who may grant is an open point inside the placeholder section."
           }
         }
       }

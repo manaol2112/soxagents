@@ -150,8 +150,13 @@ _RESTS_ON_ABSENCE: frozenset[str] = frozenset({"NOT_MET", "NOT_ADDRESSED", "PART
 # CONTRADICTED is only for two records that disagree.
 # 4 (the same day, the second independent review): a deviation shown by a record is
 # answered with that record and nothing named absent; absent is only for what is missing.
-ASSESSOR_PROMPT_VERSION = "evidence-assurance-assessor/4"
-REVIEWER_PROMPT_VERSION = "evidence-assurance-reviewer/4"
+# 5 (13 November 2026, the product owner's decisions after the first live run): the quote
+# rule as the code applies it; a placeholder is a deviation shown by the document unless
+# an approved copy is among the files; an element comparing people is judged on the
+# people the records show, and a missing approval is its own attribute's shortfall; a
+# team or role is shown only by the record's own designation of the person.
+ASSESSOR_PROMPT_VERSION = "evidence-assurance-assessor/5"
+REVIEWER_PROMPT_VERSION = "evidence-assurance-reviewer/5"
 PROMPT_VERSIONS: dict[Role, str] = {
     "ASSESSOR": ASSESSOR_PROMPT_VERSION,
     "REVIEWER": REVIEWER_PROMPT_VERSION,
@@ -214,6 +219,14 @@ _RECORD_MARK = re.compile(
 )
 # Where a clause ends within a line.
 _CLAUSE_END = re.compile(r"\.\s+|;\s+|\s\|\s|\t")
+# Placeholder text a draft or a template carries where the document should name or state
+# something: bracketed text on one line ("[APPROVER ROLE(S) - TBC with Finance]",
+# "[Approver name, title]", "within [1] business day"), or TBD or TBC standing alone.
+_PLACEHOLDER = re.compile(r"\[[^\[\]\n]{1,200}\]|\b(?:TBD|TBC)\b", re.I)
+PLACEHOLDER_YIELDS = (
+    "A placeholder, where the reading relies on another document of the request, which "
+    "may be its approved copy: not an exception shown."
+)
 # The prompt's own delimiters, neutralised wherever the files (or anything else from the
 # engagement) carry them, so that no text can close a block or open another.
 # The angle bracket and its look-alikes (fullwidth, small, CJK and mathematical angle
@@ -565,11 +578,28 @@ by a record, is NOT_MET, with that record's passage, and absent left empty: noth
 missing, the record shows the element is not met. Name something in absent only where it \
 would have to be there and is not. CONTRADICTED is only for two records that disagree with \
 each other, on different lines or in different files.
-- Quote a file's exact words, at least four words or a full value, and give the index of \
-the file the words are in. Where the same words occur more than once in the file, give in \
-context the sentence or line around them, so the passage can be placed. A quote you cannot \
-copy exactly, or that is not in the file you name, supports nothing. Never invent a value, \
-a date, a name, a page or a row. If something cannot be read, say CANNOT_TELL.
+- A placeholder where a document should name or state something the attribute requires \
+(an approver role, a deadline, an owner: "[APPROVER ROLE(S) - TBC]", "[Approver name, \
+title]", "[TBD]") is NOT_MET, a deviation shown by the document: quote the placeholder and \
+leave absent empty. If an approved or final version of the same document is also among the \
+request's files, judge the element on that version: the draft's placeholder is then not a \
+deviation.
+- An element that compares people is judged on the people the records show. A missing \
+approval is the shortfall of the attribute that requires it, not of another attribute.
+- A person's team or role is shown only by the record's own designation of that person: an \
+approval step naming the role, the ticket's assignee within its assignment group, a title \
+beside the name, or the system user group; never by who wrote a note, closed the ticket or \
+made the change.
+- Quote a file's exact words: at least four words or twenty characters, matched on whole \
+words. A shorter quote, one that starts or ends inside a word, or one with not, no, never \
+or without among the three words before it (start the quote at that word) supports \
+nothing. For a short value such as a record number, quote it with its label and the \
+surrounding words on the same line; where the whole line is shorter, quote another record \
+that shows the element. Give the index of the file the words are in. Where the same words \
+occur more than once in the file, give in context the sentence or line around them, so the \
+passage can be placed. A quote you cannot copy exactly, or that is not in the file you \
+name, supports nothing. Never invent a value, a date, a name, a page or a row. If \
+something cannot be read, say CANNOT_TELL.
 - Classify every passage you quote by its basis. RECORD: what the client's process or \
 system recorded: a request, an approval entered by the approver, a log or system line, a \
 configured value, a dated extract, a document's own approval and version block. \
@@ -1102,6 +1132,58 @@ def _checked_element(
     )
 
 
+def _on_placeholder(passage: Passage, text: str) -> bool:
+    """Whether a passage of a file overlaps placeholder text of its line ("[Approver name,
+    title]", "[TBD]")."""
+    start, end = passage.start, passage.end
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", end)
+    line = text[line_start : len(text) if line_end < 0 else line_end]
+    return any(
+        line_start + found.start() < end and start < line_start + found.end()
+        for found in _PLACEHOLDER.finditer(line)
+    )
+
+
+def _placeholders_yield(elements: Sequence[ElementView], chain: ChainInput) -> list[ElementView]:
+    """Rule 5a (the product owner, 13 November 2026: "Not met, unless approved copy"). A
+    placeholder where a document should name what the attribute requires is a deviation
+    shown by the document, except where the approved copy may be among the request's
+    files. In code: a NOT_MET resting only on placeholder text is no deviation candidate
+    in a reading that rests any element of the same attribute on a verified passage of
+    another document of the request. The code cannot tell an approved copy from another
+    document, so any document the reading relies on counts as possibly that copy. A
+    deviation needs both readings, so one reading that relies on another document
+    withdraws it; where the other reading shows the element itself MET, there never was
+    one. The element stays NOT_MET and is compared as any other answer: the rule only
+    ever withdraws an exception, it never makes support."""
+    texts = {file.id: file.text for file in chain.files}
+    documents = {
+        file.id for file in chain.files
+        if file_lens(chain.categories, file.kind) == "DESIGN_DOCUMENT"
+    }  # fmt: skip
+    relied_on = {
+        passage.file_id
+        for element in elements
+        if element.result in ("MET", "PARTLY_MET")
+        for passage in element.passages
+        if passage.file_id in documents
+    }
+    kept: list[ElementView] = []
+    for element in elements:
+        if (
+            element.candidate
+            and all(_on_placeholder(p, texts.get(p.file_id, "")) for p in element.records)
+            and relied_on - {p.file_id for p in element.records}
+        ):
+            element = replace(
+                element, candidate=False, records=(),
+                reason=_joined(element.reason, PLACEHOLDER_YIELDS),
+            )  # fmt: skip
+        kept.append(element)
+    return kept
+
+
 def weakest(results: Sequence[ElementResult]) -> Result:
     """The weakest of answered elements' results (NOT_ADDRESSED elements left out): any
     CONTRADICTED gives CONTRADICTED; a shortfall beside what is shown gives PARTLY_MET;
@@ -1166,6 +1248,7 @@ def check_opinion(output: dict[str, Any], chain: ChainInput) -> Opinion:
             elements.append(view)
             dropped += lost
             set_aside += aside
+        elements = _placeholders_yield(elements, chain)
         result = attribute_result(elements)
         reason = "" if found is None else clean_line(found.reason, TEXT_LIMIT)
         why = ""
@@ -1199,6 +1282,10 @@ def check_opinion(output: dict[str, Any], chain: ChainInput) -> Opinion:
     return Opinion(views=tuple(views), dropped=dropped, set_aside=set_aside)
 
 
+SPLIT_SHORTFALL = (
+    "Both readings find the evidence falls short on attribute {code}: one finds it not "
+    "shown, the other shown only in part."
+)
 _SUMMARY: dict[str, str] = {
     "PARTLY_MET": "Both readings find the evidence shows attribute {code} only in part.",
     "NOT_MET": "Both readings find the evidence does not show attribute {code}.",
@@ -1304,9 +1391,10 @@ def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome
     an ISSUE, as is both finding it NOT_ADDRESSED; where another D&I request of the
     control also asks for it, part of it shown (SHOWN_IN_PART, or a PARTLY_MET resting on
     absence) is PARTLY_SUPPORTED: the rest may be that request's evidence; where none
-    does, it is an ISSUE (PARTLY_MET), naming what is not shown. For one it does not ask
-    for, an agreed shortfall is shown for reference (NOT_ADDRESSED, both views). Anything
-    else is UNSETTLED, with both views."""
+    does, it is an ISSUE (PARTLY_MET), naming what is not shown. Where one reading finds it
+    NOT_MET and the other PARTLY_MET, it is an ISSUE (PARTLY_MET) with both views. For one
+    it does not ask for, an agreed shortfall is shown for reference (NOT_ADDRESSED, both
+    views). Anything else is UNSETTLED, with both views."""
     outcomes: list[Outcome] = []
     for attribute in chain.attributes:
         one = first.view(attribute.id) or _missing_view(attribute)
@@ -1317,7 +1405,7 @@ def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome
         result: Result | None = None
         summary = UNSETTLED_TEXT
         shows: Shows | None = None
-        reference = False
+        reference = split = False
         both = one.passages and two.passages
         deviations = _deviations(one, two)
         # Part of the attribute shown by the same elements in both readings.
@@ -1420,6 +1508,16 @@ def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome
                 summary = _SUMMARY[one.result].format(code=attribute.code)
             else:
                 verdict, summary, reference = "NOT_ADDRESSED", UNLINKED_TEXT, True
+        elif {one.result, two.result} == {"NOT_MET", "PARTLY_MET"} and attribute.expected:
+            # The product owner, 13 November 2026 ("Issue: met in part"): both readings
+            # find an attribute the request asks for falls short, one wholly and one in
+            # part. The least both find is that it is met in part: an ISSUE, PARTLY_MET,
+            # with both readings' views. Rule 5 came first (an absence told from files read
+            # in part, or beside a file left out, is CANNOT_TELL, so no split), and the
+            # reading that finds it not met answers an element NOT_MET, which keeps the
+            # issue wherever else the attribute is asked for (third review, item 2).
+            verdict, result, split = "ISSUE", "PARTLY_MET", True
+            summary = SPLIT_SHORTFALL.format(code=attribute.code)
         elif one.result == "NOT_ADDRESSED" and two.result == "NOT_ADDRESSED":
             result = "NOT_ADDRESSED"
             passages = ()
@@ -1449,6 +1547,13 @@ def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome
             )
             passages = ()
             absent = ()
+        elif split:
+            # The issue keeps what both readings rest it on and name absent; the views say
+            # which found it not met and which met in part.
+            views = (
+                View("ASSESSOR", one.result, one.reason),
+                View("REVIEWER", two.result, two.reason),
+            )
         outcomes.append(
             Outcome(
                 attribute_id=attribute.id,
