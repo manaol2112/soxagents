@@ -886,18 +886,117 @@ def assurance_fingerprint(
     return _fingerprint(*parts, *([] if assessment_id is None else [str(assessment_id)]))
 
 
+@dataclass(frozen=True)
+class AssuranceFindingRef:
+    id: UUID
+    fingerprint: str
+    requirement_id: UUID | None
+    attribute_id: UUID | None
+    assessment_id: UUID | None
+    status: str
+    stale: bool
+
+
 def assurance_findings(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
-) -> dict[str, UUID]:
-    """The control's assurance findings, by fingerprint."""
-    return {
-        str(row[0]): UUID(str(row[1]))
+) -> list[AssuranceFindingRef]:
+    """The control's assurance findings, oldest first."""
+    return [
+        AssuranceFindingRef(
+            id=UUID(str(row[0])),
+            fingerprint=str(row[1]),
+            requirement_id=None if row[2] is None else UUID(str(row[2])),
+            attribute_id=None if row[3] is None else UUID(str(row[3])),
+            assessment_id=None if row[4] is None else UUID(str(row[4])),
+            status=str(row[5]),
+            stale=bool(row[6]),
+        )
         for row in connection.execute(
-            "SELECT fingerprint, id FROM evidence_findings "
-            "WHERE engagement_control_id = %s AND project_id = %s AND source = 'ASSURANCE'",
+            "SELECT id, fingerprint, requirement_id, attribute_id, assessment_id, status, stale "
+            "FROM evidence_findings "
+            "WHERE engagement_control_id = %s AND project_id = %s AND source = 'ASSURANCE' "
+            "ORDER BY created_at, id",
             (control_id, project_id),
         ).fetchall()
-    }
+    ]
+
+
+def in_hand(status: str) -> bool:
+    """A finding a person has acted on and not closed: accepted, sent, answered, asked
+    again, escalated. A new check never marks it stale; its result is attached to it."""
+    return status in OPEN and status != "PROPOSED"
+
+
+def attach_assurance_result(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    requirement_id: UUID,
+    attribute_id: UUID,
+    attribute_code: str,
+    assessment_id: UUID,
+    verdict: str,
+) -> bool:
+    """A new run's result for an attribute, attached to the issue on it a person already
+    has in hand (accepted, sent, answered...), from an earlier run of the same request.
+    A new run that supports the attribute proposes ANSWERED; any other result is noted on
+    the finding's history and leaves its status. Nothing is closed, and the finding is
+    never marked stale by the new run: a person decides. Returns whether such a finding
+    is in hand (the new run then records no finding of its own for the attribute). Once
+    per finding and run."""
+    rows = cursor.execute(
+        """
+        SELECT id, status FROM evidence_findings f
+        WHERE source = 'ASSURANCE' AND requirement_id = %s AND attribute_id = %s
+          AND NOT stale AND status = ANY(%s) AND assessment_id <> %s
+          AND NOT EXISTS (
+              SELECT 1 FROM evidence_finding_events v
+              WHERE v.finding_id = f.id AND v.event = 'REASSESSED'
+                AND v.points_at ->> 'assessment_id' = %s::text
+          )
+        FOR UPDATE
+        """,
+        (
+            requirement_id, attribute_id, [x for x in OPEN if x != "PROPOSED"], assessment_id,
+            str(assessment_id),
+        ),
+    ).fetchall()  # fmt: skip
+    for finding_id, status in rows:
+        after = str(status)
+        if verdict == "SUPPORTED":
+            after = "ANSWERED"
+            note = (
+                f"A new check of the request's evidence finds attribute {attribute_code} "
+                "supported by both readings. A person decides whether this resolves it."
+            )
+            if status != "ANSWERED":
+                cursor.execute(
+                    "UPDATE evidence_findings SET status = 'ANSWERED', version = version + 1 "
+                    "WHERE id = %s",
+                    (finding_id,),
+                )
+        elif verdict == "ISSUE":
+            note = (
+                f"A new check of the request's evidence still finds attribute "
+                f"{attribute_code} not shown. A person decides."
+            )
+        else:
+            note = (
+                f"A new check of the request's evidence does not settle attribute "
+                f"{attribute_code}. A person decides."
+            )
+        _event(
+            cursor, UUID(str(finding_id)), organization_id, project_id, "REASSESSED", "AGENT",
+            None, str(status), after, note=note,
+            points_at={"assessment_id": str(assessment_id), "verdict": verdict},
+        )  # fmt: skip
+    in_hand_now = cursor.execute(
+        "SELECT 1 FROM evidence_findings WHERE source = 'ASSURANCE' AND requirement_id = %s "
+        "AND attribute_id = %s AND NOT stale AND status = ANY(%s) AND assessment_id <> %s "
+        "LIMIT 1",
+        (requirement_id, attribute_id, [x for x in OPEN if x != "PROPOSED"], assessment_id),
+    ).fetchone()
+    return in_hand_now is not None
 
 
 def record_assurance_findings(
@@ -957,11 +1056,14 @@ def record_assurance_findings(
 
 
 def mark_stale_for_assessment(cursor: psycopg.Cursor[Any], assessment_id: UUID, reason: str) -> int:
-    """The assurance run went out of date: its open findings are stale."""
+    """The assurance run went out of date: its findings nobody has acted on are stale. One
+    a person has in hand (accepted, sent, answered...) is not: a client's reply or upload
+    does not take it from them before they decide; the next run's result is attached to
+    it instead (attach_assurance_result)."""
     rows = cursor.execute(
         "SELECT id, status FROM evidence_findings "
-        "WHERE assessment_id = %s AND NOT stale AND status = ANY(%s)",
-        (assessment_id, list(OPEN)),
+        "WHERE assessment_id = %s AND NOT stale AND status = 'PROPOSED'",
+        (assessment_id,),
     ).fetchall()
     for finding_id, status in rows:
         _mark_stale(
@@ -1018,12 +1120,29 @@ def reassess_on_reading(
         for item in classification.get("items") or []
         if isinstance(item, dict) and item.get("coverage") == "COVERED"
     }
+    # An assurance finding rests on all of a requirement's files, often with no single
+    # file of its own: it is matched on its requirement, whichever request carries it now.
     open_rows = cursor.execute(
         """
         SELECT id, status, requirement_id FROM evidence_findings
-        WHERE pbc_request_id = %s AND status = ANY(%s) AND evidence_file_id <> %s
+        WHERE status = ANY(%(statuses)s)
+          AND (evidence_file_id <> %(file)s
+               OR (source = 'ASSURANCE' AND evidence_file_id IS NULL))
+          AND (
+              pbc_request_id = %(request)s
+              OR (source = 'ASSURANCE' AND requirement_id IN (
+                  SELECT q.id FROM evidence_requirements q WHERE q.pbc_request_id = %(request)s
+                  UNION
+                  SELECT m.requirement_id FROM evidence_matches m
+                  WHERE m.evidence_file_id = %(file)s AND m.requirement_id IS NOT NULL
+              ))
+          )
         """,
-        (request_id, ["ACCEPTED", "SENT", "ANSWERED", "MORE_NEEDED", "ESCALATED"], file_id),
+        {
+            "request": request_id,
+            "statuses": ["ACCEPTED", "SENT", "ANSWERED", "MORE_NEEDED", "ESCALATED"],
+            "file": file_id,
+        },
     ).fetchall()
     for finding_id, status, requirement_id in open_rows:
         covers = requirement_id is not None and str(requirement_id) in covered

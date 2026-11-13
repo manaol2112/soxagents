@@ -66,6 +66,11 @@ CREATE TABLE evidence_assessments (
     attribute_ids uuid[] NOT NULL DEFAULT '{}',
     linked_attribute_ids uuid[] NOT NULL DEFAULT '{}',
     lens text NOT NULL,
+    -- The model configuration a run would use ({tier, ASSESSOR, REVIEWER}), part of the
+    -- basis; and the one its readings ran on, recorded when it is reviewed. A run is
+    -- copied for a basis only where both are the same, so a model change never reuses one.
+    models jsonb NOT NULL DEFAULT '{}'::jsonb,
+    ran_with jsonb,
     assessor_prompt_version text NOT NULL,
     reviewer_prompt_version text NOT NULL,
     basis_sha256 text NOT NULL,
@@ -74,6 +79,8 @@ CREATE TABLE evidence_assessments (
     stage text NOT NULL DEFAULT 'GATE',
     attempts integer NOT NULL DEFAULT 0,
     lease_until timestamptz,
+    -- The claim's owner: only the worker holding it saves, fails or resets the run.
+    claim_token uuid,
     held_code text,
     held_reason text NOT NULL DEFAULT '',
     note text NOT NULL DEFAULT '',
@@ -112,7 +119,8 @@ CREATE TABLE evidence_assessments (
     CONSTRAINT evidence_assessments_held CHECK (
         (status = 'HELD') = (held_code IS NOT NULL)
         AND (held_code IS NULL OR held_code IN (
-            'CUSTODY', 'UNREADABLE', 'KIND_UNSURE', 'POPULATION', 'NO_ATTRIBUTES', 'TOO_LARGE'
+            'CUSTODY', 'READ_FAILED', 'UNREADABLE', 'KIND_UNSURE', 'POPULATION',
+            'NO_ATTRIBUTES', 'TOO_LARGE'
         ))
         AND (held_code IS NULL OR char_length(btrim(held_reason)) >= 3)
         AND (status <> 'HELD' OR stage = 'GATE')
@@ -134,6 +142,8 @@ CREATE TABLE evidence_assessments (
         jsonb_typeof(outcome) = 'array'
         AND (assessor_opinion IS NULL OR jsonb_typeof(assessor_opinion) = 'object')
         AND (reviewer_opinion IS NULL OR jsonb_typeof(reviewer_opinion) = 'object')
+        AND jsonb_typeof(models) = 'object'
+        AND (ran_with IS NULL OR jsonb_typeof(ran_with) = 'object')
     ),
     CONSTRAINT evidence_assessments_text CHECK (
         char_length(held_reason) <= 300 AND char_length(note) <= 300

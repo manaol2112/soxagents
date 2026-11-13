@@ -5873,6 +5873,16 @@ def register_evidence_plans(
 
         schedule(scheduler, ids)
 
+    def assured_plan(
+        c: psycopg.Connection[Any], p: Principal, project_id: UUID, control_id: UUID
+    ) -> None:
+        """The plan was made again or approved, which may create, remove or reshape D&I
+        requests: the assurance chain's checks follow, a request with files and no check
+        gets one (docs/evidence-assurance.md)."""
+        from ai_workforce_api.evidence_assurance import follow_control
+
+        follow_control(c, project_id, control_id, p.id, scheduler, always=True)
+
     def assured(
         c: psycopg.Connection[Any], p: Principal, project_id: UUID, control_id: UUID,
         file_id: UUID | None,
@@ -5977,6 +5987,7 @@ def register_evidence_plans(
             _, drafts, note = generate(c, model(), organization_id, project_id, control_id, p.id)
             drafted(drafts)
             planned_again(c, p, organization_id, project_id, control_id)
+            assured_plan(c, p, project_id, control_id)
             body = plan_body(c, project_id, control_id)
             return body.model_copy(update={"note": note or body.note})
 
@@ -6073,6 +6084,7 @@ def register_evidence_plans(
             for other in filled:
                 drafted(release(c, organization_id, project_id, other, p.id))
                 schedule_runs(tests, resume_testing(c, project_id, other))
+            assured_plan(c, p, project_id, control_id)
             return plan_body(c, project_id, control_id)
 
         return run(request, work)
@@ -6237,6 +6249,7 @@ def register_evidence_plans(
             _, drafts, note = generate(c, model(), organization_id, project_id, control_id, p.id)
             drafted(drafts)
             planned_again(c, p, organization_id, project_id, control_id)
+            assured_plan(c, p, project_id, control_id)
             body_out = plan_body(c, project_id, control_id)
             return body_out.model_copy(update={"note": note or body_out.note})
 

@@ -37,18 +37,30 @@ One run per **requirement** (a DESIGN requirement with at least one file in forc
 several files (a ticket shows the approval, the SAP change log shows the grant): judged
 alone, neither shows "approved before granted", and each would raise an issue that is not
 real. That is the second error the objective names, so the files are judged together
-(changed 12 November 2026, before the first build was finished).
+(changed 12 November 2026, before the first build was finished). Evidence may also be split
+across requests (the change log asked for on another request): an element the request's
+files do not bear on is `NOT_ADDRESSED`, never a shortfall (stage 4).
 
 A run is identified by its basis: every file in force on the requirement (its id, content
 hash, the hash of its stored text, its kind, and whether the gate left it out), the
-attribute basis, the requirement's links, the control's facts, the lens and both prompt
-versions. It starts by itself when the reading of a file on a DESIGN requirement lands
-(`evidence_analysis.run_analysis`, status READY), in the background, after the reading's
-transaction commits (the `_after_commit` pattern of context_routes.py; a run is never
-handed to the worker before the row that asks for it is committed). While another file of
-the same requirement is still being read, nothing is queued: that file's reading queues
-the run, so files that arrive together are read once. A run still queued when a file
-arrives is brought up to date in place (no second run for the same requirement).
+attribute basis, the requirement's links, the control's facts, the lens, both prompt
+versions, and the model configuration the readings would use (the tier and the model per
+role). It starts by itself when the reading of a file on a DESIGN requirement ends
+(`evidence_analysis.run_analysis`), in the background, after the reading's transaction
+commits (the `_after_commit` pattern of context_routes.py; a run is never handed to the
+worker before the row that asks for it is committed). While another file of the same
+requirement is still being read, nothing is queued: that file's reading queues the run, so
+files that arrive together are read once. A run still queued when a file arrives is
+brought up to date in place (no second run for the same requirement).
+
+Never silently skipped: a DESIGN requirement with a file in force and no run is listed as
+`NOT_CHECKED` (section 6) and a person can start its check. Runs are also queued, or marked
+out of date, when the plan is made again or approved or a plan run ends (requirements
+created, removed or reshaped), when a requirement's links or an attribute's wording or
+criteria change, when a file is linked to or taken off a requirement, withdrawn, replaced
+or restored, when a file's kind is confirmed, and when the control's description changes.
+On start-up a bounded backfill (`backfill`, 50 requirements a pass, idempotent) queues a run
+for each DESIGN requirement with files in force and no current run.
 
 ### Stage 1: the gate (code only, no model call)
 
@@ -58,8 +70,9 @@ plain sentence, when any of these hold:
 | Code | When |
 | --- | --- |
 | `CUSTODY` | The reading failed its custody check. |
-| `UNREADABLE` | Nothing readable was extracted (no text, password-protected, a failed OCR, a reading that did not finish). |
-| `KIND_UNSURE` | The reader's confidence in the file's kind is low, or the rules classified it (no model, or the model's answer was rejected), and no person has confirmed the kind. |
+| `READ_FAILED` | The reading did not finish this time (a timeout, a provider error, a reader that gave up, a cancellation): "The file could not be read this time. Read it again." |
+| `UNREADABLE` | Nothing readable was extracted (no text, password-protected, a failed OCR). |
+| `KIND_UNSURE` | The reader's confidence in the file's kind is low, or the rules classified it (no model, or the model's answer was rejected), or the demo seeded it, and no person has confirmed the kind. |
 | `POPULATION` | The file is a population on a design item: the walkthrough instance is picked first (walkthrough_instances.py). |
 
 The run goes ahead on the files that passed, and names the files left out
@@ -95,19 +108,29 @@ file, `MAX_READING_TEXT` the request), each numbered by an index, with:
   criteria (`testing_engine.tailored_criteria`: condition, pass, exception), marked
   `expected` when the requirement links it (`evidence_requirement_attributes`).
 
+The prompt's delimiters (`<file`, `</file>`, `<evidence>`, `<control_and_attributes>`)
+are neutralised (`‹file`) wherever they occur in a file's text or name, or in the control's
+data, so no file can close its block, open another, or forge the attributes.
+
 For each attribute it answers, per **element**, one of:
 
-`MET`, `PARTLY_MET`, `NOT_MET`, `CONTRADICTED`, `CANNOT_TELL`, or `NOT_ADDRESSED` (the files
-do not bear on this attribute at all; allowed only for an attribute that is not
-`expected`, or with a stated reason for one that is).
+`MET`, `PARTLY_MET`, `NOT_MET`, `CONTRADICTED` (two records that disagree with each other),
+`CANNOT_TELL`, or `NOT_ADDRESSED` (this request's files contain nothing about the element;
+another request may hold that evidence). A late approval, a self-approval, a wrong
+approver or a date outside the period, shown by a record, is `NOT_MET` with that record's
+passage, never `CONTRADICTED`. All of an attribute's elements `NOT_ADDRESSED` needs a stated
+reason for an `expected` attribute.
 
 The elements are set in code, so neither reading chooses what it is judged on: the
-criteria's **condition** and what **passes** at this client, where a person owns criteria;
-the wording alone otherwise. What counts as an exception is given to the reading as the
+criteria's **condition** and what **passes** at this client (keys `condition` and `pass`),
+where a person owns criteria; the wording alone otherwise (key `wording`). The same
+attribute has the same keys and texts on every request of the control, so elements combine
+across requests by key. What counts as an exception is given to the reading as the
 description of failing, not as an element to be met.
 
-Each answer carries the exact words it rests on, with the index of the file they are in,
-or names what is absent.
+Each answer carries the exact words it rests on, with the index of the file they are in
+(and, where the same words occur more than once in the file, the words around them), or
+names what is absent.
 
 ### Stage 3: the blind re-performance (one model call)
 
@@ -122,43 +145,58 @@ the record that shows it, and say what would have to be there and is not.
 Applied to each agent's answer first, then to the pair. The model proposes; the code
 decides what stands (the rule of evidence_mapping.py).
 
-1. Every quote is found in the stored text of **the file it names**
-   (`console_citations.find_quote`) and located there (`evidence_mapping.locate`). A quote
-   that file does not hold is dropped, whichever other file may hold it.
+1. Every quote is found in the stored text of **the file it names**, strictly
+   (`console_citations.find_passage`, beside the console's looser `find_quote`): on word
+   boundaries at both ends, at least four words or twenty characters after folding. A
+   quote that file does not hold is dropped, whichever other file may hold it. Where the
+   words occur more than once in the file, the occurrence its context points to is the
+   one located; when that cannot be told the passage still counts, located as "found in
+   several places".
 2. `MET` and `PARTLY_MET` need a verified quote for each element they claim. Without
    one, the element is `CANNOT_TELL`.
-3. `CONTRADICTED` needs two verified quotes. Otherwise `CANNOT_TELL`.
+3. `CONTRADICTED` needs two verified passages that do not overlap, at least one of them
+   support under the lens (a RECORD; or a REQUIREMENT under `DESIGN_DOCUMENT`). Otherwise
+   `CANNOT_TELL`.
 4. Passages are classified RECORD, REQUIREMENT, ASSERTION or INSTRUCTION (the first, third
-   and fourth as evidence_mapping does; a REQUIREMENT is a document's own rule, "access
-   must be approved by ..."). Only a RECORD supports an element under `INSTANCE_RECORD`.
-   Under `DESIGN_DOCUMENT` a REQUIREMENT supports an element, as does a RECORD the
-   document carries (its approval, its version); a statement that something was done
-   does not. An unclassified passage is an ASSERTION. A line the deterministic guards
-   flag is never support.
-5. When a file's stored text was cut (`text_truncated`), or when a file of the request
-   was left out by the gate, an answer that rests on absence (`NOT_MET`, `NOT_ADDRESSED`,
-   and the missing part of `PARTLY_MET`) becomes `CANNOT_TELL`, with "a file was read in
-   part" or "a file on this request has not been checked".
-6. An attribute's result is the weakest of its elements: any `CONTRADICTED` gives
-   `CONTRADICTED`; else any `NOT_MET` with any `MET` gives `PARTLY_MET`; all `NOT_MET`
-   gives `NOT_MET`; any `CANNOT_TELL` gives `CANNOT_TELL` unless a `MET` and a `NOT_MET`
-   already make it `PARTLY_MET` (so `NOT_MET` with `CANNOT_TELL` is `CANNOT_TELL`: what is
-   not known could be met); all `MET` gives `MET`. An element or an attribute the answer
-   leaves out is `CANNOT_TELL`.
+   and fourth as evidence_mapping does; a REQUIREMENT is a document's own rule). Only a
+   RECORD supports an element under `INSTANCE_RECORD`; under `DESIGN_DOCUMENT` a
+   REQUIREMENT does, as does a RECORD the document carries. An unclassified passage is an
+   ASSERTION. A concern wins: words the answer calls an ASSERTION or an INSTRUCTION
+   anywhere are support nowhere in that answer. Code reads as an ASSERTION, whatever the
+   reading called it, a passage on a line that opens with Remark:, Note:, Summary:,
+   Comment: or Conclusion:, or that says all of something was (or has been) obtained,
+   approved or reviewed. A line the deterministic guards flag is never support.
+5. For an attribute the request asks for (`expected`), when a file's stored text was cut
+   or a file of the request was left out by the gate, a result that rests on absence (a
+   `NOT_MET` with no record of the deviation, a `NOT_ADDRESSED`, and the missing part of a
+   `PARTLY_MET`) becomes `CANNOT_TELL`, with "a file was read in part" or "a file on this
+   request has not been checked". A `NOT_MET` resting on a verified passage that shows the
+   deviation (a RECORD, or a REQUIREMENT under `DESIGN_DOCUMENT`, from a file read in full)
+   stands. An attribute the request does not link is not held to this rule.
+6. An attribute's result for the request: any `CONTRADICTED` gives `CONTRADICTED`; any
+   `NOT_MET` that shows a deviation gives `NOT_MET` (an exception), whatever else is shown;
+   all `NOT_ADDRESSED` gives `NOT_ADDRESSED`; every element `MET` gives `MET`; at least one
+   `MET` and the rest `NOT_ADDRESSED` gives `SHOWN_IN_PART` (no shortfall: the rest may be
+   another request's evidence); otherwise the weakest of the elements answered (the
+   `NOT_ADDRESSED` ones left out): `MET` with `NOT_MET` or `PARTLY_MET` gives `PARTLY_MET`
+   (kept for shortfalls that rest on absence); else any `CANNOT_TELL` gives `CANNOT_TELL`;
+   else `NOT_MET`. An element or an attribute the answer leaves out is `CANNOT_TELL`.
 
 Then the comparison, per attribute:
 
 | Assessor | Reviewer | Verdict |
 | --- | --- | --- |
-| `MET` | `MET` | `SUPPORTED` |
-| the same one of `PARTLY_MET`, `NOT_MET`, `CONTRADICTED` | | `ISSUE` |
-| `NOT_ADDRESSED` | `NOT_ADDRESSED` | `NOT_ADDRESSED` |
+| `MET` | `MET` (both with verified passages) | `SUPPORTED` |
+| `SHOWN_IN_PART` | `SHOWN_IN_PART`, on the same elements | `PARTLY_SUPPORTED` |
+| the same `CONTRADICTED` | | `ISSUE` |
+| the same `PARTLY_MET` or `NOT_MET`, attribute linked | | `ISSUE` |
+| the same `PARTLY_MET` or `NOT_MET`, attribute not linked | | `NOT_ADDRESSED`, "This request does not ask for this attribute; what the readings found is shown for reference.", both views |
+| `NOT_ADDRESSED` | `NOT_ADDRESSED` | `ISSUE` if linked (the evidence does not address what its request said it would), else `NOT_ADDRESSED` |
 | anything else, including either `CANNOT_TELL` | | `UNSETTLED` |
 
-`PARTLY_MET` against `NOT_MET` is `UNSETTLED`, not an issue: the two readings disagree on
-what the files show. An `expected` attribute both find `NOT_ADDRESSED` is an `ISSUE` (the
-evidence does not address what its request said it would). `SUPPORTED` always carries the
-result `MET` and at least one verified passage from each reading.
+`PARTLY_MET` against `NOT_MET`, and `SHOWN_IN_PART` on different elements, are `UNSETTLED`.
+A requirement with no links at all has every attribute unlinked. `SUPPORTED` always
+carries the result `MET` and at least one verified passage from each reading.
 
 There is no third agent and no tie-break. `UNSETTLED` goes to a person with both views.
 
@@ -169,12 +207,29 @@ gave nothing.
 
 ### Stage 5: what a person sees
 
-- `SUPPORTED`: the attribute, the passages both readings rest on, each with its file.
-- `ISSUE`: recorded as an evidence finding (source `ASSURANCE`), so the existing accept,
-  edit, follow-up and resolve loop applies. The finding states the attribute's letter,
-  what is not shown, and the passage or the absence it rests on. The question it proposes
-  for the control owner is written from the firm's own attribute wording, never from the
-  model's words.
+- `SUPPORTED`: the attribute, the passages both readings rest on, each with its file, and
+  what it shows for D&I: `IMPLEMENTATION` when the run reads the records of an instance
+  and every element shown rests, in both readings, on a passage of a file that is itself
+  such a record; `DESIGN` otherwise (a policy or procedure requires it). The verdict is
+  `SUPPORTED` either way; the screen counts an attribute as evidenced for D&I only where
+  implementation is shown.
+- `PARTLY_SUPPORTED`: the elements both readings find shown, with their passages; never a
+  finding. Elements combine across requests by key: an attribute is evidenced when every
+  element is shown (implementation) by some accepted request.
+- `ISSUE`: recorded as an evidence finding (source `ASSURANCE`), once per requirement,
+  attribute and basis, so the existing accept, edit, follow-up and resolve loop applies.
+  The finding states the attribute's letter and what is not shown; for an exception shown
+  by a record it names the element and quotes the passage ("Not met: approved by someone
+  other than the requester. The ticket shows “...”."). The question it proposes for the
+  control owner is written from the firm's own attribute wording, never from the model's
+  words.
+- An issue a person already has in hand (accepted, sent, answered, asked again,
+  escalated) is never marked stale by a client's reply or upload: the reading that arrives
+  attaches to it (matched on its requirement where it rests on several files) and proposes
+  ANSWERED, and the next run's result is attached to it on its history (a run that
+  supports the attribute proposes ANSWERED, "a person decides"); no second finding is
+  raised for the attribute. No agent closes a finding. A finding nobody acted on goes stale
+  with its run.
 - `UNSETTLED`: shown as "The two readings do not agree. Your judgment is needed.", with
   each reading's result and reason. Never a finding, never counted as support.
 - For a file the chain covers (a file its readings include), the reader's own
@@ -185,7 +240,9 @@ gave nothing.
   a finding a person already decided is left as it is. The deterministic checks (source
   `RULES`: placeholder text, version, dates) stay: they are facts located in the text. A
   reading by the rules is not the model's, and its findings are left as they are.
-- While a run works, the row says so. Nothing of a run is shown before it finishes.
+- While a run works, the row says so. Nothing of a run is shown before it finishes. A run
+  whose worker stopped before it finished reads as FAILED, "The check stopped before it
+  finished.", so the person can check again.
 
 Coverage on the D&I list: an attribute is *evidenced* by a request's files only when the
 run is `SUPPORTED` for it **and** a person accepted the requirement's evidence. The agents'
@@ -202,18 +259,24 @@ except to be marked out of date:
   part, and the gate's code and sentence where it was left out), the files the readings
   include (`file_ids`), a hash of the attributes as assessed (each id, letter, wording
   and criteria), the requirement's linked attribute ids, the control's facts, the lens,
-  both prompt versions, and one hash over all of it;
+  both prompt versions, the model configuration the run would use (`models`), and one
+  hash over all of it;
 - state: `PENDING`, `WORKING`, `HELD`, `READY`, `FAILED`; the stage reached; lease and
-  attempts as evidence_analyses has them; the gate's code and sentence when the whole run
-  is held; why it failed when it did;
-- the two checked answers (never the raw model output), each with its model call id;
+  attempts as evidence_analyses has them, and the claim's owner token (`claim_token`: only
+  the worker holding the claim saves, fails or resets the run; an exception after the claim
+  puts it back in the queue, whichever worker ran it); the gate's code and sentence when
+  the whole run is held; why it failed when it did;
+- the two checked answers (never the raw model output), each with its model call id, and
+  the model configuration the readings ran on (`ran_with`);
 - the outcome per attribute (verdict, result, passages with their file and location, what
-  is absent, and both views when unsettled);
+  is absent, both views when unsettled or shown for reference, what it shows for D&I, and
+  each element as the readings agree on it);
 - `stale_at` and `stale_reason` when a file is added to, replaced on or withdrawn from
   the requirement, a file is read again with another text or kind, an attribute's wording
-  or criteria changes, the attribute list changes, the requirement's links change, or the
-  control's description changes. A stale run is shown as out of date and a new run is
-  queued while a file is still in force on the requirement.
+  or criteria changes, the attribute list changes, the requirement's links change, the
+  control's description changes, or the model configuration changes. A stale run is shown
+  as out of date and a new run is queued while a file is still in force on the
+  requirement.
 
 A finished run (`HELD`, `READY`, `FAILED`) is only ever marked out of date, once, and an
 out-of-date run is never changed (a trigger refuses both); a run is never deleted. A run
@@ -222,17 +285,19 @@ still queued is brought up to date in place.
 Idempotent: there is one current run per requirement, and the same basis is never run
 twice; asking again returns the run on record. When a basis comes back (a link removed
 and restored), the earlier reviewed run of that basis is copied into a new run
-(`reused_from_id`), with no model call. Partial reuse of single attributes' results is
-not built.
+(`reused_from_id`), with no model call, only where it ran on the very model configuration
+the basis names (a model change never reuses a run). Partial reuse of single attributes'
+results is not built.
 
 `evidence_findings` gains the source `ASSURANCE`, the kinds `NOT_MET`, `PARTLY_MET`,
 `CONTRADICTED` and `NOT_ADDRESSED`, and `assessment_id` (the run a finding rests on), by
 migration (never by silently widening a check). An `ISSUE` is recorded once per
 requirement, attribute and basis, pinned to its run; when the run goes out of date its
-open findings are marked stale, as a replaced file's are. Where the finding of a basis
-went stale and that basis comes back, the issue is recorded again for the new run, so an
-agreed issue is never left without a finding a person can act on. A plan approved again
-does not mark them stale: they are pinned to the run's basis, not the plan's revision.
+findings nobody acted on are marked stale, as a replaced file's are, and one a person has
+in hand is kept and gets the next run's result attached. Where the finding of a basis went
+stale and that basis comes back, the issue is recorded again for the new run. A plan
+approved again does not mark them stale: they are pinned to the run's basis, not the
+plan's revision.
 
 Every model call goes through `provenance.AgentCaller` (budgets, trial reservations,
 cancellation, the provenance record), both readings in one job. A run that cannot pay for
@@ -244,12 +309,14 @@ the reason, and no call is made or recorded.
 In `evidence_assurance.py`, with no database:
 
 ```python
-Result = Literal["MET", "PARTLY_MET", "NOT_MET", "CONTRADICTED", "CANNOT_TELL", "NOT_ADDRESSED"]
-Verdict = Literal["SUPPORTED", "ISSUE", "UNSETTLED", "NOT_ADDRESSED"]
+ElementResult = Literal["MET", "PARTLY_MET", "NOT_MET", "CONTRADICTED", "CANNOT_TELL", "NOT_ADDRESSED"]
+Result = Literal["MET", "SHOWN_IN_PART", "PARTLY_MET", "NOT_MET", "CONTRADICTED", "CANNOT_TELL", "NOT_ADDRESSED"]
+Verdict = Literal["SUPPORTED", "PARTLY_SUPPORTED", "ISSUE", "UNSETTLED", "NOT_ADDRESSED"]
 Lens = Literal["DESIGN_DOCUMENT", "INSTANCE_RECORD"]
 Role = Literal["ASSESSOR", "REVIEWER"]
+Shows = Literal["DESIGN", "IMPLEMENTATION"]
 PassageBasis = Literal["RECORD", "REQUIREMENT", "ASSERTION", "INSTRUCTION"]
-HeldCode = Literal["CUSTODY", "UNREADABLE", "KIND_UNSURE", "POPULATION", "NO_ATTRIBUTES", "TOO_LARGE"]
+HeldCode = Literal["CUSTODY", "READ_FAILED", "UNREADABLE", "KIND_UNSURE", "POPULATION", "NO_ATTRIBUTES", "TOO_LARGE"]
 
 @dataclass(frozen=True)
 class AttributeSpec: id: UUID; code: str; text: str; criteria: dict[str, Any] | None; expected: bool
@@ -263,9 +330,10 @@ class ChainInput:
     attributes: tuple[AttributeSpec, ...]
     files: tuple[FileSpec, ...]          # the files the readings include, in prompt order
     files_left_out: bool = False         # a file of the request was held by the gate
+    categories: tuple[str, ...] = ()     # the requirement's, for each file's own lens
 
 @dataclass(frozen=True)
-class GateFacts: custody_failed: bool; readable: bool; kind: str; kind_confirmed: bool; confidence: str; source: str
+class GateFacts: custody_failed: bool; readable: bool; kind: str; kind_confirmed: bool; confidence: str; source: str; read_failed: bool = False
 
 def gate(facts: GateFacts) -> Held | None: ...                       # one file
 def run_gate(files: Sequence[tuple[Held | None, int]], attributes: int) -> Held | None: ...   # the run
@@ -273,18 +341,21 @@ def lens_for(categories: tuple[str, ...], kinds: Sequence[str]) -> Lens: ...
 def elements_of(attribute: AttributeSpec) -> tuple[tuple[str, str], ...]: ...   # (key, text)
 def prompt_for(chain: ChainInput, role: Role) -> tuple[str, str]: ...   # (system, prompt)
 def check_opinion(output: dict[str, Any], chain: ChainInput) -> Opinion: ...   # rules 1 to 6
+def attribute_result(elements: Sequence[ElementView]) -> Result: ...   # rule 6
 def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome, ...]: ...
 def run_chain(ask: Callable[[Role, str, str], dict[str, Any] | None], chain: ChainInput) -> ChainResult: ...
 ```
 
 `Outcome` has `attribute_id`, `code`, `expected`, `verdict`, `result` (the agreed one, or
-None), `passages` (each with its `file_id`), `absent`, `views` (both, when unsettled) and
-`summary` (one sentence, written in code). `ChainResult` has `outcomes`, `first`, `second`
-(the two checked `Opinion`s), and `failed` and `reason` when a reading gave no usable
-answer. `run_chain` is the gate's successor stages only (assess, re-perform, compare); an
-`ask` that returns None for either role gives every attribute `UNSETTLED` with the reason,
-never a guess. `check_opinion` raises `ValueError` for an answer of the wrong shape, which
-`run_chain` treats as no answer.
+None when the readings differ or what they agree on is shown for reference), `passages`
+(each with its `file_id`), `absent`, `views` (both, when unsettled or for reference),
+`summary` (one sentence, written in code), `shows`, and `elements` (each element as the
+readings agree on it: `key`, `text`, `result` or None, `passages`, `absent`). `ChainResult`
+has `outcomes`, `first`, `second` (the two checked `Opinion`s), and `failed` and `reason`
+when a reading gave no usable answer. `run_chain` is the gate's successor stages only
+(assess, re-perform, compare); an `ask` that returns None for either role gives every
+attribute `UNSETTLED` with the reason, never a guess. `check_opinion` raises `ValueError`
+for an answer of the wrong shape, which `run_chain` treats as no answer.
 
 The reviewer's prompt never contains anything from the assessor's answer. A test asserts it.
 
@@ -296,27 +367,31 @@ The reviewer's prompt never contains anything from the assessor's answer. A test
 {
   "requests": [
     {
-      "requirement_id": "…", "run_id": "…",
-      "status": "QUEUED | CHECKING | HELD | REVIEWED | FAILED | OUT_OF_DATE",
+      "requirement_id": "…", "run_id": "… or null",
+      "status": "NOT_CHECKED | QUEUED | CHECKING | HELD | REVIEWED | FAILED | OUT_OF_DATE",
       "stage": "GATE | ASSESS | VERIFY | COMPARE | DONE",
       "held": { "code": "KIND_UNSURE", "reason": "…" },
-      "held_files": [ { "file_id": "…", "code": "KIND_UNSURE", "reason": "…" } ],
+      "held_files": [ { "file_id": "…", "code": "READ_FAILED", "reason": "…" } ],
       "file_ids": [ "…" ],
       "lens": "INSTANCE_RECORD",
       "read_in_part": false,
       "attributes": [
         {
           "attribute_id": "…", "code": "B", "expected": true,
-          "verdict": "SUPPORTED | ISSUE | UNSETTLED | NOT_ADDRESSED",
-          "result": "MET | PARTLY_MET | NOT_MET | CONTRADICTED | NOT_ADDRESSED | null",
+          "verdict": "SUPPORTED | PARTLY_SUPPORTED | ISSUE | UNSETTLED | NOT_ADDRESSED",
+          "result": "MET | SHOWN_IN_PART | PARTLY_MET | NOT_MET | CONTRADICTED | NOT_ADDRESSED | null",
           "summary": "…",
+          "shows": "DESIGN | IMPLEMENTATION | null",
           "passages": [ { "quote": "…", "file_id": "…",
                           "location": { "label": "Page 3", "page": 3, "sheet": null,
                                         "row": null, "column": null, "cell": null } } ],
           "absent": [ "…" ],
           "views": [ { "role": "ASSESSOR", "result": "MET", "reason": "…" },
                      { "role": "REVIEWER", "result": "NOT_MET", "reason": "…" } ],
-          "finding_id": "… or null"
+          "elements": [ { "key": "condition", "text": "…", "result": "MET | … | null",
+                          "passages": [ … ], "absent": [ "…" ] } ],
+          "finding_id": "… or null",
+          "finding_status": "PROPOSED | ACCEPTED | … | null"
         }
       ],
       "out_of_date": [ "…" ],
@@ -324,13 +399,14 @@ The reviewer's prompt never contains anything from the assessor's answer. A test
       "note": ""
     }
   ],
-  "summary": { "checking": 0, "held": 0, "failed": 0, "out_of_date": 0,
-               "supported": 0, "issues": 0, "unsettled": 0 }
+  "summary": { "not_checked": 0, "checking": 0, "held": 0, "failed": 0, "out_of_date": 0,
+               "supported": 0, "partly_supported": 0, "issues": 0, "unsettled": 0 }
 }
 ```
 
-One entry per DESIGN requirement that has a file in force and a run, its latest. A
-requirement whose files are still being read for the first time has no entry yet.
+One entry per DESIGN requirement that has a file in force: its latest run, or
+`NOT_CHECKED` (with `run_id` null, `held` null, `file_ids`, `held_files` and `attributes`
+empty) where it has none.
 
 - `held` is null unless the whole run is HELD. `held_files` lists every file the readings
   did not include, each with its code and sentence: a file its own gate held, and, when
@@ -342,27 +418,35 @@ requirement whose files are still being read for the first time has no entry yet
   about to be queued).
 - Every `file_id` (in `file_ids`, `held_files` and each passage) is the evidence file id
   the evidence plan's requirement body lists in `files[].file_id`.
-- `views` is empty unless UNSETTLED; `attributes` is empty unless the run is REVIEWED
-  (nothing of a run is shown before it finishes, and nothing of one that is out of date).
-  `SUPPORTED` always carries `result` `MET` and at least one passage. `finding_id` is set
-  only for an ISSUE.
+- `views` is empty unless UNSETTLED or shown for reference (an unlinked attribute's
+  agreed shortfall); `attributes` is empty unless the run is REVIEWED (nothing of a run is
+  shown before it finishes, and nothing of one that is out of date). `SUPPORTED` always
+  carries `result` `MET` and at least one passage. `shows` is set only for `SUPPORTED` and
+  `PARTLY_SUPPORTED`.
+- `elements`: each element by the key and text set in code (the same on every request of
+  the control), with the result both readings agree on, or null where they differ; every
+  element whose result is `MET` carries its own verified passages.
+- `finding_id` and `finding_status`: the finding of an ISSUE, or the finding a person has
+  in hand from an earlier run to which this run's result was attached; null otherwise.
 - `out_of_date` is non-empty only when `status` is `OUT_OF_DATE`: one plain sentence for
   each thing that changed. A finished run is compared with what would be read now each
   time it is read, so a change nothing marked yet still shows as out of date.
-- `note` says in a sentence why a FAILED run stopped; it is empty otherwise.
+- `note` says in a sentence why a FAILED run stopped ("The check stopped before it
+  finished." for a run whose worker stopped); it is empty otherwise.
 - `read_in_part` is true when any included file's stored text was cut.
 - Every `reason` and sentence is plain, with no codes.
-- `summary`: `checking`, `held`, `failed` and `out_of_date` count requests; `supported`,
-  `issues` and `unsettled` count the attribute verdicts of the reviewed requests.
+- `summary`: `not_checked`, `checking`, `held`, `failed` and `out_of_date` count requests;
+  `supported`, `partly_supported`, `issues` and `unsettled` count the attribute verdicts of
+  the reviewed requests, `issues` only while the finding is open (or has none).
 
-`POST .../evidence-assurance/{requirement_id}/rerun` (task.update): starts the run again
-for a FAILED or OUT_OF_DATE request. Success is 202 with the request's entry (the shape
-above). A request whose reviewed or held run still rests on the same basis is returned as
-it is (the same basis is never run twice). Refused with 409, whose `detail` is one plain
-sentence, while a run is queued or working ("The check is already running."), while a
-file of the request is still being read, or when no file is on the request. Another firm
-gets 404, as does a requirement that is not a DESIGN requirement of the control; a
-Reviewer reads and cannot rerun (403).
+`POST .../evidence-assurance/{requirement_id}/rerun` (task.update): starts the check for a
+NOT_CHECKED, FAILED or OUT_OF_DATE request (a run that stopped is failed first). Success is
+202 with the request's entry (the shape above). A request whose reviewed or held run still
+rests on the same basis is returned as it is (the same basis is never run twice). Refused
+with 409, whose `detail` is one plain sentence, while a run is queued or working ("The
+check is already running."), while a file of the request is still being read, or when no
+file is on the request. Another firm gets 404, as does a requirement that is not a DESIGN
+requirement of the control; a Reviewer reads and cannot rerun (403).
 
 The evidence findings API (`evidence_findings.FindingBody`) gains the source `ASSURANCE`,
 the four kinds, and `assessment_id`.

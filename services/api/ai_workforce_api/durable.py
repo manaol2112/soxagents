@@ -268,10 +268,12 @@ async def serve(
 
 async def resume_assessments(client: Client, database_url: str) -> int:
     """Restart the assurance chain's runs left queued or abandoned."""
-    from ai_workforce_api.evidence_assurance import open_assessments
+    from ai_workforce_api.evidence_assurance import backfill, open_assessments
 
     try:
         with connect(database_url) as connection:
+            # A D&I request with files and no check gets one, a bounded number a start.
+            backfill(connection)
             ids = open_assessments(connection)
         for run_id in ids:
             await start_assessment(client, run_id)
@@ -884,18 +886,22 @@ def activities_for(
             except Exception:
                 logger.warning("the design draft could not be scheduled; it resumes on restart")
         # The reading has committed: the assurance run it recorded, if any, starts.
-        await open_assessments_now()
+        await open_assessments_now(analysis_id=UUID(analysis_id))
         return result
 
-    async def open_assessments_now() -> None:
-        """Hand the assurance chain's queued runs to the engine."""
+    async def open_assessments_now(
+        *, analysis_id: UUID | None = None, run_id: UUID | None = None
+    ) -> None:
+        """Hand one engagement's queued assurance runs (a reading's or a run's) to the
+        engine."""
         if not address or assess is None:
             return
-        from ai_workforce_api.evidence_assurance import open_assessments
+        from ai_workforce_api.evidence_assurance import open_assessments, project_of
 
         def pending() -> list[UUID]:
             with connect(database_url) as connection:
-                return open_assessments(connection)
+                project = project_of(connection, analysis_id=analysis_id, run_id=run_id)
+                return [] if project is None else open_assessments(connection, project)
 
         try:
             await _schedule_assessments(address, await asyncio.to_thread(pending))
@@ -912,7 +918,7 @@ def activities_for(
         result = await asyncio.to_thread(assess, UUID(run_id))
         if result == "STALE":
             # The run was out of date: what stands now was queued in its place.
-            await open_assessments_now()
+            await open_assessments_now(run_id=UUID(run_id))
         return result
 
     @activity.defn(name="fail_evidence_assessment")
@@ -933,7 +939,7 @@ def activities_for(
 
         await asyncio.to_thread(fail)
         # Its request is checked on its other files now, with this one left out.
-        await open_assessments_now()
+        await open_assessments_now(analysis_id=UUID(analysis_id))
 
     @activity.defn(name="draft_workpaper")
     async def draft_workpaper(workpaper_id: str) -> str:
@@ -974,7 +980,20 @@ def activities_for(
     async def run_evidence_plan(plan_id: str) -> str:
         if plan is None:
             return "SKIPPED"
-        return await asyncio.to_thread(plan, UUID(plan_id))
+        result = await asyncio.to_thread(plan, UUID(plan_id))
+        if address and assess is not None:
+            # The plan run may have created or reshaped D&I requests: their checks follow.
+            from ai_workforce_api.evidence_assurance import follow_plan
+
+            def follow() -> list[UUID]:
+                with connect(database_url) as connection:
+                    return follow_plan(connection, UUID(plan_id))
+
+            try:
+                await _schedule_assessments(address, await asyncio.to_thread(follow))
+            except Exception:
+                logger.warning("the checks of a planned control could not be scheduled")
+        return result
 
     @activity.defn(name="fail_evidence_plan_run")
     async def fail_evidence_plan_run(plan_id: str) -> None:
