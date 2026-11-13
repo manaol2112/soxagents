@@ -73,6 +73,13 @@ from ai_workforce_api.settings import Settings
 from ai_workforce_api.testing_engine import TestScheduler, schedule_runs
 
 
+class AttributesRunBody(BaseModel):
+    """ "Run again" on the Attributes step. `force`: run the agents on purpose even when
+    nothing they read has changed since their last finished run."""
+
+    force: bool = False
+
+
 class ContextBody(BaseModel):
     control_id: UUID
     classifications: list[Classification]
@@ -395,8 +402,14 @@ def register_control_context(
 
     @app.post(f"{control}/attributes/generate")
     def generate(
-        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        request: Request,
+        body: AttributesRunBody | None = None,
     ) -> ContextBody:
+        force = body is not None and body.force
+
         def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
             _allowed(c, p, organization_id, project_id, control_id)
             # With a worker and a model the whole run is asked for, in the background:
@@ -407,7 +420,7 @@ def register_control_context(
             if plans is not None and model() is not None:
                 from ai_workforce_api.evidence_plans import request_attributes_run
 
-                planned = request_attributes_run(c, project_id, control_id)
+                planned = request_attributes_run(c, project_id, control_id, force)
                 if planned is not None:
                     _after_commit(lambda: plans([planned]))
                     return _body(c, project_id, control_id)
@@ -429,12 +442,16 @@ def register_control_context(
                         c, project_id, control_id,
                         "The agents are already updating the attributes.",
                     )  # fmt: skip
-                from ai_workforce_api.evidence_plans import NOTHING_CHANGED_NOTE
+                from ai_workforce_api.evidence_plans import nothing_changed_note
 
-                if not attributes_rerun_useful(c, project_id, control_id):
-                    # Nothing the agents read changed and their last run finished: no
-                    # agent is called and nothing is written (B1h).
-                    return _body(c, project_id, control_id, NOTHING_CHANGED_NOTE)
+                if not force and not attributes_rerun_useful(c, project_id, control_id):
+                    # The agents would read what they read at their last finished run: no
+                    # agent is called and nothing is written (B1h). A person who wants
+                    # them run all the same sends `force`.
+                    return _body(
+                        c, project_id, control_id,
+                        nothing_changed_note(c, project_id, control_id),
+                    )  # fmt: skip
             note = generate_reviewed(c, model(), organization_id, project_id, control_id, p.id)
             return _body(c, project_id, control_id, note)
 

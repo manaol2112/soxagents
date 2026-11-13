@@ -415,10 +415,10 @@ PLANNER_PROMPT_VERSION = "engagement-planner/10"
 # Room for a whole plan: three phases, their procedures and evidence. At the provider's
 # default of 4,096 a plan built on an approved narrative was cut off and the rules stood in
 # (26 October 2026). The limit also holds the model's reasoning: on ITGC-AC-01 an answer
-# with two evidence items a phase used 5,700 to 8,600 of 16,000 (12 November 2026), so a
-# plan at the schema's limit of four items a phase could have been cut off. 32,000 leaves
-# room for it twice over; the call's own budget estimate and timeout still bound it.
-PLANNER_TOKENS, PLANNER_SECONDS = 32000, 300
+# used 5,700 to 8,600 of it and none was cut off (12 November 2026, B1h). Not raised: the
+# whole allowance is reserved against the call's budget, and the call is not streamed, so
+# more room would mostly be nominal. An answer that is cut off is now recorded as one.
+PLANNER_TOKENS, PLANNER_SECONDS = 16000, 300
 # A rejected plan is sent back to the planner with what was wrong this many times.
 PLAN_CORRECTIONS = 2
 
@@ -479,6 +479,8 @@ def plan_for(
         cancelled=False,
         system=SYSTEM_PROMPT,
         max_tokens=PLANNER_TOKENS,
+        # A plan written one level too deep is read as written (models.unnested, B1h).
+        unnest=True,
     )
     call = caller.generate(
         request,
@@ -2076,6 +2078,35 @@ def queue_drafts(
 LISTED_STATUSES: tuple[str, ...] = ("PLANNED", "AWAITING_DEPENDENCY", "REQUESTED")
 
 GATE_PLAN = "approve the test plan first"
+# A control change was recorded and the planner's answer for it could not be used, so the
+# plan was kept as it was (generate, B1h): its phases and periods may not fit the change.
+# Operating evidence is not requested, samples are not approved and testing is not concluded
+# on it until the evidence is planned again.
+GATE_CHANGE = "plan the evidence again first: the plan has not been updated for a recorded change"
+
+
+def change_unplanned(connection: psycopg.Connection[Any], control_id: UUID) -> datetime | None:
+    """When the latest control change was recorded that the control's plan has not been
+    generated for since, or None. Durable and self-clearing: the plan's generated_at moves
+    only when a plan is written, so a run that kept the plan leaves this standing, and
+    planning the evidence again clears it."""
+    row = connection.execute(
+        f"SELECT {_CHANGE_UNPLANNED_SQL} FROM evidence_plans p WHERE p.engagement_control_id = %s",
+        (control_id,),
+    ).fetchone()
+    found: datetime | None = None if row is None else row[0]
+    return found
+
+
+def change_wait(unplanned: datetime | None) -> str:
+    if unplanned is None:
+        return ""
+    return (
+        f"The plan has not been updated for the change recorded on {_day(unplanned)}. "
+        "Plan the evidence again."
+    )
+
+
 GATE_ATTRIBUTES = "settle the control's attributes first"
 # D&I evidence has its own release (B1, migration 0145): the test plan's approval gates only
 # the operating phases.
@@ -2125,6 +2156,8 @@ def gate_reason(
         ).fetchone()
         is not None
     )
+    if phase != "DESIGN" and change_unplanned(connection, control_id) is not None:
+        return GATE_CHANGE
     return gate_reason_from(plan_status, settled, phase, released)
 
 
@@ -2283,28 +2316,105 @@ def replan_for_new_attributes(connection: psycopg.Connection[Any], control_id: U
     run of that kind would otherwise turn this one into a full attribute run (run_plan
     reads the stage), and the attribute agent would replace proposals a person has pending.
     Only a retry or a reclaim of the same run keeps its stage."""
+    if _tried_the_same(connection, control_id):
+        # The planner's last run on exactly these inputs did not finish its work (its
+        # answer could not be used and the plan was kept, or it failed). Asking again on
+        # every save would call the planner up to three times a save (B1h, after the
+        # review): only a person, or a change in what the agents read, starts it again.
+        # The attribute's missing evidence stays visible meanwhile (attributes_run).
+        return None
     with transaction(connection) as cursor:
         row = cursor.execute(
-            """
+            f"""
             UPDATE evidence_plans p
             SET run_status = 'PENDING', run_attempts = 0, run_lease_until = NULL,
                 run_note = '', run_stage = ''
-            WHERE p.engagement_control_id = %s AND p.status = 'PROPOSED'
+            WHERE p.engagement_control_id = %s
               AND p.run_status NOT IN ('PENDING', 'WORKING')
-              AND EXISTS (
-                  SELECT 1 FROM control_attributes a
-                  WHERE a.engagement_control_id = p.engagement_control_id
-                    AND a.status = 'APPROVED'
-                    AND NOT EXISTS (
-                        SELECT 1 FROM evidence_requirement_attributes ra
-                        JOIN evidence_requirements q ON q.id = ra.requirement_id
-                        WHERE ra.attribute_id = a.id AND q.plan_id = p.id
-                          AND q.status <> 'REMOVED'))
+              AND {_ATTRIBUTE_UNPLANNED_SQL}
             RETURNING p.id
             """,
             (control_id,),
         ).fetchone()
     return None if row is None else UUID(str(row[0]))
+
+
+# An approved attribute no live requirement of a plan still to approve is planned against:
+# approving it sent the plan back (revise_evidence_plan), and it has no evidence until the
+# planner plans it. SQL over evidence_plans `p`.
+_ATTRIBUTE_UNPLANNED_SQL = """
+    (p.status = 'PROPOSED'
+     AND EXISTS (
+         SELECT 1 FROM control_attributes a
+         WHERE a.engagement_control_id = p.engagement_control_id
+           AND a.status = 'APPROVED'
+           AND NOT EXISTS (
+               SELECT 1 FROM evidence_requirement_attributes ra
+               JOIN evidence_requirements q ON q.id = ra.requirement_id
+               WHERE ra.attribute_id = a.id AND q.plan_id = p.id
+                 AND q.status <> 'REMOVED')))
+"""
+# When a control change was recorded that the plan has not been generated for since: the
+# planner's answer for it could not be used and the plan was kept (generate). SQL over `p`.
+_CHANGE_UNPLANNED_SQL = """
+    (SELECT max(ch.created_at) FROM control_changes ch
+     WHERE ch.engagement_control_id = p.engagement_control_id
+       AND ch.created_at > p.generated_at)
+"""
+
+# What of the planner's facts is not an input a rerun would act on: which criteria the
+# planner may write and which attributes a person excepted from D&I are decisions on the
+# agents' own proposals, and the interim result and the roll-forward window are the progress
+# of testing, followed by their own hooks (refresh_decisions, on_rollforward_started).
+_NOT_READ_AS_INPUT = ("criteria_writable", "design_excepted", "interim", "rollforward_window")
+
+
+def agents_read(connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID) -> str:
+    """A hash of what the agents read about the control, as it stands now: one value to
+    compare with the one kept when their last run finished (evidence_plans.run_read).
+
+    Not a list of tables to watch: it is taken from the readers the agents' prompts are
+    built from. (1) The planner's facts, whole (load_facts: the control's record from the
+    RCM, its library definition and statement with the client's values, its approved
+    attributes as worded, the approved narrative, the confirmed understanding with its
+    dates, the recorded control changes, the kinds of its documents, the methodology), less
+    _NOT_READ_AS_INPUT. (2) The criteria a person stated for an approved attribute, which
+    the attribute agent and the reviewer read and the planner does not. (3) The documents
+    that apply to the control (control_context.documents): which, their titles, their
+    length and opening words, so one linked, unlinked or replaced changes it.
+
+    What an agent wrote itself is not in it (its proposals, the criteria it tailored, its
+    review), nor a person's acceptance of that: a run does not make itself stale, and
+    accepting the agents' work is not a reason to run them again."""
+    from ai_workforce_api.control_context import documents
+
+    facts = asdict(load_facts(connection, project_id, control_id))
+    for name in _NOT_READ_AS_INPUT:
+        facts.pop(name, None)
+    stated = connection.execute(
+        "SELECT a.text, a.condition, a.pass_criteria, a.fail_criteria, a.judgment_required "
+        "FROM control_attributes a WHERE a.engagement_control_id = %s "
+        "AND a.status = 'APPROVED' AND a.criteria_origin = 'PERSON' ORDER BY a.text, a.id",
+        (control_id,),
+    ).fetchall()
+    papers = sorted(
+        (str(d.id), d.kind, d.title, d.file_name, d.characters, d.excerpt)
+        for d in documents(connection, project_id, control_id)
+    )
+    data = json.dumps([facts, stated, papers], default=str, sort_keys=True)
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+
+def _tried_the_same(connection: psycopg.Connection[Any], control_id: UUID) -> bool:
+    """Whether the control's last plan run did not finish its work on exactly what the
+    agents would read now (evidence_plans.run_tried)."""
+    row = connection.execute(
+        "SELECT project_id, run_tried FROM evidence_plans WHERE engagement_control_id = %s",
+        (control_id,),
+    ).fetchone()
+    if row is None or str(row[1]) == "":
+        return False
+    return str(row[1]) == agents_read(connection, UUID(str(row[0])), control_id)
 
 
 # The planner follows the understanding (product owner, 12 November 2026: "Shouldn't it
@@ -2395,19 +2505,9 @@ def queue_for_understanding(
         return None
     # A run that kept the plan because the planner's answer could not be used (generate)
     # leaves the plan as generated before, so the understanding still reads as due. It is
-    # not asked again by itself on every save: only once the understanding has changed
-    # after that run. A person's "Run again" is not held by this.
-    kept = connection.execute(
-        "SELECT max(r.created_at) FROM evidence_plan_runs r JOIN evidence_plans p "
-        "ON p.id = r.plan_id WHERE p.project_id = %s AND p.engagement_control_id = %s "
-        "AND r.source = 'FALLBACK' AND r.output = '{}'::jsonb",
-        (project_id, control_id),
-    ).fetchone()
-    if (
-        kept is not None
-        and kept[0] is not None
-        and not understanding_due(connection, project_id, control_id, kept[0])
-    ):
+    # not asked again by itself on every save: only once what the agents read has changed
+    # since that run (run_tried). A person's "Run again" is not held by this.
+    if _tried_the_same(connection, control_id):
         return None
     with transaction(connection) as cursor:
         row = cursor.execute(
@@ -2425,7 +2525,7 @@ def queue_for_understanding(
 
 
 def request_attributes_run(
-    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, force: bool = False
 ) -> UUID | None:
     """A person asks for the attributes to be prepared again ("Run again"): the same run as
     queue_for_understanding, whether or not anything changed, and over a run that failed or
@@ -2434,11 +2534,10 @@ def request_attributes_run(
     Returns the plan to run, or None when there is no plan or a run is live.
 
     Nothing is queued, and nothing is written, when the run would have nothing to do
-    (attributes_rerun_useful, B1h): the attributes are settled, the understanding has not
-    changed since the planner agent's plan was generated, and the last run finished. The
-    attribute agent and the planner would be given what they were given before, and a
-    settled plan is not planned again from scratch. The caller says so (NOTHING_CHANGED_NOTE)."""
-    if not attributes_rerun_useful(connection, project_id, control_id):
+    (attributes_rerun_useful, B1h): the agents would read what they read at their last
+    finished run. The caller says so (nothing_changed_note). With `force` a person runs
+    them on purpose all the same: the run is queued whether or not anything changed."""
+    if not force and not attributes_rerun_useful(connection, project_id, control_id):
         return None
     with transaction(connection) as cursor:
         row = cursor.execute(
@@ -2455,10 +2554,24 @@ def request_attributes_run(
     return None if row is None else UUID(str(row[0]))
 
 
-NOTHING_CHANGED_NOTE = (
-    "Nothing the agents read has changed since their last run, so the attributes and the "
-    "evidence plan were left as they are."
-)
+def nothing_changed_note(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> str:
+    """What "Run again" answers when it starts nothing (attributes_rerun_useful is false):
+    the date is the agents' last finished run, or, for a plan with none on record, when the
+    plan was generated."""
+    row = connection.execute(
+        "SELECT coalesce(run_read_at, generated_at) FROM evidence_plans "
+        "WHERE project_id = %s AND engagement_control_id = %s",
+        (project_id, control_id),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return "Nothing the agents read has changed since their last run."
+    return f"Nothing the agents read has changed since their last run on {_day(row[0])}."
+
+
+def _day(moment: datetime) -> str:
+    return f"{moment.day} {moment:%B %Y}"
 
 
 def attributes_rerun_useful(
@@ -2468,28 +2581,45 @@ def attributes_rerun_useful(
     "Run again" (request_attributes_run) and for the Attributes step, which shows a stopped
     run's note only then (the context's `attributes_rerun_useful`).
 
-    True only when something the agents read changed since their last finished run, or a
-    run stopped before finishing work that is still needed: the control has no plan yet; a
-    client value or a confirmed walkthrough answer changed after the plan was generated; an
-    approved attribute the planner may write has no criteria; the planner agent has not
-    planned the control (the plan is the rules', RULES or FALLBACK: its answer is still
-    wanted); or the plan's last run failed or was interrupted. A run that kept the plan
-    because the planner's answer could not be used leaves the plan as generated before, so
-    it reads as useful exactly when one of these still holds. False while a run waits or
-    works: there is nothing to start."""
+    One comparison: what the agents would read now (agents_read) against what they read at
+    their last finished run (evidence_plans.run_read). Anything they read that changed
+    makes it true: a person reworded an attribute or its criteria, added or retired one, a
+    document was linked, unlinked or replaced, the approved narrative, the control's record
+    or its library definition changed, the understanding changed, a control change was
+    recorded. A run of which a stage did not finish (the planner's answer could not be used,
+    or the attribute agent or the reviewer failed) is not a finished run, so it leaves this
+    true whenever what they read differs from the last run that did finish.
+
+    Also true, whatever was read: the control has no plan; the plan's last run failed or
+    was interrupted; the planner agent has not planned the control (the plan is the rules',
+    RULES or FALLBACK: a run that succeeds changes that); an approved attribute has no
+    evidence planned against it; a recorded control change is not in the plan. For a plan
+    with no finished run on record (from before migration 0152) the older rule stands in
+    for the comparison: the understanding changed after the plan was generated, an
+    approved attribute the planner may write has no criteria, or the only run since did not
+    finish its work. False while a run waits or works: there is nothing to start."""
     row = connection.execute(
         f"""
-        SELECT NOT {_AGENTS_AT_WORK_SQL}
-               AND (p.source IN ('RULES', 'FALLBACK')
-                    OR p.run_status IN ('FAILED', 'WORKING')
-                    OR coalesce({_UNDERSTANDING_CHANGED_SQL} > p.generated_at, false)
-                    OR {_CRITERIA_MISSING_SQL})
+        SELECT {_AGENTS_AT_WORK_SQL},
+               p.source IN ('RULES', 'FALLBACK') OR p.run_status IN ('FAILED', 'WORKING')
+               OR {_ATTRIBUTE_UNPLANNED_SQL} OR {_CHANGE_UNPLANNED_SQL} IS NOT NULL,
+               p.run_read,
+               coalesce({_UNDERSTANDING_CHANGED_SQL} > p.generated_at, false)
+               OR {_CRITERIA_MISSING_SQL} OR p.run_tried <> ''
         FROM evidence_plans p
         WHERE p.project_id = %s AND p.engagement_control_id = %s
         """,
         (project_id, control_id),
     ).fetchone()
-    return True if row is None else bool(row[0])
+    if row is None:
+        return True
+    if row[0]:
+        return False
+    if row[1]:
+        return True
+    if str(row[2]) == "":
+        return bool(row[3])
+    return agents_read(connection, project_id, control_id) != str(row[2])
 
 
 STOPPED_NOTE = "The run stopped before it finished. Run again."
@@ -2649,6 +2779,9 @@ def run_plan(
         UUID(str(row[2])),
     )
     note = ""
+    # What the agents read at the start of the run's last pass, and whether that pass
+    # finished its work: kept on the plan for attributes_rerun_useful and the queues (0152).
+    read, finished = "", False
     if provider is None:
         if str(row[3]) == "PROPOSED":
             note = "The rules' plan stands and waits for a person to approve it."
@@ -2662,14 +2795,16 @@ def run_plan(
         follows = str(row[5]) != "" or understanding_due(connection, project_id, control_id)
         if follows or str(row[3]) == "PROPOSED":
             began = _now(connection)
-            note = _plan_pass(
+            read = agents_read(connection, project_id, control_id)
+            note, finished = _plan_pass(
                 connection, provider, organization_id, project_id, control_id, requester,
                 follows,
             )  # fmt: skip
             # An answer saved while the agents worked was not read: once more, and only
             # once, so a run always ends.
             if follows and understanding_due(connection, project_id, control_id, began):
-                note = _plan_pass(
+                read = agents_read(connection, project_id, control_id)
+                note, finished = _plan_pass(
                     connection, provider, organization_id, project_id, control_id,
                     requester, True,
                 )  # fmt: skip
@@ -2677,9 +2812,15 @@ def run_plan(
 
     with transaction(connection) as cursor:
         cursor.execute(
-            "UPDATE evidence_plans SET run_status = 'IDLE', run_lease_until = NULL, "
-            "run_stage = '', run_note = %s WHERE id = %s",
-            (note[:300], plan_id),
+            """
+            UPDATE evidence_plans
+            SET run_status = 'IDLE', run_lease_until = NULL, run_stage = '', run_note = %s,
+                run_read = CASE WHEN %s THEN %s ELSE run_read END,
+                run_read_at = CASE WHEN %s THEN clock_timestamp() ELSE run_read_at END,
+                run_tried = CASE WHEN %s THEN '' WHEN %s <> '' THEN %s ELSE run_tried END
+            WHERE id = %s
+            """,
+            (note[:300], finished, read, finished, finished, read, read, plan_id),
         )
         # The run may have been the last thing a D&I requests list a person had completed
         # waited for: the release their decision stood for is recorded with the run's end,
@@ -2705,15 +2846,20 @@ def _plan_pass(
     control_id: UUID,
     requester: UUID,
     attributes_first: bool,
-) -> str:
+) -> tuple[str, bool]:
     """One pass of a plan run: the attribute agent's proposals from the understanding when
     the run follows it (as the approved narrative's run does, process_narrative), then the
-    planner. The proposals stay proposed; the planner's criteria are the agent's."""
+    planner. The proposals stay proposed; the planner's criteria are the agent's.
+
+    Returns the run's note and whether the pass finished its work: the planner's answer was
+    used (the plan was neither kept nor planned by the rules in its place) and no other
+    agent's last call in the pass failed."""
+    began = _now(connection)
     if not attributes_first:
         _, _drafts, note = generate(
             connection, provider, organization_id, project_id, control_id, requester
         )
-        return note
+        return note, _pass_finished(connection, control_id, began, note)
     from ai_workforce_api.attribute_review import review_set
     from ai_workforce_api.context_routes import _generate
 
@@ -2743,7 +2889,51 @@ def _plan_pass(
     review_note = review_set(
         connection, provider, organization_id, project_id, control_id, requester
     )
-    return " ".join(part for part in (attribute_note, note, review_note) if part)
+    planner_note = attribute_note if attribute_note.startswith(KEPT_NOTE) else note
+    return (
+        " ".join(part for part in (attribute_note, note, review_note) if part),
+        _pass_finished(connection, control_id, began, planner_note),
+    )
+
+
+def _pass_finished(
+    connection: psycopg.Connection[Any], control_id: UUID, began: datetime, planner_note: str
+) -> bool:
+    """Whether a pass of a plan run finished its work (see _plan_pass). The planner's
+    outcome is read from the plan; the attribute agent's, its drafts' reviewer's and the
+    set reviewer's from their calls on the control since the pass began: the last call of
+    each must have succeeded."""
+    if planner_note.startswith(KEPT_NOTE):
+        return False
+    from ai_workforce_api import attribute_review, control_attributes
+
+    agents = [
+        version.split("/", 1)[0]
+        for version in (
+            control_attributes.PROMPT_VERSION,
+            control_attributes.REVIEW_PROMPT_VERSION,
+            attribute_review.PROMPT_VERSION,
+        )
+    ]
+    row = connection.execute(
+        """
+        SELECT p.source = 'FALLBACK'
+               OR EXISTS (
+                   SELECT 1 FROM (
+                       SELECT DISTINCT ON (m.agent_key, m.prompt_version) m.status
+                       FROM model_calls m
+                       WHERE m.target_type = 'engagement_control'
+                         AND m.target_id = p.engagement_control_id
+                         AND m.created_at >= %s
+                         AND split_part(m.prompt_version, '/', 1) = ANY(%s)
+                       ORDER BY m.agent_key, m.prompt_version, m.created_at DESC
+                   ) AS last
+                   WHERE last.status <> 'SUCCEEDED')
+        FROM evidence_plans p WHERE p.engagement_control_id = %s
+        """,
+        (began, agents, control_id),
+    ).fetchone()
+    return row is not None and not row[0]
 
 
 def _run_stage(connection: psycopg.Connection[Any], control_id: UUID, stage: str) -> None:
@@ -2761,14 +2951,28 @@ def _run_stage(connection: psycopg.Connection[Any], control_id: UUID, stage: str
 def fail_plan_run(connection: psycopg.Connection[Any], plan_id: UUID) -> None:
     """The agent could not plan: the rules' plan stands, and still waits for a person. The
     run keeps its stage, which says it was one that follows the understanding
-    (attributes_run reads it as stopped); the next run sets it again."""
+    (attributes_run reads it as stopped); the next run sets it again. What the agents
+    would have read is kept (run_tried), so nothing queues the same run again by itself."""
+    tried = ""
+    try:
+        found = connection.execute(
+            "SELECT project_id, engagement_control_id FROM evidence_plans WHERE id = %s",
+            (plan_id,),
+        ).fetchone()
+        if found is not None:
+            tried = agents_read(connection, UUID(str(found[0])), UUID(str(found[1])))
+    except Exception:
+        # The failure is recorded whatever happens here; without the hash the run may be
+        # queued again, as before.
+        logger.warning("could not read what a failed plan run would have read")
     with transaction(connection) as cursor:
         cursor.execute(
             "UPDATE evidence_plans SET run_status = 'FAILED', run_lease_until = NULL, "
+            "run_tried = CASE WHEN %s <> '' THEN %s ELSE run_tried END, "
             "run_note = 'The planner agent could not refine this plan; the rules plan "
             "stands and waits for approval.' WHERE id = %s AND run_status IN "
             "('PENDING', 'WORKING') RETURNING engagement_control_id",
-            (plan_id,),
+            (tried, tried, plan_id),
         )
         failed = cursor.fetchone()
         if failed is not None:
@@ -2802,6 +3006,8 @@ def population_gate(
     phase = "INTERIM" if round_kind is None else round_kind
     if phase not in ("INTERIM", "ROLLFORWARD"):
         return None
+    if change_unplanned(connection, control_id) is not None:
+        return GATE_CHANGE
     rows = connection.execute(
         """
         SELECT q.title, q.categories, q.necessity, q.status, q.sufficiency
@@ -3294,6 +3500,14 @@ class EvidencePlanBody(BaseModel):
     version: int
     # The D&I requests list (B1f): what it waits for, and whether it is released.
     design_requests: DesignRequests = Field(default_factory=DesignRequests)
+    # The planner's last answer could not be used and the plan was kept as it was (B1h):
+    # the sentence and why, while that run is the plan's latest. Empty otherwise.
+    kept_note: str = ""
+    # A control change was recorded that the plan has not been generated for since: when,
+    # and the sentence the plan shows. Operating evidence, samples and testing wait for the
+    # evidence to be planned again (GATE_CHANGE).
+    change_unplanned_at: datetime | None = None
+    change_wait: str = ""
 
 
 def requirement_state(
@@ -3418,6 +3632,7 @@ def plan_body(
         ).fetchall()
     ]
     reconcile = reconcile_info(connection, project_id, control_id)
+    unplanned = change_unplanned(connection, control_id)
     if plan is None:
         return EvidencePlanBody(
             control_id=control_id, plan_id=None, reconcile=reconcile, status="NOT_PLANNED",
@@ -3510,6 +3725,9 @@ def plan_body(
         categories=dict(CATEGORY_LABELS),
         version=int(plan[9]),
         design_requests=design_requests(connection, project_id, control_id, requirements),
+        kept_note=runs[0].note if runs and runs[0].note.startswith(KEPT_NOTE) else "",
+        change_unplanned_at=unplanned,
+        change_wait=change_wait(unplanned),
     )
 
 
@@ -4026,14 +4244,15 @@ def generate(
 KEPT_NOTE = "The planner's answer could not be used, so the plan was kept as it was."
 
 # The plan stands: the planner agent (or the demo's seed) made it, or a person stands behind
-# something in it (the plan approved, a request accepted, criteria accepted), or something
-# of it is already out (a request requested, a phase released). SQL over evidence_plans `p`.
+# something in it (the plan approved, a request accepted or waived, criteria accepted), or
+# something of it is already out (a request requested, a phase released). SQL over
+# evidence_plans `p`.
 _PLAN_STANDS_SQL = """
     (p.source IN ('MODEL', 'SEEDED')
      OR p.approved_by IS NOT NULL
      OR EXISTS (SELECT 1 FROM evidence_requirements q
                 WHERE q.plan_id = p.id
-                  AND (q.accepted_by IS NOT NULL OR q.status = 'REQUESTED'))
+                  AND (q.accepted_by IS NOT NULL OR q.status IN ('REQUESTED', 'WAIVED')))
      OR EXISTS (SELECT 1 FROM phase_releases r
                 WHERE r.engagement_control_id = p.engagement_control_id)
      OR EXISTS (SELECT 1 FROM control_attributes a

@@ -23,7 +23,7 @@ import os
 import time
 from collections.abc import Callable
 from contextlib import nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -426,6 +426,12 @@ class AgentCaller:
         operation: str = "generate",
     ) -> UUID:
         prompt_hash = sha256_text(request.system + "\n" + request.prompt)
+        if raw.returned is not None:
+            # The answer was re-read (models.unnested): the record's hash and kept content
+            # are of what the provider returned, and the call says which properties were
+            # read from text, so the hash still means "what the provider returned".
+            raw = replace(raw, output=raw.returned)
+            inputs = {**(inputs or {}), "unnested": list(raw.unnested)}
         output_hash = sha256_text(json.dumps(raw.output, sort_keys=True)) if raw.output else ""
         call_id = record_call(
             self._connection,
