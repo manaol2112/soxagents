@@ -106,6 +106,8 @@ import {
 import { ControlsToolbar } from "./controls-toolbar";
 import { CoverageForm } from "./coverage-form";
 import { DesignConclusionPanel } from "./design-conclusion-panel";
+import { DesignEvidence } from "./design-evidence";
+import { carriersOf, evidenceList } from "./design-evidence-model";
 import { showsEvidenceWorkspace } from "./design-release-model";
 import { DesignRequests } from "./design-requests";
 import { requestsView } from "./design-requests-model";
@@ -154,6 +156,7 @@ import {
 } from "./evidence-model";
 import { populationWaiting } from "./evidence-plan-model";
 import { PreviewButton } from "./evidence-preview";
+import { phaseWindow } from "./evidence-requests-model";
 import {
   proposals as evidenceProposals,
   evidenceSummary,
@@ -1405,7 +1408,21 @@ function ControlRecord({
         planned={control.evidencePlan !== "NONE"}
         canAct={canAct}
         canApprove={canApprove}
-        closeHref={evidenceHref(tabHrefs.evidence, { view: "requests" })}
+        delivery={
+          (evidencePlan?.phases ?? [])
+            .flatMap((phase) => phase.requests)
+            .find((item) => item.id === focusRow.id)?.delivery ?? null
+        }
+        // Opened on the D&I Evidence step, it closes back to that step's list.
+        closeHref={
+          opened === "designevidence"
+            ? href(model, {
+                ...keep,
+                control: control.id,
+                step: "designevidence",
+              })
+            : evidenceHref(tabHrefs.evidence, { view: "requests" })
+        }
       />
     ) : focused !== null ? (
       <p className="form-hint" role="status">
@@ -1859,6 +1876,56 @@ function ControlRecord({
   });
   const requestsListed =
     designRequests.mode === "list" || designRequests.mode === "drafting";
+  // Once the requests are drafted the step stays one list (product owner, 12 November
+  // 2026: "This view is again so heavy and a lot of duplicates labels and purpose. Just
+  // simplify this"): each request with where it stands and the evidence that came back.
+  // Only for a released D&I phase with a plan; anything else keeps the evidence workspace.
+  const designWindow = evidencePlan?.phases.find(
+    (phase) => phase.phase === "DESIGN",
+  );
+  const designEvidence =
+    designRequests.mode === "hidden" &&
+    evidencePlan !== null &&
+    evidencePlan.status !== "NOT_PLANNED" &&
+    (designPhase?.step === "RELEASED" || designPhase?.step === "COMPLETE")
+      ? evidenceList({
+          requirements: designWindow?.requirements ?? [],
+          approved: context?.approved ?? [],
+          // The plan lists the phase's requests with how each reached its owner;
+          // the control's list says what kind each is.
+          requests: carriersOf(
+            designWindow?.requests ?? [],
+            control.requests
+              .filter((request) => request.phase === "DESIGN")
+              .map((request) => ({
+                id: request.id,
+                kind: request.kind,
+                status: request.status,
+                dueAt: request.dueAt,
+                recipient: request.recipient ?? "",
+                title: request.title,
+                approval: request.approvalDecision ?? null,
+              })),
+          ),
+          // The control records its owner by name and email; no role is on record.
+          owner: { name: control.ownerName, role: "" },
+          exceptions: evidencePlan.designRequests?.exceptions ?? [],
+          liveEmail: evidencePlan.liveEmail ?? null,
+          procedures:
+            masterHere === null
+              ? null
+              : Object.fromEntries(
+                  masterHere.evidence.map((item) => [
+                    item.id,
+                    item.procedureIds,
+                  ]),
+                ),
+          period:
+            (designWindow === undefined ? "" : phaseWindow(designWindow)) ||
+            "The control as currently designed",
+          now: Date.now(),
+        })
+      : null;
   // The planner at work or the requests being drafted: the step is the agents'. An
   // accepted list with nothing at work on it is not: it says what it waits for.
   if (requestsListed && designRequests.working) {
@@ -1947,6 +2014,7 @@ function ControlRecord({
     })),
     designRelease: designPhase,
     designRequests: requestsListed ? designRequests.header : null,
+    designEvidence: designEvidence?.header ?? null,
     sheet:
       sheet === null
         ? null
@@ -2634,10 +2702,92 @@ function ControlRecord({
                     }}
                   />
                 ) : null}
-                {/* The requests list is the one list until then: the workspace shows the
-                    requests once they are drafted (product owner, 12 November 2026: no
-                    duplicated evidence list). */}
+                {/* Once the requests are drafted the step is still one list: the
+                    requests, each with where it stands and the evidence that came back
+                    (product owner, 12 November 2026). */}
                 {tab === "evidence" &&
+                opened === "designevidence" &&
+                designEvidence !== null &&
+                evidencePlan !== null ? (
+                  <DesignEvidence
+                    key={control.id}
+                    ids={stepIds}
+                    view={designEvidence}
+                    plan={evidencePlan}
+                    canAct={canAct}
+                    files={(engagement.files?.files ?? []).map((file) => ({
+                      id: file.id,
+                      fileName: file.fileName,
+                      requestId: file.request?.id ?? null,
+                      blocked: changeBlocked(file),
+                      applicationUnknown: file.applicationScope === "UNKNOWN",
+                      createdAt: file.createdAt,
+                      sizeBytes: file.sizeBytes,
+                      addedBy: file.addedBy,
+                    }))}
+                    applications={engagement.files?.applications ?? []}
+                    system={
+                      (engagement.files?.applications ?? []).find(
+                        (app) => app.name === control.applicationName,
+                      )?.id ?? null
+                    }
+                    intelligence={{
+                      register: engagement.files,
+                      mapping:
+                        engagement.evidenceMapping != null &&
+                        engagement.evidenceMapping.controlId === control.id
+                          ? engagement.evidenceMapping
+                          : null,
+                      attributes:
+                        engagement.masterPlan != null &&
+                        engagement.masterPlan.controlId === control.id
+                          ? engagement.masterPlan.attributes.map((item) => ({
+                              code: item.code,
+                              text: item.text,
+                            }))
+                          : [],
+                      controlTitle: control.title,
+                      askHref,
+                      focusFile: engagement.filters.focusFile ?? null,
+                      openAdd: engagement.filters.evidenceView === "add",
+                      findings: engagement.evidenceFindings ?? null,
+                      tests: (engagement.tests ?? []).filter(
+                        (entry) => entry.controlId === control.id,
+                      ),
+                      instances: engagement.walkthroughInstances ?? null,
+                    }}
+                    controlRef={control.controlRef}
+                    activity={engagement.activity ?? null}
+                    head={<RequestHead model={model} review={requestReview} />}
+                    library={
+                      <ControlEvidence
+                        model={model}
+                        control={control}
+                        step={formStep}
+                        files={engagement.files}
+                        notice={engagement.changeNotice}
+                        serves={fileServes(evidencePlan)}
+                        placed={placedFiles(evidencePlan)}
+                      />
+                    }
+                    otherFiles={
+                      (engagement.files?.files ?? []).filter(
+                        (file) => !placedFiles(evidencePlan).has(file.id),
+                      ).length
+                    }
+                    documents={{
+                      line: governingLine,
+                      body: setupFor(["documents"]),
+                    }}
+                    stepHref={stepHrefsWf.designevidence}
+                    focusView={engagement.filters.evidenceView ?? null}
+                  />
+                ) : null}
+                {/* The requests list is the one list until then; any other step, and a
+                    D&I phase the list cannot be read for, keeps the evidence workspace
+                    (product owner, 12 November 2026: no duplicated evidence list). */}
+                {tab === "evidence" &&
+                !(opened === "designevidence" && designEvidence !== null) &&
                 showsEvidenceWorkspace(opened, designRequests) ? (
                   <EvidenceWorkspace
                     ids={stepIds}
@@ -2773,6 +2923,7 @@ function ControlRecord({
                   from Control Understanding, 9 November 2026). */}
                 {tab === "evidence" &&
                 opened === "designevidence" &&
+                designEvidence === null &&
                 designRequests.mode === "hidden" ? (
                   <details className="stp-fold dr-docs">
                     <summary>

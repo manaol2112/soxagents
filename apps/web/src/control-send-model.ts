@@ -338,11 +338,20 @@ export type SentReport = {
 
 /** Who the requests went to, as a person reads it: "Jordan Lee", "Jordan Lee and Alex
  * Morgan", "3 people". */
+/** What the server answers for a request it approved while email is off: the approval
+ * recorded the hand-over, nothing was sent, and it is not counted as sent
+ * (evidence_center.HANDED_OVER). */
+export const HANDED_OVER_ANSWER =
+  "Approved and handed over: email sending is off, so nothing was sent.";
+
+const handedOver = (target: Pick<SendTarget, "ok" | "waiting" | "detail">) =>
+  !target.ok && !target.waiting && target.detail === HANDED_OVER_ANSWER;
+
 function whoOf(result: SendResult): string {
   const names = [
     ...new Set(
       result.targets
-        .filter((t) => t.ok && t.recipient !== "")
+        .filter((t) => (t.ok || handedOver(t)) && t.recipient !== "")
         .map((t) => personOf(t.recipient.toLowerCase(), result.contacts).name),
     ),
   ];
@@ -351,17 +360,35 @@ function whoOf(result: SendResult): string {
 
 export function sentReport(result: SendResult): SentReport {
   const plan = reviewPlan(result);
-  const sent = plan.sending.length;
-  const problems = plan.attention.map((a) => ({
-    title: a.title,
-    reason: a.reason,
-  }));
+  // Each request is reported as the server answered for it, never from what the page
+  // believed about email beforehand (that may be stale): a target it sent was emailed;
+  // one it says it handed over is no failure, and nothing was emailed for it.
+  const handedCount = result.targets.filter(handedOver).length;
+  const emailedCount = plan.sending.length;
+  const sent = emailedCount + handedCount;
+  const problems = plan.attention
+    .filter((a) => a.reason !== HANDED_OVER_ANSWER)
+    .map((a) => ({
+      title: a.title,
+      reason: a.reason,
+    }));
   const scheduled = plan.later.map((l) => ({
     title: l.title,
     period: l.period,
   }));
   const who = whoOf(result);
-  const emailed = `Approved and emailed${who === "" ? "" : ` to ${who}`}. Replies and evidence will appear in the Evidence center.`;
+  const emailed =
+    handedCount > 0 && emailedCount > 0
+      ? `Approved${who === "" ? "" : ` for ${who}`}: ${emailedCount} emailed, ${handedCount} recorded as handed over because email sending is off for ${handedCount === 1 ? "it" : "them"}.`
+      : handedCount > 0
+        ? `Approved and recorded as handed over${who === "" ? "" : ` to ${who}`}. Nothing was emailed: email sending is off in this environment. Upload what you receive on its row.`
+        : `Approved and emailed${who === "" ? "" : ` to ${who}`}. Replies and evidence will appear in the Evidence center.`;
+  const went =
+    handedCount > 0 && emailedCount > 0
+      ? "approved"
+      : handedCount > 0
+        ? "handed over"
+        : "sent";
   const base = { scheduled, scheduledLead: plan.laterLead, problems };
   if (sent > 0) {
     return {
@@ -370,9 +397,9 @@ export function sentReport(result: SendResult): SentReport {
       title:
         problems.length === 0
           ? sent === 1
-            ? "Request sent"
-            : `${sent} requests sent`
-          : `${sent} of ${sent + problems.length} requests sent`,
+            ? `Request ${went}`
+            : `${sent} requests ${went}`
+          : `${sent} of ${sent + problems.length} requests ${went}`,
       lead: emailed,
     };
   }

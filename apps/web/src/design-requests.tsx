@@ -53,7 +53,7 @@ const ROUTES = {
  * decides on what is there now. A refusal leaves the page as it was, with the reason in
  * place.
  */
-function useRequestAction(ids: Ids) {
+export function useRequestAction(ids: Ids) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [busy, setBusy] = useState("");
@@ -964,7 +964,7 @@ function DialogFoot({
 /** A request added, with the attributes it addresses, or its title and description
  * edited. Either is accepted by that act: the person wrote it. What was typed stays if
  * the server refuses. */
-function RequestDialog({
+export function RequestDialog({
   ids,
   row,
   attributes,
@@ -1169,7 +1169,7 @@ function RequestDialog({
 }
 
 /** The approved attributes a request addresses, as a checklist by letter and wording. */
-function AttributesDialog({
+export function AttributesDialog({
   ids,
   row,
   attributes,

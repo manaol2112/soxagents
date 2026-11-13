@@ -88,8 +88,96 @@ _COLUMNS = """
     evidence_description, status, outbound_message_id, thread_id, first_response_at,
     received_at, attachment_refs, follow_up_after_days, max_follow_ups, escalation_state,
     cancellation_reason, version, provided_directly, testing_phase, engagement_control_id,
-    cc_recipients, request_type, title, priority, drafted_by
+    cc_recipients, request_type, title, priority, drafted_by,
+    handed_over_at,
+    (SELECT u.display_name FROM users u WHERE u.id = pbc_requests.handed_over_by),
+    (SELECT o.created_at FROM outbound_messages o
+     WHERE o.project_id = pbc_requests.project_id
+       AND o.provider_message_id = pbc_requests.outbound_message_id
+     ORDER BY o.created_at LIMIT 1),
+    (SELECT u.display_name FROM outbound_messages o JOIN users u ON u.id = o.actor_user_id
+     WHERE o.project_id = pbc_requests.project_id
+       AND o.provider_message_id = pbc_requests.outbound_message_id
+     ORDER BY o.created_at LIMIT 1)
 """
+
+
+class Delivery(BaseModel):
+    """How a request reached its owner, and nothing more than happened (B1g, product
+    owner, 12 November 2026). EMAIL: its message was delivered to the mailbox provider
+    (the request holds the message's id); `at` and `by` are when the message was recorded
+    and who sent it. HANDED_OVER: email sending was off when it was approved, so nothing
+    was sent; the person who approved or sent it is on record as having handed it over,
+    then. A request that neither was sent nor handed over has no delivery."""
+
+    mode: Literal["EMAIL", "HANDED_OVER"]
+    at: datetime | None
+    # The person's name, as the plan names its people.
+    by: str | None
+
+
+def delivery_of(
+    message_id: Any, sent_at: Any, sent_by: Any, handed_over_at: Any, handed_over_by: Any
+) -> Delivery | None:
+    """The one rule for a request's delivery: an email that went out says EMAIL, whatever
+    came before; otherwise a recorded hand-over; otherwise nothing."""
+    if isinstance(message_id, str) and message_id != "":
+        return Delivery(
+            mode="EMAIL",
+            at=sent_at if isinstance(sent_at, datetime) else None,
+            by=None if sent_by is None else str(sent_by),
+        )
+    if isinstance(handed_over_at, datetime):
+        return Delivery(
+            mode="HANDED_OVER",
+            at=handed_over_at,
+            by=None if handed_over_by is None else str(handed_over_by),
+        )
+    return None
+
+
+def handover_of(
+    cursor: psycopg.Cursor[Any], project_id: UUID, request_id: UUID
+) -> dict[str, str] | None:
+    """The hand-over the request holds now, if any: read before a change that returns the
+    request to draft, which ends it (the trigger of migration 0152 clears it)."""
+    row = cursor.execute(
+        "SELECT handed_over_at, handed_over_by, handed_over_approval_id FROM pbc_requests "
+        "WHERE id = %s AND project_id = %s AND handed_over_at IS NOT NULL",
+        (request_id, project_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "handed_over_at": row[0].isoformat(),
+        "handed_over_by": str(row[1]),
+        "approval_id": str(row[2]),
+    }
+
+
+def record_handover_withdrawn(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    request_id: UUID,
+    actor_id: UUID,
+    handed: dict[str, str],
+    reason: str,
+) -> None:
+    """A handed-over request returned to draft is no longer with its owner as approved:
+    the trail says who returned it and why, and keeps what the hand-over was. Every path
+    that returns a request to draft calls this in the same transaction; the database
+    refuses the commit of one that did not (migration 0153), so a hand-over never ends
+    without a record."""
+    cursor.execute(
+        """
+        INSERT INTO audit_events (
+            organization_id, project_id, actor_user_id, action, target_type, target_id, payload
+        )
+        VALUES (%s, %s, %s, 'pbc.handover_withdrawn', 'pbc_request', %s, %s)
+        """,
+        (organization_id, project_id, actor_id, request_id, Json({"reason": reason, **handed})),
+    )
 
 
 class PbcState(Exception):
@@ -181,38 +269,59 @@ class PbcBody(BaseModel):
     priority: str = "NORMAL"
     # Who drafted it: the evidence coordinator (AGENT) or a person (migration 0076).
     drafted_by: str = "PERSON"
+    # How it reached its owner: by email, or handed over while email was off (migration
+    # 0152). None when neither: no status here says "sent" for a request nothing sent.
+    delivery: Delivery | None = None
+    # Whether a message can be sent now (outbound.email_on): with it off, approving a
+    # request records a hand-over instead of sending. Set by the routes that answer with
+    # a request; a body built elsewhere leaves it False.
+    live_email: bool = False
 
 
 def register_pbc(app: FastAPI, settings: Settings) -> None:
+    from ai_workforce_api.mailbox import mailbox_available
+
+    def stamped(body: PbcBody) -> PbcBody:
+        return body.model_copy(update={"live_email": mailbox_available(settings)})
+
     @app.post("/organizations/{organization_id}/projects/{project_id}/pbc-requests")
     def create_request(
         organization_id: UUID, project_id: UUID, body: PbcCreate, request: Request
     ) -> PbcBody:
         _reject_secret(body.model_dump())
         principal = _session_principal(request)
-        return _run(
-            settings,
-            lambda connection: _create(connection, principal, organization_id, project_id, body),
+        return stamped(
+            _run(
+                settings,
+                lambda connection: _create(
+                    connection, principal, organization_id, project_id, body
+                ),
+            )
         )
 
     @app.get("/organizations/{organization_id}/projects/{project_id}/pbc-requests")
     def list_requests(organization_id: UUID, project_id: UUID, request: Request) -> list[PbcBody]:
         principal = _session_principal(request)
-        return _run(
-            settings,
-            lambda connection: _list(connection, principal, organization_id, project_id),
-        )
+        return [
+            stamped(item)
+            for item in _run(
+                settings,
+                lambda connection: _list(connection, principal, organization_id, project_id),
+            )
+        ]
 
     @app.get("/organizations/{organization_id}/projects/{project_id}/pbc-requests/{request_id}")
     def read_request(
         organization_id: UUID, project_id: UUID, request_id: UUID, request: Request
     ) -> PbcBody:
         principal = _session_principal(request)
-        return _run(
-            settings,
-            lambda connection: _read(
-                connection, principal, organization_id, project_id, request_id
-            ),
+        return stamped(
+            _run(
+                settings,
+                lambda connection: _read(
+                    connection, principal, organization_id, project_id, request_id
+                ),
+            )
         )
 
     @app.post("/organizations/{organization_id}/projects/{project_id}/pbc-requests/{request_id}")
@@ -225,11 +334,13 @@ def register_pbc(app: FastAPI, settings: Settings) -> None:
     ) -> PbcBody:
         _reject_secret(body.model_dump())
         principal = _session_principal(request)
-        return _run(
-            settings,
-            lambda connection: _update(
-                connection, principal, organization_id, project_id, request_id, body
-            ),
+        return stamped(
+            _run(
+                settings,
+                lambda connection: _update(
+                    connection, principal, organization_id, project_id, request_id, body
+                ),
+            )
         )
 
 
@@ -464,6 +575,11 @@ def _update(
             message_id = None
             thread_id = None
         escalation = "ESCALATED" if status == "ESCALATED" else "NONE"
+        handed = (
+            handover_of(cursor, project_id, request_id)
+            if status == "DRAFT" and current.status != "DRAFT"
+            else None
+        )
         row = cursor.execute(
             f"""
             UPDATE pbc_requests
@@ -515,6 +631,14 @@ def _update(
             raise PbcState("pbc request changed")
         updated = _body(row)
         _audit(cursor, organization_id, project_id, principal.id, updated.id, status)
+        if handed is not None:
+            # Taken back to reword: it is no longer with the owner as approved (the
+            # trigger of migration 0152 cleared the hand-over), and the trail says who
+            # took it back. Its next approval records a hand-over of its own.
+            record_handover_withdrawn(
+                cursor, organization_id, project_id, updated.id, principal.id, handed,
+                "returned to draft",
+            )  # fmt: skip
         if status not in REMINDABLE:
             cancel_open(cursor, organization_id, project_id, principal.id, updated.id)
     return updated
@@ -705,4 +829,5 @@ def _body(row: tuple[Any, ...]) -> PbcBody:
         title=str(row[24] or ""),
         priority=str(row[25] or "NORMAL"),
         drafted_by=str(row[26] or "PERSON"),
+        delivery=delivery_of(row[9], row[29], row[30], row[27], row[28]) if len(row) > 30 else None,
     )

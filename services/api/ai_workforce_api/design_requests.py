@@ -54,6 +54,7 @@ from ai_workforce_api.evidence_plans import (
     list_decided,
     plan_body,
     queue_drafts,
+    with_live_email,
 )
 from ai_workforce_api.phase_release import (
     _LIVE_REQUIREMENT_SQL,
@@ -331,8 +332,9 @@ def register_design_requests(app: FastAPI, settings: Settings, scheduler: Any = 
         principal = _session_principal(request)
         try:
             # Drafts a release queued are handed to the worker once the request committed.
-            return committed(
-                lambda: _call(settings, lambda connection: work(connection, principal))
+            return with_live_email(
+                settings,
+                committed(lambda: _call(settings, lambda connection: work(connection, principal))),
             )
         except PlanState as error:
             raise HTTPException(status_code=409, detail=error.detail) from None

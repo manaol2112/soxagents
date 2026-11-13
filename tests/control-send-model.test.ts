@@ -6,6 +6,7 @@ import {
   addressOf,
   checkOwner,
   confirmLines,
+  HANDED_OVER_ANSWER,
   initialsOf,
   matchOwners,
   outsideDomains,
@@ -301,6 +302,47 @@ describe("approve and send from the Request step", () => {
     assert.equal(sentReport(all).title, "2 requests sent");
     assert.equal(sentReport(all).tone, "success");
     assert.match(sentReport(all).lead, /emailed to Jordan Lee\./);
+    // Old expectation (first cut of the D&I list, 12 November 2026): told by the page
+    // that email was off, `sentReport(all, true)` reported these server-confirmed
+    // emails as "2 requests handed over". That flag is read before the send and may be
+    // stale, so it reported emails that went out as never sent. New: the report follows
+    // what the server answered for each request and takes no flag; a request it sent
+    // reads as sent (asserted above), and only one it says it handed over reads so.
+    assert.equal(sentReport.length, 1);
+    // The server's own answer for a request approved while email is off: not counted
+    // as sent, and not a failure to resolve either.
+    const answered = {
+      ...result,
+      targets: result.targets.map((t) => ({
+        ...t,
+        ok: false,
+        waiting: false,
+        recipient: "jordan.lee@example.com",
+        detail: HANDED_OVER_ANSWER,
+      })),
+    };
+    const report = sentReport(answered);
+    assert.equal(report.title, "2 requests handed over");
+    assert.equal(report.tone, "success");
+    assert.deepEqual(report.problems, []);
+    assert.match(report.lead, /recorded as handed over to Jordan Lee\./);
+    assert.match(report.lead, /Nothing was emailed/);
+    assert.doesNotMatch(
+      `${report.title} ${report.lead}`,
+      /\bsent\b|and emailed/,
+    );
+    // One emailed and one handed over in the same answer: each said as it went.
+    const mixed = sentReport({
+      ...all,
+      targets: all.targets.map((t, at) =>
+        at === 0 ? t : { ...t, ok: false, detail: HANDED_OVER_ANSWER },
+      ),
+    });
+    assert.equal(mixed.title, "2 requests approved");
+    assert.match(mixed.lead, /1 emailed, 1 recorded as handed over/);
+    assert.deepEqual(mixed.problems, []);
+    // A refusal is still a refusal.
+    assert.equal(sentReport(none).title, "Not sent");
   });
 
   it("says a request scheduled for its phase is still scheduled, not unsent", () => {

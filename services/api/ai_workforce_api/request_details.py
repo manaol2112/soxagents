@@ -689,8 +689,11 @@ def details(
     can_share = principal.kind is PrincipalKind.USER and _allowed(
         connection, principal, Action.PROJECT_UPDATE, organization_id, project_id
     )
+    from ai_workforce_api.mailbox import mailbox_available
+
     return DetailsBody(
-        request=pbc,
+        # With whether a message can be sent now, as the request's own routes say it.
+        request=pbc.model_copy(update={"live_email": mailbox_available(settings)}),
         reference=reference_of(pbc.id),
         title=title_of(pbc, content),
         title_set=pbc.title.strip() != "",

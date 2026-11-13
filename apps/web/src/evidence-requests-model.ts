@@ -153,6 +153,11 @@ const FORMATS: Record<string, string> = {
   OTHER: "Any readable file",
 };
 
+/** The usual form of an item of these categories, by its first. */
+export function formatOf(categories: readonly string[]): string {
+  return FORMATS[categories[0] ?? "OTHER"] ?? FORMATS.OTHER ?? "";
+}
+
 export type RequestItem = {
   item: PlanRequirement;
   /** The plan's code for it (E1, E2), when the test plan holds it. */

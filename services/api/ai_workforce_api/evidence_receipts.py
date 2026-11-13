@@ -6,6 +6,17 @@ sent moves as if the owner had replied, and its open follow-ups stop. A request 
 never sent (a draft, or awaiting approval) is marked as provided directly, and its send
 approval, pending or approved and not yet used, is withdrawn, so the request never goes out.
 
+Evidence already in hand is per item (B1g, product owner, 12 November 2026). Before, a
+file for one item of an unsent request marked the whole request received and withdrew its
+send, so its other items were never asked for. Now, for a D&I request drafted from the
+plan and never sent nor handed over, the items with evidence of their own stay on the
+request, which is received as provided directly (nothing is sent for them), and the items
+with none leave it and are requested again in a draft of their own, worded from the plan
+without the items in hand; that draft needs a person's approval like any other, and an
+approval of the earlier wording is withdrawn, never carried over. A file that serves no
+item leaves the request as it was: it still goes out. When every item is in hand nothing
+is sent, as before. The interim and roll-forward requests behave as before.
+
 Each move is recorded on a filing. When a file leaves the request (withdrawn, or moved to
 another control) the request follows the evidence left on it: received while every item
 still has evidence, partly received while some does, and back to where it was before any
@@ -21,6 +32,7 @@ import psycopg
 from psycopg.types.json import Json
 
 from ai_workforce_api.followups import cancel_open
+from ai_workforce_api.pbc import handover_of, record_handover_withdrawn
 
 ReceiptStatus = Literal["PARTIALLY_RECEIVED", "RECEIVED"]
 _ANSWERED = frozenset({"SENT", "WAITING_FOR_RESPONSE", "OVERDUE", "ESCALATED"})
@@ -125,23 +137,181 @@ def apply_receipt(
     by: Literal["AGENT", "PERSON", "OWNER"],
 ) -> ReceiptStatus | None:
     """Move the request for a filed file. Returns the new status, or None if it stays."""
+    moved, _split = _receive(
+        cursor, organization_id, project_id, match_id, request_id, actor_id, by
+    )
+    return moved
+
+
+def settle_in_hand(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    request_id: UUID,
+    actor_id: UUID,
+) -> Literal["SPLIT", "IN_HAND"] | None:
+    """Before an unsent D&I request goes for approval: evidence already in hand for its
+    items is applied now (the file's reading may not have finished, or the evidence was
+    linked, which moves no request by itself), so nobody approves a wording that asks for
+    an item in hand. SPLIT: some items were in hand, and the rest are now asked for in a
+    draft without them. IN_HAND: every item was, so the request is received as provided
+    directly and nothing needs sending. None: nothing is in hand and the request goes on
+    as it is. Only for the requests the per-item rule covers (_receive)."""
     row = cursor.execute(
-        "SELECT status FROM pbc_requests WHERE id = %s AND project_id = %s FOR UPDATE",
+        "SELECT status FROM pbc_requests WHERE id = %s AND project_id = %s",
+        (request_id, project_id),
+    ).fetchone()
+    if row is None or str(row[0]) not in _UNSENT:
+        return None
+    reading = cursor.execute(
+        "SELECT 1 FROM evidence_matches m "
+        "JOIN evidence_analyses a ON a.evidence_file_id = m.evidence_file_id "
+        "WHERE m.pbc_request_id = %s AND m.status = 'FILED' AND m.requirement_id IS NULL "
+        "AND a.status IN ('PENDING', 'WORKING') LIMIT 1",
+        (request_id,),
+    ).fetchone()
+    if reading is not None:
+        # A file added on the request as a whole serves the items its reading finds it
+        # covers: until it is read, which items it puts in hand is not known, and the
+        # reading applies it when it ends (apply_receipt), approved or not.
+        return None
+    match = cursor.execute(
+        "SELECT m.id FROM evidence_matches m JOIN evidence_file_links l "
+        "ON l.evidence_file_id = m.evidence_file_id AND l.pbc_request_id = m.pbc_request_id "
+        "WHERE m.pbc_request_id = %s AND m.status = 'FILED' ORDER BY m.id LIMIT 1",
+        (request_id,),
+    ).fetchone()
+    moved, split = _receive(
+        cursor, organization_id, project_id, None if match is None else UUID(str(match[0])),
+        request_id, actor_id, "PERSON", settling=True,
+    )  # fmt: skip
+    if moved is None:
+        return None
+    return "SPLIT" if split else "IN_HAND"
+
+
+def _receive(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    match_id: UUID | None,
+    request_id: UUID,
+    actor_id: UUID,
+    by: Literal["AGENT", "PERSON", "OWNER"],
+    *,
+    settling: bool = False,
+) -> tuple[ReceiptStatus | None, bool]:
+    """The move, and whether items were taken off the request to be asked for on their
+    own. `settling` (settle_in_hand): only where the per-item rule applies, and only when
+    something is in hand."""
+    # The plan's row before the request and its requirements, as every writer of a plan
+    # takes them (evidence_plans.issue): the items left to ask for are requested again.
+    cursor.execute(
+        "SELECT 1 FROM evidence_plans p JOIN pbc_requests r "
+        "ON r.engagement_control_id = p.engagement_control_id AND r.project_id = p.project_id "
+        "WHERE r.id = %s AND r.project_id = %s AND r.testing_phase = 'DESIGN' FOR UPDATE OF p",
+        (request_id, project_id),
+    )
+    row = cursor.execute(
+        """
+        SELECT r.status, r.engagement_control_id,
+               r.testing_phase = 'DESIGN' AND r.engagement_control_id IS NOT NULL
+               AND r.operation_key LIKE 'plan-%%' AND r.handed_over_at IS NULL
+               -- A message recorded for it and not definitively failed may be with the
+               -- owner (pending, or its outcome unknown, or delivered): the request is
+               -- then treated as asked for, whole, and is never split.
+               AND NOT EXISTS (
+                   SELECT 1 FROM outbound_messages o
+                   WHERE o.pbc_request_id = r.id AND o.status <> 'FAILED')
+               -- Approved or sent with other requests as one email: likewise.
+               AND NOT EXISTS (
+                   SELECT 1 FROM evidence_request_group_members m
+                   JOIN evidence_request_groups g ON g.id = m.group_id
+                   WHERE m.pbc_request_id = r.id AND m.released_at IS NULL
+                     AND g.status IN ('APPROVED', 'SENT'))
+        FROM pbc_requests r WHERE r.id = %s AND r.project_id = %s FOR UPDATE OF r
+        """,
         (request_id, project_id),
     ).fetchone()
     if row is None:
-        return None
+        return None, False
     before = str(row[0])
     # A request whose every item a person accepted is received, as when the last item is
     # accepted (evidence_plans._received_when_accepted): a file restored to it puts it back
     # where its withdrawal found it.
     whole = covered(cursor, project_id, request_id) or _every_item_accepted(cursor, request_id)
-    target: ReceiptStatus = "RECEIVED" if whole else "PARTIALLY_RECEIVED"
-    if before in ("RECEIVED", "CLOSED", "CANCELLED") or before == target:
-        return None
-    if before not in _ANSWERED and before not in _UNSENT and before != "PARTIALLY_RECEIVED":
-        return None
     unsent = before in _UNSENT
+    # Per item (B1g): on an unsent D&I request of the plan, never handed over, the items
+    # with no evidence of their own are still to be asked for.
+    left: list[UUID] = []
+    served = False
+    if unsent and bool(row[2]) and (settling or not whole):
+        in_hand, left = _items(cursor, request_id)
+        if not in_hand:
+            # No file serves any of its items: nothing is in hand, so the request stays
+            # as it is and still goes out for all of them.
+            return None, False
+        # Every item it keeps has evidence of its own: it is received, whatever the
+        # coordinator's draft counted (one answer with settle_in_hand's IN_HAND).
+        served = True
+    elif settling:
+        return None, False
+    if before in ("RECEIVED", "CLOSED", "CANCELLED"):
+        return None, False
+    if before not in _ANSWERED and before not in _UNSENT and before != "PARTIALLY_RECEIVED":
+        return None, False
+
+    def move(target: ReceiptStatus, aside: list[UUID]) -> None:
+        _move(
+            cursor, organization_id, project_id, match_id, request_id, actor_id, by,
+            before, target, aside, None if row[1] is None else UUID(str(row[1])),
+        )  # fmt: skip
+
+    if left:
+        try:
+            # All of it or none: the items taken off are requested again in the same
+            # step, or the request is left whole.
+            with cursor.connection.transaction():
+                move("RECEIVED", left)
+            return "RECEIVED", True
+        except _NotRequested:
+            # The items left to ask for cannot be requested now (the engagement is not
+            # running, the control is out of scope, a kickoff draft waits to be settled
+            # against the plan): no item is left without a request. The request stays
+            # whole: untouched before an approval, and as before for a file that came.
+            if settling:
+                return None, False
+            served = False
+    target: ReceiptStatus = "RECEIVED" if whole or served else "PARTIALLY_RECEIVED"
+    if before == target:
+        return None, False
+    move(target, [])
+    return target, False
+
+
+class _NotRequested(Exception):
+    """An item taken off a request could not be requested again."""
+
+
+def _move(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    match_id: UUID | None,
+    request_id: UUID,
+    actor_id: UUID,
+    by: Literal["AGENT", "PERSON", "OWNER"],
+    before: str,
+    target: ReceiptStatus,
+    left: list[UUID],
+    control_id: UUID | None,
+) -> None:
+    """Record the request's move for the evidence on it; with `left`, the items still to
+    be asked for leave it first and are requested again last (_NotRequested if not)."""
+    unsent = before in _UNSENT
+    if left:
+        assert control_id is not None
+        _set_aside(cursor, project_id, control_id, request_id, left, before)
     cursor.execute(
         """
         UPDATE pbc_requests
@@ -161,17 +331,18 @@ def apply_receipt(
     if target == "RECEIVED":
         cancel_open(cursor, organization_id, project_id, actor_id, request_id)
     # The first move is what a change of control puts back.
-    cursor.execute(
-        """
-        UPDATE evidence_matches
-        SET receipt_request_id = %s,
-            receipt_status_before = coalesce(receipt_status_before, %s),
-            receipt_status_set = %s,
-            version = version + 1
-        WHERE id = %s
-        """,
-        (request_id, before, target, match_id),
-    )
+    if match_id is not None:
+        cursor.execute(
+            """
+            UPDATE evidence_matches
+            SET receipt_request_id = %s,
+                receipt_status_before = coalesce(receipt_status_before, %s),
+                receipt_status_set = %s,
+                version = version + 1
+            WHERE id = %s
+            """,
+            (request_id, before, target, match_id),
+        )
     _audit(
         cursor,
         organization_id,
@@ -181,7 +352,158 @@ def apply_receipt(
         "pbc.received_from_evidence",
         {"status": target, "from": before, "by": by, "provided_directly": unsent},
     )
-    return target
+    if left:
+        assert control_id is not None
+        _request_again(cursor, organization_id, project_id, control_id, request_id, actor_id, left)
+
+
+def _items(cursor: psycopg.Cursor[Any], request_id: UUID) -> tuple[list[UUID], list[UUID]]:
+    """The request's items with evidence of their own, and those with none: the test of
+    _every_item_served, item by item (a file on the request that serves the item, one a
+    sibling control shares for it, or one a person linked to it)."""
+    from ai_workforce_api.evidence_plans import request_file_serves, shared_from_sibling
+
+    rows = cursor.execute(
+        """
+        SELECT q.id,
+               EXISTS (
+                   SELECT 1 FROM evidence_file_links l
+                   LEFT JOIN evidence_analyses a ON a.evidence_file_id = l.evidence_file_id
+                   WHERE l.pbc_request_id = q.pbc_request_id AND {SERVES})
+               OR EXISTS ({SHARED})
+               OR EXISTS (
+                   SELECT 1 FROM evidence_requirement_files ef
+                   JOIN evidence_file_links l
+                     ON l.evidence_file_id = ef.evidence_file_id
+                    AND l.engagement_control_id = ef.engagement_control_id
+                   WHERE ef.requirement_id = q.id AND ef.status = 'LINKED')
+        FROM evidence_requirements q
+        WHERE q.pbc_request_id = %s AND q.status = 'REQUESTED'
+        ORDER BY q.created_at, q.requirement_key
+        FOR UPDATE OF q
+        """.replace("{SERVES}", request_file_serves("l.evidence_file_id")).replace(
+            "{SHARED}", shared_from_sibling("1")
+        ),
+        (request_id,),
+    ).fetchall()
+    in_hand = [UUID(str(item[0])) for item in rows if item[1]]
+    left = [UUID(str(item[0])) for item in rows if not item[1]]
+    return in_hand, left
+
+
+IN_HAND_NOTE = "Asked for on its own: evidence for another item of its request was in hand."
+
+
+def _set_aside(
+    cursor: psycopg.Cursor[Any],
+    project_id: UUID,
+    control_id: UUID,
+    request_id: UUID,
+    left: list[UUID],
+    before: str,
+) -> None:
+    """Take the items still to be asked for off the request, which keeps only the items
+    whose evidence is in hand and is worded again for what it now holds (it is not sent:
+    it is received as provided directly, and an approval of its earlier wording is
+    withdrawn by the caller). The coordinator's draft of it no longer says what it holds,
+    so it stops counting (covered() then reads each item's own evidence)."""
+    from ai_workforce_api.evidence_plans import render_into
+
+    cursor.execute(
+        """
+        UPDATE evidence_requirements
+        SET status = CASE WHEN depends_on IS NULL THEN 'PLANNED' ELSE 'AWAITING_DEPENDENCY' END,
+            pbc_request_id = NULL, coverage_note = %s, version = version + 1
+        WHERE id = ANY(%s) AND pbc_request_id = %s
+        """,
+        (IN_HAND_NOTE, left, request_id),
+    )
+    # Before its status moves and its send approval is withdrawn, in this transaction:
+    # the request is never left approved for a wording it no longer has.
+    assert before in _UNSENT
+    render_into(cursor, project_id, control_id, request_id, unsent=True)
+    cursor.execute(
+        """
+        UPDATE pbc_drafts
+        SET status = 'SKIPPED', source = NULL, content = NULL, lease_until = NULL,
+            note = 'Evidence for its items was in hand; the rest are asked for on their own.',
+            version = version + 1, updated_at = clock_timestamp()
+        WHERE pbc_request_id = %s
+        """,
+        (request_id,),
+    )
+
+
+def _request_again(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    request_id: UUID,
+    actor_id: UUID,
+    left: list[UUID],
+) -> None:
+    """Request the items taken off a request whose other items were in hand, as any planned
+    item is requested (evidence_plans.issue: the same gates, the same draft request per
+    control and phase). The request is worded from the plan, item by item, by the reviewed
+    rendering and with no model: it is ready for a person at once, never waiting on a
+    worker, and it is sent only on a person's approval of that wording. A request made
+    for them is addressed as the one they left was (who it goes to, who is copied, when
+    it is due), which a person may have set."""
+    from ai_workforce_api.evidence_plans import issue
+
+    # Only the items taken off: nothing else of the control is requested by a file.
+    issued = issue(
+        cursor, organization_id, project_id, control_id, actor_id, "evidence_in_hand", only=left
+    )
+    if issued.created:
+        cursor.execute(
+            """
+            UPDATE pbc_requests n
+            SET recipient = o.recipient, cc_recipients = o.cc_recipients, due_at = o.due_at,
+                follow_up_after_days = o.follow_up_after_days,
+                max_follow_ups = o.max_follow_ups, priority = o.priority,
+                version = n.version + 1
+            FROM pbc_requests o
+            WHERE o.id = %s AND n.id = ANY(%s) AND n.status = 'DRAFT'
+            """,
+            (request_id, issued.created),
+        )
+    if issued.rewritten:
+        # A draft they joined was worded again from the plan (render_into): what the
+        # coordinator drafted for it before no longer lists its items.
+        cursor.execute(
+            """
+            UPDATE pbc_drafts
+            SET status = 'SKIPPED', source = NULL, content = NULL, lease_until = NULL,
+                note = 'Items joined it after it was drafted; the plan''s wording stands.',
+                version = version + 1, updated_at = clock_timestamp()
+            WHERE pbc_request_id = ANY(%s) AND status <> 'DRAFTING'
+            """,
+            (issued.rewritten,),
+        )
+    placed = cursor.execute(
+        "SELECT q.pbc_request_id FROM evidence_requirements q "
+        "LEFT JOIN pbc_requests r ON r.id = q.pbc_request_id AND r.status = 'DRAFT' "
+        "WHERE q.id = ANY(%s) AND q.status = 'REQUESTED' AND r.id IS NOT NULL",
+        (left,),
+    ).fetchall()
+    if len(placed) != len(left):
+        raise _NotRequested()
+    carried = sorted({str(item[0]) for item in placed})
+    _audit(
+        cursor,
+        organization_id,
+        project_id,
+        actor_id,
+        request_id,
+        "pbc.items_requested_separately",
+        {
+            "requirements": [str(item) for item in left],
+            "requests": carried,
+            "reason": "evidence for the request's other items was in hand",
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -223,12 +545,15 @@ def follow_evidence(
     the status `before` its filing recorded, if it recorded one. A request evidence never
     moved, or one moved on since (closed, cancelled), is left alone."""
     row = cursor.execute(
-        "SELECT status FROM pbc_requests WHERE id = %s AND project_id = %s FOR UPDATE",
+        "SELECT status, provided_directly AND outbound_message_id IS NULL "
+        "AND handed_over_at IS NULL "
+        "FROM pbc_requests WHERE id = %s AND project_id = %s FOR UPDATE",
         (request_id, project_id),
     ).fetchone()
     if row is None or str(row[0]) not in _EVIDENCE:
         return
     status = str(row[0])
+    never_asked = bool(row[1])
     records = [
         (UUID(str(found[0])), None if found[1] is None else str(found[1]))
         for found in cursor.execute(
@@ -238,7 +563,12 @@ def follow_evidence(
         ).fetchall()
     ]
     if before is None and not records:
-        return
+        if not never_asked:
+            return
+        # Received only from evidence provided directly, with no filing that recorded
+        # where it was (the evidence in hand was a person's link, settle_in_hand): it was
+        # never sent nor handed over, so it was a draft.
+        before = "DRAFT"
     # Where the request was before any evidence came: the first recorded status that is
     # not itself a receipt.
     origins = [
@@ -255,6 +585,7 @@ def follow_evidence(
         target = "DRAFT" if origin in _UNSENT else origin
     else:
         return
+    handed = handover_of(cursor, project_id, request_id) if target == "DRAFT" else None
     if target != status:
         cursor.execute(
             """
@@ -279,6 +610,13 @@ def follow_evidence(
             {"status": target, "from": status},
         )
     if target not in _EVIDENCE:
+        if target == "DRAFT" and handed is not None:
+            # No longer with the owner as approved: said on the trail, by whom and why
+            # (the database refuses a hand-over that ends with no such record).
+            record_handover_withdrawn(
+                cursor, organization_id, project_id, request_id, actor_id, handed,
+                "its evidence was withdrawn",
+            )  # fmt: skip
         cursor.execute(
             "UPDATE evidence_matches SET receipt_request_id = NULL, receipt_status_before = NULL, "
             "receipt_status_set = NULL, version = version + 1 WHERE receipt_request_id = %s",

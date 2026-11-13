@@ -20,7 +20,7 @@
 -- plan was generated).
 --
 -- Rollback: ALTER TABLE evidence_plans DROP COLUMN run_read, DROP COLUMN run_read_at,
--- DROP COLUMN run_tried; and delete the '0152_plan_run_read' row from schema_migrations.
+-- DROP COLUMN run_tried; and delete the '0154_plan_run_read' row from schema_migrations.
 
 ALTER TABLE evidence_plans
     ADD COLUMN run_read text NOT NULL DEFAULT '',

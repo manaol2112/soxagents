@@ -9,6 +9,7 @@
  * and an empty list of requests never reads as done.
  */
 
+import { type Delivery, readSeam } from "./design-evidence-model.ts";
 import {
   type DesignRequestsState,
   parseDesignRequests,
@@ -371,7 +372,11 @@ export type PlanRequirement = {
   // The attributes it addresses and whether a person accepted it (the D&I requests list,
   // 12 November 2026): attributeIds, accepted, acceptedBy, acceptedAt, toAccept,
   // personEdited.
-} & RequestAcceptance;
+} & RequestAcceptance & {
+    /** Its evidence was uploaded before its request was sent, so it is left out of what
+     * is sent (the D&I list, 12 November 2026). Present only when the server says so. */
+    inHand?: boolean;
+  };
 
 /** Whether an item waits on a person now: something arrived and no one has judged it, the
  * planner proposes a change to it, or it is flagged for review. */
@@ -404,7 +409,18 @@ export type PlanPhase = {
   stateLabel: string;
   testingComplete: boolean;
   requirements: PlanRequirement[];
-  requests: Array<{ id: string; reference: string; status: string }>;
+  requests: Array<{
+    id: string;
+    reference: string;
+    status: string;
+    /** Who it goes to, when it is due, and its version, where the plan says. */
+    recipient?: string;
+    dueAt?: string;
+    version?: number;
+    /** How it reached its owner (by email, or handed over while email was off); null
+     * when the server says it did not; absent when the server did not say. */
+    delivery?: Delivery | null;
+  }>;
   version: number;
 };
 
@@ -466,6 +482,9 @@ export type EvidencePlan = {
   } | null;
   /** Where the D&I requests list stands (12 November 2026); null when not sent. */
   designRequests: DesignRequestsState | null;
+  /** Whether live email is on in this environment (the mock mailbox counts as on);
+   * absent when the server did not say. */
+  liveEmail?: boolean | null;
 };
 
 export const PLAN_STATUS_LABELS: Record<EvidencePlan["status"], string> = {
@@ -570,6 +589,7 @@ function parseRequirement(item: Raw): PlanRequirement {
       ? item.passed_over.map((name) => str(name)).filter((name) => name !== "")
       : [],
     ...parseRequestAcceptance(item),
+    ...(readSeam(item).inHand ? { inHand: true } : {}),
   };
 }
 
@@ -715,6 +735,19 @@ export function parsePlan(value: unknown): EvidencePlan | null {
           id: str(request.id),
           reference: str(request.reference),
           status: str(request.status),
+          ...(typeof request.recipient === "string"
+            ? { recipient: request.recipient }
+            : {}),
+          ...(typeof request.due_at === "string"
+            ? { dueAt: request.due_at }
+            : {}),
+          ...(typeof request.version === "number"
+            ? { version: request.version }
+            : {}),
+          // Read only where the server sent the field: null then means "not sent".
+          ...("delivery" in request
+            ? { delivery: readSeam(request).delivery }
+            : {}),
         })),
         version: num(phase.version),
       };
@@ -749,6 +782,9 @@ export function parsePlan(value: unknown): EvidencePlan | null {
           }
         : null,
     designRequests: parseDesignRequests(value.design_requests),
+    ...(readSeam(value).liveEmail !== null
+      ? { liveEmail: readSeam(value).liveEmail }
+      : {}),
   };
 }
 

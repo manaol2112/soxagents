@@ -32,6 +32,7 @@ import "./control-setup.css";
 import "./agent-avatar.css";
 import "./attribute-list.css";
 import "./design-requests.css";
+import "./design-evidence.css";
 // Last: the glass layer sits over the modules' own surfaces.
 import "./glass.css";
 
