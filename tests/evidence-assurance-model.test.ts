@@ -2034,11 +2034,11 @@ describe("an attribute's elements", () => {
         keyed,
       });
     assert.equal(
-      keyedRow(new Set()).acceptNote,
+      keyedRow(new Set())?.acceptNote,
       "Accepting marks attribute A as evidenced.",
     );
     assert.match(
-      keyedRow(new Set([A])).acceptNote,
+      keyedRow(new Set([A]))?.acceptNote ?? "",
       /^Accepting marks no attribute as evidenced/,
     );
     assert.deepEqual(
@@ -2237,6 +2237,8 @@ function list(overrides: Partial<EvidenceInput> = {}) {
     procedures: null,
     period: "The control as currently designed",
     now: NOW,
+    // A read that failed unless a test gives one: the same as leaving it out, typed.
+    assurance: null,
     ...overrides,
   });
 }

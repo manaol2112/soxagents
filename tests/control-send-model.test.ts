@@ -573,7 +573,7 @@ describe("changing who a request goes to in the review (28 October 2026)", () =>
     });
     assert.ok(result !== null);
     const seen = seenOf(result);
-    assert.deepEqual(seen, [{ id: result.targets[0].id, digest }]);
+    assert.deepEqual(seen, [{ id: result.targets[0]?.id, digest }]);
     assert.deepEqual(sendBody(false, null, [], seen), { preview: false, seen });
     // A check never carries them; nothing reviewed, nothing sent back.
     assert.deepEqual(sendBody(true, null, [], seen), { preview: true });
