@@ -668,6 +668,10 @@ export function DesignEvidence({
                 {chip.state === "EVIDENCED" ? (
                   <span className="dq-cov-state" aria-hidden="true">
                     <UiIcon name="check" size={12} />
+                    {/* Combined from several requests: said, never a plain check. */}
+                    {chip.across >= 2
+                      ? ` Shown across ${chip.across} requests`
+                      : null}
                   </span>
                 ) : chip.state === "REQUESTED" ? null : chip.state ===
                   "DESIGN_ONLY" ? (

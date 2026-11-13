@@ -138,6 +138,11 @@ function list(overrides: Partial<EvidenceInput> = {}) {
     procedures: null,
     period: "The control as currently designed",
     now: NOW,
+    // The assurance chain's read succeeded and has no entry for these requests: the
+    // list reads as it did before the chain. Before the second review these tests
+    // left `assurance` out, which then also meant "as before the chain"; a missing
+    // or failed read now fails closed (coverage not known), so the read is explicit.
+    assurance: { requests: [], summary: null },
     ...overrides,
   });
 }

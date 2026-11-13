@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
+  COVERAGE_UNREAD,
   type EvidenceInput,
   evidenceList,
   lettersSpan,
@@ -23,6 +24,7 @@ import {
   type EvidenceAssurance,
   elementWords,
   issueDecided,
+  keyedOf,
   NOT_CHECKED_LINE,
   NOT_LISTED,
   offeredAction,
@@ -34,6 +36,7 @@ import {
   requestCheck,
   rereadProblem,
   resultWords,
+  SAME_INSTANCE,
   STATE_WORDS,
   STILL_CHECKING,
 } from "../apps/web/src/evidence-assurance-model.ts";
@@ -1898,13 +1901,13 @@ describe("an attribute's elements", () => {
         ],
       },
     ]);
-    // Both accepted: every element shown.
+    // Both accepted: every element shown, across the two requests.
     assert.deepEqual(
       attributeCoverage(A, [
         { accepted: true, facts: approval },
         { accepted: true, facts: timing },
       ]),
-      { state: "EVIDENCED", missing: [] },
+      { state: "EVIDENCED", missing: [], across: 2 },
     );
     // One accepted: shown in part, the rest named.
     assert.deepEqual(
@@ -1912,7 +1915,11 @@ describe("an attribute's elements", () => {
         { accepted: true, facts: approval },
         { accepted: false, facts: timing },
       ]),
-      { state: "PARTLY", missing: ["The approval comes before the grant"] },
+      {
+        state: "PARTLY",
+        missing: ["The approval comes before the grant"],
+        across: 0,
+      },
     );
     // The rest documented in a policy only: design documented.
     const policy = facts([
@@ -1937,6 +1944,7 @@ describe("an attribute's elements", () => {
       {
         state: "DESIGN_ONLY",
         missing: ["The approval comes before the grant"],
+        across: 0,
       },
     );
     // Nothing accepted, and no check read it.
@@ -1971,14 +1979,80 @@ describe("an attribute's elements", () => {
       attributeCoverage(A, [{ accepted: true, facts: bare }]).state,
       "NONE",
     );
-    // Whole support sent without its elements covers every element.
+    // Before the second review, whole support sent without its elements covered every
+    // element (a wildcard), here EVIDENCED. Where another request sends the attribute's
+    // elements, which ones it showed is not known: it covers nothing.
     assert.equal(
       attributeCoverage(A, [
         { accepted: true, facts: facts([attribute()]) },
         { accepted: false, facts: timing },
       ]).state,
-      "EVIDENCED",
+      "NONE",
     );
+    assert.deepEqual(
+      attributeCoverage(A, [
+        { accepted: true, facts: facts([attribute()]) },
+        { accepted: true, facts: approval },
+      ]),
+      {
+        state: "PARTLY",
+        missing: ["The approval comes before the grant"],
+        across: 0,
+      },
+    );
+    // Where no request sends the elements, whole support stands, in one request.
+    assert.deepEqual(
+      attributeCoverage(A, [{ accepted: true, facts: facts([attribute()]) }]),
+      { state: "EVIDENCED", missing: [], across: 1 },
+    );
+    // One request showing every element is not "across": it is plainly evidenced.
+    const whole = facts([
+      attribute({
+        elements: [
+          element("condition", "Access is approved by the line manager", "MET"),
+          element("pass", "The approval comes before the grant", "MET"),
+        ],
+      }),
+    ]);
+    assert.equal(
+      attributeCoverage(A, [
+        { accepted: true, facts: whole },
+        { accepted: true, facts: approval },
+      ]).across,
+      1,
+    );
+  });
+
+  it("a check sent without elements does not show an attribute whole beside Accept where others send them", () => {
+    const keyedRow = (keyed: Set<string>) =>
+      assuranceRow({
+        requirementId: POLICY,
+        files: [POLICY_FILE],
+        assurance: parsed([entry({ attributes: [attribute()] })]),
+        attributes: lettered,
+        span,
+        keyed,
+      });
+    assert.equal(
+      keyedRow(new Set()).acceptNote,
+      "Accepting marks attribute A as evidenced.",
+    );
+    assert.match(
+      keyedRow(new Set([A])).acceptNote,
+      /^Accepting marks no attribute as evidenced/,
+    );
+    assert.deepEqual(
+      [
+        ...keyedOf(
+          parsed([
+            entry({ attributes: [IN_PART] }),
+            entry({ requirement_id: WALK, attributes: [ISSUE] }),
+          ]),
+        ),
+      ],
+      [A],
+    );
+    assert.deepEqual([...keyedOf(null)], []);
   });
 
   it("on the list: the coverage names the elements still not shown, and evidences once the last is", () => {
@@ -2032,6 +2106,23 @@ describe("an attribute's elements", () => {
     assert.match(view.coverageLine, /A shown in part/);
     // Accepting the request that shows the rest covers A.
     assert.match(view.coverageLine, /accepting this file covers A/);
+    // Beside Accept on the request that completes it: shown across two requests, and
+    // the one check the person makes.
+    const walkRow = view.rows.find((row) => row.id === WALK);
+    assert.match(
+      walkRow?.assurance?.acceptNote ?? "",
+      / Accepting this request shows A across 2 requests\. Check that these requests show the same instance\.$/,
+    );
+    assert.equal(
+      SAME_INSTANCE,
+      "Check that these requests show the same instance.",
+    );
+    // The request already accepted has no Accept, and no such note.
+    assert.ok(
+      !(
+        view.rows.find((row) => row.id === POLICY)?.assurance?.acceptNote ?? ""
+      ).includes(SAME_INSTANCE),
+    );
     const done = list({
       requirements: requirements.map((item) => ({
         ...item,
@@ -2039,8 +2130,18 @@ describe("an attribute's elements", () => {
       })),
       assurance,
     });
+    // Evidenced for coverage, and labelled as combined: never plain "evidence accepted".
     assert.equal(done.coverage[0]?.state, "EVIDENCED");
+    assert.equal(done.coverage[0]?.across, 2);
+    assert.equal(
+      done.coverage[0]?.label,
+      "Attribute A: shown across 2 requests",
+    );
     assert.deepEqual(done.coverage[0]?.missing, []);
+    assert.match(
+      done.coverageLine,
+      /^1 of 5 attributes evidenced · A shown across 2 requests/,
+    );
   });
 });
 
@@ -2159,10 +2260,12 @@ const reviewed = (extra: unknown[] = []) =>
   );
 
 describe("the D&I list with the chain", () => {
-  it("reads exactly as before where the chain was not read, or has no entry", () => {
-    const before = list();
+  // Before the second review this read "where the chain was not read, or has no entry"
+  // and included a null read: a failed read evidenced as before the chain. It now fails
+  // closed (the next test); only a read that succeeded and has no entry reads as before.
+  it("reads exactly as before where the read succeeded and has no entry for the request", () => {
+    const before = list({ assurance: parsed([]) });
     for (const assurance of [
-      null,
       parsed([]),
       parsed([entry({ requirement_id: WALK })]),
     ]) {
@@ -2174,6 +2277,48 @@ describe("the D&I list with the chain", () => {
       assert.equal(view.coverageLine, before.coverageLine);
     }
     assert.equal(before.rows[0]?.agent?.lead, "Agent proposes: a follow-up.");
+  });
+
+  it("fails closed: a read that failed, or did not parse, evidences nothing and says the coverage is not known", () => {
+    const accepted = [requirement({ state: "ACCEPTED" })];
+    // What the same accepted request evidenced before the second review.
+    assert.equal(
+      list({ requirements: accepted, assurance: parsed([]) }).coverage[0]
+        ?.state,
+      "EVIDENCED",
+    );
+    for (const assurance of [
+      null,
+      parseAssurance({ broken: true }),
+      undefined,
+    ]) {
+      const view = list({
+        requirements: accepted,
+        // A missing read is no read: left out, it fails closed too.
+        ...(assurance === undefined ? {} : { assurance }),
+      });
+      assert.equal(view.coverageUnread, true);
+      assert.deepEqual(
+        view.coverage.filter((chip) => chip.state === "EVIDENCED"),
+        [],
+      );
+      assert.equal(
+        view.coverageLine,
+        "The checks against the attributes could not be read. Refresh to try again.",
+      );
+      assert.equal(view.coverageLine, COVERAGE_UNREAD);
+      assert.equal(
+        view.coverage[0]?.label,
+        "Attribute A: evidence accepted; its check could not be read",
+      );
+      assert.equal(view.coverage[0]?.state, "REQUESTED");
+    }
+    // Not a single attribute evidenced, nor promised by accepting what waits.
+    const waiting = list({ assurance: null });
+    assert.ok(!waiting.coverageLine.includes("accepting"));
+    // Nothing to check (no D&I request): nothing is said to have failed.
+    const none = list({ requirements: [], assurance: null });
+    assert.equal(none.coverageUnread, false);
   });
 
   it("the row's quiet line names the check, and the reader's single reading is not put to the person", () => {
@@ -2622,6 +2767,8 @@ describe("the screen's own files", () => {
     assert.match(view, /<FindingRecords\s+findings=\{\[finding\]\}/);
     assert.match(view, /Not asked for by this request/);
     assert.match(view, /chip\.state ===\s*"DESIGN_ONLY"/);
+    // An evidenced chip combined from several requests says so in words.
+    assert.match(view, /Shown across \$\{chip\.across\} requests/);
   });
 
   it("lists an opened attribute's elements, what a request shows in part, and the elements still not shown under the coverage", () => {
