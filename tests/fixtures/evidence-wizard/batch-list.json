@@ -1,0 +1,28 @@
+{
+ "batches": [
+  {
+   "batch_id": "ea453457-e709-424d-9c9d-fccfd79e49c4",
+   "chosen_requirement_id": null,
+   "created_at": "2026-11-13T15:29:11.204601Z",
+   "created_by_name": "de-contract-cc10-82745a42@example.com",
+   "files": 2,
+   "finished": false,
+   "finished_at": null,
+   "in_progress": 1,
+   "needs_person": 0,
+   "not_design": 0
+  },
+  {
+   "batch_id": "d15d8bb5-541d-4147-a383-9960e0294df7",
+   "chosen_requirement_id": null,
+   "created_at": "2026-11-13T15:29:10.163289Z",
+   "created_by_name": "de-contract-cc10-82745a42@example.com",
+   "files": 8,
+   "finished": false,
+   "finished_at": null,
+   "in_progress": 2,
+   "needs_person": 2,
+   "not_design": 1
+  }
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "addresses": [],
+ "classification": {
+  "confidence": "low",
+  "kind": "walkthrough",
+  "label": "Walkthrough evidence",
+  "summary": "A walkthrough file."
+ },
+ "duplicate": false,
+ "extension": "txt",
+ "file_id": "7a09e825-4fbe-40a3-88eb-3cf4ca49f7fd",
+ "name": "access notes.txt",
+ "placement": {
+  "method": "PERSON",
+  "reason": "Placed by a person.",
+  "requirement_ids": [
+   "01a1d586-d4d4-783e-afd5-2880c73c201a"
+  ],
+  "status": "PLACED",
+  "suggestions": [],
+  "version": 2
+ },
+ "read": {
+  "finished_at": "2026-11-13T15:29:10.654061Z",
+  "method": "TEXT",
+  "note": "",
+  "pages": null,
+  "started_at": "2026-11-13T15:29:10.631077Z",
+  "status": "READY"
+ },
+ "size_bytes": 82,
+ "stage": "SORTED"
+}

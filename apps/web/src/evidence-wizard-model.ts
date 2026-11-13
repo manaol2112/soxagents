@@ -156,6 +156,10 @@ export type BatchFile = {
   addresses: Address[];
   /** Already held before this session: shown where it is, and not moved here. */
   duplicate: boolean;
+  /** The server's word on where the file stands, where this page reads it: it left the
+   * control's D&I items (NOT_DESIGN), or its reading ended (SORTED, NEEDS_PERSON,
+   * FAILED, READ); "" for anything else. */
+  stage: string;
 };
 
 export type BatchItem = {
@@ -167,6 +171,9 @@ export type BatchItem = {
   fileIds: string[];
   /** The item's check (its entry of GET .../evidence-assurance); null while it has none. */
   check: AssuredRequest | null;
+  /** What each file addresses in this item's own check, by file; null where the server
+   * sent no such map (an older server: the file's own list stands in). */
+  addresses: Record<string, Address[]> | null;
 };
 
 export type BatchStages = {
@@ -313,6 +320,24 @@ export function extensionOf(name: string): string {
   return /^[a-z0-9]{1,10}$/i.test(tail) ? tail.toLowerCase() : "";
 }
 
+/** Unique code and verdict pairs; a verdict this page does not know is a judgment. */
+function parseAddresses(value: unknown): Address[] {
+  return distinct(
+    (Array.isArray(value) ? value : [])
+      .filter(isRecord)
+      .map((item) => ({
+        code: str(item.code).slice(0, 8),
+        verdict: VERDICTS.find((each) => each === item.verdict) ?? "UNSETTLED",
+      }))
+      .filter((item) => item.code !== ""),
+    (item) => `${item.code}:${item.verdict}`,
+  );
+}
+
+/** The server's per-file stages this page acts on: the file left the control's D&I
+ * items, or its reading ended. */
+const ENDED_STAGES = ["NOT_DESIGN", "SORTED", "NEEDS_PERSON", "FAILED", "READ"];
+
 function parseFile(value: unknown): BatchFile | null {
   if (!isRecord(value)) {
     return null;
@@ -322,28 +347,34 @@ function parseFile(value: unknown): BatchFile | null {
     return null;
   }
   const name = str(value.name).slice(0, 200) || "A file with no name";
-  const read = parseRead(value.read);
-  const said = str(value.extension).toLowerCase();
+  const stage = ENDED_STAGES.find((item) => item === value.stage) ?? "";
+  const said = parseRead(value.read);
+  // Where the server's stage says the reading ended, it ended (the reading's own record
+  // can lag a move made elsewhere).
+  const read: BatchRead =
+    stage !== "" && (said.status === "PENDING" || said.status === "WORKING")
+      ? { ...said, status: stage === "FAILED" ? "FAILED" : "READY" }
+      : said;
+  const placement = parsePlacement(value.placement, read);
+  const extension = str(value.extension).toLowerCase();
   return {
     fileId,
     name,
     sizeBytes: whole(value.size_bytes),
-    extension: /^[a-z0-9]{1,10}$/.test(said) ? said : extensionOf(name),
+    extension: /^[a-z0-9]{1,10}$/.test(extension)
+      ? extension
+      : extensionOf(name),
     read,
     classification: parseClassification(value.classification, read),
-    placement: parsePlacement(value.placement, read),
-    addresses: distinct(
-      (Array.isArray(value.addresses) ? value.addresses : [])
-        .filter(isRecord)
-        .map((item) => ({
-          code: str(item.code).slice(0, 8),
-          verdict:
-            VERDICTS.find((each) => each === item.verdict) ?? "UNSETTLED",
-        }))
-        .filter((item) => item.code !== ""),
-      (item) => `${item.code}:${item.verdict}`,
-    ),
+    // A file the server says left this control's D&I items (refiled elsewhere, or out
+    // of D&I) is out, whatever its last placement named.
+    placement:
+      stage === "NOT_DESIGN" && placement.status !== "NOT_DESIGN"
+        ? { ...placement, status: "NOT_DESIGN", requirementIds: [] }
+        : placement,
+    addresses: parseAddresses(value.addresses),
     duplicate: value.duplicate === true,
+    stage,
   };
 }
 
@@ -391,6 +422,14 @@ function parseItem(value: unknown): BatchItem | null {
       (id) => id,
     ),
     check,
+    // { "<file_id>": [{code, verdict}] }: this item's own check only.
+    addresses: isRecord(value.addresses)
+      ? Object.fromEntries(
+          Object.entries(value.addresses)
+            .filter(([fileId]) => UUID.test(fileId))
+            .map(([fileId, list]) => [fileId, parseAddresses(list)]),
+        )
+      : null,
   };
 }
 
@@ -489,10 +528,14 @@ export function parseBatchList(value: unknown): BatchSummary[] | null {
           createdBy: str(item.created_by_name).slice(0, 120),
           chosenRequirementId: uuidOrNull(item.chosen_requirement_id),
           files: whole(item.files) ?? 0,
+          // The server sends how many files are still under way; a count it did not
+          // send is read from whether it finished.
           inProgress:
-            typeof item.in_progress === "boolean"
-              ? item.in_progress
-              : !finished,
+            typeof item.in_progress === "number"
+              ? item.in_progress > 0
+              : typeof item.in_progress === "boolean"
+                ? item.in_progress
+                : !finished,
           needsPerson: whole(item.needs_person) ?? 0,
           notDesign: whole(item.not_design) ?? 0,
           finished,
@@ -504,20 +547,30 @@ export function parseBatchList(value: unknown): BatchSummary[] | null {
   ).slice(0, 10);
 }
 
-/** The session the list shows a line for and reopens: the latest one still in progress,
- * or the latest finished one whose files still need a person, unless that finished one
- * was put away with Done in this browser. */
+/** The session the list shows a line for and reopens, so none is lost: the latest one
+ * still under way or whose files still need a person, else the latest finished one; a
+ * session put away with Done in this browser only while something is under way in it
+ * again. The list comes latest first. */
 export function batchToShow(
   list: readonly BatchSummary[],
   dismissed: ReadonlySet<string>,
 ): BatchSummary | null {
-  return (
-    list.find(
-      (item) =>
-        item.inProgress ||
-        (item.needsPerson > 0 && !dismissed.has(item.batchId)),
-    ) ?? null
-  );
+  const rank = (item: BatchSummary): number | null =>
+    dismissed.has(item.batchId)
+      ? item.inProgress
+        ? 0
+        : null
+      : item.inProgress || item.needsPerson > 0
+        ? 0
+        : 1;
+  let best: { item: BatchSummary; rank: number } | null = null;
+  for (const item of list) {
+    const at = rank(item);
+    if (at !== null && (best === null || at < best.rank)) {
+      best = { item, rank: at };
+    }
+  }
+  return best?.item ?? null;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -622,7 +675,33 @@ export type Upload = {
   fileId: string | null;
   /** Why it was not added, in a sentence; "" otherwise. */
   detail: string;
+  /** When the server answered it (this browser's clock): a batch read after that which
+   * no longer lists the file means it is gone from this upload (removed). */
+  answeredAt?: number;
 };
+
+/** A file this browser stored that the server's batch, read after the file was stored,
+ * no longer lists: removed from this upload (withdrawn), here or elsewhere. It is gone:
+ * no row, no count, and the session can finish without it. `readAt` is when that batch
+ * arrived (this browser's clock); without it the batch is taken as the latest. */
+export function goneFromBatch(
+  upload: Upload,
+  batch: BatchState | null,
+  readAt?: number | null,
+): boolean {
+  if (batch === null || upload.state !== "stored" || upload.fileId === null) {
+    return false;
+  }
+  if (batch.files.some((file) => file.fileId === upload.fileId)) {
+    return false;
+  }
+  return (
+    readAt === undefined ||
+    readAt === null ||
+    upload.answeredAt === undefined ||
+    readAt >= upload.answeredAt
+  );
+}
 
 /** The upload route's answer for one file: stored, already held, refused with the
  * server's sentence, or not reached (which can be tried again). */
@@ -1012,8 +1091,27 @@ export type Destination =
       choices: Choice[];
       /** The choice selected first: the agent's first suggestion, or none. */
       preselect: string;
+      /** The action the reason names, offered beside the choice: confirm the file's
+       * kind, or read it again; null where it names none. */
+      fix: NeedsFix | null;
     }
   | { kind: "out"; note: string; reason: string };
+
+/** What a "Needs you" reason asks a person to do first (the reading's own actions). */
+export type NeedsFix = "confirm-kind" | "reread";
+
+/** The action a file that needs a person can take in place: confirming its kind where
+ * the reader was not sure of it, reading it again where its reading failed. */
+export function needsFix(file: BatchFile): NeedsFix | null {
+  if (file.placement.status !== "NEEDS_PERSON") {
+    return null;
+  }
+  const reason = file.placement.reason;
+  if (file.read.status === "FAILED" || /\bread it again\b/i.test(reason)) {
+    return "reread";
+  }
+  return /\bconfirm its kind\b/i.test(reason) ? "confirm-kind" : null;
+}
 
 export type FileLine = {
   key: string;
@@ -1061,6 +1159,8 @@ export type RowFacts = {
   now: number;
   /** Suggestions a person set aside with "Leave it". */
   leftAlone?: ReadonlySet<string>;
+  /** When the batch arrived (this browser's clock): see goneFromBatch. */
+  readAt?: number | null;
 };
 
 const readEnded = (file: BatchFile): boolean =>
@@ -1279,6 +1379,7 @@ function destinationOf(
           : "The agent could not tell where it goes. Choose where it goes.",
       choices,
       preselect,
+      fix: needsFix(file),
     };
   }
   return null;
@@ -1359,24 +1460,33 @@ export function fileLines(
       suggestion: file === null ? null : suggestionOf(file, batch, facts),
       duplicate: file?.duplicate ?? upload?.state === "duplicate",
       retry: file === null && upload?.state === "failed",
-      movable: file !== null && !file.duplicate && readEnded(file),
+      // A file already held stays where it is, unless it needs a person: then the
+      // person chooses here, where the list sends them.
+      movable:
+        file !== null &&
+        readEnded(file) &&
+        (!file.duplicate || file.placement.status === "NEEDS_PERSON"),
       version: file?.placement.version ?? 0,
       on: file?.placement.requirementIds ?? [],
       upload,
       file,
     };
   };
-  const lines = uploads.map((upload) => {
+  const lines = uploads.flatMap((upload) => {
+    // Removed from this upload: gone, here and in every count.
+    if (goneFromBatch(upload, batch, facts.readAt)) {
+      return [];
+    }
     const file =
       upload.fileId === null ? null : (byId.get(upload.fileId) ?? null);
     // The same file added twice is one entry: the second upload reads as already held.
     if (file !== null && sent.has(file.fileId)) {
-      return line({ ...upload, state: "duplicate" }, null);
+      return [line({ ...upload, state: "duplicate" }, null)];
     }
     if (file !== null) {
       sent.add(file.fileId);
     }
-    return line(upload, file);
+    return [line(upload, file)];
   });
   for (const file of batch?.files ?? []) {
     if (!sent.has(file.fileId)) {
@@ -1419,6 +1529,8 @@ export type Progress = {
   placed: number;
   items: number;
   checked: number;
+  /** Items whose check is queued, at work, or about to be queued: exactly. */
+  checkingItems: number;
   uploading: boolean;
   /** Something is being read or sorted. */
   reading: boolean;
@@ -1459,10 +1571,14 @@ function checkComing(
 }
 
 export function progressOf(
-  uploads: readonly Upload[],
+  every: readonly Upload[],
   batch: BatchState | null,
   now: number,
+  /** When the batch arrived (this browser's clock): see goneFromBatch. */
+  readAt?: number | null,
 ): Progress {
+  // A file removed from this upload is gone: it holds nothing back.
+  const uploads = every.filter((item) => !goneFromBatch(item, batch, readAt));
   const files = batch?.files ?? [];
   const known = new Set(files.map((file) => file.fileId));
   const sending = uploads.filter(
@@ -1491,11 +1607,9 @@ export function progressOf(
   const sorted = files.filter(
     (file) => readEnded(file) && file.placement.status !== "PENDING",
   ).length;
+  // A file already held that needs a person counts too: it is chosen here.
   const needs = files.filter(
-    (file) =>
-      !file.duplicate &&
-      readEnded(file) &&
-      file.placement.status === "NEEDS_PERSON",
+    (file) => readEnded(file) && file.placement.status === "NEEDS_PERSON",
   ).length;
   const notDesign = files.filter(
     (file) => readEnded(file) && file.placement.status === "NOT_DESIGN",
@@ -1602,6 +1716,7 @@ export function progressOf(
     placed,
     items: items.length,
     checked,
+    checkingItems: coming.length,
     uploading,
     reading,
     checking,
@@ -2411,8 +2526,9 @@ export function itemResults(
       rechecking,
       hold,
       attributes,
+      // While the check runs again its counts are from before the change: not shown.
       tally:
-        status === "REVIEWED" || rechecking ? tallyOf(attributes, false) : [],
+        status === "REVIEWED" && !rechecking ? tallyOf(attributes, false) : [],
       accept: accepted
         ? {
             state: "accepted",
@@ -2487,7 +2603,10 @@ export function resultsSummary(
   };
   // As the prototype says it: the letters of each item, by what their evidence shows
   // ("B, C, D, E (design) and A, B, C, D (implementation)").
-  const supported = results.flatMap((item) => {
+  // An item checked again after a change speaks from its new check only: until it
+  // ends, it is in the "Not checked" line, never with its results from before.
+  const settled = results.filter((item) => !item.rechecking);
+  const supported = settled.flatMap((item) => {
     const rows = item.attributes.filter((row) => row.state === "SUPPORTED");
     return [
       { word: " (design)", label: "Supported (design)" },
@@ -2505,7 +2624,7 @@ export function resultsSummary(
   });
   add("SUPPORTED", supported.length > 0 ? `${listAnd(supported)}.` : "");
   const on = (state: AttrState) =>
-    results.flatMap((item) =>
+    settled.flatMap((item) =>
       item.attributes
         .filter((row) => row.state === state)
         .map((row) => `${row.letter} on ${item.title}`),
@@ -2518,7 +2637,11 @@ export function resultsSummary(
   add("NOT_SATISFIED", said("NOT_SATISFIED"));
   add("JUDGMENT", said("JUDGMENT"));
   const unchecked = results.flatMap((item) =>
-    item.hold === null ? [] : [`${item.title} (${item.hold.short})`],
+    item.rechecking
+      ? [`${item.title} (being checked again)`]
+      : item.hold === null
+        ? []
+        : [`${item.title} (${item.hold.short})`],
   );
   add("NOT_CHECKED", unchecked.length > 0 ? `${listAnd(unchecked)}.` : "");
   return { lead, lines };
@@ -2557,24 +2680,47 @@ export function apartTitle(count: number): string {
 export function addressesLine(
   file: BatchFile | null,
   batch: BatchState | null,
+  /** The item whose card shows the file: its own check's map is read. */
+  requirementId?: string,
 ):
   | { kind: "letters"; letters: string[]; spoken: string }
   | { kind: "none" }
-  | { kind: "later" } {
+  | { kind: "later" }
+  | { kind: "unknown" } {
   if (file === null) {
     return { kind: "later" };
   }
-  const items = (batch?.items ?? []).filter((item) =>
-    file.placement.requirementIds.includes(item.requirementId),
+  const item =
+    requirementId === undefined
+      ? undefined
+      : (batch?.items ?? []).find(
+          (each) => each.requirementId === requirementId,
+        );
+  const on = (batch?.items ?? []).filter((each) =>
+    file.placement.requirementIds.includes(each.requirementId),
   );
+  // This item's check, or, asked without an item, every item the file is on.
   const reviewed =
-    items.length > 0 &&
-    items.every((item) => item.check?.status === "REVIEWED");
+    item !== undefined
+      ? item.check?.status === "REVIEWED"
+      : on.length > 0 && on.every((each) => each.check?.status === "REVIEWED");
   if (!reviewed) {
     return { kind: "later" };
   }
+  // The item's own map (the server's items[].addresses); without one, the file's own
+  // list stands in only where the file is on this one item: on several, its letters mix
+  // the items' checks, and nothing is said rather than the wrong letters.
+  const list =
+    item?.addresses != null
+      ? (item.addresses[file.fileId] ?? [])
+      : on.length <= 1 || item === undefined
+        ? file.addresses
+        : null;
+  if (list === null) {
+    return { kind: "unknown" };
+  }
   const letters = distinct(
-    file.addresses.map((item) => item.code),
+    list.map((each) => each.code),
     (code) => code,
   );
   if (letters.length === 0) {
@@ -2591,11 +2737,100 @@ export function addressesLine(
     kind: "letters",
     letters,
     spoken: listAnd(
-      file.addresses.map(
-        (item) => `${item.code} (${verdictWords[item.verdict]})`,
-      ),
+      list.map((each) => `${each.code} (${verdictWords[each.verdict]})`),
     ),
   };
+}
+
+/** Said after a move that leaves an item with no evidence: the server asks for it again
+ * in a new draft (the requests follow the evidence). */
+export const ASKED_AGAIN =
+  "That item is asked for again in a new draft, which needs approval before it is sent.";
+
+/** The sentence for `count` items a move left with no evidence; "" for none. */
+export function askedAgain(count: number): string {
+  return count === 0
+    ? ""
+    : count === 1
+      ? ASKED_AGAIN
+      : "Those items are asked for again in a new draft, which needs approval before it is sent.";
+}
+
+/** What a person reads when confirming a file's kind or reading it again did not go
+ * through; null when the server confirmed it. A refusal is the server's sentence. */
+export function readingProblem(status: number, detail = ""): string | null {
+  if (status === 200) {
+    return null;
+  }
+  if (status === 409) {
+    return detail.trim() !== ""
+      ? sentence(detail)
+      : "The file’s reading changed meanwhile. It is shown as it is now: try again.";
+  }
+  if (status === 403 || status === 404) {
+    return "Your role cannot change this file’s reading.";
+  }
+  if (status === 422) {
+    return "This file’s reading is not known here yet. Refresh the page and try again.";
+  }
+  return "That could not be done. Try again in a moment.";
+}
+
+/** The items a move takes a file off (`from`, not in `to`) that then hold no evidence:
+ * no other file of this upload placed on them, and none held before it. */
+export function leftWithout(
+  fileId: string,
+  from: readonly string[],
+  to: readonly string[],
+  items: readonly WizardItem[],
+  batch: BatchState | null,
+): string[] {
+  return from
+    .filter((id) => !to.includes(id))
+    .filter((id) => {
+      const others = (batch?.files ?? []).some(
+        (file) =>
+          file.fileId !== fileId &&
+          file.placement.status === "PLACED" &&
+          file.placement.requirementIds.includes(id),
+      );
+      const held = (
+        items.find((item) => item.requirementId === id)?.held ?? []
+      ).some((file) => file.id !== fileId);
+      return !others && !held;
+    });
+}
+
+/** After this many reads in a row that did not reach the server, the window says so and
+ * keeps trying, further apart each time. */
+export const UNREACHABLE_AFTER = 3;
+export const UNREACHABLE = "Can’t reach the server. Retrying.";
+
+/** How long until the next read after `failures` reads in a row did not reach the
+ * server: the usual pace, then doubling, at most 30 seconds. While nothing would be read
+ * again (null) a failed read still tries again. */
+export function retryDelay(
+  delay: number | null,
+  failures: number,
+): number | null {
+  if (failures <= 0) {
+    return delay;
+  }
+  const base = delay ?? 2_000;
+  return failures < UNREACHABLE_AFTER
+    ? base
+    : Math.min(30_000, base * 2 ** (failures - UNREACHABLE_AFTER + 1));
+}
+
+/** The elapsed time shown never runs backwards: a newer answer that moves the clock
+ * offset back keeps the time already shown, until the session is done (then its own
+ * record stands). */
+export function steadySeconds(
+  shown: number | null,
+  next: number,
+  done: boolean,
+): number {
+  return done || shown === null ? next : Math.max(shown, next);
 }
 
 /** The footer note on Results. */
@@ -2636,12 +2871,13 @@ export function progressLine(facts: {
   const done = p !== null ? p.done : s?.inProgress === false;
   if (!done) {
     const stage = p?.stages.find((item) => item.state === "active") ?? null;
+    // The items whose check is still to come or at work, exactly; not every item.
     const now =
       p === null
         ? ""
-        : stage?.key === "check"
-          ? `Checking ${plural(p.items, "item")} against the attributes`
-          : stage !== null
+        : (stage === null || stage.key === "check") && p.checkingItems > 0
+          ? `Checking ${plural(p.checkingItems, "item")} against the attributes`
+          : stage !== null && stage.key !== "check"
             ? stage.count
             : "";
     return {
@@ -2676,6 +2912,8 @@ export type SessionHint = {
   requirementId: string | null;
   /** Finished sessions put away with Done. */
   dismissed: string[];
+  /** The window was open on it: a page refresh that loses the page opens it again. */
+  open?: true;
 };
 
 export const hintKey = (controlId: string): string =>
@@ -2698,6 +2936,7 @@ export function readHint(raw: string | null): SessionHint | null {
         .map(uuidOrNull)
         .filter((id): id is string => id !== null)
         .slice(-20),
+      ...(value.open === true ? { open: true as const } : {}),
     };
   } catch {
     return null;
@@ -2709,5 +2948,6 @@ export function writeHint(hint: SessionHint): string {
     batch: hint.batchId,
     requirement: hint.requirementId,
     dismissed: hint.dismissed.slice(-20),
+    ...(hint.open === true ? { open: true } : {}),
   });
 }

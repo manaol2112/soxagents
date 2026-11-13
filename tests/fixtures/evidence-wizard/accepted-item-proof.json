@@ -1,0 +1,58 @@
+{
+ "agent_placements": {
+  "8224ee7f-50fa-4218-a158-1a72bbc4b9ad": [
+   "PLACED",
+   "AGENT",
+   [
+    "01a1d581-694e-73d3-ad6d-cd8fc0556af2"
+   ]
+  ],
+  "9bf49c4d-5826-4be4-bd9c-84c1c03fbecd": [
+   "PLACED",
+   "AGENT",
+   [
+    "01a1d581-694e-73d3-ad6d-cd8fc0556af2"
+   ]
+  ]
+ },
+ "files_now": [
+  "27d48839-d8fe-4d3d-88c0-ddad3dc1dae5",
+  "8224ee7f-50fa-4218-a158-1a72bbc4b9ad",
+  "9bf49c4d-5826-4be4-bd9c-84c1c03fbecd"
+ ],
+ "held_when_accepted": [
+  "27d48839-d8fe-4d3d-88c0-ddad3dc1dae5"
+ ],
+ "sufficiency_after": "ACCEPTED",
+ "sufficiency_by": "de-accepted-38cc-3a965eb2@example.com",
+ "supported_passages": [
+  {
+   "code": "A",
+   "files": [
+    "8224ee7f-50fa-4218-a158-1a72bbc4b9ad",
+    "9bf49c4d-5826-4be4-bd9c-84c1c03fbecd"
+   ]
+  },
+  {
+   "code": "C",
+   "files": [
+    "8224ee7f-50fa-4218-a158-1a72bbc4b9ad",
+    "9bf49c4d-5826-4be4-bd9c-84c1c03fbecd"
+   ]
+  },
+  {
+   "code": "D",
+   "files": [
+    "8224ee7f-50fa-4218-a158-1a72bbc4b9ad",
+    "9bf49c4d-5826-4be4-bd9c-84c1c03fbecd"
+   ]
+  },
+  {
+   "code": "E",
+   "files": [
+    "8224ee7f-50fa-4218-a158-1a72bbc4b9ad",
+    "9bf49c4d-5826-4be4-bd9c-84c1c03fbecd"
+   ]
+  }
+ ]
+}

@@ -4,10 +4,12 @@ import { describe, it } from "node:test";
 
 import { uploadTarget } from "../apps/web/src/evidence-model.ts";
 import {
+  ASKED_AGAIN,
   addressesLine,
   analyzeLabel,
   announcement,
   apartTitle,
+  askedAgain,
   attributeRows,
   attributesTitle,
   type BatchState,
@@ -25,9 +27,12 @@ import {
   finishedAt,
   finishedNote,
   formatElapsed,
+  goneFromBatch,
   hintKey,
   itemCards,
   itemResults,
+  leftWithout,
+  needsFix,
   OUT,
   OUT_LABEL,
   parseBatch,
@@ -41,10 +46,15 @@ import {
   type Queued,
   queueHead,
   readHint,
+  readingProblem,
   resultsNote,
   resultsSummary,
+  retryDelay,
   STALLED_AFTER_MS,
   serverClock,
+  steadySeconds,
+  UNREACHABLE,
+  UNREACHABLE_AFTER,
   type Upload,
   uploadAnswer,
   type WizardItem,
@@ -155,7 +165,27 @@ const where = (label: string, page: number | null = null) => ({
 });
 
 /** One file of the batch as the server sends it: by default read and placed. */
+/** The server's stage for a file (evidence_wizard._file_body), from its reading and its
+ * placement, unless the test names one. */
+function stageOf(entry: Record<string, unknown>): string {
+  const read = (entry.read ?? {}) as { status?: unknown };
+  const placement = (entry.placement ?? {}) as { status?: unknown };
+  if (read.status === "FAILED") return "FAILED";
+  if (read.status === "WORKING") return "READING";
+  if (read.status !== "READY") return "STORED";
+  return placement.status === "PLACED"
+    ? "SORTED"
+    : placement.status === "NEEDS_PERSON" || placement.status === "NOT_DESIGN"
+      ? String(placement.status)
+      : "READ";
+}
+
 function file(over: Record<string, unknown> = {}) {
+  const entry = fileEntry(over);
+  return "stage" in over ? entry : { ...entry, stage: stageOf(entry) };
+}
+
+function fileEntry(over: Record<string, unknown>) {
   return {
     file_id: F1,
     name: "Access Review Policy v3.2.pdf",
@@ -858,7 +888,7 @@ describe("the control's recent sessions (GET .../evidence-batches)", () => {
     assert.equal(said?.inProgress, false);
   });
 
-  it("shows the latest session under way, or the latest finished one whose files still need a person, unless put away with Done here", () => {
+  it("reopens the latest session under way or needing a person, else the latest finished one, unless put away with Done here", () => {
     const done = entry({ batch_id: uuid(90) });
     const needs = entry({ batch_id: uuid(91), needs_person: 1 });
     const running = entry({
@@ -869,7 +899,18 @@ describe("the control's recent sessions (GET .../evidence-batches)", () => {
     const read = list([done, needs, running]) ?? [];
     assert.equal(batchToShow(read, new Set())?.batchId, uuid(91));
     assert.equal(batchToShow(read, new Set([uuid(91)]))?.batchId, uuid(92));
-    assert.equal(batchToShow(list([done]) ?? [], new Set()), null);
+    // Rewritten after the review (13 November 2026, decision 13). Old: a finished session
+    // nothing needs a person for was not shown (null). New: it is reopened from the list
+    // (after any under way or needing a person), so a session is never lost; Done in this
+    // browser puts it away. Reason: the lead's decision 13 and the reviewer's
+    // batch-list fixtures (latest first).
+    assert.equal(batchToShow(list([done]) ?? [], new Set())?.batchId, uuid(90));
+    assert.equal(batchToShow(list([done]) ?? [], new Set([uuid(90)])), null);
+    // Latest first among those under way or needing a person.
+    assert.equal(
+      batchToShow(list([running, needs]) ?? [], new Set())?.batchId,
+      uuid(92),
+    );
     // One under way is shown even if put away before (a person moved a file since).
     assert.equal(
       batchToShow(list([running]) ?? [], new Set([uuid(92)]))?.batchId,
@@ -2682,6 +2723,373 @@ describe("the wording", () => {
         "The review was compl",
         "Access found inappro",
       ],
+    );
+  });
+});
+
+// The joint review of the wizard with the server (13 November 2026): each decision on
+// the server's own JSON (tests/fixtures/evidence-wizard, written by the server's tests).
+describe("the joint review's decisions", () => {
+  const fixture = (name: string): Record<string, unknown> =>
+    JSON.parse(
+      readFileSync(
+        new URL(`./fixtures/evidence-wizard/${name}`, import.meta.url),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+  const ids = fixture("ids.json") as {
+    policy_item: string;
+    walk_item: string;
+    files: Record<string, string>;
+  };
+  const all = () =>
+    fixture("batch-state-all.json") as Record<string, unknown> & {
+      files: Array<Record<string, unknown>>;
+      items: Array<Record<string, unknown>>;
+    };
+  const policyFile = ids.files.policy ?? "";
+  const ticketFile = ids.files.ticket ?? "";
+
+  it("2: each item card shows a file's letters from its own item's check, the file's own list only for a file on one item", () => {
+    const raw = all();
+    // The policy file on both items, each item's own map naming different letters.
+    raw.files = raw.files.map((each) =>
+      each.file_id === policyFile
+        ? {
+            ...each,
+            placement: {
+              ...(each.placement as Record<string, unknown>),
+              requirement_ids: [ids.policy_item, ids.walk_item],
+            },
+          }
+        : each,
+    );
+    raw.items = raw.items.map((item) => ({
+      ...item,
+      file_ids:
+        item.requirement_id === ids.walk_item
+          ? [...(item.file_ids as string[]), policyFile]
+          : item.file_ids,
+      addresses:
+        item.requirement_id === ids.policy_item
+          ? { [policyFile]: [{ code: "A", verdict: "SUPPORTED" }] }
+          : {
+              [policyFile]: [{ code: "B", verdict: "ISSUE" }],
+              [ticketFile]: [{ code: "C", verdict: "SUPPORTED" }],
+            },
+    }));
+    const batch = batchOf(raw);
+    const policy =
+      batch.files.find((each) => each.fileId === policyFile) ?? null;
+    assert.deepEqual(addressesLine(policy, batch, ids.policy_item), {
+      kind: "letters",
+      letters: ["A"],
+      spoken: "A (supported)",
+    });
+    assert.deepEqual(addressesLine(policy, batch, ids.walk_item), {
+      kind: "letters",
+      letters: ["B"],
+      spoken: "B (not satisfied)",
+    });
+    // Without the map (an older server): the file's own list only on one item.
+    const older = batchOf({
+      ...raw,
+      items: raw.items.map(({ addresses: _unused, ...item }) => item),
+    });
+    const onTwo =
+      older.files.find((each) => each.fileId === policyFile) ?? null;
+    assert.deepEqual(addressesLine(onTwo, older, ids.walk_item), {
+      kind: "unknown",
+    });
+    const ticket =
+      older.files.find((each) => each.fileId === ticketFile) ?? null;
+    assert.equal(addressesLine(ticket, older, ids.walk_item).kind, "letters");
+  });
+
+  it("3: a file removed from this upload is gone once a batch read after it was stored leaves it out", () => {
+    const batch = batchOf(fixture("batch-state-after-withdraw.json"));
+    const minutes = ids.files.minutes ?? "";
+    const stored = upload({
+      key: "m",
+      state: "stored",
+      fileId: minutes,
+      answeredAt: 1_000,
+    });
+    // A read that set out before the file was stored does not know it yet: arriving.
+    assert.equal(goneFromBatch(stored, batch, 500), false);
+    assert.equal(progressOf([stored], batch, NOW, 500).reading, true);
+    // Read after it: gone, with no row and nothing held back.
+    assert.equal(goneFromBatch(stored, batch, 2_000), true);
+    assert.equal(
+      fileLines([stored], batch, facts({ readAt: 2_000 })).some(
+        (line) => line.fileId === minutes,
+      ),
+      false,
+    );
+    const reviewed = batchOf(fixture("batch-state-reviewed.json"));
+    const after = {
+      ...reviewed,
+      files: reviewed.files.filter((each) => each.fileId !== minutes),
+    };
+    const finished = progressOf([stored], after, NOW + 600_000, 2_000);
+    assert.equal(finished.done, true);
+    assert.equal(pollDelay({ open: true, ...finished }), null);
+  });
+
+  it("1: an accepted item is no destination, and a refused move says the server's sentence", () => {
+    const batch = batchOf(all());
+    const notes = batch.files.find((each) => each.fileId === ids.files.notes);
+    assert.ok(notes !== undefined);
+    const items: WizardItem[] = batch.items.map((item) => ({
+      requirementId: item.requirementId,
+      title: item.title,
+      kind: "Kind",
+      icon: "file",
+      shows: "",
+      letters: item.letters,
+      files: 1,
+      choosable: item.requirementId !== ids.policy_item,
+      accepted: item.requirementId === ids.policy_item,
+      canAccept: false,
+      acceptedBy: "",
+      version: 1,
+      held: [],
+    }));
+    assert.deepEqual(
+      choicesFor(notes, items, batch).choices.map((choice) => choice.value),
+      [ids.walk_item, OUT],
+    );
+    assert.equal(
+      placementProblem(
+        409,
+        "the item's evidence is accepted, so its files stay as they are",
+      ),
+      "The item's evidence is accepted, so its files stay as they are.",
+    );
+  });
+
+  it("6: offers the action a reason names (confirm the kind, read it again), and Choose for a duplicate that needs a person", () => {
+    const batch = batchOf(all());
+    const lines = fileLines([], batch, facts());
+    const notes = lineOf(lines, ids.files.notes ?? "");
+    const scan = lines.find((line) => line.name === "unreadable scan.txt");
+    assert.equal(
+      notes.dest?.kind === "needs" ? notes.dest.fix : null,
+      "confirm-kind",
+    );
+    assert.equal(scan?.dest?.kind === "needs" ? scan.dest.fix : null, "reread");
+    const policy = batch.files.find((each) => each.fileId === policyFile);
+    assert.ok(policy !== undefined);
+    assert.equal(needsFix(policy), null);
+    const duplicate = batchOf(fixture("batch-state-duplicate-needs.json"));
+    const [held] = fileLines([], duplicate, facts({ items: [] }));
+    assert.equal(held?.duplicate, true);
+    assert.equal(held?.movable, true);
+    assert.equal(progressOf([], duplicate, NOW).needs, 1);
+    // A duplicate placed already stays where it is.
+    const placed = fileLines(
+      [],
+      batchOf(fixture("batch-state-duplicate.json")),
+      facts({ items: [] }),
+    );
+    assert.equal(placed.find((line) => line.duplicate)?.movable, false);
+    assert.equal(readingProblem(200), null);
+    assert.equal(
+      readingProblem(409, "the reading changed"),
+      "The reading changed.",
+    );
+    assert.equal(
+      readingProblem(422),
+      "This file’s reading is not known here yet. Refresh the page and try again.",
+    );
+  });
+
+  it("7: while an item is checked again, its counts and summary lines from before the change are not shown", () => {
+    const reviewed = batchOf(fixture("batch-state-reviewed.json"));
+    const previous = Object.fromEntries(
+      reviewed.items.flatMap((item) =>
+        item.check === null ? [] : [[item.requirementId, item.check]],
+      ),
+    );
+    const raw = fixture("batch-state-reviewed.json") as Record<
+      string,
+      unknown
+    > & {
+      items: Array<Record<string, unknown>>;
+    };
+    raw.items = raw.items.map((item) =>
+      item.requirement_id === ids.walk_item
+        ? {
+            ...item,
+            assurance: {
+              ...(item.assurance as Record<string, unknown>),
+              status: "QUEUED",
+              stage: "GATE",
+              attributes: [],
+            },
+          }
+        : item,
+    );
+    const batch = batchOf(raw);
+    const results = itemResults(batch, {
+      items: [],
+      attributes: [],
+      now: NOW,
+      previous,
+    });
+    const walk = results.find((item) => item.requirementId === ids.walk_item);
+    assert.equal(walk?.rechecking, true);
+    assert.deepEqual(walk?.tally, []);
+    const summary = resultsSummary(batch, results, progressOf([], batch, NOW));
+    // The walkthrough's issue on B was from before the change: not said.
+    assert.equal(
+      summary.lines.find((line) => line.key === "NOT_SATISFIED"),
+      undefined,
+    );
+    assert.match(
+      summary.lines.find((line) => line.key === "NOT_CHECKED")?.text ?? "",
+      /\(being checked again\)/,
+    );
+  });
+
+  it("8: after three reads in a row that did not reach the server it says so and retries further apart; the open window is remembered", () => {
+    assert.equal(UNREACHABLE_AFTER, 3);
+    assert.equal(UNREACHABLE, "Can’t reach the server. Retrying.");
+    assert.equal(retryDelay(2_000, 0), 2_000);
+    assert.equal(retryDelay(2_000, 2), 2_000);
+    assert.equal(retryDelay(2_000, 3), 4_000);
+    assert.equal(retryDelay(2_000, 4), 8_000);
+    assert.equal(retryDelay(2_000, 9), 30_000);
+    // Nothing would be read again, yet a failed read keeps trying.
+    assert.equal(retryDelay(null, 1), 2_000);
+    assert.equal(retryDelay(null, 0), null);
+    const hint = {
+      batchId: BATCH,
+      requirementId: null,
+      dismissed: [],
+      open: true as const,
+    };
+    assert.deepEqual(readHint(writeHint(hint)), hint);
+    const view = readFileSync("apps/web/src/evidence-wizard.tsx", "utf8");
+    assert.match(view, /hint\.open === true/);
+    assert.match(view, /setReopenOnRead\(true\)/);
+    assert.match(view, /status === 0 \|\| status >= 500 \? count \+ 1 : 0/);
+  });
+
+  it("13: the server's stage stands where a file left the control or its reading ended", () => {
+    const raw = all();
+    const policy = raw.files.find((each) => each.file_id === policyFile) ?? {};
+    const out = batchOf({
+      ...raw,
+      files: [
+        { ...policy, stage: "NOT_DESIGN" },
+        {
+          ...policy,
+          file_id: uuid(80),
+          stage: "SORTED",
+          read: {
+            ...(policy.read as Record<string, unknown>),
+            status: "WORKING",
+          },
+        },
+      ],
+    });
+    assert.equal(out.files[0]?.placement.status, "NOT_DESIGN");
+    assert.deepEqual(out.files[0]?.placement.requirementIds, []);
+    assert.equal(out.files[1]?.read.status, "READY");
+  });
+
+  it("13: the elapsed time never runs backwards, the list counts the items being checked exactly, and the comparison is drawn from COMPARE", () => {
+    assert.equal(steadySeconds(null, 10, false), 10);
+    assert.equal(steadySeconds(42, 40, false), 42);
+    assert.equal(steadySeconds(42, 45, false), 45);
+    assert.equal(steadySeconds(42, 33, true), 33);
+    const running = batchOf(
+      finishedBatch({
+        items: [
+          {
+            ...finishedBatch().items[0],
+            assurance: {
+              ...POLICY_CHECK,
+              status: "CHECKING",
+              stage: "COMPARE",
+              attributes: [],
+            },
+          },
+          finishedBatch().items[1],
+        ],
+      }),
+    );
+    const progress = progressOf([], running, NOW);
+    assert.equal(progress.checkingItems, 1);
+    assert.equal(
+      progressLine({ progress, summary: null, seconds: 30 })?.text,
+      "Analyzing 7 files · Checking 1 item against the attributes · 0:30",
+    );
+    const [card] = itemCards(running, {
+      items: ITEMS,
+      attributes: ATTRIBUTES,
+      now: NOW,
+    });
+    assert.deepEqual(card?.lanes?.compare, {
+      state: "active",
+      text: "Comparing",
+    });
+  });
+
+  it("13: a move that leaves an item without evidence says it is asked for again in a new draft", () => {
+    const batch = batchOf(fixture("batch-state-reviewed.json"));
+    const items: WizardItem[] = [
+      {
+        requirementId: ids.policy_item,
+        title: "Access management policy",
+        kind: "",
+        icon: "file",
+        shows: "",
+        letters: [],
+        files: 1,
+        choosable: true,
+        accepted: false,
+        canAccept: true,
+        acceptedBy: "",
+        version: 1,
+        held: [{ id: policyFile, name: "access policy.txt" }],
+      },
+    ];
+    // The policy was the policy item's only file.
+    assert.deepEqual(
+      leftWithout(policyFile, [ids.policy_item], [ids.walk_item], items, batch),
+      [ids.policy_item],
+    );
+    // The ticket leaves the walkthrough with its change log: not empty.
+    assert.deepEqual(
+      leftWithout(ticketFile, [ids.walk_item], [], items, batch),
+      [],
+    );
+    assert.equal(askedAgain(1), ASKED_AGAIN);
+    assert.equal(
+      ASKED_AGAIN,
+      "That item is asked for again in a new draft, which needs approval before it is sent.",
+    );
+    assert.equal(askedAgain(0), "");
+    const view = readFileSync("apps/web/src/evidence-wizard.tsx", "utf8");
+    assert.match(view, /askedAgain\(emptied\)/);
+  });
+
+  it("13: Cancel, Close or Escape on Add files with files queued asks before dropping them", () => {
+    const view = readFileSync("apps/web/src/evidence-wizard.tsx", "utf8");
+    assert.match(view, /function requestClose\(\)/);
+    assert.match(
+      view,
+      /Drop the \$\{plural\(view\.queued, "file"\)\} queued\?/,
+    );
+    assert.match(
+      view,
+      /if \(wizard\.queued > 0\) \{\s*event\.preventDefault\(\);/,
+    );
+    assert.equal(
+      (view.match(/onClick=\{wizard\.requestClose\}/g) ?? []).length,
+      2,
     );
   });
 });

@@ -11,7 +11,7 @@ import {
   useRef,
   useState,
 } from "react";
-
+import { EVIDENCE_KIND_LABELS, EVIDENCE_KINDS } from "./analysis-model";
 import {
   type AssuredRequest,
   assuranceProblem,
@@ -27,6 +27,7 @@ import {
   analyzeLabel,
   announcement,
   apartTitle,
+  askedAgain,
   attributesTitle,
   type BatchState,
   type BatchSummary,
@@ -50,6 +51,8 @@ import {
   itemCards,
   itemResults,
   type Lane,
+  leftWithout,
+  type NeedsFix,
   OUT,
   OUT_LABEL,
   type Progress,
@@ -64,10 +67,15 @@ import {
   type Queued,
   queueHead,
   readHint,
+  readingProblem,
   resultsNote,
   resultsSummary,
+  retryDelay,
   type StageLine,
   serverClock,
+  steadySeconds,
+  UNREACHABLE,
+  UNREACHABLE_AFTER,
   type Upload,
   uploadAnswer,
   type WizardContext,
@@ -124,6 +132,9 @@ export type WizardSetup = {
   system: string | null;
   /** Uploads ended: the list reads the plan again before it offers anything else. */
   onUploaded: () => void;
+  /** The control's readings of its files (the register's): a file's kind is confirmed,
+   * or it is read again, on its reading. */
+  analyses: ReadonlyArray<{ id: string; fileId: string; version: number }>;
 };
 
 function sessionStore(): Storage | null {
@@ -175,6 +186,8 @@ export function useEvidenceWizard(setup: WizardSetup) {
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [batch, setBatch] = useState<BatchState | null>(null);
   const [receivedAt, setReceivedAt] = useState<number | null>(null);
+  // When the shown batch's read set out (see goneFromBatch).
+  const [readFrom, setReadFrom] = useState<number | null>(null);
   const [summary, setSummary] = useState<BatchSummary | null>(null);
   const [dismissed, setDismissed] = useState<string[]>([]);
   const [placing, setPlacing] = useState<Record<string, boolean>>({});
@@ -199,6 +212,17 @@ export function useEvidenceWizard(setup: WizardSetup) {
   const [live, setLive] = useState("");
   const [now, setNow] = useState(() => Date.now());
   const [polled, setPolled] = useState(0);
+  // Reads in a row that did not reach the server: past three the window says so.
+  const [failures, setFailures] = useState(0);
+  // Cancel or Escape on Add files with files queued asks first.
+  const [confirmDrop, setConfirmDrop] = useState(false);
+  // A file whose kind is being confirmed, or which is being read again.
+  const [fixing, setFixing] = useState("");
+  // The window was open when the page was lost: it opens again once the batch is read.
+  const [reopenOnRead, setReopenOnRead] = useState(false);
+  const shownSeconds = useRef<{ batchId: string; seconds: number } | null>(
+    null,
+  );
   // The hint is written only once the arrival's own reading of it is done.
   const [ready, setReady] = useState(false);
   const files = useRef(new Map<string, File>());
@@ -216,8 +240,8 @@ export function useEvidenceWizard(setup: WizardSetup) {
   );
   const clock = serverClock(batch?.serverNow ?? null, receivedAt, now);
   const progress = useMemo(
-    () => progressOf(uploads, batch, clock),
-    [uploads, batch, clock],
+    () => progressOf(uploads, batch, clock, readFrom),
+    [uploads, batch, clock, readFrom],
   );
   const known = batch !== null || uploads.length > 0;
   // The list of sessions speaks only for the session it named.
@@ -229,6 +253,8 @@ export function useEvidenceWizard(setup: WizardSetup) {
     async (batchId: string): Promise<number> => {
       seq.current += 1;
       const mine = seq.current;
+      // When this read set out: a file stored after it is not yet in its answer.
+      const started = Date.now();
       const query = new URLSearchParams({
         organization: ids.organizationId,
         project: ids.projectId,
@@ -251,6 +277,9 @@ export function useEvidenceWizard(setup: WizardSetup) {
         status = 0;
       }
       setPolled((count) => count + 1);
+      // Not reached (no answer, or the server failed): counted, and read again further
+      // apart; any answer from the server resets it.
+      setFailures((count) => (status === 0 || status >= 500 ? count + 1 : 0));
       if (mine !== seq.current) {
         return -1;
       }
@@ -259,6 +288,7 @@ export function useEvidenceWizard(setup: WizardSetup) {
         if (parsed !== null && parsed.batchId === batchId) {
           setBatch(parsed);
           setReceivedAt(Date.now());
+          setReadFrom(started);
           setNow(Date.now());
         }
       }
@@ -310,19 +340,31 @@ export function useEvidenceWizard(setup: WizardSetup) {
         list === null
           ? null
           : batchToShow(list, new Set(hint?.dismissed ?? []));
+      // The window was open on a session when the page was lost: that session, whatever
+      // the list leads with, so the batch is never lost. Otherwise the list's pick, and
+      // without the list (an older server) this tab's hint.
+      const kept =
+        hint !== null && hint.open === true && hint.batchId !== ""
+          ? hint
+          : null;
       const pick =
-        shown !== null
-          ? {
-              batchId: shown.batchId,
-              requirementId: shown.chosenRequirementId,
-            }
-          : list === null && hint !== null && hint.batchId !== ""
-            ? { batchId: hint.batchId, requirementId: hint.requirementId }
-            : null;
+        kept !== null
+          ? { batchId: kept.batchId, requirementId: kept.requirementId }
+          : shown !== null
+            ? {
+                batchId: shown.batchId,
+                requirementId: shown.chosenRequirementId,
+              }
+            : list === null && hint !== null && hint.batchId !== ""
+              ? { batchId: hint.batchId, requirementId: hint.requirementId }
+              : null;
       if (pick === null) {
         return;
       }
-      setSummary(shown);
+      if (kept !== null) {
+        setReopenOnRead(true);
+      }
+      setSummary(list?.find((item) => item.batchId === pick.batchId) ?? shown);
       setSession(
         (current) =>
           current ?? {
@@ -367,23 +409,41 @@ export function useEvidenceWizard(setup: WizardSetup) {
           batchId: session?.batchId ?? "",
           requirementId: session?.requirementId ?? null,
           dismissed,
+          ...(open && session !== null ? { open: true as const } : {}),
         }),
       );
     } catch {
       // Storage can be unavailable; the server's list still reopens the session.
     }
-  }, [ready, session, dismissed, ids.controlId]);
+  }, [ready, session, dismissed, open, ids.controlId]);
+
+  // The window was open when the page was lost: once its batch is read, it opens again
+  // where the session got to.
+  useEffect(() => {
+    if (!reopenOnRead || batch === null || batch.batchId !== sessionId) {
+      return;
+    }
+    setReopenOnRead(false);
+    setStep(progress.done ? 3 : 2);
+    setOpen(true);
+  }, [reopenOnRead, batch, sessionId, progress.done]);
 
   // Read again while something is under way; never while nothing is.
+  // A read that did not reach the server is tried again, further apart each time, even
+  // where the last answer said nothing is under way: the batch is never let go.
   const delay =
     session === null
       ? null
-      : pollDelay({
-          open,
-          uploading: progress.uploading,
-          reading: progress.reading || (!known && batch === null),
-          checking: progress.checking,
-        });
+      : retryDelay(
+          pollDelay({
+            open,
+            uploading: progress.uploading,
+            reading: progress.reading || (!known && batch === null),
+            checking: progress.checking,
+          }),
+          failures,
+        );
+  const unreachable = failures >= UNREACHABLE_AFTER;
   // biome-ignore lint/correctness/useExhaustiveDependencies: `polled` counts the reads; it re-arms the timer after every one, answered or not, so a failed read never stops the polling.
   useEffect(() => {
     if (sessionId === null || delay === null) {
@@ -543,6 +603,8 @@ export function useEvidenceWizard(setup: WizardSetup) {
         update(upload.key, {
           ...uploadAnswer(request.status, body),
           sent: upload.size,
+          // A batch read after this that no longer lists the file: it was removed.
+          answeredAt: Date.now(),
         });
         resolve();
       };
@@ -812,12 +874,94 @@ export function useEvidenceWizard(setup: WizardSetup) {
     const title =
       setup.items.find((item) => item.requirementId === choice)?.title ??
       "the item";
-    const said =
+    // An item the move leaves with no evidence is asked for again (the requests follow
+    // the evidence): said, as the server does it.
+    const emptied = leftWithout(
+      fileId,
+      line.on,
+      choice === OUT ? [] : [choice],
+      setup.items,
+      batch,
+    ).length;
+    const said = [
       choice === OUT
         ? `${line.name} is kept in the control’s files.`
-        : `${line.name} is now in ${title}. The item is checked again with it.`;
+        : `${line.name} is now in ${title}. The item is checked again with it.`,
+      askedAgain(emptied),
+    ]
+      .filter((part) => part !== "")
+      .join(" ");
     setNote(said);
     setLive(said);
+    router.refresh();
+    void read(session.batchId);
+  }
+
+  /** "Confirm its kind" or "Read it again", where a reason names it: the reading's own
+   * actions (the evidence dialog's route), said only once the server confirms them. */
+  async function fixReading(
+    line: FileLine,
+    fix: NeedsFix,
+    kind: string | null,
+  ) {
+    const fileId = line.fileId;
+    const analysis =
+      fileId === null
+        ? undefined
+        : setup.analyses.find((each) => each.fileId === fileId);
+    if (session === null || fileId === null || fixing !== "") {
+      return;
+    }
+    setProblems((current) => {
+      const next = { ...current };
+      delete next[fileId];
+      return next;
+    });
+    if (analysis === undefined) {
+      setProblems((current) => ({
+        ...current,
+        [fileId]: readingProblem(422) ?? "",
+      }));
+      router.refresh();
+      return;
+    }
+    setFixing(fileId);
+    let status = 0;
+    let detail = "";
+    try {
+      const response = await fetch("/workspace/evidence-dialog", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          organization_id: ids.organizationId,
+          project_id: ids.projectId,
+          intent: fix === "reread" ? "reanalyze" : "confirm-kind",
+          analysis_id: analysis.id,
+          version: analysis.version,
+          ...(fix === "confirm-kind" ? { kind } : {}),
+        }),
+      });
+      const body = (await response.json()) as {
+        status?: unknown;
+        detail?: unknown;
+      };
+      status = typeof body.status === "number" ? body.status : 0;
+      detail = typeof body.detail === "string" ? body.detail : "";
+    } catch {
+      status = 0;
+    }
+    setFixing("");
+    const problem = readingProblem(status, detail);
+    if (problem !== null) {
+      setProblems((current) => ({ ...current, [fileId]: problem }));
+    } else {
+      const said =
+        fix === "reread"
+          ? `${line.name} is being read again.`
+          : `${line.name}: its kind is confirmed.`;
+      setNote(said);
+      setLive(said);
+    }
     router.refresh();
     void read(session.batchId);
   }
@@ -891,7 +1035,26 @@ export function useEvidenceWizard(setup: WizardSetup) {
     void read(session.batchId);
   }
 
+  /** Files queued on Add files and not sent yet: closing would drop them. */
+  const queued =
+    step === 1 && draft !== null
+      ? draft.queue.filter((item) => item.skipped === "").length
+      : 0;
+
+  /** Cancel, Close and Escape: with files queued on Add files, the window asks first. */
+  function requestClose() {
+    if (queued > 0 && !confirmDrop) {
+      setConfirmDrop(true);
+      setLive(
+        `${plural(queued, "file")} queued and not sent. Drop them, or keep them?`,
+      );
+      return;
+    }
+    close();
+  }
+
   function close() {
+    setConfirmDrop(false);
     setOpen(false);
     setRemoving(null);
     if (session === null || draft !== null) {
@@ -922,15 +1085,26 @@ export function useEvidenceWizard(setup: WizardSetup) {
     files.current.clear();
   }
 
-  const seconds = elapsedSeconds({
+  // Never backwards: a newer answer that moves the clock offset back keeps the time
+  // already shown (steadySeconds), until the session is done.
+  const counted = elapsedSeconds({
     createdAt: batch?.createdAt ?? listed?.createdAt ?? null,
     now: clock,
     done: progress.done,
     finished: finishedAt(batch),
     startedAt: session?.startedAt ?? null,
   });
+  const before =
+    shownSeconds.current !== null &&
+    shownSeconds.current.batchId === session?.batchId
+      ? shownSeconds.current.seconds
+      : null;
+  const seconds = steadySeconds(before, counted, progress.done);
+  shownSeconds.current =
+    session === null ? null : { batchId: session.batchId, seconds };
 
-  const line =
+  const offline = unreachable ? ` · ${UNREACHABLE}` : "";
+  const shown =
     open || session === null
       ? null
       : progressLine({
@@ -938,6 +1112,8 @@ export function useEvidenceWizard(setup: WizardSetup) {
           summary: listed,
           seconds,
         });
+  const line =
+    shown === null ? null : { ...shown, text: `${shown.text}${offline}` };
 
   return {
     open,
@@ -963,8 +1139,17 @@ export function useEvidenceWizard(setup: WizardSetup) {
     live,
     line,
     setup,
+    unreachable,
+    readFrom,
+    queued,
+    confirmDrop,
+    fixing,
     startNew,
     reopen,
+    requestClose,
+    keepQueued: () => setConfirmDrop(false),
+    fixReading: (fileLine: FileLine, fix: NeedsFix, kind: string | null) =>
+      void fixReading(fileLine, fix, kind),
     /** "Upload evidence": this browser's open session where there is one, else a new
      * one. Another person's session is reopened from the list's line. */
     openFromList: () => {
@@ -1104,6 +1289,17 @@ export function EvidenceWizard({ wizard }: { wizard: Wizard }) {
           ) != null
         ) {
           event.preventDefault();
+          return;
+        }
+        // Files queued on Add files are never dropped by Escape alone: it asks, and a
+        // second Escape keeps them.
+        if (wizard.queued > 0) {
+          event.preventDefault();
+          if (wizard.confirmDrop) {
+            wizard.keepQueued();
+          } else {
+            wizard.requestClose();
+          }
         }
       }}
       onClose={() => {
@@ -1156,6 +1352,13 @@ export type WindowView = {
   held: ReadonlyArray<{ id: string; blocked?: string | null }>;
   applications: ReadonlyArray<{ id: string; name: string }>;
   policy: boolean;
+  /** Three reads in a row did not reach the server: the window says so. */
+  unreachable: boolean;
+  /** Files queued on Add files, and whether closing asks before dropping them. */
+  queued: number;
+  confirmDrop: boolean;
+  /** The file whose reading is being confirmed or read again. */
+  fixing: string;
 };
 
 export function windowView(wizard: Wizard): WindowView {
@@ -1167,6 +1370,7 @@ export function windowView(wizard: Wizard): WindowView {
     mine: wizard.session?.mine ?? false,
     now: clock,
     leftAlone: wizard.leftAlone,
+    readAt: wizard.readFrom,
   });
   const results = itemResults(batch, {
     items,
@@ -1206,6 +1410,10 @@ export function windowView(wizard: Wizard): WindowView {
     applications: setup.applications,
     policy:
       wizard.draft !== null && wizard.policyItem(wizard.draft.requirementId),
+    unreachable: wizard.unreachable,
+    queued: wizard.queued,
+    confirmDrop: wizard.confirmDrop,
+    fixing: wizard.fixing,
   };
 }
 
@@ -1213,6 +1421,9 @@ export function windowView(wizard: Wizard): WindowView {
 export type WindowActions = Pick<
   Wizard,
   | "close"
+  | "requestClose"
+  | "keepQueued"
+  | "fixReading"
   | "done"
   | "analyze"
   | "addFiles"
@@ -1338,7 +1549,7 @@ export function WizardWindow({
           type="button"
           className="btn btn-ghost wz-close"
           aria-label="Close"
-          onClick={wizard.close}
+          onClick={wizard.requestClose}
         >
           <UiIcon name="x" size={17} />
         </button>
@@ -1364,6 +1575,42 @@ function Footer({ view, wizard }: { view: WindowView; wizard: WindowActions }) {
       <span>{text}</span>
     </p>
   );
+  // Three reads in a row did not reach the server: said, while it keeps trying.
+  const offline = (
+    <p className="wz-note is-warning" role="status">
+      <UiIcon name="retry" size={15} />
+      <span>{UNREACHABLE}</span>
+    </p>
+  );
+  if (view.step === 1 && view.confirmDrop) {
+    // Cancel, Close or Escape with files queued: asked before they are dropped.
+    return (
+      <footer className="wz-foot is-asking">
+        <p className="wz-note is-warning" role="alert">
+          <UiIcon name="info" size={15} />
+          <span>
+            {`Drop the ${plural(view.queued, "file")} queued? ${view.queued === 1 ? "It has" : "They have"} not been sent.`}
+          </span>
+        </p>
+        <div className="wz-acts">
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={wizard.keepQueued}
+          >
+            Keep {view.queued === 1 ? "it" : "them"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger"
+            onClick={wizard.close}
+          >
+            Drop {view.queued === 1 ? "it" : "them"}
+          </button>
+        </div>
+      </footer>
+    );
+  }
   if (view.step === 1) {
     const action = analyzeLabel(view.draft?.queue ?? []);
     const systems = view.draft?.systems;
@@ -1390,7 +1637,7 @@ function Footer({ view, wizard }: { view: WindowView; wizard: WindowActions }) {
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={wizard.close}
+              onClick={wizard.requestClose}
             >
               Cancel
             </button>
@@ -1412,12 +1659,18 @@ function Footer({ view, wizard }: { view: WindowView; wizard: WindowActions }) {
     const done = view.progress.done;
     return (
       <footer className="wz-foot">
-        {done
-          ? note("checkCircle", finishedNote(view.seconds, view.progress), true)
-          : note(
-              "info",
-              "You can close this window. The results appear on the list when they are ready.",
-            )}
+        {view.unreachable
+          ? offline
+          : done
+            ? note(
+                "checkCircle",
+                finishedNote(view.seconds, view.progress),
+                true,
+              )
+            : note(
+                "info",
+                "You can close this window. The results appear on the list when they are ready.",
+              )}
         <div className="wz-acts">
           <button
             type="button"
@@ -1441,7 +1694,9 @@ function Footer({ view, wizard }: { view: WindowView; wizard: WindowActions }) {
   }
   return (
     <footer className="wz-foot">
-      {note("listCheck", resultsNote(view.progress))}
+      {view.unreachable
+        ? offline
+        : note("listCheck", resultsNote(view.progress))}
       <div className="wz-acts">
         {view.canAct ? (
           <button
@@ -2134,7 +2389,9 @@ function FileRow({
             dest={line.dest}
             busy={busy}
             canAct={view.canAct}
+            fixing={line.fileId !== null && view.fixing === line.fileId}
             onPlace={(choice) => wizard.place(line, choice)}
+            onFix={(fix, kind) => wizard.fixReading(line, fix, kind)}
           />
         ) : null}
         {line.suggestion !== null && view.canAct ? (
@@ -2188,13 +2445,17 @@ function DestinationView({
   dest,
   busy,
   canAct,
+  fixing,
   onPlace,
+  onFix,
 }: {
   line: FileLine;
   dest: Destination;
   busy: boolean;
   canAct: boolean;
+  fixing: boolean;
   onPlace: (choice: string) => void;
+  onFix: (fix: NeedsFix, kind: string | null) => void;
 }) {
   if (dest.kind === "placed") {
     return (
@@ -2225,7 +2486,10 @@ function DestinationView({
         Needs you: choose where this goes
       </span>
       <span className="wz-needs-why">{dest.reason}</span>
-      {canAct && !line.duplicate ? (
+      {canAct && dest.fix !== null ? (
+        <FixReading line={line} fix={dest.fix} busy={fixing} onFix={onFix} />
+      ) : null}
+      {canAct && line.movable ? (
         <Choose
           key={`${line.fileId ?? line.key}:${line.version}`}
           name={line.name}
@@ -2235,6 +2499,85 @@ function DestinationView({
           onPlace={onPlace}
         />
       ) : null}
+    </span>
+  );
+}
+
+/** The action a "Needs you" reason names, in place: "Confirm its kind" (the reading's
+ * kind confirmed, the agent's own kind selected first where it named one) or "Read it
+ * again". Said done only once the server confirms it. */
+function FixReading({
+  line,
+  fix,
+  busy,
+  onFix,
+}: {
+  line: FileLine;
+  fix: NeedsFix;
+  busy: boolean;
+  onFix: (fix: NeedsFix, kind: string | null) => void;
+}) {
+  const id = useId();
+  const said = line.file?.classification?.kind ?? "";
+  const [kind, setKind] = useState(
+    EVIDENCE_KINDS.find((each) => each === said) ?? "",
+  );
+  const spinner = <span className="spinner small" aria-hidden="true" />;
+  if (fix === "reread") {
+    return (
+      <span className="wz-choose">
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          aria-disabled={busy || undefined}
+          onClick={() => {
+            if (!busy) {
+              onFix("reread", null);
+            }
+          }}
+        >
+          {busy ? spinner : <UiIcon name="retry" size={13} />}
+          {busy ? "Starting…" : "Read it again"}
+        </button>
+      </span>
+    );
+  }
+  return (
+    <span className="wz-choose">
+      <label className="sr-only" htmlFor={id}>
+        What {line.name} is
+      </label>
+      <select
+        id={id}
+        value={kind}
+        disabled={busy}
+        onChange={(event) => setKind(event.target.value)}
+      >
+        {kind === "" ? (
+          <option value="" disabled>
+            Choose its kind
+          </option>
+        ) : null}
+        {EVIDENCE_KINDS.map((each) => (
+          <option key={each} value={each}>
+            {EVIDENCE_KIND_LABELS[each]}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        className="btn btn-secondary btn-sm"
+        disabled={kind === ""}
+        aria-disabled={busy || undefined}
+        onClick={() => {
+          if (!busy && kind !== "") {
+            onFix("confirm-kind", kind);
+          }
+        }}
+      >
+        {busy ? spinner : null}
+        {busy ? "Confirming…" : "Confirm its kind"}
+      </button>
     </span>
   );
 }
@@ -2568,6 +2911,14 @@ function ApartRow({
               Needs you: choose where this goes
             </span>
             <span className="wz-why">{needs.reason}</span>
+            {view.canAct && needs.fix !== null ? (
+              <FixReading
+                line={line}
+                fix={needs.fix}
+                busy={line.fileId !== null && view.fixing === line.fileId}
+                onFix={(fix, kind) => wizard.fixReading(line, fix, kind)}
+              />
+            ) : null}
           </>
         ) : line.dest?.kind === "out" ? (
           <>
@@ -2603,7 +2954,8 @@ function ApartRow({
           <Withdraw line={line} view={view} wizard={wizard} />
         ) : null}
       </div>
-      {!view.canAct || line.duplicate ? null : needs !== null ? (
+      {!view.canAct || (line.duplicate && !line.movable) ? null : needs !==
+        null ? (
         <Choose
           key={`${line.fileId ?? line.key}:${line.version}`}
           name={line.name}
@@ -2833,6 +3185,7 @@ function ResultCard({
               <ResultFile
                 key={line.key}
                 line={line}
+                requirementId={item.requirementId}
                 view={view}
                 wizard={wizard}
               />
@@ -3043,16 +3396,19 @@ function ResultCard({
 
 function ResultFile({
   line,
+  requirementId,
   view,
   wizard,
 }: {
   line: FileLine;
+  /** The item whose card this is: the file's letters are from its own check. */
+  requirementId: string;
   view: WindowView;
   wizard: WindowActions;
 }) {
   const busy = line.fileId !== null && view.placing[line.fileId] === true;
   const problem = line.fileId === null ? undefined : view.problems[line.fileId];
-  const addresses = addressesLine(line.file, view.batch);
+  const addresses = addressesLine(line.file, view.batch, requirementId);
   const by =
     line.dest?.kind === "placed" && line.dest.note !== ""
       ? line.dest.note === "your choice" ||
@@ -3088,7 +3444,7 @@ function ResultFile({
           </span>
         ) : addresses.kind === "none" ? (
           <span className="wz-addr-none">Addresses no attribute</span>
-        ) : (
+        ) : addresses.kind === "unknown" ? null : (
           <span className="wz-addr">
             Addresses
             <span className="sr-only"> {addresses.spoken}</span>

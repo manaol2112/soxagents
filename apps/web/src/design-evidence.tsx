@@ -374,6 +374,7 @@ export function DesignEvidence({
     system,
     // After an upload nothing else is offered until the plan is read again.
     onUploaded: () => setSettling(plan),
+    analyses: intelligence.register?.analyses ?? [],
   });
   const [over, setOver] = useState(false);
   // The rows the person opened or closed; until then the first that waits on them is open.

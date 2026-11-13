@@ -1,0 +1,49 @@
+{
+ "batch_id": "9f52650f-35bc-4b2a-bf83-b8bc3314a2f9",
+ "chosen_requirement_id": null,
+ "control_id": "01a1d586-d0c9-76f3-bc16-f5bb2226cbfb",
+ "created_at": "2026-11-13T15:29:11.853947Z",
+ "files": [
+  {
+   "addresses": [],
+   "classification": {
+    "confidence": "low",
+    "kind": "other",
+    "label": "Other",
+    "summary": "A other file."
+   },
+   "duplicate": true,
+   "extension": "txt",
+   "file_id": "017fbbf1-005a-462b-8c80-a460584881ce",
+   "name": "unplaced scan.txt",
+   "placement": {
+    "method": "AGENT",
+    "reason": "The reader is not sure what kind of evidence this file is. Confirm its kind to start the check.",
+    "requirement_ids": [],
+    "status": "NEEDS_PERSON",
+    "suggestions": [],
+    "version": 1
+   },
+   "read": {
+    "finished_at": "2026-11-13T15:29:11.807761Z",
+    "method": "TEXT",
+    "note": "",
+    "pages": null,
+    "started_at": "2026-11-13T15:29:11.780082Z",
+    "status": "READY"
+   },
+   "size_bytes": 41,
+   "stage": "NEEDS_PERSON"
+  }
+ ],
+ "items": [],
+ "server_now": "2026-11-13T15:29:11.885739Z",
+ "stages": {
+  "checked_items": 0,
+  "files": 1,
+  "items": 0,
+  "read": 1,
+  "sorted": 1,
+  "stored": 1
+ }
+}
