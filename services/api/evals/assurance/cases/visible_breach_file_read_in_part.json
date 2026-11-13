@@ -172,12 +172,9 @@
       "shows": "IMPLEMENTATION"
     },
     "B": {
-      "verdict": "ISSUE",
-      "results": [
-        "NOT_MET"
-      ],
-      "unsettled_acceptable": false,
-      "reason": "The line manager step was approved by the user himself as delegate; the line manager never approved.",
+      "verdict": "UNSETTLED",
+      "unsettled_acceptable": true,
+      "reason": "The line manager step was approved by the user himself as delegate, but the change log was read in part: an exception is shown, and a person judges it with both readings' passages (third independent review, item 1: a deviation never escapes rule 5).",
       "answer": {
         "reason": "The role owner approved; the line manager step was approved by the user himself.",
         "elements": {
@@ -203,12 +200,9 @@
       }
     },
     "C": {
-      "verdict": "ISSUE",
-      "results": [
-        "NOT_MET"
-      ],
-      "unsettled_acceptable": false,
-      "reason": "Daniel Okafor requested the access and approved it himself: a self-approval, whatever the unread rows hold.",
+      "verdict": "UNSETTLED",
+      "unsettled_acceptable": true,
+      "reason": "Daniel Okafor requested the access and approved it himself, but the change log was read in part: an exception is shown, and a person judges it with both readings' passages (third independent review, item 1)",
       "answer": {
         "reason": "The requester and receiving user approved his own request.",
         "elements": {

@@ -158,13 +158,33 @@ def _cut(folded: str, end: int, needle: str) -> bool:
     return needle[-1] in "-/:." and end < len(folded) and folded[end].isalnum()
 
 
+# Where the look-back for a negator stops: a cell separator, a tab, ":", ";" or ".".
+_CLAUSE_STOP = re.compile(r"\s\|\s|\t|[:;.]")
+_LOOK_BACK = 3
+
+
 def _negated(text: str, start: int) -> bool:
-    """Whether the word just before a match, on the same line of the original text,
-    negates it ("not approved by the line manager" quoted as "approved by the line
-    manager")."""
+    """Whether one of the three words just before a match, in its own clause of the line
+    (the look-back stops at a cell separator, a tab, ":", ";" or "."), negates it ("not
+    formally approved by the line manager" quoted as "approved by the line manager").
+    "no" before a number or a full stop is a number's abbreviation ("Ticket no 1041"),
+    not a negation."""
     line_start = text.rfind("\n", 0, start) + 1
-    before = _WORD.findall(text[line_start:start])
-    return bool(before) and before[-1].lower() in _NEGATORS
+    before = text[line_start:start]
+    stops = list(_CLAUSE_STOP.finditer(before))
+    clause_start = line_start + (stops[-1].end() if stops else 0)
+    words = list(_WORD.finditer(text, clause_start, start))[-_LOOK_BACK:]
+    for word in words:
+        token = word.group(0).lower()
+        if token not in _NEGATORS:
+            continue
+        if token == "no":
+            after = text[word.end() : word.end() + 1]
+            following = _WORD.search(text, word.end())
+            if after == "." or (following is not None and following.group(0)[:1].isdigit()):
+                continue
+        return True
+    return False
 
 
 def find_passage(text: str, quote: str, context: str = "") -> PassageMatch | None:
