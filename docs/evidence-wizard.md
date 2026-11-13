@@ -221,4 +221,4 @@ From the live run of 13 November 2026 (docs/evidence-assurance.md, section 8):
 | Interactive prototype for approval | in progress, 13 November 2026 |
 | Server: wizard uploads, placement, batch state, moves | in progress, 13 November 2026 |
 | Accuracy: nested answers, the false-issue pattern | in progress, 13 November 2026 |
-| The wizard in the app, built to the approved prototype | after the prototype is approved |
+| The wizard in the app, built to the approved prototype | built, pending review, 13 November 2026 (`evidence-wizard.tsx`, `evidence-wizard-model.ts`, `evidence-wizard.css`; route `/workspace/evidence-batches`) |

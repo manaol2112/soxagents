@@ -5,6 +5,38 @@ import type { IconName } from "./icon-name";
 export type { IconName } from "./icon-name";
 
 const PATHS: Record<IconName, ReactNode> = {
+  // The D&I evidence wizard's (the approved prototype, 13 November 2026).
+  lock: (
+    <>
+      <rect x="5" y="11" width="14" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </>
+  ),
+  listCheck: (
+    <>
+      <path d="M11 6h9M11 12h9M11 18h9" />
+      <path d="m3.5 6 1.5 1.5L7.5 5M3.5 12l1.5 1.5 2.5-2.5M3.5 18l1.5 1.5 2.5-2.5" />
+    </>
+  ),
+  checkCircle: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="m8.5 12.5 2.5 2.5 4.5-5" />
+    </>
+  ),
+  xCircle: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="m15 9-6 6M9 9l6 6" />
+    </>
+  ),
+  minusCircle: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M8 12h8" />
+    </>
+  ),
+  chevronDown: <path d="m6 9 6 6 6-6" />,
   external: (
     <>
       <path d="M14 4h6v6" />

@@ -732,11 +732,18 @@ export function uploadTarget(params: URLSearchParams): UploadTarget {
   const requirement = params.get("requirement") ?? "";
   // The applications a person says it applies to: ALL, or application ids.
   const applications = params.get("applications") ?? "";
+  // The D&I evidence wizard (docs/evidence-wizard.md, 2.1): the control whose D&I items
+  // the files are sorted into. Its row's item comes without a request (the server finds
+  // the request that carries it); a wizard upload never names a request.
+  const control = params.get("control") ?? "";
+  const wizard = control !== "";
   if (
+    (wizard && (!UUID.test(control) || request !== "")) ||
     (request !== "" && !UUID.test(request)) ||
-    (requirement !== "" && (request === "" || !UUID.test(requirement))) ||
+    (requirement !== "" &&
+      ((request === "" && !wizard) || !UUID.test(requirement))) ||
     (applications !== "" &&
-      (request === "" ||
+      ((request === "" && !(wizard && requirement !== "")) ||
         (applications !== "ALL" &&
           !applications
             .split(",")
@@ -755,8 +762,12 @@ export function uploadTarget(params: URLSearchParams): UploadTarget {
     // Added on a request: filed to it, not matched.
     query.set("request_id", request);
   }
+  if (wizard) {
+    query.set("design_control_id", control);
+  }
   if (requirement !== "") {
-    // Added on one item of the request: for that item only.
+    // Added on one item of the request: for that item only. In the wizard, the row's
+    // item: the person's choice.
     query.set("requirement_id", requirement);
   }
   if (applications !== "") {

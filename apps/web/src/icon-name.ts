@@ -65,4 +65,10 @@ export type IconName =
   | "cloudUpload"
   | "folder"
   | "image"
-  | "external";
+  | "external"
+  | "lock"
+  | "listCheck"
+  | "checkCircle"
+  | "xCircle"
+  | "minusCircle"
+  | "chevronDown";

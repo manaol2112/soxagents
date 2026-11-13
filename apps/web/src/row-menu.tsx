@@ -64,8 +64,14 @@ export function RowMenu({
   label: string;
   items: RowMenuItem[];
   /** A labelled button in place of the row's "more" icon, such as a page's Add, or a
-   * row's status that opens what can change it (with a class of its own). */
-  trigger?: { label: string; icon: IconName; className?: string } | null;
+   * row's status that opens what can change it (with a class of its own). `ariaLabel`
+   * names what it acts on where the label alone does not ("Move" a file). */
+  trigger?: {
+    label: string;
+    icon: IconName;
+    className?: string;
+    ariaLabel?: string;
+  } | null;
 }) {
   const [open, setOpen] = useState(false);
   // Opens to the left of its button, or to the right where the left has no room.
@@ -143,6 +149,7 @@ export function RowMenu({
           className={`btn row-menu-trigger${trigger.className ? ` ${trigger.className}` : ""}`}
           aria-haspopup="menu"
           aria-expanded={open}
+          aria-label={trigger.ariaLabel}
           onClick={() => setOpen((value) => !value)}
         >
           <UiIcon name={trigger.icon} size={15} />

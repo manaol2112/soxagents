@@ -366,6 +366,10 @@ function parseAttribute(
             : said === "UNSETTLED";
   const verdict: Verdict = said !== null && stands ? said : "UNSETTLED";
   const findingId = verdict === "ISSUE" ? uuidOrNull(value.finding_id) : null;
+  const views = (Array.isArray(value.views) ? value.views : [])
+    .map(parseView)
+    .filter((item): item is View => item !== null)
+    .slice(0, 2);
   return {
     attributeId,
     code,
@@ -383,14 +387,17 @@ function parseAttribute(
     passages,
     absent: strings(value.absent, 12),
     // Both readings: where they do not agree, and where the request does not ask for
-    // the attribute (available on open, never a judgment).
+    // the attribute (available on open, never a judgment). An issue shows them too where
+    // the server sends one from each reading: a split shortfall, one reading finding it
+    // not met and the other met in part (docs/evidence-assurance.md, rule 4).
     views:
       verdict === "UNSETTLED" || verdict === "NOT_ADDRESSED"
-        ? (Array.isArray(value.views) ? value.views : [])
-            .map(parseView)
-            .filter((item): item is View => item !== null)
-            .slice(0, 2)
-        : [],
+        ? views
+        : verdict === "ISSUE" &&
+            views.length === 2 &&
+            new Set(views.map((view) => view.role)).size === 2
+          ? views
+          : [],
     findingId,
     findingStatus:
       findingId === null

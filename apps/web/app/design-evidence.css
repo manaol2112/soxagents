@@ -46,6 +46,54 @@
   margin-top: -0.15rem;
 }
 
+/* The evidence wizard's session while its window is closed (evidence-wizard.css): where
+   it stands, and Show progress or See results. */
+.de-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.75rem;
+  padding: 0.55rem 0.9rem;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--surface));
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-sm);
+}
+
+/* With no request to sit under, the line is a card of its own. */
+.dq.de > .de-progress {
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+
+.de-progress > svg {
+  color: var(--accent-text);
+}
+
+.de-progress.is-done > svg {
+  color: var(--success);
+}
+
+.de-progress-text {
+  flex: 1 1 16rem;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Files dragged over the list or a row: it takes them (the wizard opens with them). */
+.dq.de.is-over .de-card {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent);
+  transition:
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.de-row.is-over {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
 /* A request no row travels in: one quiet line under its delivery line. */
 .de-lone {
   margin: 0;
@@ -174,41 +222,6 @@ button.de-caret > svg {
 
 .de-row.is-aside .tar-text {
   color: var(--text-secondary);
-}
-
-/* The row takes files dropped on it: the upload's own zone, drawn as the row. */
-.de-row > .request-upload {
-  display: block;
-  /* The upload zone packs its content to the right, and a browser applies that to a
-     block's children too: the row shrank to its text and sat off to the right. */
-  justify-items: normal;
-  padding: 0;
-  border: 0;
-  border-radius: inherit;
-}
-
-/* The upload zone styles every button in it as a small inline one: the row's own
-   head and caret keep their shape. */
-.de-row > .request-upload button.tar-head {
-  display: grid;
-  gap: 0.75rem;
-  white-space: normal;
-}
-
-.de-row > .request-upload button.de-caret {
-  display: inline-grid;
-  gap: 0;
-}
-
-.de-row > .request-upload.is-over {
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 2px var(--accent);
-}
-
-.de-row > .request-upload > .upload-note {
-  display: block;
-  padding: 0 0.9rem 0.6rem calc(0.9rem + 34px + 0.75rem);
-  white-space: normal;
 }
 
 /* The states the shared chip has no tone for yet. */
@@ -867,10 +880,6 @@ button.de-caret > svg {
     padding: 0 0.45rem;
   }
 
-  .de-row > .request-upload > .upload-note {
-    padding-left: 0.9rem;
-  }
-
   /* The two readings go one under the other, and an attribute's detail takes the
      row's width. */
   .de-views {
@@ -891,7 +900,8 @@ button.de-caret > svg {
 @media (prefers-reduced-motion: reduce) {
   button.de-caret > svg,
   .de-must > summary > svg,
-  .de-attr-caret > svg {
+  .de-attr-caret > svg,
+  .dq.de.is-over .de-card {
     transition: none;
   }
 
