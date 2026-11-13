@@ -81,6 +81,13 @@ class SendTarget(BaseModel):
     waiting: bool = False
     # The testing phase it serves (DESIGN, INTERIM, ROLLFORWARD), when it is one request.
     phase: str = ""
+    # The email as it will go, read in the review before anything is approved (product
+    # owner, 12 November 2026: "It's not easy to find the email template"). Rendered by the
+    # send's own functions (outbound.render, evidence_groups.render_group), so the review
+    # shows the text the send renders again and checks; the upload link is added when sent.
+    # Empty when the text cannot be rendered (the send then refuses it with its reason).
+    subject: str = ""
+    body: str = ""
 
 
 class OwnerChoice(BaseModel):
@@ -146,6 +153,38 @@ def _phase_title(phase: str | None) -> str:
 
     label = PHASE_LABELS.get(str(phase), "")
     return f"{label} evidence request" if label else "Evidence request"
+
+
+def _with_email(
+    connection: Any,
+    organization_id: UUID,
+    project_id: UUID,
+    shown: dict[UUID, SendTarget],
+    groups: dict[UUID, Any],
+) -> None:
+    """Each target that goes now, with its email's subject and text as the send renders it."""
+    from ai_workforce_api.evidence_groups import _pbcs, render_group, sections_for
+    from ai_workforce_api.outbound import _engagement, _read_pbc, render
+
+    engagement = _engagement(connection, organization_id, project_id)
+    for key, target in shown.items():
+        if target.waiting or not target.ok:
+            continue
+        try:
+            grouped = groups.get(key)
+            if grouped is not None:
+                members = [m for m, _ in grouped.members]
+                pbcs = _pbcs(connection, organization_id, project_id, members)
+                message = render_group(
+                    key, members[0], sections_for(connection, [pbcs[m] for m in members]),
+                    engagement,
+                )  # fmt: skip
+            else:
+                request = _read_pbc(connection, organization_id, project_id, key)
+                message = render(request, engagement)
+        except ValueError, KeyError, IndexError, NotVisible:
+            continue
+        shown[key] = target.model_copy(update={"subject": message.subject, "body": message.body})
 
 
 def _check_routing(routing: list[Routing]) -> None:
@@ -333,6 +372,8 @@ def control_send(
             recipient=recipient or owner_email,
             other_controls=[], ok=True, detail="", phase=str(current.testing_phase or ""),
         )  # fmt: skip
+    if body.preview:
+        _with_email(connection, organization_id, project_id, shown, groups)
     waiting = [target for target in shown.values() if target.waiting]
     # The engagement's people at the client, for changing who a request goes to.
     choices: list[OwnerChoice] = []

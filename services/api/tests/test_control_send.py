@@ -81,6 +81,10 @@ def test_a_control_without_an_owner_asks_for_one_then_sends_to_them(
     # A request is named by its title or its phase, never by the control's code.
     assert all(t["title"] and t["title"] != "ITGC-AC-06" for t in preview["targets"])
     assert _state(migrated, control) == (before, ("", ""))
+    # The review shows each email's own subject and text before anything is approved
+    # (product owner, 12 November 2026: the email was hard to find before approving).
+    going = [t for t in preview["targets"] if t["ok"]]
+    assert going and all(t["subject"].strip() and t["body"].strip() for t in going), going
 
     # Sent: the owner is the control's, each draft goes to them, approved and sent.
     sent = _send(owner, team, control, preview=False, **named)
@@ -93,6 +97,17 @@ def test_a_control_without_an_owner_asks_for_one_then_sends_to_them(
     # The Evidence center shows them as sent: they are its own records.
     center = {r["id"]: r for r in _all(owner, team)}
     assert all(center[r["id"]]["status"] == "SENT" for r in rows if r["id"] in center)
+    # What went is what the review showed: the same subject, rendered by the same send.
+    with connect(migrated.url) as connection:
+        subjects = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT subject FROM outbound_messages WHERE project_id = "
+                "(SELECT project_id FROM engagement_controls WHERE id = %s)",
+                (UUID(control),),
+            ).fetchall()
+        }
+    assert {t["subject"] for t in going} <= subjects, (going, subjects)
     # Nothing left to send.
     again = _send(owner, team, control, preview=True)
     assert (again["drafts"], again["targets"]) == (0, [])

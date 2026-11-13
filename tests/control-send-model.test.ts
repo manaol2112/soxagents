@@ -187,6 +187,38 @@ describe("review and send requests (the reference, 28 October 2026)", () => {
     assert.equal(plan.emails, 1);
   });
 
+  // The email is read in the review before anything is approved (product owner, 12
+  // November 2026: "It's not easy to find the email template currently").
+  it("carries each email's subject and text into the review, and none it was not sent", () => {
+    const withText = {
+      ...held,
+      targets: [
+        {
+          ...held.targets[0],
+          subject: "[PBC-AAAA1111] Evidence request: ITGC-AC-01",
+          body: "Hello,\n\nPlease provide the items below.",
+        },
+        ...held.targets.slice(1),
+      ],
+    };
+    const result = parseSendResult(withText);
+    assert.ok(result !== null);
+    assert.deepEqual(reviewPlan(result).sending[0]?.email, {
+      subject: "[PBC-AAAA1111] Evidence request: ITGC-AC-01",
+      body: "Hello,\n\nPlease provide the items below.",
+    });
+    // An answer without the text (an older server, or one that could not render it):
+    // the review says so instead of showing an empty email.
+    const without = parseSendResult(held);
+    assert.ok(without !== null);
+    assert.equal(reviewPlan(without).sending[0]?.email, null);
+    const view = readFileSync("apps/web/src/control-send.tsx", "utf8");
+    assert.match(view, /The email could not be shown here/);
+    // The button opens the review; it does not claim to approve on its own.
+    assert.match(view, /"Review and send"/);
+    assert.doesNotMatch(view, /: "Approve and send"\}/);
+  });
+
   it("reads a title without the window it ends with, and counts requests", () => {
     assert.equal(
       shortTitle("All access grants and changes, 1 Jan to 30 Sep 2027"),

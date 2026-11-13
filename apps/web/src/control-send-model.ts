@@ -19,6 +19,9 @@ export type SendTarget = {
   /** Its testing phase (DESIGN, INTERIM, ROLLFORWARD), and the window it covers. */
   phase: string;
   period: string;
+  /** The email as it will go (the send's own rendering); "" when the server sent none. */
+  subject: string;
+  body: string;
 };
 
 /** A request not sent, and why; held means it only waits for its phase. */
@@ -94,6 +97,8 @@ export function parseSendResult(value: unknown): SendResult | null {
         waiting: t.waiting === true,
         phase: str(t.phase),
         period: "",
+        subject: str(t.subject),
+        body: str(t.body),
       })),
     done: num(v.done),
     refused: num(v.refused),
@@ -199,6 +204,8 @@ export function reviewPlan(result: SendResult): {
     title: string;
     recipient: string;
     others: string[];
+    /** The email to read before approving; null when the server sent no text. */
+    email: { subject: string; body: string } | null;
   }>;
   later: Array<{ id: string; title: string; period: string; note: string }>;
   attention: Array<{ id: string; title: string; reason: string }>;
@@ -215,6 +222,8 @@ export function reviewPlan(result: SendResult): {
         title: shortTitle(t.title),
         recipient: t.recipient,
         others: t.otherControls,
+        email:
+          t.body.trim() === "" ? null : { subject: t.subject, body: t.body },
       })),
     later: later.map((t) => ({
       id: t.id,

@@ -1554,6 +1554,52 @@
   min-width: 0;
 }
 
+/* The email as it goes, read before approving: plain text, its own line breaks kept. */
+.rs-email {
+  margin-top: 0.4rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.rs-email > summary {
+  padding: 0.4rem 0.65rem;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.rs-email > :not(summary) {
+  margin: 0 0.65rem 0.5rem;
+}
+
+.rs-text .rs-email-subject,
+.rs-email-subject {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.rs-email-subject > span {
+  margin-right: 0.35rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.rs-email-body {
+  max-height: 18rem;
+  overflow: auto;
+  padding: 0.55rem 0.65rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface-muted);
+  border-radius: 6px;
+}
+
 .rs-text strong {
   color: var(--text-strong);
   font-size: var(--fs-md);

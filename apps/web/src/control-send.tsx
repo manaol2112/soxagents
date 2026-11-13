@@ -151,7 +151,9 @@ export function ControlSend({
     <>
       <button type="button" className="btn" onClick={() => void check(owner)}>
         <UiIcon name="mail" size={14} />
-        {handover ? "Approve and mark as handed over" : "Approve and send"}
+        {/* It opens the review: the emails are read there, then approved (product
+            owner, 12 November 2026: the email was hard to find before approving). */}
+        {handover ? "Review and hand over" : "Review and send"}
       </button>
       <dialog
         ref={dialog}
@@ -441,6 +443,28 @@ function ReviewStep({
                         Also carries {item.others.join(", ")} in the same email
                       </small>
                     ) : null}
+                    {item.email !== null ? (
+                      // The text as it goes, open while there are few to read.
+                      <details className="rs-email" open={sending <= 2}>
+                        <summary>
+                          {handover ? "The request's wording" : "The email"}
+                        </summary>
+                        <p className="rs-email-subject">
+                          <span>Subject</span> {item.email.subject}
+                        </p>
+                        <div className="rs-email-body">{item.email.body}</div>
+                        <small>
+                          The secure upload link is added when it is sent. To
+                          change the wording, close this and use Change on the
+                          request.
+                        </small>
+                      </details>
+                    ) : (
+                      <small>
+                        The email could not be shown here. Open the request to
+                        read it before approving.
+                      </small>
+                    )}
                   </span>
                   <span className="pill pill-dot tone-success">
                     Ready to send
