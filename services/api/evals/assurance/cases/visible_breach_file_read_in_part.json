@@ -190,7 +190,7 @@
                 "basis": "RECORD"
               }
             ],
-            "absent": "An approval by the line manager, Grace Whitfield, herself.",
+            "absent": "",
             "reason": "The line manager step was approved by the user himself, not by the line manager."
           },
           "pass": {
@@ -226,7 +226,7 @@
                 "basis": "RECORD"
               }
             ],
-            "absent": "Requester and approvers being different people.",
+            "absent": "",
             "reason": "The requester is also an approver."
           },
           "pass": {
@@ -243,7 +243,7 @@
                 "basis": "RECORD"
               }
             ],
-            "absent": "Approvers other than the requester and the receiving user.",
+            "absent": "",
             "reason": "An approver is the requester and the user who receives the access."
           }
         }

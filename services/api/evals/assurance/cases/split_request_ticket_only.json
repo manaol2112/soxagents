@@ -35,7 +35,8 @@
         "pass_when": "Both approvals are timestamped before the SAP change document shows the role assigned.",
         "exception_when": "An approval is missing, is given by someone other than the named approver, or is dated after the role was assigned."
       },
-      "expected": true
+      "expected": true,
+      "linked_elsewhere": true
     },
     {
       "code": "C",

@@ -137,7 +137,7 @@
                 "basis": "RECORD"
               }
             ],
-            "absent": "A recorded management approval and an effective date on or before 1 January 2026.",
+            "absent": "",
             "reason": "The approval block is placeholders and the document is marked draft."
           }
         }
@@ -174,7 +174,7 @@
                 "basis": "REQUIREMENT"
               }
             ],
-            "absent": "The line manager and the role owner named as approvers.",
+            "absent": "",
             "reason": "The approvers are a placeholder."
           }
         }

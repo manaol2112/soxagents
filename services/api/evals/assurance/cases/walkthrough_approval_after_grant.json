@@ -206,7 +206,7 @@
                 "basis": "RECORD"
               }
             ],
-            "absent": "A role owner approval dated before the role assignment at 02.03.2026 09:12:05.",
+            "absent": "",
             "reason": "The role owner approval is timestamped after the SAP assignment."
           }
         }

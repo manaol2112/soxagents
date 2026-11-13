@@ -79,6 +79,9 @@ class AttributeCase(_Strict):
     criteria: CriteriaCase | None = None
     # The request links this attribute (evidence_requirement_attributes).
     expected: bool
+    # Another D&I request of the control links it too (evidence_assurance: part of it shown
+    # here is partial support; where no other request does, what is not shown is an issue).
+    linked_elsewhere: bool = False
 
 
 class RowsCase(_Strict):
@@ -288,6 +291,7 @@ def attribute_spec(case: EvalCase, attribute: AttributeCase) -> AttributeSpec:
         text=attribute.text,
         criteria=criteria,
         expected=attribute.expected,
+        linked_elsewhere=attribute.linked_elsewhere,
     )
 
 

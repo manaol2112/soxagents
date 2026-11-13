@@ -106,7 +106,8 @@ def find_quote(text: str, quote: str) -> tuple[int, int] | None:
 _FOLD_STRICT = str.maketrans(
     {
         "\u2019": "'", "\u2018": "'", "\u201c": '"', "\u201d": '"', "\u2013": "-",
-        "\u2014": "-", "\u00a0": " ", "\u2039": "<", "\u203a": ">",
+        "\u2014": "-", "\u00a0": " ", "\u2039": "<", "\u203a": ">", "\uff1c": "<",
+        "\ufe64": "<", "\u3008": "<", "\u2329": "<", "\u27e8": "<",
     }
 )  # fmt: skip
 MIN_PASSAGE_WORDS = 4
@@ -146,10 +147,31 @@ def _all(folded: str, needle: str) -> list[int]:
     return found
 
 
+# A word that turns what follows it into its opposite.
+_NEGATORS = frozenset({"not", "no", "never", "without"})
+_WORD = re.compile(r"[A-Za-z0-9']+")
+
+
+def _cut(folded: str, end: int, needle: str) -> bool:
+    """Whether the needle ends inside a token: it ends with "-", "/", ":" or "." and a
+    letter or digit follows ("approved on 2026-03-" of "2026-03-03")."""
+    return needle[-1] in "-/:." and end < len(folded) and folded[end].isalnum()
+
+
+def _negated(text: str, start: int) -> bool:
+    """Whether the word just before a match, on the same line of the original text,
+    negates it ("not approved by the line manager" quoted as "approved by the line
+    manager")."""
+    line_start = text.rfind("\n", 0, start) + 1
+    before = _WORD.findall(text[line_start:start])
+    return bool(before) and before[-1].lower() in _NEGATORS
+
+
 def find_passage(text: str, quote: str, context: str = "") -> PassageMatch | None:
     """Where a quoted passage is in the text, matched strictly: folded as find_quote
     folds (spacing, case, quote marks, dashes), but only on word boundaries at both ends,
-    and only for a passage of at least four words or twenty characters after folding.
+    never where the word just before it negates it or where it ends inside a token, and
+    only for a passage of at least four words or twenty characters after folding.
     None when it is not there, or too short to stand for anything. Where it occurs more
     than once, `context` (words around it in the text) picks the occurrence meant; when
     it does not pick exactly one, the match says it is not placed. find_quote, which the
@@ -162,6 +184,8 @@ def find_passage(text: str, quote: str, context: str = "") -> PassageMatch | Non
         (at, at + len(needle))
         for at in _all(folded, needle)
         if _bounded(folded, at, len(needle), needle)
+        and not _cut(folded, at + len(needle), needle)
+        and not _negated(text, origin[at])
     ]
     if not spans:
         return None

@@ -517,15 +517,10 @@ def test_one_line_quoted_twice_is_not_a_contradiction(tmp_path: Path) -> None:
     assert d["verdict"] == "UNSETTLED" and d["assessor_result"] == "CANNOT_TELL"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known defect, reported to the lead: rule 3 asks for two passages that do not "
-        "overlap, not two records, so two fragments of one line pass as a contradiction "
-        "(and an agreed CONTRADICTED is an ISSUE even on an unlinked attribute)."
-    ),
-)
 def test_two_fragments_of_one_line_are_not_a_contradiction(tmp_path: Path) -> None:
+    """Fixed after the second independent review (item 8): a contradiction needs two
+    passages on different lines or in different files; two pieces of one line are one
+    record. Was a strict expected failure."""
     case = BY_NAME["one_line_contradiction"]
     first = "Role requested: Z_FI_AP_CLERK - Accounts Payable Clerk"
     claims = _claims("D", "CONTRADICTED", [

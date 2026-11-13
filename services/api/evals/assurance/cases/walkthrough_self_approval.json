@@ -185,7 +185,7 @@
                 "basis": "RECORD"
               }
             ],
-            "absent": "An approval by the line manager, Grace Whitfield, herself.",
+            "absent": "",
             "reason": "The line manager step was approved by the user himself, not by the line manager."
           },
           "pass": {

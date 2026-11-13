@@ -936,6 +936,7 @@ def attach_assurance_result(
     attribute_code: str,
     assessment_id: UUID,
     verdict: str,
+    result: str = "",
 ) -> bool:
     """A new run's result for an attribute, attached to the issue on it a person already
     has in hand (accepted, sent, answered...), from an earlier run of the same request.
@@ -976,9 +977,15 @@ def attach_assurance_result(
                     (finding_id,),
                 )
         elif verdict == "ISSUE":
+            phrase = {
+                "CONTRADICTED": "contradicted",
+                "NOT_MET": "not met",
+                "PARTLY_MET": "met in part",
+                "NOT_ADDRESSED": "not addressed",
+            }.get(result, "not shown")
             note = (
-                f"A new check of the request's evidence still finds attribute "
-                f"{attribute_code} not shown. A person decides."
+                f"A new check of the request's evidence finds attribute {attribute_code} "
+                f"{phrase}. A person decides."
             )
         else:
             note = (
