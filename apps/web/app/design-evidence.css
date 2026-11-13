@@ -683,6 +683,49 @@ button.de-caret > svg {
   background: var(--surface-muted);
 }
 
+/* Attributes the request does not ask for: one folded line, both readings on open. */
+.de-unasked {
+  min-width: 0;
+}
+
+.de-unasked > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.de-unasked > summary::-webkit-details-marker {
+  display: none;
+}
+
+.de-unasked > summary:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.de-unasked > summary > .de-attr-caret {
+  margin-left: auto;
+}
+
+.de-unasked[open] > summary .de-attr-caret > svg {
+  transform: rotate(90deg);
+}
+
+.de-unasked-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.4rem 0 0.2rem;
+  list-style: none;
+  font-size: var(--fs-sm);
+  animation: tar-open 200ms ease;
+}
+
+.de-unasked-list p {
+  margin: 0 0 0.35rem;
+  overflow-wrap: anywhere;
+}
+
 /* Accept, with what accepting marks as evidenced said first. */
 .de-accept {
   display: grid;
@@ -777,7 +820,8 @@ button.de-caret > svg {
     transition: none;
   }
 
-  .de-attr-body {
+  .de-attr-body,
+  .de-unasked-list {
     animation: none;
   }
 }

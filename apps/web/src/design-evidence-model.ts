@@ -23,6 +23,7 @@ import {
   assurancePill,
   assuranceRow,
   assuranceSentence,
+  DESIGN_ONLY,
   type EvidenceAssurance,
 } from "./evidence-assurance-model.ts";
 import type { PlanRequirement } from "./evidence-plan-model.ts";
@@ -422,6 +423,9 @@ export type HistoryRow = {
 
 export type CoverageState =
   | "EVIDENCED"
+  // Accepted, and its check supports it with the documented design alone: D&I needs
+  // the implementation shown too.
+  | "DESIGN_ONLY"
   | "REQUESTED"
   | "EXCEPTED"
   | "UNCOVERED";
@@ -1075,12 +1079,15 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
 
   // Coverage: outline where a request addresses the attribute, green with a check once
   // the evidence of one such request is accepted. Where the assurance chain checked a
-  // row's files, accepting it evidences the attributes both readings support and no
-  // other (docs/evidence-assurance.md, section 3): the agents' support alone is only
-  // ready to accept, and an acceptance alone does not evidence what the check did not
-  // support.
+  // row's files, accepting it evidences the attributes both readings support with the
+  // records of an instance, and no other (docs/evidence-assurance.md, section 3): D&I
+  // needs the design and its implementation, so support by a policy's word alone is
+  // "design documented, implementation not yet shown"; the agents' support alone is
+  // only ready to accept, and an acceptance alone does not evidence what the check did
+  // not support.
   const evidences = (row: EvidenceRow) =>
-    row.assurance === null ? row.attributeIds : row.assurance.supportedIds;
+    row.assurance === null ? row.attributeIds : row.assurance.implementedIds;
+  const designs = (row: EvidenceRow) => row.assurance?.designIds ?? [];
   const reasonOf = new Map(
     input.exceptions.map((item) => [item.attributeId, item]),
   );
@@ -1091,7 +1098,8 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
       (row) =>
         row.state === "ACCEPTED" &&
         row.assurance !== null &&
-        row.attributeIds.includes(attributeId),
+        row.attributeIds.includes(attributeId) &&
+        !designs(row).includes(attributeId),
     );
   const coverage: CoverageChip[] = attributes.map((item) => {
     const addressing = live.filter((row) => row.attributeIds.includes(item.id));
@@ -1099,11 +1107,15 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
       (row) => row.state === "ACCEPTED" && evidences(row).includes(item.id),
     )
       ? "EVIDENCED"
-      : addressing.length > 0
-        ? "REQUESTED"
-        : excepted.has(item.id)
-          ? "EXCEPTED"
-          : "UNCOVERED";
+      : live.some(
+            (row) => row.state === "ACCEPTED" && designs(row).includes(item.id),
+          )
+        ? "DESIGN_ONLY"
+        : addressing.length > 0
+          ? "REQUESTED"
+          : excepted.has(item.id)
+            ? "EXCEPTED"
+            : "UNCOVERED";
     return {
       attributeId: item.id,
       letter: item.letter,
@@ -1112,13 +1124,15 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
       label:
         state === "EVIDENCED"
           ? `Attribute ${item.letter}: evidence accepted`
-          : state === "REQUESTED"
-            ? unsupported(item.id)
-              ? `Attribute ${item.letter}: evidence accepted, and its check does not show the attribute supported`
-              : `Attribute ${item.letter}: requested, no evidence accepted yet`
-            : state === "EXCEPTED"
-              ? `Attribute ${item.letter}: not evidenced at D&I, with a recorded reason`
-              : `Attribute ${item.letter}: not addressed by any request`,
+          : state === "DESIGN_ONLY"
+            ? `Attribute ${item.letter}: ${DESIGN_ONLY}`
+            : state === "REQUESTED"
+              ? unsupported(item.id)
+                ? `Attribute ${item.letter}: evidence accepted, and its check does not show the attribute supported`
+                : `Attribute ${item.letter}: requested, no evidence accepted yet`
+              : state === "EXCEPTED"
+                ? `Attribute ${item.letter}: not evidenced at D&I, with a recorded reason`
+                : `Attribute ${item.letter}: not addressed by any request`,
       reason: state === "EXCEPTED" ? (reasonOf.get(item.id)?.reason ?? "") : "",
     };
   });
@@ -1131,6 +1145,7 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
   const evidenced = coverage.filter((chip) => chip.state === "EVIDENCED");
   const gaps = coverage.filter((chip) => chip.state === "UNCOVERED");
   const reasons = coverage.filter((chip) => chip.state === "EXCEPTED");
+  const designed = coverage.filter((chip) => chip.state === "DESIGN_ONLY");
   const review = live.filter((row) => row.canAccept && !row.decided);
   // What accepting the files that wait would add to the coverage.
   const wouldCover = attributes
@@ -1154,11 +1169,18 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
           gaps.length === 0 &&
           reasons.length === 0 &&
           wouldCover.length === 0 &&
-          bare.length === 0
+          bare.length === 0 &&
+          designed.length === 0
             ? "Every attribute is requested · none evidenced yet"
             : `${evidenced.length} of ${plural(attributes.length, "attribute")} evidenced`,
           wouldCover.length > 0
             ? `accepting ${reviewFiles === 1 ? "this file" : "these files"} covers ${lettersSpan(wouldCover, allLetters)}`
+            : "",
+          designed.length > 0
+            ? `${lettersSpan(
+                designed.map((chip) => chip.letter),
+                allLetters,
+              )} ${DESIGN_ONLY}`
             : "",
           bare.length > 0
             ? `${lettersSpan(bare, allLetters)} accepted without support from the check`

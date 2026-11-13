@@ -3,9 +3,10 @@
  * sections 6 and 7). The in-force files of each D&I request are read together, as one
  * walkthrough, against the control's approved attributes by two independent readings,
  * and code on the server decides what stands: one run per request. This module reads
- * what the server sent and words it for the request's row: a check at work, a check on
- * hold with the one action that clears it, a check to run again, a file left out of the
- * readings with why, and a finished check with each attribute's state.
+ * what the server sent and words it for the request's row: a check not run yet, a check
+ * at work, a check on hold with the one action that clears it, a check to run again, a
+ * file left out of the readings with why, and a finished check with each attribute's
+ * state.
  *
  * Pure. Nothing here decides a verdict: the server does. A value this module does not
  * know falls back to the cautious reading, never to "supported": an unknown status reads
@@ -13,9 +14,16 @@
  * person's judgment, and support that came without what support needs (the agreed
  * result, a passage) is not shown as support. Nothing reads as an issue unless the
  * server's verdict says both readings agree on it, and no file of the request is left
- * out of what the row says without saying so.
+ * out of what the row says without saying so. D&I needs both the design and its
+ * implementation: an attribute is evidenced only where the records of an instance show
+ * it, never on a policy's word alone.
  */
 
+import {
+  CLOSED_STATUSES,
+  FINDING_STATUSES,
+  type FindingStatus,
+} from "./evidence-findings-model.ts";
 import type { IconName } from "./icon-name.ts";
 
 type Raw = Record<string, unknown>;
@@ -30,6 +38,7 @@ const uuidOrNull = (value: unknown): string | null =>
 // What the server sends (section 6)
 
 export const STATUSES = [
+  "NOT_CHECKED",
   "QUEUED",
   "CHECKING",
   "HELD",
@@ -63,6 +72,7 @@ export type Result = (typeof RESULTS)[number];
 const HELD_CODES = [
   "CUSTODY",
   "UNREADABLE",
+  "READ_FAILED",
   "KIND_UNSURE",
   "POPULATION",
   "NO_ATTRIBUTES",
@@ -74,18 +84,24 @@ export type HeldCode = (typeof HELD_CODES)[number] | "OTHER";
 
 export type Lens = "DESIGN_DOCUMENT" | "INSTANCE_RECORD";
 
+/** What a supported attribute's evidence shows: the documented design (a policy or
+ * procedure requires it) or its implementation (the records of an instance show it). */
+export type Shows = "DESIGN" | "IMPLEMENTATION";
+
 /** A file's own words a result rests on, and where they sit. */
 export type Passage = {
   quote: string;
   /** The file the words are in; null where the server named none this page can read
    * and the request read more than one file. */
   fileId: string | null;
-  /** "Page 3", "Sheet Users, row 4"; "" where the server located nothing. */
+  /** "Page 3", "Image 2", "Sheet Users, row 4, column B"; "" where the server located
+   * nothing. */
   location: string;
   page: number | null;
 };
 
-/** One reading's answer for an attribute the two readings do not agree on. */
+/** One reading's answer for an attribute: both, where the readings do not agree, or
+ * where the request does not ask for the attribute. */
 export type View = {
   role: "ASSESSOR" | "REVIEWER";
   result: Result | null;
@@ -103,11 +119,16 @@ export type AssuredAttribute = {
    * person's judgment, without the claim that two readings disagree. */
   understood: boolean;
   result: Result | null;
+  /** What a supported attribute's evidence shows; null where it is not supported or
+   * the server did not say. */
+  shows: Shows | null;
   summary: string;
   passages: Passage[];
   absent: string[];
   views: View[];
   findingId: string | null;
+  /** The finding's status, where the server sent one this page knows. */
+  findingStatus: FindingStatus | null;
 };
 
 /** A file the gate left out of the readings; the run went ahead on the rest. */
@@ -130,6 +151,8 @@ export type AssuredRequest = {
   attributes: AssuredAttribute[];
   /** Why the check is out of date, in the server's sentences. */
   outOfDate: string[];
+  /** Why a failed check failed, in one plain sentence; "" otherwise. */
+  note: string;
   finishedAt: string | null;
 };
 
@@ -140,7 +163,7 @@ export type AssuranceSummary = {
   held: number | null;
   failed: number | null;
   outOfDate: number | null;
-  /** Attribute verdicts. */
+  /** Attribute verdicts; issues counts only the open ones. */
   supported: number | null;
   issues: number | null;
   unsettled: number | null;
@@ -161,39 +184,43 @@ const strings = (value: unknown, limit: number): string[] =>
 const heldCode = (value: unknown): HeldCode =>
   HELD_CODES.find((item) => item === value) ?? "OTHER";
 
+const positive = (value: unknown): number | null =>
+  typeof value === "number" && Number.isInteger(value) && value > 0
+    ? value
+    : null;
+
+/**
+ * Where a passage sits. The server sends `{label, page, sheet, row, column, cell}`
+ * (evidence_assurance._where): `label` is already plain words ("Page 3", "Image 2",
+ * "Sheet Users, row 4, column B") and is shown as it is; without it the parts are
+ * composed. A bare string is taken as the label.
+ */
 function parseLocation(value: unknown): {
   location: string;
   page: number | null;
 } {
   if (typeof value === "string") {
-    return { location: value.trim(), page: null };
+    return { location: value.trim().slice(0, 120), page: null };
   }
   if (!isRecord(value)) {
     return { location: "", page: null };
   }
-  const page =
-    typeof value.page === "number" &&
-    Number.isInteger(value.page) &&
-    value.page > 0
-      ? value.page
-      : null;
-  const said = str(value.location);
-  if (said !== "") {
-    return { location: said, page };
+  const page = positive(value.page);
+  const label = str(value.label).slice(0, 120);
+  if (label !== "") {
+    return { location: label, page };
   }
   const sheet = str(value.sheet);
+  const row = positive(value.row);
+  const column = str(value.column);
   const cell = str(value.cell);
-  const row =
-    typeof value.row === "number" &&
-    Number.isInteger(value.row) &&
-    value.row > 0
-      ? value.row
-      : null;
   return {
     location: [
       page !== null ? `Page ${page}` : "",
       sheet !== "" ? `Sheet ${sheet}` : "",
-      cell !== "" ? `cell ${cell}` : row !== null ? `row ${row}` : "",
+      row !== null ? `row ${row}` : "",
+      column !== "" ? `column ${column}` : "",
+      row === null && column === "" && cell !== "" ? `cell ${cell}` : "",
     ]
       .filter((part) => part !== "")
       .join(", "),
@@ -265,6 +292,7 @@ function parseAttribute(
           ? result === null || result === "NOT_ADDRESSED"
           : said === "UNSETTLED";
   const verdict: Verdict = said !== null && stands ? said : "UNSETTLED";
+  const findingId = verdict === "ISSUE" ? uuidOrNull(value.finding_id) : null;
   return {
     attributeId,
     code,
@@ -272,17 +300,29 @@ function parseAttribute(
     verdict,
     understood: said !== null && stands,
     result: verdict === "UNSETTLED" ? null : result,
+    shows:
+      verdict === "SUPPORTED" &&
+      (value.shows === "DESIGN" || value.shows === "IMPLEMENTATION")
+        ? value.shows
+        : null,
     summary: str(value.summary),
     passages,
     absent: strings(value.absent, 12),
+    // Both readings: where they do not agree, and where the request does not ask for
+    // the attribute (available on open, never a judgment).
     views:
-      verdict === "UNSETTLED"
+      verdict === "UNSETTLED" || verdict === "NOT_ADDRESSED"
         ? (Array.isArray(value.views) ? value.views : [])
             .map(parseView)
             .filter((item): item is View => item !== null)
             .slice(0, 2)
         : [],
-    findingId: verdict === "ISSUE" ? uuidOrNull(value.finding_id) : null,
+    findingId,
+    findingStatus:
+      findingId === null
+        ? null
+        : (FINDING_STATUSES.find((item) => item === value.finding_status) ??
+          null),
   };
 }
 
@@ -367,6 +407,7 @@ function parseRequest(value: unknown): AssuredRequest | null {
           )
         : [],
     outOfDate,
+    note: status === "FAILED" ? str(value.note).slice(0, 300) : "",
     finishedAt: str(value.finished_at) || null,
   };
 }
@@ -408,42 +449,54 @@ export function parseAssurance(value: unknown): EvidenceAssurance | null {
   };
 }
 
+/** An issue a person has disposed of: its finding is dismissed, resolved, its
+ * clarification accepted, or marked not applicable. It is no longer open. */
+export function issueDecided(item: AssuredAttribute): boolean {
+  return (
+    item.verdict === "ISSUE" &&
+    item.findingStatus !== null &&
+    CLOSED_STATUSES.includes(item.findingStatus)
+  );
+}
+
 // The step's line
 
 export type AssuranceCounts = {
   /** Requests the chain has an entry for. */
   requests: number;
+  /** Requests with files and no check yet. */
+  notChecked: number;
   /** Requests whose check is queued or at work. */
   checking: number;
   /** Requests whose check is on hold. */
   held: number;
   /** Requests whose check failed or is out of date: to run again. */
   again: number;
-  /** Results both readings agree are an issue. */
+  /** Open results both readings agree are an issue. */
   issues: number;
   /** Results that need the person's judgment. */
   unsettled: number;
 };
 
 /**
- * What the step's line counts, from the server's `summary`, never below what the
- * requests on the page themselves show (a result this page read cautiously as needing
- * judgment is counted, though the server's summary could not know it). Support is not
- * counted here: the step's line never states it.
+ * What the step's line counts, from the server's `summary` (its issues are the open
+ * ones), never below what the requests on the page themselves show (a result this page
+ * read cautiously as needing judgment is counted, though the server's summary could not
+ * know it). An issue a person has decided is not counted. Support is not counted here:
+ * the step's line never states it.
  */
 export function assuranceCounts(
   assurance: EvidenceAssurance | null,
 ): AssuranceCounts {
   const requests = assurance?.requests ?? [];
-  const verdicts = requests.flatMap((item) =>
-    item.attributes.map((each) => each.verdict),
-  );
+  const attributes = requests.flatMap((item) => item.attributes);
   const summary = assurance?.summary ?? null;
   const has = (...statuses: CheckStatus[]) =>
     requests.filter((item) => statuses.includes(item.status)).length;
   const said = (value: number | null | undefined) => value ?? 0;
   return {
     requests: requests.length,
+    notChecked: has("NOT_CHECKED"),
     checking: Math.max(said(summary?.checking), has("QUEUED", "CHECKING")),
     held: Math.max(said(summary?.held), has("HELD")),
     again: Math.max(
@@ -452,11 +505,13 @@ export function assuranceCounts(
     ),
     issues: Math.max(
       said(summary?.issues),
-      verdicts.filter((verdict) => verdict === "ISSUE").length,
+      attributes.filter(
+        (item) => item.verdict === "ISSUE" && !issueDecided(item),
+      ).length,
     ),
     unsettled: Math.max(
       said(summary?.unsettled),
-      verdicts.filter((verdict) => verdict === "UNSETTLED").length,
+      attributes.filter((item) => item.verdict === "UNSETTLED").length,
     ),
   };
 }
@@ -464,8 +519,8 @@ export function assuranceCounts(
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /** What follows "N files to review" on the step's pill: what needs the person first,
- * then what is on hold, then what is to run again, then what is still being checked.
- * "" when nothing does. */
+ * then what is on hold, then what is to run again or not run yet, then what is still
+ * being checked. "" when nothing does. */
 export function assurancePill(counts: AssuranceCounts): string {
   const parts =
     counts.issues + counts.unsettled > 0
@@ -477,9 +532,11 @@ export function assurancePill(counts: AssuranceCounts): string {
         ? [`${counts.held} on hold`]
         : counts.again > 0
           ? [`${counts.again} to check again`]
-          : counts.checking > 0
-            ? [`${counts.checking} being checked`]
-            : [];
+          : counts.notChecked > 0
+            ? [`${counts.notChecked} not checked yet`]
+            : counts.checking > 0
+              ? [`${counts.checking} being checked`]
+              : [];
   return parts.filter((part) => part !== "").join(" · ");
 }
 
@@ -490,7 +547,7 @@ export function assuranceSentence(counts: AssuranceCounts): string {
     return "";
   }
   const found = [
-    counts.issues > 0 ? plural(counts.issues, "issue") : "",
+    counts.issues > 0 ? plural(counts.issues, "open issue") : "",
     counts.unsettled > 0
       ? `${plural(counts.unsettled, "result")} for your judgment`
       : "",
@@ -500,17 +557,25 @@ export function assuranceSentence(counts: AssuranceCounts): string {
       ? `${plural(counts.held, "request")} on hold until you act on ${counts.held === 1 ? "its" : "their"} row`
       : "",
     counts.again > 0 ? `${plural(counts.again, "check")} to run again` : "",
+    counts.notChecked > 0
+      ? `${plural(counts.notChecked, "request")} not checked yet`
+      : "",
     counts.checking > 0
       ? `${plural(counts.checking, "request")} still being checked`
       : "",
   ].filter((part) => part !== "");
   const reviewed =
-    counts.requests - counts.checking - counts.held - counts.again > 0;
+    counts.requests -
+      counts.checking -
+      counts.held -
+      counts.again -
+      counts.notChecked >
+    0;
   const lead =
     found.length > 0
       ? `Two independent readings checked the evidence against the attributes: ${found.join(", ")}. See each row.`
       : reviewed
-        ? "Two independent readings checked the evidence against the attributes: no issue, and nothing left for your judgment. What each row supports is on the row."
+        ? "Two independent readings checked the evidence against the attributes: no open issue, and nothing left for your judgment. What each row supports is on the row."
         : "";
   const rest =
     waiting.length === 0
@@ -524,6 +589,7 @@ export function assuranceSentence(counts: AssuranceCounts): string {
 export type AttributeState =
   | "SUPPORTED"
   | "ISSUE"
+  | "DECIDED"
   | "JUDGMENT"
   | "NOT_ADDRESSED";
 
@@ -536,8 +602,23 @@ export const STATE_WORDS: Record<
 > = {
   SUPPORTED: { label: "Supported", icon: "check", tone: "success" },
   ISSUE: { label: "Issue", icon: "risk", tone: "danger" },
+  DECIDED: { label: "Issue decided", icon: "check", tone: "neutral" },
   JUDGMENT: { label: "Your judgment needed", icon: "help", tone: "warning" },
   NOT_ADDRESSED: { label: "Not addressed", icon: "minus", tone: "neutral" },
+};
+
+/** What supported evidence shows, in words. */
+const SHOWS_WORDS: Record<Shows, string> = {
+  DESIGN: "design",
+  IMPLEMENTATION: "implementation",
+};
+
+/** How a person decided an issue's finding, in words: "Issue: decided by dismissal". */
+const DECIDED_WORDS: Partial<Record<FindingStatus, string>> = {
+  DISMISSED: "dismissal",
+  RESOLVED: "resolution",
+  CLARIFICATION_ACCEPTED: "an accepted clarification",
+  NOT_APPLICABLE: "marking it not applicable",
 };
 
 /** What a reading found, in an auditor's words. A reading with no result this page
@@ -568,8 +649,12 @@ export const READINGS_DISAGREE =
 export const RESULT_UNREAD =
   "This result could not be read as it was sent, so it is not shown as supported. Your judgment is needed.";
 
-const stateOf = (verdict: Verdict): AttributeState =>
-  verdict === "UNSETTLED" ? "JUDGMENT" : verdict;
+function stateOf(item: AssuredAttribute): AttributeState {
+  if (item.verdict === "UNSETTLED") {
+    return "JUDGMENT";
+  }
+  return issueDecided(item) ? "DECIDED" : item.verdict;
+}
 
 /** A file of the request's row: its id and its name. */
 export type RowFile = { id: string; name: string };
@@ -593,7 +678,10 @@ export type AttributeLine = {
   /** The request asks for it. */
   expected: boolean;
   state: AttributeState;
-  /** "Supported", "Issue: not shown", "Your judgment needed", "Not addressed". */
+  /** What supported evidence shows; null otherwise. */
+  shows: Shows | null;
+  /** "Supported (implementation)", "Issue: not shown", "Issue: decided by dismissal",
+   * "Your judgment needed", "Not addressed". */
   label: string;
   icon: IconName;
   tone: Tone;
@@ -602,15 +690,36 @@ export type AttributeLine = {
   absent: string[];
   /** The sentence over the two readings; null unless the person's judgment is needed. */
   judgment: string | null;
-  /** Both readings, side by side, for an attribute they do not agree on. */
+  /** Both readings: side by side where they do not agree, or on open where the request
+   * does not ask for the attribute. */
   readings: Array<{ who: string; result: string; reason: string }>;
   /** The evidence finding that records the issue; null where there is none. */
   findingId: string | null;
-  /** It opens by itself: an issue, or a judgment the person owes. */
+  /** It opens by itself: an open issue, or a judgment the person owes. */
   open: boolean;
 };
 
 export type Lettered = { id: string; letter: string; text: string };
+
+function labelOf(item: AssuredAttribute, state: AttributeState): string {
+  const words = STATE_WORDS[state];
+  if (state === "SUPPORTED") {
+    return item.shows === null
+      ? words.label
+      : `${words.label} (${SHOWS_WORDS[item.shows]})`;
+  }
+  if (state === "DECIDED") {
+    const how =
+      item.findingStatus === null
+        ? undefined
+        : DECIDED_WORDS[item.findingStatus];
+    return how === undefined ? "Issue: decided" : `Issue: decided by ${how}`;
+  }
+  if (state === "ISSUE" && item.result !== null) {
+    return `${words.label}: ${RESULT_WORDS[item.result].toLowerCase()}`;
+  }
+  return words.label;
+}
 
 function attributeLine(
   item: AssuredAttribute,
@@ -619,7 +728,7 @@ function attributeLine(
   many: boolean,
 ): AttributeLine {
   const known = attributes.find((each) => each.id === item.attributeId);
-  const state = stateOf(item.verdict);
+  const state = stateOf(item);
   const words = STATE_WORDS[state];
   return {
     key: item.attributeId !== "" ? item.attributeId : item.code,
@@ -628,10 +737,8 @@ function attributeLine(
     text: known?.text ?? "",
     expected: item.expected,
     state,
-    label:
-      state === "ISSUE" && item.result !== null
-        ? `${words.label}: ${RESULT_WORDS[item.result].toLowerCase()}`
-        : words.label,
+    shows: state === "SUPPORTED" ? item.shows : null,
+    label: labelOf(item, state),
     icon: words.icon,
     tone: words.tone,
     summary: item.summary,
@@ -668,6 +775,7 @@ function attributeLine(
 // A request's check, as its row shows it
 
 export type CheckStanding =
+  | "NOT_CHECKED"
   | "CHECKING"
   | "HELD"
   | "FAILED"
@@ -677,11 +785,12 @@ export type CheckStanding =
 export type CheckActionKind =
   | "CONFIRM_TYPE"
   | "REPLACE"
+  | "REREAD"
   | "PICK_INSTANCE"
   | "RERUN";
 
-/** The one action that clears a hold, or runs the check again. A file's action names
- * its file; running again is the request's. */
+/** The one action that clears a hold, or runs the check. A file's action names its
+ * file; running the check is the request's. */
 export type CheckAction = {
   kind: CheckActionKind;
   label: string;
@@ -695,6 +804,8 @@ const FILE_ACTIONS: Partial<
   KIND_UNSURE: { kind: "CONFIRM_TYPE", label: "Confirm the file's type" },
   UNREADABLE: { kind: "REPLACE", label: "Replace the file" },
   CUSTODY: { kind: "REPLACE", label: "Replace the file" },
+  // The reading itself failed: the file is read again (the reader's own re-read).
+  READ_FAILED: { kind: "REREAD", label: "Read the file again" },
   // Picked in the evidence dialog, on the population's own rows.
   POPULATION: { kind: "PICK_INSTANCE", label: "Pick the walkthrough instance" },
 };
@@ -707,6 +818,8 @@ const HELD_REASONS: Record<HeldCode, string> = {
     "Nothing readable could be taken from the evidence, so it has not been checked against the attributes.",
   CUSTODY:
     "The evidence did not pass its custody check, so it has not been checked against the attributes.",
+  READ_FAILED:
+    "Reading the file did not finish, so the evidence has not been checked against the attributes.",
   POPULATION:
     "The file is a population. The walkthrough instance is picked first, then its records are checked.",
   NO_ATTRIBUTES:
@@ -721,6 +834,7 @@ const FILE_REASONS: Record<HeldCode, string> = {
   KIND_UNSURE: "Its type is not confirmed.",
   UNREADABLE: "Nothing readable could be taken from it.",
   CUSTODY: "It did not pass its custody check.",
+  READ_FAILED: "Reading it did not finish.",
   POPULATION: "It is a population: the walkthrough instance is picked first.",
   NO_ATTRIBUTES: "It was not checked.",
   TOO_LARGE: "It is too large to be read with the other files.",
@@ -751,17 +865,21 @@ export type RequestCheck = {
   line: string;
   /** Where a check at work has got to ("second, independent reading"); "" otherwise. */
   stage: string;
-  /** The single action that clears a hold, or runs the check again; null when a person
-   * can do nothing about it here. Offered only to a person who may act (offeredAction). */
+  /** The single action that clears a hold, or runs the check; null when a person can do
+   * nothing about it here. Offered only to a person who may act (offeredAction). */
   action: CheckAction | null;
   /** "The evidence was read in part.", where it was; null otherwise. */
   readInPart: string | null;
   /** Files of the request the readings did not include, each with why. */
   leftOut: LeftOutLine[];
-  /** Issues and judgments first, then what is supported, in the attributes' order. */
+  /** Open issues and judgments first, then what is supported, then decided issues, in
+   * the attributes' order. */
   attributes: AttributeLine[];
-  /** Attributes the evidence does not bear on, folded to one quiet line. */
+  /** Attributes the request asks for that the evidence does not bear on, folded. */
   notAddressed: AttributeLine[];
+  /** Attributes the request does not ask for and the evidence does not bear on: one
+   * folded line, both readings on open. */
+  notAsked: AttributeLine[];
 };
 
 /** A sentence as the server sent it, closed with a full stop. */
@@ -779,6 +897,7 @@ function against(letters: readonly string[], span: Span): string {
 }
 
 export const READ_IN_PART = "The evidence was read in part.";
+export const NOT_CHECKED_LINE = "Not checked against the attributes yet";
 
 /** One request's check as its row shows it. `attributes` are the control's approved
  * attributes with the list's letters: every one of them is checked. `files` are the
@@ -826,6 +945,11 @@ export function requestCheck(
           }))
       : []),
   ];
+  const rerun = (label: string): CheckAction => ({
+    kind: "RERUN",
+    label,
+    fileId: null,
+  });
   const base = {
     stage: "",
     action: null,
@@ -833,7 +957,17 @@ export function requestCheck(
     leftOut,
     attributes: [],
     notAddressed: [],
+    notAsked: [],
   };
+  if (request.status === "NOT_CHECKED") {
+    return {
+      ...base,
+      leftOut: [],
+      standing: "NOT_CHECKED",
+      line: NOT_CHECKED_LINE,
+      action: rerun("Check now"),
+    };
+  }
   if (working) {
     return {
       ...base,
@@ -868,8 +1002,13 @@ export function requestCheck(
     return {
       ...base,
       standing: "FAILED",
-      line: "The check did not finish, so nothing of it is shown.",
-      action: { kind: "RERUN", label: "Check again", fileId: null },
+      line: [
+        "The check did not finish, so nothing of it is shown.",
+        sentence(request.note),
+      ]
+        .filter((part) => part !== "")
+        .join(" "),
+      action: rerun("Check again"),
     };
   }
   if (request.status === "OUT_OF_DATE") {
@@ -880,14 +1019,15 @@ export function requestCheck(
         "The check is out of date, so its results are not shown.",
         ...request.outOfDate.map(sentence),
       ].join(" "),
-      action: { kind: "RERUN", label: "Check again", fileId: null },
+      action: rerun("Check again"),
     };
   }
   const rank: Record<AttributeState, number> = {
     ISSUE: 0,
     JUDGMENT: 1,
     SUPPORTED: 2,
-    NOT_ADDRESSED: 3,
+    DECIDED: 3,
+    NOT_ADDRESSED: 4,
   };
   const place = (line: AttributeLine) => {
     const at = attributes.findIndex((each) => each.id === line.attributeId);
@@ -913,35 +1053,78 @@ export function requestCheck(
           )} by two independent readings${read > 1 ? `, reading ${read} files together` : ""}.`,
     readInPart: request.readInPart ? READ_IN_PART : null,
     attributes: lines.filter((line) => line.state !== "NOT_ADDRESSED"),
-    notAddressed: lines.filter((line) => line.state === "NOT_ADDRESSED"),
+    notAddressed: lines.filter(
+      (line) => line.state === "NOT_ADDRESSED" && line.expected,
+    ),
+    notAsked: lines.filter(
+      (line) => line.state === "NOT_ADDRESSED" && !line.expected,
+    ),
   };
 }
 
-/** The action as the person is offered it: only to a person who may act, and a
- * replacement only where its file can be replaced now. */
+/** The action as the person is offered it: only to a person who may act; a replacement
+ * only where its file can be replaced now; a re-read only where its reading is known. */
 export function offeredAction(
   action: CheckAction | null,
-  facts: { canAct: boolean; replaceable: (fileId: string) => boolean },
+  facts: {
+    canAct: boolean;
+    replaceable: (fileId: string) => boolean;
+    rereadable: (fileId: string) => boolean;
+  },
 ): CheckAction | null {
   if (action === null || !facts.canAct) {
     return null;
   }
-  return action.kind === "REPLACE" &&
-    (action.fileId === null || !facts.replaceable(action.fileId))
-    ? null
-    : action;
+  if (action.kind === "REPLACE" || action.kind === "REREAD") {
+    const able =
+      action.kind === "REPLACE" ? facts.replaceable : facts.rereadable;
+    return action.fileId !== null && able(action.fileId) ? action : null;
+  }
+  return action;
 }
 
 // One request row
 
+/** How the row's own line groups its letters: each letter under one group. */
+export type StateGroupKey =
+  | "IMPLEMENTED"
+  | "DESIGN"
+  | "SUPPORTED"
+  | "ISSUE"
+  | "JUDGMENT"
+  | "DECIDED";
+
 export type StateGroup = {
-  state: AttributeState;
+  key: StateGroupKey;
   letters: string[];
-  /** "A and C supported", "B issue", "D your judgment needed". */
+  /** "A supported (implementation)", "B issue", "D your judgment needed". */
   label: string;
   icon: IconName;
   tone: Tone;
 };
+
+const GROUP_WORDS: Record<
+  StateGroupKey,
+  { words: string; state: AttributeState }
+> = {
+  IMPLEMENTED: { words: "supported (implementation)", state: "SUPPORTED" },
+  DESIGN: { words: "supported (design)", state: "SUPPORTED" },
+  SUPPORTED: { words: "supported", state: "SUPPORTED" },
+  ISSUE: { words: "issue", state: "ISSUE" },
+  JUDGMENT: { words: "your judgment needed", state: "JUDGMENT" },
+  DECIDED: { words: "issue decided", state: "DECIDED" },
+};
+
+const groupOf = (line: AttributeLine): StateGroupKey | null =>
+  line.state === "SUPPORTED"
+    ? line.shows === "IMPLEMENTATION"
+      ? "IMPLEMENTED"
+      : line.shows === "DESIGN"
+        ? "DESIGN"
+        : "SUPPORTED"
+    : line.state === "NOT_ADDRESSED"
+      ? null
+      : line.state;
 
 export type AssuranceRow = {
   standing: CheckStanding;
@@ -951,10 +1134,14 @@ export type AssuranceRow = {
   /** Beside the row's letters once the check is finished: each letter under its one
    * state. */
   states: StateGroup[];
-  /** The same for a screen reader and the step's notes: "A and C supported, B issue". */
+  /** The same for a screen reader and the step's notes. */
   spoken: string;
-  /** The attributes accepting the row's evidence marks as evidenced. */
-  supportedIds: string[];
+  /** The attributes the check supports with records of an instance: accepting the row
+   * marks these as evidenced, and no other. */
+  implementedIds: string[];
+  /** The attributes the check supports with the documented design only: accepting
+   * marks them "design documented, implementation not yet shown". */
+  designIds: string[];
   /** Beside Accept: what accepting marks as evidenced, and what it does not settle. */
   acceptNote: string;
   /** The check is queued or at work: the list is read again until it ends. */
@@ -962,11 +1149,15 @@ export type AssuranceRow = {
 };
 
 const STANDING_FACTS: Record<Exclude<CheckStanding, "CHECKING">, string> = {
+  NOT_CHECKED: "Not checked yet",
   HELD: "Check on hold",
   FAILED: "Check did not finish",
   OUT_OF_DATE: "Check out of date",
   REVIEWED: "Checked by two readings",
 };
+
+/** Said of an attribute whose support is the documented design alone. */
+export const DESIGN_ONLY = "design documented, implementation not yet shown";
 
 /**
  * What a request row shows of its check; null when the chain has no entry for the
@@ -995,53 +1186,59 @@ export function assuranceRow(input: {
     input.files,
     input.span,
   );
-  const lettersIn = (state: AttributeState) =>
-    check.attributes
-      .filter((line) => line.state === state)
-      .map((line) => line.letter);
-  const states: StateGroup[] = (["SUPPORTED", "ISSUE", "JUDGMENT"] as const)
-    .map((state) => ({ state, letters: lettersIn(state) }))
-    .filter((group) => group.letters.length > 0)
-    .map(({ state, letters }) => ({
-      state,
-      letters,
-      label: `${input.span(letters)} ${STATE_WORDS[state].label.toLowerCase()}`,
-      icon: STATE_WORDS[state].icon,
-      tone: STATE_WORDS[state].tone,
-    }));
-  const left = check.leftOut.length;
+  const order = input.attributes.map((item) => item.letter);
+  const at = (letter: string) =>
+    order.indexOf(letter) < 0 ? order.length : order.indexOf(letter);
   // In the attributes' order, as the row's letters are.
-  const ordered = (state: AttributeState) =>
-    input.attributes
-      .map((item) => item.letter)
-      .filter((letter) => lettersIn(state).includes(letter))
-      .concat(
-        lettersIn(state).filter(
-          (letter) => !input.attributes.some((item) => item.letter === letter),
-        ),
-      );
+  const lettersOf = (key: StateGroupKey) =>
+    check.attributes
+      .filter((line) => groupOf(line) === key)
+      .map((line) => line.letter)
+      .sort((a, b) => at(a) - at(b) || a.localeCompare(b));
+  const keys: StateGroupKey[] = [
+    "IMPLEMENTED",
+    "DESIGN",
+    "SUPPORTED",
+    "ISSUE",
+    "JUDGMENT",
+    "DECIDED",
+  ];
+  const states: StateGroup[] = keys
+    .map((key) => ({ key, letters: lettersOf(key) }))
+    .filter((group) => group.letters.length > 0)
+    .map(({ key, letters }) => ({
+      key,
+      letters,
+      label: `${input.span(letters)} ${GROUP_WORDS[key].words}`,
+      icon: STATE_WORDS[GROUP_WORDS[key].state].icon,
+      tone: STATE_WORDS[GROUP_WORDS[key].state].tone,
+    }));
+  const idsOf = (key: StateGroupKey) =>
+    check.attributes
+      .filter((line) => groupOf(line) === key && line.attributeId !== "")
+      .map((line) => line.attributeId);
+  const left = check.leftOut.length;
   return {
     standing: check.standing,
     fact:
       check.standing === "CHECKING"
-        ? `Checking ${against(
-            input.attributes.map((item) => item.letter),
-            input.span,
-          )}…`
+        ? `Checking ${against(order, input.span)}…`
         : check.standing === "REVIEWED" && left > 0
           ? `${STANDING_FACTS.REVIEWED}, ${plural(left, "file")} left out`
           : STANDING_FACTS[check.standing],
     check,
     states,
     spoken: states.map((group) => group.label).join(", "),
-    supportedIds: check.attributes
-      .filter((line) => line.state === "SUPPORTED" && line.attributeId !== "")
-      .map((line) => line.attributeId),
+    implementedIds: idsOf("IMPLEMENTED"),
+    designIds: idsOf("DESIGN"),
     acceptNote: acceptNote({
       standing: check.standing,
-      supported: ordered("SUPPORTED"),
-      issues: ordered("ISSUE"),
-      judged: ordered("JUDGMENT"),
+      implemented: lettersOf("IMPLEMENTED"),
+      design: lettersOf("DESIGN"),
+      unstated: lettersOf("SUPPORTED"),
+      issues: lettersOf("ISSUE"),
+      judged: lettersOf("JUDGMENT"),
+      decided: lettersOf("DECIDED"),
       leftOut: left,
       span: input.span,
     }),
@@ -1051,14 +1248,22 @@ export function assuranceRow(input: {
 
 /**
  * Beside Accept: what accepting the row's evidence marks as evidenced (the attributes
- * both readings support, and no other), and what it leaves open. It informs and never
- * blocks: Accept stays the person's.
+ * the records of an instance show, and no other), and what it leaves open. It informs
+ * and never blocks: Accept stays the person's.
  */
 export function acceptNote(facts: {
   standing: CheckStanding;
-  supported: readonly string[];
+  /** Supported by the records of an instance. */
+  implemented: readonly string[];
+  /** Supported by the documented design alone. */
+  design: readonly string[];
+  /** Supported, without the server saying by which. */
+  unstated: readonly string[];
+  /** Open issues. */
   issues: readonly string[];
   judged: readonly string[];
+  /** Issues a person has decided. */
+  decided: readonly string[];
   /** Files of the request the readings did not include. */
   leftOut: number;
   span: Span;
@@ -1071,10 +1276,15 @@ export function acceptNote(facts: {
     return "This evidence has not been checked against the attributes, so accepting marks no attribute as evidenced.";
   }
   const open = facts.issues.length + facts.judged.length > 0;
+  const many = (letters: readonly string[]) => letters.length !== 1;
   return [
-    facts.supported.length > 0
-      ? `Accepting marks attribute${facts.supported.length === 1 ? "" : "s"} ${span(facts.supported)} as evidenced.`
-      : "Accepting marks no attribute as evidenced: the two readings support none.",
+    facts.implemented.length > 0
+      ? `Accepting marks attribute${many(facts.implemented) ? "s" : ""} ${span(facts.implemented)} as evidenced.`
+      : "Accepting marks no attribute as evidenced: the two readings find no record of an instance that shows one.",
+    facts.design.length > 0 ? `${span(facts.design)}: ${DESIGN_ONLY}.` : "",
+    facts.unstated.length > 0
+      ? `${span(facts.unstated)} ${many(facts.unstated) ? "are" : "is"} supported, but the check does not say whether by the design or its implementation, so ${many(facts.unstated) ? "they are" : "it is"} not marked as evidenced.`
+      : "",
     facts.issues.length > 0
       ? `Both readings found an issue on ${span(facts.issues)}.`
       : "",
@@ -1082,6 +1292,9 @@ export function acceptNote(facts: {
       ? `The readings do not agree on ${span(facts.judged)}: your judgment is needed.`
       : "",
     open ? "You can still accept; accepting does not settle these." : "",
+    facts.decided.length > 0
+      ? `The issue on ${span(facts.decided)} is decided, and ${many(facts.decided) ? "they are" : "it is"} not marked as evidenced.`
+      : "",
     facts.leftOut > 0
       ? `${plural(facts.leftOut, "file")} ${facts.leftOut === 1 ? "was" : "were"} not part of the check.`
       : "",
@@ -1090,13 +1303,27 @@ export function acceptNote(facts: {
     .join(" ");
 }
 
-// Running a check again
+// Polling while a check works
+
+/** How long until the list is read again while a check works, by how long it has been
+ * reading: every 5 seconds for the first minute, then every 15, and no more after 20
+ * minutes (null), when the row says so instead. */
+export function checkPollDelay(elapsedMs: number): number | null {
+  if (elapsedMs < 60_000) {
+    return 5_000;
+  }
+  return elapsedMs < 20 * 60_000 ? 15_000 : null;
+}
+
+export const STILL_CHECKING = "Still checking. Refresh to see the result.";
+
+// Running a check, and reading a file again
 
 type Fields = Record<string, unknown>;
 type AssuranceWrite = { path: string } | { error: "invalid" };
 
-/** The API call behind "Check again" (the /workspace/evidence-assurance route): POST
- * .../evidence-assurance/{requirement_id}/rerun, with no body. */
+/** The API call behind "Check again" and "Check now" (the /workspace/evidence-assurance
+ * route): POST .../evidence-assurance/{requirement_id}/rerun, with no body. */
 export function assuranceWrite(fields: Fields): AssuranceWrite {
   const [organizationId, projectId, controlId, requirementId] = [
     "organization_id",
@@ -1117,8 +1344,8 @@ export function assuranceWrite(fields: Fields): AssuranceWrite {
   };
 }
 
-/** What a person reads when "Check again" did not go through; null when the server
- * confirmed it. */
+/** What a person reads when running the check did not go through; null when the
+ * server confirmed it. */
 export function assuranceProblem(status: number, detail = ""): string | null {
   if (status === 200) {
     return null;
@@ -1127,10 +1354,10 @@ export function assuranceProblem(status: number, detail = ""): string | null {
     // The server says why in one plain sentence: shown as it is.
     return detail.trim() !== ""
       ? sentence(detail.trim())
-      : "The check cannot be run again now. The row is refreshed.";
+      : "The check cannot be run now. The row is refreshed.";
   }
   if (status === 403) {
-    return "Your role cannot run the check again.";
+    return "Your role cannot run the check.";
   }
   if (status === 404) {
     return "This request is no longer here to check. Refresh the page.";
@@ -1139,4 +1366,22 @@ export function assuranceProblem(status: number, detail = ""): string | null {
     return "The check could not be started for this request. Refresh the page and try again.";
   }
   return "The check could not be started. Try again in a moment.";
+}
+
+/** What a person reads when reading a file again did not go through; null when the
+ * server confirmed it. */
+export function rereadProblem(status: number): string | null {
+  if (status === 200) {
+    return null;
+  }
+  if (status === 409) {
+    return "The file's reading changed meanwhile. The row is refreshed: check it and try again.";
+  }
+  if (status === 403 || status === 404) {
+    return "Your role cannot read this file again.";
+  }
+  if (status === 422) {
+    return "The file could not be read again. Refresh the page and try again.";
+  }
+  return "Reading the file again could not be started. Try again in a moment.";
 }

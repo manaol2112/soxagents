@@ -32,9 +32,12 @@ import {
   type AttributeLine,
   assuranceProblem,
   type CheckAction,
+  checkPollDelay,
   offeredAction,
   type RequestCheck,
   type RowFile,
+  rereadProblem,
+  STILL_CHECKING,
 } from "./evidence-assurance-model";
 import { centerHref, DEFAULT_QUERY } from "./evidence-center-model";
 import { type DialogOpen, EvidenceDialog } from "./evidence-dialog";
@@ -166,7 +169,73 @@ function useAssuranceAction(ids: Ids) {
     }
     return message === null;
   }
-  return { run, busy, pending: pending || busy !== "", problem };
+  /** Reads a file again whose reading failed: the reader's own re-read, through the
+   * evidence dialog's route, so nothing reloads. */
+  async function reread(
+    fileId: string,
+    analysis: { id: string; version: number },
+  ): Promise<boolean> {
+    setBusy(`reread-${fileId}`);
+    setProblem(null);
+    let status = 0;
+    try {
+      const response = await fetch("/workspace/evidence-dialog", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          organization_id: ids.organizationId,
+          project_id: ids.projectId,
+          intent: "reanalyze",
+          analysis_id: analysis.id,
+          version: analysis.version,
+        }),
+      });
+      const body = (await response.json()) as { status?: unknown };
+      status = typeof body.status === "number" ? body.status : 0;
+    } catch {
+      status = 0;
+    }
+    setBusy("");
+    const message = rereadProblem(status);
+    setProblem(message);
+    if (message === null || status === 409) {
+      startTransition(() => router.refresh());
+    }
+    return message === null;
+  }
+  return { run, reread, busy, pending: pending || busy !== "", problem };
+}
+
+/**
+ * While a check works the list is read again in place until the run leaves the queue
+ * and the readings: every 5 seconds for the first minute, then every 15, for up to 20
+ * minutes (checkPollDelay). After that it stops and says so, rather than read for good.
+ */
+function CheckPolling() {
+  const router = useRouter();
+  const [over, setOver] = useState(false);
+  useEffect(() => {
+    const start = Date.now();
+    let timer: number | undefined;
+    const next = () => {
+      const delay = checkPollDelay(Date.now() - start);
+      if (delay === null) {
+        setOver(true);
+        return;
+      }
+      timer = window.setTimeout(() => {
+        router.refresh();
+        next();
+      }, delay);
+    };
+    next();
+    return () => window.clearTimeout(timer);
+  }, [router]);
+  return over ? (
+    <p className="ta-run-note" role="status">
+      {STILL_CHECKING}
+    </p>
+  ) : null;
 }
 
 /** A row as the pre-release list's dialogs read it (edit, change attributes). */
@@ -410,6 +479,11 @@ export function DesignEvidence({
       ) : null}
       {action.note ? <p className="cc-note">{action.note}</p> : null}
       <Problem text={problem ?? changed} />
+      {/* While a request's evidence is checked against the attributes, the list is read
+          again with a backoff, until every check has left the queue and the readings. */}
+      {view.rows.some((row) => row.assurance?.working === true) ? (
+        <CheckPolling />
+      ) : null}
 
       {view.groups.map((group) => {
         const reviewHref =
@@ -524,6 +598,7 @@ export function DesignEvidence({
                       attributeCount={view.attributes.length}
                       onDialog={setEvidence}
                       findings={intelligence.findings ?? null}
+                      analyses={intelligence.register?.analyses ?? []}
                       controlRef={controlRef}
                       checks={checks}
                       onCoverage={() =>
@@ -559,13 +634,7 @@ export function DesignEvidence({
 
       {/* While the agent reads a file the list is read again, in place, so the row
           moves from Reading… to To review by itself; it stops when the reading ends. */}
-      {view.rows.some((row) => row.reading > 0) ? (
-        <AutoRefresh />
-      ) : view.rows.some((row) => row.assurance?.working === true) ? (
-        // The same while a file is checked against the attributes: two readings take
-        // longer than one, so the list is read again less often and for longer.
-        <AutoRefresh key="checks" seconds={5} limit={60} />
-      ) : null}
+      {view.rows.some((row) => row.reading > 0) ? <AutoRefresh /> : null}
 
       {view.coverage.length > 0 ? (
         <section className="dq-coverage" aria-labelledby={`${id}-coverage`}>
@@ -582,7 +651,7 @@ export function DesignEvidence({
                 className={`dq-cov ${
                   chip.state === "EVIDENCED"
                     ? "is-covered"
-                    : chip.state === "REQUESTED"
+                    : chip.state === "REQUESTED" || chip.state === "DESIGN_ONLY"
                       ? "is-requested"
                       : chip.state === "EXCEPTED"
                         ? "is-exception"
@@ -598,7 +667,12 @@ export function DesignEvidence({
                   <span className="dq-cov-state" aria-hidden="true">
                     <UiIcon name="check" size={12} />
                   </span>
-                ) : chip.state === "REQUESTED" ? null : (
+                ) : chip.state === "REQUESTED" ? null : chip.state ===
+                  "DESIGN_ONLY" ? (
+                  <span className="dq-cov-state" aria-hidden="true">
+                    Design documented
+                  </span>
+                ) : (
                   <span className="dq-cov-state" aria-hidden="true">
                     {chip.state === "EXCEPTED"
                       ? "Reason recorded"
@@ -844,6 +918,7 @@ function Row({
   attributeCount,
   onDialog,
   findings,
+  analyses,
   controlRef,
   checks,
   onCoverage,
@@ -872,6 +947,8 @@ function Row({
   onDialog: (open: DialogOpen) => void;
   /** The control's evidence findings: an issue the check found is one of them. */
   findings: EvidenceFinding[] | null;
+  /** The control's readings of its files: a failed one is read again by its id. */
+  analyses: ReadonlyArray<{ id: string; fileId: string; version: number }>;
   controlRef: string;
   /** "Check again" on a file of the row. */
   checks: ReturnType<typeof useAssuranceAction>;
@@ -956,6 +1033,15 @@ function Row({
       void checkAgain();
     } else if (act.fileId === null) {
       return;
+    } else if (act.kind === "REREAD") {
+      const analysis = analysisOf(act.fileId);
+      if (analysis !== null) {
+        void checks.reread(act.fileId, analysis).then((ok) => {
+          if (ok) {
+            onDone("The file is being read again.");
+          }
+        });
+      }
     } else if (act.kind === "REPLACE") {
       setFileForm({ fileId: act.fileId, form: "replace" });
       setFileDone(null);
@@ -965,6 +1051,8 @@ function Row({
       onDialog({ mode: "review", fileId: act.fileId });
     }
   };
+  const analysisOf = (fileId: string) =>
+    analyses.find((each) => each.fileId === fileId) ?? null;
   const rowFiles: RowFile[] = item.files.map((file) => ({
     id: file.fileId,
     name: file.name,
@@ -977,6 +1065,7 @@ function Row({
         const held = files.find((each) => each.id === fileId);
         return held !== undefined && (held.blocked ?? null) === null;
       },
+      rereadable: (fileId) => analysisOf(fileId) !== null,
     });
 
   async function accept() {
@@ -1123,10 +1212,7 @@ function Row({
           {assured !== null && assured.states.length > 0 ? (
             <span className="de-states">
               {assured.states.map((group) => (
-                <span
-                  key={group.state}
-                  className={`de-state tone-${group.tone}`}
-                >
+                <span key={group.key} className={`de-state tone-${group.tone}`}>
                   <UiIcon name={group.icon} size={12} />
                   {group.label}
                 </span>
@@ -1455,7 +1541,8 @@ function Row({
                       check={assured.check}
                       files={rowFiles}
                       offer={offer}
-                      busy={checks.busy === item.id}
+                      busy={checks.busy}
+                      requirementId={item.id}
                       disabled={locked || checks.pending}
                       onAct={actOn}
                       findings={findings}
@@ -1673,6 +1760,7 @@ function CheckOfRequest({
   files,
   offer,
   busy,
+  requirementId,
   disabled,
   onAct,
   findings,
@@ -1687,7 +1775,9 @@ function CheckOfRequest({
   files: RowFile[];
   /** An action as this person is offered it; null when there is none for them. */
   offer: (action: CheckAction | null) => CheckAction | null;
-  busy: boolean;
+  /** What is at work: the request's id (its check), or reread-<file id>. */
+  busy: string;
+  requirementId: string;
   disabled: boolean;
   onAct: (action: CheckAction) => void;
   findings: EvidenceFinding[] | null;
@@ -1705,7 +1795,11 @@ function CheckOfRequest({
       aria-label={`${act.label}: ${about}`}
       onClick={() => onAct(act)}
     >
-      {busy && act.kind === "RERUN" ? "Starting…" : act.label}
+      {act.kind === "RERUN" && busy === requirementId
+        ? "Starting…"
+        : act.kind === "REREAD" && busy === `reread-${act.fileId ?? ""}`
+          ? "Reading…"
+          : act.label}
     </button>
   );
   const leftOut =
@@ -1749,7 +1843,11 @@ function CheckOfRequest({
       <div className={`de-check is-${check.standing.toLowerCase()}`}>
         <div className="de-check-line">
           <UiIcon
-            name={check.standing === "HELD" ? "info" : "retry"}
+            name={
+              check.standing === "HELD" || check.standing === "NOT_CHECKED"
+                ? "info"
+                : "retry"
+            }
             size={13}
           />
           <span>{check.line}</span>
@@ -1799,6 +1897,47 @@ function CheckOfRequest({
             />
           ))}
         </ul>
+      ) : null}
+      {check.notAsked.length > 0 ? (
+        // Attributes the request does not ask for and the evidence does not bear on:
+        // one folded line, never an issue or a judgment; both readings on open.
+        <details className="de-unasked">
+          <summary className="de-unaddressed">
+            <span className="de-state tone-neutral">
+              <UiIcon name="minus" size={12} />
+              Not asked for by this request
+            </span>
+            {check.notAsked.map((line) => (
+              <span key={line.key} className="dr-code">
+                {line.letter}
+              </span>
+            ))}
+            <span className="de-attr-caret" aria-hidden="true">
+              <UiIcon name="chevron" size={12} />
+            </span>
+          </summary>
+          <ul className="de-unasked-list">
+            {check.notAsked.map((line) => (
+              <li key={line.key}>
+                <p>
+                  <span className="dr-code">{line.letter}</span>{" "}
+                  {line.summary !== "" ? line.summary : line.text}
+                </p>
+                {line.readings.length > 0 ? (
+                  <div className="de-views">
+                    {line.readings.map((reading) => (
+                      <div key={reading.who} className="de-view">
+                        <strong>{reading.who}</strong>
+                        <span className="de-view-result">{reading.result}</span>
+                        {reading.reason !== "" ? <p>{reading.reason}</p> : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </details>
       ) : null}
       {check.notAddressed.length > 0 ? (
         <p className="de-unaddressed">
