@@ -1,0 +1,268 @@
+{
+  "name": "split_request_ticket_only",
+  "title": "The approval ticket on a request of its own; the SAP change log was asked for on another request",
+  "synthetic": true,
+  "company": "Northwind Fabrics",
+  "system": "SAP S/4HANA",
+  "period": "2026-01-01/2026-12-31",
+  "control": {
+    "ref": "ITGC-AC-01",
+    "title": "New and changed SAP S/4HANA access is approved before it is granted",
+    "activity": "New and changed user access to SAP S/4HANA production (PRD, client 100) is requested through a ServiceNow catalog item that names the user and each role. The user's line manager and the owner of each role approve the request in ServiceNow before SAP Security assigns the role. SAP Security, who neither request nor approve the access, assign only the roles approved.",
+    "domain": "ACCESS"
+  },
+  "categories": [
+    "CONTROL_EXECUTION"
+  ],
+  "lens": "INSTANCE_RECORD",
+  "read_in_part": false,
+  "attributes": [
+    {
+      "code": "A",
+      "text": "The access was requested through a ServiceNow ticket that names the user and the SAP S/4HANA role.",
+      "criteria": {
+        "condition": "A ServiceNow request exists for the user's new or changed SAP S/4HANA access.",
+        "pass_when": "The ticket identifies the requester, the user who receives the access and the exact SAP role requested.",
+        "exception_when": "No ticket exists, or the ticket does not name the user or the role."
+      },
+      "expected": true
+    },
+    {
+      "code": "B",
+      "text": "The access was approved by the user's line manager and the role owner before it was granted.",
+      "criteria": {
+        "condition": "Approval of the request by the user's line manager and by the role owner is recorded.",
+        "pass_when": "Both approvals are timestamped before the SAP change document shows the role assigned.",
+        "exception_when": "An approval is missing, is given by someone other than the named approver, or is dated after the role was assigned."
+      },
+      "expected": true
+    },
+    {
+      "code": "C",
+      "text": "The requester, the approvers and the person who granted the access are different people.",
+      "criteria": {
+        "condition": "The requester, each approver and the SAP user who assigned the role are different people.",
+        "pass_when": "Neither approver is the requester or the user who receives the access, and the role was assigned by a member of SAP Security who did not approve the request.",
+        "exception_when": "A person approves their own request, or an approver also assigns the role."
+      },
+      "expected": false
+    },
+    {
+      "code": "D",
+      "text": "The access granted in SAP S/4HANA is the access approved, and was granted within the audit period.",
+      "criteria": {
+        "condition": "The SAP S/4HANA change document shows the role approved in the ticket assigned to the same user.",
+        "pass_when": "The assignment is dated within the audit period, 1 January 2026 to 31 December 2026.",
+        "exception_when": "A different role or user is changed, or the assignment falls outside the audit period."
+      },
+      "expected": false
+    }
+  ],
+  "files": [
+    {
+      "name": "RITM0048213 ServiceNow export.txt",
+      "kind": "walkthrough",
+      "lines": [
+        "ServiceNow - Requested Item (export to text)",
+        "Instance: northwindfabrics.service-now.example",
+        "Exported: 2026-07-02 09:15:03 by Sofia Morales",
+        "All times are UTC.",
+        "",
+        "Number: RITM0048213",
+        "Request: REQ0039127",
+        "Catalog item: SAP S/4HANA Access Request",
+        "Requested for: Daniel Okafor (DOKAFOR), Accounts Payable Clerk, Finance",
+        "Opened by: Daniel Okafor (DOKAFOR)",
+        "Opened: 2026-03-02 08:41:17",
+        "Manager (HR record): Grace Whitfield (GWHITFIELD), Finance Manager",
+        "System: SAP S/4HANA production (PRD, client 100)",
+        "Request type: New access",
+        "Role requested: Z_FI_AP_CLERK - Accounts Payable Clerk (vendor invoice entry)",
+        "Business justification: Joined the Accounts Payable team on 2 March 2026; needs to post vendor invoices.",
+        "Assignment group: SAP Security",
+        "State: Closed Complete",
+        "Closed: 2026-03-03 11:05:52",
+        "",
+        "Approvals",
+        "Approver | Approval step | State | Updated",
+        "Grace Whitfield (GWHITFIELD) | Line manager approval | Approved | 2026-03-02 09:03:44",
+        "Marcus Hale (MHALE) | Role owner approval - Z_FI_AP_CLERK | Approved | 2026-03-02 15:27:10",
+        "",
+        "Activity",
+        "2026-03-02 08:41:17 Daniel Okafor: Request submitted.",
+        "2026-03-02 09:03:44 Grace Whitfield: Approved.",
+        "2026-03-02 15:27:10 Marcus Hale: Approved. Role is appropriate for AP invoice entry.",
+        "2026-03-03 11:05:52 Tomas Nguyen: Closed Complete."
+      ]
+    }
+  ],
+  "expected": {
+    "A": {
+      "verdict": "SUPPORTED",
+      "unsettled_acceptable": false,
+      "reason": "The ServiceNow ticket names the requester, the user and the Z_FI_AP_CLERK role.",
+      "answer": {
+        "reason": "The ticket is an SAP S/4HANA access request naming the user, the requester and the role.",
+        "elements": {
+          "condition": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Catalog item: SAP S/4HANA Access Request",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Requested for: Daniel Okafor (DOKAFOR), Accounts Payable Clerk, Finance",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "",
+            "reason": "A ServiceNow SAP S/4HANA access request exists for the user."
+          },
+          "pass": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Opened by: Daniel Okafor (DOKAFOR)",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Requested for: Daniel Okafor (DOKAFOR), Accounts Payable Clerk, Finance",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Role requested: Z_FI_AP_CLERK - Accounts Payable Clerk (vendor invoice entry)",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "",
+            "reason": "Requester, user and role are named."
+          }
+        }
+      }
+    },
+    "B": {
+      "verdict": "UNSETTLED",
+      "unsettled_acceptable": true,
+      "reason": "Both approvals are shown; whether they precede the grant needs the SAP log on the other request. Not an exception.",
+      "answer": {
+        "reason": "Both approvals are recorded; the role assignment is not in this request's file.",
+        "elements": {
+          "condition": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Grace Whitfield (GWHITFIELD) | Line manager approval | Approved | 2026-03-02 09:03:44",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Marcus Hale (MHALE) | Role owner approval - Z_FI_AP_CLERK | Approved | 2026-03-02 15:27:10",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "",
+            "reason": "Both approvals are in the ticket."
+          },
+          "pass": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Marcus Hale (MHALE) | Role owner approval - Z_FI_AP_CLERK | Approved | 2026-03-02 15:27:10",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "The SAP change document of the role assignment, asked for on another request.",
+            "reason": "No SAP change document is in this request's file."
+          }
+        }
+      },
+      "code_gap": {
+        "gives": "ISSUE",
+        "why": "A run is per request and judges every approved attribute. When the approval ticket and the SAP change log are on two requests, the ticket's request cannot show 'before the grant'. NOT_ADDRESSED is allowed only for a whole attribute, so the careful answer for that one element is NOT_MET, and rule 6 makes MET + NOT_MET a PARTLY_MET that both readings agree on: an ISSUE that is not real."
+      }
+    },
+    "C": {
+      "verdict": "UNSETTLED",
+      "unsettled_acceptable": true,
+      "reason": "Requester and approvers differ; who assigned the role is in the SAP log on the other request.",
+      "answer": {
+        "reason": "Requester and approvers are different people; who assigned the role is not in this file.",
+        "elements": {
+          "condition": {
+            "result": "PARTLY_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Opened by: Daniel Okafor (DOKAFOR)",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Grace Whitfield (GWHITFIELD) | Line manager approval | Approved | 2026-03-02 09:03:44",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Marcus Hale (MHALE) | Role owner approval - Z_FI_AP_CLERK | Approved | 2026-03-02 15:27:10",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "The SAP user who assigned the role.",
+            "reason": "Requester and approvers differ; the granter is not recorded here."
+          },
+          "pass": {
+            "result": "PARTLY_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Grace Whitfield (GWHITFIELD) | Line manager approval | Approved | 2026-03-02 09:03:44",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Marcus Hale (MHALE) | Role owner approval - Z_FI_AP_CLERK | Approved | 2026-03-02 15:27:10",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "The SAP change document naming who assigned the role.",
+            "reason": "Neither approver is the requester; who assigned the role is not shown."
+          }
+        }
+      },
+      "code_gap": {
+        "gives": "ISSUE",
+        "why": "A run is per request and judges every approved attribute. When the approval ticket and the SAP change log are on two requests, the ticket's request cannot show 'before the grant'. NOT_ADDRESSED is allowed only for a whole attribute, so the careful answer for that one element is NOT_MET, and rule 6 makes MET + NOT_MET a PARTLY_MET that both readings agree on: an ISSUE that is not real."
+      }
+    },
+    "D": {
+      "verdict": "NOT_ADDRESSED",
+      "unsettled_acceptable": false,
+      "reason": "A ServiceNow ticket holds no SAP change document; D is the other request's.",
+      "answer": {
+        "reason": "This file is the ServiceNow ticket; it holds no SAP change document, which is what D is about.",
+        "elements": {
+          "condition": {
+            "result": "NOT_ADDRESSED",
+            "quotes": [],
+            "absent": "",
+            "reason": "No SAP change document is in this file."
+          },
+          "pass": {
+            "result": "NOT_ADDRESSED",
+            "quotes": [],
+            "absent": "",
+            "reason": "No SAP change document is in this file."
+          }
+        }
+      }
+    }
+  }
+}

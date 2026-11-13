@@ -1,0 +1,221 @@
+{
+  "name": "policy_missing_element",
+  "title": "The same procedure without its segregation of duties section",
+  "synthetic": true,
+  "company": "Northwind Fabrics",
+  "system": "SAP S/4HANA",
+  "period": "2026-01-01/2026-12-31",
+  "control": {
+    "ref": "ITGC-AC-01",
+    "title": "New and changed SAP S/4HANA access is approved before it is granted",
+    "activity": "New and changed user access to SAP S/4HANA production (PRD, client 100) is requested through a ServiceNow catalog item that names the user and each role. The user's line manager and the owner of each role approve the request in ServiceNow before SAP Security assigns the role. SAP Security, who neither request nor approve the access, assign only the roles approved.",
+    "domain": "ACCESS"
+  },
+  "categories": [
+    "PROCESS_DOCUMENTATION"
+  ],
+  "lens": "DESIGN_DOCUMENT",
+  "read_in_part": false,
+  "attributes": [
+    {
+      "code": "A",
+      "text": "A user access provisioning procedure for SAP S/4HANA is documented, approved by management and in effect for the audit period.",
+      "criteria": {
+        "condition": "A documented procedure for granting and changing user access to SAP S/4HANA exists and names SAP S/4HANA in its scope.",
+        "pass_when": "The document's approval record shows approval by an accountable manager, and its effective date is on or before 1 January 2026.",
+        "exception_when": "The document is a draft or carries placeholders, has no recorded approval, covers another system, or takes effect after 1 January 2026."
+      },
+      "expected": true
+    },
+    {
+      "code": "B",
+      "text": "The procedure requires access to be approved by the user's line manager and the role owner before it is granted.",
+      "criteria": {
+        "condition": "The procedure requires every new or changed SAP S/4HANA access request to be approved before the access is granted.",
+        "pass_when": "The procedure names both the user's line manager and the owner of each role requested as approvers.",
+        "exception_when": "Approval is optional, may follow the grant, or the approvers are not named."
+      },
+      "expected": true
+    },
+    {
+      "code": "C",
+      "text": "The procedure requires segregation between the requester, the approvers and the person who grants the access.",
+      "criteria": {
+        "condition": "The procedure prohibits a user from approving a request for their own access.",
+        "pass_when": "The procedure requires the person who grants the access to be someone other than the requester and the approvers.",
+        "exception_when": "The procedure is silent on self-approval or allows an approver to grant the access."
+      },
+      "expected": true
+    }
+  ],
+  "files": [
+    {
+      "name": "ITSEC-PRC-004 SAP S4HANA User Access Provisioning Procedure v2.0.txt",
+      "kind": "policy",
+      "lines": [
+        "NORTHWIND FABRICS LTD",
+        "SAP S/4HANA User Access Provisioning Procedure",
+        "Document ID: ITSEC-PRC-004",
+        "Version: 2.0",
+        "Owner: Priya Raman, IT Security Manager",
+        "Classification: Internal",
+        "",
+        "Version history",
+        "Version | Date | Author | Summary of change | Approved by",
+        "1.0 | 18 November 2024 | Priya Raman | First issue | Elena Brooks, Chief Information Officer",
+        "1.1 | 2 June 2025 | Priya Raman | Added the role owner approval step | Elena Brooks, Chief Information Officer",
+        "2.0 | 8 December 2025 | Priya Raman | Annual review; the ServiceNow catalog item replaces the e-mail request form | Elena Brooks, Chief Information Officer",
+        "",
+        "Document approval",
+        "Approved by: Elena Brooks, Chief Information Officer",
+        "Approval date: 8 December 2025",
+        "Effective date: 1 January 2026",
+        "Next review due: December 2026",
+        "",
+        "1. Purpose",
+        "This procedure sets out how user access to SAP S/4HANA is requested, approved and granted at Northwind Fabrics.",
+        "",
+        "2. Scope",
+        "2.1 This procedure applies to every new or changed user access to SAP S/4HANA production (system PRD, client 100), for employees, contractors and service accounts.",
+        "2.2 Out of scope: removal of access for leavers and movers (procedure ITSEC-PRC-005) and the quarterly user access review (procedure ITSEC-PRC-006).",
+        "",
+        "3. Roles and responsibilities",
+        "- Requester: the user, or a colleague on the user's behalf, who raises the request.",
+        "- Line manager: the user's manager as recorded in the HR system.",
+        "- Role owner: the business owner of an SAP role, as listed in the SAP role catalogue (the Finance Systems Lead owns the Z_FI_* roles).",
+        "- SAP Security: the team in IT that assigns roles in SAP S/4HANA with transactions SU01 and PFCG.",
+        "",
+        "4. Requesting and approving access",
+        "4.1 Every request for new or changed access to SAP S/4HANA must be raised as a ServiceNow \"SAP S/4HANA Access Request\" catalog item that names the user and each role requested.",
+        "4.2 Access must be approved by the user's line manager and by the owner of each role requested before it is granted. The approvals are recorded in the ServiceNow approval record of the request.",
+        "4.3 A request that is not approved by both approvers within ten business days is cancelled.",
+        "",
+        "5. Granting access",
+        "5.1 SAP Security assigns only the roles approved in the ServiceNow request, and only after both approvals are recorded.",
+        "5.2 SAP Security records the ServiceNow request number in the SU01 change reason.",
+        "",
+        "6. Emergency access",
+        "Firefighter access is governed by the SAP GRC Emergency Access procedure (ITSEC-PRC-009) and is outside this procedure.",
+        "",
+        "7. Records",
+        "ServiceNow requests and their approval records are retained for seven years.",
+        "",
+        "8. Exceptions",
+        "An exception to this procedure needs the written approval of the Chief Information Officer, recorded in the IT exceptions register."
+      ]
+    }
+  ],
+  "expected": {
+    "A": {
+      "verdict": "SUPPORTED",
+      "unsettled_acceptable": false,
+      "reason": "Approved version 2.0 of the SAP S/4HANA procedure, effective 1 January 2026.",
+      "answer": {
+        "reason": "The procedure covers SAP S/4HANA, is approved by the CIO and effective from 1 January 2026.",
+        "elements": {
+          "condition": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "2.1 This procedure applies to every new or changed user access to SAP S/4HANA production (system PRD, client 100)",
+                "basis": "REQUIREMENT"
+              }
+            ],
+            "absent": "",
+            "reason": "Section 2.1 puts SAP S/4HANA production in scope."
+          },
+          "pass": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Approved by: Elena Brooks, Chief Information Officer",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Effective date: 1 January 2026",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "",
+            "reason": "The approval block shows the CIO's approval and a 1 January 2026 effective date."
+          }
+        }
+      }
+    },
+    "B": {
+      "verdict": "SUPPORTED",
+      "unsettled_acceptable": false,
+      "reason": "Section 4.2 requires line manager and role owner approval before access is granted.",
+      "answer": {
+        "reason": "Section 4.2 requires both approvals before the grant.",
+        "elements": {
+          "condition": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Access must be approved by the user's line manager and by the owner of each role requested before it is granted.",
+                "basis": "REQUIREMENT"
+              }
+            ],
+            "absent": "",
+            "reason": "Approval before the grant is required."
+          },
+          "pass": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Access must be approved by the user's line manager and by the owner of each role requested before it is granted.",
+                "basis": "REQUIREMENT"
+              },
+              {
+                "file": 0,
+                "quote": "Role owner: the business owner of an SAP role, as listed in the SAP role catalogue",
+                "basis": "REQUIREMENT"
+              }
+            ],
+            "absent": "",
+            "reason": "The line manager and the role owner are named as approvers."
+          }
+        }
+      }
+    },
+    "C": {
+      "verdict": "ISSUE",
+      "results": [
+        "NOT_MET",
+        "PARTLY_MET",
+        "NOT_ADDRESSED"
+      ],
+      "unsettled_acceptable": false,
+      "reason": "The procedure has no segregation of duties requirement: self-approval and approver-grants are not prohibited.",
+      "answer": {
+        "reason": "The procedure addresses provisioning but says nothing on self-approval or who may grant.",
+        "elements": {
+          "condition": {
+            "result": "NOT_MET",
+            "quotes": [],
+            "absent": "A requirement that a user may not approve their own access request.",
+            "reason": "No section prohibits approving one's own access."
+          },
+          "pass": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "SAP Security assigns only the roles approved in the ServiceNow request, and only after both approvals are recorded.",
+                "basis": "REQUIREMENT"
+              }
+            ],
+            "absent": "A requirement that the granter is neither the requester nor an approver.",
+            "reason": "Section 5.1 limits what SAP Security assigns but not who may grant."
+          }
+        }
+      }
+    }
+  }
+}

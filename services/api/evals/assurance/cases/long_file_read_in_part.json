@@ -1,0 +1,250 @@
+{
+  "name": "long_file_read_in_part",
+  "title": "A half-year change log for all users; the walkthrough user's row is past the 200,000 characters the reader keeps",
+  "synthetic": true,
+  "company": "Northwind Fabrics",
+  "system": "SAP S/4HANA",
+  "period": "2026-01-01/2026-12-31",
+  "control": {
+    "ref": "ITGC-AC-01",
+    "title": "New and changed SAP S/4HANA access is approved before it is granted",
+    "activity": "New and changed user access to SAP S/4HANA production (PRD, client 100) is requested through a ServiceNow catalog item that names the user and each role. The user's line manager and the owner of each role approve the request in ServiceNow before SAP Security assigns the role. SAP Security, who neither request nor approve the access, assign only the roles approved.",
+    "domain": "ACCESS"
+  },
+  "categories": [
+    "CONTROL_EXECUTION"
+  ],
+  "lens": "INSTANCE_RECORD",
+  "read_in_part": true,
+  "attributes": [
+    {
+      "code": "A",
+      "text": "The access was requested through a ServiceNow ticket that names the user and the SAP S/4HANA role.",
+      "criteria": {
+        "condition": "A ServiceNow request exists for the user's new or changed SAP S/4HANA access.",
+        "pass_when": "The ticket identifies the requester, the user who receives the access and the exact SAP role requested.",
+        "exception_when": "No ticket exists, or the ticket does not name the user or the role."
+      },
+      "expected": true
+    },
+    {
+      "code": "B",
+      "text": "The access was approved by the user's line manager and the role owner before it was granted.",
+      "criteria": {
+        "condition": "Approval of the request by the user's line manager and by the role owner is recorded.",
+        "pass_when": "Both approvals are timestamped before the SAP change document shows the role assigned.",
+        "exception_when": "An approval is missing, is given by someone other than the named approver, or is dated after the role was assigned."
+      },
+      "expected": true
+    },
+    {
+      "code": "C",
+      "text": "The requester, the approvers and the person who granted the access are different people.",
+      "criteria": {
+        "condition": "The requester, each approver and the SAP user who assigned the role are different people.",
+        "pass_when": "Neither approver is the requester or the user who receives the access, and the role was assigned by a member of SAP Security who did not approve the request.",
+        "exception_when": "A person approves their own request, or an approver also assigns the role."
+      },
+      "expected": true
+    },
+    {
+      "code": "D",
+      "text": "The access granted in SAP S/4HANA is the access approved, and was granted within the audit period.",
+      "criteria": {
+        "condition": "The SAP S/4HANA change document shows the role approved in the ticket assigned to the same user.",
+        "pass_when": "The assignment is dated within the audit period, 1 January 2026 to 31 December 2026.",
+        "exception_when": "A different role or user is changed, or the assignment falls outside the audit period."
+      },
+      "expected": true
+    }
+  ],
+  "files": [
+    {
+      "name": "RITM0049120 ServiceNow export.txt",
+      "kind": "walkthrough",
+      "lines": [
+        "ServiceNow - Requested Item (export to text)",
+        "Instance: northwindfabrics.service-now.example",
+        "Exported: 2026-07-02 09:15:03 by Sofia Morales",
+        "All times are UTC.",
+        "",
+        "Number: RITM0049120",
+        "Request: REQ0040311",
+        "Catalog item: SAP S/4HANA Access Request",
+        "Requested for: Zara Wolfe (ZWOLFE), Accounts Payable Clerk, Finance",
+        "Opened by: Zara Wolfe (ZWOLFE)",
+        "Opened: 2026-05-11 08:55:40",
+        "Manager (HR record): Grace Whitfield (GWHITFIELD), Finance Manager",
+        "System: SAP S/4HANA production (PRD, client 100)",
+        "Request type: New access",
+        "Role requested: Z_FI_AP_CLERK - Accounts Payable Clerk (vendor invoice entry)",
+        "Business justification: Moves from Accounts Receivable to Accounts Payable on 11 May 2026; needs to post vendor invoices.",
+        "Assignment group: SAP Security",
+        "State: Closed Complete",
+        "Closed: 2026-05-12 16:10:04",
+        "",
+        "Approvals",
+        "Approver | Approval step | State | Updated",
+        "Grace Whitfield (GWHITFIELD) | Line manager approval | Approved | 2026-05-11 09:20:13",
+        "Marcus Hale (MHALE) | Role owner approval - Z_FI_AP_CLERK | Approved | 2026-05-11 13:02:48",
+        "",
+        "Activity",
+        "2026-05-11 08:55:40 Zara Wolfe: Request submitted.",
+        "2026-05-11 09:20:13 Grace Whitfield: Approved.",
+        "2026-05-11 13:02:48 Marcus Hale: Approved.",
+        "2026-05-12 16:10:04 Sofia Morales: Closed Complete."
+      ]
+    },
+    {
+      "name": "RSUSR100N change documents all users H1 2026.txt",
+      "kind": "change_history",
+      "lines": [
+        "SAP S/4HANA - System PRD, Client 100",
+        "Report RSUSR100N - Change Documents for Users",
+        "Executed by: SMORALES (Sofia Morales)    Executed on: 02.07.2026 08:02:51",
+        "Times are shown in the system time zone, UTC.",
+        "Selection: User = *; Change date from 01.01.2026 to 30.06.2026; Roles: X; Profiles: -",
+        "Sorted by: User, then date",
+        "",
+        "Date | Time | Changed by | Name of changer | User | Change | Role or profile | Valid from | Valid to | Change reason",
+        "{{ROWS}}",
+        "12.05.2026 | 10:14:22 | TNGUYEN | Tomas Nguyen | ZWOLFE | Role assigned | Z_FI_AP_CLERK | 12.05.2026 | 31.12.9999 | RITM0049120",
+        "",
+        "Number of change documents displayed: 1751"
+      ],
+      "rows": {
+        "template": "{date} | {time} | {changer} | {changer_name} | {user} | Role assigned | {role} | {date} | 31.12.9999 | RITM004{n:04d}",
+        "count": 1750
+      },
+      "beyond_cut": "12.05.2026 | 10:14:22 | TNGUYEN | Tomas Nguyen | ZWOLFE | Role assigned | Z_FI_AP_CLERK | 12.05.2026 | 31.12.9999 | RITM0049120"
+    }
+  ],
+  "expected": {
+    "A": {
+      "verdict": "SUPPORTED",
+      "unsettled_acceptable": false,
+      "reason": "The ServiceNow ticket names the requester, the user and the Z_FI_AP_CLERK role.",
+      "answer": {
+        "reason": "The ticket is an SAP S/4HANA access request naming the user, the requester and the role.",
+        "elements": {
+          "condition": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Catalog item: SAP S/4HANA Access Request",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Requested for: Zara Wolfe (ZWOLFE), Accounts Payable Clerk, Finance",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "",
+            "reason": "A ServiceNow SAP S/4HANA access request exists for the user."
+          },
+          "pass": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Opened by: Zara Wolfe (ZWOLFE)",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Requested for: Zara Wolfe (ZWOLFE), Accounts Payable Clerk, Finance",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Role requested: Z_FI_AP_CLERK - Accounts Payable Clerk (vendor invoice entry)",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "",
+            "reason": "Requester, user and role are named."
+          }
+        }
+      }
+    },
+    "B": {
+      "verdict": "UNSETTLED",
+      "unsettled_acceptable": true,
+      "reason": "Both approvals are recorded, but the grant's row is in the part of the log that was not read, so timing cannot be told.",
+      "answer": {
+        "reason": "The approvals are recorded; the change log was read in part and the assignment is not in the part read.",
+        "elements": {
+          "condition": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Grace Whitfield (GWHITFIELD) | Line manager approval | Approved | 2026-05-11 09:20:13",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Marcus Hale (MHALE) | Role owner approval - Z_FI_AP_CLERK | Approved | 2026-05-11 13:02:48",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "",
+            "reason": "Both approvals are in the ticket."
+          },
+          "pass": {
+            "result": "CANNOT_TELL",
+            "quotes": [],
+            "absent": "",
+            "reason": "The change log was read in part; the user's assignment row is not in the part read."
+          }
+        }
+      }
+    },
+    "C": {
+      "verdict": "UNSETTLED",
+      "unsettled_acceptable": true,
+      "reason": "Who assigned the role is in the unread part of the log.",
+      "answer": {
+        "reason": "Requester and approvers differ; who assigned the role cannot be read.",
+        "elements": {
+          "condition": {
+            "result": "CANNOT_TELL",
+            "quotes": [],
+            "absent": "",
+            "reason": "Who assigned the role is not in the part of the log read."
+          },
+          "pass": {
+            "result": "CANNOT_TELL",
+            "quotes": [],
+            "absent": "",
+            "reason": "Who assigned the role is not in the part of the log read."
+          }
+        }
+      }
+    },
+    "D": {
+      "verdict": "UNSETTLED",
+      "unsettled_acceptable": true,
+      "reason": "The assignment row for ZWOLFE lies beyond the part of the log that was read; neither met nor an issue can be told.",
+      "answer": {
+        "reason": "The change log was read in part; the user's assignment is not in the part read.",
+        "elements": {
+          "condition": {
+            "result": "CANNOT_TELL",
+            "quotes": [],
+            "absent": "",
+            "reason": "The user's assignment row is not in the part read."
+          },
+          "pass": {
+            "result": "CANNOT_TELL",
+            "quotes": [],
+            "absent": "",
+            "reason": "The user's assignment row is not in the part read."
+          }
+        }
+      }
+    }
+  }
+}
