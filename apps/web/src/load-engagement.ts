@@ -21,6 +21,7 @@ import {
   parsePlan,
   QUEUES,
 } from "./engagement-model";
+import { parseAssurance } from "./evidence-assurance-model";
 import { parseChangeNotice } from "./evidence-change-model";
 import { parseInstances } from "./evidence-dialog-model";
 import { parseFindings } from "./evidence-findings-model";
@@ -172,6 +173,7 @@ export async function loadEngagement(
     phaseProgress,
     evidenceMapping,
     evidenceFindings,
+    evidenceAssurance,
     walkthroughInstances,
     exportsListed,
     designConclusion,
@@ -239,6 +241,10 @@ export async function loadEngagement(
     // The evidence workspace's findings (docs/evidence-intelligence.md, increment 2).
     open
       ? apiGet(`${base}/controls/${query.control}/evidence-findings`, session)
+      : null,
+    // The assurance chain's check of each D&I file (docs/evidence-assurance.md).
+    open
+      ? apiGet(`${base}/controls/${query.control}/evidence-assurance`, session)
       : null,
     // The walkthrough instances picked in the evidence dialog (31 October 2026).
     open
@@ -353,6 +359,10 @@ export async function loadEngagement(
       ok(evidenceFindings) === undefined
         ? null
         : parseFindings(ok(evidenceFindings)),
+    evidenceAssurance:
+      ok(evidenceAssurance) === undefined
+        ? null
+        : parseAssurance(ok(evidenceAssurance)),
     walkthroughInstances:
       ok(walkthroughInstances) === undefined
         ? null

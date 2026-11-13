@@ -84,6 +84,10 @@ const KIND_ICON: Record<EvidenceFinding["kind"], IconName> = {
   LATE: "clock",
   NOT_TRACED: "search",
   ACTIVITY: "activity",
+  NOT_MET: "x",
+  PARTLY_MET: "info",
+  CONTRADICTED: "risk",
+  NOT_ADDRESSED: "minus",
 };
 
 function toneOf(
@@ -101,6 +105,8 @@ function toneOf(
   return finding.kind === "CONFLICT" ||
     finding.kind === "CONCERN" ||
     finding.kind === "NOT_COVERED" ||
+    finding.kind === "NOT_MET" ||
+    finding.kind === "CONTRADICTED" ||
     finding.status === "ESCALATED"
     ? "danger"
     : "warning";

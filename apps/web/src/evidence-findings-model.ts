@@ -9,7 +9,14 @@ import type { EvidenceCitation } from "./evidence-preview-model.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export type FindingSource = "READER" | "RULES" | "MAPPING" | "TRACE";
+/** ASSURANCE: an issue both readings of the assurance chain agree on
+ * (docs/evidence-assurance.md, section 3). */
+export type FindingSource =
+  | "READER"
+  | "RULES"
+  | "MAPPING"
+  | "TRACE"
+  | "ASSURANCE";
 
 export type FindingKind =
   | "GAP"
@@ -23,7 +30,12 @@ export type FindingKind =
   | "CONCERN"
   | "LATE"
   | "NOT_TRACED"
-  | "ACTIVITY";
+  | "ACTIVITY"
+  // The assurance chain's issues, by what both readings agree the file shows.
+  | "NOT_MET"
+  | "PARTLY_MET"
+  | "CONTRADICTED"
+  | "NOT_ADDRESSED";
 
 export const FINDING_STATUSES = [
   "PROPOSED",
@@ -135,6 +147,10 @@ export const FINDING_KIND_LABELS: Record<FindingKind, string> = {
   LATE: "Later than the limit",
   NOT_TRACED: "Sample not traced",
   ACTIVITY: "Activity after the event",
+  NOT_MET: "Not shown",
+  PARTLY_MET: "Shown in part",
+  CONTRADICTED: "Contradicted in the evidence",
+  NOT_ADDRESSED: "Not addressed by the evidence",
 };
 
 export const FINDING_SOURCE_LABELS: Record<FindingSource, string> = {
@@ -142,6 +158,7 @@ export const FINDING_SOURCE_LABELS: Record<FindingSource, string> = {
   RULES: "The standard checks",
   MAPPING: "The evidence mapping",
   TRACE: "The sample trace",
+  ASSURANCE: "Two independent readings",
 };
 
 /** Open: a person still has something to do with it. */

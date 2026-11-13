@@ -434,6 +434,20 @@ export function dialogWrite(fields: Record<string, unknown>): DialogWrite {
         body: { version, kind },
       };
     }
+    // Reading a file again, the reader's own re-read (the analysis view's "Read again",
+    // here in place): the D&I list offers it where a file's reading failed.
+    case "reanalyze": {
+      const analysis = id(fields.analysis_id);
+      const version = int(fields.version, 1, 1_000_000);
+      if (analysis === null || version === null) {
+        return { ok: false, problem: "invalid" };
+      }
+      return {
+        ok: true,
+        path: `${base}/evidence-analyses/${analysis}/reanalyze`,
+        body: { version },
+      };
+    }
     case "propose-samples": {
       const file = id(fields.file_id);
       const size = int(fields.sample_size, 1, MAX_SAMPLE);

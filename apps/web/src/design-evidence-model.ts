@@ -16,6 +16,17 @@
 
 import { attributeLetter } from "./control-context-model.ts";
 import { itemKind } from "./design-release-model.ts";
+import {
+  type AssuranceCounts,
+  type AssuranceRow,
+  assuranceCounts,
+  assurancePill,
+  assuranceRow,
+  assuranceSentence,
+  attributeCoverage,
+  DESIGN_ONLY,
+  type EvidenceAssurance,
+} from "./evidence-assurance-model.ts";
 import type { PlanRequirement } from "./evidence-plan-model.ts";
 import { formatBytes, formatDate } from "./format.ts";
 import type { IconName } from "./icon-name.ts";
@@ -200,6 +211,9 @@ export type EvidenceInput = {
   period: string;
   /** The time now, in milliseconds: how long a request has been overdue. */
   now: number;
+  /** What the assurance chain says of the control's D&I files (docs/evidence-assurance.md);
+   * null or absent when it was not read, and the list then reads as it did before. */
+  assurance?: EvidenceAssurance | null;
 };
 
 /** Where a row stands. The first eight are the list's vocabulary (product owner, 12
@@ -318,6 +332,9 @@ export type EvidenceRow = {
   delivery: Delivery | null;
   /** The plan's own state for the requirement. */
   planState: string;
+  /** What the assurance chain says of the row's files: each file's check and, once one
+   * is finished, each attribute's state. Null where the chain has no entry for them. */
+  assurance: AssuranceRow | null;
 };
 
 export type EvidenceStanding =
@@ -407,6 +424,11 @@ export type HistoryRow = {
 
 export type CoverageState =
   | "EVIDENCED"
+  // Accepted, and its check supports it with the documented design alone: D&I needs
+  // the implementation shown too.
+  | "DESIGN_ONLY"
+  // Accepted requests show some of its elements from an instance's records, not all.
+  | "PARTLY"
   | "REQUESTED"
   | "EXCEPTED"
   | "UNCOVERED";
@@ -420,6 +442,11 @@ export type CoverageChip = {
   label: string;
   /** The recorded reason, where it is not evidenced at D&I; "" otherwise. */
   reason: string;
+  /** The elements no accepted request shows from an instance's records yet, by their
+   * text; empty where none was read or all are shown. */
+  missing: string[];
+  /** Accepted on a request the chain checked, and its check shows nothing of it. */
+  unsupported: boolean;
 };
 
 export type EvidenceAttribute = {
@@ -639,7 +666,11 @@ function readingOf(item: Requirement, decided: boolean): Reading | null {
   };
 }
 
-function factOf(item: Requirement, state: ChipState): string {
+function factOf(
+  item: Requirement,
+  state: ChipState,
+  assured: AssuranceRow | null,
+): string {
   const files = item.files.length;
   const count = plural(files, "file");
   const by = item.sufficiencyBy ?? "";
@@ -663,6 +694,11 @@ function factOf(item: Requirement, state: ChipState): string {
   }
   if (item.state === "FOLLOW_UP_REQUIRED") {
     return `${count} · Follow-up asked${by !== "" ? ` by ${by}` : ""}`;
+  }
+  // The chain's check says where the files stand; the single reading's own proposal is
+  // the row's only where the chain has no entry for them.
+  if (assured !== null) {
+    return `${count} · ${assured.fact}`;
   }
   const word = PROPOSAL_WORDS[item.assessment.proposal];
   return word === undefined ? count : `${count} · Agent: ${word}`;
@@ -848,6 +884,23 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
     const canAccept =
       judgeable && files > 0 && item.state !== "ACCEPTED" && reading === 0;
     const who = item.sufficiencyBy ?? "";
+    const assured =
+      input.assurance == null
+        ? null
+        : assuranceRow({
+            requirementId: item.id,
+            files: item.files.map((file) => ({
+              id: file.fileId,
+              name: file.name,
+            })),
+            assurance: input.assurance,
+            attributes,
+            span: (some) => lettersSpan(some, allLetters),
+          });
+    // Where the chain has an entry for the request, its two readings stand in for the
+    // reader's single one: the reader's proposal and its follow-up points were never
+    // checked by a second reading, so they are not put to the person.
+    const single = assured === null;
     return {
       id: item.id,
       version: item.version,
@@ -856,7 +909,7 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
       kind,
       icon,
       categories: [...item.categories],
-      sub: `${item.necessity === "OPTIONAL" ? `${kind} · Optional` : kind} · ${factOf(item, state)}`,
+      sub: `${item.necessity === "OPTIONAL" ? `${kind} · Optional` : kind} · ${factOf(item, state, assured)}`,
       letters,
       attributeIds: addressed.map((each) => each.id),
       addresses:
@@ -886,9 +939,11 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
       waits:
         item.pendingChange !== null ||
         (canAccept && !decided && ARRIVED.includes(item.state)),
-      agent: readingOf(item, decided),
+      agent: single ? readingOf(item, decided) : null,
       proposal:
-        files > 0 && PROPOSAL_WORDS[item.assessment.proposal] !== undefined
+        single &&
+        files > 0 &&
+        PROPOSAL_WORDS[item.assessment.proposal] !== undefined
           ? item.assessment.proposal
           : "NONE",
       note:
@@ -914,6 +969,7 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
       requestId: item.requestId,
       delivery: carrier?.delivery ?? null,
       planState: item.state,
+      assurance: assured,
     };
   });
   const live = rows.filter((row) => !row.aside);
@@ -1030,22 +1086,64 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
     lead?.line ?? deliveryOf(null, input.owner, false, input.now, handover);
 
   // Coverage: outline where a request addresses the attribute, green with a check once
-  // the evidence of one such request is accepted.
+  // the evidence of one such request is accepted. Where the assurance chain checked a
+  // row's files, accepting it evidences the attributes both readings support with the
+  // records of an instance, and no other (docs/evidence-assurance.md, section 3): D&I
+  // needs the design and its implementation, so support by a policy's word alone is
+  // "design documented, implementation not yet shown"; the agents' support alone is
+  // only ready to accept, and an acceptance alone does not evidence what the check did
+  // not support.
+  // An attribute is evidenced only when every one of its elements is shown from the
+  // records of an instance by some accepted request, the elements combined across the
+  // control's requests by key (attributeCoverage). A row the chain has no entry for
+  // evidences what it addresses once accepted, as before the chain.
+  const checked = (accepting: (row: EvidenceRow) => boolean) =>
+    live.flatMap((row) =>
+      row.assurance === null
+        ? []
+        : [{ accepted: accepting(row), facts: row.assurance.elementFacts }],
+    );
+  const settled = checked((row) => row.state === "ACCEPTED");
+  const legacy = (
+    attributeId: string,
+    accepting: (row: EvidenceRow) => boolean,
+  ) =>
+    live.some(
+      (row) =>
+        row.assurance === null &&
+        accepting(row) &&
+        row.attributeIds.includes(attributeId),
+    );
   const reasonOf = new Map(
     input.exceptions.map((item) => [item.attributeId, item]),
   );
   const excepted = new Set(reasonOf.keys());
   const coverage: CoverageChip[] = attributes.map((item) => {
     const addressing = live.filter((row) => row.attributeIds.includes(item.id));
-    const state: CoverageState = addressing.some(
-      (row) => row.state === "ACCEPTED",
-    )
-      ? "EVIDENCED"
-      : addressing.length > 0
-        ? "REQUESTED"
-        : excepted.has(item.id)
-          ? "EXCEPTED"
-          : "UNCOVERED";
+    const found = attributeCoverage(item.id, settled);
+    // Accepted on a row the chain checked, and its check shows nothing of it.
+    const unsupported =
+      (found.state === "NONE" || found.state === "UNKNOWN") &&
+      live.some(
+        (row) =>
+          row.state === "ACCEPTED" &&
+          row.assurance !== null &&
+          row.attributeIds.includes(item.id),
+      );
+    const state: CoverageState =
+      legacy(item.id, (row) => row.state === "ACCEPTED") ||
+      found.state === "EVIDENCED"
+        ? "EVIDENCED"
+        : found.state === "DESIGN_ONLY"
+          ? "DESIGN_ONLY"
+          : found.state === "PARTLY"
+            ? "PARTLY"
+            : addressing.length > 0
+              ? "REQUESTED"
+              : excepted.has(item.id)
+                ? "EXCEPTED"
+                : "UNCOVERED";
+    const missing = state === "EVIDENCED" ? [] : found.missing;
     return {
       attributeId: item.id,
       letter: item.letter,
@@ -1054,12 +1152,21 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
       label:
         state === "EVIDENCED"
           ? `Attribute ${item.letter}: evidence accepted`
-          : state === "REQUESTED"
-            ? `Attribute ${item.letter}: requested, no evidence accepted yet`
-            : state === "EXCEPTED"
-              ? `Attribute ${item.letter}: not evidenced at D&I, with a recorded reason`
-              : `Attribute ${item.letter}: not addressed by any request`,
+          : state === "DESIGN_ONLY"
+            ? `Attribute ${item.letter}: ${DESIGN_ONLY}`
+            : state === "PARTLY"
+              ? `Attribute ${item.letter}: shown in part${missing.length > 0 ? `; still not shown: ${missing.join("; ")}` : ""}`
+              : state === "REQUESTED"
+                ? unsupported
+                  ? `Attribute ${item.letter}: evidence accepted, and its check does not show the attribute supported`
+                  : `Attribute ${item.letter}: requested, no evidence accepted yet`
+                : state === "EXCEPTED"
+                  ? `Attribute ${item.letter}: not evidenced at D&I, with a recorded reason`
+                  : `Attribute ${item.letter}: not addressed by any request`,
       reason: state === "EXCEPTED" ? (reasonOf.get(item.id)?.reason ?? "") : "",
+      // Which elements are still not shown, by their text, once a check has read them.
+      missing: state === "REQUESTED" && !unsupported ? [] : missing,
+      unsupported: state === "REQUESTED" && unsupported,
     };
   });
   const exceptions: ExceptionLine[] = attributes.flatMap((item) => {
@@ -1071,15 +1178,23 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
   const evidenced = coverage.filter((chip) => chip.state === "EVIDENCED");
   const gaps = coverage.filter((chip) => chip.state === "UNCOVERED");
   const reasons = coverage.filter((chip) => chip.state === "EXCEPTED");
+  const designed = coverage.filter((chip) => chip.state === "DESIGN_ONLY");
+  const inPart = coverage.filter((chip) => chip.state === "PARTLY");
   const review = live.filter((row) => row.canAccept && !row.decided);
   // What accepting the files that wait would add to the coverage.
+  const waits = (row: EvidenceRow) =>
+    row.state === "ACCEPTED" || review.includes(row);
   const wouldCover = attributes
     .filter(
       (item) =>
         !evidenced.some((chip) => chip.attributeId === item.id) &&
-        review.some((row) => row.attributeIds.includes(item.id)),
+        (legacy(item.id, (row) => review.includes(row)) ||
+          attributeCoverage(item.id, checked(waits)).state === "EVIDENCED"),
     )
     .map((item) => item.letter);
+  const bare = coverage
+    .filter((chip) => chip.unsupported)
+    .map((chip) => chip.letter);
   const reviewFiles = review.reduce((sum, row) => sum + row.files, 0);
   const coverageLine =
     attributes.length === 0
@@ -1088,11 +1203,29 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
           evidenced.length === 0 &&
           gaps.length === 0 &&
           reasons.length === 0 &&
-          wouldCover.length === 0
+          wouldCover.length === 0 &&
+          bare.length === 0 &&
+          designed.length === 0 &&
+          inPart.length === 0
             ? "Every attribute is requested · none evidenced yet"
             : `${evidenced.length} of ${plural(attributes.length, "attribute")} evidenced`,
           wouldCover.length > 0
             ? `accepting ${reviewFiles === 1 ? "this file" : "these files"} covers ${lettersSpan(wouldCover, allLetters)}`
+            : "",
+          inPart.length > 0
+            ? `${lettersSpan(
+                inPart.map((chip) => chip.letter),
+                allLetters,
+              )} shown in part`
+            : "",
+          designed.length > 0
+            ? `${lettersSpan(
+                designed.map((chip) => chip.letter),
+                allLetters,
+              )} ${DESIGN_ONLY}`
+            : "",
+          bare.length > 0
+            ? `${lettersSpan(bare, allLetters)} accepted without support from the check`
             : "",
           reasons.length > 0
             ? `${lettersSpan(
@@ -1135,6 +1268,10 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
     attributes: attributes.length,
     now: input.now,
     drafted,
+    assured:
+      input.assurance == null || input.assurance.requests.length === 0
+        ? null
+        : assuranceCounts(input.assurance),
   });
 
   const received = live.reduce((sum, row) => sum + row.files, 0);
@@ -1207,6 +1344,8 @@ function headerOf(facts: {
   now: number;
   /** A request of the phase is drafted and waits to be approved and sent. */
   drafted: boolean;
+  /** What the assurance chain's checks need of the person; null where it has none. */
+  assured: AssuranceCounts | null;
 }): EvidenceHeader {
   const { live, review, reviewFiles, main, owner, handover } = facts;
   const count = (state: ChipState) =>
@@ -1237,6 +1376,10 @@ function headerOf(facts: {
     ...read.map((row) =>
       `${row.title}: ${row.agent?.lead ?? ""} ${row.agent?.text ?? ""}`.trim(),
     ),
+    // What the two readings agree each checked row shows, and what they left open.
+    ...live
+      .filter((row) => row.assurance !== null && row.assurance.spoken !== "")
+      .map((row) => `${row.title}: ${row.assurance?.spoken ?? ""}.`),
   ];
   const due = main !== null && main.dueAt !== "" ? formatDate(main.dueAt) : "";
   const at = main?.delivery?.at != null ? formatDate(main.delivery.at) : "";
@@ -1370,14 +1513,21 @@ function headerOf(facts: {
               ? (proposed[0] ?? "")
               : tally.map((item) => `${item.n} ${item.word}`).join(", ")
           }.`;
+    // The chain's checks: what they need of the person, counted from its summary. The
+    // reader's own proposal is said only for a file the chain has no entry for.
+    const checks =
+      facts.assured === null ? "" : assuranceSentence(facts.assured);
+    const pill = facts.assured === null ? "" : assurancePill(facts.assured);
+    const readings =
+      checks === "" ? says : proposed.length > 0 ? `${says} ${checks}` : checks;
     return {
       standing: "REVIEW",
       tone: "attention",
-      status: `${plural(reviewFiles, "file")} to review`,
+      status: `${plural(reviewFiles, "file")} to review${pill !== "" ? ` · ${pill}` : ""}`,
       need: {
         kind: "act",
         title: `Review ${plural(reviewFiles, "file")}.`,
-        detail: `${says} Nothing is accepted until you accept it.`,
+        detail: `${readings} Nothing is accepted until you accept it.`,
       },
       agent: {
         did:
