@@ -1562,7 +1562,14 @@ describe("the record under the list", () => {
     assert.match(screen, /view\.groups\.map/);
     // After an upload nothing else is offered until the plan is read again.
     assert.match(screen, /settling === plan/);
-    assert.match(screen, /onUploaded=\{\(\) => setSettling\(plan\)\}/);
+    // Rewritten for the D&I evidence wizard (docs/evidence-wizard.md, 13 November 2026).
+    // Old: `onUploaded={() => setSettling(plan)}`, the row's own upload (RequestUpload).
+    // New: `onUploaded: () => setSettling(plan)`, handed to the wizard, which every
+    // upload on the list now goes through (the header's Upload evidence, a row's
+    // Upload, a drop). Reason: the rows' direct upload is replaced by the wizard; the
+    // list still locks until the plan is read again once the wizard's uploads end.
+    assert.match(screen, /onUploaded: \(\) => setSettling\(plan\)/);
+    assert.doesNotMatch(screen, /<RequestUpload\b/);
   });
 });
 

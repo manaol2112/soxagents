@@ -593,6 +593,72 @@ describe("parseAssurance (section 6)", () => {
     assert.equal(request.attributes[3]?.findingId, null);
   });
 
+  it("keeps both readings on an issue only where each reading sent one: a split shortfall (the D&I evidence wizard, 13 November 2026)", () => {
+    // The server sends ISSUE PARTLY_MET with both views where one reading finds the
+    // attribute not met and the other met in part (docs/evidence-assurance.md, rule 4).
+    const split = {
+      ...ISSUE,
+      result: "PARTLY_MET",
+      views: [
+        { role: "ASSESSOR", result: "NOT_MET", reason: "No approval at all." },
+        {
+          role: "REVIEWER",
+          result: "PARTLY_MET",
+          reason: "Approved, but after the grant.",
+        },
+      ],
+    };
+    const request = only(
+      parsed([
+        entry({
+          attributes: [
+            split,
+            // One view, or the same reading twice, is not both readings.
+            {
+              ...split,
+              attribute_id: C,
+              code: "C",
+              views: [split.views[0]],
+            },
+            {
+              ...split,
+              attribute_id: D,
+              code: "D",
+              views: [split.views[0], split.views[0]],
+            },
+          ],
+        }),
+      ]),
+    );
+    assert.equal(request.attributes[0]?.verdict, "ISSUE");
+    assert.deepEqual(
+      request.attributes[0]?.views.map((view) => [view.role, view.result]),
+      [
+        ["ASSESSOR", "NOT_MET"],
+        ["REVIEWER", "PARTLY_MET"],
+      ],
+    );
+    assert.deepEqual(request.attributes[1]?.views, []);
+    assert.deepEqual(request.attributes[2]?.views, []);
+    // The row shows them side by side, under the issue.
+    const check = requestCheck(request, lettered, [POLICY_FILE], span);
+    assert.deepEqual(
+      check.attributes.find((line) => line.letter === "B")?.readings,
+      [
+        {
+          who: "First reading",
+          result: "Not shown",
+          reason: "No approval at all.",
+        },
+        {
+          who: "Second, independent reading",
+          result: "Shown in part",
+          reason: "Approved, but after the grant.",
+        },
+      ],
+    );
+  });
+
   it("shows the server's location label as it is, and composes one from the parts without it", () => {
     const where = (location: unknown) =>
       only(

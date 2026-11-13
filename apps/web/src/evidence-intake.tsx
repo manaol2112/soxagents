@@ -14,7 +14,7 @@ import { UiIcon } from "./ui-icon";
 
 const AT_ONCE = 3;
 
-type Picked = { file: File; path: string };
+export type Picked = { file: File; path: string };
 type ItemState = "queued" | "sending" | "done" | "duplicate" | "failed";
 type Item = {
   key: string;
@@ -25,7 +25,10 @@ type Item = {
 };
 
 /** Every file in a dropped folder, with its path inside the folder. */
-async function walk(entry: FileSystemEntry, into: Picked[]): Promise<void> {
+export async function walk(
+  entry: FileSystemEntry,
+  into: Picked[],
+): Promise<void> {
   if (entry.isFile) {
     const file = await new Promise<File>((resolve, reject) =>
       (entry as FileSystemFileEntry).file(resolve, reject),

@@ -30,6 +30,10 @@ type Props = {
   sourcesTitle?: string;
   label: React.ReactNode;
   className?: string;
+  /** Where the preview is drawn: the page by default. A modal <dialog> passes itself, so
+   * the preview sits in its top layer and is not made inert beneath it (the D&I evidence
+   * wizard's "Open in the file"). */
+  container?: HTMLElement | null;
 };
 
 /** A button that opens the evidence preview, with the cited passages marked. */
@@ -106,6 +110,7 @@ function PreviewDialog({
   startFileId,
   title,
   sourcesTitle = "What the tester relied on",
+  container = null,
   onClose,
 }: Props & { onClose: () => void }) {
   const first = startFileId ?? citations[0]?.fileId ?? files[0]?.id ?? "";
@@ -293,7 +298,7 @@ function PreviewDialog({
         </div>
       </div>
     </div>,
-    document.body,
+    container ?? document.body,
   );
 }
 

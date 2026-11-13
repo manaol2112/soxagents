@@ -2806,6 +2806,11 @@ function ControlRecord({
                     }}
                     stepHref={stepHrefsWf.designevidence}
                     focusView={engagement.filters.evidenceView ?? null}
+                    about={{
+                      title: control.title,
+                      system: control.applicationName ?? "",
+                      engagement: model.selectedProject?.name ?? "",
+                    }}
                   />
                 ) : null}
                 {/* The requests list is the one list until then; any other step, and a

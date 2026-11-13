@@ -1,0 +1,18 @@
+{
+ "batch": "cbceb9bf-8553-4866-97ec-89fc191a1204",
+ "failed": "5db10e6e-0c7a-4b63-91b1-493cb1f8f4e1",
+ "files": {
+  "log": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
+  "minutes": "e9fe71f5-0640-4bbe-acb6-6a564d0fdcdf",
+  "notes": "0d6ac527-e8b5-4c54-a97c-39eefc193e98",
+  "policy": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
+  "ticket": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990"
+ },
+ "held": "40ca2d5f-19c3-416b-8a3a-2045c7b35c44",
+ "policy_item": "01a1d5c0-1d84-74c5-8cdb-719bf1a0688a",
+ "second": "46934601-94a1-4a8d-8844-1dfdbf0185cf",
+ "stored": "397fd85b-f721-4e08-9112-b7fba7abd825",
+ "third": "23d2602e-7812-4b33-b91e-52674a57eb29",
+ "walk_item": "01a1d5c0-1d89-7db1-801e-e6f012953a44",
+ "working": "3cba78da-ebc3-4d06-a0d1-619816744113"
+}

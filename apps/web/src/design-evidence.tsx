@@ -51,7 +51,7 @@ import {
   useFindingsAction,
 } from "./evidence-findings-view";
 import { evidenceHref } from "./evidence-flow";
-import { RequestUpload } from "./evidence-intake";
+import type { Picked } from "./evidence-intake";
 import type { Intelligence } from "./evidence-intelligence-view";
 import type {
   EvidencePlan,
@@ -66,6 +66,14 @@ import {
 } from "./evidence-plan-view";
 import { PreviewButton } from "./evidence-preview";
 import { formatOf, wordingOf } from "./evidence-requests-model";
+import {
+  carriesFiles,
+  droppedFiles,
+  EvidenceWizard,
+  useEvidenceWizard,
+  WizardProgress,
+} from "./evidence-wizard";
+import { wizardItems } from "./evidence-wizard-model";
 import type { HeldFile } from "./evidence-workspace-model";
 import { linkableFiles } from "./evidence-workspace-model";
 import { fileLine } from "./evidence-workspace-view";
@@ -238,6 +246,15 @@ function CheckPolling() {
   ) : null;
 }
 
+/** A drag over a dialog the list renders (the evidence wizard, Review and send) is that
+ * dialog's, never a drop on the list. */
+function inDialog(event: { target: EventTarget }): boolean {
+  return (
+    event.target instanceof Element &&
+    event.target.closest("dialog, [role='dialog']") !== null
+  );
+}
+
 /** A row as the pre-release list's dialogs read it (edit, change attributes). */
 function asRequest(row: EvidenceRow): RequestsRow {
   return {
@@ -291,6 +308,7 @@ export function DesignEvidence({
   documents,
   stepHref,
   focusView,
+  about = { title: "", system: "", engagement: "" },
 }: {
   ids: Ids;
   view: EvidenceList;
@@ -316,6 +334,9 @@ export function DesignEvidence({
   stepHref: string;
   /** The view a link names (?ev=): "files" opens the other files. */
   focusView: string | null;
+  /** What the evidence wizard's header says of the control: its title, its system and
+   * the engagement. */
+  about?: { title: string; system: string; engagement: string };
 }) {
   const id = useId();
   const router = useRouter();
@@ -328,6 +349,34 @@ export function DesignEvidence({
       .flatMap((phase) => phase.requirements)
       .map((item) => [item.id, item]),
   );
+  // Evidence is added through the D&I evidence wizard (docs/evidence-wizard.md): the
+  // header's Upload evidence, a row's Upload, and files dropped on the list open it.
+  const wizard = useEvidenceWizard({
+    ids,
+    items: wizardItems(view.rows, [...requirements.values()]),
+    attributes: view.attributes,
+    context: {
+      controlRef,
+      controlTitle: about.title,
+      system: about.system,
+      engagement: about.engagement,
+      requests: view.groups
+        .filter((group) => group.rowIds.length > 0)
+        .map((group) => ({
+          to: group.line.quiet ? "" : group.line.to,
+          role: group.line.role,
+          due: group.line.due,
+        })),
+    },
+    canAct,
+    held: files,
+    applications,
+    system,
+    // After an upload nothing else is offered until the plan is read again.
+    onUploaded: () => setSettling(plan),
+    analyses: intelligence.register?.analyses ?? [],
+  });
+  const [over, setOver] = useState(false);
   // The rows the person opened or closed; until then the first that waits on them is open.
   const [chosen, setChosen] = useState<ReadonlySet<string> | null>(null);
   const [dialog, setDialog] = useState<ListDialog | null>(null);
@@ -415,7 +464,34 @@ export function DesignEvidence({
   }
 
   return (
-    <section className="dq de" aria-label="D&I requests" aria-busy={locked}>
+    // Files dropped anywhere on the list open the evidence wizard with them queued;
+    // Upload evidence and each row's Upload do the same from the keyboard.
+    <section
+      className={`dq de${over ? " is-over" : ""}`}
+      aria-label="D&I requests"
+      aria-busy={locked}
+      onDragOver={(event) => {
+        if (canAct && !locked && carriesFiles(event) && !inDialog(event)) {
+          event.preventDefault();
+          setOver(true);
+        }
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setOver(false);
+        }
+      }}
+      onDrop={(event) => {
+        setOver(false);
+        if (!canAct || locked || !carriesFiles(event) || inDialog(event)) {
+          return;
+        }
+        event.preventDefault();
+        void droppedFiles(event.dataTransfer).then((picked) =>
+          wizard.startNew(null, picked),
+        );
+      }}
+    >
       {head}
       <div className="ta-bar de-bar">
         <h4 className="ta-section-title">{view.title}</h4>
@@ -429,6 +505,18 @@ export function DesignEvidence({
             >
               <UiIcon name="plus" size={13} />
               Add request
+            </button>
+            {/* The evidence wizard: the files are sorted into the control's D&I items
+                and checked against the attributes. One primary per area: it is
+                secondary while requests wait to be sent. */}
+            <button
+              type="button"
+              className={view.send.show ? "btn btn-secondary" : "btn"}
+              disabled={locked}
+              onClick={wizard.openFromList}
+            >
+              <UiIcon name="upload" size={14} />
+              Upload evidence
             </button>
             {/* Approved and sent here, through the same check, review and confirmation
                 as before: shown only while requests wait to be sent. */}
@@ -485,7 +573,8 @@ export function DesignEvidence({
         <CheckPolling />
       ) : null}
 
-      {view.groups.map((group) => {
+      {view.groups.length === 0 ? <WizardProgress wizard={wizard} /> : null}
+      {view.groups.map((group, at) => {
         const reviewHref =
           group.line.requestId === null
             ? null
@@ -558,6 +647,9 @@ export function DesignEvidence({
                 ]}
               />
             </div>
+            {/* The evidence wizard's session while its window is closed: where it
+                stands, and the way back into it. */}
+            {at === 0 ? <WizardProgress wizard={wizard} /> : null}
             {group.rowIds.length === 0 ? (
               // A request no row travels in (a follow-up, a samples request): its line
               // above says where it stands; this says what it is.
@@ -588,10 +680,9 @@ export function DesignEvidence({
                       canAct={canAct}
                       action={action}
                       locked={locked}
-                      onUploaded={() => setSettling(plan)}
+                      onUpload={(picked) => wizard.startNew(row.id, picked)}
                       files={files}
                       applications={applications}
-                      system={system}
                       policies={policies.evidence}
                       onPolicyDecided={policies.reload}
                       wording={wording}
@@ -923,6 +1014,7 @@ export function DesignEvidence({
           instances={intelligence.instances ?? null}
         />
       ) : null}
+      <EvidenceWizard wizard={wizard} />
     </section>
   );
 }
@@ -937,10 +1029,9 @@ function Row({
   canAct,
   action,
   locked,
-  onUploaded,
+  onUpload,
   files,
   applications,
-  system,
   policies,
   onPolicyDecided,
   wording,
@@ -964,11 +1055,11 @@ function Row({
   canAct: boolean;
   action: Action;
   locked: boolean;
-  /** Files were added: the plan is read again before anything else is offered. */
-  onUploaded: () => void;
+  /** Opens the evidence wizard on this request (the person's choice stands; the agent
+   * only suggests a better fit), with files dropped on the row queued. */
+  onUpload: (picked?: Picked[]) => void;
   files: HeldFile[];
   applications: Array<{ id: string; name: string }>;
-  system: string | null;
   policies: PolicyEvidence;
   onPolicyDecided: () => void;
   wording: ReadonlyMap<string, { letter: string; text: string }>;
@@ -991,6 +1082,8 @@ function Row({
 }) {
   const id = useId();
   const bodyId = `${id}-body`;
+  // Files are dragged over the row: it shows it takes them.
+  const [over, setOver] = useState(false);
   const [asking, setAsking] = useState<Asking | null>(null);
   const [words, setWords] = useState("");
   const [picker, setPicker] = useState<"policy" | "held" | null>(null);
@@ -1164,11 +1257,12 @@ function Row({
     }
   }
 
-  const menuFor = (pick: (() => void) | null): RowMenuItem[] => {
+  const menuFor = (): RowMenuItem[] => {
     const run: Record<MenuKey, () => void> = {
       edit: onEdit,
       attributes: onAttributes,
-      upload: () => pick?.(),
+      // The evidence wizard, opened on this request.
+      upload: () => onUpload(),
       policy: () => {
         setPicker("policy");
         if (!open) {
@@ -1223,7 +1317,7 @@ function Row({
   const hasGuide =
     guide !== null || item.objective !== "" || item.rationale !== "";
 
-  const content = (pick: (() => void) | null, running: boolean) => (
+  const content = (
     <div className="de-grid">
       <button
         type="button"
@@ -1282,26 +1376,20 @@ function Row({
         </span>
       </button>
       <span className="dq-menu de-acts">
-        {uploads && pick !== null ? (
+        {uploads ? (
           <button
             type="button"
             className="btn btn-secondary btn-sm de-upload"
-            disabled={running || locked}
+            disabled={locked}
             aria-label={`Upload evidence for ${row.title}`}
-            title="Choose files, or drop them on the row. They are evidence for this request only."
-            onClick={pick}
+            title="Opens the evidence wizard on this request. Files can be dropped on the row too."
+            onClick={() => onUpload()}
           >
-            {running ? (
-              <span className="spinner small" aria-hidden="true" />
-            ) : (
-              <UiIcon name="upload" size={13} />
-            )}
-            <span className="de-upload-label">
-              {running ? "Uploading…" : "Upload"}
-            </span>
+            <UiIcon name="upload" size={13} />
+            <span className="de-upload-label">Upload</span>
           </button>
         ) : null}
-        {canAct ? <RowMenu label={row.title} items={menuFor(pick)} /> : null}
+        {canAct ? <RowMenu label={row.title} items={menuFor()} /> : null}
       </span>
       <button
         type="button"
@@ -1748,28 +1836,34 @@ function Row({
             }
           : undefined
       }
-      className={`tar de-row is-${row.state.toLowerCase()}${open ? " is-open" : ""}${row.aside ? " is-aside" : ""}`}
+      // Files dropped on the row open the evidence wizard on it, with them queued (a
+      // policy on a control over several systems is asked about there).
+      onDragOver={(event) => {
+        if (uploads && !locked && carriesFiles(event)) {
+          event.preventDefault();
+          event.stopPropagation();
+          setOver(true);
+        }
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setOver(false);
+        }
+      }}
+      onDrop={(event) => {
+        setOver(false);
+        if (!uploads || locked || !carriesFiles(event)) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        void droppedFiles(event.dataTransfer).then((picked) =>
+          onUpload(picked),
+        );
+      }}
+      className={`tar de-row is-${row.state.toLowerCase()}${open ? " is-open" : ""}${row.aside ? " is-aside" : ""}${over ? " is-over" : ""}`}
     >
-      {uploads && item.requestId !== null ? (
-        <RequestUpload
-          organizationId={ids.organizationId}
-          projectId={ids.projectId}
-          requestId={item.requestId}
-          requirementId={item.id}
-          label={item.title}
-          // A policy or procedure may govern several systems: the person says which.
-          systems={
-            item.categories.includes("PROCESS_DOCUMENTATION")
-              ? applications
-              : []
-          }
-          system={system}
-          onUploaded={onUploaded}
-          chooser={(pick, running) => content(pick, running)}
-        />
-      ) : (
-        content(null, false)
-      )}
+      {content}
     </li>
   );
 }
