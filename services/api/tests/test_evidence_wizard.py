@@ -1804,6 +1804,93 @@ def test_a_bundles_other_item_is_received_on_its_own_request(migrated: Database)
     assert case.read(asked)["status"] == "RECEIVED"
     [(_actor, _agent, moved)] = case.audit("pbc.received_from_evidence", asked)
     assert (moved["from"], moved["status"]) == ("SENT", "RECEIVED")
+    # The file withdrawn: the request the link moved goes back to where the link found it.
+    withdrawn = case.owner.post(
+        f"{case.base}/evidence-files/{pack}/withdraw", json={"reason": "Wrong file uploaded."}
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+    assert case.read(asked)["status"] == "SENT"
+    assert case.read(case.request)["status"] == "RECEIVED", "the policy's own file is on it"
+
+
+@pytest.mark.parametrize("leaves", ["withdraw", "move", "unlink", "refile"])
+def test_a_request_a_link_moved_follows_the_file_when_it_leaves(
+    migrated: Database, leaves: str
+) -> None:
+    """The confirmation pass (the reviewer's proof link-withdraw-proof.json): a bundle's
+    link received its item's own request, and when the file left (withdrawn, moved off the
+    item, unlinked on the list, filed to another control) that request stayed received
+    with nothing on it, its item
+    never asked for. Each request a link moved follows the evidence left on it, as the
+    filing's request does: here, back to a draft that asks for the item."""
+    case = _Wizard(migrated, f"lk{leaves}")
+    walk, policy_item = case.walkthrough, case.policy
+    # The walkthrough's own evidence on its row: the policy item is asked for on its own.
+    case.add_for(walk, "ticket v1.txt")
+    other = str(case.item(policy_item["id"])["request_id"])
+    assert other != case.request and case.read(other)["status"] == "DRAFT"
+    pack = case.add("access pack.txt", POLICY + TICKET)
+    case.read_file(pack, _Reader("other", "low"))
+    version = case.file(pack)["placement"]["version"]
+    placed = case.place(pack, [walk["id"], policy_item["id"]], version)
+    assert placed.status_code == 200, placed.text
+    assert case.filing(pack) == (UUID(case.request), UUID(walk["id"]), "PERSON")
+    assert case.read(other)["status"] == "RECEIVED"
+    if leaves == "withdraw":
+        gone = case.owner.post(
+            f"{case.base}/evidence-files/{pack}/withdraw", json={"reason": "Wrong file uploaded."}
+        )
+    elif leaves == "move":
+        gone = case.place(pack, [walk["id"]], case.file(pack)["placement"]["version"])
+    elif leaves == "refile":
+        gone = _refile(case, pack, _other_control(case))
+    else:
+        link = next(f for f in case.item(policy_item["id"])["files"] if f["file_id"] == pack)
+        gone = case.owner.post(
+            f"{case.base}/controls/{case.control}/evidence-requirements/{policy_item['id']}"
+            f"/files/{link['link_id']}/remove",
+            json={"reason": "Not the policy after all.", "version": link["link_version"]},
+        )
+    assert gone.status_code == 200, gone.text
+    back = case.read(other)
+    assert (back["status"], back["provided_directly"]) == ("DRAFT", False)
+    assert case.item(policy_item["id"])["files"] == []
+    assert case.item(policy_item["id"])["in_hand"] is False
+    # The walkthrough's request keeps its own evidence.
+    assert case.read(case.request)["status"] == "RECEIVED"
+
+
+def test_a_check_records_its_compare_stage(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The minor item: once both readings of a check are in, the run is at COMPARE (the
+    screen draws its lane from it) until its outcome is recorded."""
+    case = _Wizard(migrated, "compare")
+    policy = case.add("access policy.txt", POLICY)
+    case.read_file(policy, _Reader("policy", covers={case.policy["title"]: "COVERED"}))
+    seen: list[tuple[str, str]] = []
+    record = record_outcome
+
+    def spy(connection: Any, call_id: Any, outcome: dict[str, Any]) -> None:
+        with connect(migrated.url) as other:
+            seen.extend(
+                (str(row[0]), str(row[1]))
+                for row in other.execute(
+                    "SELECT status, stage FROM evidence_assessments "
+                    "WHERE engagement_control_id = %s",
+                    (UUID(case.control),),
+                ).fetchall()
+            )
+        record(connection, call_id, outcome)
+
+    monkeypatch.setattr(assurance_module, "record_outcome", spy)
+    assert case.check(_Readings(_shown_by(FIRST), _shown_by(SECOND))) == ["READY"]
+    assert seen and set(seen) == {("WORKING", "COMPARE")}
+    [(stage,)] = case.rows(
+        "SELECT stage FROM evidence_assessments WHERE engagement_control_id = %s",
+        UUID(case.control),
+    )
+    assert stage == "DONE"
 
 
 def test_a_file_dropped_again_from_a_row_says_so(migrated: Database) -> None:

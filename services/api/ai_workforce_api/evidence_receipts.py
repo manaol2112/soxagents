@@ -24,6 +24,7 @@ evidence came once none is left (31 Oct 2026: withdrawing one of two items' file
 request received).
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import UUID
@@ -454,8 +455,10 @@ def _move(
         actor_id,
         request_id,
         "pbc.received_from_evidence",
-        {"status": target, "from": before, "by": by, "provided_directly": unsent},
-    )
+        {"status": target, "from": before, "by": by, "provided_directly": unsent,
+         # Moved by a link, not a filing: no filing records where it was (follow_evidence).
+         **({"by_link": True} if match_id is None else {})},
+    )  # fmt: skip
     if left:
         assert control_id is not None
         _request_again(cursor, organization_id, project_id, control_id, request_id, actor_id, left)
@@ -667,12 +670,17 @@ def follow_evidence(
         ).fetchall()
     ]
     if before is None and not records:
-        if not never_asked:
-            return
-        # Received only from evidence provided directly, with no filing that recorded
-        # where it was (the evidence in hand was a person's link, settle_in_hand): it was
-        # never sent nor handed over, so it was a draft.
-        before = "DRAFT"
+        if never_asked:
+            # Received only from evidence provided directly, with no filing that recorded
+            # where it was (the evidence in hand was a person's link, settle_in_hand): it
+            # was never sent nor handed over, so it was a draft.
+            before = "DRAFT"
+        else:
+            # Received by a link, not a filing (a D&I evidence wizard bundle's further
+            # item, apply_receipt without a filing): where the link's receipt found it.
+            before = _linked_from(cursor, request_id)
+            if before is None:
+                return
     # Where the request was before any evidence came: the first recorded status that is
     # not itself a receipt.
     origins = [
@@ -756,6 +764,59 @@ def follow_evidence(
             """,
             (request_id, origin, target, request_id),
         )
+
+
+def _linked_from(cursor: psycopg.Cursor[Any], request_id: UUID) -> str | None:
+    """Where the latest receipt a link recorded on the request found it (its audit event
+    says, since no filing on the request recorded it), when that was not itself a receipt."""
+    row = cursor.execute(
+        """
+        SELECT payload ->> 'from' FROM audit_events
+        WHERE target_type = 'pbc_request' AND target_id = %s
+          AND action = 'pbc.received_from_evidence'
+          AND coalesce((payload ->> 'by_link')::boolean, false)
+          AND payload ->> 'from' NOT IN ('PARTIALLY_RECEIVED', 'RECEIVED')
+        ORDER BY occurred_at DESC, id DESC
+        LIMIT 1
+        """,
+        (request_id,),
+    ).fetchone()
+    return None if row is None or row[0] is None else str(row[0])
+
+
+def linked_requests(cursor: psycopg.Cursor[Any], file_id: UUID) -> list[UUID]:
+    """The requests of the D&I items a file is linked to (evidence_requirement_files), in
+    a fixed order: a link moves its item's request too (a D&I evidence wizard bundle)."""
+    return [
+        UUID(str(row[0]))
+        for row in cursor.execute(
+            """
+            SELECT DISTINCT q.pbc_request_id FROM evidence_requirement_files ef
+            JOIN evidence_requirements q ON q.id = ef.requirement_id
+            WHERE ef.evidence_file_id = %s AND ef.status = 'LINKED' AND q.phase = 'DESIGN'
+              AND q.pbc_request_id IS NOT NULL
+            ORDER BY q.pbc_request_id
+            """,
+            (file_id,),
+        ).fetchall()
+    ]
+
+
+def follow_linked(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    file_id: UUID,
+    actor_id: UUID,
+    followed: Sequence[UUID | None] = (),
+) -> list[UUID]:
+    """After a file left (withdrawn, or filed to another control or off it): the request of
+    each D&I item it is linked to follows the evidence left on it too, as its filing's
+    request does (`followed`, already followed). Returns the requests followed."""
+    found = [request for request in linked_requests(cursor, file_id) if request not in followed]
+    for request_id in found:
+        follow_evidence(cursor, organization_id, project_id, request_id, actor_id)
+    return found
 
 
 def _evidence_left(cursor: psycopg.Cursor[Any], request_id: UUID) -> bool:

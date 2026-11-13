@@ -47,6 +47,7 @@ from ai_workforce_api.evidence_links import control_request, evidence_hint
 from ai_workforce_api.evidence_receipts import (
     apply_receipt,
     follow_evidence,
+    follow_linked,
     release_receipt,
 )
 from ai_workforce_api.evidence_review import review_decided
@@ -1191,6 +1192,12 @@ def _file(
                     cursor, organization_id, project_id, released.request_id, principal.id,
                     released.before,
                 )  # fmt: skip
+            # So does the request of each D&I item it is linked to: a link serves its item
+            # only while the file is on the item's control.
+            follow_linked(
+                cursor, organization_id, project_id, file_id, principal.id,
+                [None if released is None else released.request_id],
+            )  # fmt: skip
             if wizard is not None:
                 # The wizard's placement follows the file (superseding, kept), and its
                 # batch's landing is checked: a file filed to another control is not the

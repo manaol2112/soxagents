@@ -201,7 +201,10 @@ the batch's files still filed to its control is being read (a file filed to anot
 since is not the batch's to wait for), the batch lands: each placed file's request is
 received as for a file read on it (`apply_receipt`, item by item), and so is the own
 request of each further item a file is linked to (a bundle's other items, on another
-request), by the same per-item rule, so a sent request stops chasing evidence in hand; the
+request), by the same per-item rule, so a sent request stops chasing evidence in hand
+(when the file leaves, by withdrawal, a move off the item, an unlink or a filing to another
+control, each such request follows the evidence left on it, as the filing's request does,
+back to where the link's receipt found it when nothing is left); the
 control's checks are brought in step, and when it landed is recorded (`landed_at`). Files
 that arrive together are so checked once, and an unsent request is not split on the first
 file when the second is for its other item. A person's move before the batch has landed
