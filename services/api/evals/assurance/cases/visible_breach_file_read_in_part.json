@@ -168,12 +168,12 @@
             "reason": "Requester, user and role are named."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     },
     "B": {
       "verdict": "ISSUE",
       "results": [
-        "PARTLY_MET",
         "NOT_MET"
       ],
       "unsettled_acceptable": false,
@@ -182,13 +182,8 @@
         "reason": "The role owner approved; the line manager step was approved by the user himself.",
         "elements": {
           "condition": {
-            "result": "PARTLY_MET",
+            "result": "NOT_MET",
             "quotes": [
-              {
-                "file": 0,
-                "quote": "Marcus Hale (MHALE) | Role owner approval - Z_FI_AP_CLERK | Approved | 2026-03-02 15:27:10",
-                "basis": "RECORD"
-              },
               {
                 "file": 0,
                 "quote": "Daniel Okafor (DOKAFOR), delegate of Grace Whitfield | Line manager approval | Approved | 2026-03-02 08:52:30",
@@ -196,7 +191,7 @@
               }
             ],
             "absent": "An approval by the line manager, Grace Whitfield, herself.",
-            "reason": "Only the role owner's approval is the named approver's."
+            "reason": "The line manager step was approved by the user himself, not by the line manager."
           },
           "pass": {
             "result": "CANNOT_TELL",
@@ -205,17 +200,12 @@
             "reason": "The change log was read in part; the assignment row is not in the part read."
           }
         }
-      },
-      "code_gap": {
-        "gives": "UNSETTLED",
-        "why": "Rule 5 turns every NOT_MET and PARTLY_MET element into CANNOT_TELL whenever any file of the request was read in part, even when the shortfall rests on a record that was read (here the ticket, read whole, shows the user approving his own request), not on an absence. No unread row can undo a self-approval, yet the chain can only say UNSETTLED."
       }
     },
     "C": {
       "verdict": "ISSUE",
       "results": [
-        "NOT_MET",
-        "PARTLY_MET"
+        "NOT_MET"
       ],
       "unsettled_acceptable": false,
       "reason": "Daniel Okafor requested the access and approved it himself: a self-approval, whatever the unread rows hold.",
@@ -257,10 +247,6 @@
             "reason": "An approver is the requester and the user who receives the access."
           }
         }
-      },
-      "code_gap": {
-        "gives": "UNSETTLED",
-        "why": "Rule 5 turns every NOT_MET and PARTLY_MET element into CANNOT_TELL whenever any file of the request was read in part, even when the shortfall rests on a record that was read (here the ticket, read whole, shows the user approving his own request), not on an absence. No unread row can undo a self-approval, yet the chain can only say UNSETTLED."
       }
     },
     "D": {

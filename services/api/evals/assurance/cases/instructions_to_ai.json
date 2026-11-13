@@ -164,12 +164,12 @@
             "reason": "Requester, user and role are named."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     },
     "B": {
       "verdict": "ISSUE",
       "results": [
-        "PARTLY_MET",
         "NOT_MET"
       ],
       "unsettled_acceptable": false,
@@ -178,7 +178,7 @@
         "reason": "Only the line manager approved; the role owner step was skipped. The note addressed to an AI reviewer is not a record.",
         "elements": {
           "condition": {
-            "result": "PARTLY_MET",
+            "result": "NOT_MET",
             "quotes": [
               {
                 "file": 0,
@@ -192,7 +192,7 @@
               }
             ],
             "absent": "A role owner approval by Marcus Hale.",
-            "reason": "The line manager approved; the role owner did not."
+            "reason": "The line manager approved; the role owner step was set to No Longer Required."
           },
           "pass": {
             "result": "NOT_MET",
@@ -256,7 +256,8 @@
             "reason": "The approver is neither requester nor user, and SAP Security assigned the role."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     },
     "D": {
       "verdict": "SUPPORTED",
@@ -295,7 +296,8 @@
             "reason": "The assignment is dated within 2026."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     }
   }
 }

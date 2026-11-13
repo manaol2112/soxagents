@@ -163,12 +163,12 @@
             "reason": "Requester, user and role are named."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     },
     "B": {
       "verdict": "ISSUE",
       "results": [
-        "PARTLY_MET",
         "NOT_MET"
       ],
       "unsettled_acceptable": false,
@@ -177,13 +177,8 @@
         "reason": "The role owner approved; the line manager step was approved by the user himself.",
         "elements": {
           "condition": {
-            "result": "PARTLY_MET",
+            "result": "NOT_MET",
             "quotes": [
-              {
-                "file": 0,
-                "quote": "Marcus Hale (MHALE) | Role owner approval - Z_FI_AP_CLERK | Approved | 2026-03-02 15:27:10",
-                "basis": "RECORD"
-              },
               {
                 "file": 0,
                 "quote": "Daniel Okafor (DOKAFOR), delegate of Grace Whitfield | Line manager approval | Approved | 2026-03-02 08:52:30",
@@ -191,11 +186,16 @@
               }
             ],
             "absent": "An approval by the line manager, Grace Whitfield, herself.",
-            "reason": "Only the role owner's approval is the named approver's."
+            "reason": "The line manager step was approved by the user himself, not by the line manager."
           },
           "pass": {
-            "result": "PARTLY_MET",
+            "result": "MET",
             "quotes": [
+              {
+                "file": 0,
+                "quote": "Daniel Okafor (DOKAFOR), delegate of Grace Whitfield | Line manager approval | Approved | 2026-03-02 08:52:30",
+                "basis": "RECORD"
+              },
               {
                 "file": 0,
                 "quote": "Marcus Hale (MHALE) | Role owner approval - Z_FI_AP_CLERK | Approved | 2026-03-02 15:27:10",
@@ -207,8 +207,8 @@
                 "basis": "RECORD"
               }
             ],
-            "absent": "A line manager approval dated before the assignment.",
-            "reason": "The role owner approved before the grant; there is no line manager approval to time."
+            "absent": "",
+            "reason": "Both approval steps are timestamped before the SAP assignment."
           }
         }
       }
@@ -216,8 +216,7 @@
     "C": {
       "verdict": "ISSUE",
       "results": [
-        "NOT_MET",
-        "PARTLY_MET"
+        "NOT_MET"
       ],
       "unsettled_acceptable": false,
       "reason": "Daniel Okafor requested the access and approved it himself: a self-approval.",
@@ -298,7 +297,8 @@
             "reason": "The assignment is dated within 2026."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     }
   }
 }

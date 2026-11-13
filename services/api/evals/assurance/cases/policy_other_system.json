@@ -103,7 +103,6 @@
       "verdict": "ISSUE",
       "results": [
         "NOT_MET",
-        "PARTLY_MET",
         "NOT_ADDRESSED"
       ],
       "unsettled_acceptable": false,
@@ -152,7 +151,6 @@
       "verdict": "ISSUE",
       "results": [
         "NOT_MET",
-        "PARTLY_MET",
         "NOT_ADDRESSED"
       ],
       "unsettled_acceptable": false,
@@ -196,7 +194,6 @@
       "verdict": "ISSUE",
       "results": [
         "NOT_MET",
-        "PARTLY_MET",
         "NOT_ADDRESSED"
       ],
       "unsettled_acceptable": false,

@@ -190,7 +190,8 @@
             "reason": "Requester, user and role are named."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     },
     "B": {
       "verdict": "SUPPORTED",
@@ -244,7 +245,8 @@
             "reason": "Both approvals precede the assignment on 09.06.2026."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     },
     "C": {
       "verdict": "SUPPORTED",
@@ -303,7 +305,8 @@
             "reason": "The role was assigned by SAP Security, not by an approver."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     },
     "D": {
       "verdict": "SUPPORTED",
@@ -342,7 +345,8 @@
             "reason": "The assignment is dated within 2026."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     }
   }
 }

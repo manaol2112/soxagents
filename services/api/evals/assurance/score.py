@@ -63,7 +63,7 @@ from ai_workforce_api.settings import Settings
 from evals.assurance.case_set import CASES_DIR, EvalCase, Expectation, chain_of, load_cases
 
 RESULTS_DIR = Path(__file__).parent / "results"
-# As evidence_assurance.run_assessment's request_of builds each reading's request.
+# As the database run (evidence_assurance._assess, its request_of) builds each request.
 TIMEOUT_SECONDS = 240
 MAX_TOKENS = 8192
 
@@ -193,12 +193,23 @@ def _result_of(opinion: Opinion | None, chain: ChainInput, code: str) -> str | N
     return None if view is None else view.result
 
 
-def classify(expectation: Expectation, verdict: str, result: str | None) -> str:
-    """One attribute's outcome against what an auditor expects, by the errors' order."""
+SUPPORT_VERDICTS = frozenset({"SUPPORTED", "PARTLY_SUPPORTED"})
+
+
+def classify(
+    expectation: Expectation, verdict: str, result: str | None, shows: str | None = None
+) -> str:
+    """One attribute's outcome against what an auditor expects, by the errors' order. A
+    support with the right verdict but credited as IMPLEMENTATION where the evidence shows
+    only the design is a false IMPLEMENTATION (the D&I equivalent of a false SUPPORTED)."""
     if verdict == expectation.verdict and (verdict != "ISSUE" or result in expectation.results):
+        if verdict in SUPPORT_VERDICTS and shows != expectation.shows:
+            return "false_implementation" if shows == "IMPLEMENTATION" else "shows_mismatch"
         return "correct"
     if verdict == "SUPPORTED":
         return "false_supported"
+    if verdict == "PARTLY_SUPPORTED":
+        return "false_partly_supported"
     if verdict == "ISSUE":
         return "issue_wrong_result" if expectation.verdict == "ISSUE" else "false_issue"
     if expectation.verdict == "ISSUE":
@@ -230,14 +241,18 @@ def score_attributes(
             "expected_verdict": expectation.verdict,
             "acceptable_results": list(expectation.results),
             "unsettled_acceptable": expectation.unsettled_acceptable,
+            "expected_shows": expectation.shows,
             "auditor_reason": expectation.reason,
             "code_gap": None if expectation.code_gap is None else expectation.code_gap.model_dump(),
             "verdict": verdict,
             "result": actual,
+            "shows": None if found is None else found.shows,
             "assessor_result": assessor,
             "reviewer_result": reviewer,
             "readings_agree": assessor is not None and assessor == reviewer,
-            "outcome": "skipped" if found is None else classify(expectation, verdict, actual),
+            "outcome": "skipped"
+            if found is None
+            else classify(expectation, verdict, actual, found.shows),
             "summary": "" if found is None else found.summary,
         })  # fmt: skip
     return scored
@@ -284,6 +299,21 @@ def totals_of(cases: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "missed_issue": count(scored, missed_issue),
         "missed_issue_from_code_gaps": count(gap, missed_issue),
         "issue_wrong_result": count(scored, lambda a: a["outcome"] == "issue_wrong_result"),
+        "false_partly_supported": count(
+            scored,
+            lambda a: (
+                a["expected_verdict"] not in SUPPORT_VERDICTS and a["verdict"] == "PARTLY_SUPPORTED"
+            ),
+        ),
+        "false_implementation": count(
+            scored,
+            lambda a: (
+                a["verdict"] in SUPPORT_VERDICTS
+                and a["shows"] == "IMPLEMENTATION"
+                and a["expected_shows"] == "DESIGN"
+            ),
+        ),
+        "shows_mismatch": count(scored, lambda a: a["outcome"] == "shows_mismatch"),
         "missed_supported": count(
             scored, lambda a: a["expected_verdict"] == "SUPPORTED" and a["verdict"] != "SUPPORTED"
         ),
@@ -478,8 +508,8 @@ def print_report(report: dict[str, Any], out: TextIO) -> None:
     print("", file=out)
     print(f"Models: {', '.join(report['models'])}; prompts: {report['prompt_versions']}", file=out)
     for key in (
-        "false_supported", "false_issue", "false_issue_from_code_gaps", "missed_issue",
-        "missed_issue_from_code_gaps", "issue_wrong_result", "unsettled", "unsettled_rate",
+        "false_supported", "false_implementation", "false_partly_supported", "shows_mismatch",
+        "false_issue", "missed_issue", "issue_wrong_result", "unsettled", "unsettled_rate",
         "unsettled_not_acceptable", "agreement_rate", "silently_skipped", "correct",
         "attributes_scored", "input_tokens", "output_tokens", "cost_usd", "cost_per_file_usd",
     ):  # fmt: skip

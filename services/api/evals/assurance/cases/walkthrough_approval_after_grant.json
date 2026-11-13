@@ -162,14 +162,13 @@
             "reason": "Requester, user and role are named."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     },
     "B": {
       "verdict": "ISSUE",
       "results": [
-        "PARTLY_MET",
-        "NOT_MET",
-        "CONTRADICTED"
+        "NOT_MET"
       ],
       "unsettled_acceptable": false,
       "reason": "The role was assigned at 09:12 on 2 March; the role owner approved at 15:27, after the grant.",
@@ -270,7 +269,8 @@
             "reason": "The role was assigned by SAP Security, not by an approver."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     },
     "D": {
       "verdict": "SUPPORTED",
@@ -309,7 +309,8 @@
             "reason": "The assignment is dated within 2026."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     }
   }
 }

@@ -145,8 +145,9 @@
             "quotes": [
               {
                 "file": 0,
-                "quote": "Approved by: Elena Brooks, Chief Information Officer",
-                "basis": "RECORD"
+                "quote": "Elena Brooks, Chief Information Officer",
+                "basis": "RECORD",
+                "context": "Approved by: Elena Brooks, Chief Information Officer"
               },
               {
                 "file": 0,
@@ -158,7 +159,8 @@
             "reason": "The approval block shows the CIO's approval and a 1 January 2026 effective date."
           }
         }
-      }
+      },
+      "shows": "DESIGN"
     },
     "B": {
       "verdict": "SUPPORTED",
@@ -197,7 +199,8 @@
             "reason": "The line manager and the role owner are named as approvers."
           }
         }
-      }
+      },
+      "shows": "DESIGN"
     },
     "C": {
       "verdict": "SUPPORTED",
@@ -231,7 +234,8 @@
             "reason": "The granter must be neither the requester nor an approver."
           }
         }
-      }
+      },
+      "shows": "DESIGN"
     },
     "D": {
       "verdict": "ISSUE",

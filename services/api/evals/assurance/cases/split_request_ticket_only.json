@@ -144,14 +144,15 @@
             "reason": "Requester, user and role are named."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     },
     "B": {
-      "verdict": "UNSETTLED",
-      "unsettled_acceptable": true,
+      "verdict": "PARTLY_SUPPORTED",
+      "unsettled_acceptable": false,
       "reason": "Both approvals are shown; whether they precede the grant needs the SAP log on the other request. Not an exception.",
       "answer": {
-        "reason": "Both approvals are recorded; the role assignment is not in this request's file.",
+        "reason": "Both approvals are recorded; the role assignment is another request's evidence.",
         "elements": {
           "condition": {
             "result": "MET",
@@ -171,28 +172,19 @@
             "reason": "Both approvals are in the ticket."
           },
           "pass": {
-            "result": "NOT_MET",
-            "quotes": [
-              {
-                "file": 0,
-                "quote": "Marcus Hale (MHALE) | Role owner approval - Z_FI_AP_CLERK | Approved | 2026-03-02 15:27:10",
-                "basis": "RECORD"
-              }
-            ],
-            "absent": "The SAP change document of the role assignment, asked for on another request.",
-            "reason": "No SAP change document is in this request's file."
+            "result": "NOT_ADDRESSED",
+            "quotes": [],
+            "absent": "",
+            "reason": "This request's file holds no SAP change document; the timing is the other request's evidence."
           }
         }
       },
-      "code_gap": {
-        "gives": "ISSUE",
-        "why": "A run is per request and judges every approved attribute. When the approval ticket and the SAP change log are on two requests, the ticket's request cannot show 'before the grant'. NOT_ADDRESSED is allowed only for a whole attribute, so the careful answer for that one element is NOT_MET, and rule 6 makes MET + NOT_MET a PARTLY_MET that both readings agree on: an ISSUE that is not real."
-      }
+      "shows": "IMPLEMENTATION"
     },
     "C": {
-      "verdict": "UNSETTLED",
+      "verdict": "NOT_ADDRESSED",
       "unsettled_acceptable": true,
-      "reason": "Requester and approvers differ; who assigned the role is in the SAP log on the other request.",
+      "reason": "Not asked for by this request; requester and approvers differ, and who assigned the role is in the SAP log on the other request. No issue.",
       "answer": {
         "reason": "Requester and approvers are different people; who assigned the role is not in this file.",
         "elements": {
@@ -236,10 +228,6 @@
             "reason": "Neither approver is the requester; who assigned the role is not shown."
           }
         }
-      },
-      "code_gap": {
-        "gives": "ISSUE",
-        "why": "A run is per request and judges every approved attribute. When the approval ticket and the SAP change log are on two requests, the ticket's request cannot show 'before the grant'. NOT_ADDRESSED is allowed only for a whole attribute, so the careful answer for that one element is NOT_MET, and rule 6 makes MET + NOT_MET a PARTLY_MET that both readings agree on: an ISSUE that is not real."
       }
     },
     "D": {

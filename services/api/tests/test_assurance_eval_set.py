@@ -5,10 +5,12 @@ answer; the scorer's dry run estimates without calling anything, and a live run 
 refused without a cost cap and stops before a call that would pass it.
 
 With scripted perfect answers (the careful reader's answer each case states, quotes
-copied from its files) the scorer reports no false SUPPORTED and no false ISSUE: the
-cases and the code's rules agree. Where they cannot (a known code gap the case
-documents), the code gives exactly the verdict the case records. A fabricated quote, or
-an instruction in a file, never supports anything.
+copied from its files) the scorer reports no false SUPPORTED, no false IMPLEMENTATION
+and no false ISSUE, and every verdict and what it shows is the auditor's: the cases
+and the code's rules agree.
+A fabricated quote, a single word, a word cut out of another, an instruction in a file
+or a remark that all approvals were obtained never supports anything, and one line
+quoted twice is not a contradiction.
 
 The live scoring command (evals/assurance/score.py) is never part of a tier.
 """
@@ -27,6 +29,8 @@ from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from ai_workforce_api import evidence_assurance  # noqa: E402
+from ai_workforce_api.console_citations import find_quote  # noqa: E402
 from ai_workforce_api.evidence_assurance import (  # noqa: E402
     OPINION_SCHEMA,
     REVIEWER_AGENT,
@@ -35,7 +39,6 @@ from ai_workforce_api.evidence_assurance import (  # noqa: E402
     Role,
     Verdict,
     prompt_for,
-    run_assessment,
     run_chain,
 )
 from ai_workforce_api.evidence_extraction import MAX_TEXT  # noqa: E402
@@ -44,6 +47,7 @@ from ai_workforce_api.settings import Settings  # noqa: E402
 from evals.assurance import score  # noqa: E402
 from evals.assurance.case_set import (  # noqa: E402
     EvalCase,
+    Expectation,
     case_paths,
     chain_of,
     full_text,
@@ -54,9 +58,6 @@ from evals.assurance.case_set import (  # noqa: E402
 REPO = Path(__file__).resolve().parents[3]
 CASES = load_cases()
 BY_NAME = {case.name: case for case in CASES}
-GAP_CASES = sorted(
-    {case.name for case in CASES for e in case.expected.values() if e.code_gap is not None}
-)
 # The scenarios docs/evidence-assurance.md section 8 and the brief name, each a case.
 REQUIRED = {
     "policy_complete",
@@ -78,6 +79,10 @@ MARKER = "ASSESSOR-ONLY-7f3c"
 Answerer = Callable[[EvalCase], dict[str, Any]]
 # A quote no file of the set holds.
 FABRICATED = "Approved by Grace Whitfield in ServiceNow on 2026-03-02 09:03:44"
+ROLE_LINE = (
+    "Role requested: Z_FI_AP_CLERK - Accounts Payable Clerk (vendor invoice entry); replaces "
+    "the Z_FI_AP_DISPLAY role requested in error on RITM0048170"
+)
 
 
 def _settings() -> Settings:
@@ -239,15 +244,25 @@ def test_prompts_build_and_the_reviewer_sees_nothing_of_the_assessor(case: EvalC
 
 
 def test_the_scorer_asks_as_the_database_run_does() -> None:
-    source = inspect.getsource(run_assessment)
+    # The database run builds each reading's request in a nested request_of (no importable
+    # builder), so the scorer mirrors it and this check holds the mirror to it.
+    source = inspect.getsource(evidence_assurance)
+    assert source.count("def request_of(") == 1
+    built = source[source.index("def request_of(") :]
+    built = built[: built.index("\n\n")]
     for piece in (
+        'operation="generate"',
         "output_schema=OPINION_SCHEMA",
+        "allowed_tool_ids=()",
         f"timeout_seconds={score.TIMEOUT_SECONDS}",
+        "cancelled=False",
+        "system=system",
         f"max_tokens={score.MAX_TOKENS}",
-        "tier=assessor.tier",
-        "config=assessor.config",
     ):
-        assert piece in source
+        assert piece in built, piece
+    assert "images=" not in built and "unnest=" not in built and "web_search=" not in built
+    # The reviewer on the assessor's own tier and configuration.
+    assert "tier=assessor.tier" in source and "config=assessor.config" in source
     request = score.request_for("system", "prompt")
     assert request.output_schema is OPINION_SCHEMA and request.operation == "generate"
     setup = score.setup_for(BY_NAME["walkthrough_complete"], _settings())
@@ -315,13 +330,16 @@ def test_the_scorer_is_in_no_test_tier() -> None:
 
 
 def test_perfect_answers_score_no_false_supported_and_no_false_issue(tmp_path: Path) -> None:
-    cases = [case for case in CASES if case.name not in GAP_CASES]
+    cases = CASES
     provider = _Scripted(_answers(cases))
     code, report, text = _run(tmp_path, cases, provider)
     totals = report["totals"]
     assert code == 0 and report["mode"] == "scripted" and report["stopped"] is None
     assert len(provider.requests) == 2 * len(cases)
     assert totals["false_supported"] == 0
+    assert totals["false_implementation"] == 0
+    assert totals["false_partly_supported"] == 0
+    assert totals["shows_mismatch"] == 0
     assert totals["false_issue"] == 0
     assert totals["missed_issue"] == 0
     assert totals["issue_wrong_result"] == 0
@@ -337,25 +355,26 @@ def test_perfect_answers_score_no_false_supported_and_no_false_issue(tmp_path: P
             case["cost_usd"], abs=1e-5
         )
     assert "false_supported: 0" in text
-
-
-def test_where_the_code_cannot_reach_the_auditors_verdict_it_gives_what_the_case_records(
-    tmp_path: Path,
-) -> None:
-    cases = [BY_NAME[name] for name in GAP_CASES]
-    assert cases, "the set documents the code gaps it found"
-    _code, report, _text = _run(tmp_path, cases, _Scripted(_answers(cases)))
-    totals = report["totals"]
-    assert totals["false_supported"] == 0
-    assert totals["code_gap_as_documented"] == totals["code_gap_attributes"] > 0
-    # Every error the perfect answers leave is one of the documented gaps.
-    assert totals["false_issue"] == totals["false_issue_from_code_gaps"]
-    assert totals["missed_issue"] == totals["missed_issue_from_code_gaps"]
     for attribute in _attributes(report):
-        if attribute["code_gap"] is None:
-            assert attribute["outcome"] == "correct"
-        else:
-            assert attribute["verdict"] == attribute["code_gap"]["gives"]
+        assert attribute["verdict"] == attribute["expected_verdict"]
+        assert attribute["shows"] == attribute["expected_shows"]
+    shown = {a["shows"] for a in _attributes(report) if a["verdict"] == "SUPPORTED"}
+    assert shown == {"DESIGN", "IMPLEMENTATION"}
+    assert any(a["verdict"] == "PARTLY_SUPPORTED" for a in _attributes(report))
+
+
+def test_design_credited_as_implementation_is_counted_on_its_own() -> None:
+    policy = BY_NAME["policy_complete"].expected["A"]
+    assert policy.shows == "DESIGN"
+    assert score.classify(policy, "SUPPORTED", "MET", "DESIGN") == "correct"
+    assert score.classify(policy, "SUPPORTED", "MET", "IMPLEMENTATION") == "false_implementation"
+    record = BY_NAME["walkthrough_complete"].expected["A"]
+    assert score.classify(record, "SUPPORTED", "MET", "DESIGN") == "shows_mismatch"
+    issue: Expectation = BY_NAME["walkthrough_self_approval"].expected["C"]
+    assert score.classify(issue, "SUPPORTED", "MET", "IMPLEMENTATION") == "false_supported"
+    assert score.classify(issue, "PARTLY_SUPPORTED", "SHOWN_IN_PART", "IMPLEMENTATION") == (
+        "false_partly_supported"
+    )
 
 
 def _fabricated(case: EvalCase) -> dict[str, Any]:
@@ -435,3 +454,84 @@ def test_an_instruction_in_a_file_never_supports(tmp_path: Path) -> None:
     assert b["verdict"] != "SUPPORTED" and b["assessor_result"] == "CANNOT_TELL"
     assert case["set_aside"] == {"ASSESSOR": 4, "REVIEWER": 4}
     assert report["totals"]["false_supported"] == 0
+
+
+def _claims(code: str, result: str, quotes: list[dict[str, Any]]) -> Answerer:
+    """The perfect answer, except that every element of one attribute claims `result` on
+    `quotes`."""
+
+    def answer(case: EvalCase) -> dict[str, Any]:
+        given = scripted_answer(case)
+        for attribute in given["attributes"]:
+            if attribute["code"] == code:
+                for element in attribute["elements"]:
+                    element.update(result=result, absent="", quotes=copy.deepcopy(quotes))
+        return given
+
+    return answer
+
+
+def _both(case: EvalCase, answerer: Answerer, tmp_path: Path) -> dict[str, Any]:
+    _code, report, _text = _run(
+        tmp_path, [case], _Scripted(_answers([case], {"ASSESSOR": answerer, "REVIEWER": answerer}))
+    )
+    assert report["totals"]["false_supported"] == 0
+    return dict(report["cases"][0])
+
+
+def test_a_single_word_or_a_word_cut_from_another_never_supports(tmp_path: Path) -> None:
+    case = BY_NAME["single_word_inside_unapproved"]
+    cut = "approved | 2026-03-02 15:27:10"
+    ticket = chain_of(case).files[0].text
+    # The console's loose match would find the cut word; the chain's strict one does not.
+    assert find_quote(ticket, cut) is not None
+    claims = _claims("B", "MET", [
+        {"file": 0, "quote": "Approved", "basis": "RECORD"},
+        {"file": 0, "quote": cut, "basis": "RECORD"},
+    ])  # fmt: skip
+    record = _both(case, claims, tmp_path)
+    b = next(a for a in record["attributes"] if a["code"] == "B")
+    assert b["verdict"] == "UNSETTLED" and b["assessor_result"] == "CANNOT_TELL"
+    assert record["dropped_quotes"] == {"ASSESSOR": 4, "REVIEWER": 4}
+
+
+def test_a_remark_that_all_approvals_were_obtained_never_supports(tmp_path: Path) -> None:
+    case = BY_NAME["remark_all_approvals_obtained"]
+    claims = _claims("B", "MET", [
+        {"file": 0, "quote": "Remark: all approvals were obtained as required.", "basis": "RECORD"},
+    ])  # fmt: skip
+    record = _both(case, claims, tmp_path)
+    b = next(a for a in record["attributes"] if a["code"] == "B")
+    assert b["verdict"] == "UNSETTLED" and b["assessor_result"] == "CANNOT_TELL"
+    assert record["dropped_quotes"] == {"ASSESSOR": 0, "REVIEWER": 0}
+
+
+def test_one_line_quoted_twice_is_not_a_contradiction(tmp_path: Path) -> None:
+    case = BY_NAME["one_line_contradiction"]
+    claims = _claims("D", "CONTRADICTED", [
+        {"file": 0, "quote": ROLE_LINE, "basis": "RECORD"},
+        {"file": 0, "quote": ROLE_LINE, "basis": "RECORD"},
+    ])  # fmt: skip
+    record = _both(case, claims, tmp_path)
+    d = next(a for a in record["attributes"] if a["code"] == "D")
+    assert d["verdict"] == "UNSETTLED" and d["assessor_result"] == "CANNOT_TELL"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Known defect, reported to the lead: rule 3 asks for two passages that do not "
+        "overlap, not two records, so two fragments of one line pass as a contradiction "
+        "(and an agreed CONTRADICTED is an ISSUE even on an unlinked attribute)."
+    ),
+)
+def test_two_fragments_of_one_line_are_not_a_contradiction(tmp_path: Path) -> None:
+    case = BY_NAME["one_line_contradiction"]
+    first = "Role requested: Z_FI_AP_CLERK - Accounts Payable Clerk"
+    claims = _claims("D", "CONTRADICTED", [
+        {"file": 0, "quote": first, "basis": "RECORD"},
+        {"file": 0, "quote": "the Z_FI_AP_DISPLAY role requested in error", "basis": "RECORD"},
+    ])  # fmt: skip
+    record = _both(case, claims, tmp_path)
+    d = next(a for a in record["attributes"] if a["code"] == "D")
+    assert d["verdict"] != "ISSUE"

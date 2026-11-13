@@ -21,16 +21,19 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ai_workforce_api.console_citations import find_quote
+from ai_workforce_api.console_citations import find_passage, find_quote
 from ai_workforce_api.evidence_assurance import (
+    CONTEXT_LIMIT,
     ISSUE_RESULTS,
     QUOTE_LIMIT,
     AttributeSpec,
     ChainInput,
+    ElementResult,
     FileSpec,
     Lens,
     PassageBasis,
     Result,
+    Shows,
     Verdict,
     elements_of,
     lens_for,
@@ -107,10 +110,12 @@ class QuoteCase(_Strict):
     file: int = Field(ge=0)
     quote: str = Field(min_length=3, max_length=QUOTE_LIMIT)
     basis: PassageBasis
+    # The words around the quote, where the quote occurs more than once in the file.
+    context: str = Field(default="", max_length=CONTEXT_LIMIT)
 
 
 class ElementAnswer(_Strict):
-    result: Result
+    result: ElementResult
     quotes: list[QuoteCase] = Field(default_factory=list, max_length=4)
     absent: str = Field(default="", max_length=300)
     reason: str = Field(min_length=5, max_length=400)
@@ -141,6 +146,8 @@ class Expectation(_Strict):
     reason: str = Field(min_length=10, max_length=400)
     # The answer, element by element, a careful reader gives (the scripted perfect answer).
     answer: AttributeAnswer
+    # For SUPPORTED and PARTLY_SUPPORTED: what the support shows for D&I.
+    shows: Shows | None = None
     code_gap: CodeGap | None = None
 
     @model_validator(mode="after")
@@ -152,6 +159,8 @@ class Expectation(_Strict):
             raise ValueError("only an ISSUE names results")
         if self.verdict == "UNSETTLED" and not self.unsettled_acceptable:
             raise ValueError("an expected UNSETTLED is acceptable by definition")
+        if (self.shows is not None) != (self.verdict in ("SUPPORTED", "PARTLY_SUPPORTED")):
+            raise ValueError("a supported attribute, and only one, says what it shows")
         if self.code_gap is not None and self.code_gap.gives == self.verdict:
             raise ValueError("a code gap gives another verdict than the auditor's")
         return self
@@ -198,20 +207,28 @@ class EvalCase(_Strict):
                 raise ValueError(f"{attribute.code}: a linked attribute is never NOT_ADDRESSED")
             if (
                 expectation.verdict == "ISSUE"
-                and "NOT_ADDRESSED" in expectation.results
                 and not attribute.expected
+                and set(expectation.results) != {"CONTRADICTED"}
             ):
                 raise ValueError(
-                    f"{attribute.code}: only a linked attribute is an ISSUE unaddressed"
+                    f"{attribute.code}: an unlinked attribute is an ISSUE only contradicted"
                 )
             keys = {key for key, _text in elements_of(attribute_spec(self, attribute))}
             if set(expectation.answer.elements) != keys:
                 raise ValueError(f"{attribute.code}: the answer covers elements {sorted(keys)}")
+            given = {element.result for element in expectation.answer.elements.values()}
+            if expectation.verdict == "SUPPORTED" and given != {"MET"}:
+                raise ValueError(f"{attribute.code}: SUPPORTED rests on every element MET")
+            if expectation.verdict == "PARTLY_SUPPORTED" and given != {"MET", "NOT_ADDRESSED"}:
+                raise ValueError(f"{attribute.code}: PARTLY_SUPPORTED is MET and NOT_ADDRESSED")
             for element in expectation.answer.elements.values():
-                if expectation.verdict == "SUPPORTED" and element.result != "MET":
-                    raise ValueError(f"{attribute.code}: SUPPORTED rests on every element MET")
-                if any(quote.file >= len(self.files) for quote in element.quotes):
-                    raise ValueError(f"{attribute.code}: a quote names a file not in the case")
+                for quote in element.quotes:
+                    if quote.file >= len(self.files):
+                        raise ValueError(f"{attribute.code}: a quote names a file not in the case")
+                    # The careful reader's quotes pass the code's strict match, placed.
+                    found = find_passage(stored[quote.file].text, quote.quote, quote.context)
+                    if found is None or not found.placed:
+                        raise ValueError(f"{attribute.code}: {quote.quote!r} is not placed")
         return self
 
 
@@ -299,6 +316,7 @@ def chain_of(case: EvalCase) -> ChainInput:
         attributes=tuple(attribute_spec(case, attribute) for attribute in case.attributes),
         files=tuple(files),
         files_left_out=False,
+        categories=tuple(case.categories),
     )
 
 
@@ -313,7 +331,10 @@ def scripted_answer(case: EvalCase) -> dict[str, Any]:
                     {
                         "element": key,
                         "result": element.result,
-                        "quotes": [quote.model_dump() for quote in element.quotes],
+                        "quotes": [
+                            quote.model_dump(exclude={"context"} if not quote.context else set())
+                            for quote in element.quotes
+                        ],
                         "absent": element.absent,
                         "reason": element.reason,
                     }

@@ -157,7 +157,8 @@
             "reason": "Requester, user and role are named."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     },
     "B": {
       "verdict": "SUPPORTED",
@@ -201,7 +202,8 @@
             "reason": "The later approval precedes the SAP assignment."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     },
     "C": {
       "verdict": "SUPPORTED",
@@ -260,12 +262,12 @@
             "reason": "The role was assigned by SAP Security, not by an approver."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     },
     "D": {
       "verdict": "ISSUE",
       "results": [
-        "PARTLY_MET",
         "NOT_MET"
       ],
       "unsettled_acceptable": false,

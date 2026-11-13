@@ -162,7 +162,8 @@
             "reason": "Requester, user and role are named."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     },
     "B": {
       "verdict": "SUPPORTED",
@@ -206,13 +207,13 @@
             "reason": "The later approval precedes the SAP assignment."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     },
     "C": {
       "verdict": "ISSUE",
       "results": [
-        "NOT_MET",
-        "PARTLY_MET"
+        "NOT_MET"
       ],
       "unsettled_acceptable": false,
       "reason": "The role owner who approved the request (Marcus Hale) also assigned the role in SAP (MHALE).",
@@ -293,7 +294,8 @@
             "reason": "The assignment is dated within 2026."
           }
         }
-      }
+      },
+      "shows": "IMPLEMENTATION"
     }
   }
 }

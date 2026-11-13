@@ -11,7 +11,10 @@ evidence goes in here.
   `rows` for the long change log), and per attribute the verdict a competent IT auditor
   would reach, with a one-line reason and the careful reader's answer element by element
   (quotes copied from the files). An ISSUE lists every agreed result an auditor would
-  accept; `unsettled_acceptable` says whether UNSETTLED is acceptable; `code_gap` marks an
+  accept; a SUPPORTED or PARTLY_SUPPORTED attribute says what it `shows` (DESIGN for a
+  policy, IMPLEMENTATION for an instance's records); quotes pass the code's strict match
+  (with `context` where words repeat); `unsettled_acceptable` says whether UNSETTLED is
+  acceptable; `code_gap` (unused at present) marks an
   attribute where the code's rules keep the chain from the auditor's verdict even with
   perfect readings, and what it gives instead.
 - `case_set.py`: the typed schema, and how a case becomes the chain's own `ChainInput`
@@ -19,8 +22,9 @@ evidence goes in here.
 - `score.py`: the scoring command.
 - `tests/test_assurance_eval_set.py` (fast tier, no model): the cases validate and build,
   the reviewer's prompt carries nothing of the assessor's, the dry run and the refusals
-  work, and with the scripted perfect answers there is no false SUPPORTED and no false
-  ISSUE outside the documented code gaps.
+  work, and with the scripted perfect answers every verdict and what it shows is the
+  auditor's. One strict xfail records a known defect (two fragments of one line pass as
+  a contradiction); it fails loudly once the code is fixed.
 
 ## Dry run (free)
 
@@ -62,7 +66,9 @@ Each run writes `results/<UTC timestamp>.json` and prints the same summary.
   reading, and per attribute the expected and actual verdict and result, both readings'
   results, and an `outcome`.
 - `outcome`: `correct`; `false_supported` (expected anything but SUPPORTED, got
-  SUPPORTED: the error that matters most); `false_issue`; `missed_issue`;
+  SUPPORTED: the error that matters most); `false_implementation` (the right support,
+  but design-only evidence credited as IMPLEMENTATION: the D&I equivalent);
+  `shows_mismatch`; `false_partly_supported`; `false_issue`; `missed_issue`;
   `issue_wrong_result` (an ISSUE, but with a result the case does not accept);
   `unsettled_acceptable` / `unsettled_not_acceptable`; `other_mismatch`.
 - `totals`: those counts, the UNSETTLED rate, the agreement rate of the two readings,
