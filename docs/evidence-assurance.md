@@ -197,8 +197,10 @@ decides what stands (the rule of evidence_mapping.py).
    REQUIREMENT does, as does a RECORD the document carries. An unclassified passage is an
    ASSERTION. A concern wins: words the answer calls an ASSERTION or an INSTRUCTION
    anywhere are support nowhere in that answer. Code reads as an ASSERTION, whatever the
-   reading called it, a passage whose own clause (its line split at ". ", "; " and
-   " | ") opens, after any bullet, with Remark:, Note:, Summary:, Comment:, Conclusion: or
+   reading called it, a passage whose own clause (each line it covers, split at ". ", "; "
+   and " | "; the line break was added on 13 November 2026, so the second line of a quote
+   that runs over two is read on its own) opens, after any bullet, with Remark:, Note:,
+   Summary:, Comment:, Conclusion: or
    "<word> comment:", or says all of something was (or has been) obtained, approved or
    reviewed, or carries "per the <role>" or "according to" without a date, a time or a
    record id ("granted role per the approved request REQ-1041" stays a record). A line the
@@ -246,13 +248,13 @@ Then the comparison, per attribute:
 | the same `PARTLY_MET` or `NOT_MET`, attribute linked | | `ISSUE` |
 | the same `PARTLY_MET` or `NOT_MET`, attribute not linked | | `NOT_ADDRESSED`, "This request does not ask for this attribute; what the readings found is shown for reference.", both views |
 | `NOT_MET` | `PARTLY_MET` (or the other way round), attribute linked | `ISSUE` `PARTLY_MET` ("Issue: met in part", 13 November 2026): both readings find it falls short, one wholly and one in part; the issue keeps both readings' passages and what they name absent, and carries both views. Rule 5 comes first, and the reading that finds it not met answers an element `NOT_MET`, which keeps the issue wherever else the attribute is asked for |
+| `NOT_MET` | `PARTLY_MET` (or the other way round), attribute not linked | `NOT_ADDRESSED`, shown for reference with both views, as an agreed shortfall on it is (approved 13 November 2026: an unlinked attribute is an issue only for a deviation or a contradiction) |
 | `NOT_ADDRESSED` | `NOT_ADDRESSED` | `ISSUE` if linked (the evidence does not address what its request said it would), else `NOT_ADDRESSED` |
 | anything else, including either `CANNOT_TELL` | | `UNSETTLED` |
 
-`PARTLY_MET` against `NOT_MET` on an attribute the request does not link (it was
-`UNSETTLED` linked or not before 13 November 2026), `SHOWN_IN_PART` on different elements,
-and `PARTLY_MET` on different elements of an attribute another request also asks for, are
-`UNSETTLED`. A
+`PARTLY_MET` against `NOT_MET` was `UNSETTLED`, linked or not, before 13 November 2026.
+`SHOWN_IN_PART` on different elements, and `PARTLY_MET` on different elements of an
+attribute another request also asks for, are `UNSETTLED`. A
 requirement with no links at all has every attribute unlinked. `SUPPORTED` always carries
 the result `MET` and at least one verified passage from each reading. "Another D&I request
 links it" is part of the run's basis (`elsewhere_attribute_ids`): a change there puts the

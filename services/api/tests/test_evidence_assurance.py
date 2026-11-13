@@ -25,7 +25,9 @@ Audit integrity (critical tier):
 - prompts /5: both readings are told the quote rule the strict match applies and the
   placeholder, shortfall-attribution and designation rules; a placeholder is an exception
   shown unless a reading relies on another document of the request, and never support;
-  NOT_MET against PARTLY_MET on a linked attribute is an ISSUE met in part, rule 5 first;
+  NOT_MET against PARTLY_MET on a linked attribute is an ISSUE met in part, rule 5 first,
+  and on an unlinked one is shown for reference; a quote over two lines is read line by
+  line for assertion markers;
 - another firm sees nothing, and a Reviewer reads and cannot rerun.
 """
 
@@ -443,7 +445,15 @@ def test_every_row_of_the_comparison_table(first: str, second: str) -> None:
     November 2026 ("Issue: met in part"): both readings find the attribute falls short, one
     wholly and one in part, and the first live run sent such a real issue to a person as
     a disagreement (remark_all_approvals_obtained, attribute B). Every other row is
-    unchanged."""
+    unchanged.
+
+    Rewritten a third time the same day, for those two rows on an attribute the request
+    does not link. Old expectation: UNSETTLED, a person's, with both views. New: shown for
+    reference (verdict NOT_ADDRESSED, no result, both views, no passages, nothing absent),
+    as an agreed shortfall on such an attribute is. Why: approved by the product owner for
+    consistency with the decided rule that an unlinked attribute is an issue only for a
+    deviation or a contradiction; asking a person to judge a shortfall both readings find,
+    on an attribute the request never asked for, is a judgment nobody needs."""
     for expected in (True, False):
         chain = _chain(expected=(expected, False))
         outcome = compare(_opinion(first, chain), _opinion(second, chain), chain)[0]
@@ -456,17 +466,17 @@ def test_every_row_of_the_comparison_table(first: str, second: str) -> None:
         elif first == second and first in ("PARTLY_MET", "NOT_MET"):
             reference = not expected
             wanted = ("ISSUE", first) if expected else ("NOT_ADDRESSED", None)
-        elif {first, second} == {"PARTLY_MET", "NOT_MET"} and expected:
-            # Both short, one wholly and one in part: met in part, with both views.
-            split = True
-            wanted = ("ISSUE", "PARTLY_MET")
+        elif {first, second} == {"PARTLY_MET", "NOT_MET"}:
+            # Both short, one wholly and one in part: met in part, with both views; on an
+            # attribute the request does not link, shown for reference.
+            split, reference = expected, not expected
+            wanted = ("ISSUE", "PARTLY_MET") if expected else ("NOT_ADDRESSED", None)
         elif first == second == "NOT_ADDRESSED":
             # The file does not address what its request said it would: an issue.
             wanted = ("ISSUE" if expected else "NOT_ADDRESSED", "NOT_ADDRESSED")
         else:
-            # Either reading unable to tell, or the two disagreeing (PARTLY_MET against
-            # NOT_MET on an attribute the request does not link included): a person's,
-            # with both views.
+            # Either reading unable to tell, or the two disagreeing: a person's, with both
+            # views.
             wanted = ("UNSETTLED", None)
         assert (outcome.verdict, outcome.result) == wanted, (first, second, expected)
         assert outcome.expected is expected and outcome.code == "A"
@@ -2722,8 +2732,8 @@ def test_a_placeholder_is_not_met_unless_an_approved_copy_is_relied_on() -> None
 def test_a_split_shortfall_is_an_issue_met_in_part() -> None:
     """Item 3 ("Issue: met in part"): one reading finds the attribute NOT_MET and the
     other PARTLY_MET. Rule 5 comes first, and an element NOT_MET keeps the issue wherever
-    else the attribute is asked for (third review); an unlinked attribute stays a
-    person's."""
+    else the attribute is asked for (third review); on an unlinked attribute it is shown
+    for reference."""
     partly = _says(A=[
         _element("MET", [(0, APPROVAL, "RECORD")], key="condition"),
         _element("NOT_MET", absent="The record of the grant.", key="pass"),
@@ -2753,7 +2763,43 @@ def test_a_split_shortfall_is_an_issue_met_in_part() -> None:
     assert compare(check_opinion(partly, held), check_opinion(wholly, held), held)[0].verdict == (
         "UNSETTLED"
     )
-    # An attribute the request does not ask for: unchanged, a person's.
+    # An attribute the request does not ask for. Rewritten the same day: old expectation,
+    # UNSETTLED (a person's); new, shown for reference with both views, as an agreed
+    # shortfall there is. Why: approved for consistency with the decided rule that an
+    # unlinked attribute is an issue only for a deviation or a contradiction.
     unlinked = _chain(expected=(False, False), criteria=OWNED)
     outcome = compare(check_opinion(partly, unlinked), check_opinion(wholly, unlinked), unlinked)
-    assert (outcome[0].verdict, outcome[0].result) == ("UNSETTLED", None)
+    assert (outcome[0].verdict, outcome[0].result, outcome[0].summary) == (
+        "NOT_ADDRESSED", None, UNLINKED_TEXT,
+    )  # fmt: skip
+    assert [v.result for v in outcome[0].views] == ["PARTLY_MET", "NOT_MET"]
+    assert outcome[0].passages == () and outcome[0].absent == ()
+
+
+def test_each_line_a_quote_covers_is_read_for_assertion_markers() -> None:
+    """Approved 13 November 2026, as it can only reduce support: a clause ends at a line
+    break too, so a quote that runs over two lines is read line by line. A second line
+    opening with Note:, Remark:, Summary:, Comment:, Conclusion: or "<word> comment:" is an
+    assertion, and "per the <role>" on a line of its own is someone's account whatever
+    date the line before carries. Before, the two lines were one clause and a marker not
+    at its start was missed, so the quote stood as a record."""
+    approval = "Approved by: Priya Shah, line manager, on 2026-03-03"
+    for marker in ("Note:", "Remark:", "Summary:", "Comment:", "Conclusion:", "Manager comment:"):
+        noted = f"{marker} the role owner approved by phone"
+        text = f"Access request REQ-2051\n{approval}\n{noted}\n"
+        quote = f"{approval}\n{noted}"
+        start = text.index(approval)
+        assert chain_module.clauses_of(text, start, start + len(quote)) == [approval, noted]
+        assert chain_module.asserts(quote), marker
+        chain = _chain(files=(_file(text),))
+        # The two lines quoted as one passage and called a record: an assertion in code,
+        # so never support.
+        assert _result(_says(A=_met(quote)), chain).result == "CANNOT_TELL", marker
+        # The approval's own line, quoted alone, is still a record.
+        assert _result(_says(A=_met(approval)), chain).result == "MET", marker
+    said = "Granted FI_AP_CLERK on 2026-03-04 09:12\nper the role owner, the approval was given"
+    assert chain_module.asserts(said)
+    assert not chain_module.asserts("Granted FI_AP_CLERK on 2026-03-04 09:12 per the role owner")
+    # Lines of record stay records, and one line is read as before.
+    assert not chain_module.asserts("Number: RITM0048213\nRequest: REQ0039127")
+    assert chain_module.clauses_of("A | Note: b | c", 4, 11) == ["Note: b"]

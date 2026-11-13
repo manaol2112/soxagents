@@ -217,8 +217,12 @@ _RECORD_MARK = re.compile(
     r"\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b|\b\d{1,2}:\d{2}\b"
     r"|\b[A-Z]{2,}[-_]?\d{2,}\b"
 )
-# Where a clause ends within a line.
-_CLAUSE_END = re.compile(r"\.\s+|;\s+|\s\|\s|\t")
+# Where a clause ends: at a line break, and within a line at ". ", "; ", " | " and tabs.
+# The line break (approved 13 November 2026, as it can only reduce support): a quote that
+# runs over two lines is read line by line, so a second line opening with "Note:" or
+# "Remark:" is an assertion, and "per the" on a line of its own is someone's account
+# whatever date the line before carries.
+_CLAUSE_END = re.compile(r"\.\s+|;\s+|\s\|\s|\t|\n")
 # Placeholder text a draft or a template carries where the document should name or state
 # something: bracketed text on one line ("[APPROVER ROLE(S) - TBC with Finance]",
 # "[Approver name, title]", "within [1] business day"), or TBD or TBC standing alone.
@@ -254,8 +258,8 @@ def _clause_asserts(clause: str) -> bool:
 
 
 def clauses_of(text: str, start: int, end: int) -> list[str]:
-    """The clauses of its line a passage sits in: the line split at ". ", "; ", " | " and
-    tabs, keeping those the passage overlaps."""
+    """The clauses a passage sits in: every line it covers, each split at ". ", "; ",
+    " | " and tabs, keeping those the passage overlaps."""
     line_start = text.rfind("\n", 0, start) + 1
     line_end = text.find("\n", end)
     line = text[line_start : len(text) if line_end < 0 else line_end]
@@ -1393,8 +1397,8 @@ def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome
     absence) is PARTLY_SUPPORTED: the rest may be that request's evidence; where none
     does, it is an ISSUE (PARTLY_MET), naming what is not shown. Where one reading finds it
     NOT_MET and the other PARTLY_MET, it is an ISSUE (PARTLY_MET) with both views. For one
-    it does not ask for, an agreed shortfall is shown for reference (NOT_ADDRESSED, both
-    views). Anything else is UNSETTLED, with both views."""
+    it does not ask for, an agreed or a split shortfall is shown for reference
+    (NOT_ADDRESSED, both views). Anything else is UNSETTLED, with both views."""
     outcomes: list[Outcome] = []
     for attribute in chain.attributes:
         one = first.view(attribute.id) or _missing_view(attribute)
@@ -1508,16 +1512,22 @@ def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome
                 summary = _SUMMARY[one.result].format(code=attribute.code)
             else:
                 verdict, summary, reference = "NOT_ADDRESSED", UNLINKED_TEXT, True
-        elif {one.result, two.result} == {"NOT_MET", "PARTLY_MET"} and attribute.expected:
+        elif {one.result, two.result} == {"NOT_MET", "PARTLY_MET"}:
             # The product owner, 13 November 2026 ("Issue: met in part"): both readings
-            # find an attribute the request asks for falls short, one wholly and one in
-            # part. The least both find is that it is met in part: an ISSUE, PARTLY_MET,
-            # with both readings' views. Rule 5 came first (an absence told from files read
-            # in part, or beside a file left out, is CANNOT_TELL, so no split), and the
-            # reading that finds it not met answers an element NOT_MET, which keeps the
-            # issue wherever else the attribute is asked for (third review, item 2).
-            verdict, result, split = "ISSUE", "PARTLY_MET", True
-            summary = SPLIT_SHORTFALL.format(code=attribute.code)
+            # find the attribute falls short, one wholly and one in part. The least both
+            # find is that it is met in part. On an attribute the request asks for: an
+            # ISSUE, PARTLY_MET, with both readings' views. Rule 5 came first (an absence
+            # told from files read in part, or beside a file left out, is CANNOT_TELL, so
+            # no split), and the reading that finds it not met answers an element NOT_MET,
+            # which keeps the issue wherever else the attribute is asked for (third
+            # review, item 2). On one it does not ask for, as for an agreed shortfall:
+            # shown for reference (approved the same day), since an unlinked attribute is
+            # an issue only for a deviation or a contradiction.
+            if attribute.expected:
+                verdict, result, split = "ISSUE", "PARTLY_MET", True
+                summary = SPLIT_SHORTFALL.format(code=attribute.code)
+            else:
+                verdict, summary, reference = "NOT_ADDRESSED", UNLINKED_TEXT, True
         elif one.result == "NOT_ADDRESSED" and two.result == "NOT_ADDRESSED":
             result = "NOT_ADDRESSED"
             passages = ()
