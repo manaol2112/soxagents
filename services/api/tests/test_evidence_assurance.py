@@ -2768,12 +2768,12 @@ def test_a_split_shortfall_is_an_issue_met_in_part() -> None:
     # shortfall there is. Why: approved for consistency with the decided rule that an
     # unlinked attribute is an issue only for a deviation or a contradiction.
     unlinked = _chain(expected=(False, False), criteria=OWNED)
-    outcome = compare(check_opinion(partly, unlinked), check_opinion(wholly, unlinked), unlinked)
-    assert (outcome[0].verdict, outcome[0].result, outcome[0].summary) == (
+    outcomes = compare(check_opinion(partly, unlinked), check_opinion(wholly, unlinked), unlinked)
+    assert (outcomes[0].verdict, outcomes[0].result, outcomes[0].summary) == (
         "NOT_ADDRESSED", None, UNLINKED_TEXT,
     )  # fmt: skip
-    assert [v.result for v in outcome[0].views] == ["PARTLY_MET", "NOT_MET"]
-    assert outcome[0].passages == () and outcome[0].absent == ()
+    assert [v.result for v in outcomes[0].views] == ["PARTLY_MET", "NOT_MET"]
+    assert outcomes[0].passages == () and outcomes[0].absent == ()
 
 
 def test_each_line_a_quote_covers_is_read_for_assertion_markers() -> None:
