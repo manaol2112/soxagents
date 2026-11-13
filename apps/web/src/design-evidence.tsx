@@ -43,6 +43,7 @@ import type { HeldFile } from "./evidence-workspace-model";
 import { linkableFiles } from "./evidence-workspace-model";
 import { fileLine } from "./evidence-workspace-view";
 import { formatDate } from "./format";
+import { LocalTime } from "./local-time";
 import {
   choosable,
   type PolicyEvidence,
@@ -672,14 +673,7 @@ export function DesignEvidence({
               <ol className="er-activity">
                 {events.map((event) => (
                   <li key={event.id}>
-                    <time dateTime={event.at}>
-                      {new Date(event.at).toLocaleString("en-US", {
-                        month: "short",
-                        day: "numeric",
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })}
-                    </time>
+                    <LocalTime at={event.at} />
                     <div>
                       <strong>{event.title}</strong>
                       <p className="er-sub">

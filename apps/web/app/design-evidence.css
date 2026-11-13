@@ -179,6 +179,9 @@ button.de-caret > svg {
 /* The row takes files dropped on it: the upload's own zone, drawn as the row. */
 .de-row > .request-upload {
   display: block;
+  /* The upload zone packs its content to the right, and a browser applies that to a
+     block's children too: the row shrank to its text and sat off to the right. */
+  justify-items: normal;
   padding: 0;
   border: 0;
   border-radius: inherit;

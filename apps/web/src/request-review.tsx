@@ -185,6 +185,7 @@ export function RequestReview({
   inDialog = false,
   side = null,
   delivery = null,
+  lean = false,
 }: {
   ids: Ids;
   request: ControlRequest;
@@ -210,6 +211,10 @@ export function RequestReview({
   inDialog?: boolean;
   /** Shown in the dialog's status panel: delivery and reminders, from the page. */
   side?: ReactNode;
+  /** Opened on the control's own D&I list, which already names the control, the phase,
+   * the items, the due date and each item's upload: none of it is repeated here
+   * (product owner, 12 November 2026). */
+  lean?: boolean;
 }) {
   const id = useId();
   const review = useReviewAction(ids, request.id, closeHref);
@@ -258,13 +263,19 @@ export function RequestReview({
     (details?.types ?? []).map((item) => [item.key, item.label]),
   );
   const heading = details?.title || request.title || "Evidence request";
-  const eyebrow = [
-    details?.reference || "Evidence request",
-    heading.includes(control.title)
-      ? control.ref
-      : `${control.ref} ${control.title}`,
-    control.system,
-  ].filter((part) => part !== "");
+  const eyebrow = (
+    lean
+      ? [details?.reference || "Evidence request"]
+      : [
+          details?.reference || "Evidence request",
+          heading.includes(control.title)
+            ? control.ref
+            : `${control.ref} ${control.title}`,
+          control.system,
+        ]
+  ).filter((part) => part !== "");
+  // The list under it carries each item's own upload.
+  const rowsUpload = lean && (details?.planning.requirements.length ?? 0) > 0;
   const itemCount = details?.content.structured
     ? details.content.items.length
     : 0;
@@ -291,7 +302,7 @@ export function RequestReview({
                 </span>
               </li>
             ) : null}
-            {phase !== "" ? (
+            {phase !== "" && !lean ? (
               <li>
                 <span className="rr-badge">{phase} phase</span>
               </li>
@@ -305,18 +316,20 @@ export function RequestReview({
                 </span>
               </li>
             ) : null}
-            {itemCount > 0 ? (
+            {itemCount > 0 && !lean ? (
               <li>
                 <span className="rr-badge">
                   {itemCount} item{itemCount === 1 ? "" : "s"}
                 </span>
               </li>
             ) : null}
-            <li>
-              <span className="rr-badge">
-                Due {formatDate(detail?.dueAt || request.dueAt)}
-              </span>
-            </li>
+            {lean ? null : (
+              <li>
+                <span className="rr-badge">
+                  Due {formatDate(detail?.dueAt || request.dueAt)}
+                </span>
+              </li>
+            )}
             {status === "OVERDUE" ? (
               <li>
                 <span className="rr-badge is-urgent">Overdue</span>
@@ -338,7 +351,7 @@ export function RequestReview({
         )}
       </header>
 
-      <LifecycleTrack stage={life} />
+      {lean ? null : <LifecycleTrack stage={life} />}
     </>
   );
   const calloutPart = (
@@ -892,7 +905,10 @@ export function RequestReview({
         {side}
         {actionPart}
       </section>
-      {canAct && status !== "CANCELLED" && status !== "CLOSED" ? (
+      {canAct &&
+      !rowsUpload &&
+      status !== "CANCELLED" &&
+      status !== "CLOSED" ? (
         // Evidence the audit team already holds, such as what was obtained during the
         // walkthrough: filed to this request. An unsent request is then recorded as
         // received directly and is not sent (evidence_receipts.apply_receipt).

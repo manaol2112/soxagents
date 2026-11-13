@@ -86,8 +86,13 @@ export function heldForPlanning(
   // A request drafted from a plan no person has approved waits for the approval
   // (evidence_plans: the planning gate); a kickoff draft waits for the plan and then
   // for a person to reconcile it.
+  // Not a D&I request: the Design phase follows its own release, never the test plan's
+  // approval (evidence_plans.gate_reason_from), and its requests are drafted only once
+  // the list is accepted. Before, a D&I request under a plan being revised read
+  // "Drafted before planning" and offered an approval the server does not ask for.
   if (
     control.evidencePlan === "PROPOSED" &&
+    (request.phase !== "DESIGN" || request.kickoff === true) &&
     (request.status === "DRAFT" || request.status === "APPROVAL_PENDING")
   ) {
     return true;

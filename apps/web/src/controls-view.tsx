@@ -177,6 +177,7 @@ import { nextStep, nodeFlags, journey as stagesOf } from "./next-step-model";
 import { FREQUENCIES, NATURES } from "./onboarding-model";
 import { phaseStatus, planningHref, planVersions } from "./planning-model";
 import { PlanReview, type PlanWorkspace, ReviewActions } from "./planning-view";
+import { RecordDialog } from "./record-dialog";
 import { ControlPriorYear } from "./references-view";
 import { RequestReview } from "./request-review";
 import {
@@ -1388,7 +1389,13 @@ function ControlRecord({
     focused === null
       ? undefined
       : control.requests.find((request) => request.id === focused);
-  const requestReview =
+  // On the D&I Evidence step the request opens in a dialog over the step's one list,
+  // never as a second card above it (product owner, 12 November 2026).
+  const inStep = opened === "designevidence";
+  const reviewClose = inStep
+    ? href(model, { ...keep, control: control.id, step: "designevidence" })
+    : evidenceHref(tabHrefs.evidence, { view: "requests" });
+  const reviewCard =
     focusRow !== undefined ? (
       <RequestReview
         ids={ids}
@@ -1413,17 +1420,33 @@ function ControlRecord({
             .flatMap((phase) => phase.requests)
             .find((item) => item.id === focusRow.id)?.delivery ?? null
         }
+        lean={inStep}
+        inDialog={inStep}
         // Opened on the D&I Evidence step, it closes back to that step's list.
-        closeHref={
-          opened === "designevidence"
-            ? href(model, {
-                ...keep,
-                control: control.id,
-                step: "designevidence",
-              })
-            : evidenceHref(tabHrefs.evidence, { view: "requests" })
-        }
+        closeHref={reviewClose}
       />
+    ) : null;
+  const requestReview =
+    reviewCard !== null && focusRow !== undefined && inStep ? (
+      <RecordDialog
+        eyebrow={
+          engagement.focusRequest?.request.id === focusRow.id
+            ? engagement.focusRequest.reference
+            : "Evidence request"
+        }
+        title={
+          (engagement.focusRequest?.request.id === focusRow.id
+            ? engagement.focusRequest.title
+            : "") ||
+          focusRow.title ||
+          "Evidence request"
+        }
+        closeHref={reviewClose}
+      >
+        <div className="ec-dialog-body">{reviewCard}</div>
+      </RecordDialog>
+    ) : reviewCard !== null ? (
+      reviewCard
     ) : focused !== null ? (
       <p className="form-hint" role="status">
         That request is not on this control. Its requests are listed below.

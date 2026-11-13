@@ -733,6 +733,24 @@ describe("the planning gate", () => {
       requestStage(control.requests[1] as ControlRequest, control),
       "HELD",
     );
+    // A D&I request follows the D&I list's acceptance, never the test plan's approval
+    // (evidence_plans.gate_reason_from): a plan being revised does not hold it. A
+    // kickoff draft is still settled against the plan first.
+    assert.equal(
+      requestStage(request({ phase: "DESIGN" }), control),
+      "DRAFTED",
+    );
+    assert.equal(
+      requestStage(
+        request({ phase: "DESIGN", status: "APPROVAL_PENDING" }),
+        control,
+      ),
+      "AWAITING_APPROVAL",
+    );
+    assert.equal(
+      requestStage(request({ phase: "DESIGN", kickoff: true }), control),
+      "HELD",
+    );
     const actions = evidenceActions({
       control,
       plan: null,

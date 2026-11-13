@@ -934,7 +934,7 @@ describe("one story across the views", () => {
     const proposed = agentLanes(
       input({
         control: row({
-          requests: [request("DRAFT", "DESIGN")],
+          requests: [request("DRAFT", "INTERIM")],
           evidencePlan: "PROPOSED",
         }),
       }),
@@ -942,6 +942,23 @@ describe("one story across the views", () => {
     assert.equal(
       laneOf(proposed, "requests").decision.text,
       "1 request drafted, held until the evidence plan is approved",
+    );
+    // A D&I request is not held by it. Old expectation: a DESIGN draft under a proposed
+    // plan read "held until the evidence plan is approved". The Design phase follows the
+    // D&I list's acceptance, never the test plan's approval (evidence_plans.
+    // gate_reason_from, B1; no separate D&I release, product owner, 12 November 2026), so
+    // the server never held it and the screen offered an approval nobody is asked for.
+    const design = agentLanes(
+      input({
+        control: row({
+          requests: [request("DRAFT", "DESIGN")],
+          evidencePlan: "PROPOSED",
+        }),
+      }),
+    );
+    assert.equal(
+      laneOf(design, "requests").decision.text,
+      "1 request drafted, to review and approve",
     );
     assert.equal(
       laneOf(lanes, "reader").waitsFor,

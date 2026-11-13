@@ -46,6 +46,7 @@ import {
 import type { HeldFile, RequestRow } from "./evidence-workspace-model";
 import { linkableFiles } from "./evidence-workspace-model";
 import { fileLine, NO_UPLOAD } from "./evidence-workspace-view";
+import { LocalTime } from "./local-time";
 import { type PanelPlacement, panelPlacement } from "./panel-placement";
 import type { MasterPlan } from "./planning-model";
 import { AddEvidence } from "./planning-view";
@@ -839,14 +840,7 @@ function RequestPanel({
             <ol className="er-activity">
               {events.map((event) => (
                 <li key={event.id}>
-                  <time dateTime={event.at}>
-                    {new Date(event.at).toLocaleString("en-US", {
-                      month: "short",
-                      day: "numeric",
-                      hour: "numeric",
-                      minute: "2-digit",
-                    })}
-                  </time>
+                  <LocalTime at={event.at} />
                   <div>
                     <strong>{event.title}</strong>
                     <p className="er-sub">
