@@ -28,6 +28,7 @@ from ai_workforce_api.approvals import (
     payload_hash,
 )
 from ai_workforce_api.authorization import (
+    AccessDenied,
     Action,
     NotVisible,
     Principal,
@@ -193,6 +194,11 @@ class SubmitResult(BaseModel):
     # Whether a message can be sent now (email_on). False: an approval records a hand-over
     # (request.delivery says HANDED_OVER) and nothing is sent.
     live_email: bool = False
+    # An approval while email is off: whether it recorded the hand-over, and the sentence
+    # that says which (HANDED_OVER or NOT_HANDED_OVER). Empty with email on, and on a
+    # submit: nothing was approved for sending yet, or it waits to be sent.
+    handed_over: bool = False
+    notice: str = ""
 
 
 class ReminderSubmitResult(BaseModel):
@@ -937,13 +943,30 @@ def _approve_draft(
     if approval is None:
         raise NotVisible()
     approved = _pbc_body(row)
-    if not email_on(settings, mailbox) and hand_over(
-        connection, settings, principal, organization_id, project_id, request_id, asked.id
-    ):
-        approved = _read_pbc(connection, organization_id, project_id, request_id)
+    handed, notice = False, ""
+    if not email_on(settings, mailbox):
+        handed = hand_over(
+            connection, settings, principal, organization_id, project_id, request_id, asked.id
+        )
+        notice = HANDED_OVER if handed else NOT_HANDED_OVER
+        if handed:
+            approved = _read_pbc(connection, organization_id, project_id, request_id)
     return SubmitResult(
-        request=approved, approval=approval, preview=_preview_body(settings, message)
+        request=approved,
+        approval=approval,
+        preview=_preview_body(settings, message),
+        handed_over=handed,
+        notice=notice,
     )
+
+
+HANDED_OVER = "Approved and handed over: email sending is off, so nothing was sent."
+# Email is off and the person who approved may not send this request, or a send of it
+# would be refused: the approval stands and nothing says the request left.
+NOT_HANDED_OVER = (
+    "Approved. Not handed over: email sending is off, and a send of this request would be "
+    "refused, so nothing is recorded as handed over."
+)
 
 
 IN_HAND_CHANGED = (
@@ -990,24 +1013,37 @@ def hand_over(
     record). Who and when are kept on the request and on the audit trail, with the person
     as the actor; never an agent. Returns whether this call recorded it.
 
-    Held to what a send is held to, except the mailbox: the request awaits its send, it
-    does not travel in a group, its send checks pass, and the approval is approved, not
-    used, not expired, and is the approval of the message as it now reads (the same
-    binding as a send, _lock_approval: a wording changed after the approval is not handed
-    over on it). Otherwise nothing is recorded. The approval is left as it stands, so the
-    same message can still be emailed once email is on; nothing here says it was sent."""
+    Held to everything a send is held to (send_request and _record), except the mailbox:
+    the person may send (the right to update the engagement's work, and the action policy
+    for sending a request, with its restrictions), the request awaits its send, it does
+    not travel in a group, its recipients are allowed, its send checks pass, and the
+    approval is approved, not used, not expired, and is the approval of the message as it
+    now reads (_lock_approval: a wording changed after the approval is not handed over on
+    it). Where a send would be refused, nothing is recorded. The approval is left as it
+    stands, so the same message can still be emailed once email is on; nothing here says
+    it was sent."""
     if principal.kind is not PrincipalKind.USER:
         return False
     from ai_workforce_api.evidence_groups import in_live_group
 
     try:
+        authorize(
+            connection,
+            principal=principal,
+            action=Action.TASK_UPDATE,
+            organization_id=organization_id,
+            project_id=project_id,
+        )
         with transaction(connection) as cursor:
             pbc = _lock_pbc(cursor, organization_id, project_id, request_id)
             if pbc.status != "APPROVAL_PENDING" or in_live_group(connection, request_id):
                 return False
             message = render(pbc, _engagement(connection, organization_id, project_id))
+            if not recipients_allowed(settings, message):
+                return False
             _check(connection, settings, organization_id, project_id, request_id, _SEND_CHECKS)
             _lock_approval(cursor, organization_id, project_id, approval_id, message)
+            _require_policy(connection, principal, organization_id, project_id, message)
             row = cursor.execute(
                 """
                 UPDATE pbc_requests
@@ -1045,7 +1081,7 @@ def hand_over(
                 ),
             )
             return True
-    except OutboundState, NotVisible, ValueError:
+    except OutboundState, NotVisible, AccessDenied, ValueError:
         return False
 
 
@@ -1074,15 +1110,26 @@ def send_request(
         organization_id=organization_id,
         project_id=project_id,
     )
-    if (
-        handover
-        and not email_on(settings, mailbox)
-        and _by_approval(connection, organization_id, project_id, approval_id) is None
-        and hand_over(
-            connection, settings, principal, organization_id, project_id, request_id, approval_id
-        )
-    ):
-        connection.commit()
+    if _by_approval(connection, organization_id, project_id, approval_id) is None:
+        # Nothing is recorded for this approval yet. Evidence that came in hand since the
+        # approval (a file linked, or one whose reading has not ended) is applied first,
+        # as at the approval: the send is then refused, and the shorter wording is
+        # approved again.
+        _settle_in_hand(connection, principal, organization_id, project_id, request_id)
+        if (
+            handover
+            and not email_on(settings, mailbox)
+            and hand_over(
+                connection,
+                settings,
+                principal,
+                organization_id,
+                project_id,
+                request_id,
+                approval_id,
+            )
+        ):
+            connection.commit()
     result = _send_once(
         connection,
         settings,

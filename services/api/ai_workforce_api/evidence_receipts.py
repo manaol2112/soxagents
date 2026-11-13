@@ -32,6 +32,7 @@ import psycopg
 from psycopg.types.json import Json
 
 from ai_workforce_api.followups import cancel_open
+from ai_workforce_api.pbc import handover_of, record_handover_withdrawn
 
 ReceiptStatus = Literal["PARTIALLY_RECEIVED", "RECEIVED"]
 _ANSWERED = frozenset({"SENT", "WAITING_FOR_RESPONSE", "OVERDUE", "ESCALATED"})
@@ -212,10 +213,24 @@ def _receive(
         (request_id, project_id),
     )
     row = cursor.execute(
-        "SELECT status, engagement_control_id, "
-        "testing_phase = 'DESIGN' AND engagement_control_id IS NOT NULL "
-        "AND operation_key LIKE 'plan-%%' AND handed_over_at IS NULL "
-        "FROM pbc_requests WHERE id = %s AND project_id = %s FOR UPDATE",
+        """
+        SELECT r.status, r.engagement_control_id,
+               r.testing_phase = 'DESIGN' AND r.engagement_control_id IS NOT NULL
+               AND r.operation_key LIKE 'plan-%%' AND r.handed_over_at IS NULL
+               -- A message recorded for it and not definitively failed may be with the
+               -- owner (pending, or its outcome unknown, or delivered): the request is
+               -- then treated as asked for, whole, and is never split.
+               AND NOT EXISTS (
+                   SELECT 1 FROM outbound_messages o
+                   WHERE o.pbc_request_id = r.id AND o.status <> 'FAILED')
+               -- Approved or sent with other requests as one email: likewise.
+               AND NOT EXISTS (
+                   SELECT 1 FROM evidence_request_group_members m
+                   JOIN evidence_request_groups g ON g.id = m.group_id
+                   WHERE m.pbc_request_id = r.id AND m.released_at IS NULL
+                     AND g.status IN ('APPROVED', 'SENT'))
+        FROM pbc_requests r WHERE r.id = %s AND r.project_id = %s FOR UPDATE OF r
+        """,
         (request_id, project_id),
     ).fetchone()
     if row is None:
@@ -229,22 +244,74 @@ def _receive(
     # Per item (B1g): on an unsent D&I request of the plan, never handed over, the items
     # with no evidence of their own are still to be asked for.
     left: list[UUID] = []
+    served = False
     if unsent and bool(row[2]) and (settling or not whole):
         in_hand, left = _items(cursor, request_id)
         if not in_hand:
             # No file serves any of its items: nothing is in hand, so the request stays
             # as it is and still goes out for all of them.
             return None, False
-        whole = whole or bool(left)
+        # Every item it keeps has evidence of its own: it is received, whatever the
+        # coordinator's draft counted (one answer with settle_in_hand's IN_HAND).
+        served = True
     elif settling:
         return None, False
-    target: ReceiptStatus = "RECEIVED" if whole else "PARTIALLY_RECEIVED"
-    if before in ("RECEIVED", "CLOSED", "CANCELLED") or before == target:
+    if before in ("RECEIVED", "CLOSED", "CANCELLED"):
         return None, False
     if before not in _ANSWERED and before not in _UNSENT and before != "PARTIALLY_RECEIVED":
         return None, False
+
+    def move(target: ReceiptStatus, aside: list[UUID]) -> None:
+        _move(
+            cursor, organization_id, project_id, match_id, request_id, actor_id, by,
+            before, target, aside, None if row[1] is None else UUID(str(row[1])),
+        )  # fmt: skip
+
     if left:
-        _set_aside(cursor, project_id, UUID(str(row[1])), request_id, left, before)
+        try:
+            # All of it or none: the items taken off are requested again in the same
+            # step, or the request is left whole.
+            with cursor.connection.transaction():
+                move("RECEIVED", left)
+            return "RECEIVED", True
+        except _NotRequested:
+            # The items left to ask for cannot be requested now (the engagement is not
+            # running, the control is out of scope, a kickoff draft waits to be settled
+            # against the plan): no item is left without a request. The request stays
+            # whole: untouched before an approval, and as before for a file that came.
+            if settling:
+                return None, False
+            served = False
+    target: ReceiptStatus = "RECEIVED" if whole or served else "PARTIALLY_RECEIVED"
+    if before == target:
+        return None, False
+    move(target, [])
+    return target, False
+
+
+class _NotRequested(Exception):
+    """An item taken off a request could not be requested again."""
+
+
+def _move(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    match_id: UUID | None,
+    request_id: UUID,
+    actor_id: UUID,
+    by: Literal["AGENT", "PERSON", "OWNER"],
+    before: str,
+    target: ReceiptStatus,
+    left: list[UUID],
+    control_id: UUID | None,
+) -> None:
+    """Record the request's move for the evidence on it; with `left`, the items still to
+    be asked for leave it first and are requested again last (_NotRequested if not)."""
+    unsent = before in _UNSENT
+    if left:
+        assert control_id is not None
+        _set_aside(cursor, project_id, control_id, request_id, left, before)
     cursor.execute(
         """
         UPDATE pbc_requests
@@ -286,10 +353,8 @@ def _receive(
         {"status": target, "from": before, "by": by, "provided_directly": unsent},
     )
     if left:
-        _request_again(
-            cursor, organization_id, project_id, UUID(str(row[1])), request_id, actor_id, left
-        )
-    return target, bool(left)
+        assert control_id is not None
+        _request_again(cursor, organization_id, project_id, control_id, request_id, actor_id, left)
 
 
 def _items(cursor: psycopg.Cursor[Any], request_id: UUID) -> tuple[list[UUID], list[UUID]]:
@@ -387,7 +452,10 @@ def _request_again(
     it is due), which a person may have set."""
     from ai_workforce_api.evidence_plans import issue
 
-    issued = issue(cursor, organization_id, project_id, control_id, actor_id, "evidence_in_hand")
+    # Only the items taken off: nothing else of the control is requested by a file.
+    issued = issue(
+        cursor, organization_id, project_id, control_id, actor_id, "evidence_in_hand", only=left
+    )
     if issued.created:
         cursor.execute(
             """
@@ -414,14 +482,15 @@ def _request_again(
             """,
             (issued.rewritten,),
         )
-    carried = [
-        str(item[0])
-        for item in cursor.execute(
-            "SELECT DISTINCT pbc_request_id FROM evidence_requirements "
-            "WHERE id = ANY(%s) AND pbc_request_id IS NOT NULL",
-            (left,),
-        ).fetchall()
-    ]
+    placed = cursor.execute(
+        "SELECT q.pbc_request_id FROM evidence_requirements q "
+        "LEFT JOIN pbc_requests r ON r.id = q.pbc_request_id AND r.status = 'DRAFT' "
+        "WHERE q.id = ANY(%s) AND q.status = 'REQUESTED' AND r.id IS NOT NULL",
+        (left,),
+    ).fetchall()
+    if len(placed) != len(left):
+        raise _NotRequested()
+    carried = sorted({str(item[0]) for item in placed})
     _audit(
         cursor,
         organization_id,
@@ -516,6 +585,7 @@ def follow_evidence(
         target = "DRAFT" if origin in _UNSENT else origin
     else:
         return
+    handed = handover_of(cursor, project_id, request_id) if target == "DRAFT" else None
     if target != status:
         cursor.execute(
             """
@@ -540,6 +610,13 @@ def follow_evidence(
             {"status": target, "from": status},
         )
     if target not in _EVIDENCE:
+        if target == "DRAFT" and handed is not None:
+            # No longer with the owner as approved: said on the trail, by whom and why
+            # (the database refuses a hand-over that ends with no such record).
+            record_handover_withdrawn(
+                cursor, organization_id, project_id, request_id, actor_id, handed,
+                "its evidence was withdrawn",
+            )  # fmt: skip
         cursor.execute(
             "UPDATE evidence_matches SET receipt_request_id = NULL, receipt_status_before = NULL, "
             "receipt_status_set = NULL, version = version + 1 WHERE receipt_request_id = %s",

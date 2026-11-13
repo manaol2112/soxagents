@@ -1740,6 +1740,7 @@ def _retire(
     """The group is not sent: its record stays, its approvals are settled as refused, and
     its requests return to draft, to be grouped and reviewed again."""
     from ai_workforce_api.outbound import settle_approval
+    from ai_workforce_api.pbc import handover_of, record_handover_withdrawn
 
     updated = cursor.execute(
         "UPDATE evidence_request_groups SET status = 'NOT_SENT', reason = %s, "
@@ -1756,11 +1757,17 @@ def _retire(
     ).fetchall():
         settle_approval(cursor, organization_id, project_id, actor_id, approval_id, "REFUSED",
                         "not_available", None)  # fmt: skip
+        handed = handover_of(cursor, project_id, request_id)
         back = cursor.execute(
             "UPDATE pbc_requests SET status = 'DRAFT', updated_at = clock_timestamp(), "
             "version = version + 1 WHERE id = %s AND status = 'APPROVAL_PENDING' RETURNING id",
             (request_id,),
         ).fetchone()
+        if back is not None and handed is not None:
+            record_handover_withdrawn(
+                cursor, organization_id, project_id, request_id, actor_id, handed,
+                f"the request it travelled in was not sent ({reason})",
+            )  # fmt: skip
         if back is not None:
             _request_audit(cursor, organization_id, project_id, actor_id, request_id, "DRAFT",
                            group.id)  # fmt: skip

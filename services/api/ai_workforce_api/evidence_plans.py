@@ -1568,8 +1568,11 @@ def issue(
     control_id: UUID,
     requester: UUID,
     source: str,
+    only: list[UUID] | None = None,
 ) -> Issued:
-    """Request every planned requirement of the control's applicable phases."""
+    """Request every planned requirement of the control's applicable phases. With `only`,
+    just those requirements, under the same gates, and nothing else of the control is
+    touched (evidence_receipts._request_again)."""
     # The plan's row before any of its requirements, as every writer takes them (one order,
     # so two requests on the same control wait for each other and never deadlock).
     cursor.execute(
@@ -1601,9 +1604,9 @@ def issue(
             coverage_note = 'Its earlier request was withdrawn.', version = q.version + 1
         FROM pbc_requests r
         WHERE r.id = q.pbc_request_id AND q.engagement_control_id = %s
-          AND q.status = 'REQUESTED' AND r.status = 'CANCELLED'
+          AND q.status = 'REQUESTED' AND r.status = 'CANCELLED' AND %s
         """,
-        (control_id,),
+        (control_id, only is None),
     )
     created: list[UUID] = []
     rewritten: set[UUID] = set()
@@ -1616,7 +1619,8 @@ def issue(
         (project_id, control_id),
     ).fetchall()
     for phase, applicability, end in phases:
-        _link_dependents(cursor, project_id, control_id, str(phase))
+        if only is None:
+            _link_dependents(cursor, project_id, control_id, str(phase))
         if applicability != "APPLICABLE":
             continue
         if gate_reason(cursor.connection, control_id, str(phase)) is not None:
@@ -1640,10 +1644,11 @@ def issue(
                       WHERE ef.requirement_id = q.id AND ef.status = 'LINKED'
                   )
               )
+              AND (%s::uuid[] IS NULL OR q.id = ANY(%s::uuid[]))
             ORDER BY q.created_at, q.requirement_key
             FOR UPDATE OF q
             """,
-            (control_id, phase),
+            (control_id, phase, only, only),
         ).fetchall()
         if not waiting:
             continue
@@ -3069,9 +3074,10 @@ class RequirementBody(BaseModel):
     to_accept: bool = False
     # Evidence for it is already in hand (B1g, product owner, 12 November 2026): a file
     # serves this item itself (added on it, on its request and not read as missing it,
-    # shared by a sibling, or linked by a person) and no email asked for it: it is not
-    # requested, or the request carrying it was never emailed. Nothing needs sending for
-    # it. False for evidence the owner returned on an emailed request, which is received.
+    # shared by a sibling, or linked by a person) and nothing asked the owner for it: it
+    # is not requested, or the request carrying it was never emailed nor handed over.
+    # Nothing needs sending for it. False for evidence the owner returned on a request
+    # that was emailed or handed over, which is received.
     in_hand: bool = False
     files: list[RequirementFile] = Field(default_factory=list)
     # Files on its request the reader found do not cover it: not its evidence, and named
@@ -3569,7 +3575,7 @@ def _requirements(connection: psycopg.Connection[Any], plan_id: UUID) -> list[Re
                 FROM evidence_requirement_procedures rp
                 JOIN plan_procedures pp ON pp.id = rp.procedure_id
                 WHERE rp.requirement_id = q.id AND pp.status = 'ACTIVE'),
-               r.outbound_message_id IS NOT NULL
+               r.outbound_message_id IS NOT NULL OR r.handed_over_at IS NOT NULL
         FROM evidence_requirements q
         LEFT JOIN pbc_requests r ON r.id = q.pbc_request_id
         LEFT JOIN pbc_drafts d ON d.pbc_request_id = q.pbc_request_id
@@ -3642,7 +3648,7 @@ def _requirements(connection: psycopg.Connection[Any], plan_id: UUID) -> list[Re
                 accepted_by=None if not accepted or r[34] is None else str(r[34]),
                 accepted_at=r[35] if accepted else None,
                 to_accept=listed and (not accepted or r[26] is not None),
-                # Its own evidence is on file and no email asked for it.
+                # Its own evidence is on file and the owner was not asked for it.
                 in_hand=str(r[15]) in ("PLANNED", "REQUESTED")
                 and (bool(r[31]) or bool(r[32]))
                 and not bool(r[38]),

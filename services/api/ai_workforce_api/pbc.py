@@ -136,6 +136,50 @@ def delivery_of(
     return None
 
 
+def handover_of(
+    cursor: psycopg.Cursor[Any], project_id: UUID, request_id: UUID
+) -> dict[str, str] | None:
+    """The hand-over the request holds now, if any: read before a change that returns the
+    request to draft, which ends it (the trigger of migration 0152 clears it)."""
+    row = cursor.execute(
+        "SELECT handed_over_at, handed_over_by, handed_over_approval_id FROM pbc_requests "
+        "WHERE id = %s AND project_id = %s AND handed_over_at IS NOT NULL",
+        (request_id, project_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "handed_over_at": row[0].isoformat(),
+        "handed_over_by": str(row[1]),
+        "approval_id": str(row[2]),
+    }
+
+
+def record_handover_withdrawn(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    request_id: UUID,
+    actor_id: UUID,
+    handed: dict[str, str],
+    reason: str,
+) -> None:
+    """A handed-over request returned to draft is no longer with its owner as approved:
+    the trail says who returned it and why, and keeps what the hand-over was. Every path
+    that returns a request to draft calls this in the same transaction; the database
+    refuses the commit of one that did not (migration 0153), so a hand-over never ends
+    without a record."""
+    cursor.execute(
+        """
+        INSERT INTO audit_events (
+            organization_id, project_id, actor_user_id, action, target_type, target_id, payload
+        )
+        VALUES (%s, %s, %s, 'pbc.handover_withdrawn', 'pbc_request', %s, %s)
+        """,
+        (organization_id, project_id, actor_id, request_id, Json({"reason": reason, **handed})),
+    )
+
+
 class PbcState(Exception):
     def __init__(self, detail: str) -> None:
         self.detail = detail
@@ -531,6 +575,11 @@ def _update(
             message_id = None
             thread_id = None
         escalation = "ESCALATED" if status == "ESCALATED" else "NONE"
+        handed = (
+            handover_of(cursor, project_id, request_id)
+            if status == "DRAFT" and current.status != "DRAFT"
+            else None
+        )
         row = cursor.execute(
             f"""
             UPDATE pbc_requests
@@ -582,30 +631,14 @@ def _update(
             raise PbcState("pbc request changed")
         updated = _body(row)
         _audit(cursor, organization_id, project_id, principal.id, updated.id, status)
-        if (
-            status == "DRAFT"
-            and current.delivery is not None
-            and current.delivery.mode == "HANDED_OVER"
-        ):
+        if handed is not None:
             # Taken back to reword: it is no longer with the owner as approved (the
             # trigger of migration 0152 cleared the hand-over), and the trail says who
             # took it back. Its next approval records a hand-over of its own.
-            cursor.execute(
-                """
-                INSERT INTO audit_events (
-                    organization_id, project_id, actor_user_id, action, target_type,
-                    target_id, payload
-                )
-                VALUES (%s, %s, %s, 'pbc.handover_withdrawn', 'pbc_request', %s, %s)
-                """,
-                (
-                    organization_id,
-                    project_id,
-                    principal.id,
-                    updated.id,
-                    Json({"reason": "returned to draft"}),
-                ),
-            )
+            record_handover_withdrawn(
+                cursor, organization_id, project_id, updated.id, principal.id, handed,
+                "returned to draft",
+            )  # fmt: skip
         if status not in REMINDABLE:
             cancel_open(cursor, organization_id, project_id, principal.id, updated.id)
     return updated
