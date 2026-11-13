@@ -197,6 +197,7 @@ describe("review and send requests (the reference, 28 October 2026)", () => {
           ...held.targets[0],
           subject: "[PBC-AAAA1111] Evidence request: ITGC-AC-01",
           body: "Hello,\n\nPlease provide the items below.",
+          html: "<!doctype html><p>Hello,</p>",
         },
         ...held.targets.slice(1),
       ],
@@ -206,6 +207,7 @@ describe("review and send requests (the reference, 28 October 2026)", () => {
     assert.deepEqual(reviewPlan(result).sending[0]?.email, {
       subject: "[PBC-AAAA1111] Evidence request: ITGC-AC-01",
       body: "Hello,\n\nPlease provide the items below.",
+      html: "<!doctype html><p>Hello,</p>",
     });
     // An answer without the text (an older server, or one that could not render it):
     // the review says so instead of showing an empty email.
@@ -214,6 +216,14 @@ describe("review and send requests (the reference, 28 October 2026)", () => {
     assert.equal(reviewPlan(without).sending[0]?.email, null);
     const view = readFileSync("apps/web/src/control-send.tsx", "utf8");
     assert.match(view, /The email could not be shown here/);
+    // The laid-out email is the server's, shown in a frame that runs no script, follows
+    // no link and never reaches the page (13 November 2026).
+    assert.match(view, /sandbox=""/);
+    assert.match(view, /srcDoc=\{email\.html\}/);
+    assert.doesNotMatch(
+      view,
+      /dangerouslySetInnerHTML|allow-scripts|allow-same-origin/,
+    );
     // The button opens the review; it does not claim to approve on its own.
     assert.match(view, /"Review and send"/);
     assert.doesNotMatch(view, /: "Approve and send"\}/);
