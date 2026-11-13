@@ -17,9 +17,11 @@ import {
   assuranceRow,
   assuranceSentence,
   assuranceWrite,
+  attributeCoverage,
   checkPollDelay,
   DESIGN_ONLY,
   type EvidenceAssurance,
+  elementWords,
   issueDecided,
   NOT_CHECKED_LINE,
   NOT_LISTED,
@@ -187,6 +189,32 @@ const NOT_ASKED = attribute({
   ],
 });
 
+/** One element of an attribute as the API sends it. */
+const element = (
+  key: string,
+  text: string,
+  result: string | null,
+  rests = result === "MET",
+) => ({
+  key,
+  text,
+  result,
+  passages: rests ? [passage()] : [],
+  absent: result === "NOT_MET" ? "No record of the approval" : "",
+});
+
+/** Attribute A shown in part by this request: its approval is shown, its timing is
+ * left to other requests. */
+const IN_PART = attribute({
+  verdict: "PARTLY_SUPPORTED",
+  result: "SHOWN_IN_PART",
+  summary: "This request shows the approval; the timing is for another.",
+  elements: [
+    element("condition", "Access is approved by the line manager", "MET"),
+    element("pass", "The approval comes before the grant", "NOT_ADDRESSED"),
+  ],
+});
+
 describe("parseAssurance (section 6)", () => {
   it("reads a finished check with its files, attributes, passages and summary", () => {
     const read = parsed([entry({ read_in_part: true })], {
@@ -217,6 +245,7 @@ describe("parseAssurance (section 6)", () => {
       understood: true,
       result: "MET",
       shows: "IMPLEMENTATION",
+      elements: [],
       summary: "The ticket shows line-manager approval before access.",
       passages: [
         {
@@ -967,7 +996,9 @@ describe("a request's check, in every status", () => {
         line.open,
       ]),
       [
-        ["B", "ISSUE", "Issue: not shown", "risk", true],
+        // Was "Issue: not shown": NOT_MET now also means an exception a record shows
+        // (a self-approval), so the label says "not met" and the summary names it.
+        ["B", "ISSUE", "Issue: not met", "risk", true],
         ["C", "JUDGMENT", "Your judgment needed", "help", true],
         ["A", "SUPPORTED", "Supported (implementation)", "check", false],
       ],
@@ -1181,8 +1212,11 @@ describe("a request's check, in every status", () => {
   it("names an issue by what both readings agree the evidence shows", () => {
     const label = (result: unknown) =>
       check({ attributes: [{ ...ISSUE, result }] }).attributes[0]?.label;
-    assert.equal(label("NOT_MET"), "Issue: not shown");
-    assert.equal(label("PARTLY_MET"), "Issue: shown in part");
+    // Were "Issue: not shown" and "Issue: shown in part". NOT_MET on an issue now also
+    // means an exception a record shows (a self-approval, named by the summary), so
+    // "not shown" would misstate it; the words say what was found against the attribute.
+    assert.equal(label("NOT_MET"), "Issue: not met");
+    assert.equal(label("PARTLY_MET"), "Issue: met in part");
     assert.equal(label("CONTRADICTED"), "Issue: contradicted in the evidence");
     assert.equal(
       label("NOT_ADDRESSED"),
@@ -1673,6 +1707,343 @@ describe("the step's counts, pill and line", () => {
   });
 });
 
+describe("an attribute's elements", () => {
+  const check = (over: Record<string, unknown>, files = [POLICY_FILE]) =>
+    requestCheck(only(parsed([entry(over)])), lettered, files, span);
+
+  it("reads each element with its agreed result, and drops what is not one", () => {
+    const [read] = only(
+      parsed([
+        entry({
+          attributes: [
+            attribute({
+              elements: [
+                element("condition", "Access is approved", "MET"),
+                element("pass", "Approved before the grant", null),
+                element("condition", "A duplicate key", "NOT_MET"),
+                { key: "", text: "No key", result: "MET" },
+                { key: "x", text: "", result: "MET" },
+                {
+                  ...element("odd", "An odd result", "MET"),
+                  result: "SHOWN_IN_PART",
+                },
+                "text",
+              ],
+            }),
+          ],
+        }),
+      ]),
+    ).attributes;
+    assert.deepEqual(
+      read?.elements.map((item) => [
+        item.key,
+        item.result,
+        item.passages.length,
+      ]),
+      [
+        ["condition", "MET", 1],
+        ["pass", null, 0],
+        // SHOWN_IN_PART is an attribute's result, never an element's.
+        ["odd", null, 1],
+      ],
+    );
+    // A supported attribute with an element not shown contradicts itself.
+    assert.equal(read?.verdict, "UNSETTLED");
+    assert.equal(read?.understood, false);
+  });
+
+  it("lists an opened attribute's elements with their result in words", () => {
+    assert.equal(elementWords("MET"), "Shown");
+    assert.equal(elementWords("NOT_MET"), "Not shown");
+    assert.equal(elementWords("NOT_ADDRESSED"), "Not in these files");
+    assert.equal(elementWords(null), "Your judgment needed");
+    assert.equal(elementWords("PARTLY_MET"), "Shown in part");
+    assert.equal(elementWords("CANNOT_TELL"), "Could not tell");
+    const [line] = check({
+      attributes: [
+        {
+          ...ISSUE,
+          elements: [
+            element("condition", "Access is approved", "MET"),
+            element("pass", "Approved before the grant", "NOT_MET"),
+            element("exception", "No self-approval", null),
+          ],
+        },
+      ],
+    }).attributes;
+    assert.deepEqual(line?.elements, [
+      {
+        key: "condition",
+        text: "Access is approved",
+        result: "Shown",
+        tone: "success",
+        absent: [],
+      },
+      {
+        key: "pass",
+        text: "Approved before the grant",
+        result: "Not shown",
+        tone: "danger",
+        absent: ["No record of the approval"],
+      },
+      {
+        key: "exception",
+        text: "No self-approval",
+        result: "Your judgment needed",
+        tone: "warning",
+        absent: [],
+      },
+    ]);
+  });
+
+  it("an issue whose result is not met keeps the summary that names the exception", () => {
+    const [line] = check({
+      attributes: [
+        {
+          ...ISSUE,
+          summary: "The requester approved their own access (self-approval).",
+        },
+      ],
+    }).attributes;
+    assert.equal(line?.label, "Issue: not met");
+    assert.equal(
+      line?.summary,
+      "The requester approved their own access (self-approval).",
+    );
+  });
+
+  it("shown in part by this request: what it shows and what it leaves, never an issue or a judgment", () => {
+    const view = check({ attributes: [IN_PART] });
+    const [line] = view.attributes;
+    assert.equal(line?.state, "PARTLY");
+    assert.equal(line?.label, "Shown in part by this request (implementation)");
+    assert.equal(line?.judgment, null);
+    assert.equal(line?.findingId, null);
+    assert.equal(line?.open, false);
+    assert.deepEqual(line?.inPart, {
+      shows: ["Access is approved by the line manager"],
+      leaves: ["The approval comes before the grant"],
+    });
+    const row = assuranceRow({
+      requirementId: POLICY,
+      files: [POLICY_FILE],
+      assurance: parsed([entry({ attributes: [IN_PART] })]),
+      attributes: lettered,
+      span,
+    });
+    assert.deepEqual(
+      row?.states.map((group) => group.label),
+      ["A shown in part"],
+    );
+    assert.deepEqual(row?.implementedIds, []);
+    assert.equal(
+      row?.acceptNote,
+      "Accepting marks no attribute as evidenced: the two readings find no record of an instance that shows one. A is shown in part by this request; the rest is left to other requests, so it is evidenced only once they show it.",
+    );
+    const counts = assuranceCounts(parsed([entry({ attributes: [IN_PART] })]));
+    assert.deepEqual([counts.issues, counts.unsettled], [0, 0]);
+  });
+
+  it("support in part stands only as sent: some element shown, the rest not borne on", () => {
+    const verdict = (over: Record<string, unknown>) =>
+      only(parsed([entry({ attributes: [{ ...IN_PART, ...over }] })]))
+        .attributes[0]?.verdict;
+    assert.equal(verdict({}), "PARTLY_SUPPORTED");
+    assert.equal(verdict({ result: null }), "PARTLY_SUPPORTED");
+    for (const [name, over] of [
+      ["a result of met", { result: "MET" }],
+      ["no passage", { passages: [] }],
+      [
+        "an element not met",
+        {
+          elements: [
+            element("condition", "Approved", "MET"),
+            element("pass", "Before the grant", "NOT_MET"),
+          ],
+        },
+      ],
+      [
+        "nothing shown",
+        { elements: [element("pass", "Before the grant", "NOT_ADDRESSED")] },
+      ],
+      ["nothing left", { elements: [element("condition", "Approved", "MET")] }],
+    ] as const) {
+      assert.equal(verdict(over), "UNSETTLED", name);
+    }
+  });
+
+  it("combines elements across the control's requests: evidenced only when every one is shown from an instance by an accepted request", () => {
+    const facts = (attributes: unknown[]) => {
+      const row = assuranceRow({
+        requirementId: POLICY,
+        files: [POLICY_FILE],
+        assurance: parsed([entry({ attributes })]),
+        attributes: lettered,
+        span,
+      });
+      assert.ok(row !== null);
+      return row.elementFacts;
+    };
+    const approval = facts([IN_PART]);
+    const timing = facts([
+      {
+        ...IN_PART,
+        elements: [
+          element(
+            "condition",
+            "Access is approved by the line manager",
+            "NOT_ADDRESSED",
+          ),
+          element("pass", "The approval comes before the grant", "MET"),
+        ],
+      },
+    ]);
+    // Both accepted: every element shown.
+    assert.deepEqual(
+      attributeCoverage(A, [
+        { accepted: true, facts: approval },
+        { accepted: true, facts: timing },
+      ]),
+      { state: "EVIDENCED", missing: [] },
+    );
+    // One accepted: shown in part, the rest named.
+    assert.deepEqual(
+      attributeCoverage(A, [
+        { accepted: true, facts: approval },
+        { accepted: false, facts: timing },
+      ]),
+      { state: "PARTLY", missing: ["The approval comes before the grant"] },
+    );
+    // The rest documented in a policy only: design documented.
+    const policy = facts([
+      {
+        ...IN_PART,
+        shows: "DESIGN",
+        elements: [
+          element(
+            "condition",
+            "Access is approved by the line manager",
+            "NOT_ADDRESSED",
+          ),
+          element("pass", "The approval comes before the grant", "MET"),
+        ],
+      },
+    ]);
+    assert.deepEqual(
+      attributeCoverage(A, [
+        { accepted: true, facts: approval },
+        { accepted: true, facts: policy },
+      ]),
+      {
+        state: "DESIGN_ONLY",
+        missing: ["The approval comes before the grant"],
+      },
+    );
+    // Nothing accepted, and no check read it.
+    assert.equal(
+      attributeCoverage(A, [{ accepted: false, facts: approval }]).state,
+      "NONE",
+    );
+    assert.equal(
+      attributeCoverage(B, [{ accepted: true, facts: approval }]).state,
+      "UNKNOWN",
+    );
+    // An element met without a verified passage under it is not shown.
+    const bare = facts([
+      {
+        ...IN_PART,
+        elements: [
+          element(
+            "condition",
+            "Access is approved by the line manager",
+            "MET",
+            false,
+          ),
+          element(
+            "pass",
+            "The approval comes before the grant",
+            "NOT_ADDRESSED",
+          ),
+        ],
+      },
+    ]);
+    assert.equal(
+      attributeCoverage(A, [{ accepted: true, facts: bare }]).state,
+      "NONE",
+    );
+    // Whole support sent without its elements covers every element.
+    assert.equal(
+      attributeCoverage(A, [
+        { accepted: true, facts: facts([attribute()]) },
+        { accepted: false, facts: timing },
+      ]).state,
+      "EVIDENCED",
+    );
+  });
+
+  it("on the list: the coverage names the elements still not shown, and evidences once the last is", () => {
+    const requirements = [
+      requirement({ state: "ACCEPTED", attributeIds: [A] }),
+      requirement({
+        id: WALK,
+        title: "One access request traced",
+        state: "RECEIVED",
+        attributeIds: [A],
+        files: [file({ fileId: SECOND, name: "Ticket_4711.pdf" })],
+      }),
+    ];
+    const assurance = parsed([
+      entry({ attributes: [IN_PART] }),
+      entry({
+        requirement_id: WALK,
+        file_ids: [SECOND],
+        attributes: [
+          {
+            ...IN_PART,
+            passages: [passage(SECOND)],
+            elements: [
+              element(
+                "condition",
+                "Access is approved by the line manager",
+                "NOT_ADDRESSED",
+              ),
+              {
+                ...element(
+                  "pass",
+                  "The approval comes before the grant",
+                  "MET",
+                ),
+                passages: [passage(SECOND)],
+              },
+            ],
+          },
+        ],
+      }),
+    ]);
+    const view = list({ requirements, assurance });
+    assert.equal(view.coverage[0]?.state, "PARTLY");
+    assert.equal(
+      view.coverage[0]?.label,
+      "Attribute A: shown in part; still not shown: The approval comes before the grant",
+    );
+    assert.deepEqual(view.coverage[0]?.missing, [
+      "The approval comes before the grant",
+    ]);
+    assert.match(view.coverageLine, /A shown in part/);
+    // Accepting the request that shows the rest covers A.
+    assert.match(view.coverageLine, /accepting this file covers A/);
+    const done = list({
+      requirements: requirements.map((item) => ({
+        ...item,
+        state: "ACCEPTED",
+      })),
+      assurance,
+    });
+    assert.equal(done.coverage[0]?.state, "EVIDENCED");
+    assert.deepEqual(done.coverage[0]?.missing, []);
+  });
+});
+
 describe("polling while a check works", () => {
   it("every 5 seconds for the first minute, then every 15, and stops after 20 minutes", () => {
     // Before the review: every 5 seconds, stopping after 5 minutes.
@@ -2106,6 +2477,11 @@ describe("plain words on screen", () => {
             },
             UNSETTLED,
             NOT_ASKED,
+            {
+              ...IN_PART,
+              attribute_id: uuid(6),
+              code: "F",
+            },
           ],
         }),
         entry({
@@ -2166,6 +2542,8 @@ describe("plain words on screen", () => {
       "IMPLEMENTATION",
       "DISMISSED",
       "VERIFY",
+      "PARTLY_SUPPORTED",
+      "SHOWN_IN_PART",
     ]) {
       assert.ok(!shown.includes(code), code);
     }
@@ -2244,5 +2622,13 @@ describe("the screen's own files", () => {
     assert.match(view, /<FindingRecords\s+findings=\{\[finding\]\}/);
     assert.match(view, /Not asked for by this request/);
     assert.match(view, /chip\.state ===\s*"DESIGN_ONLY"/);
+  });
+
+  it("lists an opened attribute's elements, what a request shows in part, and the elements still not shown under the coverage", () => {
+    assert.match(view, /className="de-elements"/);
+    assert.match(view, /line\.inPart !== null/);
+    assert.match(view, /Left to other requests/);
+    assert.match(view, /className="dq-cov-missing"/);
+    assert.match(view, /Still not shown:/);
   });
 });

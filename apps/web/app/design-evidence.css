@@ -683,6 +683,81 @@ button.de-caret > svg {
   background: var(--surface-muted);
 }
 
+/* An attribute's elements, each with its result in words; and, for one shown in part,
+   what this request shows and what it leaves to other requests. */
+.de-elements {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.de-elements > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 0.55rem;
+  min-width: 0;
+}
+
+.de-element-result {
+  flex: none;
+  padding: 0 0.45rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 20px;
+  white-space: nowrap;
+  border-radius: 999px;
+}
+
+.de-element-text {
+  flex: 1 1 12rem;
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.de-element-text small {
+  color: var(--text-secondary);
+}
+
+.de-in-part {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.de-in-part span {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+/* Under the coverage: which elements are still not shown, by their text. */
+.dq-cov-missing {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  list-style: none;
+}
+
+.dq-cov-missing > li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dq-cov-missing-lead {
+  color: var(--text-tertiary);
+  font-weight: 600;
+}
+
 /* Attributes the request does not ask for: one folded line, both readings on open. */
 .de-unasked {
   min-width: 0;

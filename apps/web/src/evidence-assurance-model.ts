@@ -53,6 +53,9 @@ export type Stage = (typeof STAGES)[number];
 
 export const VERDICTS = [
   "SUPPORTED",
+  // The request shows some of the attribute's elements and does not bear on the rest:
+  // the rest is left to other requests. Never an issue, never a finding.
+  "PARTLY_SUPPORTED",
   "ISSUE",
   "UNSETTLED",
   "NOT_ADDRESSED",
@@ -66,8 +69,13 @@ export const RESULTS = [
   "CONTRADICTED",
   "CANNOT_TELL",
   "NOT_ADDRESSED",
+  // A partly supported attribute's result: some elements shown, the rest not borne on.
+  "SHOWN_IN_PART",
 ] as const;
 export type Result = (typeof RESULTS)[number];
+
+/** An element's agreed result; null where the two readings differ on it. */
+export type ElementResult = Exclude<Result, "SHOWN_IN_PART">;
 
 const HELD_CODES = [
   "CUSTODY",
@@ -108,6 +116,17 @@ export type View = {
   reason: string;
 };
 
+/** One part of an attribute's criteria (its condition, what passes), with the result
+ * both readings agree on for it. */
+export type AssuredElement = {
+  key: string;
+  text: string;
+  /** Null where the two readings differ on the element. */
+  result: ElementResult | null;
+  passages: Passage[];
+  absent: string[];
+};
+
 export type AssuredAttribute = {
   /** "" where the server sent none this page can read: its code is then its letter. */
   attributeId: string;
@@ -122,6 +141,9 @@ export type AssuredAttribute = {
   /** What a supported attribute's evidence shows; null where it is not supported or
    * the server did not say. */
   shows: Shows | null;
+  /** The attribute's elements, each with its agreed result; empty where the server
+   * sent none. */
+  elements: AssuredElement[];
   summary: string;
   passages: Passage[];
   absent: string[];
@@ -255,6 +277,37 @@ function parseView(value: unknown): View | null {
   };
 }
 
+function parseElement(
+  value: unknown,
+  only: string | null,
+): AssuredElement | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const key = str(value.key).slice(0, 80);
+  const text = str(value.text).slice(0, 400);
+  if (key === "" || text === "") {
+    return null;
+  }
+  return {
+    key,
+    text,
+    result:
+      RESULTS.find(
+        (item): item is ElementResult =>
+          item === value.result && item !== "SHOWN_IN_PART",
+      ) ?? null,
+    passages: (Array.isArray(value.passages) ? value.passages : [])
+      .map((item) => parsePassage(item, only))
+      .filter((item): item is Passage => item !== null)
+      .slice(0, 6),
+    absent:
+      typeof value.absent === "string"
+        ? strings([value.absent], 1)
+        : strings(value.absent, 6),
+  };
+}
+
 const ISSUE_RESULTS: readonly Result[] = [
   "PARTLY_MET",
   "NOT_MET",
@@ -280,17 +333,37 @@ function parseAttribute(
     .map((item) => parsePassage(item, only))
     .filter((item): item is Passage => item !== null)
     .slice(0, 12);
-  // What stands as sent. Support needs the agreed result and a passage it rests on
-  // (rules 2 and the comparison of section 3); an issue or "not addressed" that carries
-  // the result "met" contradicts itself. Anything else is left for the person.
+  const elements = (Array.isArray(value.elements) ? value.elements : [])
+    .map((item) => parseElement(item, only))
+    .filter((item): item is AssuredElement => item !== null)
+    .filter(
+      (item, at, all) => all.findIndex((each) => each.key === item.key) === at,
+    )
+    .slice(0, 12);
+  const each = (results: readonly (ElementResult | null)[]) =>
+    elements.every((item) => results.includes(item.result));
+  const some = (wanted: ElementResult) =>
+    elements.some((item) => item.result === wanted);
+  // What stands as sent. Support needs the agreed result, a passage it rests on, and
+  // (where the elements are sent) every element shown (rules 2 and 6 and the comparison
+  // of section 3). Support in part needs some element shown and the rest not borne on.
+  // An issue or "not addressed" that carries the result "met" contradicts itself.
+  // Anything else is left for the person.
   const stands =
     said === "SUPPORTED"
-      ? result === "MET" && passages.length > 0
-      : said === "ISSUE"
-        ? result === null || ISSUE_RESULTS.includes(result)
-        : said === "NOT_ADDRESSED"
-          ? result === null || result === "NOT_ADDRESSED"
-          : said === "UNSETTLED";
+      ? result === "MET" && passages.length > 0 && each(["MET"])
+      : said === "PARTLY_SUPPORTED"
+        ? (result === null || result === "SHOWN_IN_PART") &&
+          passages.length > 0 &&
+          (elements.length === 0 ||
+            (each(["MET", "NOT_ADDRESSED"]) &&
+              some("MET") &&
+              some("NOT_ADDRESSED")))
+        : said === "ISSUE"
+          ? result === null || ISSUE_RESULTS.includes(result)
+          : said === "NOT_ADDRESSED"
+            ? result === null || result === "NOT_ADDRESSED"
+            : said === "UNSETTLED";
   const verdict: Verdict = said !== null && stands ? said : "UNSETTLED";
   const findingId = verdict === "ISSUE" ? uuidOrNull(value.finding_id) : null;
   return {
@@ -301,10 +374,11 @@ function parseAttribute(
     understood: said !== null && stands,
     result: verdict === "UNSETTLED" ? null : result,
     shows:
-      verdict === "SUPPORTED" &&
+      (verdict === "SUPPORTED" || verdict === "PARTLY_SUPPORTED") &&
       (value.shows === "DESIGN" || value.shows === "IMPLEMENTATION")
         ? value.shows
         : null,
+    elements,
     summary: str(value.summary),
     passages,
     absent: strings(value.absent, 12),
@@ -588,6 +662,7 @@ export function assuranceSentence(counts: AssuranceCounts): string {
 
 export type AttributeState =
   | "SUPPORTED"
+  | "PARTLY"
   | "ISSUE"
   | "DECIDED"
   | "JUDGMENT"
@@ -601,6 +676,11 @@ export const STATE_WORDS: Record<
   { label: string; icon: IconName; tone: Tone }
 > = {
   SUPPORTED: { label: "Supported", icon: "check", tone: "success" },
+  PARTLY: {
+    label: "Shown in part by this request",
+    icon: "layers",
+    tone: "neutral",
+  },
   ISSUE: { label: "Issue", icon: "risk", tone: "danger" },
   DECIDED: { label: "Issue decided", icon: "check", tone: "neutral" },
   JUDGMENT: { label: "Your judgment needed", icon: "help", tone: "warning" },
@@ -630,6 +710,39 @@ const RESULT_WORDS: Record<Result, string> = {
   CONTRADICTED: "Contradicted in the evidence",
   CANNOT_TELL: "Could not tell",
   NOT_ADDRESSED: "Not addressed by the evidence",
+  SHOWN_IN_PART: "Shown in part",
+};
+
+/** An issue's result in its label. NOT_MET is "not met", never "not shown": it also
+ * means an exception a record shows (a self-approval), which the summary names. */
+const ISSUE_WORDS: Partial<Record<Result, string>> = {
+  NOT_MET: "not met",
+  PARTLY_MET: "met in part",
+  CONTRADICTED: "contradicted in the evidence",
+  NOT_ADDRESSED: "not addressed by the evidence",
+};
+
+/** An element's result, in words; null where the two readings differ on it. */
+const ELEMENT_WORDS: Record<ElementResult, string> = {
+  MET: "Shown",
+  PARTLY_MET: "Shown in part",
+  NOT_MET: "Not shown",
+  CONTRADICTED: "Contradicted in the evidence",
+  CANNOT_TELL: "Could not tell",
+  NOT_ADDRESSED: "Not in these files",
+};
+
+export function elementWords(result: ElementResult | null): string {
+  return result === null ? "Your judgment needed" : ELEMENT_WORDS[result];
+}
+
+const ELEMENT_TONES: Record<ElementResult, Tone> = {
+  MET: "success",
+  PARTLY_MET: "warning",
+  NOT_MET: "danger",
+  CONTRADICTED: "danger",
+  CANNOT_TELL: "warning",
+  NOT_ADDRESSED: "neutral",
 };
 
 export function resultWords(result: Result | null): string {
@@ -653,6 +766,9 @@ function stateOf(item: AssuredAttribute): AttributeState {
   if (item.verdict === "UNSETTLED") {
     return "JUDGMENT";
   }
+  if (item.verdict === "PARTLY_SUPPORTED") {
+    return "PARTLY";
+  }
   return issueDecided(item) ? "DECIDED" : item.verdict;
 }
 
@@ -668,6 +784,16 @@ export type ShownPassage = Passage & {
   opens: boolean;
 };
 
+/** An element as an opened attribute lists it: its text and its result in words. */
+export type ElementLine = {
+  key: string;
+  text: string;
+  /** "Shown", "Not shown", "Not in these files", "Your judgment needed". */
+  result: string;
+  tone: Tone;
+  absent: string[];
+};
+
 export type AttributeLine = {
   /** The attribute's id, or its code where the server sent no id. */
   key: string;
@@ -680,6 +806,11 @@ export type AttributeLine = {
   state: AttributeState;
   /** What supported evidence shows; null otherwise. */
   shows: Shows | null;
+  /** The attribute's elements, each with its result in words. */
+  elements: ElementLine[];
+  /** For an attribute shown in part: what this request shows, and what it leaves to
+   * other requests; null otherwise. */
+  inPart: { shows: string[]; leaves: string[] } | null;
   /** "Supported (implementation)", "Issue: not shown", "Issue: decided by dismissal",
    * "Your judgment needed", "Not addressed". */
   label: string;
@@ -703,7 +834,7 @@ export type Lettered = { id: string; letter: string; text: string };
 
 function labelOf(item: AssuredAttribute, state: AttributeState): string {
   const words = STATE_WORDS[state];
-  if (state === "SUPPORTED") {
+  if (state === "SUPPORTED" || state === "PARTLY") {
     return item.shows === null
       ? words.label
       : `${words.label} (${SHOWS_WORDS[item.shows]})`;
@@ -716,7 +847,8 @@ function labelOf(item: AssuredAttribute, state: AttributeState): string {
     return how === undefined ? "Issue: decided" : `Issue: decided by ${how}`;
   }
   if (state === "ISSUE" && item.result !== null) {
-    return `${words.label}: ${RESULT_WORDS[item.result].toLowerCase()}`;
+    const said = ISSUE_WORDS[item.result];
+    return said === undefined ? words.label : `${words.label}: ${said}`;
   }
   return words.label;
 }
@@ -737,7 +869,25 @@ function attributeLine(
     text: known?.text ?? "",
     expected: item.expected,
     state,
-    shows: state === "SUPPORTED" ? item.shows : null,
+    shows: state === "SUPPORTED" || state === "PARTLY" ? item.shows : null,
+    elements: item.elements.map((element) => ({
+      key: element.key,
+      text: element.text,
+      result: elementWords(element.result),
+      tone: element.result === null ? "warning" : ELEMENT_TONES[element.result],
+      absent: element.absent,
+    })),
+    inPart:
+      state !== "PARTLY"
+        ? null
+        : {
+            shows: item.elements
+              .filter((element) => element.result === "MET")
+              .map((element) => element.text),
+            leaves: item.elements
+              .filter((element) => element.result !== "MET")
+              .map((element) => element.text),
+          },
     label: labelOf(item, state),
     icon: words.icon,
     tone: words.tone,
@@ -1026,8 +1176,9 @@ export function requestCheck(
     ISSUE: 0,
     JUDGMENT: 1,
     SUPPORTED: 2,
-    DECIDED: 3,
-    NOT_ADDRESSED: 4,
+    PARTLY: 3,
+    DECIDED: 4,
+    NOT_ADDRESSED: 5,
   };
   const place = (line: AttributeLine) => {
     const at = attributes.findIndex((each) => each.id === line.attributeId);
@@ -1090,6 +1241,7 @@ export type StateGroupKey =
   | "IMPLEMENTED"
   | "DESIGN"
   | "SUPPORTED"
+  | "PARTLY"
   | "ISSUE"
   | "JUDGMENT"
   | "DECIDED";
@@ -1110,6 +1262,7 @@ const GROUP_WORDS: Record<
   IMPLEMENTED: { words: "supported (implementation)", state: "SUPPORTED" },
   DESIGN: { words: "supported (design)", state: "SUPPORTED" },
   SUPPORTED: { words: "supported", state: "SUPPORTED" },
+  PARTLY: { words: "shown in part", state: "PARTLY" },
   ISSUE: { words: "issue", state: "ISSUE" },
   JUDGMENT: { words: "your judgment needed", state: "JUDGMENT" },
   DECIDED: { words: "issue decided", state: "DECIDED" },
@@ -1125,6 +1278,16 @@ const groupOf = (line: AttributeLine): StateGroupKey | null =>
     : line.state === "NOT_ADDRESSED"
       ? null
       : line.state;
+
+/** What one request's check shows of one attribute's elements: every element it read,
+ * and the ones it shows, by what they show. An attribute sent without its elements is
+ * one element, the whole attribute (key ""). */
+export type AttributeElements = {
+  attributeId: string;
+  all: Array<{ key: string; text: string }>;
+  implementation: string[];
+  design: string[];
+};
 
 export type AssuranceRow = {
   standing: CheckStanding;
@@ -1142,11 +1305,118 @@ export type AssuranceRow = {
   /** The attributes the check supports with the documented design only: accepting
    * marks them "design documented, implementation not yet shown". */
   designIds: string[];
+  /** Each attribute's elements as this request's check shows them: the coverage
+   * combines them across the control's requests (attributeCoverage). */
+  elementFacts: AttributeElements[];
   /** Beside Accept: what accepting marks as evidenced, and what it does not settle. */
   acceptNote: string;
   /** The check is queued or at work: the list is read again until it ends. */
   working: boolean;
 };
+
+/** An element is shown where both readings agree it is met and a verified passage of
+ * the files rests under it, on an attribute whose support stands. */
+function elementFacts(request: AssuredRequest): AttributeElements[] {
+  return request.attributes
+    .filter((item) => item.attributeId !== "")
+    .map((item) => {
+      const supports =
+        item.verdict === "SUPPORTED" || item.verdict === "PARTLY_SUPPORTED";
+      const shown = !supports
+        ? []
+        : item.elements.length > 0
+          ? item.elements
+              .filter(
+                (element) =>
+                  element.result === "MET" && element.passages.length > 0,
+              )
+              .map((element) => element.key)
+          : // Without its elements, only whole support shows the whole attribute.
+            item.verdict === "SUPPORTED"
+            ? [""]
+            : [];
+      return {
+        attributeId: item.attributeId,
+        all:
+          item.elements.length > 0
+            ? item.elements.map((element) => ({
+                key: element.key,
+                text: element.text,
+              }))
+            : [{ key: "", text: "" }],
+        implementation: item.shows === "IMPLEMENTATION" ? shown : [],
+        design: item.shows === "DESIGN" ? shown : [],
+      };
+    });
+}
+
+export type AttributeCoverage = {
+  /** EVIDENCED: every element shown by the records of an instance in an accepted
+   * request. DESIGN_ONLY: every element the instances do not show is documented in an
+   * accepted request's design. PARTLY: accepted requests show some elements, not all.
+   * NONE: no accepted request's check shows any. UNKNOWN: no check read the attribute. */
+  state: "EVIDENCED" | "DESIGN_ONLY" | "PARTLY" | "NONE" | "UNKNOWN";
+  /** The elements no accepted request shows from the records of an instance, by their
+   * text. Empty where the elements were not sent. */
+  missing: string[];
+};
+
+/**
+ * Whether an attribute is evidenced at D&I, combining its elements across the control's
+ * requests by key: only when every element is shown with `shows: IMPLEMENTATION` by
+ * some accepted request (docs/evidence-assurance.md, section 3). A request's check whose
+ * attribute came without its elements counts as one element, the whole attribute: it
+ * covers every element when it supports the attribute whole.
+ */
+export function attributeCoverage(
+  attributeId: string,
+  entries: ReadonlyArray<{ accepted: boolean; facts: AttributeElements[] }>,
+): AttributeCoverage {
+  const facts = entries.flatMap((entry) =>
+    entry.facts
+      .filter((fact) => fact.attributeId === attributeId)
+      .map((fact) => ({ accepted: entry.accepted, fact })),
+  );
+  if (facts.length === 0) {
+    return { state: "UNKNOWN", missing: [] };
+  }
+  const texts = new Map<string, string>();
+  for (const { fact } of facts) {
+    for (const element of fact.all) {
+      if (!texts.has(element.key)) {
+        texts.set(element.key, element.text);
+      }
+    }
+  }
+  const keyed = [...texts.keys()].some((key) => key !== "");
+  const universe = [...texts.keys()].filter((key) => !keyed || key !== "");
+  const accepted = facts
+    .filter((item) => item.accepted)
+    .map((item) => item.fact);
+  const by = (pick: (fact: AttributeElements) => string[]) => {
+    const keys = new Set(accepted.flatMap(pick));
+    // Whole support (key "") shows every element.
+    return (key: string) => keys.has(key) || keys.has("");
+  };
+  const implemented = by((fact) => fact.implementation);
+  const designed = by((fact) => fact.design);
+  const missing = universe.filter((key) => !implemented(key));
+  const words = missing
+    .map((key) => texts.get(key) ?? "")
+    .filter((text) => text !== "");
+  if (missing.length === 0) {
+    return { state: "EVIDENCED", missing: [] };
+  }
+  const anyShown = universe.some((key) => implemented(key) || designed(key));
+  return {
+    state: !anyShown
+      ? "NONE"
+      : missing.every((key) => designed(key))
+        ? "DESIGN_ONLY"
+        : "PARTLY",
+    missing: words,
+  };
+}
 
 const STANDING_FACTS: Record<Exclude<CheckStanding, "CHECKING">, string> = {
   NOT_CHECKED: "Not checked yet",
@@ -1199,6 +1469,7 @@ export function assuranceRow(input: {
     "IMPLEMENTED",
     "DESIGN",
     "SUPPORTED",
+    "PARTLY",
     "ISSUE",
     "JUDGMENT",
     "DECIDED",
@@ -1218,6 +1489,20 @@ export function assuranceRow(input: {
       .filter((line) => groupOf(line) === key && line.attributeId !== "")
       .map((line) => line.attributeId);
   const left = check.leftOut.length;
+  const facts = elementFacts(request);
+  // Supported from an instance's records, with every element shown under a verified
+  // passage: accepting marks it evidenced. Support whose elements are not all shown so
+  // reads as shown in part.
+  const whole = (letter: string) => {
+    const line = check.attributes.find((each) => each.letter === letter);
+    const fact = facts.find((each) => each.attributeId === line?.attributeId);
+    if (fact === undefined) {
+      return false;
+    }
+    const shown = new Set(fact.implementation);
+    return fact.all.every((element) => shown.has(element.key) || shown.has(""));
+  };
+  const implemented = lettersOf("IMPLEMENTED");
   return {
     standing: check.standing,
     fact:
@@ -1231,11 +1516,16 @@ export function assuranceRow(input: {
     spoken: states.map((group) => group.label).join(", "),
     implementedIds: idsOf("IMPLEMENTED"),
     designIds: idsOf("DESIGN"),
+    elementFacts: facts,
     acceptNote: acceptNote({
       standing: check.standing,
-      implemented: lettersOf("IMPLEMENTED"),
+      implemented: implemented.filter(whole),
       design: lettersOf("DESIGN"),
       unstated: lettersOf("SUPPORTED"),
+      partly: [
+        ...lettersOf("PARTLY"),
+        ...implemented.filter((letter) => !whole(letter)),
+      ].sort((a, b) => at(a) - at(b) || a.localeCompare(b)),
       issues: lettersOf("ISSUE"),
       judged: lettersOf("JUDGMENT"),
       decided: lettersOf("DECIDED"),
@@ -1259,6 +1549,8 @@ export function acceptNote(facts: {
   design: readonly string[];
   /** Supported, without the server saying by which. */
   unstated: readonly string[];
+  /** Shown in part by this request, the rest left to other requests. */
+  partly?: readonly string[];
   /** Open issues. */
   issues: readonly string[];
   judged: readonly string[];
@@ -1284,6 +1576,9 @@ export function acceptNote(facts: {
     facts.design.length > 0 ? `${span(facts.design)}: ${DESIGN_ONLY}.` : "",
     facts.unstated.length > 0
       ? `${span(facts.unstated)} ${many(facts.unstated) ? "are" : "is"} supported, but the check does not say whether by the design or its implementation, so ${many(facts.unstated) ? "they are" : "it is"} not marked as evidenced.`
+      : "",
+    (facts.partly ?? []).length > 0
+      ? `${span(facts.partly ?? [])} ${many(facts.partly ?? []) ? "are" : "is"} shown in part by this request; the rest is left to other requests, so ${many(facts.partly ?? []) ? "they are" : "it is"} evidenced only once they show it.`
       : "",
     facts.issues.length > 0
       ? `Both readings found an issue on ${span(facts.issues)}.`

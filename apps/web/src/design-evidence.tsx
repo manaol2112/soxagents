@@ -651,7 +651,9 @@ export function DesignEvidence({
                 className={`dq-cov ${
                   chip.state === "EVIDENCED"
                     ? "is-covered"
-                    : chip.state === "REQUESTED" || chip.state === "DESIGN_ONLY"
+                    : chip.state === "REQUESTED" ||
+                        chip.state === "DESIGN_ONLY" ||
+                        chip.state === "PARTLY"
                       ? "is-requested"
                       : chip.state === "EXCEPTED"
                         ? "is-exception"
@@ -672,6 +674,10 @@ export function DesignEvidence({
                   <span className="dq-cov-state" aria-hidden="true">
                     Design documented
                   </span>
+                ) : chip.state === "PARTLY" ? (
+                  <span className="dq-cov-state" aria-hidden="true">
+                    Shown in part
+                  </span>
                 ) : (
                   <span className="dq-cov-state" aria-hidden="true">
                     {chip.state === "EXCEPTED"
@@ -682,6 +688,25 @@ export function DesignEvidence({
               </li>
             ))}
           </ul>
+          {/* Which elements are still not shown from an instance's records, by their
+              text, for an attribute an accepted request does not fully evidence. */}
+          {view.coverage.some((chip) => chip.missing.length > 0) ? (
+            <ul className="dq-cov-missing">
+              {view.coverage
+                .filter((chip) => chip.missing.length > 0)
+                .map((chip) => (
+                  <li key={chip.attributeId}>
+                    <span className="dr-code">{chip.letter}</span>
+                    <span>
+                      <span className="dq-cov-missing-lead">
+                        Still not shown:
+                      </span>{" "}
+                      {chip.missing.join("; ")}
+                    </span>
+                  </li>
+                ))}
+            </ul>
+          ) : null}
         </section>
       ) : null}
 
@@ -2012,6 +2037,44 @@ function AttributeCheck({
           ) : null}
           {line.judgment !== null ? (
             <p className="de-judgment">{line.judgment}</p>
+          ) : null}
+          {line.inPart !== null ? (
+            <div className="de-in-part">
+              {line.inPart.shows.length > 0 ? (
+                <p>
+                  <span>This request shows</span> {line.inPart.shows.join("; ")}
+                </p>
+              ) : null}
+              {line.inPart.leaves.length > 0 ? (
+                <p>
+                  <span>Left to other requests</span>{" "}
+                  {line.inPart.leaves.join("; ")}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+          {line.elements.length > 0 ? (
+            <ul
+              className="de-elements"
+              aria-label={`Attribute ${line.letter}: its elements`}
+            >
+              {line.elements.map((element) => (
+                <li key={element.key}>
+                  <span className={`de-element-result tone-${element.tone}`}>
+                    {element.result}
+                  </span>
+                  <span className="de-element-text">
+                    {element.text}
+                    {element.absent.length > 0 ? (
+                      <small>
+                        {" "}
+                        Not in the evidence: {element.absent.join("; ")}
+                      </small>
+                    ) : null}
+                  </span>
+                </li>
+              ))}
+            </ul>
           ) : null}
           {line.readings.length > 0 ? (
             <div className="de-views">
