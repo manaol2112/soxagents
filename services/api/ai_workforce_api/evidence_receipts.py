@@ -24,6 +24,7 @@ evidence came once none is left (31 Oct 2026: withdrawing one of two items' file
 request received).
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import UUID
@@ -46,7 +47,17 @@ def covered(cursor: psycopg.Cursor[Any], project_id: UUID, request_id: UUID) -> 
     """Whether the files filed to the request, together, cover every requested item. An
     item is placed by the requirement the reader names where it names one, in the order
     the request lists its requirements (evidence_analysis._planned_items): a file added
-    for one item is read against that item alone, so its first item is not the request's."""
+    for one item is read against that item alone, so its first item is not the request's.
+
+    A file filed for one item (its filing names the requirement) counts only for that item
+    and the items it is linked to, whatever else its reading found: the rule
+    evidence_plans.request_file_serves applies. A file of the D&I evidence wizard is read
+    against every D&I item of its control (evidence_wizard.py), so its reading names items
+    it is not filed for (independent review of the wizard, 13 November 2026: a combined
+    file placed from a row on one item marked the whole request received). An item the
+    reading names on another request is not this request's; one it names on this request
+    that is no longer requested (waived, removed) counts by its place in the list, as
+    before."""
     planned = [
         str(row[0])
         for row in cursor.execute(
@@ -74,24 +85,43 @@ def covered(cursor: psycopg.Cursor[Any], project_id: UUID, request_id: UUID) -> 
         # items read received with nothing of their own). A request with no planned
         # items is received by any file, as before.
         return not planned or _every_item_served(cursor, request_id)
+    # Every requirement this request carries or carried, whatever its status now.
+    here = {
+        str(row[0])
+        for row in cursor.execute(
+            "SELECT id FROM evidence_requirements WHERE pbc_request_id = %s", (request_id,)
+        ).fetchall()
+    }
     rows = cursor.execute(
         """
-        SELECT a.classification FROM evidence_file_links l
+        SELECT a.classification,
+               (SELECT m.requirement_id::text FROM evidence_matches m
+                WHERE m.evidence_file_id = l.evidence_file_id AND m.status = 'FILED'),
+               ARRAY(SELECT ef.requirement_id::text FROM evidence_requirement_files ef
+                     WHERE ef.evidence_file_id = l.evidence_file_id AND ef.status = 'LINKED')
+        FROM evidence_file_links l
         JOIN evidence_analyses a ON a.evidence_file_id = l.evidence_file_id
         WHERE l.project_id = %s AND l.pbc_request_id = %s AND a.status = 'READY'
         """,
         (project_id, request_id),
     ).fetchall()
     found: set[int] = set()
-    for (classification,) in rows:
+    for classification, filed_for, linked in rows:
         if not isinstance(classification, dict):
             continue
+        # Filed for one item: it counts for that item and those it is linked to only.
+        allowed = None if filed_for is None else {str(filed_for), *(str(x) for x in linked)}
         for item in classification.get("items", []):
             if not isinstance(item, dict) or item.get("coverage") != "COVERED":
                 continue
             named = str(item.get("requirement_id") or "")
+            if allowed is not None and named not in allowed:
+                continue
             if named in planned:
                 found.add(planned.index(named))
+            elif named and named not in here:
+                # Another request's item (a wizard file is read against every D&I item).
+                continue
             elif isinstance(item.get("index"), int):
                 found.add(item["index"])
     return all(index in found for index in range(wanted))
@@ -127,16 +157,38 @@ def _every_item_served(cursor: psycopg.Cursor[Any], request_id: UUID) -> bool:
     return row is not None and int(row[0]) == 0
 
 
+# Whether a request is one the per-item rule applies to (B1g): a D&I request drafted
+# from the plan and never handed over. A message recorded for it and not definitively
+# failed may be with the owner (pending, or its outcome unknown, or delivered): the request
+# is then treated as asked for, whole, and is never split. Approved or sent with other
+# requests as one email: likewise. SQL over pbc_requests as r, inside a query with
+# parameters (hence the doubled %).
+_PER_ITEM = """
+    (r.testing_phase = 'DESIGN' AND r.engagement_control_id IS NOT NULL
+     AND r.operation_key LIKE 'plan-%%' AND r.handed_over_at IS NULL
+     AND NOT EXISTS (
+         SELECT 1 FROM outbound_messages o
+         WHERE o.pbc_request_id = r.id AND o.status <> 'FAILED')
+     AND NOT EXISTS (
+         SELECT 1 FROM evidence_request_group_members m
+         JOIN evidence_request_groups g ON g.id = m.group_id
+         WHERE m.pbc_request_id = r.id AND m.released_at IS NULL
+           AND g.status IN ('APPROVED', 'SENT')))
+"""
+
+
 def apply_receipt(
     cursor: psycopg.Cursor[Any],
     organization_id: UUID,
     project_id: UUID,
-    match_id: UUID,
+    match_id: UUID | None,
     request_id: UUID,
     actor_id: UUID,
     by: Literal["AGENT", "PERSON", "OWNER"],
 ) -> ReceiptStatus | None:
-    """Move the request for a filed file. Returns the new status, or None if it stays."""
+    """Move the request for a filed file. Returns the new status, or None if it stays.
+    Without `match_id` (evidence in hand for an item by a link, not a filing on this
+    request: a wizard bundle's further item), the move is recorded on the request alone."""
     moved, _split = _receive(
         cursor, organization_id, project_id, match_id, request_id, actor_id, by
     )
@@ -190,6 +242,73 @@ def settle_in_hand(
     return "SPLIT" if split else "IN_HAND"
 
 
+class _KeepAsItWas(Exception):
+    """Nothing was asked for again: the request is left as it was."""
+
+
+def ask_again_for_items_left(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    request_id: UUID,
+    actor_id: UUID,
+) -> bool:
+    """After a person moved evidence off an item in the D&I evidence wizard
+    (evidence_wizard.move), on a D&I request that was only ever provided directly (never
+    emailed nor handed over, the requests the per-item rule covers): the request is put
+    back where it was before evidence came (a draft) and what is still in hand is applied
+    again, item by item (settle_in_hand), so the items left without evidence of their own
+    are asked for again in a draft of their own, which needs a person's approval like any
+    other, and the items in hand stay on it, received as provided directly. When nothing
+    can be asked for again (nothing left without evidence, nothing in hand, a file on it
+    still being read, the items cannot be requested now) the request is left as it was.
+    Outside the wizard, evidence taken off an item leaves the request as follow_evidence
+    puts it. Returns whether items were asked for again."""
+    cursor.execute(
+        "SELECT 1 FROM evidence_plans p JOIN pbc_requests r "
+        "ON r.engagement_control_id = p.engagement_control_id AND r.project_id = p.project_id "
+        "WHERE r.id = %s AND r.project_id = %s AND r.testing_phase = 'DESIGN' FOR UPDATE OF p",
+        (request_id, project_id),
+    )
+    row = cursor.execute(
+        f"""
+        SELECT r.status, {_PER_ITEM}
+               AND r.provided_directly AND r.outbound_message_id IS NULL
+        FROM pbc_requests r WHERE r.id = %s AND r.project_id = %s FOR UPDATE OF r
+        """,  # noqa: S608
+        (request_id, project_id),
+    ).fetchone()
+    if row is None or str(row[0]) not in _EVIDENCE or not row[1]:
+        return False
+    in_hand, left = _items(cursor, request_id)
+    if not in_hand or not left:
+        return False
+    try:
+        with cursor.connection.transaction():
+            cursor.execute(
+                """
+                UPDATE pbc_requests
+                SET status = 'DRAFT', provided_directly = false, received_at = NULL,
+                    updated_at = clock_timestamp(), version = version + 1
+                WHERE id = %s AND project_id = %s
+                """,
+                (request_id, project_id),
+            )
+            _audit(
+                cursor, organization_id, project_id, actor_id, request_id,
+                "pbc.receipt_undone",
+                {"status": "DRAFT", "from": str(row[0]),
+                 "reason": "evidence was moved off an item; what is in hand is applied again"},
+            )  # fmt: skip
+            if settle_in_hand(cursor, organization_id, project_id, request_id, actor_id) != (
+                "SPLIT"
+            ):
+                raise _KeepAsItWas()
+    except _KeepAsItWas:
+        return False
+    return True
+
+
 def _receive(
     cursor: psycopg.Cursor[Any],
     organization_id: UUID,
@@ -213,24 +332,10 @@ def _receive(
         (request_id, project_id),
     )
     row = cursor.execute(
-        """
-        SELECT r.status, r.engagement_control_id,
-               r.testing_phase = 'DESIGN' AND r.engagement_control_id IS NOT NULL
-               AND r.operation_key LIKE 'plan-%%' AND r.handed_over_at IS NULL
-               -- A message recorded for it and not definitively failed may be with the
-               -- owner (pending, or its outcome unknown, or delivered): the request is
-               -- then treated as asked for, whole, and is never split.
-               AND NOT EXISTS (
-                   SELECT 1 FROM outbound_messages o
-                   WHERE o.pbc_request_id = r.id AND o.status <> 'FAILED')
-               -- Approved or sent with other requests as one email: likewise.
-               AND NOT EXISTS (
-                   SELECT 1 FROM evidence_request_group_members m
-                   JOIN evidence_request_groups g ON g.id = m.group_id
-                   WHERE m.pbc_request_id = r.id AND m.released_at IS NULL
-                     AND g.status IN ('APPROVED', 'SENT'))
+        f"""
+        SELECT r.status, r.engagement_control_id, {_PER_ITEM}
         FROM pbc_requests r WHERE r.id = %s AND r.project_id = %s FOR UPDATE OF r
-        """,
+        """,  # noqa: S608
         (request_id, project_id),
     ).fetchone()
     if row is None:
@@ -350,8 +455,10 @@ def _move(
         actor_id,
         request_id,
         "pbc.received_from_evidence",
-        {"status": target, "from": before, "by": by, "provided_directly": unsent},
-    )
+        {"status": target, "from": before, "by": by, "provided_directly": unsent,
+         # Moved by a link, not a filing: no filing records where it was (follow_evidence).
+         **({"by_link": True} if match_id is None else {})},
+    )  # fmt: skip
     if left:
         assert control_id is not None
         _request_again(cursor, organization_id, project_id, control_id, request_id, actor_id, left)
@@ -563,12 +670,17 @@ def follow_evidence(
         ).fetchall()
     ]
     if before is None and not records:
-        if not never_asked:
-            return
-        # Received only from evidence provided directly, with no filing that recorded
-        # where it was (the evidence in hand was a person's link, settle_in_hand): it was
-        # never sent nor handed over, so it was a draft.
-        before = "DRAFT"
+        if never_asked:
+            # Received only from evidence provided directly, with no filing that recorded
+            # where it was (the evidence in hand was a person's link, settle_in_hand): it
+            # was never sent nor handed over, so it was a draft.
+            before = "DRAFT"
+        else:
+            # Received by a link, not a filing (a D&I evidence wizard bundle's further
+            # item, apply_receipt without a filing): where the link's receipt found it.
+            before = _linked_from(cursor, request_id)
+            if before is None:
+                return
     # Where the request was before any evidence came: the first recorded status that is
     # not itself a receipt.
     origins = [
@@ -652,6 +764,59 @@ def follow_evidence(
             """,
             (request_id, origin, target, request_id),
         )
+
+
+def _linked_from(cursor: psycopg.Cursor[Any], request_id: UUID) -> str | None:
+    """Where the latest receipt a link recorded on the request found it (its audit event
+    says, since no filing on the request recorded it), when that was not itself a receipt."""
+    row = cursor.execute(
+        """
+        SELECT payload ->> 'from' FROM audit_events
+        WHERE target_type = 'pbc_request' AND target_id = %s
+          AND action = 'pbc.received_from_evidence'
+          AND coalesce((payload ->> 'by_link')::boolean, false)
+          AND payload ->> 'from' NOT IN ('PARTIALLY_RECEIVED', 'RECEIVED')
+        ORDER BY occurred_at DESC, id DESC
+        LIMIT 1
+        """,
+        (request_id,),
+    ).fetchone()
+    return None if row is None or row[0] is None else str(row[0])
+
+
+def linked_requests(cursor: psycopg.Cursor[Any], file_id: UUID) -> list[UUID]:
+    """The requests of the D&I items a file is linked to (evidence_requirement_files), in
+    a fixed order: a link moves its item's request too (a D&I evidence wizard bundle)."""
+    return [
+        UUID(str(row[0]))
+        for row in cursor.execute(
+            """
+            SELECT DISTINCT q.pbc_request_id FROM evidence_requirement_files ef
+            JOIN evidence_requirements q ON q.id = ef.requirement_id
+            WHERE ef.evidence_file_id = %s AND ef.status = 'LINKED' AND q.phase = 'DESIGN'
+              AND q.pbc_request_id IS NOT NULL
+            ORDER BY q.pbc_request_id
+            """,
+            (file_id,),
+        ).fetchall()
+    ]
+
+
+def follow_linked(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    file_id: UUID,
+    actor_id: UUID,
+    followed: Sequence[UUID | None] = (),
+) -> list[UUID]:
+    """After a file left (withdrawn, or filed to another control or off it): the request of
+    each D&I item it is linked to follows the evidence left on it too, as its filing's
+    request does (`followed`, already followed). Returns the requests followed."""
+    found = [request for request in linked_requests(cursor, file_id) if request not in followed]
+    for request_id in found:
+        follow_evidence(cursor, organization_id, project_id, request_id, actor_id)
+    return found
 
 
 def _evidence_left(cursor: psycopg.Cursor[Any], request_id: UUID) -> bool:

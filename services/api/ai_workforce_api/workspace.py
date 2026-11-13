@@ -58,6 +58,7 @@ from ai_workforce_api.evidence_plans import (
     ATTRIBUTES_SETTLED_SQL,
     population_waiting_controls,
     reconcile_waiting,
+    request_file_serves,
     unplanned_controls,
     unrequested_controls,
 )
@@ -1282,30 +1283,8 @@ def _controls(
         (project_id,),
     ).fetchall():
         requirements.setdefault(control_id, {}).setdefault(str(phase), {})[str(status)] = int(count)
-    # Requested items not complete yet: no person accepted them, and the reader found no
-    # file that covers them in full ("covers it in part" is not complete). A phase whose
-    # items are not all complete is not ready for testing (31 Oct 2026).
-    for control_id, phase, count in connection.execute(
-        """
-        SELECT q.engagement_control_id, q.phase, count(*) FROM evidence_requirements q
-        WHERE q.project_id = %s AND q.status = 'REQUESTED' AND q.sufficiency <> 'ACCEPTED'
-          AND NOT EXISTS (
-              SELECT 1 FROM evidence_file_links l
-              JOIN evidence_analyses a
-                ON a.evidence_file_id = l.evidence_file_id AND a.status = 'READY'
-              CROSS JOIN LATERAL jsonb_array_elements(
-                  CASE WHEN jsonb_typeof(a.classification -> 'items') = 'array'
-                       THEN a.classification -> 'items' ELSE '[]'::jsonb END) AS item
-              WHERE l.pbc_request_id = q.pbc_request_id
-                AND item ->> 'requirement_id' = q.id::text
-                AND item ->> 'coverage' = 'COVERED')
-        GROUP BY 1, 2
-        """,
-        (project_id,),
-    ).fetchall():
-        requirements.setdefault(control_id, {}).setdefault(str(phase), {})["INCOMPLETE"] = int(
-            count
-        )
+    for control_id, phase, count in incomplete_items(connection, project_id):
+        requirements.setdefault(control_id, {}).setdefault(phase, {})["INCOMPLETE"] = count
     started = connection.execute(
         "SELECT kicked_off_at IS NOT NULL FROM engagement_settings WHERE project_id = %s",
         (project_id,),
@@ -1632,6 +1611,50 @@ def agent_runs(connection: psycopg.Connection[Any], project_id: UUID) -> dict[UU
         if status == "IDLE" and note == REPERFORM_FAILED:
             found.stopped.append("reviewing")
     return runs
+
+
+def incomplete_items(
+    connection: psycopg.Connection[Any], project_id: UUID
+) -> list[tuple[UUID, str, int]]:
+    """Per control and phase, how many requested items are not complete yet: no person
+    accepted them, and the reader found no file that covers them in full ("covers it in
+    part" is not complete). A phase whose items are not all complete is not ready for
+    testing (31 Oct 2026). Only a file that serves the item counts: one on its request
+    that is filed for it (or for the request as a whole), or one linked to it
+    (evidence_plans.request_file_serves). A file filed for another item never completes
+    this one by what its reading found: a D&I evidence wizard file is read against every
+    D&I item of its control (independent review of the wizard, 13 November 2026)."""
+    covered_item = """
+        CROSS JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(a.classification -> 'items') = 'array'
+                 THEN a.classification -> 'items' ELSE '[]'::jsonb END) AS item
+        WHERE item ->> 'requirement_id' = q.id::text AND item ->> 'coverage' = 'COVERED'
+    """
+    rows = connection.execute(
+        f"""
+        SELECT q.engagement_control_id, q.phase, count(*) FROM evidence_requirements q
+        WHERE q.project_id = %s AND q.status = 'REQUESTED' AND q.sufficiency <> 'ACCEPTED'
+          AND NOT EXISTS (
+              SELECT 1 FROM evidence_file_links l
+              JOIN evidence_analyses a
+                ON a.evidence_file_id = l.evidence_file_id AND a.status = 'READY'
+              {covered_item}
+                AND l.pbc_request_id = q.pbc_request_id
+                AND {request_file_serves("l.evidence_file_id")})
+          AND NOT EXISTS (
+              SELECT 1 FROM evidence_requirement_files ef
+              JOIN evidence_file_links l
+                ON l.evidence_file_id = ef.evidence_file_id
+               AND l.engagement_control_id = ef.engagement_control_id
+              JOIN evidence_analyses a
+                ON a.evidence_file_id = ef.evidence_file_id AND a.status = 'READY'
+              {covered_item}
+                AND ef.requirement_id = q.id AND ef.status = 'LINKED')
+        GROUP BY 1, 2
+        """,  # noqa: S608
+        (project_id,),
+    ).fetchall()
+    return [(UUID(str(row[0])), str(row[1]), int(row[2])) for row in rows]
 
 
 def _sheet_states(

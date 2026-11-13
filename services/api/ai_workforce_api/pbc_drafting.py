@@ -1568,6 +1568,7 @@ class LocalDraftScheduler:
             open_plan_runs,
             reclaim_interrupted_plan_runs,
         )
+        from ai_workforce_api.evidence_wizard import land_open_batches
         from ai_workforce_api.policy_evidence import open_runs as open_policies
         from ai_workforce_api.prior_year import open_runs as open_prior_year
         from ai_workforce_api.process_narrative import open_runs as open_narratives
@@ -1594,6 +1595,9 @@ class LocalDraftScheduler:
             priors = open_prior_year(connection)
             narratives = open_narratives(connection)
             policies = open_policies(connection)
+            # A wizard batch whose readings all ended without it landing lands now (its
+            # receipts and checks follow).
+            land_open_batches(connection)
             # A D&I request with files and no check (filed before the chain, or whose
             # queueing failed) gets one, a bounded number a start.
             backfill(connection)

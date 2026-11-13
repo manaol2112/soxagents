@@ -64,6 +64,7 @@ from ai_workforce_api.evidence_plans import register_evidence_plans
 from ai_workforce_api.evidence_portal import register_evidence_portal
 from ai_workforce_api.evidence_review import register_evidence_reviews
 from ai_workforce_api.evidence_versions import register_evidence_versions
+from ai_workforce_api.evidence_wizard import register_evidence_wizard
 from ai_workforce_api.execution import register_execution
 from ai_workforce_api.exports import register_exports
 from ai_workforce_api.followups import FollowUpTimer, register_followups
@@ -203,7 +204,7 @@ def create_app(
     models = model_provider
     register_models(app, resolved, models)
     register_provenance(app, resolved)
-    register_agent_runs(app, resolved)
+    register_agent_runs(app, resolved, drafts)
     register_manager(app, resolved, models, attached)
     register_handoffs(app, resolved)
     register_actions(app, resolved)
@@ -231,6 +232,7 @@ def create_app(
     register_evidence_mapping(app, resolved, model_provider)
     register_evidence_findings(app, resolved)
     register_evidence_assurance(app, resolved, drafts)
+    register_evidence_wizard(app, resolved, drafts)
     register_walkthrough_instances(app, resolved)
     register_sample_traces(app, resolved)
     register_methodology(app, resolved)

@@ -269,10 +269,14 @@ async def serve(
 async def resume_assessments(client: Client, database_url: str) -> int:
     """Restart the assurance chain's runs left queued or abandoned."""
     from ai_workforce_api.evidence_assurance import backfill, open_assessments
+    from ai_workforce_api.evidence_wizard import land_open_batches
 
     try:
         with connect(database_url) as connection:
-            # A D&I request with files and no check gets one, a bounded number a start.
+            # A wizard batch whose readings all ended without it landing lands now (its
+            # receipts and checks follow); then a D&I request with files and no check gets
+            # one, a bounded number a start.
+            land_open_batches(connection)
             backfill(connection)
             ids = open_assessments(connection)
         for run_id in ids:

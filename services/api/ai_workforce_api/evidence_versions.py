@@ -50,6 +50,7 @@ from ai_workforce_api.evidence_intake import (
 from ai_workforce_api.evidence_receipts import (
     apply_receipt,
     follow_evidence,
+    follow_linked,
     release_receipt,
 )
 from ai_workforce_api.inbound import clean_line
@@ -449,6 +450,8 @@ def withdraw(
                 cursor, organization_id, project_id, left, principal.id,
                 None if released is None else released.before,
             )  # fmt: skip
+        # So does the request of each D&I item it is linked to, which a link may have moved.
+        follow_linked(cursor, organization_id, project_id, file_id, principal.id, [left])
         runs = _off_testing(cursor, project_id, control_id, file_id)
         _audit(
             cursor, organization_id, project_id, principal.id, "evidence.withdrawn", file_id,

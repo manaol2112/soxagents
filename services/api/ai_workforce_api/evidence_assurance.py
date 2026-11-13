@@ -3375,24 +3375,25 @@ def _assess(
     # kept on record, never read.
     superseded: dict[Role, Call] = {}
 
-    def leased(verify: bool = False) -> None:
+    def leased(stage: Stage | None = None) -> None:
         """The claim's lease, extended before a reading and before a reading asked again
-        (a reading asked twice is not read as a check that stopped); `verify`: the run
-        moves on to the second reading."""
+        (a reading asked twice is not read as a check that stopped); `stage`: the run moves
+        on to the second reading (VERIFY), or to comparing the two (COMPARE), which the
+        evidence wizard draws its lane from."""
         with transaction(connection) as cursor:
             cursor.execute(
                 "UPDATE evidence_assessments "
-                "SET stage = CASE WHEN %s THEN 'VERIFY' ELSE stage END, "
+                "SET stage = coalesce(%s, stage), "
                 "lease_until = clock_timestamp() + make_interval(mins => %s) "
                 "WHERE id = %s AND status = 'WORKING' AND stale_at IS NULL "
                 "AND claim_token = %s",
-                (verify, LEASE_MINUTES, run_id, token),
+                (stage, LEASE_MINUTES, run_id, token),
             )
 
     def ask(role: Role, system: str, prompt: str) -> dict[str, Any] | None:
         if role == "REVIEWER":
             reviewer.spent = assessor.spent
-            leased(verify=True)
+            leased("VERIFY")
         call = callers[role].generate(
             reading_request(system, prompt), PROMPT_VERSIONS[role], {**inputs, "role": role}
         )
@@ -3412,6 +3413,9 @@ def _assess(
         # again, malformed, timed out, refused, cancelled, over budget) is an execution
         # failure, and nothing of the answer is kept.
         if call.status == "SUCCEEDED" and call.raw.output is not None:
+            if role == "REVIEWER":
+                # Both readings are in: the two are compared next.
+                leased("COMPARE")
             return call.raw.output
         return None
 
