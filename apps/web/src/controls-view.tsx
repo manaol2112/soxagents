@@ -1408,6 +1408,11 @@ function ControlRecord({
         planned={control.evidencePlan !== "NONE"}
         canAct={canAct}
         canApprove={canApprove}
+        delivery={
+          (evidencePlan?.phases ?? [])
+            .flatMap((phase) => phase.requests)
+            .find((item) => item.id === focusRow.id)?.delivery ?? null
+        }
         // Opened on the D&I Evidence step, it closes back to that step's list.
         closeHref={
           opened === "designevidence"
@@ -1890,7 +1895,17 @@ function ControlRecord({
           // the control's list says what kind each is.
           requests: carriersOf(
             designWindow?.requests ?? [],
-            control.requests.filter((request) => request.phase === "DESIGN"),
+            control.requests
+              .filter((request) => request.phase === "DESIGN")
+              .map((request) => ({
+                id: request.id,
+                kind: request.kind,
+                status: request.status,
+                dueAt: request.dueAt,
+                recipient: request.recipient ?? "",
+                title: request.title,
+                approval: request.approvalDecision ?? null,
+              })),
           ),
           // The control records its owner by name and email; no role is on record.
           owner: { name: control.ownerName, role: "" },

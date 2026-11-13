@@ -13,6 +13,7 @@ import {
   evidenceActivity,
   fileMeta,
   type MenuKey,
+  REQUESTS_CHANGED_EVENT,
   rowMenu,
 } from "./design-evidence-model";
 import {
@@ -65,6 +66,10 @@ type Ids = {
   /** The workflow step the file forms post from, so the page comes back to it. */
   step?: string | null;
 };
+
+/** Why nothing is offered right after an upload: rows may have moved to another
+ * request, so the plan is read again first. */
+const LOCKED = "The list is being read again after the upload. One moment.";
 
 type ListDialog =
   | { mode: "add" }
@@ -222,6 +227,21 @@ export function DesignEvidence({
     return () => window.clearTimeout(timer);
   }, [settling]);
   const locked = action.pending || list.pending || settling === plan;
+  // The review pane closed because the requests changed under it (evidence in hand
+  // split one): the server's sentence is shown here, over the groups as they now are.
+  const [changed, setChanged] = useState<string | null>(null);
+  useEffect(() => {
+    const onChanged = (event: Event) => {
+      const said = (event as CustomEvent<unknown>).detail;
+      if (typeof said === "string" && said !== "") {
+        // Taken: the pane may close, the list shows why.
+        event.preventDefault();
+        setChanged(said);
+      }
+    };
+    window.addEventListener(REQUESTS_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(REQUESTS_CHANGED_EVENT, onChanged);
+  }, []);
   const problem = action.problem ?? list.problem;
   const events = evidenceActivity(activity);
 
@@ -271,6 +291,24 @@ export function DesignEvidence({
             {view.send.show ? (
               <ControlSend ids={ids} handover={view.send.handover} />
             ) : null}
+            {/* A file that fits no request yet is still added here, in the evidence
+                dialog, where the agent says which request it serves. */}
+            <RowMenu
+              label="the D&I evidence"
+              items={[
+                {
+                  label: "Add a file that fits no request",
+                  icon: "upload",
+                  unavailable: locked ? LOCKED : null,
+                  onSelect: () => setEvidence({ mode: "add", itemId: null }),
+                },
+                {
+                  label: "Open in the Evidence center",
+                  icon: "inbox",
+                  href: centerHref(ids, DEFAULT_QUERY, { q: controlRef }),
+                },
+              ]}
+            />
           </span>
         ) : null}
       </div>
@@ -296,7 +334,7 @@ export function DesignEvidence({
         </p>
       ) : null}
       {action.note ? <p className="cc-note">{action.note}</p> : null}
-      <Problem text={problem} />
+      <Problem text={problem ?? changed} />
 
       {view.groups.map((group) => {
         const reviewHref =
@@ -338,26 +376,29 @@ export function DesignEvidence({
                   Change
                 </Link>
               ) : null}
+              {/* Approved and nothing went out, or the send failed: the request itself
+                  holds the send the server allows, so the line opens it. */}
+              {canAct && group.line.action !== null && reviewHref !== null ? (
+                <Link
+                  className="btn btn-secondary btn-sm"
+                  href={reviewHref}
+                  scroll={false}
+                >
+                  {group.line.action}
+                </Link>
+              ) : null}
               <RowMenu
-                label={
-                  group.line.quiet ? "these requests" : "the request as sent"
-                }
+                label={group.line.quiet ? "these requests" : "this request"}
                 items={[
-                  ...(group.line.quiet
+                  // Named for what it is: never "the email" for a draft or a hand-over.
+                  ...(group.line.preview === "" || reviewHref === null
                     ? []
                     : [
                         {
-                          label: "Preview the email",
+                          label: group.line.preview,
                           icon: "eye" as const,
-                          unavailable:
-                            reviewHref === null
-                              ? "The request is not drafted yet."
-                              : null,
-                          onSelect: () => {
-                            if (reviewHref !== null) {
-                              router.push(reviewHref, { scroll: false });
-                            }
-                          },
+                          onSelect: () =>
+                            router.push(reviewHref, { scroll: false }),
                         },
                       ]),
                   {
@@ -368,60 +409,66 @@ export function DesignEvidence({
                 ]}
               />
             </div>
-            <ul
-              className="tar-list"
-              aria-label={
-                view.groups.length === 1
-                  ? "D&I requests"
-                  : `D&I requests: ${group.line.quiet ? group.line.status : `to ${group.line.to}, ${group.line.status}`}`
-              }
-            >
-              {group.rowIds.map((rowId) => {
-                const row = view.rows.find((each) => each.id === rowId);
-                if (row === undefined) {
-                  return null;
+            {group.rowIds.length === 0 ? (
+              // A request no row travels in (a follow-up, a samples request): its line
+              // above says where it stands; this says what it is.
+              <p className="de-lone">{group.label}</p>
+            ) : (
+              <ul
+                className="tar-list"
+                aria-label={
+                  view.groups.length === 1
+                    ? "D&I requests"
+                    : `D&I requests: ${group.line.quiet ? group.line.status : `to ${group.line.to}, ${group.line.status}`}`
                 }
-                const item = requirements.get(row.id);
-                return item === undefined ? null : (
-                  <Row
-                    key={row.id}
-                    ids={ids}
-                    row={row}
-                    item={item}
-                    open={opened.has(row.id)}
-                    onToggle={() => flip(row.id)}
-                    canAct={canAct}
-                    action={action}
-                    locked={locked}
-                    onUploaded={() => setSettling(plan)}
-                    files={files}
-                    applications={applications}
-                    system={system}
-                    policies={policies.evidence}
-                    onPolicyDecided={policies.reload}
-                    wording={wording}
-                    attributeCount={view.attributes.length}
-                    onDialog={setEvidence}
-                    onCoverage={() =>
-                      document
-                        .getElementById(`${id}-coverage`)
-                        ?.scrollIntoView({ block: "center" })
-                    }
-                    onEdit={() =>
-                      setDialog({ mode: "edit", row: asRequest(row) })
-                    }
-                    onAttributes={() =>
-                      setDialog({ mode: "attributes", row: asRequest(row) })
-                    }
-                    onRemove={() => void remove(row)}
-                    onDone={(note) => {
-                      setRemoved(null);
-                      setDone(note);
-                    }}
-                  />
-                );
-              })}
-            </ul>
+              >
+                {group.rowIds.map((rowId) => {
+                  const row = view.rows.find((each) => each.id === rowId);
+                  if (row === undefined) {
+                    return null;
+                  }
+                  const item = requirements.get(row.id);
+                  return item === undefined ? null : (
+                    <Row
+                      key={row.id}
+                      ids={ids}
+                      row={row}
+                      item={item}
+                      open={opened.has(row.id)}
+                      onToggle={() => flip(row.id)}
+                      canAct={canAct}
+                      action={action}
+                      locked={locked}
+                      onUploaded={() => setSettling(plan)}
+                      files={files}
+                      applications={applications}
+                      system={system}
+                      policies={policies.evidence}
+                      onPolicyDecided={policies.reload}
+                      wording={wording}
+                      attributeCount={view.attributes.length}
+                      onDialog={setEvidence}
+                      onCoverage={() =>
+                        document
+                          .getElementById(`${id}-coverage`)
+                          ?.scrollIntoView({ block: "center" })
+                      }
+                      onEdit={() =>
+                        setDialog({ mode: "edit", row: asRequest(row) })
+                      }
+                      onAttributes={() =>
+                        setDialog({ mode: "attributes", row: asRequest(row) })
+                      }
+                      onRemove={() => void remove(row)}
+                      onDone={(note) => {
+                        setRemoved(null);
+                        setDone(note);
+                      }}
+                    />
+                  );
+                })}
+              </ul>
+            )}
           </div>
         );
       })}
@@ -891,7 +938,8 @@ function Row({
     }).map((entry) => ({
       label: entry.label,
       icon: MENU_ICONS[entry.key],
-      unavailable: entry.unavailable,
+      // After an upload nothing is offered until the plan is read again.
+      unavailable: locked ? LOCKED : entry.unavailable,
       ...(entry.danger === true ? { danger: true } : {}),
       onSelect: run[entry.key],
     }));
@@ -1377,6 +1425,16 @@ function Row({
   return (
     <li
       id={`req-${item.id}`}
+      // While the list is locked (an upload just ended and the plan is being read
+      // again) a drop is not taken: the row may travel in another request by now.
+      onDropCapture={
+        locked
+          ? (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          : undefined
+      }
       className={`tar de-row is-${row.state.toLowerCase()}${open ? " is-open" : ""}${row.aside ? " is-aside" : ""}`}
     >
       {uploads && item.requestId !== null ? (

@@ -6,6 +6,7 @@ import {
   type Carrier,
   carriersOf,
   daysOverdue,
+  deliveryLabel,
   EVIDENCE_CHIPS,
   type EvidenceInput,
   evidenceActivity,
@@ -321,7 +322,11 @@ describe("requests drafted: approve and send", () => {
     assert.deepEqual(view.groups[0], {
       key: REQUEST,
       rowIds: [POLICY, WALK],
+      label: "",
       line: {
+        action: null,
+        preview: "Preview the request",
+        pending: null,
         requestId: REQUEST,
         to: "Maria Keller",
         role: "IT Access Manager",
@@ -1251,6 +1256,9 @@ describe("several requests: evidence in hand splits one, a follow-up is its own"
       canChange: false,
       out: false,
       quiet: true,
+      action: null,
+      preview: "",
+      pending: null,
     });
     assert.deepEqual(chips(view), ["In hand", "To send"]);
     assert.equal(view.header.status, "1 request to send");
@@ -1497,5 +1505,236 @@ describe("the record under the list", () => {
     // After an upload nothing else is offered until the plan is read again.
     assert.match(screen, /settling === plan/);
     assert.match(screen, /onUploaded=\{\(\) => setSettling\(plan\)\}/);
+  });
+});
+
+describe("what the independent review found (12 November 2026)", () => {
+  const NEW = uuid(24);
+  const HANDED = {
+    mode: "HANDED_OVER",
+    at: "2026-11-15T10:00:00Z",
+    by: "Daniel Osei",
+  } as const;
+  const followedUp = (delivery: Carrier["delivery"]) =>
+    list({
+      requirements: [
+        requirement({
+          state: "FOLLOW_UP_REQUIRED",
+          files: [file()],
+          sufficiencyNote: "Send the approved version.",
+        }),
+      ],
+      requests: [
+        carrier({ status: "RECEIVED", delivery: SENT }),
+        carrier({
+          id: FOLLOW,
+          kind: "FOLLOW_UP",
+          status: "APPROVAL_PENDING",
+          title: "Follow-up: the approved version of the policy",
+          ...(delivery !== undefined ? { delivery } : {}),
+        }),
+      ],
+    });
+
+  it("W1: a handed-over follow-up never reads as sent", () => {
+    const view = followedUp(HANDED);
+    assert.deepEqual(chips(view), ["Follow-up handed over"]);
+    assert.deepEqual(view.header.need, {
+      kind: "wait",
+      title: "Follow-up handed over",
+      detail:
+        "Follow-up handed over Nov 15, 2026 by Daniel Osei. Waiting on Maria Keller.",
+    });
+    assert.doesNotMatch(
+      `${chips(view).join(" ")} ${view.header.need.title} ${view.header.need.detail}`,
+      /sent/i,
+    );
+    // Emailed, it is sent; with no delivery on a request awaiting approval, neither.
+    assert.deepEqual(chips(followedUp(SENT)), ["Follow-up sent"]);
+    assert.deepEqual(chips(followedUp(null)), ["Follow-up to send"]);
+    assert.deepEqual(chips(followedUp(undefined)), ["Follow-up to send"]);
+  });
+
+  it("W3: every request of the phase has a place, with or without rows", () => {
+    const view = followedUp(HANDED);
+    assert.deepEqual(
+      view.groups.map((group) => [
+        group.key,
+        group.rowIds,
+        group.label,
+        group.line.status,
+      ]),
+      [
+        [REQUEST, [POLICY], "", "Sent Nov 12, 2026"],
+        [
+          FOLLOW,
+          [],
+          "Follow-up request · Follow-up: the approved version of the policy",
+          "Handed over Nov 15, 2026 by Daniel Osei",
+        ],
+      ],
+    );
+    assert.equal(view.groups[1]?.line.requestId, FOLLOW);
+    // A drafted samples request leads (it waits to be sent); an untitled one is named
+    // by its kind; a cancelled, empty one has no card: it asks for nothing.
+    const more = list({
+      requirements: [requirement({ state: "SENT" })],
+      requests: [
+        carrier({ status: "SENT", delivery: SENT }),
+        carrier({ id: NEW, kind: "SAMPLES", status: "DRAFT", delivery: null }),
+        carrier({ id: uuid(28), status: "CANCELLED", delivery: null }),
+        carrier({ id: uuid(29), status: "RECEIVED", delivery: SENT }),
+      ],
+    });
+    assert.deepEqual(
+      more.groups.map((group) => [group.key, group.label, group.line.status]),
+      [
+        [NEW, "Samples request", "Not sent"],
+        [REQUEST, "", "Sent Nov 12, 2026"],
+        [uuid(29), "Request", "Sent Nov 12, 2026 · complete"],
+      ],
+    );
+    assert.equal(more.title, "Requests · 1");
+  });
+
+  it("W4: approved is not sent, and a failed send says so, with the way on", () => {
+    const pending = (
+      approval: string | null,
+      liveEmail: boolean | null = null,
+    ) =>
+      list({
+        liveEmail,
+        requirements: [
+          requirement({ state: "APPROVAL_PENDING" }),
+          walk({ state: "APPROVAL_PENDING" }),
+        ],
+        requests: [
+          carrier({ status: "APPROVAL_PENDING", delivery: null, approval }),
+        ],
+      });
+    const read = (view: ReturnType<typeof list>) => [
+      line(view)?.status,
+      line(view)?.action,
+      view.header.standing,
+      view.header.status,
+    ];
+    assert.deepEqual(read(pending("PENDING")), [
+      "Awaiting approval",
+      null,
+      "AWAITING_APPROVAL",
+      "2 awaiting approval",
+    ]);
+    assert.deepEqual(read(pending("APPROVED")), [
+      "Approved, not sent",
+      "Send",
+      "APPROVED_UNSENT",
+      "2 approved, not sent",
+    ]);
+    assert.deepEqual(read(pending("RESEND")), [
+      "Approved, not sent",
+      "Send again",
+      "APPROVED_UNSENT",
+      "2 approved, not sent",
+    ]);
+    const failed = pending("FAILED");
+    assert.deepEqual(read(failed), [
+      "Send failed",
+      "Try again",
+      "SEND_FAILED",
+      "Send failed",
+    ]);
+    assert.equal(line(failed)?.tone, "danger");
+    assert.equal(failed.header.need.kind, "act");
+    assert.deepEqual(read(pending("EXPIRED")), [
+      "Approval expired",
+      "Submit again",
+      "AWAITING_APPROVAL",
+      "2 awaiting approval",
+    ]);
+    // None reads as submitted for approval once it is approved, nor as sent.
+    for (const approval of ["APPROVED", "FAILED", "RESEND"]) {
+      const view = pending(approval);
+      assert.doesNotMatch(view.header.need.detail, /submitted for approval/);
+      assert.deepEqual(chips(view), ["To send", "To send"]);
+      assert.equal(view.send.show, false);
+    }
+    // Email off, approved by a person who may not send: no hand-over is recorded, and
+    // a person who may send completes it. Never "sent", never "handed over" as done.
+    for (const approval of ["APPROVED", "FAILED"]) {
+      const off = pending(approval, false);
+      assert.deepEqual(read(off), [
+        "Approved, not handed over",
+        "Hand over",
+        "APPROVED_UNSENT",
+        "2 approved, not handed over",
+      ]);
+      assert.equal(off.header.need.title, "Hand over 2 approved requests.");
+      assert.match(off.header.need.detail, /no hand-over is recorded/);
+      assert.match(off.header.need.detail, /A person who may send completes/);
+    }
+    // A draft returned by the approver says so.
+    assert.equal(
+      line(
+        list({ requests: [carrier({ delivery: null, approval: "REJECTED" })] }),
+      )?.status,
+      "Returned for changes",
+    );
+  });
+
+  it("lows: the request is opened under words that are true of it", () => {
+    assert.equal(line(list())?.preview, "Preview the request");
+    const sent = list({
+      requirements: [requirement({ state: "SENT" })],
+      requests: [carrier({ status: "SENT", delivery: SENT })],
+    });
+    assert.equal(line(sent)?.preview, "Preview the email");
+    const handed = list({
+      requirements: [requirement({ state: "APPROVAL_PENDING" })],
+      requests: [carrier({ status: "APPROVAL_PENDING", delivery: HANDED })],
+    });
+    assert.equal(line(handed)?.preview, "The request as handed over");
+    assert.equal(line(handed)?.action, null);
+    assert.equal(
+      deliveryLabel(HANDED),
+      "Handed over Nov 15, 2026 by Daniel Osei",
+    );
+    assert.equal(deliveryLabel(SENT), "Sent Nov 12, 2026");
+    assert.equal(deliveryLabel(null), null);
+    assert.equal(deliveryLabel(undefined), null);
+  });
+
+  it("carries a request's title and approval from the control's list", () => {
+    const merged = carriersOf(
+      [{ id: REQUEST, status: "APPROVAL_PENDING", delivery: null }],
+      [carrier({ title: "D&I evidence", approval: "APPROVED" })],
+    );
+    assert.equal(merged[0]?.title, "D&I evidence");
+    assert.equal(merged[0]?.approval, "APPROVED");
+  });
+
+  it("W5 and lows: the screen closes the pane on a split, locks menus and drops, and keeps Add evidence", () => {
+    const read = (path: string) =>
+      readFileSync(new URL(`../apps/web/src/${path}`, import.meta.url), "utf8");
+    const pane = read("request-review.tsx");
+    // The pane hands the sentence to the list and closes back to it, only where the
+    // list took it; nothing is guessed about which request to open instead.
+    assert.match(pane, /new CustomEvent\(REQUESTS_CHANGED_EVENT/);
+    assert.match(
+      pane,
+      /taken \? router\.replace\(closeHref, \{ scroll: false \}\) : router\.refresh\(\)/,
+    );
+    assert.match(
+      pane,
+      /delivery\?\.mode === "HANDED_OVER" && reached !== null \? reached : life\.label/,
+    );
+    const screen = read("design-evidence.tsx");
+    assert.match(screen, /addEventListener\(REQUESTS_CHANGED_EVENT/);
+    assert.match(screen, /unavailable: locked \? LOCKED : entry\.unavailable/);
+    assert.match(screen, /onDropCapture=\{/);
+    assert.match(screen, /Add a file that fits no request/);
+    assert.match(screen, /label: group\.line\.preview/);
+    assert.doesNotMatch(screen, /"Preview the email"|the request as sent/);
+    // One primary in the bar: the added entry is a menu item.
+    assert.equal(screen.match(/<ControlSend /g)?.length, 1);
   });
 });

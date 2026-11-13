@@ -46,6 +46,15 @@
   margin-top: -0.15rem;
 }
 
+/* A request no row travels in: one quiet line under its delivery line. */
+.de-lone {
+  margin: 0;
+  padding: 0.55rem 0.9rem;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-sm);
+}
+
 /* Nothing goes anywhere for these rows: the line only says so. */
 .de-delivery.is-quiet .de-delivery-to {
   color: var(--text-secondary);

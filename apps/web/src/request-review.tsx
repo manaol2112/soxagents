@@ -10,7 +10,12 @@ import {
   useState,
   useTransition,
 } from "react";
-import { rereadsRequests } from "./design-evidence-model";
+import {
+  type Delivery,
+  deliveryLabel,
+  REQUESTS_CHANGED_EVENT,
+  rereadsRequests,
+} from "./design-evidence-model";
 import type { ControlRequest } from "./engagement-model";
 import type { RequestStage } from "./evidence-flow";
 import { RequestUpload } from "./evidence-intake";
@@ -83,7 +88,7 @@ const CATEGORY_WORDS: Record<string, string> = {
 
 const EMAIL = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
-function useReviewAction(ids: Ids, requestId: string) {
+function useReviewAction(ids: Ids, requestId: string, closeHref = "") {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [busy, setBusy] = useState("");
@@ -129,7 +134,21 @@ function useReviewAction(ids: Ids, requestId: string) {
     setProblem(message);
     // Evidence in hand changed the request as it was approved or submitted (the D&I
     // list, 12 November 2026): the sentence is shown and the requests are read again.
-    if (message === null || approved || rereadsRequests(detail)) {
+    if (rereadsRequests(detail) && closeHref !== "") {
+      // The request this pane is open on is no longer the one that asks for the rest
+      // (the rows not in hand moved to a new draft). Where the list behind takes the
+      // sentence (the D&I list), the pane closes back to it: it shows every request as
+      // it now is, with why. Otherwise the pane stays, refreshed, with the sentence.
+      const taken = !window.dispatchEvent(
+        new CustomEvent(REQUESTS_CHANGED_EVENT, {
+          detail: message ?? detail,
+          cancelable: true,
+        }),
+      );
+      startTransition(() =>
+        taken ? router.replace(closeHref, { scroll: false }) : router.refresh(),
+      );
+    } else if (message === null || approved || rereadsRequests(detail)) {
       startTransition(() => router.refresh());
     }
     return message === null;
@@ -165,9 +184,13 @@ export function RequestReview({
   controlHref,
   inDialog = false,
   side = null,
+  delivery = null,
 }: {
   ids: Ids;
   request: ControlRequest;
+  /** How the request reached its owner, where the page knows (the D&I list reads it
+   * from the evidence plan): by email, or handed over while email was off. */
+  delivery?: Delivery | null;
   details: RequestDetails | null;
   stage: RequestStage;
   control: { ref: string; title: string; system: string };
@@ -189,7 +212,7 @@ export function RequestReview({
   side?: ReactNode;
 }) {
   const id = useId();
-  const review = useReviewAction(ids, request.id);
+  const review = useReviewAction(ids, request.id, closeHref);
   const planAction = usePlanAction(ids);
   const [editing, setEditing] = useState(false);
   const [classifying, setClassifying] = useState(false);
@@ -222,7 +245,13 @@ export function RequestReview({
     requirements: details?.planning.requirements ?? [],
   });
   const phase = PHASE_WORDS[detail?.testingPhase ?? request.phase ?? ""] ?? "";
-  const unsent = status === "DRAFT" || status === "APPROVAL_PENDING";
+  // How it reached its owner, on the server's word: a request handed over while
+  // email is off stays awaiting approval there, and reads here as handed over.
+  const reached = deliveryLabel(delivery);
+  const stageLabel =
+    delivery?.mode === "HANDED_OVER" && reached !== null ? reached : life.label;
+  const unsent =
+    (status === "DRAFT" || status === "APPROVAL_PENDING") && delivery == null;
   const failing = details?.checks.filter((check) => !check.ok) ?? [];
   const submitBlocked = failing.some((check) => check.key !== "type");
   const typeLabels = Object.fromEntries(
@@ -296,7 +325,7 @@ export function RequestReview({
           </ul>
         </div>
         {inDialog ? null : (
-          <span className={`rr-stage is-${life.tone}`}>{life.label}</span>
+          <span className={`rr-stage is-${life.tone}`}>{stageLabel}</span>
         )}
         {inDialog ? null : (
           <a
@@ -858,7 +887,7 @@ export function RequestReview({
       >
         <p className="rr-panel-title">{inDialog ? "Status" : "Actions"}</p>
         {inDialog ? (
-          <p className={`rr-stage is-${life.tone}`}>{life.label}</p>
+          <p className={`rr-stage is-${life.tone}`}>{stageLabel}</p>
         ) : null}
         {side}
         {actionPart}

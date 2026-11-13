@@ -106,6 +106,11 @@ export type Carrier = {
   dueAt: string;
   recipient?: string;
   delivery?: Delivery | null;
+  /** What it is called (a follow-up's title says what it follows up). */
+  title?: string;
+  /** The latest approval asked to send it: PENDING, APPROVED, REJECTED, EXPIRED, FAILED
+   * (approved, the send refused), RESEND; null or absent when none. */
+  approval?: string | null;
 };
 
 /** A request of the D&I phase as the evidence plan lists it (`phases[].requests[]`). */
@@ -141,6 +146,8 @@ export function carriersOf(
         dueAt: request.dueAt || other?.dueAt || "",
         recipient: request.recipient || other?.recipient || "",
         ...(delivery !== undefined ? { delivery } : {}),
+        ...(other?.title !== undefined ? { title: other.title } : {}),
+        ...(other?.approval !== undefined ? { approval: other.approval } : {}),
       };
     }),
     ...listed.filter((request) => !seen.has(request.id)),
@@ -207,6 +214,7 @@ export type ChipState =
   | "READING"
   | "TO_REVIEW"
   | "FOLLOW_UP"
+  | "FOLLOW_UP_HANDED"
   | "ACCEPTED"
   | "HANDED_OVER"
   | "FOLLOW_UP_TO_SEND"
@@ -235,6 +243,8 @@ export const EVIDENCE_CHIPS: Record<
   READING: { label: "Reading…", tone: "ai" },
   TO_REVIEW: { label: "To review", tone: "ai" },
   FOLLOW_UP: { label: "Follow-up sent", tone: "warning" },
+  // Email was off when the follow-up was approved: handed over, never sent.
+  FOLLOW_UP_HANDED: { label: "Follow-up handed over", tone: "warning" },
   ACCEPTED: { label: "Evidence accepted", tone: "success" },
   // Live email is off: the request was handed over by a person, never emailed.
   HANDED_OVER: { label: "Handed over", tone: "info" },
@@ -314,6 +324,8 @@ export type EvidenceStanding =
   | "EMPTY"
   | "SEND"
   | "AWAITING_APPROVAL"
+  | "APPROVED_UNSENT"
+  | "SEND_FAILED"
   | "NOT_DRAFTED"
   | "CHANGES"
   | "READING"
@@ -355,6 +367,15 @@ export type DeliveryLine = {
   /** Nothing goes anywhere for these rows (evidence in hand, or set aside): the line
    * names no recipient. */
   quiet: boolean;
+  /** What the person does next on the request itself, where it is approved and nothing
+   * went out ("Send", "Try again", "Hand over", "Submit again"): it opens the request,
+   * which holds the action the server allows. Null where there is none. */
+  action: string | null;
+  /** What opening the request is called here: never "the email" for a draft or a
+   * hand-over. "" where there is no request to open. */
+  preview: string;
+  /** Approved and not out, or the send failed: what the step's line says of it. */
+  pending: "APPROVED" | "FAILED" | "AWAITING" | null;
 };
 
 /** The rows that travel in one request, under that request's delivery line. */
@@ -363,6 +384,9 @@ export type RequestGroup = {
   key: string;
   line: DeliveryLine;
   rowIds: string[];
+  /** A request no row travels in (a follow-up, a samples request): what it is, by its
+   * kind and title. "" for a group with rows. */
+  label: string;
 };
 
 export type ExceptionLine = {
@@ -542,7 +566,7 @@ function shown(item: Pick<Requirement, "phase" | "state">): boolean {
 function stateOf(
   item: Requirement,
   carrier: Carrier | null,
-  followUpOut: boolean,
+  followUp: Carrier | null,
   now: number,
 ): ChipState {
   const files = item.files.length;
@@ -569,7 +593,11 @@ function stateOf(
     return "INSUFFICIENT";
   }
   if (item.state === "FOLLOW_UP_REQUIRED") {
-    return followUpOut ? "FOLLOW_UP" : "FOLLOW_UP_TO_SEND";
+    return followUp === null
+      ? "FOLLOW_UP_TO_SEND"
+      : followUp.delivery?.mode === "HANDED_OVER"
+        ? "FOLLOW_UP_HANDED"
+        : "FOLLOW_UP";
   }
   // Evidence uploaded before its request went out: said so, on the server's word only.
   if (item.inHand === true && delivered === null) {
@@ -645,6 +673,8 @@ function deliveryOf(
   owner: EvidenceInput["owner"],
   complete: boolean,
   now: number,
+  /** Live email is off here: what goes out is a hand-over. */
+  handover = false,
 ): DeliveryLine {
   const to = owner.name.trim() || carrier?.recipient?.trim() || "";
   const base = {
@@ -664,6 +694,9 @@ function deliveryOf(
       canChange: false,
       out: false,
       quiet: false,
+      action: null,
+      preview: "",
+      pending: null,
     };
   }
   const delivered = carrier.delivery ?? null;
@@ -674,21 +707,70 @@ function deliveryOf(
     delivered !== null ||
     (carrier.delivery === undefined && !NOT_OUT.includes(carrier.status));
   if (!out) {
+    // Approved is not sent: an approval a person may not send on, or one whose send was
+    // refused, says so, with the action the request itself holds. With email off the
+    // approval of a person who may not send records no hand-over either.
+    const approval =
+      carrier.status === "APPROVAL_PENDING" ? (carrier.approval ?? null) : null;
+    const standing: Pick<DeliveryLine, "status" | "action" | "pending"> =
+      approval === "APPROVED" || approval === "RESEND"
+        ? {
+            status: handover
+              ? "Approved, not handed over"
+              : "Approved, not sent",
+            action: handover
+              ? "Hand over"
+              : approval === "RESEND"
+                ? "Send again"
+                : "Send",
+            pending: "APPROVED",
+          }
+        : approval === "FAILED"
+          ? {
+              status: handover ? "Approved, not handed over" : "Send failed",
+              action: handover ? "Hand over" : "Try again",
+              pending: handover ? "APPROVED" : "FAILED",
+            }
+          : approval === "EXPIRED"
+            ? {
+                status: "Approval expired",
+                action: "Submit again",
+                pending: "AWAITING",
+              }
+            : carrier.status === "APPROVAL_PENDING"
+              ? {
+                  status: "Awaiting approval",
+                  action: null,
+                  pending: "AWAITING",
+                }
+              : {
+                  status:
+                    carrier.status === "CANCELLED"
+                      ? "Cancelled"
+                      : carrier.status === "DRAFT" &&
+                          carrier.approval === "REJECTED"
+                        ? "Returned for changes"
+                        : "Not sent",
+                  action: null,
+                  pending: null,
+                };
     return {
       ...base,
-      status:
-        carrier.status === "APPROVAL_PENDING"
-          ? "Awaiting approval"
-          : carrier.status === "CANCELLED"
-            ? "Cancelled"
-            : "Not sent",
-      tone: "neutral",
+      ...standing,
+      tone: standing.status === "Send failed" ? "danger" : "neutral",
       canChange:
         carrier.status === "DRAFT" || carrier.status === "APPROVAL_PENDING",
       out: false,
       quiet: false,
+      preview: "Preview the request",
     };
   }
+  const preview =
+    delivered?.mode === "HANDED_OVER"
+      ? "The request as handed over"
+      : delivered?.mode === "EMAIL"
+        ? "Preview the email"
+        : "Preview the request";
   // Out: by email, handed over, or (where the server did not say how) no longer a draft.
   const when = delivered?.at != null ? ` ${formatDate(delivered.at)}` : "";
   const how =
@@ -709,6 +791,9 @@ function deliveryOf(
       canChange: true,
       out: true,
       quiet: false,
+      action: null,
+      preview,
+      pending: null,
     };
   }
   return {
@@ -718,11 +803,15 @@ function deliveryOf(
     canChange: !complete,
     out: true,
     quiet: false,
+    action: null,
+    preview,
+    pending: null,
   };
 }
 
 /** What the D&I Evidence step shows once its requests are drafted. */
 export function evidenceList(input: EvidenceInput): EvidenceList {
+  const handover = input.liveEmail === false;
   const design = input.requirements.filter(shown);
   const attributes: EvidenceAttribute[] = input.approved.map((item, at) => ({
     id: item.id,
@@ -737,12 +826,15 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
     input.requests.find(
       (request) =>
         request.kind === "FOLLOW_UP" &&
-        (request.delivery != null || !NOT_OUT.includes(request.status)),
+        // Out on the server's word; where it did not say how, by its status.
+        (request.delivery != null ||
+          (request.delivery === undefined &&
+            !NOT_OUT.includes(request.status))),
     ) ?? null;
 
   const rows: EvidenceRow[] = design.map((item) => {
     const carrier = carrierOf(item);
-    const state = stateOf(item, carrier, followUp !== null, input.now);
+    const state = stateOf(item, carrier, followUp, input.now);
     const addressed = attributes.filter((each) =>
       item.attributeIds.includes(each.id),
     );
@@ -851,6 +943,9 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
         canChange: false,
         out: false,
         quiet: true,
+        action: null,
+        preview: "",
+        pending: null,
       };
       const line: DeliveryLine =
         active.length === 0
@@ -862,13 +957,54 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
                   ? "In hand · complete"
                   : "In hand · nothing to send",
               }
-            : deliveryOf(carrier, input.owner, done, input.now);
+            : deliveryOf(carrier, input.owner, done, input.now, handover);
       const rank =
         active.length === 0 ? 4 : inHand ? 3 : !line.out ? 0 : done ? 2 : 1;
-      return { key, line, rowIds: members.map((row) => row.id), rank };
+      return {
+        key,
+        line,
+        rowIds: members.map((row) => row.id),
+        label: "",
+        rank,
+      };
     })
+    // Every other request of the phase has its place too (a follow-up, a samples
+    // request, one a split emptied): a line with no rows under it, in the same order.
+    // Not a cancelled one: it asks for nothing and went nowhere.
+    .concat(
+      input.requests
+        .filter(
+          (request) =>
+            !keys.includes(request.id) && request.status !== "CANCELLED",
+        )
+        .map((request) => {
+          const done =
+            request.status === "RECEIVED" || request.status === "CLOSED";
+          const line = deliveryOf(
+            request,
+            input.owner,
+            done,
+            input.now,
+            handover,
+          );
+          const what =
+            request.kind === "FOLLOW_UP"
+              ? "Follow-up request"
+              : request.kind === "SAMPLES"
+                ? "Samples request"
+                : "Request";
+          const title = (request.title ?? "").trim();
+          return {
+            key: request.id,
+            line,
+            rowIds: [] as string[],
+            label: title === "" ? what : `${what} · ${title}`,
+            rank: !line.out ? 0 : done ? 2 : 1,
+          };
+        }),
+    )
     .sort((a, b) => a.rank - b.rank)
-    .map(({ key, line, rowIds }) => ({ key, line, rowIds }));
+    .map(({ key, line, rowIds, label }) => ({ key, line, rowIds, label }));
   // The request the owner has now (the step's one waiting line names it), else the
   // first that went out, else the first there is.
   const WAITS: readonly ChipState[] = [
@@ -891,7 +1027,7 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
   const main =
     input.requests.find((request) => request.id === lead?.key) ?? null;
   const delivery =
-    lead?.line ?? deliveryOf(null, input.owner, false, input.now);
+    lead?.line ?? deliveryOf(null, input.owner, false, input.now, handover);
 
   // Coverage: outline where a request addresses the attribute, green with a check once
   // the evidence of one such request is accepted.
@@ -974,7 +1110,6 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
           .filter((part) => part !== "")
           .join(" · ");
 
-  const handover = input.liveEmail === false;
   // A request of the phase is drafted and waits for a person to approve and send it.
   const drafted = input.requests.some((request) => request.status === "DRAFT");
   const header = headerOf({
@@ -982,16 +1117,18 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
     review,
     reviewFiles,
     main,
-    // A row waits to be sent on a request submitted for someone else's approval.
-    approval: live.some(
-      (row) =>
-        row.state === "TO_SEND" &&
-        input.requests.some(
-          (request) =>
-            request.id === row.requestId &&
-            request.status === "APPROVAL_PENDING",
+    // What the requests of the rows that wait to be sent wait for themselves: a send
+    // that failed first, then an approval nobody sent on, then an approval.
+    approval:
+      (["FAILED", "APPROVED", "AWAITING"] as const).find((pending) =>
+        groups.some(
+          (group) =>
+            group.line.pending === pending &&
+            group.rowIds.some((id) =>
+              live.some((row) => row.id === id && row.state === "TO_SEND"),
+            ),
         ),
-    ),
+      ) ?? null,
     followUp,
     owner: delivery.to,
     handover,
@@ -1062,7 +1199,7 @@ function headerOf(facts: {
   review: readonly EvidenceRow[];
   reviewFiles: number;
   main: Carrier | null;
-  approval: boolean;
+  approval: "APPROVED" | "FAILED" | "AWAITING" | null;
   followUp: Carrier | null;
   owner: string;
   handover: boolean;
@@ -1077,7 +1214,7 @@ function headerOf(facts: {
   const toSend = count("TO_SEND");
   const changes = count("TO_ACCEPT");
   const reading = live.reduce((sum, row) => sum + row.reading, 0);
-  const followSent = count("FOLLOW_UP");
+  const followSent = count("FOLLOW_UP") + count("FOLLOW_UP_HANDED");
   const followToSend = count("FOLLOW_UP_TO_SEND");
   const insufficient = count("INSUFFICIENT");
   const accepted = count("ACCEPTED");
@@ -1141,8 +1278,41 @@ function headerOf(facts: {
       agent: { did: drafted, found },
     };
   }
+  if (toSend > 0 && facts.approval === "APPROVED") {
+    return {
+      standing: "APPROVED_UNSENT",
+      tone: "attention",
+      status: handover
+        ? `${toSend} approved, not handed over`
+        : `${toSend} approved, not sent`,
+      need: {
+        kind: "act",
+        title: handover
+          ? `Hand over ${plural(toSend, "approved request")}.`
+          : `Send ${plural(toSend, "approved request")}.`,
+        detail: handover
+          ? "The requests are approved and no hand-over is recorded: email sending is off, so nothing is emailed. A person who may send completes the hand-over from the request's line."
+          : "The requests are approved and nothing has gone out. A person who may send sends them from the request's line.",
+      },
+      agent: { did: drafted, found },
+    };
+  }
+  if (toSend > 0 && facts.approval === "FAILED") {
+    return {
+      standing: "SEND_FAILED",
+      tone: "attention",
+      status: "Send failed",
+      need: {
+        kind: "act",
+        title: "The send failed.",
+        detail:
+          "The requests are approved, the send was refused, and nothing went out. Try again from the request's line.",
+      },
+      agent: { did: drafted, found },
+    };
+  }
   if (toSend > 0) {
-    return facts.approval
+    return facts.approval === "AWAITING"
       ? {
           standing: "AWAITING_APPROVAL",
           tone: "active",
@@ -1239,6 +1409,11 @@ function headerOf(facts: {
       facts.followUp?.delivery?.at != null
         ? ` ${formatDate(facts.followUp.delivery.at)}`
         : "";
+    const handed = facts.followUp?.delivery?.mode === "HANDED_OVER";
+    const by =
+      handed && facts.followUp?.delivery?.by != null
+        ? ` by ${facts.followUp.delivery.by}`
+        : "";
     return {
       standing: "FOLLOW_UP",
       tone: followSent > 0 ? "active" : "attention",
@@ -1247,8 +1422,11 @@ function headerOf(facts: {
         followSent > 0
           ? {
               kind: "wait",
-              title: "Follow-up sent",
-              detail: `Follow-up sent${when}. Waiting on ${owner}.`,
+              title: handed ? "Follow-up handed over" : "Follow-up sent",
+              // A hand-over is never "sent": email was off, so nothing was.
+              detail: handed
+                ? `Follow-up handed over${when}${by}. Waiting on ${owner}.`
+                : `Follow-up sent${when}. Waiting on ${owner}.`,
             }
           : {
               kind: "act",
@@ -1339,6 +1517,24 @@ export type EvidenceWorkflowHeader = Pick<
   EvidenceHeader,
   "tone" | "status" | "need" | "agent"
 >;
+
+/** How a request reached its owner, in words: "Handed over Nov 12, 2026 by Dana",
+ * "Sent Nov 12, 2026". Null when it did not, or the server did not say. */
+export function deliveryLabel(
+  delivery: Delivery | null | undefined,
+): string | null {
+  if (delivery == null) {
+    return null;
+  }
+  const when = delivery.at !== null ? ` ${formatDate(delivery.at)}` : "";
+  return delivery.mode === "HANDED_OVER"
+    ? `Handed over${when}${delivery.by !== null ? ` by ${delivery.by}` : ""}`
+    : `Sent${when}`;
+}
+
+/** The message the review pane hands the list when the requests changed under it (evidence
+ * in hand): the pane closes and the list shows the server's sentence. */
+export const REQUESTS_CHANGED_EVENT = "design-evidence:requests-changed";
 
 // A file on a row
 
