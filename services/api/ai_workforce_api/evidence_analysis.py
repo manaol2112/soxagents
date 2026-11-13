@@ -113,15 +113,15 @@ from ai_workforce_api.evidence_review import (
 )
 from ai_workforce_api.evidence_withdrawn import is_withdrawn
 from ai_workforce_api.evidence_wizard import (
+    Ended,
     Item,
     Placing,
     WizardFile,
     design_items,
-    landed,
     listed_items,
     plan_placement,
-    reading_failed,
-    record_reading,
+    reading_ended,
+    request_ref,
     requested_item,
     wizard_file,
 )
@@ -255,7 +255,7 @@ def run_analysis(
     # A storage outage raises, so the attempt is retried.
     content = store(settings, connection).get(str(key))
     if digest_of(content) != digest or len(content) != int(size):
-        _fail(connection, analysis_id, CUSTODY_FAILED_NOTE)
+        handled = _fail(connection, analysis_id, CUSTODY_FAILED_NOTE)
         _audit(
             connection,
             organization_id,
@@ -267,10 +267,10 @@ def run_analysis(
         )
         # The assurance chain holds the file where it is D&I evidence: nothing of it is
         # checked against the attributes (docs/evidence-assurance.md, the gate's CUSTODY).
-        # A wizard file is not placed: it needs a person, with the gate's reason, and its
-        # batch's checks wait for the rest of its files (evidence_wizard).
-        with transaction(connection) as cursor:
-            if not reading_failed(cursor, project_id, file_id, requester, "CUSTODY"):
+        # A wizard file was handled with its ending (_fail): not placed, it needs a person
+        # with the gate's reason, and its batch's checks wait for the rest of its files.
+        if not handled:
+            with transaction(connection) as cursor:
                 queue_after_reading(cursor, project_id, file_id, requester)
         return "FAILED"
 
@@ -400,8 +400,11 @@ def run_analysis(
             connection, analysis_id, wizard, classification, source, extraction.text, listed,
             len(items) > len(listed),
         )  # fmt: skip
-        if placing.request is not None:
-            request = placing.request
+    # Until the filing is tried, in the reading's transaction, the file is read on for the
+    # request its placement means it for (the screenshot review's context and sampling's).
+    filed_on = request
+    if placing is not None and placing.request is not None:
+        request = placing.request
     review: tuple[Review, str, ReviewContext, UUID | None, str, str] | None = None
     if is_screenshot(file_kind, bool(images)):
         review = _review(
@@ -422,16 +425,14 @@ def run_analysis(
     # A person cancelled the read while it worked: nothing of it is kept, and the record
     # says who stopped it. Reading the file again is the recovery.
     if reader is not None and cancel_requested(connection, "analysis", analysis_id):
-        stopped = finish_cancelled(
+        # A wizard file's ending is handled in the cancellation's own transaction
+        # (agent_runs: evidence_wizard.analysis_ended).
+        finish_cancelled(
             connection,
             "analysis",
             analysis_id,
             actor_agent_instance_id=reader.caller.job.agent_instance_id,
         )
-        if stopped and wizard is not None:
-            # Not read: the wizard file needs a person, and its batch's checks go on.
-            with transaction(connection) as cursor:
-                reading_failed(cursor, project_id, file_id, requester, "READ_FAILED")
         return "CANCELLED"
     with transaction(connection) as cursor:
         saved = cursor.execute(
@@ -448,7 +449,9 @@ def run_analysis(
             RETURNING id
             """,
             (
-                None if request is None else request[0],
+                (None if filed_on is None else filed_on[0])
+                if wizard is not None
+                else (None if request is None else request[0]),
                 extraction.method,
                 extraction.status,
                 ocr_engine,
@@ -468,6 +471,28 @@ def run_analysis(
         ).fetchone()
         if saved is None:
             return "SKIPPED"
+        ended: Ended | None = None
+        if wizard is not None and placing is not None:
+            # The wizard's one hook for a reading's end: the filing is tried first and the
+            # placement recorded, then the batch's landing check; the reading then names
+            # the request the file is on now (where its deterministic findings go).
+            ended = reading_ended(
+                cursor, project_id, file_id, requester, analysis_id=analysis_id,
+                placing=placing,
+            )  # fmt: skip
+            if ended is not None:
+                now = None if filed_on is None else filed_on[0]
+                if ended.request_id != now:
+                    cursor.execute(
+                        "UPDATE evidence_analyses SET pbc_request_id = %s WHERE id = %s",
+                        (ended.request_id, analysis_id),
+                    )
+                request = (
+                    None if ended.request_id is None else request_ref(cursor, ended.request_id)
+                )
+            else:
+                # Not the wizard's any more (filed elsewhere meanwhile): read as any upload.
+                request = filed_on
         # The findings this reading gives, and the open findings it answers
         # (docs/evidence-intelligence.md, increment 2). The reader's own findings wait
         # until the end of this transaction, which knows by then whether the assurance
@@ -477,11 +502,7 @@ def run_analysis(
             cursor, organization_id, project_id, analysis_id, reader=reader_findings
         )
         reassess_on_reading(cursor, organization_id, project_id, analysis_id)
-        if wizard is not None and placing is not None:
-            # The wizard places the file and records the placement; the receipts of its
-            # batch follow once the batch has been read (evidence_wizard.landed).
-            record_reading(cursor, wizard, placing, analysis_id, requester)
-        elif filing is not None:
+        if ended is None and filing is not None:
             filed = _save_filing(cursor, filing[0], decided, request)
             if filed is not None and request is not None:
                 apply_receipt(
@@ -594,8 +615,8 @@ def run_analysis(
         # proposed for a wizard file: the chain judges D&I evidence once it is placed.
         covered = (
             queue_after_reading(cursor, project_id, file_id, requester)
-            if wizard is None
-            else landed(cursor, wizard, requester)
+            if ended is None
+            else ended.covered
         )
         if not ((covered or wizard is not None) and source == "MODEL"):
             reader_findings.record(cursor)
@@ -1007,7 +1028,7 @@ def _wizard_context(
 
 def fail_analysis(connection: psycopg.Connection[Any], analysis_id: UUID) -> None:
     """After the last retry, an analysis is failed so a person can run it again."""
-    _fail(connection, analysis_id, "Reading the file did not finish.")
+    handled = _fail(connection, analysis_id, "Reading the file did not finish.")
     # The assurance chain waits for a request's files to be read: this one will not be,
     # so its request is checked on its other files, with this one named as left out.
     row = connection.execute(
@@ -1015,25 +1036,35 @@ def fail_analysis(connection: psycopg.Connection[Any], analysis_id: UUID) -> Non
         "WHERE id = %s AND status = 'FAILED'",
         (analysis_id,),
     ).fetchone()
-    if row is not None:
+    if row is not None and not handled:
         with transaction(connection) as cursor:
-            # A wizard file that could not be read needs a person, with the gate's reason.
-            if not reading_failed(cursor, row[0], row[1], row[2], "READ_FAILED"):
-                queue_after_reading(cursor, row[0], row[1], row[2])
+            queue_after_reading(cursor, row[0], row[1], row[2])
 
 
-def _fail(connection: psycopg.Connection[Any], analysis_id: UUID, note: str) -> None:
+def _fail(connection: psycopg.Connection[Any], analysis_id: UUID, note: str) -> bool:
+    """Fail the reading. For a wizard file, its placement and its batch's landing check run
+    in the same transaction (evidence_wizard.reading_ended), and True is returned; the
+    caller brings the chain in step for any other file."""
     with transaction(connection) as cursor:
-        cursor.execute(
+        row = cursor.execute(
             """
             UPDATE evidence_analyses
             SET status = 'FAILED', lease_until = NULL, note = %s,
                 finished_at = clock_timestamp(),
                 version = version + 1, updated_at = clock_timestamp()
             WHERE id = %s AND status IN ('PENDING', 'WORKING')
+            RETURNING project_id, evidence_file_id, requested_by_user_id
             """,
             (note[:300], analysis_id),
-        )
+        ).fetchone()
+        if row is None:
+            return False
+        ended = reading_ended(
+            cursor, UUID(str(row[0])), UUID(str(row[1])), UUID(str(row[2])),
+            analysis_id=analysis_id,
+            failed="CUSTODY" if note == CUSTODY_FAILED_NOTE else "READ_FAILED",
+        )  # fmt: skip
+        return ended is not None
 
 
 def reset_analysis(connection: psycopg.Connection[Any], analysis_id: UUID) -> None:

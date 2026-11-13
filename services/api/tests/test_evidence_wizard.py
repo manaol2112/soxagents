@@ -23,6 +23,8 @@ Evidence traceability and approval boundaries (critical tier):
 
 import json
 import re
+import threading
+import time
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -48,11 +50,28 @@ from test_evidence_intake import _client
 from test_outbound import migrated
 from test_projects import _seed_org
 
+from ai_workforce_api import evidence_wizard as wizard_module
 from ai_workforce_api.db import connect
 from ai_workforce_api.evidence_analysis import fail_analysis, run_analysis
-from ai_workforce_api.evidence_assurance import HELD_REASONS, HeldCode, run_assessment
-from ai_workforce_api.evidence_wizard import ADDED_ON_ITEM, NOT_DESIGN_REASON, PLACED_BY_PERSON
+from ai_workforce_api.evidence_assurance import (
+    HELD_REASONS,
+    HeldCode,
+    read_assurance,
+    run_assessment,
+)
+from ai_workforce_api.evidence_receipts import _every_item_served, covered
+from ai_workforce_api.evidence_wizard import (
+    ADDED_ON_ITEM,
+    CHANGED_REASON,
+    LINKED_ON_LIST,
+    MOVED_AWAY,
+    NOT_DESIGN_REASON,
+    PLACED_BY_PERSON,
+    UNLINKED_ON_LIST,
+    land_open_batches,
+)
 from ai_workforce_api.models import ModelConfig, ModelRaw, ModelRequest
+from ai_workforce_api.pbc_drafting import run_draft
 
 __all__ = ["migrated"]
 
@@ -65,7 +84,7 @@ STATE_KEYS = {
 }  # fmt: skip
 STAGE_KEYS = {"stored", "read", "sorted", "checked_items", "items", "files"}
 FILE_KEYS = {
-    "file_id", "name", "size_bytes", "extension", "stage", "read", "classification",
+    "file_id", "name", "size_bytes", "extension", "duplicate", "stage", "read", "classification",
     "placement", "addresses",
 }  # fmt: skip
 READ_KEYS = {"status", "method", "pages", "started_at", "finished_at", "note"}
@@ -177,8 +196,16 @@ class _Wizard(_Case):
     """ITGC-AC-01 with its D&I evidence released (a policy item and a walkthrough item on
     one draft request), and a wizard session opened on its D&I list."""
 
-    def __init__(self, database: Database, slug: str) -> None:
+    def __init__(self, database: Database, slug: str, drafted: bool = False) -> None:
         super().__init__(database, slug)
+        if drafted:
+            # The coordinator drafts the request, as it does in the background once the
+            # D&I evidence is released: its normal state before anyone approves it.
+            with connect(database.url) as connection:
+                [(draft_id,)] = connection.execute(
+                    "SELECT id FROM pbc_drafts WHERE pbc_request_id = %s", (self.request,)
+                ).fetchall()
+                assert run_draft(connection, None, draft_id) == "DRAFTED"
         self.policy = next(i for i in self.items if "PROCESS_DOCUMENTATION" in i["categories"])
         self.walkthrough = next(i for i in self.items if "CONTROL_EXECUTION" in i["categories"])
         self.worker = _Worker()
@@ -303,10 +330,20 @@ def _suggestion(item: dict[str, Any], reason: str) -> dict[str, Any]:
     return {"requirement_id": item["id"], "title": item["title"], "reason": reason}
 
 
+@pytest.mark.parametrize("drafted", [False, True])
 def test_a_batch_is_sorted_into_the_items_and_its_state_follows_the_contract(
-    migrated: Database,
+    migrated: Database, drafted: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    case = _Wizard(migrated, "sort")
+    case = _Wizard(migrated, f"sort{int(drafted)}", drafted)
+    # Polling stays cheap: the assurance chain is read once per state, and not at all
+    # before any placed item has a check.
+    reads: list[UUID] = []
+
+    def counted(connection: Any, project_id: UUID, control_id: UUID, *rest: Any) -> Any:
+        reads.append(control_id)
+        return read_assurance(connection, project_id, control_id, *rest)
+
+    monkeypatch.setattr(wizard_module, "read_assurance", counted)
     policy_item, walk_item = case.policy, case.walkthrough
     files = {
         "policy": case.add("access policy.txt", POLICY),
@@ -346,6 +383,9 @@ def test_a_batch_is_sorted_into_the_items_and_its_state_follows_the_contract(
         # files that arrive together are checked once.
         assert case.runs() == []
         assert case.read(case.request)["status"] == "DRAFT"
+        # Each item holding a file is listed as not checked yet, never silently skipped.
+        assert {i["assurance"]["status"] for i in case.state()["items"]} == {"NOT_CHECKED"}
+    assert reads == []
     assert case.read_file(files["notes"], readers["notes"]) == "READY"
     # Each reading weighed every D&I item of the control, by its own wording, categories
     # and the attributes it links.
@@ -446,6 +486,7 @@ def test_a_batch_is_sorted_into_the_items_and_its_state_follows_the_contract(
     # reviewed check are in that file, with the attribute's verdict.
     assert case.check(_Readings(_shown_by(FIRST), _shown_by(SECOND))) == ["READY", "READY"]
     reviewed = case.state()
+    assert reads == [UUID(case.control)] * 2, "once per state, once its items have checks"
     assert reviewed["stages"]["checked_items"] == 2
     by_id = {f["file_id"]: f for f in reviewed["files"]}
     supported = [{"code": code, "verdict": "SUPPORTED"} for code in "ACDE"]
@@ -642,15 +683,16 @@ def _in_hand(case: _Wizard, file_id: str) -> tuple[Any, ...]:
     )
 
 
+@pytest.mark.parametrize("drafted", [False, True])
 def test_a_placement_puts_its_item_in_hand_as_a_file_added_on_the_item_does(
-    migrated: Database,
+    migrated: Database, drafted: bool
 ) -> None:
     # Placed by the agent in the wizard.
-    wizard = _Wizard(migrated, "hand-a")
+    wizard = _Wizard(migrated, f"hand-a{int(drafted)}", drafted)
     placed = wizard.add("access policy.txt", POLICY)
     wizard.read_file(placed, _Reader("policy", covers={wizard.policy["title"]: "COVERED"}))
     # Added on the item's row as before the wizard.
-    row = _Wizard(migrated, "hand-b")
+    row = _Wizard(migrated, f"hand-b{int(drafted)}", drafted)
     added = row.owner.post(
         f"{row.base}/evidence-uploads",
         params={"batch_id": str(uuid4()), "name": "access policy.txt",
@@ -810,7 +852,9 @@ def test_who_may_read_and_move_and_what_an_upload_may_name(migrated: Database) -
         for statement in (
             "UPDATE evidence_placements SET reason = 'Changed afterwards.'",
             "DELETE FROM evidence_placements",
-            "UPDATE evidence_batches SET requirement_id = NULL",
+            "UPDATE evidence_batches SET created_at = created_at - interval '1 day'",
+            "UPDATE evidence_batches SET landed_at = NULL",
+            "UPDATE evidence_batches SET landed_at = landed_at - interval '1 hour'",
             "DELETE FROM evidence_batches",
         ):
             with pytest.raises(psycopg.Error), connection.transaction():
@@ -824,3 +868,580 @@ def test_who_may_read_and_move_and_what_an_upload_may_name(migrated: Database) -
     assert case.place(policy, move_to, 1).status_code == 409
     assert case.drop("late.txt", NOTES).status_code == 409
     assert case.placements(policy) == [(1, "PLACED", "AGENT", [UUID(case.policy["id"])], False)]
+
+
+# --- After the independent review of 13 November 2026 (probes P1 to P9) ----------------
+
+BATCH_KEYS = {
+    "batch_id", "created_at", "created_by_name", "chosen_requirement_id", "files",
+    "in_progress", "needs_person", "not_design", "finished", "finished_at",
+}  # fmt: skip
+
+
+def _row_upload(case: _Wizard, item: dict[str, Any], name: str, text: str) -> str:
+    """A file added on an item's row as before the wizard (no design_control_id)."""
+    added = case.owner.post(
+        f"{case.base}/evidence-uploads",
+        params={"batch_id": str(uuid4()), "name": name, "request_id": item["request_id"],
+                "requirement_id": item["id"]},
+        content=text.encode(), headers={"content-type": "text/plain"},
+    )  # fmt: skip
+    assert added.status_code == 200, added.text
+    return str(added.json()["file_id"])
+
+
+def _items_now(case: _Wizard) -> dict[str, tuple[Any, ...]]:
+    """Per item: whether it is in hand, its status, and whether the first request still
+    carries it."""
+    found: dict[str, tuple[Any, ...]] = {}
+    for key, item in (("policy", case.policy), ("walkthrough", case.walkthrough)):
+        now = case.item(item["id"])
+        found[key] = (now["in_hand"], now["status"], now["request_id"] == case.request)
+    return found
+
+
+def _outcome(case: _Wizard, approval_id: str) -> dict[str, Any]:
+    first = case.read(case.request)
+    return {
+        "request": (first["status"], first["provided_directly"]),
+        "items": _items_now(case),
+        "requests": len(case.design_requests()),
+        "split": len(case.audit("pbc.items_requested_separately", case.request)),
+        "approval": case.rows(
+            "SELECT decision::text, execution_status::text FROM approvals WHERE id = %s",
+            UUID(approval_id),
+        ),
+        "sent": case.count("outbound_messages"),
+    }
+
+
+def _other_control(case: _Wizard) -> str:
+    """An in-scope control of the engagement other than ITGC-AC-01 and its instances."""
+    [(control_id,)] = case.rows(
+        "SELECT id FROM engagement_controls WHERE project_id = %s AND included "
+        "AND control_ref <> (SELECT control_ref FROM engagement_controls WHERE id = %s) "
+        "ORDER BY control_ref LIMIT 1",
+        case.team["project"], UUID(case.control),
+    )  # fmt: skip
+    return str(control_id)
+
+
+def _refile(case: _Wizard, file_id: str, control_id: str | None) -> Any:
+    """The Evidence center files the file to a control (None: off its control)."""
+    [(version,)] = case.rows(
+        "SELECT version FROM evidence_matches WHERE evidence_file_id = %s", UUID(file_id)
+    )
+    return case.owner.post(
+        f"{case.base}/evidence-files/{file_id}/filing",
+        json={"control_id": control_id, "version": version},
+    )
+
+
+def _analysis(case: _Wizard, file_id: str) -> str:
+    [(analysis_id,)] = case.rows(
+        "SELECT id FROM evidence_analyses WHERE evidence_file_id = %s", UUID(file_id)
+    )
+    return str(analysis_id)
+
+
+def test_a_file_from_a_row_counts_only_for_its_item_on_a_drafted_request(
+    migrated: Database,
+) -> None:
+    """P1, the blocker: a wizard file is read against every D&I item of its control, and a
+    combined file added from the walkthrough's row was counted for the policy item too,
+    on a request the coordinator had drafted: the whole request was received, its approval
+    withdrawn, and the policy item never asked for. A file filed for an item counts only
+    for that item and those it is linked to: the outcome is the one the same file added on
+    the row before the wizard has."""
+    outcomes: dict[str, dict[str, Any]] = {}
+    for mode in ("wizard", "plain"):
+        case = _Wizard(migrated, f"p1{mode}", drafted=True)
+        approved = case.approve(case.request)
+        assert approved.status_code == 200, approved.text
+        approval_id = str(approved.json()["approval"]["id"])
+        covers = {item["title"]: "COVERED" for item in case.items}
+        if mode == "wizard":
+            file_id = case.add(
+                "access pack.txt", POLICY + TICKET, requirement_id=case.walkthrough["id"]
+            )
+        else:
+            file_id = _row_upload(case, case.walkthrough, "access pack.txt", POLICY + TICKET)
+        assert case.read_file(file_id, _Reader("walkthrough", covers=covers)) == "READY"
+        assert case.filing(file_id)[1] == UUID(case.walkthrough["id"])
+        outcomes[mode] = _outcome(case, approval_id)
+    assert outcomes["wizard"] == outcomes["plain"]
+    found = outcomes["wizard"]
+    # The row's item is in hand on its request, received as provided directly; the policy
+    # item is asked for again in a draft of its own; the earlier approval sends nothing.
+    assert found["request"] == ("RECEIVED", True)
+    assert found["items"] == {
+        "policy": (False, "REQUESTED", False), "walkthrough": (True, "REQUESTED", True),
+    }  # fmt: skip
+    assert (found["requests"], found["split"], found["sent"]) == (2, 1, 0)
+    [(decision, execution)] = found["approval"]
+    assert (decision, execution) != ("APPROVED", "NOT_STARTED")
+
+
+@pytest.mark.parametrize("drafted", [False, True])
+def test_moving_a_bundle_off_an_item_asks_for_that_item_again(
+    migrated: Database, drafted: bool
+) -> None:
+    """P2: a bundle placed on both items, moved by a person to the walkthrough alone. Its
+    request was only ever provided directly, so the item left without evidence is asked
+    for again in a draft of its own (it needs approval like any other); the request keeps
+    the item in hand, received as provided directly."""
+    case = _Wizard(migrated, f"p2{int(drafted)}", drafted)
+    pack = case.add("access pack.txt", POLICY + TICKET)
+    covers = {item["title"]: "COVERED" for item in case.items}
+    case.read_file(pack, _Reader("walkthrough", covers=covers))
+    assert case.read(case.request)["status"] == "RECEIVED"
+    assert _items_now(case) == {
+        "policy": (True, "REQUESTED", True), "walkthrough": (True, "REQUESTED", True),
+    }  # fmt: skip
+    moved = case.place(pack, [case.walkthrough["id"]], 1)
+    assert moved.status_code == 200, moved.text
+    first = case.read(case.request)
+    assert (first["status"], first["provided_directly"]) == ("RECEIVED", True)
+    assert _items_now(case) == {
+        "policy": (False, "REQUESTED", False), "walkthrough": (True, "REQUESTED", True),
+    }  # fmt: skip
+    again = case.read(str(case.item(case.policy["id"])["request_id"]))
+    assert again["status"] == "DRAFT"
+    assert case.policy["title"] in again["evidence_description"]
+    assert case.count("outbound_messages") == 0
+    [(_actor, _agent, split)] = case.audit("pbc.items_requested_separately", case.request)
+    assert split["requirements"] == [case.policy["id"]]
+    [(moved_payload,)] = case.rows(
+        "SELECT payload FROM audit_events WHERE target_id = %s "
+        "AND action = 'evidence.placement_moved'",
+        UUID(pack),
+    )
+    assert moved_payload["asked_again"] == [case.request]
+
+
+def test_a_file_filed_to_another_control_never_keeps_its_batch_from_landing(
+    migrated: Database,
+) -> None:
+    """P3: a file of the batch filed to another control in the Evidence center (its reading
+    starts again there) is not the batch's to wait for: the batch lands once its own files
+    are read. Its placement is superseded by a person's, kept, that says where it went."""
+    case = _Wizard(migrated, "p3")
+    policy = case.add("access policy.txt", POLICY)
+    ticket = case.add("ticket REQ-1041.txt", TICKET)
+    minutes = case.add("parking minutes.txt", MINUTES)
+    case.read_file(policy, _Reader("policy", covers={case.policy["title"]: "COVERED"}))
+    case.read_file(minutes, _Reader("other"))
+    refiled = _refile(case, minutes, _other_control(case))
+    assert refiled.status_code == 200, refiled.text
+    assert case.rows(
+        "SELECT status FROM evidence_analyses WHERE evidence_file_id = %s", UUID(minutes)
+    ) == [("PENDING",)]
+    entry = case.file(minutes)
+    assert (entry["stage"], entry["placement"]["status"], entry["placement"]["method"]) == (
+        "NOT_DESIGN", "NOT_DESIGN", "PERSON",
+    )  # fmt: skip
+    assert entry["placement"]["reason"] == MOVED_AWAY
+    assert [row[1:3] for row in case.placements(minutes)] == [
+        ("NOT_DESIGN", "AGENT"), ("NOT_DESIGN", "PERSON"),
+    ]  # fmt: skip
+    walk = {case.walkthrough["title"]: "COVERED"}
+    assert case.read_file(ticket, _Reader("walkthrough", covers=walk)) == "READY"
+    assert {(str(r[1]), r[2]) for r in case.runs()} == {
+        (case.policy["id"], "PENDING"), (case.walkthrough["id"], "PENDING"),
+    }  # fmt: skip
+    assert case.read(case.request)["status"] == "RECEIVED"
+    state = case.state()
+    assert state["stages"] == {
+        "stored": 3, "read": 3, "sorted": 3, "checked_items": 0, "items": 2, "files": 3,
+    }  # fmt: skip
+    assert all(minutes not in item["file_ids"] for item in state["items"])
+    assert case.rows(
+        "SELECT landed_at IS NOT NULL FROM evidence_batches WHERE id = %s", UUID(case.batch)
+    ) == [(True,)]
+
+
+def test_a_file_moved_by_another_flow_is_shown_where_it_is(migrated: Database) -> None:
+    """P4: the D&I list's link and unlink, and the Evidence center's filing, move a wizard
+    file outside the wizard: each records a person's placement that supersedes the one
+    before (kept), and the state shows the file where it is, never where it was."""
+    case = _Wizard(migrated, "p4")
+    policy = case.add("access policy.txt", POLICY)
+    notes = case.add("access notes.txt", NOTES)
+    case.read_file(policy, _Reader("policy", covers={case.policy["title"]: "COVERED"}))
+    case.read_file(notes, _Reader("walkthrough", "low"))
+    assert case.file(notes)["placement"]["status"] == "NEEDS_PERSON"
+    item = case.item(case.walkthrough["id"])
+    requirement = f"{case.base}/controls/{case.control}/evidence-requirements/{item['id']}"
+    linked = case.owner.post(
+        f"{requirement}/files",
+        json={"file_id": notes, "reason": "It is the walkthrough's notes.",
+              "version": item["version"]},
+    )  # fmt: skip
+    assert linked.status_code == 200, linked.text
+    placed = case.file(notes)
+    assert placed["stage"] == "SORTED"
+    assert placed["placement"] == {
+        "status": "PLACED", "method": "PERSON", "requirement_ids": [item["id"]],
+        "reason": LINKED_ON_LIST, "suggestions": [], "version": 2,
+    }  # fmt: skip
+    assert [i["file_ids"] for i in case.state()["items"] if i["requirement_id"] == item["id"]] == [
+        [notes]
+    ]
+    link = next(f for f in case.item(item["id"])["files"] if f["file_id"] == notes)
+    unlinked = case.owner.post(
+        f"{requirement}/files/{link['link_id']}/remove",
+        json={"reason": "Not the walkthrough after all.", "version": link["link_version"]},
+    )
+    assert unlinked.status_code == 200, unlinked.text
+    off = case.file(notes)["placement"]
+    assert (off["status"], off["reason"], off["version"], off["requirement_ids"]) == (
+        "NOT_DESIGN", UNLINKED_ON_LIST, 3, [],
+    )  # fmt: skip
+    # The placed policy is filed to another control in the Evidence center.
+    refiled = _refile(case, policy, _other_control(case))
+    assert refiled.status_code == 200, refiled.text
+    state = case.state()
+    entry = next(f for f in state["files"] if f["file_id"] == policy)
+    assert (entry["stage"], entry["placement"]["status"], entry["placement"]["reason"]) == (
+        "NOT_DESIGN", "NOT_DESIGN", MOVED_AWAY,
+    )  # fmt: skip
+    assert entry["placement"]["requirement_ids"] == [] and state["items"] == []
+    refused = case.place(policy, [case.walkthrough["id"]], entry["placement"]["version"])
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "the file is no longer filed to this control"
+    assert [row[1:3] for row in case.placements(policy)] == [
+        ("PLACED", "AGENT"), ("NOT_DESIGN", "PERSON"),
+    ]  # fmt: skip
+    # The request it left follows: nothing is in hand on it any more.
+    assert case.read(case.request)["status"] == "DRAFT"
+
+
+def test_every_way_a_reading_ends_runs_the_hook_and_the_backstop_lands_the_rest(
+    migrated: Database,
+) -> None:
+    """P5: a reading cancelled while it ran, and one cancelled while queued, each need a
+    person (with the gate's reason) and run the batch's landing check in their own
+    transaction: the batch lands when the last ends. A batch whose readings ended without
+    landing (before the hook existed) is landed by the start-up backstop."""
+    case = _Wizard(migrated, "p5")
+    policy = case.add("access policy.txt", POLICY)
+    ticket = case.add("ticket REQ-1041.txt", TICKET)
+    log = case.add("sap change log.txt", LOG)
+    case.read_file(policy, _Reader("policy", covers={case.policy["title"]: "COVERED"}))
+
+    class Cancelling(_Reader):
+        """A person cancels the reading while the model works on it."""
+
+        def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
+            asked = case.owner.post(
+                f"{case.base}/agent-runs/analysis/{_analysis(case, log)}/cancel"
+            )
+            assert asked.status_code == 200 and asked.json()["state"] == "REQUESTED"
+            return super().complete(request, config)
+
+    walk = {case.walkthrough["title"]: "COVERED"}
+    assert case.read_file(log, Cancelling("change_history", covers=walk)) == "CANCELLED"
+    stopped = case.file(log)
+    assert (stopped["stage"], stopped["placement"]["status"]) == ("FAILED", "NEEDS_PERSON")
+    assert stopped["placement"]["reason"] == HELD_REASONS["READ_FAILED"]
+    assert case.runs() == [], "the ticket is still queued"
+    cancelled = case.owner.post(f"{case.base}/agent-runs/analysis/{_analysis(case, ticket)}/cancel")
+    assert cancelled.status_code == 200 and cancelled.json()["state"] == "CANCELLED"
+    state = case.state()
+    assert state["stages"]["sorted"] == state["stages"]["files"] == 3
+    queued = next(f for f in state["files"] if f["file_id"] == ticket)
+    assert (queued["stage"], queued["placement"]["status"]) == ("FAILED", "NEEDS_PERSON")
+    assert queued["placement"]["reason"] == HELD_REASONS["READ_FAILED"]
+    assert [(str(r[1]), r[2]) for r in case.runs()] == [(case.policy["id"], "PENDING")]
+    assert case.read(case.request)["status"] == "RECEIVED"
+    # A batch whose last reading ended by a way that did not land it.
+    case.batch = str(uuid4())
+    second = case.add("access policy v2.txt", POLICY + "Revised.\n")
+    third = case.add("ticket REQ-1042.txt", TICKET.replace("1041", "1042"))
+    case.read_file(second, _Reader("policy", covers={case.policy["title"]: "COVERED"}))
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE evidence_analyses SET status = 'FAILED', lease_until = NULL, "
+            "note = 'Reading the file did not finish.', finished_at = clock_timestamp() "
+            "WHERE evidence_file_id = %s",
+            (third,),
+        )
+    assert case.file(third)["placement"]["status"] == "PENDING"
+    with connect(migrated.url) as connection:
+        assert land_open_batches(connection) == 1
+    after = case.file(third)
+    assert (after["stage"], after["placement"]["status"]) == ("FAILED", "NEEDS_PERSON")
+    assert after["placement"]["reason"] == HELD_REASONS["READ_FAILED"]
+    with connect(migrated.url) as connection:
+        assert land_open_batches(connection) == 0, "landed, and nothing ended since"
+
+
+def test_an_upload_and_its_batchs_landing_take_the_batch_first(migrated: Database) -> None:
+    """P6: a landing holds the batch and then takes a request; an upload into the batch
+    used to file on that request before waiting for the batch, and the two deadlocked.
+    The upload now takes the batch first, so it waits and both go through."""
+    case = _Wizard(migrated, "p6")
+    walk = case.walkthrough["id"]
+    case.add("ticket REQ-1041.txt", TICKET, requirement_id=walk)
+    uploader = _client(migrated, case.team["owner_id"], None)
+    outcomes: list[Any] = []
+    landing = psycopg.connect(migrated.url)
+    watch = psycopg.connect(migrated.url, autocommit=True)
+    try:
+        landing.execute("SELECT 1 FROM evidence_batches WHERE id = %s FOR UPDATE", (case.batch,))
+
+        def upload() -> None:
+            dropped = case.drop("sap change log.txt", LOG, requirement_id=walk, client=uploader)
+            outcomes.append(dropped.status_code)
+
+        worker = threading.Thread(target=upload)
+        worker.start()
+        # Until the upload waits on a lock the landing holds.
+        for _ in range(200):
+            row = watch.execute(
+                "SELECT count(*) FROM pg_stat_activity "
+                "WHERE datname = current_database() AND wait_event_type = 'Lock'"
+            ).fetchone()
+            if row is not None and int(row[0]) >= 1:
+                break
+            time.sleep(0.05)
+        landing.execute(
+            "SELECT 1 FROM pbc_requests WHERE id = %s FOR UPDATE", (UUID(case.request),)
+        )
+        outcomes.append("landing went on")
+        landing.commit()
+        worker.join(30)
+    finally:
+        landing.close()
+        watch.close()
+    assert outcomes == ["landing went on", 200]
+    assert len(case.state()["files"]) == 2
+
+
+def _covered_before(cursor: Any, project_id: UUID, request_id: UUID) -> bool:
+    """evidence_receipts.covered as it was at 7c93228, before the wizard: today's rule for
+    the flows outside it."""
+    planned = [
+        str(row[0])
+        for row in cursor.execute(
+            "SELECT id FROM evidence_requirements WHERE pbc_request_id = %s "
+            "AND status = 'REQUESTED' ORDER BY CASE necessity WHEN 'REQUIRED' THEN 0 "
+            "WHEN 'CONDITIONAL' THEN 1 ELSE 2 END, created_at, requirement_key",
+            (request_id,),
+        ).fetchall()
+    ]
+    draft = cursor.execute(
+        "SELECT content FROM pbc_drafts WHERE pbc_request_id = %s AND status = 'DRAFTED'",
+        (request_id,),
+    ).fetchone()
+    items = draft[0].get("items", []) if draft is not None and isinstance(draft[0], dict) else []
+    wanted = min(len(items), 8) if isinstance(items, list) else 0
+    if wanted == 0:
+        return not planned or _every_item_served(cursor, request_id)
+    found: set[int] = set()
+    for (classification,) in cursor.execute(
+        "SELECT a.classification FROM evidence_file_links l JOIN evidence_analyses a "
+        "ON a.evidence_file_id = l.evidence_file_id WHERE l.project_id = %s "
+        "AND l.pbc_request_id = %s AND a.status = 'READY'",
+        (project_id, request_id),
+    ).fetchall():
+        for item in (classification or {}).get("items", []):
+            if not isinstance(item, dict) or item.get("coverage") != "COVERED":
+                continue
+            named = str(item.get("requirement_id") or "")
+            if named in planned:
+                found.add(planned.index(named))
+            elif isinstance(item.get("index"), int):
+                found.add(item["index"])
+    return all(index in found for index in range(wanted))
+
+
+def test_an_item_waived_on_its_own_request_counts_as_before(migrated: Database) -> None:
+    """P7: outside the wizard, two files on a drafted request as a whole, each covering
+    every item; the last item is waived and the second file withdrawn. An item the reading
+    names that is no longer requested on this request still counts by its place in the
+    list, as before the wizard: the request stays received."""
+    case = _Wizard(migrated, "p7", drafted=True)
+    covers = {item["title"]: "COVERED" for item in case.items}
+    files: list[str] = []
+    for name in ("pack one.txt", "pack two.txt"):
+        added = case.owner.post(
+            f"{case.base}/evidence-uploads",
+            params={"batch_id": str(uuid4()), "name": name, "request_id": case.request},
+            content=(POLICY + TICKET + name).encode(), headers={"content-type": "text/plain"},
+        )  # fmt: skip
+        assert added.status_code == 200, added.text
+        files.append(str(added.json()["file_id"]))
+        assert case.read_file(files[-1], _Reader("walkthrough", covers=covers)) == "READY"
+    assert case.read(case.request)["status"] == "RECEIVED"
+    [last] = [
+        str(row[0])
+        for row in case.rows(
+            "SELECT id FROM evidence_requirements WHERE pbc_request_id = %s "
+            "AND status = 'REQUESTED' ORDER BY CASE necessity WHEN 'REQUIRED' THEN 0 "
+            "WHEN 'CONDITIONAL' THEN 1 ELSE 2 END DESC, created_at DESC, requirement_key DESC "
+            "LIMIT 1",
+            UUID(case.request),
+        )
+    ]
+    waived = case.owner.post(
+        f"{case.base}/controls/{case.control}/evidence-requirements/{last}/waive",
+        json={"reason": "Not applicable: the system has no such report.",
+              "version": case.item(last)["version"]},
+    )  # fmt: skip
+    assert waived.status_code == 200, waived.text
+    withdrawn = case.owner.post(
+        f"{case.base}/evidence-files/{files[1]}/withdraw",
+        json={"reason": "Duplicate of the first pack."},
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+    assert case.read(case.request)["status"] == "RECEIVED"
+    project, request = UUID(str(case.team["project"])), UUID(case.request)
+    with connect(migrated.url) as connection, connection.cursor() as cursor:
+        assert covered(cursor, project, request) is True
+        assert _covered_before(cursor, project, request) is True
+
+
+def test_an_item_that_changes_while_its_file_is_read_leaves_the_file_unplaced(
+    migrated: Database,
+) -> None:
+    """P8: the item is waived while its file is read. The filing is tried first: the file
+    is not placed, needs a person, and its reading names no request (nothing is derived
+    against the request it was meant for)."""
+    case = _Wizard(migrated, "p8")
+    policy = case.add("access policy.txt", POLICY)
+
+    class Waiving(_Reader):
+        """A person waives the policy item while the model reads the file."""
+
+        def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
+            item = case.item(case.policy["id"])
+            waived = case.owner.post(
+                f"{case.base}/controls/{case.control}/evidence-requirements/{item['id']}/waive",
+                json={"reason": "Not applicable: the policy is group-wide.",
+                      "version": item["version"]},
+            )  # fmt: skip
+            assert waived.status_code == 200, waived.text
+            return super().complete(request, config)
+
+    covers = {case.policy["title"]: "COVERED"}
+    assert case.read_file(policy, Waiving("policy", covers=covers)) == "READY"
+    entry = case.file(policy)
+    assert (entry["placement"]["status"], entry["placement"]["reason"]) == (
+        "NEEDS_PERSON", CHANGED_REASON,
+    )  # fmt: skip
+    assert case.filing(policy) == (None, None, "PERSON")
+    assert case.rows(
+        "SELECT pbc_request_id FROM evidence_analyses WHERE evidence_file_id = %s", UUID(policy)
+    ) == [(None,)]
+    assert case.findings(policy) == []
+
+
+def test_a_file_held_already_is_listed_in_a_new_session_and_sessions_are_listed(
+    migrated: Database,
+) -> None:
+    """P9 and the control's sessions: a file held already, dropped in a new session, is
+    listed there as a duplicate with the placement it has (nothing is stored twice). The
+    control's recent sessions are listed, the most recent first, with their progress."""
+    case = _Wizard(migrated, "p9")
+    first_batch = case.batch
+    policy = case.add("access policy.txt", POLICY)
+    case.read_file(policy, _Reader("policy", covers={case.policy["title"]: "COVERED"}))
+    case.batch = str(uuid4())
+    again = case.drop("access policy.txt", POLICY)
+    assert again.status_code == 200, again.text
+    assert (again.json()["file_id"], again.json()["duplicate"]) == (policy, True)
+    state = case.state()
+    [entry] = state["files"]
+    assert set(entry) == FILE_KEYS
+    assert (entry["file_id"], entry["duplicate"], entry["stage"]) == (policy, True, "SORTED")
+    assert entry["placement"] == {
+        "status": "PLACED", "method": "AGENT", "requirement_ids": [case.policy["id"]],
+        "reason": f"The reader found it covers “{case.policy['title']}”.", "suggestions": [],
+        "version": 1,
+    }  # fmt: skip
+    assert [item["file_ids"] for item in state["items"]] == [[policy]]
+    own = case.owner.get(case.url(batch=first_batch))
+    assert own.status_code == 200 and own.json()["files"][0]["duplicate"] is False
+    assert case.rows("SELECT count(*) FROM evidence_files WHERE project_id = %s",
+                     case.team["project"]) == [(1,)]  # fmt: skip
+    listed = case.owner.get(f"{case.base}/controls/{case.control}/evidence-batches")
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    assert set(body) == {"batches"}
+    assert [b["batch_id"] for b in body["batches"]] == [case.batch, first_batch]
+    for summary in body["batches"]:
+        assert set(summary) == BATCH_KEYS
+        assert _when(summary["created_at"]) <= _when(state["server_now"])
+    newest = body["batches"][0]
+    assert {key: value for key, value in newest.items() if key != "created_at"} == {
+        "batch_id": case.batch, "created_by_name": case.name(case.team["owner_id"]),
+        "chosen_requirement_id": None, "files": 1, "in_progress": 0, "needs_person": 0,
+        "not_design": 0, "finished": False, "finished_at": None,
+    }  # fmt: skip
+    # Its item's check ends: both sessions have finished, and when.
+    assert case.check(_Readings(_shown_by(FIRST), _shown_by(SECOND))) == ["READY"]
+    done = case.owner.get(f"{case.base}/controls/{case.control}/evidence-batches").json()
+    assert [(b["finished"], b["finished_at"] is not None) for b in done["batches"]] == [
+        (True, True), (True, True),
+    ]  # fmt: skip
+    # A Reviewer reads the list; another firm does not.
+    _reviewer_id, reviewer = case.member("REVIEWER")
+    assert reviewer.get(f"{case.base}/controls/{case.control}/evidence-batches").status_code == 200
+    with connect(migrated.url) as connection:
+        stranger = _seed_org(
+            connection, f"list-{uuid4().hex[:6]}", f"{uuid4().hex[:8]}@example.com"
+        )
+    outsider = _client(migrated, stranger["user_id"], None)
+    assert outsider.get(f"{case.base}/controls/{case.control}/evidence-batches").status_code == 404
+
+
+def test_deterministic_findings_follow_a_file_onto_a_request(migrated: Database) -> None:
+    """Items 9 and 10: a file read on no request (it waited for a person) has no findings;
+    placed on an item's request by a person, the reading names that request and its
+    deterministic findings are derived there, and moved on to another request the reading
+    names that one. The reader's own findings stay held."""
+    case = _Wizard(migrated, "rules")
+    policy = case.add("access policy.txt", POLICY)
+    gaps: dict[str, Any] = {"gaps": ["The emergency approval timeframe is not stated."]}
+    case.read_file(policy, _Reader("policy", "low", covers={case.policy["title"]: "COVERED"},
+                                   **gaps))  # fmt: skip
+    assert case.file(policy)["placement"]["status"] == "NEEDS_PERSON"
+    assert case.findings(policy) == []
+    moved = case.place(policy, [case.policy["id"]], 1)
+    assert moved.status_code == 200, moved.text
+    assert case.rows(
+        "SELECT pbc_request_id FROM evidence_analyses WHERE evidence_file_id = %s", UUID(policy)
+    ) == [(UUID(case.request),)]
+    assert case.findings(policy) == [("RULES", "PLACEHOLDER")]
+    # The walkthrough item is now asked for on a request of its own; moved there, the
+    # reading names that request (item 9), and its findings are not proposed twice.
+    asked = str(case.item(case.walkthrough["id"])["request_id"])
+    assert asked != case.request
+    again = case.place(policy, [case.walkthrough["id"]], 2)
+    assert again.status_code == 200, again.text
+    assert case.rows(
+        "SELECT pbc_request_id FROM evidence_analyses WHERE evidence_file_id = %s", UUID(policy)
+    ) == [(UUID(asked),)]
+    assert case.findings(policy) == [("RULES", "PLACEHOLDER")]
+
+
+def test_a_refused_first_upload_records_no_batch(migrated: Database) -> None:
+    """Item 12: the batch is recorded in the transaction of the session's first upload that
+    stores a file or lists one held already, never before: a refused first upload leaves
+    no batch."""
+    case = _Wizard(migrated, "empty")
+    held = case.owner.post(
+        f"{case.base}/evidence-uploads",
+        params={"batch_id": str(uuid4()), "name": "access notes.txt"},
+        content=NOTES.encode(), headers={"content-type": "text/plain"},
+    )  # fmt: skip
+    assert held.status_code == 200, held.text
+    refused = case.drop("access notes.txt", NOTES)
+    assert refused.status_code == 409 and "held elsewhere" in refused.json()["detail"]
+    assert case.owner.get(case.url()).status_code == 404
+    assert case.rows("SELECT count(*) FROM evidence_batches WHERE id = %s", UUID(case.batch)) == [
+        (0,)
+    ]
+    listed = case.owner.get(f"{case.base}/controls/{case.control}/evidence-batches")
+    assert listed.status_code == 200 and listed.json() == {"batches": []}

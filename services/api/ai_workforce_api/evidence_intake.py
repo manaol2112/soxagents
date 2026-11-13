@@ -41,6 +41,7 @@ from ai_workforce_api.evidence_analysis import (
     restart_analysis,
     schedule_analyses,
 )
+from ai_workforce_api.evidence_assurance import schedule_assessments
 from ai_workforce_api.evidence_classify import KIND_LABELS
 from ai_workforce_api.evidence_links import control_request, evidence_hint
 from ai_workforce_api.evidence_receipts import (
@@ -51,10 +52,17 @@ from ai_workforce_api.evidence_receipts import (
 from ai_workforce_api.evidence_review import review_decided
 from ai_workforce_api.evidence_withdrawn import in_force, is_withdrawn
 from ai_workforce_api.evidence_wizard import (
+    FILED_HERE,
+    MOVED_AWAY,
+    TAKEN_OFF_CONTROL,
     Scope,
     WizardState,
+    follow_filing,
+    land,
+    lock_wizard,
+    open_batch,
     place_on_upload,
-    record_batch,
+    record_duplicate,
     refuse_wizard_batch,
     upload_scope,
 )
@@ -281,10 +289,11 @@ def register_evidence_intake(
         body: FilingBody,
         request: Request,
     ) -> RegisterBody:
-        result, queued = run(
+        result, queued, checks = run(
             request, lambda c, p: _file(c, p, organization_id, project_id, file_id, body)
         )
         schedule_analyses(analyses, [] if queued is None else [queued])
+        schedule_assessments(analyses, checks)
         return result
 
 
@@ -387,15 +396,15 @@ def _upload(
     (evidence_wizard.py)."""
     scope: Scope | None = None
     if design_control_id is not None:
-        # Checked before anything is stored, by whoever may add evidence here; the
-        # session's first upload records its batch.
+        # Checked before anything is stored, by whoever may add evidence here. The batch is
+        # recorded by the transaction of the session's first upload that stores a file or
+        # records one held already (_store_upload), never before it.
         _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
         _require_active(connection, organization_id, project_id)
         scope = upload_scope(connection, project_id, batch_id, design_control_id, requirement_id)
         if request_id is not None and request_id != scope.request_id:
             raise IntakeState("a wizard file is added on the control's items, not on a request")
         request_id = scope.request_id
-        record_batch(connection, organization_id, project_id, scope, principal.id)
     chosen = _chosen_applications(applications)
     if chosen is not None and request_id is None:
         raise IntakeState("say which applications a file applies to on its request")
@@ -476,6 +485,13 @@ def _store_upload(
             _request_item(connection, target[0], requirement_id)
     digest = digest_of(content)
     existing = _existing(connection, project_id, digest, folder, file_name)
+    if existing is not None and scope is not None:
+        queued_again = _wizard_held(
+            connection, principal, organization_id, project_id, scope, target, existing
+        )
+        return UploadBody(
+            file_id=existing, file_name=file_name, folder_path=folder, duplicate=True
+        ), queued_again
     if existing is not None and is_withdrawn(connection, existing):
         if requirement_id is None or target is None:
             raise IntakeState("this file was withdrawn; restore it from the withdrawn files")
@@ -486,13 +502,6 @@ def _store_upload(
         return UploadBody(
             file_id=existing, file_name=file_name, folder_path=folder, duplicate=True
         ), queued_again
-    if existing is not None and scope is not None:
-        # Dropped in the wizard again: held on this control, it stays where it is (from a
-        # row it serves the row's item too); held elsewhere, it is not added here.
-        _wizard_duplicate(connection, principal, organization_id, project_id, scope, existing)
-        return UploadBody(
-            file_id=existing, file_name=file_name, folder_path=folder, duplicate=True
-        ), None
     if existing is not None:
         if requirement_id is not None and target is not None:
             # The file is held already: it serves this item too.
@@ -520,6 +529,14 @@ def _store_upload(
     store.put(key, content)
     try:
         with transaction(connection) as cursor:
+            # A wizard upload takes its batch first: recorded by the session's first upload,
+            # and held before anything is filed on a request or the plan is taken, the order
+            # the batch's landing takes them in (evidence_wizard.open_batch).
+            batch = (
+                None
+                if scope is None
+                else open_batch(cursor, organization_id, project_id, scope, principal.id)
+            )
             cursor.execute(
                 """
                 INSERT INTO evidence_files (
@@ -618,14 +635,18 @@ def _store_upload(
                 ),
             )
             queued = queue_analysis(cursor, organization_id, project_id, file_id, principal.id)
-            if scope is not None:
-                place_on_upload(cursor, organization_id, project_id, scope, file_id, principal.id)
+            if scope is not None and batch is not None:
+                place_on_upload(
+                    cursor, organization_id, project_id, scope, batch, file_id, principal.id
+                )
     except UniqueViolation:
         # The same file arrived twice at once: the first one is kept; this object goes.
         discard(store, key)
         again = _existing(connection, project_id, digest, folder, file_name)
         if again is None:
             raise
+        if scope is not None:
+            _wizard_held(connection, principal, organization_id, project_id, scope, target, again)
         return UploadBody(
             file_id=again, file_name=file_name, folder_path=folder, duplicate=True
         ), None
@@ -637,6 +658,37 @@ def _store_upload(
     return UploadBody(
         file_id=file_id, file_name=file_name, folder_path=folder, duplicate=False
     ), queued
+
+
+def _wizard_held(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    scope: Scope,
+    target: tuple[UUID, UUID] | None,
+    file_id: UUID,
+) -> UUID | None:
+    """A file the engagement holds already, dropped in the wizard. In one transaction, the
+    session's batch first (evidence_wizard.open_batch): withdrawn, it is restored for the
+    row's item as before; held on this control, it stays as it is (from a row it serves the
+    row's item too); held anywhere else, it is not added, and nothing is recorded. The
+    session lists it with the placement it has (evidence_wizard.record_duplicate). Returns
+    the reading to run, if any."""
+    queued: UUID | None = None
+    with transaction(connection) as cursor:
+        batch = open_batch(cursor, organization_id, project_id, scope, principal.id)
+        if is_withdrawn(connection, file_id):
+            if scope.requirement_id is None or target is None:
+                raise IntakeState("this file was withdrawn; restore it from the withdrawn files")
+            queued = _restore_for_item(
+                connection, principal, organization_id, project_id, target,
+                scope.requirement_id, file_id,
+            )  # fmt: skip
+        else:
+            _wizard_duplicate(connection, principal, organization_id, project_id, scope, file_id)
+        record_duplicate(cursor, batch, file_id, principal.id)
+    return queued
 
 
 def _wizard_duplicate(
@@ -1014,11 +1066,15 @@ def _file(
     project_id: UUID,
     file_id: UUID,
     body: FilingBody,
-) -> tuple[RegisterBody, UUID | None]:
+) -> tuple[RegisterBody, UUID | None, list[UUID]]:
     _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
     _require_active(connection, organization_id, project_id)
     queued: UUID | None = None
+    checks: list[UUID] = []
     with transaction(connection) as cursor:
+        # A file the D&I evidence wizard has: its reading, then its batch, before its
+        # filing, the order every wizard write takes them in.
+        wizard = lock_wizard(cursor, project_id, file_id)
         row = cursor.execute(
             """
             SELECT m.id, m.status, m.version, m.engagement_control_id, m.filed_by,
@@ -1130,7 +1186,19 @@ def _file(
                     cursor, organization_id, project_id, released.request_id, principal.id,
                     released.before,
                 )  # fmt: skip
-    return _register(connection, principal, organization_id, project_id, file_id), queued
+            if wizard is not None:
+                # The wizard's placement follows the file (superseding, kept), and its
+                # batch's landing is checked: a file filed to another control is not the
+                # batch's to wait for.
+                follow_filing(
+                    cursor, project_id, file_id, principal.id,
+                    TAKEN_OFF_CONTROL if control is None
+                    else MOVED_AWAY if control[0] != wizard.control_id
+                    else FILED_HERE,
+                    moved=True,
+                )  # fmt: skip
+                checks = land(cursor, wizard, principal.id).queued
+    return _register(connection, principal, organization_id, project_id, file_id), queued, checks
 
 
 def _audit(

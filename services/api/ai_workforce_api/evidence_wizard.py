@@ -3,17 +3,20 @@
 
 Uploading (2.1). An upload names the control whose D&I items its files are sorted into
 (`design_control_id`), the item when the wizard was opened from a row (`requirement_id`),
-and its session (`batch_id`). The session's first upload records the batch
-(evidence_batches); the batch keeps its control and its item. A file for the whole control
-is filed to the control with its placement pending; a file from a row is placed on the
-row's item at once, a person's choice. Custody, de-duplication and the archived-engagement
-guard are evidence_intake's, unchanged.
+and its session (`batch_id`). The transaction of the session's first upload that stores a
+file, or records one held already, records the batch (evidence_batches; never before such
+an upload, so no batch is empty); the batch keeps its control and its item. A file for the
+whole control is filed to the control with its placement pending; a file from a row is
+placed on the row's item at once, a person's choice. A file the engagement holds already,
+dropped again, is listed in the session with the placement it has
+(evidence_batch_duplicates). Custody, de-duplication and the archived-engagement guard are
+evidence_intake's, unchanged.
 
 Reading (2.2). A wizard file is read by the evidence reader against every D&I item of the
 control that still expects evidence (evidence_analysis.run_analysis), so what the file
 covers is recorded against each item. The reader's own model-derived findings are never
 proposed for a wizard file: the assurance chain judges D&I evidence once the file is
-placed. The deterministic findings stay.
+placed. The deterministic findings are derived once the file is on an item's request.
 
 Placement (2.3). Code decides from the reading (`decide`); the model only proposes. A file
 the assurance gate would hold needs a person, with the gate's reason. A file the model
@@ -28,18 +31,29 @@ A placement is a filing for the item: on the item's request (the file's evidence
 filing names the request and the item), or, for a further item or an item not requested
 yet, a link to it (evidence_requirement_files). So the item counts the file as evidence in
 hand (evidence_receipts) and its check is queued (evidence_assurance) as for a file added
-on the item. Both wait for the batch: the receipts of a batch's placements are applied,
-and the checks queued, when the last of its files has been read, so files that arrive
-together are checked once. Every placement is recorded in evidence_placements, append-only:
-a person's move is a new placement that supersedes the earlier one, which is kept.
+on the item. Both wait for the batch: whichever way a reading ends (read, failed,
+cancelled, out of attempts), the one hook `reading_ended` runs in the transaction that
+records the ending, and once none of the batch's files on its control is still being read
+the batch lands: its placements' receipts are applied and its checks queued, so files
+that arrive together are checked once. A start-up backstop lands a batch that ended
+without landing. Every placement is recorded in evidence_placements, append-only: a
+person's move is a new placement that supersedes the earlier one, which is kept, and a
+move elsewhere (the Evidence center's filing, the D&I list's link or unlink) is recorded
+the same way. The batch's state shows each file where it is now, from its filing and
+links, never where it was.
 
-The batch's state (2.4) and a person's move are the routes here. File names, the reader's
-notes and the model's answer are untrusted: they are cleaned and shown as text.
+Locks: every path that writes a wizard file's placement takes the file's reading, then the
+batch, then the evidence plan, then a request, in that order (an upload, whose reading is
+new, takes the batch first), so no two of them wait for each other.
+
+The routes: the control's recent batches, a batch's state, and a person's move. File
+names, the reader's notes and the model's answer are untrusted: they are cleaned and shown
+as text.
 """
 
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal, cast
 from uuid import UUID
@@ -62,6 +76,7 @@ from ai_workforce_api.authorization import (
 )
 from ai_workforce_api.db import transaction
 from ai_workforce_api.evidence_assurance import (
+    CUSTODY_FAILED_NOTE,
     HELD_REASONS,
     GateFacts,
     Held,
@@ -70,9 +85,11 @@ from ai_workforce_api.evidence_assurance import (
     Verdict,
     attribute_letter,
     gate,
+    lens_for,
     queue_after_reading,
     queue_safely,
     read_assurance,
+    reconcile,
     schedule_assessments,
 )
 from ai_workforce_api.evidence_classify import (
@@ -84,7 +101,12 @@ from ai_workforce_api.evidence_classify import (
 )
 from ai_workforce_api.evidence_findings import ReaderFindings, derive_from_analysis
 from ai_workforce_api.evidence_links import RequestRef
-from ai_workforce_api.evidence_receipts import apply_receipt, follow_evidence, release_receipt
+from ai_workforce_api.evidence_receipts import (
+    apply_receipt,
+    ask_again_for_items_left,
+    follow_evidence,
+    release_receipt,
+)
 from ai_workforce_api.evidence_withdrawn import in_force, is_withdrawn
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.settings import Settings
@@ -100,6 +122,10 @@ ShownStatus = Literal["PLACED", "NEEDS_PERSON", "NOT_DESIGN", "PENDING"]
 
 MAX_SUGGESTIONS = 5
 REASON_LIMIT = 500
+# The batches the control's list shows, the most recent first.
+RECENT_BATCHES = 10
+# The files one batch lists.
+MAX_LISTED = 500
 # A check that has ended: reviewed, held by its gate, or failed.
 _CHECKED = frozenset({"REVIEWED", "HELD", "FAILED"})
 
@@ -126,6 +152,16 @@ CHANGED_REASON = (
 ADDED_ON_ITEM = "Added on this item by a person."
 PLACED_BY_PERSON = "Placed by a person."
 MOVED_OUT = "Taken off the D&I items by a person: it is not D&I evidence."
+# Where another flow moved a wizard file (recorded as a person's placement).
+MOVED_AWAY = "Moved to another control in the Evidence center."
+TAKEN_OFF_CONTROL = "Taken off its control in the Evidence center."
+FILED_HERE = "Filed to this control in the Evidence center."
+LINKED_ON_LIST = "Linked to an item on the D&I list."
+UNLINKED_ON_LIST = "Taken off an item on the D&I list."
+# What the state says of a file whose placement no longer says where it is.
+ELSEWHERE = "It is filed to another control now."
+OFF_ITEMS = "It is not on any of the control's D&I items now."
+HELD_BEFORE = "Held before it was dropped in this session."
 
 # What a file of each kind is said to look like, for a row's suggestion.
 _LOOKS_LIKE: dict[str, str] = {
@@ -317,6 +353,7 @@ class Batch:
     requirement_id: UUID | None
     created_by: UUID
     created_at: datetime
+    landed_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -342,9 +379,9 @@ class WizardFile:
     current: Current | None
 
 
-_BATCH = (
-    "SELECT id, organization_id, project_id, engagement_control_id, requirement_id, "
-    "created_by, created_at FROM evidence_batches WHERE id = %s"
+_BATCH_COLUMNS = (
+    "b.id, b.organization_id, b.project_id, b.engagement_control_id, b.requirement_id, "
+    "b.created_by, b.created_at, b.landed_at"
 )
 _PLACEMENT = (
     "id, version, status, method, requirement_ids, reason, suggestions, confidence, "
@@ -363,11 +400,17 @@ def _batch_of(row: tuple[Any, ...] | None) -> Batch | None:
         requirement_id=None if row[4] is None else UUID(str(row[4])),
         created_by=UUID(str(row[5])),
         created_at=row[6],
+        landed_at=row[7],
     )
 
 
 def _batch(connection: Reader, batch_id: UUID) -> Batch | None:
-    return _batch_of(connection.execute(_BATCH, (batch_id,)).fetchone())
+    return _batch_of(
+        connection.execute(
+            f"SELECT {_BATCH_COLUMNS} FROM evidence_batches b WHERE b.id = %s",  # noqa: S608
+            (batch_id,),
+        ).fetchone()
+    )
 
 
 def _current_of(row: tuple[Any, ...]) -> Current:
@@ -394,21 +437,37 @@ def _current(connection: Reader, file_id: UUID) -> Current | None:
     return None if row is None else _current_of(row)
 
 
+def _currents(connection: Reader, file_ids: Sequence[UUID]) -> dict[UUID, Current]:
+    """Each file's current placement, whichever session recorded it."""
+    if not file_ids:
+        return {}
+    return {
+        UUID(str(row[0])): _current_of(row[1:])
+        for row in connection.execute(
+            f"""
+            SELECT DISTINCT ON (evidence_file_id) evidence_file_id, {_PLACEMENT}
+            FROM evidence_placements WHERE evidence_file_id = ANY(%s)
+            ORDER BY evidence_file_id, version DESC
+            """,  # noqa: S608
+            (list(file_ids),),
+        ).fetchall()
+    }
+
+
 def wizard_file(connection: Reader, project_id: UUID, file_id: UUID) -> WizardFile | None:
     """The batch a file was uploaded in, when it is a wizard batch and the file is still
     filed to the batch's control; None otherwise (a file filed elsewhere since is read as
-    any other upload)."""
+    any other upload, and is not its batch's to wait for)."""
     row = connection.execute(
-        """
-        SELECT b.id, b.organization_id, b.project_id, b.engagement_control_id,
-               b.requirement_id, b.created_by, b.created_at
+        f"""
+        SELECT {_BATCH_COLUMNS}
         FROM evidence_files f
         JOIN evidence_batches b ON b.id = f.upload_batch_id AND b.project_id = f.project_id
         JOIN evidence_matches m
           ON m.evidence_file_id = f.id AND m.status = 'FILED'
          AND m.engagement_control_id = b.engagement_control_id
         WHERE f.id = %s AND f.project_id = %s AND f.source = 'UPLOAD'
-        """,
+        """,  # noqa: S608
         (file_id, project_id),
     ).fetchone()
     batch = _batch_of(row)
@@ -417,11 +476,55 @@ def wizard_file(connection: Reader, project_id: UUID, file_id: UUID) -> WizardFi
     return WizardFile(file_id=file_id, batch=batch, current=_current(connection, file_id))
 
 
+def _placement_batch(connection: Reader, project_id: UUID, file_id: UUID) -> Batch | None:
+    """The session a file's placements belong to: the wizard batch it was uploaded in, else
+    the session its current placement was recorded in (a file held before the wizard,
+    placed from a session it was dropped in again). None for a file the wizard never had."""
+    own = _batch_of(
+        connection.execute(
+            f"""
+            SELECT {_BATCH_COLUMNS} FROM evidence_files f
+            JOIN evidence_batches b ON b.id = f.upload_batch_id AND b.project_id = f.project_id
+            WHERE f.id = %s AND f.project_id = %s
+            """,  # noqa: S608
+            (file_id, project_id),
+        ).fetchone()
+    )
+    if own is not None:
+        return own
+    return _batch_of(
+        connection.execute(
+            f"""
+            SELECT {_BATCH_COLUMNS} FROM evidence_placements p
+            JOIN evidence_batches b ON b.id = p.batch_id
+            WHERE p.evidence_file_id = %s AND p.project_id = %s
+            ORDER BY p.version DESC LIMIT 1
+            """,  # noqa: S608
+            (file_id, project_id),
+        ).fetchone()
+    )
+
+
 def _lock(cursor: psycopg.Cursor[Any], batch_id: UUID) -> None:
     """The batch's row, held to the end of the transaction: every write of a batch's
     placements, and the check of whether its readings have all ended, take it, so two
     readings that end together agree on which one was the last."""
     cursor.execute("SELECT 1 FROM evidence_batches WHERE id = %s FOR UPDATE", (batch_id,))
+
+
+def lock_wizard(cursor: psycopg.Cursor[Any], project_id: UUID, file_id: UUID) -> Batch | None:
+    """For a flow outside the wizard that changes where a file is (the Evidence center's
+    filing, the D&I list's link and unlink), before anything else it locks: when the wizard
+    has the file, its reading and then its session's batch, held to the end of the
+    transaction, the order every wizard write takes them in. None for any other file."""
+    batch = _placement_batch(cursor, project_id, file_id)
+    if batch is None:
+        return None
+    cursor.execute(
+        "SELECT 1 FROM evidence_analyses WHERE evidence_file_id = %s FOR UPDATE", (file_id,)
+    )
+    _lock(cursor, batch.id)
+    return batch
 
 
 def _insert(
@@ -633,7 +736,7 @@ def better_fit(
     )[:MAX_SUGGESTIONS]
 
 
-# --- After a reading (evidence_analysis.run_analysis) ----------------------------------
+# --- When a reading ends (every way it ends) -------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -647,7 +750,8 @@ class Placing:
     # For a file a person placed: the items the reader is sure fit better.
     suggestions: tuple[Suggestion, ...]
     confidence: str
-    # The request the file is filed on once placed (None: the reading's own stands).
+    # The request the reading means to file the file on (what it is read for meanwhile);
+    # None where the reading's own stands.
     request: RequestRef | None
 
 
@@ -694,7 +798,7 @@ def plan_placement(
                 ),
                 None,
             )
-            request = None if primary is None else _request_ref(connection, primary)
+            request = None if primary is None else request_ref(connection, primary)
         return Placing(based_on, decision, (), classification.confidence, request)
     suggestions: tuple[Suggestion, ...] = ()
     if current.method == "PERSON" and current.status == "PLACED":
@@ -702,7 +806,7 @@ def plan_placement(
     return Placing(based_on, None, suggestions, classification.confidence, None)
 
 
-def _request_ref(connection: Reader, request_id: UUID) -> RequestRef | None:
+def request_ref(connection: Reader, request_id: UUID) -> RequestRef | None:
     row = connection.execute(
         "SELECT id, control_ref, evidence_description, engagement_control_id "
         "FROM pbc_requests WHERE id = %s",
@@ -713,17 +817,18 @@ def _request_ref(connection: Reader, request_id: UUID) -> RequestRef | None:
     return UUID(str(row[0])), str(row[1]), str(row[2]), row[3]
 
 
-def record_reading(
+def _record(
     cursor: psycopg.Cursor[Any],
     wizard: WizardFile,
     placing: Placing,
     analysis_id: UUID,
     actor: UUID,
 ) -> None:
-    """In the reading's transaction: file the file where the agent placed it and record
-    the placement, or record the reader's suggestion on a person's placement."""
+    """File the file where the agent placed it and record the placement, or record the
+    reader's suggestion on a person's placement. The filing is tried first: an item that
+    changed while the file was read (waived, removed, its request closed) leaves the file
+    unplaced, and the reading's request follows from where the file is."""
     batch = wizard.batch
-    _lock(cursor, batch.id)
     current = _current(cursor, wizard.file_id)
     if (0 if current is None else current.version) != placing.based_on:
         # A person placed the file while it was read: their placement stands.
@@ -738,8 +843,6 @@ def record_reading(
                         person=None, reason=decision.reason, actor=actor,
                     )  # fmt: skip
             except WizardState:
-                # The item changed while the file was read (waived, removed, its request
-                # closed): it is not placed, and the reading is kept.
                 decision = Decision("NEEDS_PERSON", (), CHANGED_REASON, decision.suggestions)
         version = _insert(
             cursor, batch, wizard.file_id, status=decision.status, method="AGENT",
@@ -775,47 +878,150 @@ def record_reading(
     )  # fmt: skip
 
 
-def landed(cursor: psycopg.Cursor[Any], wizard: WizardFile, actor: UUID) -> bool:
-    """In a wizard file's landing transaction (its reading ended, read or failed): when no
-    other file of its batch is still being read, the receipts of the batch's placements
-    are applied and the control's checks are brought in step (the assurance chain queues
-    each item's check once all its files are read). Returns whether the chain covers the
-    file; False while the batch is still being read."""
-    batch = wizard.batch
+@dataclass(frozen=True)
+class Ended:
+    # Whether the assurance chain covers the file (False while its batch is still read).
+    covered: bool
+    # The request the file is filed on now (None: on no request).
+    request_id: UUID | None
+
+
+def reading_ended(
+    cursor: psycopg.Cursor[Any],
+    project_id: UUID,
+    file_id: UUID,
+    actor: UUID,
+    *,
+    analysis_id: UUID,
+    placing: Placing | None = None,
+    failed: HeldCode | None = None,
+) -> Ended | None:
+    """The one hook for every way a wizard file's reading ends, run in the transaction that
+    records the ending (evidence_analysis.run_analysis when read; its custody check and its
+    last attempt, and agent_runs when cancelled, queued or running): where it was read, its
+    placement (or the reader's suggestion on a person's); where it ended unread and nothing
+    was placed, a person's choice with the gate's reason; then its batch's landing check.
+    None for a file that is not a wizard file (or no longer on its batch's control)."""
+    wizard = wizard_file(cursor, project_id, file_id)
+    if wizard is None:
+        return None
+    _lock(cursor, wizard.batch.id)
+    if placing is not None:
+        _record(cursor, wizard, placing, analysis_id, actor)
+    elif failed is not None:
+        current = _current(cursor, file_id)
+        if current is None or (current.method == "AGENT" and current.status != "PLACED"):
+            version = _insert(
+                cursor, wizard.batch, file_id, status="NEEDS_PERSON", method="AGENT",
+                requirement_ids=(), confidence=None, reason=HELD_REASONS[failed],
+                suggestions=(), analysis_id=analysis_id, decided_by=None, supersedes=current,
+            )  # fmt: skip
+            _audit(
+                cursor, wizard.batch.organization_id, project_id, actor, "evidence.placed",
+                "evidence_file", file_id,
+                {"agent": "evidence-coordinator", "batch_id": str(wizard.batch.id),
+                 "version": version, "status": "NEEDS_PERSON", "method": "AGENT",
+                 "held": failed},
+            )  # fmt: skip
+    landing = land(cursor, wizard.batch, actor, file_id)
+    filed = cursor.execute(
+        "SELECT pbc_request_id FROM evidence_matches WHERE evidence_file_id = %s "
+        "AND status = 'FILED'",
+        (file_id,),
+    ).fetchone()
+    return Ended(
+        landing.covered, None if filed is None or filed[0] is None else UUID(str(filed[0]))
+    )
+
+
+def analysis_ended(cursor: psycopg.Cursor[Any], analysis_id: UUID, actor: UUID) -> None:
+    """A reading cancelled by a person (agent_runs: queued, or stopped at its next check),
+    in the cancellation's own transaction: for a wizard file, the one hook above."""
+    row = cursor.execute(
+        "SELECT project_id, evidence_file_id FROM evidence_analyses WHERE id = %s",
+        (analysis_id,),
+    ).fetchone()
+    if row is None:
+        return
+    reading_ended(
+        cursor, UUID(str(row[0])), UUID(str(row[1])), actor, analysis_id=analysis_id,
+        failed="READ_FAILED",
+    )  # fmt: skip
+
+
+@dataclass(frozen=True)
+class Landing:
+    # Whether the assurance chain covers the file the landing was checked for.
+    covered: bool = False
+    # Checks queued by a landing no reading asked for, to hand to the worker on commit.
+    queued: list[UUID] = field(default_factory=list)
+    landed: bool = False
+
+
+def land(
+    cursor: psycopg.Cursor[Any], batch: Batch, actor: UUID, file_id: UUID | None = None
+) -> Landing:
+    """The batch's landing check: when none of its files still filed to its control is
+    being read (a file of the batch filed to another control since is not the batch's to
+    wait for), the receipts of its placements are applied, the control's checks are
+    brought in step (the assurance chain queues each item's check once all its files are
+    read), and when it landed is recorded. `file_id`, the file whose reading just ended;
+    without one (the Evidence center took a file off the batch's control), the checks it
+    queues are returned to hand to the worker."""
     _lock(cursor, batch.id)
     pending = cursor.execute(
         f"""
         SELECT 1 FROM evidence_files f
         JOIN evidence_analyses a ON a.evidence_file_id = f.id
-        WHERE f.project_id = %s AND f.upload_batch_id = %s AND f.id <> %s
+        JOIN evidence_matches m
+          ON m.evidence_file_id = f.id AND m.status = 'FILED'
+         AND m.engagement_control_id = %s
+        WHERE f.project_id = %s AND f.upload_batch_id = %s
+          AND (%s::uuid IS NULL OR f.id <> %s)
           AND a.status IN ('PENDING', 'WORKING') AND NOT {in_force("f")}
         LIMIT 1
         """,  # noqa: S608
-        (batch.project_id, batch.id, wizard.file_id),
+        (batch.control_id, batch.project_id, batch.id, file_id, file_id),
     ).fetchone()
     if pending is not None:
-        return False
+        return Landing()
     _apply_receipts(cursor, batch, actor)
-    return queue_after_reading(cursor, batch.project_id, wizard.file_id, actor)
+    covered = False
+    queued: list[UUID] = []
+    if file_id is not None:
+        covered = queue_after_reading(cursor, batch.project_id, file_id, actor)
+    else:
+        try:
+            with cursor.connection.transaction():
+                queued = reconcile(cursor, batch.project_id, batch.control_id, actor).queued
+        except Exception as error:
+            logger.warning(
+                "a wizard batch's checks could not be brought in step (%s)",
+                type(error).__name__,
+            )
+    cursor.execute(
+        "UPDATE evidence_batches SET landed_at = clock_timestamp() WHERE id = %s", (batch.id,)
+    )
+    return Landing(covered=covered, queued=queued, landed=True)
 
 
 def _apply_receipts(cursor: psycopg.Cursor[Any], batch: Batch, actor: UUID) -> None:
-    """Each placed file of the batch moves the request it is filed on, as a file read on
-    its request does (evidence_receipts.apply_receipt): per item, so an unsent D&I
-    request's other items are asked for on their own. Applying it again changes nothing."""
+    """Each placed file of the batch still on its control moves the request it is filed
+    on, as a file read on its request does (evidence_receipts.apply_receipt): per item, so
+    an unsent D&I request's other items are asked for on their own. Applying it again
+    changes nothing."""
     rows = cursor.execute(
         f"""
         SELECT DISTINCT ON (p.evidence_file_id) p.evidence_file_id, p.status, p.method, m.id,
                m.pbc_request_id, f.created_at
-        FROM evidence_placements p
-        JOIN evidence_files f ON f.id = p.evidence_file_id
+        FROM evidence_files f
+        JOIN evidence_placements p ON p.evidence_file_id = f.id
         JOIN evidence_matches m
-          ON m.evidence_file_id = p.evidence_file_id AND m.status = 'FILED'
-         AND m.engagement_control_id = p.engagement_control_id
-        WHERE p.batch_id = %s AND NOT {in_force("f")}
+          ON m.evidence_file_id = f.id AND m.status = 'FILED' AND m.engagement_control_id = %s
+        WHERE f.project_id = %s AND f.upload_batch_id = %s AND NOT {in_force("f")}
         ORDER BY p.evidence_file_id, p.version DESC
         """,  # noqa: S608
-        (batch.id,),
+        (batch.control_id, batch.project_id, batch.id),
     ).fetchall()
     for row in sorted(rows, key=lambda found: (found[5], str(found[0]))):
         if row[1] != "PLACED" or row[4] is None:
@@ -826,40 +1032,76 @@ def _apply_receipts(cursor: psycopg.Cursor[Any], batch: Batch, actor: UUID) -> N
         )  # fmt: skip
 
 
-def reading_failed(
-    cursor: psycopg.Cursor[Any], project_id: UUID, file_id: UUID, actor: UUID, code: HeldCode
-) -> bool:
-    """A wizard file whose reading ended without a reading (its custody check failed, or
-    it did not finish): it is not placed and needs a person, with the gate's reason, and
-    its batch's landing is checked. False for any other file (the caller goes on as
-    before)."""
-    wizard = wizard_file(cursor, project_id, file_id)
-    if wizard is None:
-        return False
-    _lock(cursor, wizard.batch.id)
-    current = _current(cursor, file_id)
-    if current is None or (current.method == "AGENT" and current.status != "PLACED"):
-        analysis = cursor.execute(
-            "SELECT id FROM evidence_analyses WHERE evidence_file_id = %s", (file_id,)
-        ).fetchone()
-        version = _insert(
-            cursor, wizard.batch, file_id, status="NEEDS_PERSON", method="AGENT",
-            requirement_ids=(), confidence=None, reason=HELD_REASONS[code], suggestions=(),
-            analysis_id=None if analysis is None else UUID(str(analysis[0])),
-            decided_by=None, supersedes=current,
-        )  # fmt: skip
-        _audit(
-            cursor, wizard.batch.organization_id, project_id, actor, "evidence.placed",
-            "evidence_file", file_id,
-            {"agent": "evidence-coordinator", "batch_id": str(wizard.batch.id),
-             "version": version, "status": "NEEDS_PERSON", "method": "AGENT",
-             "held": code},
-        )  # fmt: skip
-    landed(cursor, wizard, actor)
-    return True
+def land_open_batches(connection: psycopg.Connection[Any], limit: int = 50) -> int:
+    """The start-up backstop, beside the assurance chain's backfill: a batch whose files on
+    its control have all ended since it last landed (a reading that ended by a way that did
+    not land it, or before the hook existed) lands now. A file that ended unread with
+    nothing placed needs a person, with the gate's reason. Bounded, the oldest first, in
+    active engagements; never raises. Returns how many batches landed."""
+    ended = """
+        SELECT 1 FROM evidence_files f
+        JOIN evidence_analyses a ON a.evidence_file_id = f.id
+        JOIN evidence_matches m
+          ON m.evidence_file_id = f.id AND m.status = 'FILED'
+         AND m.engagement_control_id = b.engagement_control_id
+        WHERE f.project_id = b.project_id AND f.upload_batch_id = b.id
+    """
+    try:
+        with connection.transaction():
+            rows = connection.execute(
+                f"""
+                SELECT b.id FROM evidence_batches b
+                JOIN projects p ON p.id = b.project_id AND p.status = 'ACTIVE'
+                WHERE EXISTS ({ended}
+                      AND a.status IN ('READY', 'FAILED')
+                      AND coalesce(a.finished_at, a.cancelled_at, a.updated_at)
+                          > coalesce(b.landed_at, '-infinity'::timestamptz))
+                  AND NOT EXISTS ({ended} AND a.status IN ('PENDING', 'WORKING'))
+                ORDER BY b.created_at
+                LIMIT %s
+                """,  # noqa: S608
+                (limit,),
+            ).fetchall()
+    except psycopg.Error as error:
+        logger.warning("wizard batches could not be checked (%s)", type(error).__name__)
+        return 0
+    landed = 0
+    for (batch_id,) in rows:
+        try:
+            with transaction(connection) as cursor:
+                batch = _batch(cursor, UUID(str(batch_id)))
+                if batch is None:
+                    continue
+                _lock(cursor, batch.id)
+                for file_id, analysis_id, note in cursor.execute(
+                    f"""
+                    SELECT f.id, a.id, a.note FROM evidence_files f
+                    JOIN evidence_analyses a ON a.evidence_file_id = f.id
+                    JOIN evidence_matches m
+                      ON m.evidence_file_id = f.id AND m.status = 'FILED'
+                     AND m.engagement_control_id = %s
+                    WHERE f.upload_batch_id = %s AND a.status = 'FAILED'
+                      AND NOT {in_force("f")}
+                      AND NOT EXISTS (SELECT 1 FROM evidence_placements p
+                                      WHERE p.evidence_file_id = f.id)
+                    """,  # noqa: S608
+                    (batch.control_id, batch.id),
+                ).fetchall():
+                    code: HeldCode = "CUSTODY" if note == CUSTODY_FAILED_NOTE else "READ_FAILED"
+                    _insert(
+                        cursor, batch, UUID(str(file_id)), status="NEEDS_PERSON",
+                        method="AGENT", requirement_ids=(), confidence=None,
+                        reason=HELD_REASONS[code], suggestions=(),
+                        analysis_id=UUID(str(analysis_id)), decided_by=None, supersedes=None,
+                    )  # fmt: skip
+                if land(cursor, batch, batch.created_by).landed:
+                    landed += 1
+        except Exception as error:
+            logger.warning("a wizard batch could not be landed (%s)", type(error).__name__)
+    return landed
 
 
-# --- Filing a file on its items --------------------------------------------------------
+# --- Where a file is: filing it, and following it --------------------------------------
 
 
 @dataclass(frozen=True)
@@ -867,6 +1109,8 @@ class Filed:
     match_id: UUID
     # The request the file is filed on now, or None (on no request: in the control's files).
     request_id: UUID | None
+    # The requests whose items it left (its filing's, or a link's).
+    left: tuple[UUID, ...] = ()
 
 
 def _file_on(
@@ -884,8 +1128,8 @@ def _file_on(
     request for that item where it is requested (the file's evidence_matches filing),
     linked to every other one; with none, on no request (the control's files). A person's
     move also takes it off the items it leaves, and a judgment that rested on it alone goes
-    back to not reviewed (as evidence_plans.unlink_file does). The request it leaves follows
-    the evidence left on it; the caller applies the receipt of the request it goes to."""
+    back to not reviewed (as evidence_plans.unlink_file does). The requests it leaves follow
+    the evidence left on them; the caller applies the receipt of the request it goes to."""
     from ai_workforce_api.evidence_plans import _has_own_evidence
 
     project_id, control_id = batch.project_id, batch.control_id
@@ -930,11 +1174,14 @@ def _file_on(
             "version = version + 1 WHERE id = %s",
             (person, match_id),
         )
+    left: list[UUID] = []
+    if match[1] is not None and match[1] != target[0]:
+        left.append(UUID(str(match[1])))
     linked = {
-        UUID(str(row[1])): UUID(str(row[0]))
+        UUID(str(row[1])): (UUID(str(row[0])), None if row[2] is None else UUID(str(row[2])))
         for row in cursor.execute(
             """
-            SELECT ef.id, ef.requirement_id FROM evidence_requirement_files ef
+            SELECT ef.id, ef.requirement_id, q.pbc_request_id FROM evidence_requirement_files ef
             JOIN evidence_requirements q ON q.id = ef.requirement_id
             WHERE ef.evidence_file_id = %s AND ef.engagement_control_id = %s
               AND ef.status = 'LINKED' AND q.phase = 'DESIGN'
@@ -946,17 +1193,13 @@ def _file_on(
     keep = {item for item in wanted if primary is None or item != primary.requirement_id}
     # The requests of the items a link is taken off: each follows the evidence left on it,
     # as on a person's unlinking (evidence_plans.unlink_file).
-    unlinked_requests: list[UUID] = []
+    unlinked: list[UUID] = []
     if person is not None:
-        for requirement_id, link_id in linked.items():
+        for requirement_id, (link_id, carried) in linked.items():
             if requirement_id in keep:
                 continue
-            carried = cursor.execute(
-                "SELECT pbc_request_id FROM evidence_requirements WHERE id = %s",
-                (requirement_id,),
-            ).fetchone()
-            if carried is not None and carried[0] is not None:
-                unlinked_requests.append(UUID(str(carried[0])))
+            if carried is not None:
+                unlinked.append(carried)
             cursor.execute(
                 """
                 UPDATE evidence_requirement_files
@@ -1033,10 +1276,162 @@ def _file_on(
             cursor, batch.organization_id, project_id, released.request_id, actor,
             released.before,
         )  # fmt: skip
-    for request_id in dict.fromkeys(unlinked_requests):
+    for request_id in dict.fromkeys(unlinked):
         if released is None or request_id != released.request_id:
             follow_evidence(cursor, batch.organization_id, project_id, request_id, actor)
-    return Filed(match_id, target[0])
+    gone = [*left, *([] if released is None else [released.request_id]), *unlinked]
+    return Filed(match_id, target[0], tuple(dict.fromkeys(gone)))
+
+
+def _location(
+    connection: Reader, control_id: UUID, file_ids: Sequence[UUID]
+) -> dict[UUID, tuple[bool, list[UUID]]]:
+    """Where each file is now: whether it is filed to the control, and the control's D&I
+    items it serves there, in the plan's order: filed for an item on its request, filed on
+    a request as a whole (each of its items the reader did not find it misses), or linked.
+    The rule of evidence_plans.requirement_files, never a placement's record."""
+    from ai_workforce_api.evidence_plans import request_file_serves
+
+    if not file_ids:
+        return {}
+    found: dict[UUID, tuple[bool, list[UUID]]] = {
+        UUID(str(row[0])): (True, [])
+        for row in connection.execute(
+            "SELECT evidence_file_id FROM evidence_file_links "
+            "WHERE evidence_file_id = ANY(%s) AND engagement_control_id = %s",
+            (list(file_ids), control_id),
+        ).fetchall()
+    }
+    rows = connection.execute(
+        f"""
+        SELECT f.id, q.id
+        FROM evidence_files f
+        JOIN evidence_file_links l
+          ON l.evidence_file_id = f.id AND l.engagement_control_id = %(control)s
+        JOIN evidence_requirements q
+          ON q.engagement_control_id = %(control)s AND q.phase = 'DESIGN'
+         AND q.status <> 'REMOVED'
+        LEFT JOIN evidence_analyses a ON a.evidence_file_id = f.id
+        WHERE f.id = ANY(%(files)s) AND (
+            (l.pbc_request_id IS NOT NULL AND l.pbc_request_id = q.pbc_request_id
+             AND {request_file_serves("f.id")})
+            OR EXISTS (
+                SELECT 1 FROM evidence_requirement_files ef
+                WHERE ef.requirement_id = q.id AND ef.evidence_file_id = f.id
+                  AND ef.status = 'LINKED' AND ef.engagement_control_id = %(control)s))
+        ORDER BY q.created_at, q.requirement_key
+        """,  # noqa: S608
+        {"control": control_id, "files": list(file_ids)},
+    ).fetchall()
+    for file_id, requirement_id in rows:
+        entry = found.setdefault(UUID(str(file_id)), (True, []))
+        if UUID(str(requirement_id)) not in entry[1]:
+            entry[1].append(UUID(str(requirement_id)))
+    return found
+
+
+def _ordered(first: Sequence[UUID], actual: Sequence[UUID]) -> list[UUID]:
+    """The items a file is on, in the order its placement named them, then the plan's."""
+    return [item for item in first if item in actual] + [
+        item for item in actual if item not in first
+    ]
+
+
+def _repoint(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    file_id: UUID,
+    *,
+    derive: bool,
+) -> UUID | None:
+    """The reading names the request the file is filed on now; where that changed and it
+    is on a request, its deterministic findings are derived there (`derive`). The reader's
+    own findings stay held. Returns the request."""
+    row = cursor.execute(
+        """
+        SELECT a.id, a.status, a.pbc_request_id, m.pbc_request_id
+        FROM evidence_analyses a
+        LEFT JOIN evidence_matches m ON m.evidence_file_id = a.evidence_file_id
+         AND m.status = 'FILED'
+        WHERE a.evidence_file_id = %s
+        """,
+        (file_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    now = None if row[3] is None else UUID(str(row[3]))
+    if row[1] != "READY":
+        return now
+    if row[2] != row[3]:
+        cursor.execute(
+            "UPDATE evidence_analyses SET pbc_request_id = %s, version = version + 1, "
+            "updated_at = clock_timestamp() WHERE id = %s",
+            (now, row[0]),
+        )
+    if derive and now is not None:
+        derive_from_analysis(
+            cursor, organization_id, project_id, UUID(str(row[0])), reader=ReaderFindings()
+        )
+    return now
+
+
+def follow_filing(
+    cursor: psycopg.Cursor[Any],
+    project_id: UUID,
+    file_id: UUID,
+    actor: UUID,
+    reason: str,
+    *,
+    moved: bool = False,
+) -> None:
+    """A flow outside the wizard moved a file the wizard has (the Evidence center's filing,
+    `moved` when it changed the file's control; the D&I list's link or unlink): its
+    placement follows where the file is now, recorded as a person's, superseding the
+    current one, which is kept. Called in that flow's transaction after its change, with
+    lock_wizard taken before it. Nothing is recorded where nothing changed."""
+    batch = _placement_batch(cursor, project_id, file_id)
+    if batch is None:
+        return
+    on_control, actual = _location(cursor, batch.control_id, [file_id]).get(file_id, (False, []))
+    current = _current(cursor, file_id)
+    items = _ordered(() if current is None else current.requirement_ids, actual)
+    status: PlacementStatus
+    if items:
+        status = "PLACED"
+    elif not on_control:
+        status = "NOT_DESIGN"
+    elif current is None:
+        # Not placed yet, and on no item: its reading places it.
+        return
+    elif current.status == "PLACED":
+        status = "NOT_DESIGN"
+    else:
+        status = current.status
+    same = (
+        current is not None and current.status == status and list(current.requirement_ids) == items
+    )
+    if same and not moved:
+        return
+    analysis = cursor.execute(
+        "SELECT id, classification ->> 'confidence' FROM evidence_analyses "
+        "WHERE evidence_file_id = %s",
+        (file_id,),
+    ).fetchone()
+    version = _insert(
+        cursor, batch, file_id, status=status, method="PERSON", requirement_ids=items,
+        confidence=None if analysis is None else analysis[1], reason=reason, suggestions=(),
+        analysis_id=None if analysis is None else UUID(str(analysis[0])), decided_by=actor,
+        supersedes=current,
+    )  # fmt: skip
+    _audit(
+        cursor, batch.organization_id, project_id, actor, "evidence.placement_followed",
+        "evidence_file", file_id,
+        {"batch_id": str(batch.id), "version": version, "status": status, "method": "PERSON",
+         "requirement_ids": [str(item) for item in items], "reason": reason},
+    )  # fmt: skip
+    if on_control:
+        _repoint(cursor, batch.organization_id, project_id, file_id, derive=True)
 
 
 # --- Uploading into the wizard (evidence_intake) -------------------------------------
@@ -1114,41 +1509,67 @@ def upload_scope(
     return Scope(batch_id, control_id, requirement_id, request_id)
 
 
-def record_batch(
-    connection: psycopg.Connection[Any],
+def open_batch(
+    cursor: psycopg.Cursor[Any],
     organization_id: UUID,
     project_id: UUID,
     scope: Scope,
     actor: UUID,
-) -> None:
-    """The session's first upload records the batch; a later one finds it, with the same
-    control and item (two first uploads at once agree on the one recorded)."""
-    with transaction(connection) as cursor:
-        made = cursor.execute(
-            """
-            INSERT INTO evidence_batches (
-                id, organization_id, project_id, engagement_control_id, requirement_id,
-                created_by
-            )
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (id) DO NOTHING
-            RETURNING id
-            """,
-            (scope.batch_id, organization_id, project_id, scope.control_id,
-             scope.requirement_id, actor),
-        ).fetchone()  # fmt: skip
-        batch = _batch(cursor, scope.batch_id)
-        if batch is None:
-            raise NotVisible()
-        _same(batch, project_id, scope.control_id, scope.requirement_id)
-        if made is not None:
-            _audit(
-                cursor, organization_id, project_id, actor, "evidence.batch_started",
-                "evidence_batch", scope.batch_id,
-                {"control_id": str(scope.control_id), "phase": "DESIGN",
-                 "requirement_id": None if scope.requirement_id is None
-                 else str(scope.requirement_id)},
-            )  # fmt: skip
+) -> Batch:
+    """First in the transaction of a wizard upload that stores a file, or records one held
+    already: the session's batch, recorded by its first such upload (never before it, so
+    no batch is empty), and held to the end of the transaction before the upload files
+    anything on a request or takes the plan, so an upload and its batch's landing both
+    take the batch first. Two first uploads at once agree on the one recorded."""
+    made = cursor.execute(
+        """
+        INSERT INTO evidence_batches (
+            id, organization_id, project_id, engagement_control_id, requirement_id, created_by
+        )
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (id) DO NOTHING
+        RETURNING id
+        """,
+        (scope.batch_id, organization_id, project_id, scope.control_id, scope.requirement_id,
+         actor),
+    ).fetchone()  # fmt: skip
+    batch = _batch_of(
+        cursor.execute(
+            f"SELECT {_BATCH_COLUMNS} FROM evidence_batches b WHERE b.id = %s "  # noqa: S608
+            "FOR UPDATE",
+            (scope.batch_id,),
+        ).fetchone()
+    )
+    if batch is None:
+        raise NotVisible()
+    _same(batch, project_id, scope.control_id, scope.requirement_id)
+    if made is not None:
+        _audit(
+            cursor, organization_id, project_id, actor, "evidence.batch_started",
+            "evidence_batch", scope.batch_id,
+            {"control_id": str(scope.control_id), "phase": "DESIGN",
+             "requirement_id": None if scope.requirement_id is None
+             else str(scope.requirement_id)},
+        )  # fmt: skip
+    return batch
+
+
+def record_duplicate(cursor: psycopg.Cursor[Any], batch: Batch, file_id: UUID, actor: UUID) -> None:
+    """A file the engagement holds already, dropped again in this session: listed in it,
+    with the placement it has. Nothing is stored twice; dropped again in its own session,
+    it is listed there already."""
+    cursor.execute(
+        """
+        INSERT INTO evidence_batch_duplicates (
+            batch_id, evidence_file_id, organization_id, project_id, added_by
+        )
+        SELECT %s, f.id, %s, %s, %s FROM evidence_files f
+        WHERE f.id = %s AND f.project_id = %s AND f.upload_batch_id IS DISTINCT FROM %s
+        ON CONFLICT (batch_id, evidence_file_id) DO NOTHING
+        """,
+        (batch.id, batch.organization_id, batch.project_id, actor, file_id, batch.project_id,
+         batch.id),
+    )  # fmt: skip
 
 
 def refuse_wizard_batch(
@@ -1167,6 +1588,7 @@ def place_on_upload(
     organization_id: UUID,
     project_id: UUID,
     scope: Scope,
+    batch: Batch,
     file_id: UUID,
     actor: UUID,
 ) -> None:
@@ -1176,9 +1598,6 @@ def place_on_upload(
     its reading."""
     if scope.requirement_id is None:
         return
-    batch = _batch(cursor, scope.batch_id)
-    if batch is None:
-        raise NotVisible()
     if scope.request_id is None:
         _file_on(
             cursor, batch, file_id, (scope.requirement_id,), (), person=actor,
@@ -1226,6 +1645,7 @@ class SuggestionBody(BaseModel):
 class PlacementBody(BaseModel):
     status: ShownStatus
     method: Method
+    # The items the file is on now, from its filing and links.
     requirement_ids: list[UUID]
     reason: str
     suggestions: list[SuggestionBody]
@@ -1243,6 +1663,8 @@ class FileBody(BaseModel):
     name: str
     size_bytes: int
     extension: str
+    # True for a file the engagement held already, dropped again in this session.
+    duplicate: bool
     stage: FileStage
     read: ReadBody
     # Null until the file is read.
@@ -1257,7 +1679,7 @@ class ItemBody(BaseModel):
     request_title: str
     letters: list[str]
     file_ids: list[UUID]
-    # The item's entry of GET .../evidence-assurance; null while no file is in force on it.
+    # The item's entry of GET .../evidence-assurance (NOT_CHECKED until it has a run).
     assurance: RequestBody | None
 
 
@@ -1281,6 +1703,28 @@ class BatchBody(BaseModel):
     items: list[ItemBody]
 
 
+class BatchSummaryBody(BaseModel):
+    """One of the control's recent wizard sessions, for the D&I list's progress line and to
+    reopen it from any device."""
+
+    batch_id: UUID
+    created_at: datetime
+    created_by_name: str
+    chosen_requirement_id: UUID | None
+    files: int
+    # Files still being read, or read and not yet placed.
+    in_progress: int
+    needs_person: int
+    not_design: int
+    # Every file's reading ended and every placed item's check ended.
+    finished: bool
+    finished_at: datetime | None
+
+
+class BatchesBody(BaseModel):
+    batches: list[BatchSummaryBody]
+
+
 class PlacementChange(BaseModel):
     """A person's placement: the items the file goes to (none: not D&I evidence), at the
     version of the placement they saw."""
@@ -1289,16 +1733,32 @@ class PlacementChange(BaseModel):
     version: int = Field(ge=0)
 
 
-_FILES = f"""
-    SELECT f.id, f.file_name, f.size_bytes, coalesce(a.status, 'PENDING'), a.extraction,
-           a.page_count,
+# Each listed file of the batches named: its own files, then those dropped again in them.
+_LISTED = f"""
+    SELECT listed.batch_id, f.id, f.file_name, f.size_bytes, coalesce(a.status, 'PENDING'),
+           a.extraction, a.page_count,
            CASE WHEN a.status <> 'PENDING' THEN a.started_at END,
            CASE WHEN a.status IN ('READY', 'FAILED')
                 THEN coalesce(a.finished_at, a.cancelled_at) END,
-           coalesce(a.note, ''), a.classification, a.confirmed_kind
-    FROM evidence_files f
+           coalesce(a.note, ''), a.classification, a.confirmed_kind, listed.duplicate,
+           coalesce(btrim(a.extracted_text) <> '', false), coalesce(a.source, ''),
+           EXISTS (SELECT 1 FROM evidence_batches ob WHERE ob.id = f.upload_batch_id),
+           (SELECT m.filed_by FROM evidence_matches m
+            WHERE m.evidence_file_id = f.id AND m.status = 'FILED')
+    FROM (
+        SELECT f.upload_batch_id AS batch_id, f.id AS file_id, false AS duplicate,
+               f.created_at AS listed_at
+        FROM evidence_files f
+        WHERE f.project_id = %(project)s AND f.upload_batch_id = ANY(%(batches)s)
+        UNION ALL
+        SELECT d.batch_id, d.evidence_file_id, true, d.added_at
+        FROM evidence_batch_duplicates d
+        WHERE d.project_id = %(project)s AND d.batch_id = ANY(%(batches)s)
+    ) listed
+    JOIN evidence_files f ON f.id = listed.file_id
     LEFT JOIN evidence_analyses a ON a.evidence_file_id = f.id
-    WHERE f.project_id = %s AND f.upload_batch_id = %s AND NOT {in_force("f")}
+    WHERE NOT {in_force("f")}
+    ORDER BY listed.batch_id, listed.listed_at, f.id
 """
 
 
@@ -1340,94 +1800,257 @@ def _addresses(
     return sorted(found, key=lambda address: (len(address.code), address.code))
 
 
+def _classification(row: tuple[Any, ...]) -> ClassificationBody | None:
+    if str(row[4]) != "READY" or not isinstance(row[10], dict):
+        return None
+    kind = str(row[11] or row[10].get("kind") or "other")
+    confidence = row[10].get("confidence")
+    return ClassificationBody(
+        kind=kind,
+        label=KIND_LABELS.get(kind, kind),
+        confidence=(
+            cast(Confidence, confidence) if confidence in ("high", "medium", "low") else "low"
+        ),
+        summary=clean_line(str(row[10].get("summary") or ""), 300),
+    )
+
+
 def _file_body(
-    row: tuple[Any, ...], current: Current | None, entries: dict[UUID, RequestBody]
+    row: tuple[Any, ...],
+    current: Current | None,
+    on_control: bool,
+    actual: list[UUID],
+    entries: dict[UUID, RequestBody],
 ) -> FileBody:
-    file_id = UUID(str(row[0]))
-    status = str(row[3])
+    """A file's entry: where it is now (its filing and links), never where a placement
+    said it was; its placement's record (who decided, why, at which version) beside it."""
+    file_id = UUID(str(row[1]))
+    status = str(row[4])
     read_status: ReadStatus = (
         cast(ReadStatus, status)
         if status in ("PENDING", "WORKING", "READY", "FAILED")
         else "PENDING"
     )
-    classification: ClassificationBody | None = None
-    if read_status == "READY" and isinstance(row[9], dict):
-        kind = str(row[10] or row[9].get("kind") or "other")
-        confidence = row[9].get("confidence")
-        classification = ClassificationBody(
-            kind=kind,
-            label=KIND_LABELS.get(kind, kind),
-            confidence=cast(Confidence, confidence)
-            if confidence in ("high", "medium", "low")
-            else "low",
-            summary=clean_line(str(row[9].get("summary") or ""), 300),
-        )
+    items = _ordered(() if current is None else current.requirement_ids, actual)
+    shown: ShownStatus
+    reason = "" if current is None else current.reason
+    if not on_control:
+        # Filed to another control since: not this control's D&I evidence any more.
+        shown = "NOT_DESIGN"
+        if current is None or current.status != "NOT_DESIGN":
+            reason = ELSEWHERE
+    elif items:
+        shown = "PLACED"
+        if current is None:
+            reason = HELD_BEFORE
+    elif current is None:
+        # The wizard's own file waits for its reading; one held before it is on no item.
+        shown = "PENDING" if bool(row[15]) else "NOT_DESIGN"
+        reason = "" if bool(row[15]) else HELD_BEFORE
+    elif current.status == "PLACED":
+        shown = "NOT_DESIGN"
+        reason = OFF_ITEMS
+    else:
+        shown = current.status
     stage: FileStage
-    if read_status == "FAILED":
+    if not on_control:
+        stage = "NOT_DESIGN"
+    elif read_status == "FAILED":
         stage = "FAILED"
     elif read_status == "PENDING":
         stage = "STORED"
     elif read_status == "WORKING":
         stage = "READING"
-    elif current is None:
+    elif shown == "PENDING":
         stage = "READ"
-    elif current.status == "PLACED":
+    elif shown == "PLACED":
         stage = "SORTED"
-    elif current.status == "NEEDS_PERSON":
+    elif shown == "NEEDS_PERSON":
         stage = "NEEDS_PERSON"
     else:
         stage = "NOT_DESIGN"
-    placement = (
-        PlacementBody(
-            status="PENDING", method="AGENT", requirement_ids=[], reason="", suggestions=[],
-            version=0,
-        )
-        if current is None
-        else PlacementBody(
-            status=current.status,
-            method=current.method,
-            requirement_ids=list(current.requirement_ids),
-            reason=current.reason,
-            suggestions=[SuggestionBody.model_validate(item) for item in current.suggestions],
-            version=current.version,
-        )
-    )  # fmt: skip
+    method: Method = (
+        current.method if current is not None else "AGENT" if row[16] == "AGENT" else "PERSON"
+    )
+    if current is None and bool(row[15]):
+        method = "AGENT"
     return FileBody(
         file_id=file_id,
-        name=clean_line(str(row[1]), 200),
-        size_bytes=int(row[2]),
-        extension=_extension(str(row[1])),
+        name=clean_line(str(row[2]), 200),
+        size_bytes=int(row[3]),
+        extension=_extension(str(row[2])),
+        duplicate=bool(row[12]),
         stage=stage,
         read=ReadBody(
             status=read_status,
-            method=_read_method(row[4]) if read_status in ("READY", "FAILED") else "NONE",
-            pages=None if row[5] is None else int(row[5]),
-            started_at=row[6],
-            finished_at=row[7],
-            note=clean_line(str(row[8]), 300) if read_status in ("READY", "FAILED") else "",
+            method=_read_method(row[5]) if read_status in ("READY", "FAILED") else "NONE",
+            pages=None if row[6] is None else int(row[6]),
+            started_at=row[7],
+            finished_at=row[8],
+            note=clean_line(str(row[9]), 300) if read_status in ("READY", "FAILED") else "",
         ),
-        classification=classification,
-        placement=placement,
-        addresses=(
-            _addresses(file_id, current.requirement_ids, entries)
-            if current is not None and current.status == "PLACED"
-            else []
+        classification=_classification(row),
+        placement=PlacementBody(
+            status=shown,
+            method=method,
+            requirement_ids=items,
+            reason=reason,
+            suggestions=(
+                []
+                if current is None
+                else [SuggestionBody.model_validate(item) for item in current.suggestions]
+            ),
+            version=0 if current is None else current.version,
         ),
+        addresses=_addresses(file_id, items, entries) if items else [],
     )
 
 
-def _placements(connection: Reader, batch_id: UUID) -> dict[UUID, Current]:
-    return {
-        UUID(str(row[0])): _current_of(row[1:])
+def _ended(file: FileBody, away: set[UUID]) -> bool:
+    """Whether the session is done with a file's reading: it ended, or the file was filed
+    to another control since (`away`), whose reading is that control's."""
+    return file.read.status in ("READY", "FAILED") or file.file_id in away
+
+
+def _not_checked(
+    requirement_id: UUID, categories: tuple[str, ...], rows: Sequence[tuple[Any, ...]]
+) -> RequestBody:
+    """An item's entry before any check of it was recorded: NOT_CHECKED, as the assurance
+    chain lists it (never silently skipped), with the lens its files read now would take
+    (lens_for over the files that ended and pass the gate)."""
+    kinds: list[str] = []
+    for row in rows:
+        status = str(row[4])
+        if status not in ("READY", "FAILED"):
+            continue
+        classification = row[10] if isinstance(row[10], dict) else {}
+        custody = status == "FAILED" and str(row[9]) == CUSTODY_FAILED_NOTE
+        kind = str(row[11] or classification.get("kind") or "other")
+        held = gate(
+            GateFacts(
+                custody_failed=custody,
+                readable=bool(row[13]),
+                kind=kind,
+                kind_confirmed=row[11] is not None,
+                confidence=str(classification.get("confidence") or ""),
+                source=str(row[14]),
+                read_failed=status == "FAILED" and not custody,
+            )
+        )
+        if held is None:
+            kinds.append(kind)
+    return RequestBody(
+        requirement_id=requirement_id,
+        run_id=None,
+        status="NOT_CHECKED",
+        stage="GATE",
+        held=None,
+        lens=lens_for(categories, kinds),
+        read_in_part=False,
+    )
+
+
+@dataclass(frozen=True)
+class _Composed:
+    files: list[FileBody]
+    items: list[ItemBody]
+    # The files filed to another control since they were dropped.
+    away: set[UUID]
+
+
+def _compose(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    control_id: UUID,
+    batches: Sequence[Batch],
+) -> dict[UUID, _Composed]:
+    """The files and items of the sessions named, from the records, with one read of where
+    the files are and, once any placed item has a check, one read of the assurance chain."""
+    from ai_workforce_api.evidence_plans import reference
+
+    rows = connection.execute(
+        _LISTED, {"project": project_id, "batches": [batch.id for batch in batches]}
+    ).fetchall()
+    by_batch: dict[UUID, list[tuple[Any, ...]]] = {batch.id: [] for batch in batches}
+    for row in rows:
+        listed = by_batch.get(UUID(str(row[0])))
+        if listed is not None and len(listed) < MAX_LISTED:
+            listed.append(row)
+    file_ids = list(dict.fromkeys(UUID(str(row[1])) for row in rows))
+    currents = _currents(connection, file_ids)
+    located = _location(connection, control_id, file_ids)
+    placed = list(dict.fromkeys(item for _on, items in located.values() for item in items))
+    details: dict[UUID, tuple[str, UUID | None, tuple[str, ...]]] = {
+        UUID(str(row[0])): (
+            str(row[1]),
+            None if row[2] is None else UUID(str(row[2])),
+            tuple(str(item) for item in (row[3] or [])),
+        )
         for row in connection.execute(
-            f"""
-            SELECT DISTINCT ON (evidence_file_id) evidence_file_id, {_PLACEMENT}
-            FROM evidence_placements WHERE batch_id = %s
-            ORDER BY evidence_file_id, version DESC
-            """,  # noqa: S608
-            (batch_id,),
+            "SELECT id, title, pbc_request_id, categories FROM evidence_requirements "
+            "WHERE id = ANY(%s) AND engagement_control_id = %s",
+            (placed, control_id),
         ).fetchall()
     }
+    checked = bool(placed) and (
+        connection.execute(
+            "SELECT 1 FROM evidence_assessments WHERE requirement_id = ANY(%s) LIMIT 1",
+            (placed,),
+        ).fetchone()
+        is not None
+    )
+    entries: dict[UUID, RequestBody] = {}
+    if checked:
+        entries = {
+            entry.requirement_id: entry
+            for entry in read_assurance(connection, project_id, control_id).requests
+        }
+    else:
+        by_file = {UUID(str(row[1])): row for row in rows}
+        for requirement_id in placed:
+            on_item = [
+                by_file[file_id]
+                for file_id, (_on, items) in located.items()
+                if requirement_id in items and file_id in by_file
+            ]
+            entries[requirement_id] = _not_checked(
+                requirement_id, details.get(requirement_id, ("", None, ()))[2], on_item
+            )
+    links = linked_attributes(connection, control_id) if placed else {}
+    composed: dict[UUID, _Composed] = {}
+    for batch in batches:
+        files: list[FileBody] = []
+        away: set[UUID] = set()
+        on_items: dict[UUID, list[UUID]] = {}
+        for row in by_batch[batch.id]:
+            file_id = UUID(str(row[1]))
+            on_control, actual = located.get(file_id, (False, []))
+            if not on_control:
+                away.add(file_id)
+            body = _file_body(row, currents.get(file_id), on_control, actual, entries)
+            files.append(body)
+            if body.placement.status == "PLACED":
+                for requirement_id in body.placement.requirement_ids:
+                    on_items.setdefault(requirement_id, []).append(file_id)
+        items: list[ItemBody] = []
+        for requirement_id, item_files in on_items.items():
+            title, request_id, _categories = details.get(requirement_id, ("", None, ()))
+            items.append(
+                ItemBody(
+                    requirement_id=requirement_id,
+                    title=clean_line(title, 200),
+                    request_title=(
+                        "Not yet requested"
+                        if request_id is None
+                        else f"Request {reference(request_id)}"
+                    ),
+                    letters=[code for code, _text in links.get(requirement_id, ())],
+                    file_ids=item_files,
+                    assurance=entries.get(requirement_id),
+                )
+            )
+        composed[batch.id] = _Composed(files, items, away)
+    return composed
 
 
 def _visible_batch(connection: Reader, project_id: UUID, control_id: UUID, batch_id: UUID) -> Batch:
@@ -1441,54 +2064,11 @@ def batch_state(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, batch_id: UUID
 ) -> BatchBody:
     """The batch as the wizard shows it, every state from the records: each file's stage,
-    reading, classification, placement and the attributes it addresses; each item that
-    received a file, with its check (the assurance chain's entry for it)."""
-    from ai_workforce_api.evidence_plans import reference
-
+    reading, classification, where it is and the attributes it addresses; each item that
+    holds one of its files, with its check (the assurance chain's entry for it)."""
     batch = _visible_batch(connection, project_id, control_id, batch_id)
-    rows = connection.execute(
-        _FILES + " ORDER BY f.created_at, f.id LIMIT 500", (project_id, batch_id)
-    ).fetchall()
-    placements = _placements(connection, batch_id)
-    placed: dict[UUID, list[UUID]] = {}
-    for row in rows:
-        current = placements.get(UUID(str(row[0])))
-        if current is not None and current.status == "PLACED":
-            for requirement_id in current.requirement_ids:
-                placed.setdefault(requirement_id, []).append(UUID(str(row[0])))
-    entries: dict[UUID, RequestBody] = {}
-    if placed:
-        entries = {
-            entry.requirement_id: entry
-            for entry in read_assurance(connection, project_id, control_id).requests
-        }
-    files = [_file_body(row, placements.get(UUID(str(row[0]))), entries) for row in rows]
-    details: dict[UUID, tuple[str, UUID | None]] = {
-        UUID(str(row[0])): (str(row[1]), None if row[2] is None else UUID(str(row[2])))
-        for row in connection.execute(
-            "SELECT id, title, pbc_request_id FROM evidence_requirements "
-            "WHERE id = ANY(%s) AND engagement_control_id = %s",
-            (list(placed), control_id),
-        ).fetchall()
-    }
-    links = linked_attributes(connection, control_id) if placed else {}
-    items: list[ItemBody] = []
-    for requirement_id, file_ids in placed.items():
-        title, request_id = details.get(requirement_id, ("", None))
-        items.append(
-            ItemBody(
-                requirement_id=requirement_id,
-                title=clean_line(title, 200),
-                request_title=(
-                    "Not yet requested"
-                    if request_id is None
-                    else f"Request {reference(request_id)}"
-                ),
-                letters=[code for code, _text in links.get(requirement_id, ())],
-                file_ids=file_ids,
-                assurance=entries.get(requirement_id),
-            )
-        )
+    composed = _compose(connection, project_id, control_id, [batch])[batch.id]
+    files, items, away = composed.files, composed.items, composed.away
     now = connection.execute("SELECT clock_timestamp()").fetchone()
     return BatchBody(
         batch_id=batch.id,
@@ -1498,7 +2078,7 @@ def batch_state(
         server_now=batch.created_at if now is None else now[0],
         stages=StagesBody(
             stored=len(files),
-            read=sum(1 for file in files if file.read.status in ("READY", "FAILED")),
+            read=sum(1 for file in files if _ended(file, away)),
             sorted=sum(1 for file in files if file.placement.status != "PENDING"),
             checked_items=sum(
                 1
@@ -1507,10 +2087,64 @@ def batch_state(
             ),
             items=len(items),
             files=len(files),
-        ),  # fmt: skip
+        ),
         files=files,
         items=items,
     )
+
+
+def list_batches(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> BatchesBody:
+    """The control's recent wizard sessions, the most recent first: how many files each
+    holds, how many are still being read or sorted, wait for a person or are not D&I
+    evidence, and whether it has finished (every file's reading ended and every placed
+    item's check ended), and when."""
+    known = connection.execute(
+        "SELECT 1 FROM engagement_controls WHERE id = %s AND project_id = %s",
+        (control_id, project_id),
+    ).fetchone()
+    if known is None:
+        raise NotVisible()
+    rows = connection.execute(
+        f"""
+        SELECT {_BATCH_COLUMNS}, coalesce(u.display_name, '')
+        FROM evidence_batches b LEFT JOIN users u ON u.id = b.created_by
+        WHERE b.project_id = %s AND b.engagement_control_id = %s
+        ORDER BY b.created_at DESC, b.id DESC
+        LIMIT %s
+        """,  # noqa: S608
+        (project_id, control_id, RECENT_BATCHES),
+    ).fetchall()
+    batches = [batch for batch in (_batch_of(row[:8]) for row in rows) if batch is not None]
+    names = {UUID(str(row[0])): str(row[8]) for row in rows}
+    composed = _compose(connection, project_id, control_id, batches) if batches else {}
+    found: list[BatchSummaryBody] = []
+    for batch in batches:
+        files, items = composed[batch.id].files, composed[batch.id].items
+        finished = all(_ended(file, composed[batch.id].away) for file in files) and all(
+            item.assurance is not None and item.assurance.status in _CHECKED for item in items
+        )
+        moments = [file.read.finished_at for file in files if file.read.finished_at] + [
+            item.assurance.finished_at
+            for item in items
+            if item.assurance is not None and item.assurance.finished_at is not None
+        ]
+        found.append(
+            BatchSummaryBody(
+                batch_id=batch.id,
+                created_at=batch.created_at,
+                created_by_name=clean_line(names.get(batch.id, ""), 200),
+                chosen_requirement_id=batch.requirement_id,
+                files=len(files),
+                in_progress=sum(1 for file in files if file.stage in ("STORED", "READING", "READ")),
+                needs_person=sum(1 for file in files if file.placement.status == "NEEDS_PERSON"),
+                not_design=sum(1 for file in files if file.placement.status == "NOT_DESIGN"),
+                finished=finished,
+                finished_at=max(moments) if finished and moments else None,
+            )
+        )
+    return BatchesBody(batches=found)
 
 
 def file_entry(
@@ -1558,10 +2192,14 @@ def move(
     file_id: UUID,
     body: PlacementChange,
 ) -> tuple[FileBody, list[UUID]]:
-    """A person places a file: on the items named (none: not D&I evidence), at the
-    version they saw. The filing moves with it (off the items it leaves, onto the ones it
-    goes to), the requests' receipts follow, and the checks of both are brought in step;
-    the earlier placement is superseded and kept. Returns the file's entry and the checks
+    """A person places a file of the session (its own, or one dropped again in it): on the
+    items named (none: not D&I evidence), at the version they saw. The filing moves with it
+    (off the items it leaves, onto the ones it goes to); the requests follow the evidence:
+    the one it goes to is received as for a file added on its item, and on a D&I request
+    only ever provided directly, the items it left without evidence are asked for again in
+    a draft of their own; the reading names the request it is on now, where its
+    deterministic findings are derived; and the checks of both items are brought in step.
+    The earlier placement is superseded and kept. Returns the file's entry and the checks
     to hand to the worker once this has committed."""
     _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
     status = connection.execute(
@@ -1581,23 +2219,32 @@ def move(
             # takes them, so a move and the end of a reading wait for each other.
             reading = cursor.execute(
                 """
-                SELECT a.id, a.status, a.pbc_request_id, f.upload_batch_id
+                SELECT a.id, a.status,
+                       f.upload_batch_id = %s OR EXISTS (
+                           SELECT 1 FROM evidence_batch_duplicates d
+                           WHERE d.batch_id = %s AND d.evidence_file_id = f.id)
                 FROM evidence_files f
                 JOIN evidence_analyses a ON a.evidence_file_id = f.id
                 WHERE f.id = %s AND f.project_id = %s AND f.organization_id = %s
                 FOR UPDATE OF a
                 """,
-                (file_id, project_id, organization_id),
+                (batch_id, batch_id, file_id, project_id, organization_id),
             ).fetchone()
-            if reading is None or reading[3] is None or UUID(str(reading[3])) != batch_id:
+            if reading is None or not reading[2]:
                 raise NotVisible()
-            batch = _visible_batch(cursor, project_id, control_id, batch_id)
-            _lock(cursor, batch.id)
+            session = _visible_batch(cursor, project_id, control_id, batch_id)
+            # The batch the file's placements and landing belong to: its own wizard batch,
+            # else this session.
+            own = _placement_batch(cursor, project_id, file_id) or session
+            _lock(cursor, own.id)
             if is_withdrawn(cursor, file_id):
                 raise WizardState("this file is withdrawn; restore it first")
             current = _current(cursor, file_id)
             if (0 if current is None else current.version) != body.version:
                 raise WizardState("the placement changed")
+            on_control, before = _location(cursor, control_id, [file_id]).get(file_id, (False, []))
+            if not on_control:
+                raise WizardState("the file is no longer filed to this control")
             if reading[1] in ("PENDING", "WORKING"):
                 raise WizardState("the agent is still reading this file")
             from ai_workforce_api.evidence_review import review_decided
@@ -1607,14 +2254,9 @@ def move(
                 raise WizardState(
                     "the screenshot review is signed off, so the file stays where it is"
                 )
-            before = (
-                list(current.requirement_ids)
-                if current is not None and current.status == "PLACED"
-                else []
-            )
             reason = PLACED_BY_PERSON if wanted else MOVED_OUT
             filed = _file_on(
-                cursor, batch, file_id, wanted, before, person=principal.id, reason=reason,
+                cursor, session, file_id, wanted, before, person=principal.id, reason=reason,
                 actor=principal.id,
             )  # fmt: skip
             confidence = cursor.execute(
@@ -1622,7 +2264,7 @@ def move(
                 (analysis_id,),
             ).fetchone()
             version = _insert(
-                cursor, batch, file_id, status="PLACED" if wanted else "NOT_DESIGN",
+                cursor, session, file_id, status="PLACED" if wanted else "NOT_DESIGN",
                 method="PERSON", requirement_ids=wanted,
                 confidence=None if confidence is None else confidence[0], reason=reason,
                 suggestions=(), analysis_id=analysis_id, decided_by=principal.id,
@@ -1633,25 +2275,25 @@ def move(
                     cursor, organization_id, project_id, filed.match_id, filed.request_id,
                     principal.id, "PERSON",
                 )  # fmt: skip
-                if reading[2] is None:
-                    # Read on no request: what its reading finds is recorded against the
-                    # request it is filed on now. The reader's own findings stay held.
-                    cursor.execute(
-                        "UPDATE evidence_analyses SET pbc_request_id = %s, "
-                        "version = version + 1, updated_at = clock_timestamp() WHERE id = %s",
-                        (filed.request_id, analysis_id),
-                    )
-                    derive_from_analysis(
-                        cursor, organization_id, project_id, analysis_id, reader=ReaderFindings()
-                    )
+            # A D&I request only ever provided directly: the items the move left without
+            # evidence are asked for again in a draft of their own.
+            asked = [
+                request_id
+                for request_id in filed.left
+                if ask_again_for_items_left(
+                    cursor, organization_id, project_id, request_id, principal.id
+                )
+            ]
+            _repoint(cursor, organization_id, project_id, file_id, derive=True)
             _audit(
                 cursor, organization_id, project_id, principal.id, "evidence.placement_moved",
                 "evidence_file", file_id,
-                {"batch_id": str(batch.id), "version": version, "method": "PERSON",
+                {"batch_id": str(session.id), "version": version, "method": "PERSON",
                  "status": "PLACED" if wanted else "NOT_DESIGN",
                  "requirement_ids": [str(item) for item in wanted],
                  "from": [str(item) for item in before],
-                 "from_status": None if current is None else current.status},
+                 "from_status": None if current is None else current.status,
+                 "asked_again": [str(item) for item in asked]},
             )  # fmt: skip
             queued = queue_safely(cursor, project_id, file_id, principal.id)
     except UniqueViolation:
@@ -1665,10 +2307,8 @@ def move(
 def register_evidence_wizard(
     app: FastAPI, settings: Settings, scheduler: object | None = None
 ) -> None:
-    base = (
-        "/organizations/{organization_id}/projects/{project_id}/controls/{control_id}"
-        "/evidence-batches/{batch_id}"
-    )
+    control = "/organizations/{organization_id}/projects/{project_id}/controls/{control_id}"
+    base = f"{control}/evidence-batches/{{batch_id}}"
 
     def run[T](request: Request, work: Callable[[psycopg.Connection[Any], Principal], T]) -> T:
         principal = _session_principal(request)
@@ -1679,6 +2319,17 @@ def register_evidence_wizard(
             )
         except WizardState as error:
             raise HTTPException(status_code=409, detail=error.detail) from None
+
+    @app.get(f"{control}/evidence-batches", response_model=BatchesBody)
+    def batches(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> BatchesBody:
+        def work(connection: psycopg.Connection[Any], principal: Principal) -> BatchesBody:
+            authorize(connection, principal=principal, action=Action.PROJECT_READ,
+                      organization_id=organization_id, project_id=project_id)  # fmt: skip
+            return list_batches(connection, project_id, control_id)
+
+        return run(request, work)
 
     @app.get(base, response_model=BatchBody)
     def state(
@@ -1710,6 +2361,7 @@ def register_evidence_wizard(
 
 __all__ = [
     "BatchBody",
+    "BatchesBody",
     "Decision",
     "FileBody",
     "Item",
@@ -1718,6 +2370,7 @@ __all__ = [
     "batch_state",
     "decide",
     "design_items",
+    "list_batches",
     "move",
     "register_evidence_wizard",
 ]

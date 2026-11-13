@@ -7,29 +7,38 @@
 -- kept in the control's files when it covers no item. A person can move any file.
 --
 -- evidence_batches: one row per wizard session (its id is the uploads' batch id),
---   recorded by the session's first upload: the firm, the engagement, the control whose
---   D&I items the files are sorted into, the phase (DESIGN), the item chosen when the
---   wizard was opened from a row, who and when. A batch keeps its control and its item:
---   it is never changed or deleted.
+--   recorded in the transaction of the session's first upload (never before it): the
+--   firm, the engagement, the control whose D&I items the files are sorted into, the
+--   phase (DESIGN), the item chosen when the wizard was opened from a row, who and when.
+--   A batch keeps its control and its item: it is never deleted, and only when it last
+--   landed changes (landed_at: when its readings had all ended and its placements'
+--   receipts and checks were applied, so the start-up backstop finds a batch that ended
+--   without landing).
 --
--- evidence_placements: where each file of a batch was placed, append-only. One row per
---   decision: the file, its batch, the item it is filed on (requirement_id, or none) and
---   every item it is placed on (requirement_ids: more than one for a file that covers
---   several items in full), the status (PLACED, NEEDS_PERSON, NOT_DESIGN), who decided
---   (AGENT or PERSON, with the person), the reader's confidence, the reason, the ranked
---   suggestions, the reading it rests on, and when. A move is a new row that supersedes
---   the earlier one (supersedes_id, the next version of the file's placement); a row is
---   never changed or deleted, so every earlier placement is kept.
+-- evidence_batch_duplicates: a file the engagement held already, dropped again in a later
+--   session of the same control. It is listed in that session too, with the placement it
+--   has; nothing is stored twice. Never changed or deleted.
+--
+-- evidence_placements: where each file was placed, append-only. One row per decision: the
+--   file, the session it was decided in (the file's own, or one it was dropped in again),
+--   the item it is filed on (requirement_id, or none) and every item it is placed on
+--   (requirement_ids: more than one for a file that covers several items in full), the
+--   status (PLACED, NEEDS_PERSON, NOT_DESIGN), who decided (AGENT or PERSON, with the
+--   person), the reader's confidence, the reason, the ranked suggestions, the reading it
+--   rests on, and when. A move is a new row that supersedes the earlier one
+--   (supersedes_id, the next version of the file's placement); a row is never changed or
+--   deleted, so every earlier placement is kept.
 --
 -- evidence_analyses gains when the reading started and ended (started_at, finished_at),
 -- so the wizard shows each file's reading as it happens from the server's records.
 --
--- Rollback: DROP TABLE evidence_placements; DROP TABLE evidence_batches; DROP FUNCTION
--- check_evidence_placement(), keep_evidence_placement(), check_evidence_batch(),
--- keep_evidence_batch(); ALTER TABLE evidence_analyses DROP COLUMN started_at, DROP COLUMN
--- finished_at; delete the '0158_evidence_wizard' row from schema_migrations. Before any
--- wizard upload only: a wizard file's placement on an item is otherwise recorded nowhere
--- else.
+-- Rollback: DROP TABLE evidence_placements; DROP TABLE evidence_batch_duplicates; DROP
+-- TABLE evidence_batches; DROP FUNCTION check_evidence_placement(),
+-- keep_evidence_placement(), check_evidence_batch(), keep_evidence_batch(),
+-- check_evidence_batch_duplicate(), keep_evidence_batch_duplicate(); ALTER TABLE
+-- evidence_analyses DROP COLUMN started_at, DROP COLUMN finished_at; delete the
+-- '0158_evidence_wizard' row from schema_migrations. Before any wizard upload only: a
+-- wizard file's placement on an item is otherwise recorded nowhere else.
 
 CREATE TABLE evidence_batches (
     -- The batch id the session's uploads carry (evidence_files.upload_batch_id).
@@ -42,6 +51,9 @@ CREATE TABLE evidence_batches (
     requirement_id uuid REFERENCES evidence_requirements (id) ON DELETE RESTRICT,
     created_by uuid NOT NULL REFERENCES users (id) ON DELETE RESTRICT,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    -- When the batch last landed: its readings had all ended, and its placements'
+    -- receipts and checks were applied. Null until it first lands.
+    landed_at timestamptz,
     CONSTRAINT evidence_batches_phase CHECK (phase = 'DESIGN'),
     CONSTRAINT evidence_batches_project_fk
         FOREIGN KEY (project_id, organization_id) REFERENCES projects (id, organization_id)
@@ -78,14 +90,23 @@ CREATE TRIGGER evidence_batches_checked
 BEFORE INSERT ON evidence_batches
 FOR EACH ROW EXECUTE FUNCTION check_evidence_batch();
 
--- A batch keeps its control and its item: it is never changed or deleted.
+-- A batch keeps its control and its item: it is never deleted, and only the time it last
+-- landed changes, never backwards.
 CREATE FUNCTION keep_evidence_batch()
 RETURNS trigger
 LANGUAGE plpgsql
 SET search_path = pg_catalog
 AS $$
 BEGIN
-    RAISE EXCEPTION 'an evidence batch is never changed or deleted';
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'an evidence batch is never deleted';
+    END IF;
+    IF (to_jsonb(NEW) - 'landed_at') IS DISTINCT FROM (to_jsonb(OLD) - 'landed_at')
+       OR NEW.landed_at IS NULL
+       OR (OLD.landed_at IS NOT NULL AND NEW.landed_at < OLD.landed_at) THEN
+        RAISE EXCEPTION 'an evidence batch only records when it last landed';
+    END IF;
+    RETURN NEW;
 END;
 $$;
 
@@ -98,11 +119,72 @@ CREATE TRIGGER evidence_batches_archived_guard
 BEFORE INSERT OR UPDATE OR DELETE ON evidence_batches
 FOR EACH ROW EXECUTE FUNCTION refuse_archived_writes();
 
+CREATE TABLE evidence_batch_duplicates (
+    batch_id uuid NOT NULL REFERENCES evidence_batches (id) ON DELETE RESTRICT,
+    evidence_file_id uuid NOT NULL REFERENCES evidence_files (id) ON DELETE RESTRICT,
+    organization_id uuid NOT NULL,
+    project_id uuid NOT NULL,
+    added_by uuid NOT NULL REFERENCES users (id) ON DELETE RESTRICT,
+    added_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    CONSTRAINT evidence_batch_duplicates_key PRIMARY KEY (batch_id, evidence_file_id),
+    CONSTRAINT evidence_batch_duplicates_project_fk
+        FOREIGN KEY (project_id, organization_id) REFERENCES projects (id, organization_id)
+        ON DELETE RESTRICT ON UPDATE RESTRICT
+);
+
+CREATE INDEX evidence_batch_duplicates_file_idx
+    ON evidence_batch_duplicates (evidence_file_id);
+
+-- A duplicate is a file of the batch's engagement uploaded in another session.
+CREATE FUNCTION check_evidence_batch_duplicate()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM public.evidence_files f
+        JOIN public.evidence_batches b ON b.id = NEW.batch_id
+        WHERE f.id = NEW.evidence_file_id AND f.project_id = b.project_id
+          AND b.project_id = NEW.project_id
+          AND f.upload_batch_id IS DISTINCT FROM b.id
+    ) THEN
+        RAISE EXCEPTION 'a duplicate is a file of the engagement from another session'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER evidence_batch_duplicates_checked
+BEFORE INSERT ON evidence_batch_duplicates
+FOR EACH ROW EXECUTE FUNCTION check_evidence_batch_duplicate();
+
+CREATE FUNCTION keep_evidence_batch_duplicate()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog
+AS $$
+BEGIN
+    RAISE EXCEPTION 'a file dropped again in a session is never changed or deleted';
+END;
+$$;
+
+CREATE TRIGGER evidence_batch_duplicates_kept
+BEFORE UPDATE OR DELETE ON evidence_batch_duplicates
+FOR EACH ROW EXECUTE FUNCTION keep_evidence_batch_duplicate();
+
+-- An archived engagement's records are read-only (migration 0136).
+CREATE TRIGGER evidence_batch_duplicates_archived_guard
+BEFORE INSERT OR UPDATE OR DELETE ON evidence_batch_duplicates
+FOR EACH ROW EXECUTE FUNCTION refuse_archived_writes();
+
 CREATE TABLE evidence_placements (
     id uuid PRIMARY KEY DEFAULT uuidv7(),
     organization_id uuid NOT NULL,
     project_id uuid NOT NULL,
     engagement_control_id uuid NOT NULL,
+    -- The session the decision was made in: the file's own, or one it was dropped in again.
     batch_id uuid NOT NULL REFERENCES evidence_batches (id) ON DELETE RESTRICT,
     evidence_file_id uuid NOT NULL REFERENCES evidence_files (id) ON DELETE RESTRICT,
     -- The file's placement history: version 1 first, each later one superseding the one
@@ -165,9 +247,9 @@ CREATE INDEX evidence_placements_batch_idx
 CREATE INDEX evidence_placements_control_idx
     ON evidence_placements (engagement_control_id, created_at DESC);
 
--- What a placement names is checked where it is written: a file of its own batch, whose
--- control it is; D&I items of that control, each once; and, for a later version, the
--- file's version before it.
+-- What a placement names is checked where it is written: a file of the session it was
+-- decided in (its own, or one it was dropped in again), whose control it is; D&I items of
+-- that control, each once; and, for a later version, the file's version before it.
 CREATE FUNCTION check_evidence_placement()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -179,12 +261,15 @@ DECLARE
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM public.evidence_files f
-        JOIN public.evidence_batches b ON b.id = f.upload_batch_id
-        WHERE f.id = NEW.evidence_file_id AND b.id = NEW.batch_id
-          AND b.project_id = NEW.project_id
+        JOIN public.evidence_batches b ON b.id = NEW.batch_id
+        WHERE f.id = NEW.evidence_file_id AND b.project_id = NEW.project_id
           AND b.engagement_control_id = NEW.engagement_control_id
+          AND (f.upload_batch_id = b.id OR EXISTS (
+              SELECT 1 FROM public.evidence_batch_duplicates d
+              WHERE d.batch_id = b.id AND d.evidence_file_id = f.id
+          ))
     ) THEN
-        RAISE EXCEPTION 'a placement names a file of its own batch and control'
+        RAISE EXCEPTION 'a placement names a file of its session and control'
             USING ERRCODE = 'check_violation';
     END IF;
     IF cardinality(NEW.requirement_ids) <> (

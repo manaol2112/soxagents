@@ -5121,10 +5121,15 @@ def link_file(
 ) -> None:
     """A person says a file the control already holds serves a requirement, with why: the
     design walkthrough's file for an interim item, one file for two phases."""
+    from ai_workforce_api.evidence_wizard import LINKED_ON_LIST, follow_filing, lock_wizard
+
     reason = " ".join(body.reason.split())
     if len(reason) < 3:
         raise ValueError("say why the file serves it")
     with transaction(connection) as cursor:
+        # A file the D&I evidence wizard has: its reading and its batch before the plan's
+        # row, the order every wizard write takes them in.
+        wizard = lock_wizard(cursor, project_id, body.file_id)
         row = _requirement_row(cursor, project_id, control_id, requirement_id)
         if int(row[2]) != body.version:
             raise PlanState("the requirement changed")
@@ -5178,6 +5183,9 @@ def link_file(
             "evidence_requirement", requirement_id,
             {"evidence_file_id": str(body.file_id), "link_id": str(saved[0])},
         )  # fmt: skip
+        if wizard is not None:
+            # The wizard's placement follows the file (superseding, kept).
+            follow_filing(cursor, project_id, body.file_id, actor, LINKED_ON_LIST)
 
 
 def unlink_file(
@@ -5192,10 +5200,24 @@ def unlink_file(
 ) -> None:
     """A person takes a linked file off a requirement, with why. The link is kept, marked
     removed. A judgment that rested on it alone goes back to not reviewed."""
+    from ai_workforce_api.evidence_wizard import UNLINKED_ON_LIST, follow_filing, lock_wizard
+
     reason = " ".join(body.reason.split())
     if len(reason) < 3:
         raise ValueError("say why")
     with transaction(connection) as cursor:
+        # A file the D&I evidence wizard has: its reading and its batch before the plan's
+        # row, the order every wizard write takes them in.
+        linked_file = cursor.execute(
+            "SELECT evidence_file_id FROM evidence_requirement_files "
+            "WHERE id = %s AND requirement_id = %s",
+            (link_id, requirement_id),
+        ).fetchone()
+        wizard = (
+            None
+            if linked_file is None
+            else lock_wizard(cursor, project_id, UUID(str(linked_file[0])))
+        )
         row = _requirement_row(cursor, project_id, control_id, requirement_id)
         link = cursor.execute(
             "SELECT version FROM evidence_requirement_files WHERE id = %s "
@@ -5245,6 +5267,9 @@ def unlink_file(
             "evidence_requirement", requirement_id,
             {"link_id": str(link_id), "judgment_reset": not others},
         )  # fmt: skip
+        if wizard is not None and linked_file is not None:
+            # The wizard's placement follows the file (superseding, kept).
+            follow_filing(cursor, project_id, UUID(str(linked_file[0])), actor, UNLINKED_ON_LIST)
 
 
 AcceptedBy = Literal["ACCEPT", "ADD", "EDIT", "LINKS", "RESTORE", "CHANGE"]

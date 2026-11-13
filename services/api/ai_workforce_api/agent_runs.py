@@ -141,7 +141,12 @@ def finish_cancelled(
     """The job noticed the request and stopped: the record rests, says who cancelled it,
     and the audit trail records the agent's stop. False when nothing was requested."""
     found = RUN_KINDS[kind]
-    extra = ", version = version + 1, updated_at = clock_timestamp()" if kind == "analysis" else ""
+    # The record's own version (t.): users, joined below for the name, has one too, so an
+    # unqualified `version` failed as ambiguous and a running reading could not be stopped
+    # (found by the wizard's tests, 13 November 2026).
+    extra = (
+        ", version = t.version + 1, updated_at = clock_timestamp()" if kind == "analysis" else ""
+    )
     with transaction(connection) as cursor:
         row = cursor.execute(
             f"""
@@ -181,7 +186,18 @@ def finish_cancelled(
                 Json({"agent": found.agent_key, "stopped": "at the next check", **(payload or {})}),
             ),
         )
+        if kind == "analysis":
+            _analysis_ended(cursor, record_id, UUID(str(row[2])))
     return True
+
+
+def _analysis_ended(cursor: psycopg.Cursor[Any], analysis_id: UUID, actor: UUID) -> None:
+    """A cancelled reading has ended: for a file of the D&I evidence wizard, its placement
+    and its batch's landing follow in the cancellation's own transaction
+    (evidence_wizard.reading_ended, the hook every way a reading ends runs)."""
+    from ai_workforce_api.evidence_wizard import analysis_ended
+
+    analysis_ended(cursor, analysis_id, actor)
 
 
 def request_cancel(
@@ -232,6 +248,8 @@ def request_cancel(
             )
             _audit(cursor, organization_id, project_id, principal.id, found, record_id,
                    {"state": "queued", "agent": found.agent_key})  # fmt: skip
+            if kind == "analysis":
+                _analysis_ended(cursor, record_id, principal.id)
             return CancelBody(kind=kind, record_id=record_id, state="CANCELLED", note=note)
         if status == "WORKING":
             # The latest request stands; an earlier, finished cancellation does not mask it.
