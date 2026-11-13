@@ -225,10 +225,21 @@ accepted, not on a cancelled request, in a D&I phase that applies).
 
 There is no third agent and no tie-break. `UNSETTLED` goes to a person with both views.
 
-A reading that gives no usable answer (the call failed, was cut off, did not match the
-schema, or was rejected by the checks) settles nothing: the run is FAILED, nothing of it
-is shown, and a person runs it again. The second reading is not asked for when the first
-gave nothing.
+Both readings are asked with one request builder (`reading_request`, which the evaluation
+set's scorer uses too). An answer whose `attributes` arrives as the text of its JSON is
+read as the JSON it is (`models.unnested`, as the planner's answer is: the first live run,
+13 November 2026, lost three readings, and so three cases, to it); every check applies to what is
+read, and the call's record keeps what the provider returned and says it was re-read. A
+reading whose answer was cut off at its allowance of 8,192 output tokens (the provider's
+stop reason, or JSON text that ends part way) is asked once more with 16,000 and 300
+seconds, the same prompt, as a model call of its own through the same budgets and with the
+claim's lease extended; the cut-off call stays on record (`NOT_USED`, asked again) and is
+never read. An answer that is whole but of the wrong shape is not asked for again.
+
+A reading that gives no usable answer (the call failed, was cut off again, did not match
+the schema, or was rejected by the checks) settles nothing: the run is FAILED, nothing of
+it is shown, and a person runs it again. The second reading is not asked for when the
+first gave nothing.
 
 ### Stage 5: what a person sees
 
@@ -333,7 +344,9 @@ plan's revision.
 Every model call goes through `provenance.AgentCaller` (budgets, trial reservations,
 cancellation, the provenance record), both readings in one job. A run that cannot pay for
 both readings does not start the first one (`AgentCaller.refusal_for`): it is FAILED with
-the reason, and no call is made or recorded.
+the reason, and no call is made or recorded. A reading asked again after its answer was
+cut off is a further call in the same job (`inputs.retry_of` names the call it replaces);
+it is not in that first sum, and passes the budget checks itself when it is made.
 
 ## 5. Pure core (for tests and the evaluation set)
 
@@ -372,6 +385,8 @@ def run_gate(files: Sequence[tuple[Held | None, int]], attributes: int) -> Held 
 def lens_for(categories: tuple[str, ...], kinds: Sequence[str]) -> Lens: ...
 def elements_of(attribute: AttributeSpec) -> tuple[tuple[str, str], ...]: ...   # (key, text)
 def prompt_for(chain: ChainInput, role: Role) -> tuple[str, str]: ...   # (system, prompt)
+def reading_request(system: str, prompt: str, *, retry: bool = False) -> ModelRequest: ...   # both readings, database run and scorer
+def cut_off(status: str, raw: ModelRaw, schema: dict[str, Any] = OPINION_SCHEMA) -> bool: ...   # ask again with more room
 def check_opinion(output: dict[str, Any], chain: ChainInput) -> Opinion: ...   # rules 1 to 6
 def attribute_result(elements: Sequence[ElementView]) -> Result: ...   # rule 6
 def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome, ...]: ...
@@ -519,12 +534,68 @@ in part, and a file whose request links the wrong attributes.
   most), false `ISSUE`, `UNSETTLED` rate, and the cost per file. The first live figures
   are recorded here with their date, model and prompt versions.
 
+### The first live run, 13 November 2026
+
+All 20 cases, `claude-sonnet-5-5` (the BALANCED tier) for both readings, prompts
+`evidence-assurance-assessor/4` and `evidence-assurance-reviewer/4`, a $5 cap: $2.19 spent
+(697,833 input and 79,918 output tokens, $0.067 a file).
+
+| Measure | Result |
+| --- | --- |
+| Cases scored | 17 of 20; 3 failed (a reading's `attributes` arrived as JSON text) |
+| Attributes scored, correct | 64, 52 |
+| False `SUPPORTED`, false `IMPLEMENTATION` | 0, 0 |
+| False `ISSUE` | 7, all attribute C, both readings `PARTLY_MET` |
+| Missed `ISSUE`; `ISSUE` with a result the case does not accept | 1; 1 |
+| `UNSETTLED` | 10 (15.6%), 4 of them not acceptable |
+| Readings agree | 59 of 64 (92.2%) |
+
+What it showed, and what was done the same day:
+
+- The three failed cases (`policy_complete` and `three_files_together`, the second
+  reading; `walkthrough_approver_granted`, the first): "answer.attributes: expected array,
+  got string", at 1,039 to 3,581 output tokens, well inside the allowance. Mended in the
+  request (stage 4): read as written, and a reading cut off is asked once more with more
+  room.
+- The seven false issues: attribute C ("The requester, the approvers and the person who
+  granted the access are different people"), whose criteria pass when "Neither approver is
+  the requester or the user who receives the access, and the role was assigned by a member
+  of SAP Security who did not approve the request." In each of the seven cases (and in
+  `three_files_together`) no record designated the person who assigned the role (Tomas
+  Nguyen, TNGUYEN) as a member of SAP Security: the ticket held only "Assignment group: SAP
+  Security" (the queue, not the person), and his activity (a work note, the closure, the
+  SAP change document) shows what he did, not his team. The careful reader's answer said "The role was
+  assigned by SAP Security" and quoted nothing that shows it. The readings did accept the
+  records' own designations elsewhere (the approval step "Role owner approval -
+  Z_FI_AP_CLERK", the ticket's HR manager field: B was supported by both in
+  `walkthrough_complete`). The fault was the cases': a ServiceNow requested item names its
+  assignee beside its assignment group, and the eight cases now carry "Assigned to: Tomas
+  Nguyen (TNGUYEN)", which the careful answer quotes. No prompt or rule changed. Reading a
+  team from who worked or closed a ticket is no designation and was not adopted: in
+  `walkthrough_approver_granted` an approver outside SAP Security worked and closed a
+  ticket assigned to SAP Security.
+- For the product owner, not changed: `policy_draft_placeholders` B (`ISSUE` `PARTLY_MET`,
+  the case expects `NOT_MET`): a placeholder where the approvers should be named is a
+  deviation in code under `DESIGN_DOCUMENT`, but the prompt's list of deviations does not
+  name a placeholder, so the readings most likely named the approvers as absent.
+  `remark_all_approvals_obtained` B (missed): `NOT_MET` against `PARTLY_MET` on an absence
+  (no record of the role owner's step at all) is `UNSETTLED` by the comparison table.
+  `remark_all_approvals_obtained` A and `split_request_ticket_only` A (`UNSETTLED`): each
+  second reading lost exactly one quote to the strict match; the prompt allows "at least
+  four words or a full value", the match needs four words or twenty characters, and the
+  ticket's own "Number: RITM0048213" (19 characters) is dropped (likely, not proven: the
+  result file did not keep the readings' answers; it does now).
+  `single_word_inside_unapproved` D (`UNSETTLED`): D's condition reads "the role approved
+  in the ticket", and with the role owner's step Unapproved the second reading found D met
+  only in part, B's shortfall read into D's wording.
+
 ## 9. Status
 
 | Increment | State |
 | --- | --- |
 | The chain on D&I evidence: gate, assessment, blind re-performance, comparison, records, API, findings | in progress, 12 November 2026 |
 | The D&I list shows each file's check and its results per attribute | in progress, 12 November 2026 |
-| The evaluation set and the live scoring command | planned next |
+| The evaluation set and the live scoring command | built; first live run 13 November 2026 (section 8) |
+| Readings read as written and asked again when cut off; the eight cases' assignee | built 13 November 2026, a live re-run of the wrong cases to follow |
 | Prompt caching of the file text across the two readings (models.py) | planned, after the chain is measured |
 | Interim and roll-forward evidence | planned |

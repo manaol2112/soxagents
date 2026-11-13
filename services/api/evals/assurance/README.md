@@ -36,13 +36,17 @@ uv run --env-file ../../.env python -m evals.assurance.score --dry-run
 
 It prints each case's prompt size for both readings and the estimated cost from the
 configured tier prices: the input cost, and the worst case with the full output
-allowance (8,192 tokens a reading), which is what the budget checks use. Nothing is
-called and nothing is written.
+allowance (8,192 tokens a reading), which is what the budget checks use. A reading cut
+off at that allowance is asked once more with 16,000 (as the database run does): the last
+line says what that could add were every reading asked again. Nothing is called and
+nothing is written.
 
 ## Live run (costs money)
 
-A live run calls the configured model twice per case, exactly as the database run
-does. **It spends money and needs the product owner's approval before it is started.**
+A live run calls the configured model twice per case (once more for a reading cut off at
+its allowance), exactly as the database run does, with the database run's own request
+builder (`evidence_assurance.reading_request`). **It spends money and needs the product
+owner's approval before it is started.**
 It is never part of a test tier.
 
 ```
@@ -60,11 +64,14 @@ the database.
 
 Each run writes `results/<UTC timestamp>.json` and prints the same summary.
 
-- Per case: the lens, the model and tier, each call's status, tokens and cost, each
-  file's share of the case's tokens and cost (apportioned by its share of the files'
-  text, since usage is reported per call), quotes dropped and passages set aside per
-  reading, and per attribute the expected and actual verdict and result, both readings'
-  results, and an `outcome`.
+- Per case: the lens, the model and tier, each call's status, tokens and cost (a reading
+  asked again is a call of its own, `retry`; `cut_off` marks an answer cut off at its
+  allowance), each file's share of the case's tokens and cost (apportioned by its share of
+  the files' text, since usage is reported per call), quotes dropped and passages set
+  aside per reading, each reading's checked answer element by element (`readings`: what it
+  claimed, what stands, its verified passages and what it names absent), and per
+  attribute the expected and actual verdict and result, both readings' results, and an
+  `outcome`.
 - `outcome`: `correct`; `false_supported` (expected anything but SUPPORTED, got
   SUPPORTED: the error that matters most); `false_implementation` (the right support,
   but design-only evidence credited as IMPLEMENTATION: the D&I equivalent);

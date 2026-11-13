@@ -19,13 +19,16 @@ Audit integrity (critical tier):
 - a changed file, attribute or link marks the run out of date and queues a new one; the
   same basis is never run twice;
 - a budget that cannot cover both readings starts neither; a model failure is a failed
-  check, never a guess;
+  check, never a guess; an answer sent one level too deep is read as written, and a
+  reading cut off at its allowance is asked once more with a larger one, as a model call
+  of its own (cut off again, the check fails);
 - another firm sees nothing, and a Reviewer reads and cannot rerun.
 """
 
 import json
 import re
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -41,10 +44,15 @@ from ai_workforce_api import evidence_assurance as chain_module
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.evidence_analysis import run_analysis
 from ai_workforce_api.evidence_assurance import (
+    CUT_OFF_TWICE,
     FILE_NOT_CHECKED,
     HELD_REASONS,
     MAX_READING_TEXT,
     READ_IN_PART,
+    READING_SECONDS,
+    READING_TOKENS,
+    RETRY_SECONDS,
+    RETRY_TOKENS,
     UNLINKED_TEXT,
     UNSETTLED_TEXT,
     AttributeSpec,
@@ -56,6 +64,7 @@ from ai_workforce_api.evidence_assurance import (
     Opinion,
     check_opinion,
     compare,
+    cut_off,
     elements_of,
     follow_control,
     gate,
@@ -2326,3 +2335,204 @@ def test_only_requests_that_still_expect_evidence_count_as_asking_elsewhere(
         links = chain_module._linked(connection, UUID(bench.control))
         assert UUID(other) not in links.expecting
         assert links.get(UUID(other))
+
+
+# --- After the live run of 13 November 2026 ---------------------------------------------
+
+Turn = Callable[[dict[str, Any]], ModelRaw]
+
+
+class _Turns(_Readings):
+    """Readings whose raw replies come in turn, per role, each built from the request's
+    own facts (a reply cut off at the allowance, then a whole one); the last answers any
+    further request."""
+
+    def __init__(self, assessor: list[Turn], reviewer: list[Turn]) -> None:
+        super().__init__(None, None)
+        self.turns = {"ASSESSOR": list(assessor), "REVIEWER": list(reviewer)}
+
+    def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
+        del config
+        self.requests.append(request)
+        role = "REVIEWER" if "independent reviewer" in request.system[:60] else "ASSESSOR"
+        self.roles.append(role)
+        found = re.search(
+            r"<control_and_attributes>\n(.*?)\n</control_and_attributes>", request.prompt, re.S
+        )
+        assert found is not None
+        turns = self.turns[role]
+        turn = turns.pop(0) if len(turns) > 1 else turns[0]
+        return turn(json.loads(found.group(1)))
+
+
+def _whole(script: Callable[[dict[str, Any]], dict[str, Any]]) -> Turn:
+    return lambda facts: ModelRaw(script(facts), (), 900, 300)
+
+
+def _as_text(script: Callable[[dict[str, Any]], dict[str, Any]], cut: int = 0) -> Turn:
+    """The answer's `attributes` sent as the text of its JSON (the live run's shape), or,
+    with `cut`, that text with its last characters missing and no stop reason given."""
+
+    def reply(facts: dict[str, Any]) -> ModelRaw:
+        text = json.dumps(script(facts)["attributes"])
+        return ModelRaw({"attributes": text[: len(text) - cut]}, (), 900, 300)
+
+    return reply
+
+
+def _stopped(_facts: dict[str, Any]) -> ModelRaw:
+    """What the provider gives for an answer cut off at its output limit."""
+    return ModelRaw(None, (), 900, READING_TOKENS, stopped="max_tokens")
+
+
+def _run_calls(bench: _Bench, run_id: UUID) -> list[tuple[Any, ...]]:
+    return bench.rows(
+        "SELECT id, agent_key, status, error, inputs, config FROM model_calls "
+        "WHERE target_type = 'evidence_requirement' AND target_id = %s "
+        "AND inputs ->> 'assessment' = %s ORDER BY created_at, id",
+        UUID(bench.item_id), str(run_id),
+    )  # fmt: skip
+
+
+def _current_run(bench: _Bench) -> UUID:
+    return UUID(str(bench.entry()["run_id"]))
+
+
+def test_cut_off_is_the_stop_reason_or_json_text_that_ends_part_way() -> None:
+    whole = json.dumps([{"code": "A", "reason": 'Shown "in" part [1] {x}', "elements": []}])
+    assert cut_off("MALFORMED", ModelRaw(None, (), 1, READING_TOKENS, stopped="max_tokens"))
+    # Cut anywhere: inside a string, after an escape, between values.
+    for at in range(1, len(whole)):
+        assert cut_off("MALFORMED", ModelRaw({"attributes": whole[:at]}, (), 1, 1)), at
+    # Complete JSON, or text broken in another way, was not cut off: more room would not
+    # mend it, so it is never asked for again.
+    for complete in (whole, whole + " and more", "all met", "", "[1, 2]}", '{"a": 1}]', '"[1'):
+        assert not cut_off("MALFORMED", ModelRaw({"attributes": complete}, (), 1, 1)), complete
+    # Only a property the schema declares as a list or an object, and only a malformed call.
+    assert not cut_off("MALFORMED", ModelRaw({"reason": whole[:9]}, (), 1, 1))
+    assert not cut_off("MALFORMED", ModelRaw(None, (), 1, 1))
+    for status in ("SUCCEEDED", "TIMEOUT", "BUDGET_EXCEEDED"):
+        assert not cut_off(status, ModelRaw(None, (), 1, READING_TOKENS, stopped="max_tokens"))
+    # Both askings read a nested answer as written; the second has more room and time.
+    first = chain_module.reading_request("system", "prompt")
+    again = chain_module.reading_request("system", "prompt", retry=True)
+    assert first.unnest and again.unnest and first.output_schema is chain_module.OPINION_SCHEMA
+    assert (first.max_tokens, first.timeout_seconds) == (READING_TOKENS, READING_SECONDS)
+    assert (again.max_tokens, again.timeout_seconds) == (RETRY_TOKENS, RETRY_SECONDS)
+    assert READING_TOKENS == 8192 and RETRY_TOKENS > READING_TOKENS
+    assert again == replace(first, max_tokens=RETRY_TOKENS, timeout_seconds=RETRY_SECONDS)
+
+
+def test_a_reading_sent_one_level_too_deep_is_read_as_written(migrated: Database) -> None:
+    """The live run of 13 November 2026: three readings sent `attributes` as the text of
+    its JSON, and their cases failed. They are read as the planner's answer is
+    (models.unnested): what is read goes through every check, and the call's record says
+    it was re-read."""
+    bench = _Bench(migrated, "nested")
+    ticket = bench.add("ticket REQ-1041.txt", TICKET)
+    bench.read_next(_reading("walkthrough"))
+    good = _first_met_rest("MET")
+    readings = _Turns([_as_text(good)], [_whole(good)])
+    assert bench.check(readings) == ["READY"]
+    # Two readings, no second asking: the answer was whole, only one level too deep.
+    assert readings.roles == ["ASSESSOR", "REVIEWER"]
+    for request in readings.requests:
+        assert request.unnest is True
+        assert (request.max_tokens, request.timeout_seconds) == (READING_TOKENS, READING_SECONDS)
+    calls = _run_calls(bench, _current_run(bench))
+    assert [(c[1], c[2]) for c in calls] == [
+        ("itgc-access-tester", "SUCCEEDED"), ("independent-reviewer", "SUCCEEDED"),
+    ]  # fmt: skip
+    assert calls[0][4]["unnested"] == ["attributes"] and "unnested" not in calls[1][4]
+    # Read as the same answer sent as structured data is: A shown, B an issue.
+    done = bench.entry()
+    assert done["status"] == "REVIEWED"
+    by_code = {a["code"]: a for a in done["attributes"]}
+    assert (by_code["A"]["verdict"], by_code["A"]["result"]) == ("SUPPORTED", "MET")
+    assert {(p["file_id"], p["quote"]) for p in by_code["A"]["passages"]} == {(ticket, APPROVAL)}
+    assert (by_code["B"]["verdict"], by_code["B"]["result"]) == ("ISSUE", "NOT_MET")
+
+
+def test_a_reading_cut_off_at_its_allowance_is_asked_once_more_with_more_room(
+    migrated: Database,
+) -> None:
+    """A reading cut off at its answer allowance (the provider's stop reason, or JSON text
+    that ends part way) is asked once more with a larger one, as a model call of its own
+    through the same budgets. Cut off again, the reading gives nothing and the check
+    fails, never a guess; an answer that is whole but of the wrong shape is not asked
+    for again."""
+    bench = _Bench(migrated, "cut-off")
+    bench.add("ticket REQ-1041.txt", TICKET)
+    bench.read_next(_reading("walkthrough"))
+    good = _first_met_rest("MET")
+
+    # The second reading is cut off, then cut off again with more room.
+    twice = _Turns([_whole(good)], [_stopped])
+    assert bench.check(twice) == ["FAILED"]
+    assert twice.roles == ["ASSESSOR", "REVIEWER", "REVIEWER"]
+    assert [r.max_tokens for r in twice.requests] == [READING_TOKENS, READING_TOKENS, RETRY_TOKENS]
+    entry = bench.entry()
+    assert (entry["status"], entry["stage"], entry["attributes"]) == ("FAILED", "VERIFY", [])
+    assert "second reading did not finish" in entry["note"] and CUT_OFF_TWICE in entry["note"]
+    assert bench.findings() == []
+    calls = _run_calls(bench, _current_run(bench))
+    assert [(c[1], c[2]) for c in calls] == [
+        ("itgc-access-tester", "SUCCEEDED"),
+        ("independent-reviewer", "MALFORMED"),
+        ("independent-reviewer", "MALFORMED"),
+    ]
+    assert {c[3] for c in calls[1:]} == {"answer was cut off at the output limit"}
+    assert calls[2][4]["retry_of"] == str(calls[1][0])
+    assert [c[5]["max_tokens"] for c in calls] == [READING_TOKENS, READING_TOKENS, RETRY_TOKENS]
+
+    # Whole but of the wrong shape: not cut off, so not asked for again.
+    assert bench.rerun().status_code == 202
+    prose = _Turns(
+        [lambda _facts: ModelRaw({"attributes": "all met"}, (), 900, 300)], [_whole(good)]
+    )
+    assert bench.check(prose) == ["FAILED"] and prose.roles == ["ASSESSOR"]
+    entry = bench.entry()
+    assert (entry["status"], entry["stage"]) == ("FAILED", "ASSESS")
+    assert CUT_OFF_TWICE not in entry["note"] and "required format" in entry["note"]
+
+    # Cut off once, each reading (JSON text ending part way; then the stop reason), and
+    # whole when asked again: the check stands on the second answers.
+    assert bench.rerun().status_code == 202
+    once = _Turns([_as_text(good, cut=40), _whole(good)], [_stopped, _whole(good)])
+    assert bench.check(once) == ["READY"]
+    assert once.roles == ["ASSESSOR", "ASSESSOR", "REVIEWER", "REVIEWER"]
+    assert [(r.max_tokens, r.timeout_seconds) for r in once.requests] == [
+        (READING_TOKENS, READING_SECONDS), (RETRY_TOKENS, RETRY_SECONDS),
+    ] * 2  # fmt: skip
+    # The same prompt, asked again: nothing of the first answer is carried.
+    assert once.requests[1].prompt == once.requests[0].prompt
+    assert once.requests[3].prompt == once.requests[2].prompt
+    run_id = _current_run(bench)
+    calls = _run_calls(bench, run_id)
+    assert [(c[1], c[2]) for c in calls] == [
+        ("itgc-access-tester", "MALFORMED"), ("itgc-access-tester", "SUCCEEDED"),
+        ("independent-reviewer", "MALFORMED"), ("independent-reviewer", "SUCCEEDED"),
+    ]  # fmt: skip
+    assert calls[1][4]["retry_of"] == str(calls[0][0])
+    assert calls[3][4]["retry_of"] == str(calls[2][0])
+    assert "retry_of" not in calls[0][4] and "retry_of" not in calls[2][4]
+    # The cut-off answers are on record and were never read; the run keeps the second.
+    outcomes = dict(
+        bench.rows(
+            "SELECT model_call_id, outcome FROM model_call_outcomes WHERE model_call_id = ANY(%s)",
+            [c[0] for c in calls],
+        )
+    )
+    for first in (calls[0][0], calls[2][0]):
+        assert outcomes[first] == {
+            "validation": "NOT_USED", "reason": "MALFORMED", "asked_again": "cut off",
+        }  # fmt: skip
+    assert outcomes[calls[1][0]]["validation"] == outcomes[calls[3][0]]["validation"] == "ACCEPTED"
+    assert bench.rows(
+        "SELECT assessor_call_id, reviewer_call_id FROM evidence_assessments WHERE id = %s",
+        run_id,
+    ) == [(calls[1][0], calls[3][0])]
+    done = bench.entry()
+    assert (done["status"], done["note"]) == ("REVIEWED", "")
+    by_code = {a["code"]: a for a in done["attributes"]}
+    assert by_code["A"]["verdict"] == "SUPPORTED" and by_code["B"]["verdict"] == "ISSUE"

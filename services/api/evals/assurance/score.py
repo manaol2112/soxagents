@@ -10,12 +10,14 @@ before any call whose worst case would pass it.
 For each case the chain's own input is built (case_set.chain_of), and the two readings
 are asked exactly as the database run asks them (evidence_assurance.run_assessment): the
 same prompts (prompt_for), the control's tester agent's tier and that tier's pinned,
-priced model for both readings (never a weaker one for the reviewer), the same output
-schema, timeout and output allowance, the same retry of a transient failure, and the
-same per-call and per-job budget refusals. The readings then go through run_chain, so
-check_opinion and compare decide what stands, as they do for a person. Nothing is
-written to the database and no call is recorded there: the scorer writes its own result
-file under results/.
+priced model for both readings (never a weaker one for the reviewer), the very request the
+database run builds (evidence_assurance.reading_request: the output schema, timeout and
+output allowance, and an answer sent one level too deep read as written), the same retry
+of a transient failure, the same second asking of a reading cut off at its allowance,
+with the larger one, and the same per-call and per-job budget refusals. The readings then
+go through run_chain, so check_opinion and compare decide what stands, as they do for a
+person. Nothing is written to the database and no call is recorded there: the scorer
+writes its own result file under results/, with each reading's checked answer.
 
 Each attribute's verdict is scored against the case's expected verdict. Reported
 separately: false SUPPORTED (the error that matters most), false ISSUE, missed ISSUE,
@@ -37,15 +39,19 @@ from typing import Any, TextIO
 
 from ai_workforce_api.controls import BUSINESS_TESTER, DOMAIN_AGENTS
 from ai_workforce_api.evidence_assurance import (
-    OPINION_SCHEMA,
     PROMPT_VERSIONS,
+    READING_SECONDS,
+    READING_TOKENS,
+    RETRY_TOKENS,
     REVIEWER_AGENT,
     ROLES,
     ChainInput,
     ChainResult,
     Opinion,
     Role,
+    cut_off,
     prompt_for,
+    reading_request,
     run_chain,
 )
 from ai_workforce_api.model_providers import agent_tier, live_model, provider_for, tier_config
@@ -63,23 +69,15 @@ from ai_workforce_api.settings import Settings
 from evals.assurance.case_set import CASES_DIR, EvalCase, Expectation, chain_of, load_cases
 
 RESULTS_DIR = Path(__file__).parent / "results"
-# As the database run (evidence_assurance._assess, its request_of) builds each request.
-TIMEOUT_SECONDS = 240
-MAX_TOKENS = 8192
+# The database run's own figures (evidence_assurance): a reading's timeout and output
+# allowance, and the allowance a reading cut off at it is asked again with.
+TIMEOUT_SECONDS = READING_SECONDS
+MAX_TOKENS = READING_TOKENS
 
 
-def request_for(system: str, prompt: str) -> ModelRequest:
-    """One reading's request, exactly as the database run builds it."""
-    return ModelRequest(
-        operation="generate",
-        prompt=prompt,
-        output_schema=OPINION_SCHEMA,
-        allowed_tool_ids=(),
-        timeout_seconds=TIMEOUT_SECONDS,
-        cancelled=False,
-        system=system,
-        max_tokens=MAX_TOKENS,
-    )
+def request_for(system: str, prompt: str, *, retry: bool = False) -> ModelRequest:
+    """One reading's request: the very one the database run builds (reading_request)."""
+    return reading_request(system, prompt, retry=retry)
 
 
 @dataclass(frozen=True)
@@ -122,6 +120,10 @@ class CallRecord:
     cost_micros: int = 0
     estimate_micros: int = 0
     error: str = ""
+    # The reading asked again because its first answer was cut off at its allowance.
+    retry: bool = False
+    # Its answer was cut off at the allowance (evidence_assurance.cut_off).
+    cut_off: bool = False
 
 
 def _refusal(estimates: Sequence[int], limits: Limits, spent: int = 0) -> str:
@@ -177,6 +179,7 @@ def call_model(
         ):
             break
         sleep(RETRY_DELAYS[record.attempts - 1])
+    record.cut_off = cut_off(found.status, found.raw, request.output_schema)
     if found.status == "SUCCEEDED" and found.raw.output is not None:
         return found.raw.output
     return None
@@ -401,10 +404,20 @@ def run_case(
     def ask(role: Role, system: str, prompt: str) -> dict[str, Any] | None:
         made = CallRecord(role, "NOT_MADE")
         calls.append(made)
-        return call_model(
+        output = call_model(
             provider, request_for(system, prompt), setup, made, budget, limits,
             lambda: sum(c.cost_micros for c in calls), sleep,
         )  # fmt: skip
+        if made.cut_off:
+            # As the database run: cut off at its allowance, the reading is asked once
+            # more with the larger one, as a call of its own.
+            again = CallRecord(role, "NOT_MADE", retry=True)
+            calls.append(again)
+            output = call_model(
+                provider, request_for(system, prompt, retry=True), setup, again, budget,
+                limits, lambda: sum(c.cost_micros for c in calls), sleep,
+            )  # fmt: skip
+        return output
 
     stopped = ""
     result: ChainResult | None = None
@@ -428,6 +441,13 @@ def run_case(
     record["set_aside"] = {
         "ASSESSOR": None if result.first is None else result.first.set_aside,
         "REVIEWER": None if result.second is None else result.second.set_aside,
+    }
+    # Each reading's checked answer, element by element (what it claimed, what stands, its
+    # verified passages and what it names absent), so that a mismatch can be diagnosed
+    # from the result file without calling the model again. Synthetic files only.
+    record["readings"] = {
+        "ASSESSOR": None if result.first is None else result.first.as_json(),
+        "REVIEWER": None if result.second is None else result.second.as_json(),
     }
     if result.failed is not None:
         # As the database run: a reading that gave nothing settles nothing, and the run
@@ -539,6 +559,10 @@ def dry_run(cases: Sequence[EvalCase], settings: Settings, out: TextIO) -> dict[
                 "input_tokens_estimate": tokens,
                 "input_cost_micros": cost_micros(setup.config, tokens, 0),
                 "worst_case_micros": estimate_micros(setup.config, request),
+                # Were the reading cut off at its allowance: the second asking's worst case.
+                "retry_worst_case_micros": estimate_micros(
+                    setup.config, request_for(system, prompt, retry=True)
+                ),
             }
         refusal = _refusal([r["worst_case_micros"] for r in roles.values()], limits)
         rows.append({
@@ -562,6 +586,7 @@ def dry_run(cases: Sequence[EvalCase], settings: Settings, out: TextIO) -> dict[
     tokens = sum(r["input_tokens_estimate"] for row in rows for r in row["roles"].values())
     inputs = sum(r["input_cost_micros"] for row in rows for r in row["roles"].values())
     worst = sum(r["worst_case_micros"] for row in rows for r in row["roles"].values())
+    again = sum(r["retry_worst_case_micros"] for row in rows for r in row["roles"].values())
     calls = 2 * len(rows)
     models = sorted({row["model"] for row in rows})
     summary = {
@@ -571,6 +596,8 @@ def dry_run(cases: Sequence[EvalCase], settings: Settings, out: TextIO) -> dict[
         "max_output_tokens": calls * MAX_TOKENS,
         "input_cost_usd": round(inputs / 1e6, 4),
         "worst_case_cost_usd": round(worst / 1e6, 4),
+        # Were every reading cut off and asked again: what those second askings could add.
+        "retry_worst_case_cost_usd": round(again / 1e6, 4),
         "models": models,
         "live_model_configured": live_model(settings),
         "rows": rows,
@@ -581,6 +608,11 @@ def dry_run(cases: Sequence[EvalCase], settings: Settings, out: TextIO) -> dict[
         f"{', '.join(models)}; about {tokens:,} input tokens (${inputs / 1e6:.2f}) and at most "
         f"{calls * MAX_TOKENS:,} output tokens; worst case ${worst / 1e6:.2f}. "
         f"Prompts: {PROMPT_VERSIONS['ASSESSOR']}, {PROMPT_VERSIONS['REVIEWER']}.",
+        file=out,
+    )
+    print(
+        f"A reading cut off at its {MAX_TOKENS:,}-token allowance is asked once more with "
+        f"{RETRY_TOKENS:,}; were every reading asked again, up to ${again / 1e6:.2f} more.",
         file=out,
     )
     if not live_model(settings):

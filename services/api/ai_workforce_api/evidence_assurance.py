@@ -83,7 +83,7 @@ from ai_workforce_api.evidence_findings import (
 from ai_workforce_api.evidence_mapping import locate
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.model_providers import call_note, live_model, provider_for
-from ai_workforce_api.models import ModelConfig, ModelProvider, ModelRequest
+from ai_workforce_api.models import ModelConfig, ModelProvider, ModelRaw, ModelRequest
 from ai_workforce_api.provenance import (
     AgentCaller,
     Call,
@@ -168,6 +168,13 @@ ABSENT_LIMIT = 300
 # (each file's own bound is evidence_extraction.MAX_TEXT). More than this is never cut to
 # fit: the run is held as TOO_LARGE and a person reads the files.
 MAX_READING_TEXT = 400_000
+# One reading's answer allowance (output tokens) and timeout: the live run of 13 November
+# 2026 used at most 3,600 output tokens a reading. A reading cut off at its allowance is
+# asked once more with the larger one (and more time to write it): the planner's
+# allowance, which the provider takes without streaming.
+READING_TOKENS, READING_SECONDS = 8192, 240
+RETRY_TOKENS, RETRY_SECONDS = 16000, 300
+CUT_OFF_TWICE = "Its answer was cut off at the answer limit, also when asked again with more room."
 UNSETTLED_TEXT = "The two readings do not agree. Your judgment is needed."
 UNCHECKED_EXCEPTION = (
     "An exception is shown by the evidence, but a file on this request has not been "
@@ -735,6 +742,79 @@ def _criteria_shown(criteria: dict[str, Any]) -> dict[str, Any]:
         "exception_when": str(criteria.get("exception_when") or "")[:1000],
         "judgment_required": bool(criteria.get("judgment_required")),
     }
+
+
+def reading_request(system: str, prompt: str, *, retry: bool = False) -> ModelRequest:
+    """One reading's model request: the database run's (run_assessment) and the evaluation
+    set's scorer's alike, so the two cannot drift apart.
+
+    `attributes` sent as the text of its JSON is read as the JSON it is (models.unnested,
+    as the planner's answer is): the live run of 13 November 2026 lost three readings, and
+    so three cases, to it. Only that shape is read, and every check of check_opinion
+    applies to what is read. `retry`: the reading was cut off at its answer allowance and
+    is asked once more with the larger one."""
+    return ModelRequest(
+        operation="generate",
+        prompt=prompt,
+        output_schema=OPINION_SCHEMA,
+        allowed_tool_ids=(),
+        timeout_seconds=RETRY_SECONDS if retry else READING_SECONDS,
+        cancelled=False,
+        system=system,
+        max_tokens=RETRY_TOKENS if retry else READING_TOKENS,
+        unnest=True,
+    )
+
+
+def _ends_part_way(text: str) -> bool:
+    """Whether JSON text stops before its JSON does: it opens a list or an object and runs
+    out inside a string or with a bracket still open, nothing on the way closing what it
+    did not open. Complete JSON, or text broken in any other way, is not."""
+    body = text.strip()
+    if body[:1] not in ("[", "{"):
+        return False
+    pending: list[str] = []
+    quoted = escaped = False
+    for char in body:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            pending.append("]" if char == "[" else "}")
+        elif char in "]}":
+            if not pending or pending.pop() != char:
+                return False  # a bracket it did not open
+            if not pending:
+                return False  # its JSON closed: whatever follows, it was not cut off
+    return quoted or bool(pending)
+
+
+def cut_off(status: str, raw: ModelRaw, schema: dict[str, Any] = OPINION_SCHEMA) -> bool:
+    """Whether a reading's answer was cut off at its answer allowance, so that more room,
+    not another wording, is the remedy: the provider stopped at the limit (its stop
+    reason), or the answer missed the schema because a list or an object the schema
+    declares arrived as JSON text that ends part way. A complete answer of the wrong
+    shape, or text that is not JSON, was not cut off: asking again would not mend it."""
+    if status != "MALFORMED":
+        return False
+    if raw.stopped == "max_tokens":
+        return True
+    properties = schema.get("properties")
+    if raw.output is None or not isinstance(properties, dict):
+        return False
+    return any(
+        isinstance(value, str)
+        and isinstance(properties.get(name), dict)
+        and properties[name].get("type") in ("array", "object")
+        and _ends_part_way(value)
+        for name, value in raw.output.items()
+    )
 
 
 class _Quote(BaseModel):
@@ -3157,20 +3237,9 @@ def _assess(
     )
     callers: dict[Role, AgentCaller] = {"ASSESSOR": assessor, "REVIEWER": reviewer}
 
-    def request_of(system: str, prompt: str) -> ModelRequest:
-        return ModelRequest(
-            operation="generate",
-            prompt=prompt,
-            output_schema=OPINION_SCHEMA,
-            allowed_tool_ids=(),
-            timeout_seconds=240,
-            cancelled=False,
-            system=system,
-            max_tokens=8192,
-        )
-
-    # A run that cannot pay for both readings does not start the first one.
-    refusal = assessor.refusal_for([request_of(*prompt_for(chain, role)) for role in ROLES])
+    # A run that cannot pay for both readings does not start the first one. A reading cut
+    # off and asked again is not in this sum: its call passes its own checks when made.
+    refusal = assessor.refusal_for([reading_request(*prompt_for(chain, role)) for role in ROLES])
     if refusal:
         _fail(
             connection, run_id,
@@ -3187,30 +3256,57 @@ def _assess(
         "attributes": [str(a[0]) for a in attributes],
     }
     calls: dict[Role, Call] = {}
+    # A reading's first call where its answer was cut off and the reading was asked again:
+    # kept on record, never read.
+    superseded: dict[Role, Call] = {}
+
+    def leased(verify: bool = False) -> None:
+        """The claim's lease, extended before a reading and before a reading asked again
+        (a reading asked twice is not read as a check that stopped); `verify`: the run
+        moves on to the second reading."""
+        with transaction(connection) as cursor:
+            cursor.execute(
+                "UPDATE evidence_assessments "
+                "SET stage = CASE WHEN %s THEN 'VERIFY' ELSE stage END, "
+                "lease_until = clock_timestamp() + make_interval(mins => %s) "
+                "WHERE id = %s AND status = 'WORKING' AND stale_at IS NULL "
+                "AND claim_token = %s",
+                (verify, LEASE_MINUTES, run_id, token),
+            )
 
     def ask(role: Role, system: str, prompt: str) -> dict[str, Any] | None:
         if role == "REVIEWER":
             reviewer.spent = assessor.spent
-            with transaction(connection) as cursor:
-                cursor.execute(
-                    "UPDATE evidence_assessments SET stage = 'VERIFY', "
-                    "lease_until = clock_timestamp() + make_interval(mins => %s) "
-                    "WHERE id = %s AND status = 'WORKING' AND stale_at IS NULL "
-                    "AND claim_token = %s",
-                    (LEASE_MINUTES, run_id, token),
-                )
+            leased(verify=True)
         call = callers[role].generate(
-            request_of(system, prompt), PROMPT_VERSIONS[role], {**inputs, "role": role}
+            reading_request(system, prompt), PROMPT_VERSIONS[role], {**inputs, "role": role}
         )
+        if cut_off(call.status, call.raw):
+            # Cut off at the answer allowance: more room is the remedy, not another
+            # wording. Asked once more with the larger allowance, as its own model call
+            # through the same budgets; whatever that gives is read as any answer is.
+            superseded[role] = call
+            leased()
+            call = callers[role].generate(
+                reading_request(system, prompt, retry=True),
+                PROMPT_VERSIONS[role],
+                {**inputs, "role": role, "retry_of": str(call.call_id)},
+            )
         calls[role] = call
-        # Only a complete answer that matched the schema is read. Anything else (cut off,
-        # malformed, timed out, refused, cancelled, over budget) is an execution failure,
-        # and nothing of the answer is kept.
+        # Only a complete answer that matched the schema is read. Anything else (cut off
+        # again, malformed, timed out, refused, cancelled, over budget) is an execution
+        # failure, and nothing of the answer is kept.
         if call.status == "SUCCEEDED" and call.raw.output is not None:
             return call.raw.output
         return None
 
     result = run_chain(ask, chain)
+    for replaced in superseded.values():
+        record_outcome(
+            connection,
+            replaced.call_id,
+            {"validation": "NOT_USED", "reason": replaced.status, "asked_again": "cut off"},
+        )
     first_call, second_call = calls.get("ASSESSOR"), calls.get("REVIEWER")
     for role, opinion in (("ASSESSOR", result.first), ("REVIEWER", result.second)):
         made = calls.get(cast(Role, role))
@@ -3235,9 +3331,11 @@ def _assess(
     if result.failed is not None:
         failed_call = calls.get(result.failed)
         why = (
-            call_note(failed_call.status)
-            if failed_call is not None and failed_call.status != "SUCCEEDED"
-            else ""
+            ""
+            if failed_call is None or failed_call.status == "SUCCEEDED"
+            else CUT_OFF_TWICE
+            if result.failed in superseded and cut_off(failed_call.status, failed_call.raw)
+            else call_note(failed_call.status)
         )
         _fail(
             connection, run_id, _joined(result.reason, why, "Run the check again."),
