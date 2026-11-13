@@ -35,6 +35,7 @@ import {
   attributesSummary,
   attributesWorking,
   BASIS_LABELS,
+  basisLines,
   CLASSIFICATIONS,
   type Classification,
   CONFIDENCE_LABELS,
@@ -51,6 +52,7 @@ import {
   firstUnifiedToDecide,
   type LibraryUpdate,
   NATURE_LABELS,
+  offersAgentRun,
   PROCEDURE_PHASES,
   type ProcessStep,
   reviewUnfinished,
@@ -1287,8 +1289,11 @@ export function AttributesPanel({
         onDecide={(decision, item) => void decideOne(decision, item)}
         onAccept={(rows) => void acceptRows(rows)}
         onDialog={setDialog}
-        onGenerate={() =>
-          void action.run("generate", { intent: "attributes-generate" })
+        onGenerate={(force = false) =>
+          void action.run("generate", {
+            intent: "attributes-generate",
+            ...(force ? { force: true } : {}),
+          })
         }
         status={
           <>
@@ -1609,7 +1614,7 @@ function EmbeddedAttributes({
   onAccept: (rows: UnifiedRow[]) => void;
   onDialog: (state: AttributeDialogState) => void;
   /** Asks the agent to read the sources and propose attributes. */
-  onGenerate: () => void;
+  onGenerate: (force?: boolean) => void;
   status: ReactNode;
   folds: ReactNode;
   after: ReactNode;
@@ -1626,6 +1631,7 @@ function EmbeddedAttributes({
   const stopped = attributesStopped(
     context.attributesRun,
     context.attributesRunNote,
+    context.attributesRerunUseful ?? null,
   );
   // While the agents work, the page reads the attributes again every few seconds, in
   // place; it stops by itself when the run ends.
@@ -1664,6 +1670,10 @@ function EmbeddedAttributes({
     const name = `attribute ${letter}`;
     const bodyId = `${id}-${item.id}`;
     const origin = UNIFIED_ORIGINS[kind];
+    // What the agent followed in the confirmed understanding and what it set aside: shown,
+    // never silent (12 November 2026).
+    const basis =
+      kind === "REMOVAL" ? null : basisLines(item.understandingBasis);
     const criteria = item.criteria;
     const stated =
       criteria.condition !== "" ||
@@ -1772,6 +1782,18 @@ function EmbeddedAttributes({
             ) : null}
             {kind !== "APPROVED" && item.note !== "" ? (
               <p className="ta-why">{item.note}</p>
+            ) : null}
+            {basis !== null ? (
+              <div className="ta-basis">
+                <p>
+                  <span>Follows the understanding</span> {basis.follows}
+                </p>
+                {basis.setsAside.map((line) => (
+                  <p key={line}>
+                    <span>Sets aside</span> {line}
+                  </p>
+                ))}
+              </div>
             ) : null}
             {kind === "APPROVED" ? (
               <TailoredCriteria
@@ -1909,19 +1931,24 @@ function EmbeddedAttributes({
                   : `Accept all ${toAccept.length}`}
               </button>
             ) : null}
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm ta-quiet"
-              disabled={locked}
-              onClick={onGenerate}
-            >
-              <UiIcon name="sparkles" size={13} />
-              {busyKey === "generate"
-                ? "Reading the sources…"
-                : agentRan(context)
-                  ? "Run again"
-                  : "Propose with the agent"}
-            </button>
+            {offersAgentRun(
+              agentRan(context),
+              context.attributesRerunUseful,
+            ) ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm ta-quiet"
+                disabled={locked}
+                onClick={() => onGenerate()}
+              >
+                <UiIcon name="sparkles" size={13} />
+                {busyKey === "generate"
+                  ? "Reading the sources…"
+                  : agentRan(context)
+                    ? "Run again"
+                    : "Propose with the agent"}
+              </button>
+            ) : null}
             <button
               type="button"
               className="btn btn-ghost btn-sm ta-quiet"
@@ -1978,6 +2005,21 @@ function EmbeddedAttributes({
             a changed or retired attribute keeps its earlier wording in the
             history.
           </p>
+          {canAct &&
+          !offersAgentRun(agentRan(context), context.attributesRerunUseful) ? (
+            <p>
+              Nothing the agents read has changed since their last run, so
+              running them again is not offered above.{" "}
+              <button
+                type="button"
+                className="ur-skip"
+                disabled={locked}
+                onClick={() => onGenerate(true)}
+              >
+                Run the agents again anyway
+              </button>
+            </p>
+          ) : null}
         </details>
         {folds}
       </div>

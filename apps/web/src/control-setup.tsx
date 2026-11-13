@@ -189,6 +189,7 @@ export function ControlSetup({
           onProcess={processStep ? () => setCurrent("process") : null}
           documentsHref={conversation.documentsHref ?? null}
           attributesHref={conversation.attributesHref ?? null}
+          issues={issues}
         />
       </div>
     );
@@ -1225,7 +1226,7 @@ function AnswersStep({
           {choices.length > 0 ? (
             // biome-ignore lint/a11y/useSemanticElements: a row of answer buttons, not a fieldset
             <div
-              className="uc-chips"
+              className={`uc-chips${longChoices(choices) ? " is-long" : ""}`}
               role="group"
               aria-label="Suggested answers"
             >

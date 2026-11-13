@@ -256,6 +256,28 @@
   font-weight: 650;
 }
 
+/* What the agent followed in the confirmed understanding, and what it set aside. */
+.ta-basis {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--surface-muted, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.ta-basis p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.ta-basis span {
+  color: var(--text-strong);
+  font-weight: 650;
+}
+
 .ta-quote,
 .ta-why {
   margin: 0;

@@ -493,6 +493,67 @@ export function confirmPlan(
   return plan;
 }
 
+/** One set of choices an agent's question shows in place, on the review's card. */
+export type InlineScreen = {
+  /** The interview step it answers, or ONE_SCREEN for a question of one screen. */
+  step: string;
+  /** The step's own question; "" where the card's title already asks it. */
+  question: string;
+  choices: string[];
+  /** The answer the agents suggest among the choices, or "". */
+  suggested: string;
+  /** What is chosen: the person's pick, else the agents' statement where there is one. */
+  pick: Pick | null;
+};
+
+/**
+ * An agent's question as the review's card asks it in place (product owner, 12 November
+ * 2026: "User was not given an option with the question"): the agents' statement first and
+ * its alternatives, a conflict's sources, or a short interview's steps as far as the answers
+ * so far lead. The same rows, picks and confirmPlan as the conversation, so what is recorded
+ * is the same.
+ */
+export function inlineScreens(row: Prefill, picks: RowPicks): InlineScreen[] {
+  if (row.steps !== undefined && row.steps.length > 0) {
+    return walkInterview(row.steps, picks).visited.map((step) => ({
+      step: step.key,
+      question: step.question,
+      choices: step.answers.map((item) => item.label),
+      suggested: step.usual,
+      pick: picks[step.key] ?? null,
+    }));
+  }
+  const proposed = row.value.trim();
+  return [
+    {
+      step: ONE_SCREEN,
+      question: "",
+      choices: [
+        ...new Set([proposed, ...row.options].filter((item) => item !== "")),
+      ],
+      suggested: proposed,
+      pick: picks[ONE_SCREEN] ?? (proposed !== "" ? { label: proposed } : null),
+    },
+  ];
+}
+
+/** Whether the answers given in place settle the question: every step on the way answered,
+ * and the person's own words not left empty. */
+export function inlineComplete(row: Prefill, picks: RowPicks): boolean {
+  const screens = inlineScreens(row, picks);
+  const stated = screens.every(
+    (screen) =>
+      screen.pick !== null &&
+      ("label" in screen.pick || screen.pick.other.trim() !== ""),
+  );
+  if (!stated) {
+    return false;
+  }
+  return row.steps !== undefined && row.steps.length > 0
+    ? walkInterview(row.steps, picks).complete
+    : true;
+}
+
 /** Where this browser tab keeps answers not yet confirmed, so Skip for now loses no clicks. */
 export function setupDraftKey(controlId: string): string {
   return `control-setup-draft:${controlId}`;
@@ -577,9 +638,16 @@ export function agentQuestions(
       if (answer !== undefined) {
         return { ...base, value: answer, source: "RECORDED", options: [] };
       }
-      const options = conflict
-        ? issue.quotes.map((item) => `${item.title}: "${item.quote}"`)
-        : issue.suggestions;
+      // A conflict's sides as plain statements where the agents gave one for each side
+      // (12 November 2026); the sources' own words otherwise.
+      const sides = issue.suggestions
+        .map((item) => item.trim())
+        .filter(Boolean);
+      const options = !conflict
+        ? issue.suggestions
+        : sides.length >= 2
+          ? sides
+          : issue.quotes.map((item) => `${item.title}: "${item.quote}"`);
       return {
         ...base,
         value: proposal,

@@ -10,8 +10,16 @@ import {
   useState,
 } from "react";
 import { AgentAvatar } from "./agent-avatar";
+import { AgentQuestionPoint } from "./agent-question-point";
 import { AuthenticationPoint } from "./authentication-point";
 import { useAction } from "./control-context-view";
+import {
+  agentQuestions,
+  confirmPlan,
+  type Prefill,
+  type RowPicks,
+  type SetupIssue,
+} from "./control-setup-model";
 import { RecordDialog } from "./record-dialog";
 import { acceptProposal } from "./references-view";
 import { UiIcon } from "./ui-icon";
@@ -125,9 +133,13 @@ export function UnderstandingReview({
   onProcess,
   documentsHref,
   attributesHref = null,
+  issues = [],
 }: {
   ids: Ids;
   canAct: boolean;
+  /** The control's issues: an open question of the agents is answered in place, from its
+   * own choices (12 November 2026). */
+  issues?: readonly SetupIssue[];
   /** Opens the conversation with the planner, for the agents' questions or to talk it
    * through. */
   onTalk: () => void;
@@ -446,6 +458,61 @@ export function UnderstandingReview({
       go(nextOpen(now, interview, at));
     }
     await settle(`${draftText(need.label, "", true)}: saved.`);
+  }
+
+  /**
+   * Records the answer to a question the agents raised, given in place on its card: through
+   * the narrative's points when it is one, else as the issue's own resolution, exactly as the
+   * planner's conversation records it (control-setup confirm), so the audit is the same.
+   */
+  async function answerQuestion(need: Need, row: Prefill, picks: RowPicks) {
+    if (!canAct || review === null || interview === null) {
+      return;
+    }
+    const plan = confirmPlan([row], {
+      picks: { [row.key]: picks },
+      dismissed: [],
+    });
+    const answer = plan.settled[row.key] ?? "";
+    if (answer === "") {
+      return;
+    }
+    setSaving(need.key);
+    setSaved(null);
+    setProblem(null);
+    let ok = true;
+    if (plan.points.length > 0) {
+      ok = await action.run("values", {
+        intent: "process-points",
+        items: plan.points,
+      });
+    }
+    for (const item of plan.resolved) {
+      if (!ok) {
+        break;
+      }
+      ok = await action.run("values", {
+        intent: "issue-resolve",
+        issue_id: item.issueId,
+        status: "RESOLVED",
+        note: item.note,
+        version: item.version,
+      });
+    }
+    if (!ok) {
+      setSaving(null);
+      setProblem(
+        "The answer could not be saved. The question may have changed: refresh the page and try again.",
+      );
+      return;
+    }
+    // Confirmed by the server: the narrative is drafted again from the answers in the
+    // background, as after the conversation.
+    void action.run("narrate", { intent: "process-narrate" });
+    const now = withConfirmed(review, { [need.key]: answer });
+    setReview(now);
+    go(nextOpen(now, interview, at));
+    await settle(`${need.label || "The question"}: answered.`);
   }
 
   /** The carried step: the ticked answers confirmed together, the rest asked on their own. */
@@ -1545,6 +1612,29 @@ export function UnderstandingReview({
           }}
           onDone={() => go(nextOpen(review, interview, at))}
           onBack={() => go(Math.max(0, at - 1))}
+        />
+      );
+    }
+    // A question the agents raised is answered here, from its own choices; the planner's
+    // conversation stays one click away (12 November 2026).
+    const asked =
+      need.kind === "QUESTION"
+        ? agentQuestions(issues.filter((issue) => issue.id === need.key))[0]
+        : undefined;
+    if (asked !== undefined && asked.source !== "RECORDED") {
+      return (
+        <AgentQuestionPoint
+          key={need.key}
+          row={asked}
+          canAct={canAct}
+          busy={busy}
+          saving={saving === need.key}
+          chips={chips}
+          title={title}
+          why={why}
+          foot={(primary) => foot(primary, true)}
+          onAnswer={(picks) => void answerQuestion(need, asked, picks)}
+          onTalk={onTalk}
         />
       );
     }

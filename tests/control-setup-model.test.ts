@@ -13,6 +13,8 @@ import {
   firstOpenQuestion,
   firstToAnswer,
   type InterviewStep,
+  inlineComplete,
+  inlineScreens,
   interviewAnswer,
   interviewShort,
   longChoices,
@@ -996,5 +998,178 @@ describe("the inline setup", () => {
     })) {
       assert.ok(STEP_BRIEF[step.key].endsWith("."), step.key);
     }
+  });
+});
+
+describe("an agent's question answered in place on the review's card (12 November 2026)", () => {
+  // Product owner: "User was not given an option with the question."
+  const base: SetupIssue = {
+    id: "q1",
+    origin: "ATTRIBUTES",
+    kind: "MISSING",
+    topic: "Late removals",
+    detail: "Nothing says who is told.",
+    why: "Testing needs the escalation.",
+    quotes: [],
+    status: "OPEN",
+    version: 3,
+    question: "Who is told when a removal is late?",
+    suggestions: ["The application owner is told.", "Nobody is told."],
+    proposal: "The IT Security Manager is told.",
+    proposalBasis: "TYPICAL",
+  };
+  const rowOf = (over: Partial<SetupIssue> = {}): Prefill => {
+    const [row] = agentQuestions([{ ...base, ...over }]);
+    assert.ok(row !== undefined);
+    return row;
+  };
+
+  it("offers the agents' statement first, selected, with its alternatives", () => {
+    const row = rowOf();
+    const [screen, ...rest] = inlineScreens(row, {});
+    assert.equal(rest.length, 0);
+    assert.deepEqual(screen?.choices, [
+      "The IT Security Manager is told.",
+      "The application owner is told.",
+      "Nobody is told.",
+    ]);
+    assert.equal(screen?.suggested, "The IT Security Manager is told.");
+    assert.deepEqual(screen?.pick, {
+      label: "The IT Security Manager is told.",
+    });
+    // Confirmed untouched, the statement is what is recorded.
+    assert.equal(inlineComplete(row, {}), true);
+    const plan = confirmPlan([row], { picks: { q1: {} }, dismissed: [] });
+    assert.deepEqual(plan.resolved, [
+      { issueId: "q1", version: 3, note: "The IT Security Manager is told." },
+    ]);
+  });
+
+  it("offers a conflict's sources with none selected: the person decides", () => {
+    const row = rowOf({
+      kind: "CONFLICT",
+      question: "",
+      proposal: "",
+      suggestions: [],
+      quotes: [
+        { source: "control", title: "RCM record", quote: "Grant date in AD" },
+        { source: "walk", title: "Walkthrough", quote: "Ticket history" },
+      ],
+    });
+    const [screen] = inlineScreens(row, {});
+    assert.deepEqual(screen?.choices, [
+      'RCM record: "Grant date in AD"',
+      'Walkthrough: "Ticket history"',
+    ]);
+    assert.equal(screen?.pick, null);
+    assert.equal(inlineComplete(row, {}), false);
+    const picks = { [ONE_SCREEN]: { label: 'Walkthrough: "Ticket history"' } };
+    assert.equal(inlineComplete(row, picks), true);
+    const plan = confirmPlan([row], { picks: { q1: picks }, dismissed: [] });
+    assert.equal(plan.resolved[0]?.note, 'Walkthrough: "Ticket history"');
+    assert.equal(plan.points.length, 0);
+  });
+
+  it("offers a conflict's sides as plain statements where the agents gave one each", () => {
+    const row = rowOf({
+      kind: "CONFLICT",
+      question: "",
+      proposal: "",
+      suggestions: [
+        "The Active Directory change log holds the grant date.",
+        "ServiceNow ticket history shows when access was granted.",
+      ],
+      quotes: [
+        { source: "control", title: "RCM record", quote: "Grant date in AD" },
+        { source: "doc", title: "Procedure", quote: "Ticket history" },
+      ],
+    });
+    assert.deepEqual(inlineScreens(row, {})[0]?.choices, [
+      "The Active Directory change log holds the grant date.",
+      "ServiceNow ticket history shows when access was granted.",
+    ]);
+    // One statement alone is not both sides: the sources' own words are the choices.
+    const one = rowOf({
+      kind: "CONFLICT",
+      question: "",
+      proposal: "",
+      suggestions: ["Only one side."],
+      quotes: [
+        { source: "control", title: "RCM record", quote: "Grant date in AD" },
+        { source: "doc", title: "Procedure", quote: "Ticket history" },
+      ],
+    });
+    assert.deepEqual(inlineScreens(one, {})[0]?.choices, [
+      'RCM record: "Grant date in AD"',
+      'Procedure: "Ticket history"',
+    ]);
+  });
+
+  it("takes the person's own words, and never an empty answer", () => {
+    const row = rowOf();
+    assert.equal(inlineComplete(row, { [ONE_SCREEN]: { other: "  " } }), false);
+    const picks = { [ONE_SCREEN]: { other: "The CIO is told by email" } };
+    assert.equal(inlineComplete(row, picks), true);
+    const plan = confirmPlan([row], { picks: { q1: picks }, dismissed: [] });
+    assert.equal(plan.resolved[0]?.note, "The CIO is told by email");
+  });
+
+  it("walks a short interview step by step, as far as the answers lead", () => {
+    const interview: InterviewStep[] = [
+      {
+        key: "s1",
+        question: "Is a late removal reported?",
+        why: "",
+        usual: "Yes",
+        basis: "TYPICAL",
+        answers: [
+          { label: "Yes", says: "A late removal is reported.", next: "s2" },
+          { label: "No", says: "A late removal is not reported.", next: "" },
+        ],
+      },
+      {
+        key: "s2",
+        question: "Who receives it?",
+        why: "",
+        usual: "IT Security Manager",
+        basis: "TYPICAL",
+        answers: [
+          {
+            label: "IT Security Manager",
+            says: "The IT Security Manager receives it.",
+            next: "",
+          },
+        ],
+      },
+    ];
+    const row = rowOf({ origin: "PROCESS", interview });
+    // Only the first step until it is answered; nothing is selected for the person.
+    const first = inlineScreens(row, {});
+    assert.deepEqual(
+      first.map((screen) => [screen.step, screen.question, screen.pick]),
+      [["s1", "Is a late removal reported?", null]],
+    );
+    assert.equal(first[0]?.suggested, "Yes");
+    assert.equal(inlineComplete(row, {}), false);
+    // "No" ends it; "Yes" leads on to who receives it.
+    assert.equal(inlineComplete(row, { s1: { label: "No" } }), true);
+    const on = { s1: { label: "Yes" } };
+    assert.deepEqual(
+      inlineScreens(row, on).map((screen) => screen.step),
+      ["s1", "s2"],
+    );
+    assert.equal(inlineComplete(row, on), false);
+    const done = { ...on, s2: { label: "IT Security Manager" } };
+    assert.equal(inlineComplete(row, done), true);
+    // A narrative point settles through the points, with the sentences the answers mean.
+    const plan = confirmPlan([row], { picks: { q1: done }, dismissed: [] });
+    assert.deepEqual(plan.points, [
+      {
+        issue_id: "q1",
+        version: 3,
+        answer:
+          "A late removal is reported. The IT Security Manager receives it.",
+      },
+    ]);
   });
 });

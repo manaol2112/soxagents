@@ -12,6 +12,7 @@ import {
   attributesStopped,
   attributesSummary,
   attributesWorking,
+  basisLines,
   clock,
   contextProblem,
   contextWrite,
@@ -23,6 +24,7 @@ import {
   type NarrativeReview,
   type NarrativeRun,
   narrativeProgress,
+  offersAgentRun,
   openRows,
   parseContext,
   planOutcomeLine,
@@ -1784,5 +1786,180 @@ describe("the Attributes step as one list the agent prepared", () => {
     });
     assert.equal(odd?.attributesRun, "");
     assert.equal(odd?.attributesStage, "");
+  });
+});
+
+describe("what the agent followed and set aside is shown, never silent (12 November 2026)", () => {
+  // Product owner: "shouldn't the attribute just follow what control understanding says",
+  // and "Newer answer wins."
+  const basis = {
+    summary: "The attribute follows the walkthrough.",
+    follows: {
+      answer: "The request tool's ticket history",
+      question: "What shows when changes were made?",
+      statement: "Ticket history shows when access was granted.",
+      confirmedAt: "2026-11-12T16:14:00Z",
+      confirmedBy: "PERSON" as const,
+    },
+    setsAside: [
+      {
+        kind: "OLDER_ANSWER" as const,
+        answer: "The grant date is held in the Active Directory change log.",
+        statement: "",
+        confirmedAt: "2026-10-29T03:00:00Z",
+      },
+      {
+        kind: "RCM_RECORD" as const,
+        answer: "",
+        statement: "The grant date is read in Active Directory.",
+        confirmedAt: "",
+      },
+    ],
+  };
+
+  it("shows what was confirmed as recorded, with its date, and each thing set aside", () => {
+    assert.deepEqual(basisLines(basis), {
+      follows:
+        "What shows when changes were made? The request tool's ticket history (confirmed 12 November 2026)",
+      setsAside: [
+        "An earlier answer: The grant date is held in the Active Directory change log. (answered 29 October 2026)",
+        "The RCM record: The grant date is read in Active Directory.",
+      ],
+    });
+    assert.equal(basisLines(null), null);
+    assert.equal(basisLines(undefined), null);
+  });
+
+  it("never words a value the records filled in as a person's confirmation", () => {
+    const lines = basisLines({
+      ...basis,
+      follows: { ...basis.follows, confirmedBy: "RECORDS" },
+    });
+    assert.match(
+      lines?.follows ?? "",
+      /\(from the records, 12 November 2026\)$/,
+    );
+    assert.doesNotMatch(lines?.follows ?? "", /confirmed/);
+    // With no recorded answer, the agent's sentence stands in, without the question.
+    assert.equal(
+      basisLines({
+        ...basis,
+        follows: { ...basis.follows, answer: "", confirmedAt: "" },
+      })?.follows,
+      "Ticket history shows when access was granted.",
+    );
+  });
+
+  it("reads the record from the API, and nothing from a record that says nothing", () => {
+    const read = (understanding_basis: unknown) =>
+      parseContext({
+        control_id: CONTROL,
+        attributes: {
+          approved: [
+            {
+              id: "11111111-1111-4111-8111-111111111111",
+              text: "Approved before the grant",
+              status: "APPROVED",
+              understanding_basis,
+            },
+          ],
+          proposed: [],
+          history: [],
+        },
+      })?.approved[0]?.understandingBasis;
+    assert.deepEqual(
+      read({
+        follows: {
+          kind: "WALKTHROUGH_ANSWER",
+          key: "wt-ac-change-logging-gap",
+          question: "What shows when changes were made?",
+          answer: "The request tool's ticket history",
+          statement: "",
+          confirmed_at: "2026-11-12T16:14:00Z",
+          confirmed_by: "PERSON",
+        },
+        sets_aside: [
+          {
+            kind: "LIBRARY_WORDING",
+            statement: "The system log shows it.",
+            answer: "",
+            confirmed_at: null,
+          },
+          { kind: "SOMETHING_NEW", statement: "", answer: "" },
+        ],
+        summary: "Follows the walkthrough.",
+        by: "engagement-planner",
+        recorded_at: "2026-11-12T16:15:00Z",
+      }),
+      {
+        summary: "Follows the walkthrough.",
+        follows: {
+          answer: "The request tool's ticket history",
+          question: "What shows when changes were made?",
+          statement: "",
+          confirmedAt: "2026-11-12T16:14:00Z",
+          confirmedBy: "PERSON",
+        },
+        setsAside: [
+          {
+            kind: "LIBRARY_WORDING",
+            answer: "",
+            statement: "The system log shows it.",
+            confirmedAt: "",
+          },
+        ],
+      },
+    );
+    assert.equal(read(null), null);
+    assert.equal(
+      read({ follows: { statement: "", answer: "" }, sets_aside: [] }),
+      null,
+    );
+    assert.equal(read({ follows: { answer: "x" }, sets_aside: [] }), null);
+  });
+});
+
+describe("the agents are offered only when a run would do something (12 November 2026)", () => {
+  // Product owner: "If attributes are all accepted, do you think it's worth showing the run
+  // again for ai to generate?" and "Why do I also keep getting this error?"
+  it("always offers the first run, and a re-run only when it is useful", () => {
+    assert.equal(offersAgentRun(false, false), true);
+    assert.equal(offersAgentRun(false, null), true);
+    assert.equal(offersAgentRun(true, true), true);
+    assert.equal(offersAgentRun(true, false), false);
+    // An API that does not say keeps the action, as before.
+    assert.equal(offersAgentRun(true, null), true);
+    assert.equal(offersAgentRun(true, undefined), true);
+  });
+
+  it("shows a stopped run's note only while something waits on the agents", () => {
+    const note = "The planner's answer could not be used. Run again.";
+    assert.equal(attributesStopped("STOPPED", note), note);
+    assert.equal(attributesStopped("STOPPED", note, true), note);
+    assert.equal(attributesStopped("STOPPED", note, false), null);
+    assert.equal(attributesStopped("", note, true), null);
+  });
+
+  it("sends force only when a person asks to run the agents anyway", () => {
+    const plain = contextWrite({ ...IDS, intent: "attributes-generate" });
+    const forced = contextWrite({
+      ...IDS,
+      intent: "attributes-generate",
+      force: true,
+    });
+    assert.ok(!("error" in plain) && !("error" in forced));
+    assert.deepEqual(plain.body, {});
+    assert.deepEqual(forced.body, { force: true });
+    assert.match(forced.path, /\/attributes\/generate$/);
+  });
+
+  it("reads the API's answer, and nothing where it gives none", () => {
+    const read = (attributes_rerun_useful: unknown) =>
+      parseContext({ control_id: CONTROL, attributes_rerun_useful })
+        ?.attributesRerunUseful;
+    assert.equal(read(true), true);
+    assert.equal(read(false), false);
+    assert.equal(read(undefined), null);
+    assert.equal(read("yes"), null);
   });
 });

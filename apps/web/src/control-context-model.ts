@@ -118,7 +118,138 @@ export type Attribute = {
   /** The reviewer agent's verdict on the attribute as it reads now (12 November 2026), or
    * null when it was not reviewed or changed since. Agent output, never an approval. */
   review: AttributeReview | null;
+  /** What the agent followed in the confirmed understanding, and what it set aside, where
+   * the attribute differs from the RCM record, the library or an earlier answer (product
+   * owner, 12 November 2026: the understanding is the authority, the newer answer wins).
+   * Agent output; null or absent where it followed nothing over anything. */
+  understandingBasis?: UnderstandingBasis | null;
 };
+
+export type UnderstandingBasis = {
+  summary: string;
+  follows: {
+    /** The answer as recorded, with its question; the agent's paraphrase beside it. */
+    answer: string;
+    question: string;
+    statement: string;
+    confirmedAt: string;
+    /** A person confirmed it, or the records filled it in: never worded as a person's
+     * confirmation when it is the records'. */
+    confirmedBy: "PERSON" | "RECORDS";
+  };
+  setsAside: Array<{
+    kind:
+      | "OLDER_ANSWER"
+      | "RCM_RECORD"
+      | "LIBRARY_WORDING"
+      | "APPROVED_ATTRIBUTE";
+    /** An older answer as recorded; "" for the other kinds, which carry a statement. */
+    answer: string;
+    statement: string;
+    confirmedAt: string;
+  }>;
+};
+
+const SET_ASIDE_LABELS: Record<
+  UnderstandingBasis["setsAside"][number]["kind"],
+  string
+> = {
+  OLDER_ANSWER: "An earlier answer",
+  RCM_RECORD: "The RCM record",
+  LIBRARY_WORDING: "The library's wording",
+  APPROVED_ATTRIBUTE: "The attribute as it read",
+};
+
+/** A day as the line names it ("29 October 2026"), or "" for no date or one not readable. */
+function dayOf(value: string): string {
+  const at = value === "" ? Number.NaN : Date.parse(value);
+  return Number.isNaN(at)
+    ? ""
+    : new Intl.DateTimeFormat("en-GB", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+        timeZone: "UTC",
+      }).format(new Date(at));
+}
+
+/**
+ * The lines an attribute shows for what the agent followed and set aside: never silent, so
+ * the person accepting the attribute sees which answer it rests on. What was confirmed is
+ * shown as recorded (the question and its answer), not as the agent put it. Null where there
+ * is no record.
+ */
+export function basisLines(
+  basis: UnderstandingBasis | null | undefined,
+): { follows: string; setsAside: string[] } | null {
+  if (basis === null || basis === undefined) {
+    return null;
+  }
+  const { follows } = basis;
+  const said = follows.answer !== "" ? follows.answer : follows.statement;
+  const asked =
+    follows.answer !== "" && follows.question !== ""
+      ? `${follows.question} `
+      : "";
+  const day = dayOf(follows.confirmedAt);
+  const when =
+    follows.confirmedBy === "RECORDS"
+      ? ` (from the records${day !== "" ? `, ${day}` : ""})`
+      : day !== ""
+        ? ` (confirmed ${day})`
+        : "";
+  return {
+    follows: `${asked}${said}${when}`,
+    setsAside: basis.setsAside.map((item) => {
+      const answered = dayOf(item.confirmedAt);
+      return `${SET_ASIDE_LABELS[item.kind]}: ${
+        item.answer !== "" ? item.answer : item.statement
+      }${answered !== "" ? ` (answered ${answered})` : ""}`;
+    }),
+  };
+}
+
+function parseBasis(value: unknown): UnderstandingBasis | null {
+  if (!isRecord(value) || !isRecord(value.follows)) {
+    return null;
+  }
+  const follows = {
+    answer: str(value.follows.answer),
+    question: str(value.follows.question),
+    statement: str(value.follows.statement),
+    confirmedAt: str(value.follows.confirmed_at),
+    confirmedBy: oneOf(
+      value.follows.confirmed_by,
+      ["PERSON", "RECORDS"] as const,
+      "RECORDS",
+    ),
+  };
+  const setsAside = records(value.sets_aside)
+    .map((item) => ({
+      kind: oneOf(
+        item.kind,
+        [
+          "OLDER_ANSWER",
+          "RCM_RECORD",
+          "LIBRARY_WORDING",
+          "APPROVED_ATTRIBUTE",
+        ] as const,
+        "OLDER_ANSWER",
+      ),
+      answer: str(item.answer),
+      statement: str(item.statement),
+      confirmedAt: str(item.confirmed_at),
+    }))
+    .filter((item) => item.answer !== "" || item.statement !== "")
+    .slice(0, 3);
+  if (
+    (follows.answer === "" && follows.statement === "") ||
+    setsAside.length === 0
+  ) {
+    return null;
+  }
+  return { summary: str(value.summary), follows, setsAside };
+}
 
 export type AttributeReview = {
   verdict: "OK" | "REVISED" | "CONCERN";
@@ -392,11 +523,28 @@ export function attributesWorking(
 export function attributesStopped(
   run: AttributesRun,
   note: string,
+  rerunUseful: boolean | null = null,
 ): string | null {
-  if (run !== "STOPPED") {
+  // Nothing waits on the agents: a stopped run is not this person's problem to read about
+  // (product owner, 12 November 2026: "Why do I also keep getting this error?").
+  if (run !== "STOPPED" || rerunUseful === false) {
     return null;
   }
   return note !== "" ? note : "The run stopped before it finished. Run again.";
+}
+
+/**
+ * Whether the list offers the agents: always the first time ("Propose with the agent"), and
+ * again ("Run again") only when it would do something. On settled work, with nothing the
+ * agents read changed, the action is not shown (product owner, 12 November 2026: "If
+ * attributes are all accepted, do you think it's worth showing the run again?"). A change to
+ * the understanding starts the run by itself.
+ */
+export function offersAgentRun(
+  ran: boolean,
+  rerunUseful: boolean | null | undefined,
+): boolean {
+  return !ran || rerunUseful !== false;
 }
 
 /** Whether an agent has already worked on the attributes, so asking again is a re-run. */
@@ -1208,6 +1356,10 @@ export type ControlContext = {
   attributesStage: AttributesStage;
   /** For a stopped run: what happened and what a person does next. */
   attributesRunNote: string;
+  /** Whether running the agents again would do anything: something they read changed since
+   * their last finished run, or a run stopped before finishing work still needed. False on
+   * settled work; null or absent when the API does not say (then asking stays offered). */
+  attributesRerunUseful?: boolean | null;
   note: string;
 };
 
@@ -1562,6 +1714,7 @@ function parseAttribute(item: Raw): Attribute {
           note: str(item.review.note),
         }
       : null,
+    understandingBasis: parseBasis(item.understanding_basis),
   };
 }
 
@@ -1798,6 +1951,10 @@ export function parseContext(value: unknown): ControlContext | null {
       "",
     ),
     attributesRunNote: str(value.attributes_run_note),
+    attributesRerunUseful:
+      typeof value.attributes_rerun_useful === "boolean"
+        ? value.attributes_rerun_useful
+        : null,
     attributesStage: oneOf(
       value.attributes_stage,
       ["", "ATTRIBUTES", "CRITERIA", "REVIEW"] as const,
@@ -1983,7 +2140,14 @@ export function contextWrite(fields: Fields): ContextWrite {
         : { error: "invalid" };
     }
     case "attributes-generate":
-      return ok("POST", `${control}/attributes/generate`, {}, true);
+      // `force` runs the agents although nothing they read has changed: a person's own
+      // decision, offered quietly on settled work (12 November 2026).
+      return ok(
+        "POST",
+        `${control}/attributes/generate`,
+        fields.force === true ? { force: true } : {},
+        true,
+      );
     case "library-adopt":
       return ok("POST", `${control}/library-update/adopt`);
     case "values-set": {
