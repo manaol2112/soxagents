@@ -1947,6 +1947,8 @@ function ControlRecord({
             (designWindow === undefined ? "" : phaseWindow(designWindow)) ||
             "The control as currently designed",
           now: Date.now(),
+          // Each file's check by the assurance chain (docs/evidence-assurance.md).
+          assurance: engagement.evidenceAssurance ?? null,
         })
       : null;
   // The planner at work or the requests being drafted: the step is the agents'. An

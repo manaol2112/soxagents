@@ -8,6 +8,7 @@ import type {
   DesignConclusion,
   DesignConclusionNotice,
 } from "./design-conclusion-model.ts";
+import type { EvidenceAssurance } from "./evidence-assurance-model.ts";
 import type { ChangeNotice } from "./evidence-change-model.ts";
 import type { WalkthroughInstance } from "./evidence-dialog-model.ts";
 import type { EvidenceFinding } from "./evidence-findings-model.ts";
@@ -670,6 +671,9 @@ export type EngagementState = {
   evidenceMapping?: EvidenceMappingRun | null;
   /** The open control's evidence findings (increment 2); null when not loaded. */
   evidenceFindings?: EvidenceFinding[] | null;
+  /** What the assurance chain says of the open control's D&I files
+   * (docs/evidence-assurance.md); null when not loaded or not there. */
+  evidenceAssurance?: EvidenceAssurance | null;
   /** The walkthrough instances picked for the open control's design items. */
   walkthroughInstances?: WalkthroughInstance[] | null;
   /** The engagement's journey and what waits on the team (next_steps.py), for Home. */
