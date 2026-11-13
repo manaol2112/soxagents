@@ -2260,30 +2260,61 @@ const reviewed = (extra: unknown[] = []) =>
   );
 
 describe("the D&I list with the chain", () => {
-  // Before the second review this read "where the chain was not read, or has no entry"
-  // and included a null read: a failed read evidenced as before the chain. It now fails
-  // closed (the next test); only a read that succeeded and has no entry reads as before.
-  it("reads exactly as before where the read succeeded and has no entry for the request", () => {
-    const before = list({ assurance: parsed([]) });
+  // Before: "reads exactly as before where the read succeeded and has no entry for the
+  // request" (the row kept the reader's "Agent proposes: a follow-up." and, accepted,
+  // evidenced what it addressed). Now, the cautious way (lead, 12 November 2026): a
+  // request with files the read does not list is not checked, and evidences nothing.
+  it("a request with files the read does not list is not checked: Check now, no reader's proposal, nothing evidenced", () => {
     for (const assurance of [
       parsed([]),
       parsed([entry({ requirement_id: WALK })]),
     ]) {
       const view = list({ assurance });
-      assert.equal(view.rows[0]?.assurance, null);
-      assert.equal(view.rows[0]?.sub, before.rows[0]?.sub);
-      assert.deepEqual(view.rows[0]?.agent, before.rows[0]?.agent);
-      assert.deepEqual(view.coverage, before.coverage);
-      assert.equal(view.coverageLine, before.coverageLine);
+      assert.equal(view.rows[0]?.assurance?.standing, "NOT_CHECKED");
+      assert.equal(
+        view.rows[0]?.assurance?.check.line,
+        "Not checked against the attributes yet",
+      );
+      assert.deepEqual(view.rows[0]?.assurance?.check.action, {
+        kind: "RERUN",
+        label: "Check now",
+        fileId: null,
+      });
+      assert.equal(
+        view.rows[0]?.sub,
+        "Policy or procedure · 1 file · Not checked yet",
+      );
+      assert.equal(view.rows[0]?.agent, null);
+      assert.equal(view.rows[0]?.proposal, "NONE");
+      assert.equal(view.rows[0]?.readerShown, false);
     }
-    assert.equal(before.rows[0]?.agent?.lead, "Agent proposes: a follow-up.");
+    const accepted = list({
+      requirements: [requirement({ state: "ACCEPTED" })],
+      assurance: parsed([]),
+    });
+    assert.deepEqual(
+      accepted.coverage.filter((chip) => chip.state === "EVIDENCED"),
+      [],
+    );
+    assert.equal(
+      accepted.coverage[0]?.label,
+      "Attribute A: evidence accepted, not checked against the attributes yet",
+    );
+    // A request with no file has nothing to check, and no entry is made up for it.
+    const empty = list({
+      requirements: [requirement({ state: "SENT", files: [] })],
+      assurance: parsed([]),
+    });
+    assert.equal(empty.rows[0]?.assurance, null);
   });
 
   it("fails closed: a read that failed, or did not parse, evidences nothing and says the coverage is not known", () => {
     const accepted = [requirement({ state: "ACCEPTED" })];
-    // What the same accepted request evidenced before the second review.
+    // What the same accepted request evidences when its check is read and supports A.
+    // (Before the lead's follow-up this used an empty read, parsed([]): a request with
+    // no entry then evidenced what it addressed. It is now not checked, and does not.)
     assert.equal(
-      list({ requirements: accepted, assurance: parsed([]) }).coverage[0]
+      list({ requirements: accepted, assurance: parsed([entry()]) }).coverage[0]
         ?.state,
       "EVIDENCED",
     );
@@ -2316,6 +2347,17 @@ describe("the D&I list with the chain", () => {
     // Not a single attribute evidenced, nor promised by accepting what waits.
     const waiting = list({ assurance: null });
     assert.ok(!waiting.coverageLine.includes("accepting"));
+    // Nor the reader's single reading: never checked by a second one. The row says
+    // nothing of it, and the step's line says only that the checks could not be read.
+    assert.equal(waiting.rows[0]?.agent, null);
+    assert.equal(waiting.rows[0]?.proposal, "NONE");
+    assert.equal(waiting.rows[0]?.readerShown, false);
+    assert.equal(waiting.rows[0]?.sub, "Policy or procedure · 1 file");
+    assert.equal(
+      waiting.header.need.detail,
+      `${COVERAGE_UNREAD} Nothing is accepted until you accept it.`,
+    );
+    assert.ok(!waiting.header.agent.found.join(" ").includes("Agent proposes"));
     // Nothing to check (no D&I request): nothing is said to have failed.
     const none = list({ requirements: [], assurance: null });
     assert.equal(none.coverageUnread, false);
@@ -2425,11 +2467,18 @@ describe("the D&I list with the chain", () => {
       early.coverage.filter((chip) => chip.state === "EVIDENCED"),
       [],
     );
+    // Old: accepted where the read has no entry for it, A was EVIDENCED, "as before the
+    // chain". New (the cautious way, lead's decision): the request is not checked, and
+    // evidences nothing.
     const legacy = list({
       requirements: [requirement({ state: "ACCEPTED" })],
       assurance: parsed([]),
     });
-    assert.equal(state(legacy).A, "EVIDENCED");
+    assert.equal(state(legacy).A, "REQUESTED");
+    assert.equal(
+      legacy.coverage[0]?.label,
+      "Attribute A: evidence accepted, not checked against the attributes yet",
+    );
   });
 
   it("support by the documented design alone reads design documented, implementation not yet shown", () => {

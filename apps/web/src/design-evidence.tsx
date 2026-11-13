@@ -1045,7 +1045,7 @@ function Row({
       { kind: "FOLLOW_UP_REQUIRED" },
       // The reader's own follow-up points start the text only where the chain has not
       // checked the row: they were never checked by a second reading.
-      assured != null
+      !row.readerShown
         ? ""
         : item.assessment.followUps.join("; ").slice(0, 1000),
     );

@@ -1350,6 +1350,44 @@ function elementFacts(request: AssuredRequest): AttributeElements[] {
     });
 }
 
+/** A request with files the server sent no entry for: it has not been checked against
+ * the attributes (the server always sends at least NOT_CHECKED; where it does not, the
+ * row says so and offers Check now, and nothing of it evidences). */
+export function notChecked(requirementId: string): AssuredRequest {
+  return {
+    requirementId,
+    runId: null,
+    status: "NOT_CHECKED",
+    stage: null,
+    held: null,
+    heldFiles: [],
+    fileIds: [],
+    lens: null,
+    readInPart: false,
+    attributes: [],
+    outOfDate: [],
+    note: "",
+    finishedAt: null,
+  };
+}
+
+/** The read, with a not-checked entry for each request with files it does not list. */
+export function withNotChecked(
+  assurance: EvidenceAssurance,
+  requirementIds: readonly string[],
+): EvidenceAssurance {
+  const listed = new Set(assurance.requests.map((item) => item.requirementId));
+  return {
+    ...assurance,
+    requests: [
+      ...assurance.requests,
+      ...requirementIds
+        .filter((id) => !listed.has(id))
+        .map((id) => notChecked(id)),
+    ],
+  };
+}
+
 /** The attributes some request of the control sends with their elements. */
 export function keyedOf(assurance: EvidenceAssurance | null): Set<string> {
   return new Set(

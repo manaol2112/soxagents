@@ -488,36 +488,54 @@ describe("a file came back: review it", () => {
   it("reads To review on its row and opens that row", () => {
     const view = review();
     assert.deepEqual(chips(view), ["To review", "With owner"]);
+    // Rewritten after the assurance chain's review (12 November 2026, lead's decision:
+    // "the cautious way"). A D&I request with files always has a chain entry; one the
+    // read does not list is not checked against the attributes. It evidences nothing,
+    // and the reader's single reading is not put to the person (never checked by a
+    // second reading).
+    // Old: sub "Policy or procedure · 1 file · Agent: sufficient", and the agent line
+    // {lead: "Agent proposes: sufficient.", text: "Version 3.2, …"}. New: the row reads
+    // "Not checked yet", with Check now, and no reader's proposal.
     assert.equal(
       view.rows[0]?.sub,
-      "Policy or procedure · 1 file · Agent: sufficient",
+      "Policy or procedure · 1 file · Not checked yet",
     );
     assert.equal(view.open, POLICY);
     assert.equal(view.rows[0]?.canAccept, true);
     assert.equal(view.rows[1]?.canAccept, false);
-    assert.deepEqual(view.rows[0]?.agent, {
-      lead: "Agent proposes: sufficient.",
-      // The reader's note is kept to a length, so one cut mid-sentence says so.
-      text: "Version 3.2, approved 3 Mar 2026, requires line-manager approval before provisioning…",
-      followUps: [],
-    });
+    assert.equal(view.rows[0]?.agent, null);
+    assert.equal(view.rows[0]?.readerShown, false);
+    assert.equal(
+      view.rows[0]?.assurance?.check.line,
+      "Not checked against the attributes yet",
+    );
+    assert.equal(view.rows[0]?.assurance?.check.action?.label, "Check now");
   });
 
   it("asks for the review once, and accepts nothing by itself", () => {
     const view = review();
     assert.equal(view.header.standing, "REVIEW");
-    assert.equal(view.header.status, "1 file to review");
+    // Rewritten after the assurance chain's review (12 November 2026, lead's decision:
+    // "the cautious way"). A D&I request with files always has a chain entry; one the
+    // read does not list is not checked against the attributes. It evidences nothing,
+    // and the reader's single reading is not put to the person (never checked by a
+    // second reading).
+    // Old: status "1 file to review", detail "The agent read it and proposes:
+    // sufficient. …", did "Read 1 file: 1 sufficient.", and the coverage line "0 of 5
+    // attributes evidenced · accepting this file covers A to D". New: the request is
+    // not checked yet, so accepting it covers nothing.
+    assert.equal(view.header.status, "1 file to review · 1 not checked yet");
     assert.deepEqual(view.header.need, {
       kind: "act",
       title: "Review 1 file.",
       detail:
-        "The agent read it and proposes: sufficient. Nothing is accepted until you accept it.",
+        "1 request not checked yet. Nothing is accepted until you accept it.",
     });
-    assert.equal(view.header.agent.did, "Read 1 file: 1 sufficient.");
+    assert.equal(view.header.agent.did, "Read 1 file.");
     assert.equal(view.send.show, false);
     assert.equal(
       view.coverageLine,
-      "0 of 5 attributes evidenced · accepting this file covers A to D",
+      "Every attribute is requested · none evidenced yet",
     );
     assert.ok(view.coverage.every((chip) => chip.state === "REQUESTED"));
     assert.equal(view.activityLine, "Sent Nov 12, 2026 · 1 file received");
@@ -543,22 +561,27 @@ describe("a file came back: review it", () => {
       ],
       requests: [carrier({ status: "RECEIVED", delivery: SENT })],
     });
-    assert.equal(view.header.status, "3 files to review");
+    // Rewritten after the assurance chain's review (12 November 2026, lead's decision:
+    // "the cautious way"). A D&I request with files always has a chain entry; one the
+    // read does not list is not checked against the attributes. It evidences nothing,
+    // and the reader's single reading is not put to the person (never checked by a
+    // second reading).
+    // Old: status "3 files to review", the reader's mixed proposals in the detail and
+    // in did ("1 sufficient, 1 a follow-up"), the second row "… · Agent: a follow-up",
+    // and "accepting these files covers A to E". New: both requests are not checked yet.
+    assert.equal(view.header.status, "3 files to review · 2 not checked yet");
     assert.equal(
       view.header.need.detail,
-      "The agent read them and proposes: 1 sufficient, 1 a follow-up. Nothing is accepted until you accept it.",
+      "2 requests not checked yet. Nothing is accepted until you accept it.",
     );
-    assert.equal(
-      view.header.agent.did,
-      "Read 3 files: 1 sufficient, 1 a follow-up.",
-    );
+    assert.equal(view.header.agent.did, "Read 3 files.");
     assert.equal(
       view.rows[1]?.sub,
-      "Walkthrough instance · 2 files · Agent: a follow-up",
+      "Walkthrough instance · 2 files · Not checked yet",
     );
     assert.equal(
       view.coverageLine,
-      "0 of 5 attributes evidenced · accepting these files covers A to E",
+      "Every attribute is requested · none evidenced yet",
     );
   });
 
@@ -660,7 +683,13 @@ describe("a follow-up, and a decision against the evidence", () => {
       view.rows[0]?.note,
       "Send the approved version. (Daniel Osei)",
     );
-    assert.equal(view.rows[0]?.agent?.lead, "Agent proposed: sufficient.");
+    // Rewritten after the assurance chain's review (12 November 2026, lead's decision:
+    // "the cautious way"). A D&I request with files always has a chain entry; one the
+    // read does not list is not checked against the attributes. It evidences nothing,
+    // and the reader's single reading is not put to the person (never checked by a
+    // second reading).
+    // Old: the reader's past proposal, "Agent proposed: sufficient.". New: none.
+    assert.equal(view.rows[0]?.agent, null);
   });
 
   it("does not say sent while nothing went out for it", () => {
@@ -759,9 +788,23 @@ describe("everything accepted", () => {
     assert.equal(done.send.show, false);
     assert.equal(line(done)?.status, "Sent Nov 12, 2026 · complete");
     assert.equal(line(done)?.canChange, false);
-    assert.equal(done.coverageLine, "5 of 5 attributes evidenced");
-    assert.ok(done.coverage.every((chip) => chip.state === "EVIDENCED"));
-    assert.equal(done.coverage[0]?.label, "Attribute A: evidence accepted");
+    // Rewritten after the assurance chain's review (12 November 2026, lead's decision:
+    // "the cautious way"). A D&I request with files always has a chain entry; one the
+    // read does not list is not checked against the attributes. It evidences nothing,
+    // and the reader's single reading is not put to the person (never checked by a
+    // second reading).
+    // Old: "5 of 5 attributes evidenced", every chip EVIDENCED, "Attribute A: evidence
+    // accepted" (a person's acceptance alone evidenced what the request addressed).
+    // New: accepted, and not checked yet: nothing is evidenced, and it says so.
+    assert.equal(
+      done.coverageLine,
+      "0 of 5 attributes evidenced · A to E accepted, not checked against the attributes yet",
+    );
+    assert.ok(done.coverage.every((chip) => chip.state === "REQUESTED"));
+    assert.equal(
+      done.coverage[0]?.label,
+      "Attribute A: evidence accepted, not checked against the attributes yet",
+    );
     assert.equal(
       done.activityLine,
       "Sent Nov 12, 2026 · 4 files received · 2 accepted",
@@ -776,11 +819,21 @@ describe("everything accepted", () => {
       ],
       requests: [carrier({ status: "PARTIALLY_RECEIVED", delivery: SENT })],
     });
+    // Rewritten after the assurance chain's review (12 November 2026, lead's decision:
+    // "the cautious way"). A D&I request with files always has a chain entry; one the
+    // read does not list is not checked against the attributes. It evidences nothing,
+    // and the reader's single reading is not put to the person (never checked by a
+    // second reading).
+    // Old: A to D EVIDENCED and "4 of 5 attributes evidenced". New: the accepted
+    // request is not checked yet, so nothing is evidenced.
     assert.deepEqual(
       part.coverage.map((chip) => chip.state),
-      ["EVIDENCED", "EVIDENCED", "EVIDENCED", "EVIDENCED", "REQUESTED"],
+      ["REQUESTED", "REQUESTED", "REQUESTED", "REQUESTED", "REQUESTED"],
     );
-    assert.equal(part.coverageLine, "4 of 5 attributes evidenced");
+    assert.equal(
+      part.coverageLine,
+      "0 of 5 attributes evidenced · A to D accepted, not checked against the attributes yet",
+    );
     // An attribute no request addresses, with or without a recorded reason.
     const gaps = list({
       requirements: [requirement({ attributeIds: [A, B] })],
