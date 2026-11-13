@@ -700,13 +700,32 @@ def check_draft(output: dict[str, Any], context: DraftContext) -> DraftContent:
     return content
 
 
+_DETAIL_ENTRY = re.compile(r"^(?:\d{1,2}[.)]|[-•*])\s+(\S.*)$")
+
+
+def detail_lines(detail: str) -> list[str]:
+    """An item's detail as lines indented under the item: every line, not only the
+    first, and a numbered or bulleted list inside it as indented "- " lines, so the list
+    is never read as items of the request. Blank lines are left out: an item is one
+    paragraph. Bug hunt, 12 November 2026: a detail's own "1. ..." list, unindented,
+    was laid out as seven requests of its own."""
+    lines: list[str] = []
+    for raw in detail.replace("\r\n", "\n").split("\n"):
+        text = raw.strip()
+        if not text:
+            continue
+        entry = _DETAIL_ENTRY.match(text)
+        lines.append(f"   - {entry.group(1)}" if entry is not None else f"   {text}")
+    return lines
+
+
 def render(content: DraftContent) -> str:
     """The request text the approved email template carries."""
 
     def block(item: DraftItem, number: int, full: bool) -> str:
         lines = [f"{number}. {item.title}"]
         if item.detail:
-            lines.append(f"   {item.detail}")
+            lines.extend(detail_lines(item.detail))
         if item.period:
             lines.append(f"   Period: {item.period}")
         if item.fields and full:

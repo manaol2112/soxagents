@@ -34,7 +34,9 @@ _LINK = re.compile(r"/upload/([A-Za-z0-9_-]{32,64})")
 def test_the_request_email_carries_a_link_and_only_its_hash_is_kept(migrated: Database) -> None:
     sent = _sent(migrated, "link")
     assert LINK_PLACEHOLDER not in sent["body"]
-    assert "attachments are not accepted as evidence" in sent["body"]
+    # Rewritten for the approved redesign (version 3): old wording "Files sent as email
+    # attachments are not accepted as evidence."; new, said once under HOW TO SEND IT.
+    assert "Please do not send evidence as email attachments." in sent["body"]
     token = sent["token"]
     with connect(migrated.url) as connection:
         stored = connection.execute(

@@ -90,9 +90,59 @@ class GroupState(Exception):
 # Wording
 
 
-def _templates() -> tuple[Any, Any]:
+# Version 2 (the approved redesign, product owner, 12 November 2026): the same frame as a
+# single request's version 3 (request_email.py). A group approved on version 1 is still
+# sent on version 1: the send renders it on the version its approval record holds.
+GROUP_VERSION = 2
+_HOW_TO_SEND = (
+    "HOW TO SEND IT\n\n"
+    "Open your secure upload page, where each item is described in full:\n"
+    "$upload_link\n"
+    "Enter the one-time code we email to this address, then upload each file against its "
+    "item. Please do not send evidence as email attachments.\n\n"
+    "Thank you,\n"
+    "The $team\n\n"
+    "Questions? Reply to this email and keep $reference in the subject."
+)
+
+
+def _templates(version: int | None = None) -> tuple[Any, Any]:
+    """The group's request and reminder templates at a version (the current for None);
+    a version no template has is refused, and the send then refuses the message."""
     from ai_workforce_api.outbound import MessageTemplate
 
+    chosen = GROUP_VERSION if version is None else version
+    if chosen == 2:
+        return (
+            MessageTemplate(
+                template_id=GROUP_TEMPLATE_ID,
+                version=2,
+                subject="$subject_line",
+                body=(
+                    "$greeting\n\n"
+                    "The $team needs the evidence below.\n\n"
+                    "$facts\n\n"
+                    "WHAT WE NEED\n\n"
+                    "$sections\n\n" + _HOW_TO_SEND
+                ),
+            ),
+            MessageTemplate(
+                template_id=GROUP_REMINDER_TEMPLATE_ID,
+                version=2,
+                subject="Reminder: $subject_line",
+                body=(
+                    "$greeting\n\n"
+                    "This is reminder $sequence of $limit: the evidence below is still "
+                    "outstanding. If you have already uploaded it, thank you, and you can "
+                    "ignore this reminder.\n\n"
+                    "$facts\n\n"
+                    "WHAT WE NEED\n\n"
+                    "$sections\n\n" + _HOW_TO_SEND
+                ),
+            ),
+        )
+    if chosen != 1:
+        raise ValueError("unknown template version")
     request = MessageTemplate(
         template_id=GROUP_TEMPLATE_ID,
         version=1,
@@ -140,9 +190,15 @@ class Section:
     # The control's name and its system: what the reader sees instead of internal IDs.
     control_title: str = ""
     system: str = ""
+    # The recipient's name as a record holds it (outbound.recipient_name), and the
+    # testing phase: what version 2 greets and names.
+    recipient_name: str = ""
+    testing_phase: str = ""
 
 
-def section_of(pbc: PbcBody, control_title: str = "", system: str = "") -> Section:
+def section_of(
+    pbc: PbcBody, control_title: str = "", system: str = "", recipient_name: str = ""
+) -> Section:
     return Section(
         id=pbc.id,
         control_ref=pbc.control_ref.strip(),
@@ -152,11 +208,16 @@ def section_of(pbc: PbcBody, control_title: str = "", system: str = "") -> Secti
         cc=tuple(item.strip().lower() for item in pbc.cc_recipients if item.strip()),
         control_title=" ".join(control_title.split())[:160],
         system=" ".join(system.split())[:120],
+        recipient_name=" ".join(recipient_name.split())[:200],
+        testing_phase=str(pbc.testing_phase or ""),
     )
 
 
 def sections_for(connection: Any, pbcs: list[PbcBody]) -> list[Section]:
-    """The members as the email shows them, by their controls' names and systems."""
+    """The members as the email shows them, by their controls' names and systems, with
+    the recipient's name as a record holds it."""
+    from ai_workforce_api.outbound import recipient_name
+
     names = {
         UUID(str(row[0])): (str(row[1]), str(row[2]))
         for row in connection.execute(
@@ -166,12 +227,21 @@ def sections_for(connection: Any, pbcs: list[PbcBody]) -> list[Section]:
             ([p.engagement_control_id for p in pbcs if p.engagement_control_id is not None],),
         ).fetchall()
     }
+    people: dict[str, str] = {}
     found: list[Section] = []
     for p in pbcs:
         title, system = (
             names.get(p.engagement_control_id, ("", "")) if p.engagement_control_id else ("", "")
         )
-        found.append(section_of(p, title, system))
+        address = p.recipient.strip().lower()
+        if address not in people:
+            lead = next(
+                (q.engagement_control_id for q in pbcs
+                 if q.recipient.strip().lower() == address and q.engagement_control_id),
+                None,
+            )  # fmt: skip
+            people[address] = recipient_name(connection, p.project_id, address, lead)
+        found.append(section_of(p, title, system, people[address]))
     return found
 
 
@@ -222,16 +292,115 @@ def _shared(sections: list[Section]) -> tuple[str, tuple[str, ...]]:
     return sections[0].recipient, sections[0].cc
 
 
-def render_group(group_id: UUID, lead_id: UUID, sections: list[Section], engagement: str) -> Any:
-    """The group's one email, from its members as they stand. Deterministic: the send
+def _label(section: Section) -> str:
+    """A member's heading in version 2: its control's name, with its reference and
+    system."""
+    from ai_workforce_api.request_details import heading_of, parse_wording
+
+    name = section.control_title or heading_of(parse_wording(section.description))
+    named = ", ".join(x for x in (section.control_ref, section.system) if x)
+    if not name or name == section.control_ref:
+        return f"{section.control_ref} ({section.system})" if section.system else name
+    return f"{name} ({named})" if named else name
+
+
+def _section_v2(section: Section, due: datetime, with_items: bool) -> str:
+    """A member under WHAT WE NEED: its heading, then each item in brief (its title and
+    what it covers; the full wording is on the secure link). In the shortest form, its
+    heading alone, as a list entry."""
+    from ai_workforce_api.request_email import parse
+
+    heading = (_label(section) or section.control_ref)[:200]
+    if section.due_at.astimezone(UTC).date() != due.astimezone(UTC).date():
+        heading += f", due {_day(section.due_at)}"
+    if not with_items:
+        return f"- {heading}"
+    wording = parse(section.description)
+    items = [item.text(brief=True) for item in wording.items]
+    if not items:
+        first = next((x.strip() for x in section.description.splitlines() if x.strip()), "")
+        if first:
+            items.append(first[:300])
+    return "\n\n".join([f"{heading}:", *items])
+
+
+def _count_v2(sections: list[Section]) -> int:
+    from ai_workforce_api.request_email import parse
+
+    return sum(max(len(parse(s.description).items), 1) for s in sections)
+
+
+def _values_v2(
+    sections: list[Section], due: datetime, engagement: str, reference: str
+) -> dict[str, str]:
+    """What version 2's templates carry, besides the sections."""
+    from ai_workforce_api.request_email import (
+        PHASE_WORDS,
+        due_long,
+        facts_block,
+        greeting,
+        subject,
+        team,
+    )
+
+    refs = [s.control_ref for s in sections]
+    systems = list(dict.fromkeys(s.system for s in sections if s.system))
+    phases = {s.testing_phase for s in sections}
+    stage = PHASE_WORDS.get(next(iter(phases)), "") if len(phases) == 1 else ""
+    names = {s.recipient_name for s in sections}
+    rows = [
+        ("Controls" if len(refs) > 1 else "Control", ", ".join(refs)[:400]),
+        ("Systems" if len(systems) > 1 else "System", ", ".join(systems)[:300]),
+        ("Stage", stage),
+        ("Due", due_long(due)),
+        ("Reference", reference),
+    ]
+    # Named by its audit, not as a group of controls (R2a: grouping is never shown as a
+    # concept); its controls by their references with their names, as a single request.
+    signs = team(engagement)
+    return {
+        "subject_line": subject(
+            signs[: -len(" team")], ", ".join(refs) if len(refs) <= 3 else "",
+            _count_v2(sections), due, reference,
+        ),
+        "greeting": greeting(next(iter(names)) if len(names) == 1 else ""),
+        "facts": facts_block(rows),
+        "team": team(engagement),
+        "reference": reference,
+    }  # fmt: skip
+
+
+def render_group(
+    group_id: UUID,
+    lead_id: UUID,
+    sections: list[Section],
+    engagement: str,
+    *,
+    version: int | None = None,
+) -> Any:
+    """The group's one email, from its members as they stand, on a template version: the
+    current one for a new approval, the approved one for a send. Deterministic: the send
     renders it again and refuses anything but the approved content."""
     from ai_workforce_api.evidence_portal import LINK_PLACEHOLDER
-    from ai_workforce_api.outbound import RenderedMessage, _digest
+    from ai_workforce_api.request_email import tidy
 
-    template, _ = _templates()
+    template, _ = _templates(version)
     recipient, cc = _shared(sections)
     due = min(s.due_at for s in sections)
     reference = reference_of(group_id)
+    if template.version >= 2:
+        values = {
+            **_values_v2(sections, due, engagement, reference),
+            "sections": "\n\n".join(_section_v2(s, due, True) for s in sections),
+            "upload_link": LINK_PLACEHOLDER,
+        }
+        subject = Template(template.subject).substitute(values)
+        body = tidy(Template(template.body).substitute(values))
+        if len(body) > 3800:
+            values["sections"] = "\n".join(_section_v2(s, due, False) for s in sections)
+            body = tidy(Template(template.body).substitute(values))
+        return _group_message(template, recipient, cc, subject, body, reference, lead_id,
+                              group_id)  # fmt: skip
     values = {
         "reference": reference,
         "count": str(len(sections)),
@@ -247,6 +416,21 @@ def render_group(group_id: UUID, lead_id: UUID, sections: list[Section], engagem
         # are on the secure link, as a single request's brief does (outbound._compose).
         values["sections"] = "\n".join(_block(s, due, False) for s in sections)
         body = Template(template.body).substitute(values)
+    return _group_message(template, recipient, cc, subject, body, reference, lead_id, group_id)
+
+
+def _group_message(
+    template: Any,
+    recipient: str,
+    cc: tuple[str, ...],
+    subject: str,
+    body: str,
+    reference: str,
+    lead_id: UUID,
+    group_id: UUID,
+) -> Any:
+    from ai_workforce_api.outbound import RenderedMessage, _digest
+
     if len(subject) > 200 or len(body) > 3800:
         raise ValueError("message is too long")
     digest = _digest(recipient, cc, subject, body)
@@ -257,7 +441,7 @@ def render_group(group_id: UUID, lead_id: UUID, sections: list[Section], engagem
         body=body,
         reference=reference,
         content_sha256=digest,
-        request_ref=_ref(lead_id, group_id, digest),
+        request_ref=_ref(lead_id, group_id, digest, template.version),
         metadata={
             "request_id": str(lead_id),
             "request_reference": reference,
@@ -275,23 +459,43 @@ def render_group_reminder(
     engagement: str,
     follow_up_id: UUID,
     sequence: int,
+    *,
+    version: int | None = None,
 ) -> Any:
-    """The group's reminder, in its thread, listing what is still open."""
+    """The group's reminder, in its thread, listing what is still open, on a template
+    version (the current for a new reminder, the approved one for a send)."""
     from ai_workforce_api.evidence_portal import LINK_PLACEHOLDER
-    from ai_workforce_api.outbound import (
-        REMINDER_ACTION_ID,
-        RenderedMessage,
-        _digest,
-    )
 
     if lead.thread_id is None:
         raise ValueError("request has no thread")
     if not open_sections:
         raise ValueError("nothing is open")
-    _, template = _templates()
+    from ai_workforce_api.request_email import tidy
+
+    _, template = _templates(version)
     recipient, cc = _shared(open_sections)
     due = min(s.due_at for s in open_sections)
     reference = reference_of(group_id)
+    extra = {
+        "upload_link": LINK_PLACEHOLDER,
+        "sequence": str(sequence),
+        "limit": str(max(sequence, lead.max_follow_ups)),
+    }
+    if template.version >= 2:
+        values = {
+            **_values_v2(open_sections, due, engagement, reference),
+            "sections": "\n\n".join(_section_v2(s, due, True) for s in open_sections),
+            **extra,
+        }
+        body = tidy(Template(template.body).substitute(values))
+        if len(body) > 3800:
+            values["sections"] = "\n".join(_section_v2(s, due, False) for s in open_sections)
+            body = tidy(Template(template.body).substitute(values))
+        return _reminder_message(
+            template, lead, group_id, recipient, cc,
+            Template(template.subject).substitute(values), body, reference, follow_up_id,
+            sequence,
+        )  # fmt: skip
     values = {
         "reference": reference,
         "count": str(len(open_sections)),
@@ -304,10 +508,30 @@ def render_group_reminder(
     }
     subject = Template(template.subject).substitute(values)
     body = Template(template.body).substitute(values)
+    return _reminder_message(
+        template, lead, group_id, recipient, cc, subject, body, reference, follow_up_id,
+        sequence,
+    )  # fmt: skip
+
+
+def _reminder_message(
+    template: Any,
+    lead: PbcBody,
+    group_id: UUID,
+    recipient: str,
+    cc: tuple[str, ...],
+    subject: str,
+    body: str,
+    reference: str,
+    follow_up_id: UUID,
+    sequence: int,
+) -> Any:
+    from ai_workforce_api.outbound import REMINDER_ACTION_ID, RenderedMessage, _digest
+
     if len(subject) > 200 or len(body) > 3800:
         raise ValueError("message is too long")
     digest = _digest(recipient, cc, subject, body)
-    version = f"{template.template_id}-v{template.version}"
+    tag = f"{template.template_id}-v{template.version}"
     return RenderedMessage(
         template=template,
         recipient=recipient,
@@ -315,7 +539,7 @@ def render_group_reminder(
         body=body,
         reference=reference,
         content_sha256=digest,
-        request_ref=f"pbc/{lead.id}/{version}/{follow_up_id}/{digest[:16]}",
+        request_ref=f"pbc/{lead.id}/{tag}/{follow_up_id}/{digest[:16]}",
         metadata={
             "request_id": str(lead.id),
             "request_reference": reference,
@@ -330,9 +554,10 @@ def render_group_reminder(
     )
 
 
-def _ref(request_id: UUID, group_id: UUID, digest: str) -> str:
-    # pbc/{request}/... keeps every per-request reader of approvals working.
-    return f"pbc/{request_id}/{GROUP_TEMPLATE_ID}-v1/{group_id}/{digest[:16]}"
+def _ref(request_id: UUID, group_id: UUID, digest: str, version: int) -> str:
+    # pbc/{request}/... keeps every per-request reader of approvals working; the template
+    # version is the one the message was rendered on.
+    return f"pbc/{request_id}/{GROUP_TEMPLATE_ID}-v{version}/{group_id}/{digest[:16]}"
 
 
 def member_parameters(message: Any, request_id: UUID, group_id: UUID) -> dict[str, str]:
@@ -340,7 +565,7 @@ def member_parameters(message: Any, request_id: UUID, group_id: UUID) -> dict[st
     return {
         "recipient": message.recipient,
         "subject": message.subject,
-        "request_ref": _ref(request_id, group_id, message.content_sha256),
+        "request_ref": _ref(request_id, group_id, message.content_sha256, message.template.version),
     }
 
 
@@ -1087,8 +1312,9 @@ def review(
         ).fetchone()
         try:
             message = render_group(
-                group.id, group.lead_request_id, sections_for(connection, members), engagement
-            )
+                group.id, group.lead_request_id, sections_for(connection, members), engagement,
+                version=approved_version(connection, group.id),
+            )  # fmt: skip
             body = message.body
         except ValueError:
             body = ""
@@ -1564,6 +1790,17 @@ def _frozen(connection: psycopg.Connection[Any], group_id: UUID) -> tuple[str, l
     return str(row[0]), list(row[1] or [])
 
 
+def approved_version(connection: Any, group_id: UUID) -> int | None:
+    """The template version the group's email was approved on (its approval record):
+    the send renders it on that version, so a group approved before a newer template
+    still goes out exactly as approved. None for a group not approved."""
+    row = connection.execute(
+        "SELECT template_version FROM evidence_group_approvals WHERE group_id = %s",
+        (group_id,),
+    ).fetchone()
+    return None if row is None else int(row[0])
+
+
 def _send_problem(
     connection: psycopg.Connection[Any],
     settings: Settings,
@@ -1612,6 +1849,7 @@ def _send_problem(
             group.lead_request_id,
             sections_for(connection, members),
             _engagement(connection, organization_id, project_id),
+            version=approved_version(connection, group.id),
         )
     except ValueError:
         return "changed_since_approval"
@@ -1682,6 +1920,7 @@ def _record(
                 group.lead_request_id,
                 sections_for(connection, members),
                 _engagement(connection, organization_id, project_id),
+                version=approved_version(connection, group.id),
             )
             if message.content_sha256 != digest:
                 raise OutboundState("approval does not match")
@@ -1812,6 +2051,7 @@ def message_for(
         group.lead_request_id,
         sections_for(connection, [pbcs[m] for m in group.members]),
         _engagement(connection, organization_id, project_id),
+        version=int(outbound.template_version),
     )
 
 
@@ -1866,9 +2106,12 @@ def reminder_for(
     engagement: str,
     follow_up_id: UUID,
     sequence: int,
+    *,
+    version: Callable[[], int | None] | None = None,
 ) -> Any | None:
     """The group's reminder when the request leads a sent group; None otherwise. A member
-    that does not lead is never reminded on its own."""
+    that does not lead is never reminded on its own. `version` gives the template version
+    to render on (the approved one), asked only for a group's reminder."""
     from ai_workforce_api.outbound import OutboundState
 
     group = sent_group_of(connection, pbc.id)
@@ -1883,6 +2126,7 @@ def reminder_for(
         engagement,
         follow_up_id,
         sequence,
+        version=None if version is None else version(),
     )
 
 

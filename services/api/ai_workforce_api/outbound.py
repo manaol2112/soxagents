@@ -66,6 +66,12 @@ from ai_workforce_api.pbc import _audit as _pbc_audit
 from ai_workforce_api.pbc import _body as _pbc_body
 from ai_workforce_api.pbc import _lock as _lock_pbc
 from ai_workforce_api.policy import evaluate
+from ai_workforce_api.request_email import (
+    Facts,
+    control_line,
+    tidy,
+    values_for_request,
+)
 from ai_workforce_api.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -143,7 +149,123 @@ PBC_REMINDER = MessageTemplate(
         "If you have already uploaded it, thank you, and you can ignore this reminder."
     ),
 )
-TEMPLATES: tuple[MessageTemplate, ...] = (PBC_REQUEST, PBC_REMINDER)
+# Version 3 (the approved redesign, product owner, 12 November 2026): the subject names
+# the control, its items and its due date, with the reference replies are matched on; the
+# owner is greeted by name when a record holds it; the facts, then WHAT WE NEED with every
+# item under labels an owner understands, then HOW TO SEND IT, and a signature
+# (request_email.py composes the parts). A message approved on version 2 is still sent
+# on version 2: the send renders it again on the version its approval records
+# (approved_template), never on a newer one.
+PBC_REQUEST_V3 = MessageTemplate(
+    template_id="pbc-request",
+    version=3,
+    subject="$subject_line",
+    body=(
+        "$greeting\n\n"
+        "$opening"
+        "$facts\n\n"
+        "WHAT WE NEED\n\n"
+        "$items\n\n"
+        "HOW TO SEND IT\n\n"
+        "Open your secure upload page:\n"
+        "$upload_link\n"
+        "Enter the one-time code we email to this address, then upload each file against "
+        "its item. Please do not send evidence as email attachments.\n\n"
+        "Thank you,\n"
+        "The $team\n\n"
+        "Questions? Reply to this email and keep $reference in the subject."
+    ),
+)
+PBC_REMINDER_V3 = MessageTemplate(
+    template_id="pbc-reminder",
+    version=3,
+    subject="Reminder: $subject_line",
+    body=(
+        "$greeting\n\n"
+        "This is reminder $sequence of $limit for the evidence the $team asked for. If "
+        "you have already uploaded it, thank you, and you can ignore this reminder.\n\n"
+        "$facts\n\n"
+        "WHAT WE NEED\n\n"
+        "$items\n\n"
+        "HOW TO SEND IT\n\n"
+        "Open your secure upload page:\n"
+        "$upload_link\n"
+        "Enter the one-time code we email to this address, then upload each file against "
+        "its item. Please do not send evidence as email attachments.\n\n"
+        "Thank you,\n"
+        "The $team\n\n"
+        "Questions? Reply to this email and keep $reference in the subject."
+    ),
+)
+TEMPLATES: tuple[MessageTemplate, ...] = (
+    PBC_REQUEST,
+    PBC_REMINDER,
+    PBC_REQUEST_V3,
+    PBC_REMINDER_V3,
+)
+_BY_VERSION: dict[tuple[str, int], MessageTemplate] = {
+    (t.template_id, t.version): t for t in TEMPLATES
+}
+# What a new message is rendered on.
+CURRENT_REQUEST = PBC_REQUEST_V3
+CURRENT_REMINDER = PBC_REMINDER_V3
+# The template an approval binds, from its request reference ("pbc/{request}/{template}-
+# v{version}/..."), which the approval's payload hash covers.
+_APPROVED_REF = re.compile(r"^pbc/[0-9a-f-]{36}/([a-z][a-z0-9-]{0,40}?)-v(\d{1,4})/")
+
+
+def template_for(template_id: str, version: int | None) -> MessageTemplate:
+    """The template of this id at this version, or the current one for None. A version
+    no template has is refused (ValueError): the send then refuses the message."""
+    if version is None:
+        return CURRENT_REMINDER if template_id == PBC_REMINDER.template_id else CURRENT_REQUEST
+    found = _BY_VERSION.get((template_id, version))
+    if found is None:
+        raise ValueError("unknown template version")
+    return found
+
+
+def approved_template(
+    connection: psycopg.Connection[Any], approval_id: UUID
+) -> tuple[str, int] | None:
+    """The template id and version an approval was asked on, from its request reference;
+    None when it names none."""
+    row = connection.execute(
+        "SELECT parameters ->> 'request_ref' FROM approvals WHERE id = %s", (approval_id,)
+    ).fetchone()
+    if row is None or not isinstance(row[0], str):
+        return None
+    match = _APPROVED_REF.match(row[0])
+    if match is None:
+        return None
+    found = match.group(1), int(match.group(2))
+    # A version no template has is rendered on the current one, which then does not match
+    # the approval: the send is refused as not matching, never sent on other wording.
+    return found if found in _RENDERABLE else None
+
+
+# Every template version a message can still be rendered on: the single request's and
+# reminder's (here), and a group's and its reminder's (evidence_groups._templates).
+_RENDERABLE = frozenset(
+    {
+        *_BY_VERSION,
+        ("pbc-group", 1),
+        ("pbc-group", 2),
+        ("pbc-group-reminder", 1),
+        ("pbc-group-reminder", 2),
+    }
+)
+
+
+def approved_version(
+    connection: psycopg.Connection[Any], approval_id: UUID, template_id: str
+) -> int | None:
+    """The version of this template an approval binds; None (the current version) when
+    it binds another template, whose message then does not match the approval."""
+    found = approved_template(connection, approval_id)
+    return found[1] if found is not None and found[0] == template_id else None
+
+
 # A grouped request's reminder (evidence_groups) is a reminder too.
 _REMINDER_TEMPLATES = frozenset({PBC_REMINDER.template_id, "pbc-group-reminder"})
 
@@ -519,9 +641,18 @@ def _stamped(settings: Settings, mailbox: MailboxFactory, result: SubmitResult) 
     )
 
 
-def render(request: PbcBody, engagement: str) -> RenderedMessage:
-    template = PBC_REQUEST
-    reference, subject, body = _compose(template, request, engagement, {})
+def render(
+    request: PbcBody,
+    engagement: str,
+    facts: Facts | None = None,
+    *,
+    version: int | None = None,
+) -> RenderedMessage:
+    """The request's message on a template version: the current one for a new approval,
+    the approved one for a send (approved_template). Deterministic: the send renders it
+    again and refuses anything but the approved content. Version 2 reads no facts."""
+    template = template_for(PBC_REQUEST.template_id, version)
+    reference, subject, body = _compose(template, request, engagement, {}, facts)
     recipient = request.recipient.strip()
     cc = _copied(request)
     digest = _digest(recipient, cc, subject, body)
@@ -542,6 +673,18 @@ def render(request: PbcBody, engagement: str) -> RenderedMessage:
     )
 
 
+def render_request(
+    connection: psycopg.Connection[Any],
+    request: PbcBody,
+    engagement: str,
+    *,
+    version: int | None = None,
+) -> RenderedMessage:
+    """render, with the facts the request's records hold: every caller renders a request
+    the same way, so what is approved is what the send renders again."""
+    return render(request, engagement, request_facts(connection, request), version=version)
+
+
 def _copied(request: PbcBody) -> tuple[str, ...]:
     return tuple(item.strip().lower() for item in request.cc_recipients if item.strip())
 
@@ -553,22 +696,29 @@ def _digest(recipient: str, cc: tuple[str, ...], subject: str, body: str) -> str
 
 
 def render_reminder(
-    request: PbcBody, engagement: str, follow_up_id: UUID, sequence: int
+    request: PbcBody,
+    engagement: str,
+    follow_up_id: UUID,
+    sequence: int,
+    facts: Facts | None = None,
+    *,
+    version: int | None = None,
 ) -> RenderedMessage:
     """Reminders reply in the request's thread so the recipient sees one conversation."""
     if request.thread_id is None:
         raise ValueError("request has no thread")
-    template = PBC_REMINDER
+    template = template_for(PBC_REMINDER.template_id, version)
     reference, subject, body = _compose(
         template,
         request,
         engagement,
         {"sequence": str(sequence), "limit": str(max(sequence, request.max_follow_ups))},
+        facts,
     )
     recipient = request.recipient.strip()
     cc = _copied(request)
     digest = _digest(recipient, cc, subject, body)
-    version = f"{template.template_id}-v{template.version}"
+    tag = f"{template.template_id}-v{template.version}"
     return RenderedMessage(
         template=template,
         recipient=recipient,
@@ -576,7 +726,7 @@ def render_reminder(
         body=body,
         reference=reference,
         content_sha256=digest,
-        request_ref=f"pbc/{request.id}/{version}/{follow_up_id}/{digest[:16]}",
+        request_ref=f"pbc/{request.id}/{tag}/{follow_up_id}/{digest[:16]}",
         metadata={
             "request_id": str(request.id),
             "request_reference": reference,
@@ -591,8 +741,14 @@ def render_reminder(
 
 
 def _compose(
-    template: MessageTemplate, request: PbcBody, engagement: str, extra: dict[str, str]
+    template: MessageTemplate,
+    request: PbcBody,
+    engagement: str,
+    extra: dict[str, str],
+    facts: Facts | None = None,
 ) -> tuple[str, str, str]:
+    if template.version >= 3:
+        return _compose_v3(template, request, engagement, extra, facts or Facts())
     reference = f"PBC-{request.id.hex[-8:].upper()}"
     due = request.due_at.astimezone(UTC)
     values = {
@@ -616,6 +772,106 @@ def _compose(
     if len(subject) > 200 or len(body) > 4000 - room:
         raise ValueError("message is too long")
     return reference, subject, body
+
+
+def _compose_v3(
+    template: MessageTemplate,
+    request: PbcBody,
+    engagement: str,
+    extra: dict[str, str],
+    facts: Facts,
+) -> tuple[str, str, str]:
+    """Version 3's text (request_email.py), within the same limits as before: the body
+    with room for the link within 4,000 characters, else every item in brief with the
+    note that the full wording is on the secure link."""
+    reference = f"PBC-{request.id.hex[-8:].upper()}"
+    reminder = template.template_id == PBC_REMINDER.template_id
+
+    def text(brief: bool) -> tuple[str, str]:
+        values = values_for_request(
+            reference=reference,
+            control_ref=request.control_ref,
+            phase=request.testing_phase,
+            due=request.due_at,
+            description=request.evidence_description,
+            engagement=engagement,
+            facts=facts,
+            brief=brief,
+            note=SUMMARY_NOTE,
+            reminder=reminder,
+        )
+        values.update({"upload_link": LINK_PLACEHOLDER, **extra})
+        return (
+            Template(template.subject).substitute(values),
+            tidy(Template(template.body).substitute(values)),
+        )
+
+    subject, body = text(False)
+    room = 200
+    if len(body) > 4000 - room:
+        subject, body = text(True)
+    if len(subject) > 200 or len(body) > 4000 - room:
+        raise ValueError("message is too long")
+    return reference, subject, body
+
+
+def request_facts(connection: psycopg.Connection[Any], request: PbcBody) -> Facts:
+    """What the email names besides the wording: the control's name, a line describing
+    it, its system, and the recipient's name when a record holds it."""
+    title = frequency = system = ""
+    if request.engagement_control_id is not None:
+        row = connection.execute(
+            "SELECT c.title, c.frequency, coalesce(a.name, '') FROM engagement_controls c "
+            "LEFT JOIN engagement_applications a ON a.id = c.engagement_application_id "
+            "WHERE c.id = %s AND c.project_id = %s",
+            (request.engagement_control_id, request.project_id),
+        ).fetchone()
+        if row is not None:
+            title, frequency, system = (" ".join(str(x or "").split()) for x in row)
+    return Facts(
+        control_title=title[:160],
+        control_line=control_line(title, frequency, system),
+        system=system[:120],
+        recipient_name=recipient_name(
+            connection, request.project_id, request.recipient, request.engagement_control_id
+        ),
+    )
+
+
+def recipient_name(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    recipient: str,
+    control_id: UUID | None,
+) -> str:
+    """The recipient's name as a record holds it: the request's control owner, a client
+    contact of the engagement, its evidence coordinator, or the owner of another of its
+    controls, at that address. Empty when none does; never made up from the address."""
+    address = recipient.strip().lower()
+    if not address:
+        return ""
+    row = connection.execute(
+        """
+        SELECT name FROM (
+            SELECT 1 AS rank, owner_name AS name FROM engagement_controls
+            WHERE id = %s AND project_id = %s AND lower(btrim(owner_email)) = %s
+            UNION ALL
+            SELECT 2, name FROM engagement_contacts WHERE project_id = %s AND email = %s
+            UNION ALL
+            SELECT 3, client_coordinator_name FROM engagement_settings
+            WHERE project_id = %s AND lower(btrim(client_coordinator_email)) = %s
+            UNION ALL
+            SELECT 4, owner_name FROM engagement_controls
+            WHERE project_id = %s AND included AND lower(btrim(owner_email)) = %s
+        ) named
+        WHERE btrim(coalesce(name, '')) <> ''
+        ORDER BY rank, name
+        LIMIT 1
+        """,
+        (control_id, project_id, address, project_id, address, project_id, address,
+         project_id, address),
+    ).fetchone()  # fmt: skip
+    return "" if row is None else " ".join(str(row[0]).split())[:200]
 
 
 _ITEM = re.compile(r"^\d{1,2}\. \S")
@@ -679,9 +935,20 @@ def _preview(
         project_id=project_id,
     )
     pbc = _read_pbc(connection, organization_id, project_id, request_id)
+    # A request awaiting its send is shown as its approval binds it, on the version it
+    # was approved on; any other, as a new approval would render it.
+    version = None
+    if pbc.status == "APPROVAL_PENDING":
+        latest = _latest_approval(connection, organization_id, project_id, request_id)
+        if latest is not None:
+            version = approved_version(connection, latest, PBC_REQUEST.template_id)
     return _preview_body(
-        settings, render(pbc, _engagement(connection, organization_id, project_id))
-    )
+        settings,
+        render_request(
+            connection, pbc, _engagement(connection, organization_id, project_id),
+            version=version,
+        ),
+    )  # fmt: skip
 
 
 class BatchItem(BaseModel):
@@ -761,7 +1028,11 @@ def _submit(
     project_id: UUID,
     request_id: UUID,
     body: SubmitBody,
+    *,
+    template_version: int | None = None,
 ) -> SubmitResult:
+    """Ask for the approval of the request's message, on the current template version,
+    or on the version given (a message carried over from an earlier approval)."""
     authorize(
         connection,
         principal=principal,
@@ -783,7 +1054,10 @@ def _submit(
     if pbc.recipient.strip() == "":
         # Drafted with no owner email and no evidence coordinator to address it to.
         raise OutboundState("set who the request goes to first")
-    message = render(pbc, _engagement(connection, organization_id, project_id))
+    message = render_request(
+        connection, pbc, _engagement(connection, organization_id, project_id),
+        version=template_version,
+    )  # fmt: skip
     if not recipients_allowed(settings, message):
         raise OutboundState("recipient is not allowed")
     _check(connection, settings, organization_id, project_id, request_id, _SUBMIT_CHECKS)
@@ -905,7 +1179,7 @@ def _approve_draft(
         raise OutboundState(held)
     if pbc.recipient.strip() == "":
         raise OutboundState("set who the request goes to first")
-    message = render(pbc, _engagement(connection, organization_id, project_id))
+    message = render_request(connection, pbc, _engagement(connection, organization_id, project_id))
     if not recipients_allowed(settings, message):
         raise OutboundState("recipient is not allowed")
     _check(connection, settings, organization_id, project_id, request_id, None)
@@ -1038,7 +1312,10 @@ def hand_over(
             pbc = _lock_pbc(cursor, organization_id, project_id, request_id)
             if pbc.status != "APPROVAL_PENDING" or in_live_group(connection, request_id):
                 return False
-            message = render(pbc, _engagement(connection, organization_id, project_id))
+            message = render_request(
+                connection, pbc, _engagement(connection, organization_id, project_id),
+                version=approved_version(connection, approval_id, PBC_REQUEST.template_id),
+            )  # fmt: skip
             if not recipients_allowed(settings, message):
                 return False
             _check(connection, settings, organization_id, project_id, request_id, _SEND_CHECKS)
@@ -1378,11 +1655,13 @@ def resend_request(
     if state is None:
         raise OutboundState("this request needs approval")
     if state[0] == "APPROVED" and state[1] == "REFUSED":
-        # Its own send was refused: a new approval carries the same message over.
+        # Its own send was refused: a new approval carries the same message over, on the
+        # template version the refused approval was asked on.
         pbc = _read_pbc(connection, organization_id, project_id, request_id)
         submitted = _submit(
             connection, settings, principal, organization_id, project_id, request_id,
             SubmitBody(version=pbc.version),
+            template_version=approved_version(connection, approval_id, PBC_REQUEST.template_id),
         )  # fmt: skip
         approval_id = submitted.approval.id
     elif state[0] != "PENDING":
@@ -1505,6 +1784,7 @@ def _record_reminder(
                 _engagement(connection, organization_id, project_id),
                 follow_up.id,
                 follow_up.sequence,
+                approved_template(connection, approval_id),
             )
             if not recipients_allowed(settings, message):
                 raise OutboundState("recipient is not allowed")
@@ -1542,7 +1822,12 @@ def _record(
 
             if in_live_group(connection, request_id):
                 raise OutboundState("this request is sent with the request it was approved in")
-            message = render(pbc, _engagement(connection, organization_id, project_id))
+            # On the version the approval was asked on: a message approved before a newer
+            # template still goes out exactly as approved.
+            message = render_request(
+                connection, pbc, _engagement(connection, organization_id, project_id),
+                version=approved_version(connection, approval_id, PBC_REQUEST.template_id),
+            )  # fmt: skip
             if not recipients_allowed(settings, message):
                 raise OutboundState("recipient is not allowed")
             _check(connection, settings, organization_id, project_id, request_id, _SEND_CHECKS)
@@ -2037,11 +2322,17 @@ def _message_for(
     if outbound.follow_up_id is None:
         if outbound.template_id == "pbc-group":
             return message_for(connection, organization_id, project_id, outbound)  # type: ignore[no-any-return]
-        return render(pbc, engagement)
+        # On the version the message was recorded with, which its approval bound.
+        if outbound.template_id != PBC_REQUEST.template_id:
+            raise ValueError("unknown template")
+        return render_request(connection, pbc, engagement, version=outbound.template_version)
     follow_up = read_follow_up(
         connection, organization_id, project_id, outbound.pbc_request_id, outbound.follow_up_id
     )
-    return _reminder(connection, pbc, engagement, follow_up.id, follow_up.sequence)
+    return _reminder(
+        connection, pbc, engagement, follow_up.id, follow_up.sequence,
+        (outbound.template_id, outbound.template_version),
+    )  # fmt: skip
 
 
 def _reminder(
@@ -2050,14 +2341,30 @@ def _reminder(
     engagement: str,
     follow_up_id: UUID,
     sequence: int,
+    approved: tuple[str, int] | None = None,
 ) -> RenderedMessage:
-    """A request's reminder; for a request sent in a group, the group's (its lead's)."""
-    from ai_workforce_api.evidence_groups import reminder_for
+    """A request's reminder; for a request sent in a group, the group's (its lead's). On
+    the template version `approved` names (the approval's or the recorded message's), or
+    the current one for a new reminder."""
+    from ai_workforce_api.evidence_groups import GROUP_REMINDER_TEMPLATE_ID, reminder_for
 
-    grouped = reminder_for(connection, pbc, engagement, follow_up_id, sequence)
+    def version(template_id: str) -> int | None:
+        if approved is None:
+            return None
+        # Approved as the other kind of reminder: rendered on the current version, it does
+        # not match, and the send is refused.
+        return approved[1] if approved[0] == template_id else None
+
+    grouped = reminder_for(
+        connection, pbc, engagement, follow_up_id, sequence,
+        version=lambda: version(GROUP_REMINDER_TEMPLATE_ID),
+    )  # fmt: skip
     if grouped is not None:
         return grouped  # type: ignore[no-any-return]
-    return render_reminder(pbc, engagement, follow_up_id, sequence)
+    return render_reminder(
+        pbc, engagement, follow_up_id, sequence, request_facts(connection, pbc),
+        version=version(PBC_REMINDER.template_id),
+    )  # fmt: skip
 
 
 def _remindable(connection: psycopg.Connection[Any], pbc: PbcBody) -> bool:
@@ -2124,6 +2431,23 @@ def _still_to_send(
         and row[1] == "APPROVED"
         and row[2] == "NOT_STARTED"
     )
+
+
+def _latest_approval(
+    connection: psycopg.Connection[Any], organization_id: UUID, project_id: UUID, request_id: UUID
+) -> UUID | None:
+    """The request's latest send approval, if any."""
+    row = connection.execute(
+        """
+        SELECT id FROM approvals
+        WHERE organization_id = %s AND project_id = %s AND action_id = %s
+          AND parameters ->> 'request_ref' LIKE %s
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (organization_id, project_id, ACTION_ID, f"pbc/{request_id}/%"),
+    ).fetchone()
+    return None if row is None else UUID(str(row[0]))
 
 
 def _content(connection: psycopg.Connection[Any], outbound_id: UUID) -> str:

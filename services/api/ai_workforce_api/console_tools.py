@@ -1887,7 +1887,12 @@ def _sendable(
 ) -> None:
     """Whether the request's message could be submitted: it fits in one email and, when
     asked, goes to an allowed address. The reasons are said plainly, with what to change."""
-    from ai_workforce_api.outbound import _engagement, _read_pbc, recipients_allowed, render
+    from ai_workforce_api.outbound import (
+        _engagement,
+        _read_pbc,
+        recipients_allowed,
+        render_request,
+    )
 
     pbc = _read_pbc(context.connection, context.organization_id, context.project_id, request_id)
     changes = {"evidence_description": description, "recipient": recipient}
@@ -1895,10 +1900,15 @@ def _sendable(
     engagement = _engagement(context.connection, context.organization_id, context.project_id)
     ref = pbc.control_ref
     try:
-        message = render(pbc, engagement)
+        message = render_request(context.connection, pbc, engagement)
     except ValueError:
         # How much wording fits: the email allows the rest once the template is around it.
-        around = len(render(pbc.model_copy(update={"evidence_description": "x"}), engagement).body)
+        around = len(
+            render_request(
+                context.connection, pbc.model_copy(update={"evidence_description": "x"}),
+                engagement,
+            ).body
+        )  # fmt: skip
         limit = max(MESSAGE_CHARS - around + 1, 0)
         raise ToolFailed(
             f"The request for {ref} is too long to send: its wording is "

@@ -1964,7 +1964,10 @@ def render(
             if wording.note:
                 parts.append(f"   {wording.note}")
             return "\n".join(parts)
-        parts = [heading, f"   {line.description}"]
+        from ai_workforce_api.pbc_drafting import detail_lines
+
+        # Every line of the description under the item, its own list as "- " lines.
+        parts = [heading, *(detail_lines(line.description) or [f"   {line.description}"])]
         if full and line.period_label:
             parts.append(f"   Period: {line.period_label}")
         return "\n".join(parts)

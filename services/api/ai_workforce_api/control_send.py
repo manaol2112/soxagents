@@ -164,7 +164,7 @@ def _with_email(
 ) -> None:
     """Each target that goes now, with its email's subject and text as the send renders it."""
     from ai_workforce_api.evidence_groups import _pbcs, render_group, sections_for
-    from ai_workforce_api.outbound import _engagement, _read_pbc, render
+    from ai_workforce_api.outbound import _engagement, _read_pbc, render_request
 
     engagement = _engagement(connection, organization_id, project_id)
     for key, target in shown.items():
@@ -181,7 +181,7 @@ def _with_email(
                 )  # fmt: skip
             else:
                 request = _read_pbc(connection, organization_id, project_id, key)
-                message = render(request, engagement)
+                message = render_request(connection, request, engagement)
         except ValueError, KeyError, IndexError, NotVisible:
             continue
         shown[key] = target.model_copy(update={"subject": message.subject, "body": message.body})

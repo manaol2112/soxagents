@@ -38,8 +38,11 @@ from ai_workforce_api.settings import Settings
 
 __all__ = ["migrated"]
 
-# The reviewed wording of the group's email and its reminder (version 1 of each).
+# The reviewed wording of the group's email and its reminder (version 1 of each), kept
+# unchanged for a group approved on it.
 _APPROVED_GROUP_TEMPLATES = "ccc1831c643d0979cebbc30edf06c82ec43855b8800f5b128dad9dfb278025dc"
+# Version 2 of each: the approved redesign (12 November 2026).
+_APPROVED_GROUP_TEMPLATES_V2 = "3a525380a7d0d40100a68fdb0b02317a3e80cc5a89525c0a1449fca5d318262e"
 
 
 def _groups(client: Any, team: dict[str, Any], **params: Any) -> list[dict[str, Any]]:
@@ -88,8 +91,15 @@ def _personal_split(client: Any, team: dict[str, Any]) -> tuple[dict[str, Any], 
 
 
 def test_the_group_wording_is_the_reviewed_version() -> None:
-    text = "\n".join(f"{t.template_id}\n{t.version}\n{t.subject}\n{t.body}" for t in _templates())
-    assert hashlib.sha256(text.encode()).hexdigest() == _APPROVED_GROUP_TEMPLATES
+    # Old: _templates() was version 1 only. New: version 1 is still there, unchanged, and
+    # a new group is on version 2.
+    for version, expected in ((1, _APPROVED_GROUP_TEMPLATES), (None, _APPROVED_GROUP_TEMPLATES_V2)):
+        found = _templates(version)
+        assert {t.version for t in found} == {version or 2}
+        text = "\n".join(f"{t.template_id}\n{t.version}\n{t.subject}\n{t.body}" for t in found)
+        assert hashlib.sha256(text.encode()).hexdigest() == expected
+    with pytest.raises(ValueError):
+        _templates(3)
 
 
 def _candidate(n: int, **change: Any) -> Candidate:
@@ -166,9 +176,14 @@ def test_a_request_too_long_for_one_email_names_every_control_and_links_the_item
     ]  # fmt: skip
     message = render_group(uuid4(), many[0].id, many, "SOX 2027")
     assert len(message.body) <= 3800 and "Period:" not in message.body
+    assert "Covers:" not in message.body
     lines = message.body.splitlines()
-    assert all(f"- Control {n}" in lines for n in range(1, 13))
+    # Old: "- Control 1"; new (version 2): each control by its name with its reference.
+    assert all(f"- Control {n} (C-{n:02d})" in lines for n in range(1, 13))
     assert "where each item is described in full:" in message.body
+    # Version 1 still renders as it did.
+    old = render_group(uuid4(), many[0].id, many, "SOX 2027", version=1)
+    assert all(f"- Control {n}" in old.body.splitlines() for n in range(1, 13))
 
 
 # The list and the review
@@ -266,14 +281,20 @@ def test_the_review_shows_every_control_item_and_the_email(migrated: Database) -
     assert len(body["members"]) == len(standard["member_ids"])
     assert all(m["items"] and m["problem"] is None for m in body["members"])
     # Short and client-friendly: the engagement and the due date; each control by its name
-    # and system, then its items; no internal control IDs and no grouping.
-    assert body["subject"] == f"[{body['reference']}] Evidence request for SOX 2027"
-    assert "needs the evidence below by" in body["body"]
+    # and system, then its items; no grouping. Rewritten for the approved redesign
+    # (version 2, 12 November 2026). Old: subject "[PBC-…] Evidence request for SOX
+    # 2027", "needs the evidence below by", and no control reference anywhere. New: the
+    # subject names the audit, the items and the due date with the reference at the end;
+    # each control is named with its reference and system (the approved design shows a
+    # control's reference beside its name, never alone); still no grouping.
+    assert body["subject"].startswith("SOX 2027 audit")
+    assert body["subject"].endswith(f"[{body['reference']}]")
+    assert "The SOX 2027 audit team needs the evidence below." in body["body"]
     for member in body["members"]:
-        assert f"{member['control_title']} ({member['systems'][0]})" in body["body"]
+        named = f"{member['control_title']} ({member['control_ref']}, {member['systems'][0]})"
+        assert named in body["body"]
         assert member["items"][0] in body["body"]
-        assert member["control_ref"] not in body["body"]
-    assert "controls" not in body["body"] and "group" not in body["body"].lower()
+    assert "group" not in body["body"].lower()
     assert "[secure upload link, added when the request is sent]" in body["body"]
     # Another firm sees nothing; an unknown id is not found.
     other = _new_outsider(migrated)
@@ -350,7 +371,8 @@ def test_approve_and_send_sends_one_email_and_keeps_each_control_traceable(
         )
         # Each approval binds its own request to the group's one email.
         for a in approvals:
-            assert str(a[5]).startswith(f"pbc/{a[0]}/pbc-group-v1/{view['id']}/")
+            # Old: pbc-group-v1; new: a group approved now is on version 2.
+            assert str(a[5]).startswith(f"pbc/{a[0]}/pbc-group-v2/{view['id']}/")
         assert lead_approval == _one(
             connection,
             "SELECT lead_approval_id FROM evidence_request_groups WHERE id = %s",
@@ -459,7 +481,11 @@ def test_a_persons_recipient_due_date_and_priority_are_never_overwritten(
     again = _review(owner, team, stays["id"]).json()
     [kept] = [m for m in again["members"] if m["id"] == later["id"]]
     assert kept["due_differs"] is True and kept["due_at"][:10] == due.isoformat()
-    assert f"(due {due.day} {due:%B %Y})" in again["body"]
+    # Old (version 1): "<control> (<system>) (due 28 November 2026)"; new (version 2):
+    # "<control> (<reference>, <system>), due 28 November 2026", the same date in words.
+    assert f", due {due.day} {due:%B %Y}" in again["body"]
+    # A contact recorded by a role, not a person's name, is not greeted by that role.
+    assert again["body"].startswith("Hello,\n\n")
     # Approving and sending changes none of it.
     assert _approve_send(owner, team, again).json()["status"] == "SENT"
     with connect(migrated.url) as connection:
@@ -613,6 +639,55 @@ def test_an_approval_committed_before_a_crash_is_sent_by_a_later_call(
     assert sent.status_code == 200 and sent.json()["status"] == "SENT"
 
 
+def test_a_group_approved_on_version_1_is_sent_exactly_as_approved(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A group approved before the redesign goes out on version 1, the wording its
+    approval record holds: the send renders it on that version and checks it against the
+    approved content, so it is neither refused as changed nor sent on new wording."""
+    from ai_workforce_api import evidence_groups
+
+    team = _ready(migrated, "eg-v1")
+    owner = team["owner"]
+    standard, _ = _personal_split(owner, team)
+    view = _review(owner, team, standard["id"]).json()
+    with monkeypatch.context() as before, connect(migrated.url) as connection:
+        # As before the change: version 1 was the group's current template.
+        before.setattr(evidence_groups, "GROUP_VERSION", 1)
+        _approve(
+            connection, _settings(migrated), _principal(team), team["org"], team["project"],
+            UUID(view["id"]), ApproveSendBody(members=[SeenMember(**m) for m in _seen(view)]),
+            "Reviewed and approved.",
+        )  # fmt: skip
+        connection.commit()
+    with connect(migrated.url) as connection:
+        approved = connection.execute(
+            "SELECT subject, content_sha256, template_version FROM evidence_group_approvals "
+            "WHERE group_id = %s",
+            (view["id"],),
+        ).fetchone()
+    assert approved is not None and approved[2] == 1
+    assert approved[0] == f"[{view['reference']}] Evidence request for SOX 2027"
+    # The review shows it as approved, on version 1.
+    pending = _review(owner, team, view["id"]).json()
+    assert (
+        "needs the evidence below by" in pending["body"] and "WHAT WE NEED" not in pending["body"]
+    )
+    sent = owner.post(f"{_project(team)}/evidence-groups/{view['id']}/send")
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["status"] == "SENT"
+    with connect(migrated.url) as connection:
+        outbound = connection.execute(
+            "SELECT subject, content_sha256, template_version FROM outbound_messages "
+            "WHERE project_id = %s",
+            (team["project"],),
+        ).fetchall()
+        body = _one(connection, "SELECT body FROM mailbox_messages WHERE project_id = %s",
+                    team["project"])  # fmt: skip
+    assert outbound == [approved]
+    assert body.startswith("Hello,\n\nThe audit team for SOX 2027 needs the evidence below by")
+
+
 def test_a_change_after_approval_is_not_sent_and_the_requests_return_to_draft(
     migrated: Database,
 ) -> None:
@@ -725,9 +800,17 @@ def test_one_reminder_workflow_for_the_group_and_none_for_its_members(
     reminded = owner.post(f"{_project(team)}/pbc-requests/{lead}/follow-ups/{follow_up}/remind")
     assert reminded.status_code == 200, reminded.text
     preview = reminded.json()["preview"]
-    assert preview["subject"] == f"[{view['reference']}] Reminder: evidence request for SOX 2027"
-    outstanding = preview["body"].split("Still outstanding:")[1].splitlines()
-    named = [f"- {m['control_title']} ({m['systems'][0]})" for m in view["members"]]
+    # Rewritten for the approved redesign (version 2). Old: subject "[PBC-…] Reminder:
+    # evidence request for SOX 2027" and a "Still outstanding:" list of "- <name>
+    # (<system>)". New: "Reminder: SOX 2027 audit …[PBC-…]", and WHAT WE NEED names each
+    # control still open, with its reference and system. As before, the lead's control,
+    # whose evidence came in, is not reminded of.
+    assert preview["subject"].startswith("Reminder: SOX 2027 audit")
+    assert preview["subject"].endswith(f"[{view['reference']}]")
+    outstanding = preview["body"].split("WHAT WE NEED")[1].split("HOW TO SEND IT")[0]
+    named = [
+        f"{m['control_title']} ({m['control_ref']}, {m['systems'][0]})" for m in view["members"]
+    ]
     assert named[0] not in outstanding and all(line in outstanding for line in named[1:])
     assert reminded.json()["delivery"]["status"] == "ACCEPTED"
     # A person asking to remind a member reminds the group, in its thread.
