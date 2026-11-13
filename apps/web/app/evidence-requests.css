@@ -1421,6 +1421,10 @@
 /* Review and send requests (the product owner's reference, 28 October 2026). */
 .cs-dialog:has(.rs) {
   width: min(calc(100% - 2rem), 44rem);
+  /* Never taller than the screen: the dialog's own `overflow: visible` let a tall review
+     spill past its edge, out of reach (13 November 2026). */
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
 }
 
 .cs-dialog:has(.rs) .confirm-dialog-body {
@@ -1554,75 +1558,165 @@
   min-width: 0;
 }
 
-/* The email as its recipient sees it: a mail window under the request, the dialog's
-   full width, never inside the request's text column. */
-.cs-dialog:has(.rs-mail) {
-  width: min(calc(100% - 2rem), 54rem);
+/* Review and send, with the email beside the requests (product owner, 13 November 2026:
+   the preview spilled out of the dialog, which lets its content overflow). A window of
+   fixed height: the head, the requests on the left and the email on the right, each
+   scrolling on its own, and the approve bar always on screen. */
+.cs-dialog:has(.rs.is-split) {
+  width: min(calc(100% - 2rem), 78rem);
+  height: min(calc(100dvh - 2rem), 54rem);
+  overflow: hidden;
 }
 
-.rs-item.is-routed {
+.cs-dialog:has(.rs.is-split) .confirm-dialog-body {
+  /* One row the window's height, so the step fills it rather than its content's height. */
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
+}
+
+.rs.is-split {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 0;
+  height: 100%;
+  padding: 0;
+}
+
+.rs.is-split > .co-head {
+  padding: 1.1rem 1.5rem 1rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.rs-main {
+  display: grid;
+  grid-template-columns: minmax(20rem, 25rem) minmax(0, 1fr);
+  min-height: 0;
+}
+
+.rs-side {
+  display: grid;
+  align-content: start;
+  gap: 0.9rem;
+  min-width: 0;
+}
+
+.rs.is-split .rs-side {
+  overflow: auto;
+  padding: 1rem 1.25rem 1.25rem 1.5rem;
+}
+
+.rs.is-split .rs-group {
+  padding: 0.85rem;
+}
+
+.rs.is-split .rs-item.is-routed {
   flex-wrap: wrap;
   align-items: flex-start;
+  gap: 0.6rem 0.75rem;
 }
 
-.rs-mail,
-.rs-mail-none {
-  flex: 0 0 100%;
-  min-width: 0;
-  margin: 0;
+.rs.is-split .rs-item.is-routed > .rs-text {
+  flex: 1 1 10rem;
 }
 
-.rs-mail-none {
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
+.rs-item.is-shown {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 1px var(--accent-border);
 }
 
-.rs-mail > summary {
-  display: flex;
-  gap: 0.5rem;
+button.rs-show {
+  display: inline-flex;
+  gap: 0.35rem;
   align-items: center;
-  min-width: 0;
-  padding: 0.45rem 0.1rem;
+  height: 26px;
+  margin-left: auto;
+  padding: 0 0.55rem;
   color: var(--accent-text);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-xs);
   font-weight: 600;
-  cursor: pointer;
-  border-top: 1px solid var(--border-subtle);
+  background: transparent;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  box-shadow: none;
 }
 
-.rs-mail > summary > svg {
-  flex: none;
+button.rs-show[aria-pressed="true"] {
+  color: var(--accent-strong, var(--accent-text));
+  background: var(--accent-soft);
 }
 
-.rs-mail > summary > span:first-of-type {
-  flex: none;
+/* The email pane: its own light canvas, as a mail client shows it, in both themes. */
+.rs-pane {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface-muted);
+  border-left: 1px solid var(--border-subtle);
 }
 
-.rs-mail-subject-line {
-  overflow: hidden;
+.rs-pane-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 1.25rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.rs-pane-kicker {
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
   color: var(--text-secondary);
-  font-weight: 400;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
-.rs-mail[open] .rs-mail-subject-line {
-  display: none;
-}
-
-.rs-mail-window {
-  overflow: hidden;
-  margin-top: 0.35rem;
+.rs-pane-switch {
+  display: inline-flex;
+  margin: 0;
+  padding: 2px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 8px;
+}
+
+.rs-pane-switch button {
+  height: 26px;
+  padding: 0 0.7rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+.rs-pane-switch button[aria-pressed="true"] {
+  color: var(--text-strong);
+  background: var(--surface-muted);
+  box-shadow: 0 0 0 1px var(--border-subtle);
+}
+
+.rs-pane-none {
+  grid-row: 2 / -1;
+  margin: 0;
+  padding: 1.25rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
 }
 
 .rs-mail-head {
   display: grid;
   gap: 0.3rem;
   margin: 0;
-  padding: 0.7rem 0.9rem;
+  padding: 0.75rem 1.25rem;
+  background: var(--surface);
   border-bottom: 1px solid var(--border-subtle);
   font-size: var(--fs-sm);
 }
@@ -1649,54 +1743,65 @@
   font-weight: 600;
 }
 
-/* The email keeps its own light canvas, as a mail client shows it, in both themes. */
 .rs-mail-frame {
   display: block;
   width: 100%;
-  height: min(60vh, 34rem);
+  height: 100%;
+  min-height: 16rem;
   background: #f1f3f6;
   border: 0;
 }
 
 .rs-mail-plain {
-  max-height: min(60vh, 34rem);
+  min-height: 0;
   overflow: auto;
-  padding: 0.9rem 1rem;
+  padding: 1rem 1.25rem;
   color: var(--text);
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: 12.5px;
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  background: var(--surface-muted);
 }
 
 .rs-mail-foot {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 1rem;
-  align-items: baseline;
-  justify-content: space-between;
   margin: 0;
-  padding: 0.55rem 0.9rem;
+  padding: 0.55rem 1.25rem;
   color: var(--text-secondary);
   font-size: var(--fs-xs);
+  background: var(--surface);
   border-top: 1px solid var(--border-subtle);
 }
 
-.rs-mail-foot > span {
-  flex: 1 1 18rem;
+.rs.is-split > .rs-foot {
+  margin: 0;
+  padding: 0.85rem 1.5rem;
+  background: var(--surface);
+  border-top: 1px solid var(--border-subtle);
 }
 
-.rs-mail-foot button.text-link {
-  height: auto;
-  padding: 0;
-  color: var(--accent-text);
-  background: none;
-  border: 0;
-  box-shadow: none;
-  font-size: var(--fs-xs);
-  font-weight: 600;
+/* A narrow window: one column that scrolls, the email under the requests at a fixed
+   height, the approve bar still at the bottom. */
+@media (max-width: 960px) {
+  .cs-dialog:has(.rs.is-split) {
+    height: calc(100dvh - 1rem);
+  }
+
+  .rs-main {
+    grid-template-columns: minmax(0, 1fr);
+    overflow: auto;
+  }
+
+  .rs.is-split .rs-side {
+    overflow: visible;
+    padding: 1rem 1.25rem;
+  }
+
+  .rs-pane {
+    grid-template-rows: auto auto 60dvh auto;
+    border-top: 1px solid var(--border-subtle);
+    border-left: 0;
+  }
 }
 
 .rs-text strong {

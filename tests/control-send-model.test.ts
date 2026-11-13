@@ -216,7 +216,8 @@ describe("review and send requests (the reference, 28 October 2026)", () => {
     assert.ok(without !== null);
     assert.equal(reviewPlan(without).sending[0]?.email, null);
     const view = readFileSync("apps/web/src/control-send.tsx", "utf8");
-    assert.match(view, /The email could not be shown here/);
+    // Worded with the request's title in the preview pane (13 November 2026).
+    assert.match(view, /could not be shown here\. Open the request to/);
     // The laid-out email is the server's, shown in a frame that runs no script, follows
     // no link and never reaches the page (13 November 2026).
     assert.match(view, /sandbox=""/);
@@ -228,6 +229,41 @@ describe("review and send requests (the reference, 28 October 2026)", () => {
     // The button opens the review; it does not claim to approve on its own.
     assert.match(view, /"Review and send"/);
     assert.doesNotMatch(view, /: "Approve and send"\}/);
+  });
+
+  // The review is a window of fixed height: the requests and the email scroll on their
+  // own and the approve bar never leaves the screen. Before, the dialog's own
+  // `overflow: visible` let a tall preview spill past its edge, out of reach (product
+  // owner, 13 November 2026).
+  it("keeps the review inside the screen, with the email beside the requests", () => {
+    const view = readFileSync("apps/web/src/control-send.tsx", "utf8");
+    assert.match(view, /function EmailPane\(/);
+    assert.match(view, /className=\{`rs\$\{split \? " is-split" : ""\}`\}/);
+    assert.match(view, /<div className="rs-side">\{side\}<\/div>/);
+    assert.doesNotMatch(view, /<details className="rs-mail"/);
+    const css = readFileSync("apps/web/app/evidence-requests.css", "utf8");
+    const rule = (selector: string) => {
+      const at = css.indexOf(`${selector} {`);
+      assert.ok(at >= 0, selector);
+      return css.slice(at, css.indexOf("}", at));
+    };
+    assert.match(
+      rule(".cs-dialog:has(.rs)"),
+      /max-height: calc\(100dvh - 2rem\)/,
+    );
+    assert.match(
+      rule(".cs-dialog:has(.rs.is-split)"),
+      /height: min\(calc\(100dvh - 2rem\)/,
+    );
+    assert.match(rule(".cs-dialog:has(.rs.is-split)"), /overflow: hidden/);
+    assert.match(
+      rule(".cs-dialog:has(.rs.is-split) .confirm-dialog-body"),
+      /grid-template-rows: minmax\(0, 1fr\)/,
+    );
+    assert.match(
+      rule(".rs.is-split"),
+      /grid-template-rows: auto minmax\(0, 1fr\) auto/,
+    );
   });
 
   it("reads a title without the window it ends with, and counts requests", () => {

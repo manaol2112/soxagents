@@ -230,86 +230,99 @@ export function ControlSend({
 }
 
 /**
- * The email as its recipient will see it, under the request it belongs to: a mail window
- * with who it goes to and its subject, then the message laid out by the same layout the
- * send attaches (product owner, 13 November 2026: the first preview crammed the plain text
- * into the request's narrow text column). The layout is the server's, built only from the
- * approved text; it is shown in a frame that runs no script and follows no link.
+ * The email as its recipient will see it, in the review's preview pane: who it goes to and
+ * its subject, then the message laid out by the same layout the send attaches. The pane
+ * has a fixed height in the dialog and the message scrolls inside it, so the approve bar
+ * never leaves the screen (product owner, 13 November 2026: the preview spilled out of the
+ * dialog). The layout is the server's, built only from the approved text; it is shown in a
+ * frame that runs no script and follows no link.
  */
-function EmailPreview({
+function EmailPane({
+  title,
   email,
   to,
   cc,
-  open,
+  position,
   handover,
 }: {
+  title: string;
   email: { subject: string; body: string; html: string } | null;
   to: string;
   cc: string[];
-  open: boolean;
+  /** "1 of 2" where several go now; "" for one. */
+  position: string;
   handover: boolean;
 }) {
   const [plain, setPlain] = useState(false);
-  if (email === null) {
-    return (
-      <p className="rs-mail-none">
-        The email could not be shown here. Open the request to read it before
-        approving.
-      </p>
-    );
-  }
-  const laidOut = email.html !== "" && !plain;
+  const laidOut = email !== null && email.html !== "" && !plain;
   return (
-    <details className="rs-mail" open={open}>
-      <summary>
-        <UiIcon name="mail" size={14} />
-        <span>{handover ? "Preview the request" : "Preview the email"}</span>
-        <span className="rs-mail-subject-line">{email.subject}</span>
-      </summary>
-      <div className="rs-mail-window">
-        <dl className="rs-mail-head">
-          <div>
-            <dt>To</dt>
-            <dd>{to}</dd>
-          </div>
-          {cc.length > 0 ? (
-            <div>
-              <dt>Cc</dt>
-              <dd>{cc.join(", ")}</dd>
-            </div>
-          ) : null}
-          <div>
-            <dt>Subject</dt>
-            <dd className="rs-mail-subject">{email.subject}</dd>
-          </div>
-        </dl>
-        {laidOut ? (
-          <iframe
-            className="rs-mail-frame"
-            title={`Email preview: ${email.subject}`}
-            sandbox=""
-            srcDoc={email.html}
-          />
-        ) : (
-          <div className="rs-mail-plain">{email.body}</div>
-        )}
-        <p className="rs-mail-foot">
-          <span>
-            The secure upload link is added when it is sent. To change the
-            wording, close this and use Change on the request.
-          </span>
-          {email.html !== "" ? (
+    <section className="rs-pane" aria-label="Email preview">
+      <header className="rs-pane-head">
+        <span className="rs-pane-kicker">
+          <UiIcon name="mail" size={14} />
+          {handover ? "The request as it is handed over" : "Email preview"}
+          {position !== "" ? <span> · {position}</span> : null}
+        </span>
+        {email !== null && email.html !== "" ? (
+          <fieldset className="rs-pane-switch">
+            <legend className="sr-only">How the email is shown</legend>
             <button
               type="button"
-              className="text-link is-plain"
-              onClick={() => setPlain((value) => !value)}
+              aria-pressed={!plain}
+              onClick={() => setPlain(false)}
             >
-              {plain ? "Show as the recipient sees it" : "Show plain text"}
+              As sent
             </button>
-          ) : null}
+            <button
+              type="button"
+              aria-pressed={plain}
+              onClick={() => setPlain(true)}
+            >
+              Plain text
+            </button>
+          </fieldset>
+        ) : null}
+      </header>
+      {email === null ? (
+        <p className="rs-pane-none">
+          The email for “{title}” could not be shown here. Open the request to
+          read it before approving.
         </p>
-      </div>
-    </details>
+      ) : (
+        <>
+          <dl className="rs-mail-head">
+            <div>
+              <dt>To</dt>
+              <dd>{to}</dd>
+            </div>
+            {cc.length > 0 ? (
+              <div>
+                <dt>Cc</dt>
+                <dd>{cc.join(", ")}</dd>
+              </div>
+            ) : null}
+            <div>
+              <dt>Subject</dt>
+              <dd className="rs-mail-subject">{email.subject}</dd>
+            </div>
+          </dl>
+          {laidOut ? (
+            <iframe
+              className="rs-mail-frame"
+              title={`Email preview: ${email.subject}`}
+              sandbox=""
+              srcDoc={email.html}
+            />
+          ) : (
+            <div className="rs-mail-plain">{email.body}</div>
+          )}
+          <p className="rs-mail-foot">
+            The secure upload link is added when it is sent. To change the
+            wording, close this and use Change on the request.
+          </p>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -364,34 +377,17 @@ function ReviewStep({
       : personOf(edits[ownerFrom].recipient, result.contacts);
   const sending = plan.sending.length;
   const held = plan.later.length + plan.attention.length;
-  return (
-    <div className="rs">
-      <header className="co-head">
-        <span className="co-head-icon" aria-hidden="true">
-          <UiIcon name="check" size={20} />
-        </span>
-        <span className="co-head-text">
-          <small className="rs-eyebrow">Request approval</small>
-          <h2 id={titleId}>
-            {handover
-              ? "Review and hand over requests"
-              : "Review and send requests"}
-          </h2>
-          <span>
-            {handover
-              ? "Confirm what will be handed over now and what will remain scheduled."
-              : "Confirm what will be sent now and what will remain scheduled."}
-          </span>
-        </span>
-        <button
-          type="button"
-          className="btn-ghost btn-sm co-close"
-          aria-label="Close"
-          onClick={onCancel}
-        >
-          <UiIcon name="x" size={16} />
-        </button>
-      </header>
+  // The email shown in the preview pane: the one picked, else the first that goes now.
+  const [shownId, setShownId] = useState<string | null>(null);
+  const shown =
+    plan.sending.find((item) => item.id === shownId) ?? plan.sending[0];
+  const shownEdit =
+    shown === undefined
+      ? null
+      : (edits[shown.id] ?? { recipient: shown.recipient, cc: [] });
+  const split = shown !== undefined;
+  const side = (
+    <>
       {sending > 0 ? (
         <section className="rs-group is-now" aria-labelledby={`${id}-now`}>
           <header>
@@ -417,7 +413,10 @@ function ReviewStep({
               const changed = edit.recipient !== item.recipient;
               const picking = editing?.id === item.id ? editing.mode : null;
               return (
-                <li key={item.id} className="rs-item is-routed">
+                <li
+                  key={item.id}
+                  className={`rs-item is-routed${sending > 1 && shown?.id === item.id ? " is-shown" : ""}`}
+                >
                   <span className="rs-file" aria-hidden="true">
                     <UiIcon name="file" size={18} />
                   </span>
@@ -535,13 +534,17 @@ function ReviewStep({
                   <span className="pill pill-dot tone-success">
                     Ready to send
                   </span>
-                  <EmailPreview
-                    email={item.email}
-                    to={edit.recipient}
-                    cc={edit.cc}
-                    open={sending <= 2}
-                    handover={handover}
-                  />
+                  {sending > 1 ? (
+                    <button
+                      type="button"
+                      className="rs-show"
+                      aria-pressed={shown?.id === item.id}
+                      onClick={() => setShownId(item.id)}
+                    >
+                      <UiIcon name="eye" size={13} />
+                      {shown?.id === item.id ? "Shown" : "Preview"}
+                    </button>
+                  ) : null}
                 </li>
               );
             })}
@@ -627,6 +630,56 @@ function ReviewStep({
           </label>
         </>
       ) : null}
+    </>
+  );
+  return (
+    <div className={`rs${split ? " is-split" : ""}`}>
+      <header className="co-head">
+        <span className="co-head-icon" aria-hidden="true">
+          <UiIcon name="check" size={20} />
+        </span>
+        <span className="co-head-text">
+          <small className="rs-eyebrow">Request approval</small>
+          <h2 id={titleId}>
+            {handover
+              ? "Review and hand over requests"
+              : "Review and send requests"}
+          </h2>
+          <span>
+            {handover
+              ? "Confirm what will be handed over now and what will remain scheduled."
+              : "Confirm what will be sent now and what will remain scheduled."}
+          </span>
+        </span>
+        <button
+          type="button"
+          className="btn-ghost btn-sm co-close"
+          aria-label="Close"
+          onClick={onCancel}
+        >
+          <UiIcon name="x" size={16} />
+        </button>
+      </header>
+      {split && shown !== undefined && shownEdit !== null ? (
+        <div className="rs-main">
+          <div className="rs-side">{side}</div>
+          <EmailPane
+            key={shown.id}
+            title={shown.title}
+            email={shown.email}
+            to={shownEdit.recipient}
+            cc={shownEdit.cc}
+            position={
+              sending > 1
+                ? `${plan.sending.indexOf(shown) + 1} of ${sending}`
+                : ""
+            }
+            handover={handover}
+          />
+        </div>
+      ) : (
+        <div className="rs-side">{side}</div>
+      )}
       <footer className="rs-foot">
         <p>
           {sending} {handover ? "handed over now" : "sending now"}
