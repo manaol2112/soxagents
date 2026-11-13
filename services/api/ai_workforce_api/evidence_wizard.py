@@ -21,11 +21,13 @@ placed. The deterministic findings are derived once the file is on an item's req
 Placement (2.3). Code decides from the reading (`decide`); the model only proposes. A file
 the assurance gate would hold needs a person, with the gate's reason. A file the model
 read with high or medium confidence is placed when one item stands out: the only item it
-covers in full, or, covering items only in part, the only one its kind fits; a file it
-covers several items in full (a bundle) is placed on each of them. Anything else needs a
-person, with the items ranked; a file that covers no item is not D&I evidence and stays in
-the control's files. A file from a row stays on the row's item and carries a suggestion
-when the reader is sure another item fits better: nothing moves without a person.
+covers in full, or, covering items only in part, the only one its kind fits; a file that
+covers several items in full (a bundle) is placed on each of them its kind fits. Never on
+an item a person accepted: that needs the person, who reopens the decision on the list
+first. Anything else needs a person, with the items ranked; a file that covers no item is
+not D&I evidence and stays in the control's files. A file from a row stays on the row's
+item and carries a suggestion when the reader is sure another item fits better: nothing
+moves without a person.
 
 A placement is a filing for the item: on the item's request (the file's evidence_matches
 filing names the request and the item), or, for a further item or an item not requested
@@ -34,8 +36,9 @@ hand (evidence_receipts) and its check is queued (evidence_assurance) as for a f
 on the item. Both wait for the batch: whichever way a reading ends (read, failed,
 cancelled, out of attempts), the one hook `reading_ended` runs in the transaction that
 records the ending, and once none of the batch's files on its control is still being read
-the batch lands: its placements' receipts are applied and its checks queued, so files
-that arrive together are checked once. A start-up backstop lands a batch that ended
+the batch lands: its placements' receipts are applied (on the request of each item a file
+is on) and its checks queued, so files that arrive together are checked once; a person's
+move before then waits for the landing too. A start-up backstop lands a batch that ended
 without landing. Every placement is recorded in evidence_placements, append-only: a
 person's move is a new placement that supersedes the earlier one, which is kept, and a
 move elsewhere (the Evidence center's filing, the D&I list's link or unlink) is recorded
@@ -86,7 +89,7 @@ from ai_workforce_api.evidence_assurance import (
     attribute_letter,
     gate,
     lens_for,
-    queue_after_reading,
+    queue_for_file,
     queue_safely,
     read_assurance,
     reconcile,
@@ -149,6 +152,14 @@ SEVERAL_REASON = (
 CHANGED_REASON = (
     "The item the reader found it fits changed while the file was read. Choose where it goes."
 )
+# An item a person accepted takes no more evidence until the decision is reopened on the
+# D&I list (decided by the product owner, 13 November 2026): nothing is added under an
+# acceptance, by the agent or by a person.
+ACCEPTED_REASON = "Its evidence is accepted. Reopen the decision on the list first."
+NONE_FITS_REASON = (
+    "The reader found it covers several items in full, and its kind fits none of them. "
+    "Choose where it goes."
+)
 ADDED_ON_ITEM = "Added on this item by a person."
 PLACED_BY_PERSON = "Placed by a person."
 MOVED_OUT = "Taken off the D&I items by a person: it is not D&I evidence."
@@ -157,6 +168,7 @@ MOVED_AWAY = "Moved to another control in the Evidence center."
 TAKEN_OFF_CONTROL = "Taken off its control in the Evidence center."
 FILED_HERE = "Filed to this control in the Evidence center."
 LINKED_ON_LIST = "Linked to an item on the D&I list."
+ADDED_AGAIN = "Added again from the row."
 UNLINKED_ON_LIST = "Taken off an item on the D&I list."
 # What the state says of a file whose placement no longer says where it is.
 ELSEWHERE = "It is filed to another control now."
@@ -195,6 +207,13 @@ class WizardState(Exception):
     def __init__(self, detail: str) -> None:
         super().__init__(detail)
         self.detail = detail
+
+
+class AcceptedItem(WizardState):
+    """A 409: an item a person accepted takes no more evidence."""
+
+    def __init__(self) -> None:
+        super().__init__(ACCEPTED_REASON)
 
 
 Reader = psycopg.Connection[Any] | psycopg.Cursor[Any]
@@ -236,10 +255,17 @@ class Item:
     request_id: UUID | None
     # The approved attributes it links, in the control's order: (letter, wording).
     attributes: tuple[tuple[str, str], ...]
+    # A person's judgment of its evidence (evidence_requirements.sufficiency).
+    sufficiency: str = "NOT_REVIEWED"
 
     @property
     def letters(self) -> list[str]:
         return [code for code, _text in self.attributes]
+
+    @property
+    def accepted(self) -> bool:
+        """A person accepted its evidence: it takes no more until that is reopened."""
+        return self.sufficiency == "ACCEPTED"
 
 
 def linked_attributes(
@@ -280,7 +306,8 @@ def design_items(connection: Reader, project_id: UUID, control_id: UUID) -> list
     links = linked_attributes(connection, control_id)
     rows = connection.execute(
         """
-        SELECT q.id, q.title, q.description, q.categories, q.period_label, q.pbc_request_id
+        SELECT q.id, q.title, q.description, q.categories, q.period_label, q.pbc_request_id,
+               q.sufficiency
         FROM evidence_requirements q
         LEFT JOIN pbc_requests r ON r.id = q.pbc_request_id
         LEFT JOIN evidence_plan_phases ph ON ph.plan_id = q.plan_id AND ph.phase = q.phase
@@ -302,6 +329,7 @@ def design_items(connection: Reader, project_id: UUID, control_id: UUID) -> list
             period=str(row[4] or ""),
             request_id=None if row[5] is None else UUID(str(row[5])),
             attributes=links.get(UUID(str(row[0])), ()),
+            sufficiency=str(row[6] or "NOT_REVIEWED"),
         )
         for row in rows
     ]
@@ -677,32 +705,40 @@ def decide(
     # 3. Only the model's reading, with high or medium confidence, places a file.
     if source != "MODEL" or classification.confidence not in ("high", "medium"):
         return Decision("NEEDS_PERSON", (), NOT_SURE_REASON, ranked)
+
+    def placed(entries: Sequence[Item], reason: str) -> Decision:
+        # Never under an acceptance: an item a person accepted waits for them to reopen it.
+        if any(entry.accepted for entry in entries):
+            return Decision("NEEDS_PERSON", (), ACCEPTED_REASON, ranked)
+        return Decision("PLACED", tuple(entry.requirement_id for entry in entries), reason, ())
+
+    label = KIND_LABELS.get(kind, kind).lower()
     if len(covered) == 1:
-        return Decision(
-            "PLACED",
-            (covered[0].requirement_id,),
-            f"The reader found it covers {_quoted(covered[0].title)}.",
-            (),
-        )
+        return placed(covered, f"The reader found it covers {_quoted(covered[0].title)}.")
     if covered:
-        # A bundle: it covers several items in full, and is placed on each.
-        return Decision(
-            "PLACED",
-            tuple(entry.requirement_id for entry in covered),
-            "The reader found it covers each of these items in full: "
-            + ", ".join(_quoted(entry.title) for entry in covered)
-            + ".",
-            (),
-        )
+        # A bundle: it covers several items in full, and is placed on each its kind fits.
+        bundle = [entry for entry in covered if fits(kind, entry.categories)]
+        if len(bundle) > 1:
+            return placed(
+                bundle,
+                "The reader found it covers each of these items in full: "
+                + ", ".join(_quoted(entry.title) for entry in bundle)
+                + ".",
+            )
+        if len(bundle) == 1:
+            return placed(
+                bundle,
+                f"The reader found it covers {_quoted(bundle[0].title)} in full, and of the "
+                f"items it covers in full it is the only one a file of this kind ({label}) "
+                "fits.",
+            )
+        return Decision("NEEDS_PERSON", (), NONE_FITS_REASON, ranked)
     fitting = [entry for entry in partial if fits(kind, entry.categories)]
     if len(fitting) == 1:
-        label = KIND_LABELS.get(kind, kind).lower()
-        return Decision(
-            "PLACED",
-            (fitting[0].requirement_id,),
+        return placed(
+            fitting,
             f"The reader found it covers {_quoted(fitting[0].title)} in part, and it is the "
             f"only item a file of this kind ({label}) fits.",
-            (),
         )
     # 4. Otherwise a person chooses, with the candidates ranked.
     if len(partial) == 1:
@@ -842,6 +878,9 @@ def _record(
                         cursor, batch, wizard.file_id, decision.requirement_ids, (),
                         person=None, reason=decision.reason, actor=actor,
                     )  # fmt: skip
+            except AcceptedItem:
+                # A person accepted the item while the file was read.
+                decision = Decision("NEEDS_PERSON", (), ACCEPTED_REASON, decision.suggestions)
             except WizardState:
                 decision = Decision("NEEDS_PERSON", (), CHANGED_REASON, decision.suggestions)
         version = _insert(
@@ -884,6 +923,8 @@ class Ended:
     covered: bool
     # The request the file is filed on now (None: on no request).
     request_id: UUID | None
+    # The checks its batch's landing queued, to hand to the worker once this commits.
+    queued: list[UUID] = field(default_factory=list)
 
 
 def reading_ended(
@@ -930,23 +971,28 @@ def reading_ended(
         (file_id,),
     ).fetchone()
     return Ended(
-        landing.covered, None if filed is None or filed[0] is None else UUID(str(filed[0]))
+        landing.covered,
+        None if filed is None or filed[0] is None else UUID(str(filed[0])),
+        landing.queued,
     )
 
 
-def analysis_ended(cursor: psycopg.Cursor[Any], analysis_id: UUID, actor: UUID) -> None:
+def analysis_ended(cursor: psycopg.Cursor[Any], analysis_id: UUID, actor: UUID) -> list[UUID]:
     """A reading cancelled by a person (agent_runs: queued, or stopped at its next check),
-    in the cancellation's own transaction: for a wizard file, the one hook above."""
+    in the cancellation's own transaction: for a wizard file, the one hook above. Returns
+    the checks its batch's landing queued, which the caller hands to the worker once the
+    cancellation has committed (a reading the worker stopped is handed on by the worker)."""
     row = cursor.execute(
         "SELECT project_id, evidence_file_id FROM evidence_analyses WHERE id = %s",
         (analysis_id,),
     ).fetchone()
     if row is None:
-        return
-    reading_ended(
+        return []
+    ended = reading_ended(
         cursor, UUID(str(row[0])), UUID(str(row[1])), actor, analysis_id=analysis_id,
         failed="READ_FAILED",
     )  # fmt: skip
+    return [] if ended is None else ended.queued
 
 
 @dataclass(frozen=True)
@@ -966,30 +1012,26 @@ def land(
     wait for), the receipts of its placements are applied, the control's checks are
     brought in step (the assurance chain queues each item's check once all its files are
     read), and when it landed is recorded. `file_id`, the file whose reading just ended;
-    without one (the Evidence center took a file off the batch's control), the checks it
-    queues are returned to hand to the worker."""
+    without one, the Evidence center took a file off the batch's control. Either way the
+    checks it queues are returned, for the caller to hand to the worker on commit."""
     _lock(cursor, batch.id)
-    pending = cursor.execute(
-        f"""
-        SELECT 1 FROM evidence_files f
-        JOIN evidence_analyses a ON a.evidence_file_id = f.id
-        JOIN evidence_matches m
-          ON m.evidence_file_id = f.id AND m.status = 'FILED'
-         AND m.engagement_control_id = %s
-        WHERE f.project_id = %s AND f.upload_batch_id = %s
-          AND (%s::uuid IS NULL OR f.id <> %s)
-          AND a.status IN ('PENDING', 'WORKING') AND NOT {in_force("f")}
-        LIMIT 1
-        """,  # noqa: S608
-        (batch.control_id, batch.project_id, batch.id, file_id, file_id),
-    ).fetchone()
-    if pending is not None:
+    if _still_read(cursor, batch, file_id):
         return Landing()
     _apply_receipts(cursor, batch, actor)
     covered = False
     queued: list[UUID] = []
     if file_id is not None:
-        covered = queue_after_reading(cursor, batch.project_id, file_id, actor)
+        # The reading's own hook (evidence_assurance.queue_after_reading), keeping the
+        # checks it queues: in a savepoint, so a failure never loses the reading.
+        try:
+            with cursor.connection.transaction():
+                made = queue_for_file(cursor, batch.project_id, file_id, actor)
+            covered, queued = file_id in made.covered, made.queued
+        except Exception as error:
+            logger.warning(
+                "the evidence assessment of a file could not be queued (%s)",
+                type(error).__name__,
+            )
     else:
         try:
             with cursor.connection.transaction():
@@ -1005,11 +1047,86 @@ def land(
     return Landing(covered=covered, queued=queued, landed=True)
 
 
+def _still_read(cursor: psycopg.Cursor[Any], batch: Batch, file_id: UUID | None) -> bool:
+    """Whether a file of the batch still filed to its control, other than `file_id`, is
+    being read (queued or working)."""
+    return (
+        cursor.execute(
+            f"""
+            SELECT 1 FROM evidence_files f
+            JOIN evidence_analyses a ON a.evidence_file_id = f.id
+            JOIN evidence_matches m
+              ON m.evidence_file_id = f.id AND m.status = 'FILED'
+             AND m.engagement_control_id = %s
+            WHERE f.project_id = %s AND f.upload_batch_id = %s
+              AND (%s::uuid IS NULL OR f.id <> %s)
+              AND a.status IN ('PENDING', 'WORKING') AND NOT {in_force("f")}
+            LIMIT 1
+            """,  # noqa: S608
+            (batch.control_id, batch.project_id, batch.id, file_id, file_id),
+        ).fetchone()
+        is not None
+    )
+
+
+def _waits_for_landing(cursor: psycopg.Cursor[Any], batch: Batch, file_id: UUID) -> bool:
+    """Whether a person's move of the file waits for its batch's landing to apply its
+    receipts and queue its checks: the file is one of the batch's own, came after the batch
+    last landed (so the landing has not applied it yet), and another of its files on its
+    control is still being read (so the landing is still to come). A file held before,
+    dropped again in a session, never waits: no landing of that session applies it."""
+    row = cursor.execute(
+        "SELECT created_at FROM evidence_files WHERE id = %s AND upload_batch_id = %s",
+        (file_id, batch.id),
+    ).fetchone()
+    if row is None:
+        return False
+    current = cursor.execute(
+        "SELECT landed_at FROM evidence_batches WHERE id = %s", (batch.id,)
+    ).fetchone()
+    landed_at = None if current is None else current[0]
+    if landed_at is not None and row[0] <= landed_at:
+        return False
+    return _still_read(cursor, batch, file_id)
+
+
+def _receipts(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    file_id: UUID,
+    filing: tuple[UUID, UUID | None],
+    actor: UUID,
+    by: Literal["AGENT", "PERSON"],
+) -> None:
+    """A placed file moves the request it is filed on (`filing`: its evidence_matches
+    filing and that request), as a file read on its request does, and the own request of
+    each further D&I item it is linked to (a bundle's other items), so a sent request stops
+    chasing evidence in hand: each by the same per-item rule (evidence_receipts.
+    apply_receipt), so an unsent D&I request's other items are asked for on their own.
+    Applying it again changes nothing."""
+    match_id, request_id = filing
+    if request_id is not None:
+        apply_receipt(cursor, organization_id, project_id, match_id, request_id, actor, by)
+    for (other,) in cursor.execute(
+        """
+        SELECT DISTINCT q.pbc_request_id FROM evidence_requirement_files ef
+        JOIN evidence_requirements q ON q.id = ef.requirement_id
+        WHERE ef.evidence_file_id = %s AND ef.engagement_control_id = %s
+          AND ef.status = 'LINKED' AND q.phase = 'DESIGN' AND q.status = 'REQUESTED'
+          AND q.pbc_request_id IS NOT NULL AND q.pbc_request_id IS DISTINCT FROM %s
+        ORDER BY q.pbc_request_id
+        """,
+        (file_id, control_id, request_id),
+    ).fetchall():
+        # Not this file's filing: the request's receipt is recorded on the request alone.
+        apply_receipt(cursor, organization_id, project_id, None, UUID(str(other)), actor, by)
+
+
 def _apply_receipts(cursor: psycopg.Cursor[Any], batch: Batch, actor: UUID) -> None:
-    """Each placed file of the batch still on its control moves the request it is filed
-    on, as a file read on its request does (evidence_receipts.apply_receipt): per item, so
-    an unsent D&I request's other items are asked for on their own. Applying it again
-    changes nothing."""
+    """Each placed file of the batch still on its control moves the requests of the items
+    it is on (_receipts), in the order the files came."""
     rows = cursor.execute(
         f"""
         SELECT DISTINCT ON (p.evidence_file_id) p.evidence_file_id, p.status, p.method, m.id,
@@ -1024,11 +1141,12 @@ def _apply_receipts(cursor: psycopg.Cursor[Any], batch: Batch, actor: UUID) -> N
         (batch.control_id, batch.project_id, batch.id),
     ).fetchall()
     for row in sorted(rows, key=lambda found: (found[5], str(found[0]))):
-        if row[1] != "PLACED" or row[4] is None:
+        if row[1] != "PLACED":
             continue
-        apply_receipt(
-            cursor, batch.organization_id, batch.project_id, UUID(str(row[3])),
-            UUID(str(row[4])), actor, "AGENT" if row[2] == "AGENT" else "PERSON",
+        _receipts(
+            cursor, batch.organization_id, batch.project_id, batch.control_id,
+            UUID(str(row[0])), (UUID(str(row[3])), None if row[4] is None else UUID(str(row[4]))),
+            actor, "AGENT" if row[2] == "AGENT" else "PERSON",
         )  # fmt: skip
 
 
@@ -1143,6 +1261,9 @@ def _file_on(
     missing = [item for item in wanted if item not in known]
     if missing:
         raise WizardState("that item is not one the control's D&I evidence still asks for")
+    if any(known[item].accepted for item in wanted if item not in before):
+        # Nothing is added under a person's acceptance: they reopen it on the list first.
+        raise AcceptedItem()
     match = cursor.execute(
         "SELECT id, pbc_request_id, requirement_id FROM evidence_matches "
         "WHERE evidence_file_id = %s AND status = 'FILED' AND engagement_control_id = %s "
@@ -1494,6 +1615,8 @@ def upload_scope(
             raise WizardState(
                 "this item is not one of the control's D&I items that still expect evidence"
             )
+        if item.accepted:
+            raise AcceptedItem()
         request_id = item.request_id
     batch = _batch(connection, batch_id)
     if batch is not None:
@@ -1681,6 +1804,9 @@ class ItemBody(BaseModel):
     file_ids: list[UUID]
     # The item's entry of GET .../evidence-assurance (NOT_CHECKED until it has a run).
     assurance: RequestBody | None
+    # For each of its files (by id), the attributes that file addresses in this item's own
+    # REVIEWED entry, each with its verdict there; [] until it is reviewed.
+    addresses: dict[UUID, list[AddressBody]]
 
 
 class StagesBody(BaseModel):
@@ -1775,27 +1901,21 @@ def _read_method(extraction: Any) -> ReadMethod:
     return "OCR" if extraction == "OCR" else "TEXT"
 
 
-def _addresses(
-    file_id: UUID, requirement_ids: Sequence[UUID], entries: dict[UUID, RequestBody]
-) -> list[AddressBody]:
-    """The attributes the file addresses: those whose verified passages (the attribute's
-    or its elements') in the item's REVIEWED assurance entry are in this file, each with
-    that attribute's verdict. Empty until the item's check is reviewed."""
+def _addresses(file_id: UUID, entry: RequestBody | None) -> list[AddressBody]:
+    """The attributes the file addresses for one item: those whose verified passages (the
+    attribute's or its elements') in that item's own REVIEWED assurance entry are in this
+    file, each with that attribute's verdict there. Empty until the item's check is
+    reviewed. Never merged across items: the same letter can stand for another attribute,
+    with another verdict, on another item."""
+    if entry is None or entry.status != "REVIEWED":
+        return []
     found: list[AddressBody] = []
-    seen: set[tuple[str, str]] = set()
-    for requirement_id in requirement_ids:
-        entry = entries.get(requirement_id)
-        if entry is None or entry.status != "REVIEWED":
-            continue
-        for attribute in entry.attributes:
-            passages = [
-                *attribute.passages,
-                *(passage for element in attribute.elements for passage in element.passages),
-            ]
-            key = (attribute.code, str(attribute.verdict))
-            if key in seen or all(passage.file_id != file_id for passage in passages):
-                continue
-            seen.add(key)
+    for attribute in entry.attributes:
+        passages = [
+            *attribute.passages,
+            *(passage for element in attribute.elements for passage in element.passages),
+        ]
+        if any(passage.file_id == file_id for passage in passages):
             found.append(AddressBody(code=attribute.code, verdict=attribute.verdict))
     return sorted(found, key=lambda address: (len(address.code), address.code))
 
@@ -1902,7 +2022,9 @@ def _file_body(
             ),
             version=0 if current is None else current.version,
         ),
-        addresses=_addresses(file_id, items, entries) if items else [],
+        # Kept for one release (docs/evidence-wizard.md, 2.4): filled only for a file on
+        # exactly one item; per item, items[].addresses.
+        addresses=_addresses(file_id, entries.get(items[0])) if len(items) == 1 else [],
     )
 
 
@@ -2047,6 +2169,10 @@ def _compose(
                     letters=[code for code, _text in links.get(requirement_id, ())],
                     file_ids=item_files,
                     assurance=entries.get(requirement_id),
+                    addresses={
+                        file_id: _addresses(file_id, entries.get(requirement_id))
+                        for file_id in item_files
+                    },
                 )
             )
         composed[batch.id] = _Composed(files, items, away)
@@ -2193,12 +2319,14 @@ def move(
     body: PlacementChange,
 ) -> tuple[FileBody, list[UUID]]:
     """A person places a file of the session (its own, or one dropped again in it): on the
-    items named (none: not D&I evidence), at the version they saw. The filing moves with it
-    (off the items it leaves, onto the ones it goes to); the requests follow the evidence:
-    the one it goes to is received as for a file added on its item, and on a D&I request
+    items named (none: not D&I evidence), at the version they saw; never onto an item a
+    person accepted (reopened on the list first). The filing moves with it (off the items
+    it leaves, onto the ones it goes to); the requests follow the evidence: those of the
+    items it goes to are received as for a file added on its item, and on a D&I request
     only ever provided directly, the items it left without evidence are asked for again in
     a draft of their own; the reading names the request it is on now, where its
     deterministic findings are derived; and the checks of both items are brought in step.
+    Before the file's batch has landed, the receipts and the checks wait for the landing.
     The earlier placement is superseded and kept. Returns the file's entry and the checks
     to hand to the worker once this has committed."""
     _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
@@ -2270,20 +2398,26 @@ def move(
                 suggestions=(), analysis_id=analysis_id, decided_by=principal.id,
                 supersedes=current,
             )  # fmt: skip
-            if filed.request_id is not None:
-                apply_receipt(
-                    cursor, organization_id, project_id, filed.match_id, filed.request_id,
-                    principal.id, "PERSON",
+            # Before its batch has landed (another of its files is still read, and this one
+            # came after the batch last landed), the placement is recorded and nothing
+            # else: the landing applies the receipts and queues the checks, so files that
+            # arrive together are checked once and an unsent request is not split early.
+            waits = _waits_for_landing(cursor, own, file_id)
+            asked: list[UUID] = []
+            if not waits:
+                _receipts(
+                    cursor, organization_id, project_id, control_id, file_id,
+                    (filed.match_id, filed.request_id), principal.id, "PERSON",
                 )  # fmt: skip
-            # A D&I request only ever provided directly: the items the move left without
-            # evidence are asked for again in a draft of their own.
-            asked = [
-                request_id
-                for request_id in filed.left
-                if ask_again_for_items_left(
-                    cursor, organization_id, project_id, request_id, principal.id
-                )
-            ]
+                # A D&I request only ever provided directly: the items the move left
+                # without evidence are asked for again in a draft of their own.
+                asked = [
+                    request_id
+                    for request_id in filed.left
+                    if ask_again_for_items_left(
+                        cursor, organization_id, project_id, request_id, principal.id
+                    )
+                ]
             _repoint(cursor, organization_id, project_id, file_id, derive=True)
             _audit(
                 cursor, organization_id, project_id, principal.id, "evidence.placement_moved",
@@ -2293,9 +2427,9 @@ def move(
                  "requirement_ids": [str(item) for item in wanted],
                  "from": [str(item) for item in before],
                  "from_status": None if current is None else current.status,
-                 "asked_again": [str(item) for item in asked]},
+                 "asked_again": [str(item) for item in asked], "waits_for_landing": waits},
             )  # fmt: skip
-            queued = queue_safely(cursor, project_id, file_id, principal.id)
+            queued = [] if waits else queue_safely(cursor, project_id, file_id, principal.id)
     except UniqueViolation:
         raise WizardState("the placement changed") from None
     return file_entry(connection, project_id, control_id, batch_id, file_id), queued

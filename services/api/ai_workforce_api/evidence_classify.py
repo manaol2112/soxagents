@@ -407,6 +407,18 @@ def _date(year: int, month: int, day: int) -> date:
         return date.min
 
 
+_DELIMITER = re.compile(
+    r"(?:<|&lt;|＜|﹤|〈|〈|⟨)(\s*/?\s*)(request_and_file|evidence_excerpt)\b",
+    re.I,
+)
+
+
+def _neutral(text: str) -> str:
+    """Text with the reader prompt's delimiters made inert (‹evidence_excerpt instead of
+    <evidence_excerpt)."""
+    return _DELIMITER.sub(lambda found: "‹" + found.group(1) + found.group(2), text)
+
+
 def prompt_for(context: ClassifyContext) -> str:
     facts: dict[str, Any] = {
         "file": {
@@ -446,8 +458,11 @@ def prompt_for(context: ClassifyContext) -> str:
     }
     if not context.items:
         facts["request"]["description"] = context.request_description[:2500]
-    data = json.dumps(facts, ensure_ascii=False, indent=1)
-    excerpt = context.text[:EXCERPT_CHARS]
+    # The file's text and name are untrusted: the prompt's own delimiters in them are made
+    # inert, as the assurance prompts do (evidence_assurance.neutral), so a file cannot
+    # close its excerpt and speak as the request.
+    data = _neutral(json.dumps(facts, ensure_ascii=False, indent=1))
+    excerpt = _neutral(context.text[:EXCERPT_CHARS])
     return (
         "Classify this evidence file against its request.\n\n"
         f"<request_and_file>\n{data}\n</request_and_file>\n\n"

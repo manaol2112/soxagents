@@ -52,6 +52,7 @@ from ai_workforce_api.evidence_receipts import (
 from ai_workforce_api.evidence_review import review_decided
 from ai_workforce_api.evidence_withdrawn import in_force, is_withdrawn
 from ai_workforce_api.evidence_wizard import (
+    ADDED_AGAIN,
     FILED_HERE,
     MOVED_AWAY,
     TAKEN_OFF_CONTROL,
@@ -715,7 +716,7 @@ def _wizard_duplicate(
     if scope.requirement_id is not None:
         _serve_item(
             connection, principal, organization_id, project_id, scope.control_id,
-            scope.requirement_id, file_id,
+            scope.requirement_id, file_id, placement_reason=ADDED_AGAIN,
         )  # fmt: skip
 
 
@@ -738,9 +739,12 @@ def _serve_item(
     control_id: UUID,
     item: UUID,
     file_id: UUID,
+    *,
+    placement_reason: str | None = None,
 ) -> None:
     """A file already held, added again on an item: a person links it to the item, unless
-    it serves the item already."""
+    it serves the item already. For a file the D&I evidence wizard has, its placement
+    follows with `placement_reason` (a row of the wizard: added again from the row)."""
     from ai_workforce_api.evidence_plans import LinkBody, PlanState, link_file
 
     row = connection.execute(
@@ -753,6 +757,7 @@ def _serve_item(
             connection, organization_id, project_id, control_id, item, principal.id,
             LinkBody(file_id=file_id, reason="Added on this item of its request.",
                      version=int(row[0])),
+            placement_reason=placement_reason,
         )  # fmt: skip
     except PlanState as refused:
         if "already serves" not in str(refused):

@@ -1127,6 +1127,26 @@ def reassess_on_reading(
         for item in classification.get("items") or []
         if isinstance(item, dict) and item.get("coverage") == "COVERED"
     }
+    # The file covers only the items it serves (evidence_plans.request_file_serves): filed
+    # for one item, that item and those it is linked to; never another item its reading
+    # names (a D&I evidence wizard file is read against every D&I item of its control).
+    filed_for = cursor.execute(
+        "SELECT requirement_id FROM evidence_matches "
+        "WHERE evidence_file_id = %s AND status = 'FILED' AND requirement_id IS NOT NULL",
+        (file_id,),
+    ).fetchone()
+    if filed_for is not None:
+        covered &= {
+            str(filed_for[0]),
+            *(
+                str(linked)
+                for (linked,) in cursor.execute(
+                    "SELECT requirement_id FROM evidence_requirement_files "
+                    "WHERE evidence_file_id = %s AND status = 'LINKED'",
+                    (file_id,),
+                ).fetchall()
+            ),
+        }
     # An assurance finding rests on all of a requirement's files, often with no single
     # file of its own: it is matched on its requirement, whichever request carries it now.
     open_rows = cursor.execute(

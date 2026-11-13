@@ -20,6 +20,7 @@ from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel
 
+from ai_workforce_api.after_commit import after_commit, committed
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -187,17 +188,20 @@ def finish_cancelled(
             ),
         )
         if kind == "analysis":
+            # The worker that stopped hands the engagement's queued checks on once this
+            # commits (durable: open_assessments_now after every reading).
             _analysis_ended(cursor, record_id, UUID(str(row[2])))
     return True
 
 
-def _analysis_ended(cursor: psycopg.Cursor[Any], analysis_id: UUID, actor: UUID) -> None:
+def _analysis_ended(cursor: psycopg.Cursor[Any], analysis_id: UUID, actor: UUID) -> list[UUID]:
     """A cancelled reading has ended: for a file of the D&I evidence wizard, its placement
     and its batch's landing follow in the cancellation's own transaction
-    (evidence_wizard.reading_ended, the hook every way a reading ends runs)."""
+    (evidence_wizard.reading_ended, the hook every way a reading ends runs). Returns the
+    checks the landing queued, to hand to the worker once the cancellation commits."""
     from ai_workforce_api.evidence_wizard import analysis_ended
 
-    analysis_ended(cursor, analysis_id, actor)
+    return analysis_ended(cursor, analysis_id, actor)
 
 
 def request_cancel(
@@ -207,7 +211,11 @@ def request_cancel(
     project_id: UUID,
     kind: str,
     record_id: UUID,
+    scheduler: object | None = None,
 ) -> CancelBody:
+    """A person cancels a queued or running job. A queued reading of a D&I evidence wizard
+    file that was its batch's last lands the batch: the checks that queues are handed to
+    the worker (`scheduler`) once the cancellation has committed."""
     found = RUN_KINDS.get(kind)
     if found is None:
         raise NotVisible()
@@ -249,7 +257,11 @@ def request_cancel(
             _audit(cursor, organization_id, project_id, principal.id, found, record_id,
                    {"state": "queued", "agent": found.agent_key})  # fmt: skip
             if kind == "analysis":
-                _analysis_ended(cursor, record_id, principal.id)
+                queued = _analysis_ended(cursor, record_id, principal.id)
+                if queued:
+                    from ai_workforce_api.evidence_assurance import schedule_assessments
+
+                    after_commit(lambda: schedule_assessments(scheduler, queued))
             return CancelBody(kind=kind, record_id=record_id, state="CANCELLED", note=note)
         if status == "WORKING":
             # The latest request stands; an earlier, finished cancellation does not mask it.
@@ -316,7 +328,7 @@ def _audit(
     )
 
 
-def register_agent_runs(app: FastAPI, settings: Settings) -> None:
+def register_agent_runs(app: FastAPI, settings: Settings, scheduler: object | None = None) -> None:
     base = "/organizations/{organization_id}/projects/{project_id}"
 
     @app.post(f"{base}/agent-runs/{{kind}}/{{record_id}}/cancel", response_model=CancelBody)
@@ -324,9 +336,18 @@ def register_agent_runs(app: FastAPI, settings: Settings) -> None:
         organization_id: UUID, project_id: UUID, kind: str, record_id: UUID, request: Request
     ) -> CancelBody:
         principal = _session_principal(request)
-        return _call(
-            settings,
-            lambda connection: request_cancel(
-                connection, principal, organization_id, project_id, kind, record_id
-            ),
+        # What a cancellation queued is handed to the worker once it has committed.
+        return committed(
+            lambda: _call(
+                settings,
+                lambda connection: request_cancel(
+                    connection,
+                    principal,
+                    organization_id,
+                    project_id,
+                    kind,
+                    record_id,
+                    scheduler,
+                ),  # fmt: skip
+            )
         )

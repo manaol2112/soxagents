@@ -180,12 +180,14 @@ def apply_receipt(
     cursor: psycopg.Cursor[Any],
     organization_id: UUID,
     project_id: UUID,
-    match_id: UUID,
+    match_id: UUID | None,
     request_id: UUID,
     actor_id: UUID,
     by: Literal["AGENT", "PERSON", "OWNER"],
 ) -> ReceiptStatus | None:
-    """Move the request for a filed file. Returns the new status, or None if it stays."""
+    """Move the request for a filed file. Returns the new status, or None if it stays.
+    Without `match_id` (evidence in hand for an item by a link, not a filing on this
+    request: a wizard bundle's further item), the move is recorded on the request alone."""
     moved, _split = _receive(
         cursor, organization_id, project_id, match_id, request_id, actor_id, by
     )

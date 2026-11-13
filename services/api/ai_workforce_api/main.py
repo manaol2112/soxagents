@@ -204,7 +204,7 @@ def create_app(
     models = model_provider
     register_models(app, resolved, models)
     register_provenance(app, resolved)
-    register_agent_runs(app, resolved)
+    register_agent_runs(app, resolved, drafts)
     register_manager(app, resolved, models, attached)
     register_handoffs(app, resolved)
     register_actions(app, resolved)

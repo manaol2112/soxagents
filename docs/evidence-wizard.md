@@ -99,7 +99,8 @@ the step's action, always visible. At narrow widths it is one column.
 Built in `evidence_wizard.py` (migration 0158), with its hooks in the reading
 (`evidence_analysis`), the uploads and the Evidence center's filing (`evidence_intake`), the
 D&I list's links (`evidence_plans`), cancellation (`agent_runs`) and the receipts
-(`evidence_receipts`). The independent review of 13 November 2026 is folded in below.
+(`evidence_receipts`). The independent review of 13 November 2026, and the joint review of
+the server and the screen that followed it the same day, are folded in below.
 
 ### 2.1 Uploading into the wizard
 
@@ -111,7 +112,8 @@ D&I list's links (`evidence_plans`), cancellation (`agent_runs`) and the receipt
   choice); it must be a DESIGN requirement of that control that still expects evidence
   (planned, waiting on another or requested; not waived or removed, not a proposed addition
   nobody accepted, not on a cancelled or closed request, in a D&I phase that applies), else
-  409;
+  409; an item whose evidence a person accepted is 409 "Its evidence is accepted. Reopen the
+  decision on the list first." (2.3, rule 0);
 - `batch_id`: as today, one per wizard session. A batch keeps its control and its item: an
   upload naming another is 409, as is a batch id already used by uploads outside the wizard
   and an upload outside the wizard into a wizard batch.
@@ -136,7 +138,9 @@ A wizard file is read by the existing reader, with every D&I item of the control
 requested items (the DESIGN requirements that still expect evidence, across the control's
 D&I requests, each with its id, title, description, categories and the attribute letters it
 links, with their wording), at most `MAX_ITEMS` (14), the row's own item always among them.
-The reader's coverage of each item is recorded against the requirement, as today.
+The reader's coverage of each item is recorded against the requirement, as today. The
+file's text and name are untrusted: the prompt's own delimiters in them (`<evidence_excerpt>`,
+`<request_and_file>`) are made inert, as the assurance prompts do.
 
 The reader's own model-derived findings are never proposed for a wizard file: the
 assurance chain judges D&I evidence once the file is placed. Its deterministic findings
@@ -146,6 +150,12 @@ onto one.
 
 ### 2.3 Placement rules (code decides, the model proposes)
 
+0. An item a person accepted (sufficiency ACCEPTED) is not placeable: nothing is added
+   under an existing acceptance. Where the rules below would place a file on it, the file
+   needs a person instead, with the reason "Its evidence is accepted. Reopen the decision on
+   the list first." and the items ranked; a person's move to it, or a file added on its
+   row, is 409 with that sentence. Reopened on the list, it takes evidence again. A file
+   already on it stays.
 1. A file the assurance gate would hold (custody, a reading that did not finish,
    unreadable, kind unsure, population on a design item) is not placed: it needs a person,
    with the gate's reason, and the items ranked.
@@ -155,7 +165,8 @@ onto one.
    file's kind (a policy, procedure or narrative to process documentation; a ticket, log,
    listing, screenshot or sign-off to control execution, and to the item's own category
    where it asks for exactly that). A file the reader says fully covers several items (a
-   bundle) is placed on each of them.
+   bundle) is placed on each of them whose category fits its kind: on the only one, where
+   one fits; where none fits, a person chooses.
 4. Otherwise it needs a person, with the candidates ranked and the reason in words.
 5. A file covering no item is "not D&I evidence": it stays in the control's files, shown in
    the results, and can be moved.
@@ -176,7 +187,11 @@ that item and the items it is linked to, whatever else its reading found (the ru
 `request_file_serves` applies to the request's items). A wizard file is read against every
 D&I item of its control, so its reading names items it is not filed for. An item a reading
 names on another request is not this request's; one it names on this request that is no
-longer requested (waived, removed) counts by its place in the list, as before.
+longer requested (waived, removed) counts by its place in the list, as before. The same
+rule decides what a reading completes: the journey's INCOMPLETE count
+(`workspace.incomplete_items`) and a reading's note on an item's open finding
+(`evidence_findings.reassess_on_reading`) count only the items the file serves (filed for,
+or linked), never another item its reading names.
 
 The batch waits for its files. Every way a reading ends (read, failed, out of attempts,
 custody, cancelled while queued or while running) runs one hook in the transaction that
@@ -184,11 +199,19 @@ records the ending: the placement where it was read, a person's choice with the 
 reason where it ended unread and nothing was placed, then the landing check. Once none of
 the batch's files still filed to its control is being read (a file filed to another control
 since is not the batch's to wait for), the batch lands: each placed file's request is
-received as for a file read on it (`apply_receipt`, item by item), the control's checks are
-brought in step, and when it landed is recorded (`landed_at`). Files that arrive together
-are so checked once, and an unsent request is not split on the first file when the second
-is for its other item. On start-up, beside the chain's backfill, a batch whose files all
-ended since it last landed lands now (`land_open_batches`).
+received as for a file read on it (`apply_receipt`, item by item), and so is the own
+request of each further item a file is linked to (a bundle's other items, on another
+request), by the same per-item rule, so a sent request stops chasing evidence in hand; the
+control's checks are brought in step, and when it landed is recorded (`landed_at`). Files
+that arrive together are so checked once, and an unsent request is not split on the first
+file when the second is for its other item. A person's move before the batch has landed
+(another of its files is still being read, and the moved file came after the batch last
+landed) records the placement and its filing only: its receipts and its checks wait for the
+landing, like the agent's. The checks a landing queues are handed to the worker once the
+transaction commits, whichever way it came (a reading the worker ends, a person's
+cancellation of the last queued reading, the Evidence center's filing). On start-up, beside
+the chain's backfill, a batch whose files all ended since it last landed lands now
+(`land_open_batches`).
 
 Placements are recorded in `evidence_placements` (append-only): file, the session it was
 decided in, requirement (or none) and every item it is placed on, status PLACED,
@@ -198,7 +221,8 @@ keeps it. A move outside the wizard is recorded the same way, as a person's: the
 center's filing ("Moved to another control in the Evidence center.", "Taken off its control
 in the Evidence center.", "Filed to this control in the Evidence center.") and the D&I
 list's link and unlink ("Linked to an item on the D&I list.", "Taken off an item on the D&I
-list."); the Evidence center's filing also runs the batch's landing check. Every path takes
+list."), and a file dropped again from a row ("Added again from the row."); the Evidence
+center's filing also runs the batch's landing check. Every path takes
 the file's reading, then the batch, then the plan, then a request, so none waits for another.
 
 ### 2.4 The batch's state
@@ -231,13 +255,20 @@ the file's reading, then the batch, then the plan, then a request, so none waits
   ],
   "items": [
     { "requirement_id": "…", "title": "…", "request_title": "…", "letters": ["A", "B"],
-      "file_ids": ["…"], "assurance": { "…": "the entry of GET …/evidence-assurance for it" } }
+      "file_ids": ["…"], "assurance": { "…": "the entry of GET …/evidence-assurance for it" },
+      "addresses": { "<file_id>": [ { "code": "B", "verdict": "SUPPORTED" } ] } }
   ]
 }
 ```
 
-Plain sentences only in `reason`, `note` and `summary`. `addresses` is empty until the item's
-check is REVIEWED. Cheap enough to poll every 2 to 5 seconds: the assurance chain is read
+Plain sentences only in `reason`, `note` and `summary`. The attributes a file addresses are
+per item: `items[].addresses` has one key for each of the item's `file_ids`, listing the
+attributes whose verified passages in that item's own REVIEWED entry are in that file, each
+with its verdict there (in letter order; `[]` until the item's check is REVIEWED). They are
+never merged across items: on another item the same letter can be another attribute, with
+another verdict. The per-file `files[].addresses` is kept for one release only, filled for a
+file on exactly one item (that item's list) and `[]` for a file on several; the screen reads
+`items[].addresses`. Cheap enough to poll every 2 to 5 seconds: the assurance chain is read
 once per state, and not at all before any placed item has a check (each item is then
 `NOT_CHECKED`).
 
@@ -261,9 +292,12 @@ items follow; the reading names the request the file is on now, where its determ
 findings are derived), and answers with the file's entry. On a D&I request only ever
 provided directly (never emailed nor handed over), the items a move leaves without evidence
 are asked for again in a draft of their own, which needs approval like any other; outside
-the wizard, taking evidence off an item leaves the request as before. A stale version, a
-file still being read, withdrawn or filed to another control, an item the control no longer
-expects evidence for, or an item named twice is 409. Another firm is 404; a Reviewer reads
+the wizard, taking evidence off an item leaves the request as before. Before the file's
+batch has landed, the move records the placement and its filing, and the receipts and the
+checks wait for the landing (2.3). A stale version, a file still being read, withdrawn or
+filed to another control, an item the control no longer expects evidence for, an item a
+person accepted ("Its evidence is accepted. Reopen the decision on the list first."), or an
+item named twice is 409. Another firm is 404; a Reviewer reads
 and cannot move; an archived engagement changes nothing.
 
 `GET .../controls/{control_id}/evidence-batches` (project.read): the control's recent
@@ -313,6 +347,6 @@ From the live run of 13 November 2026 (docs/evidence-assurance.md, section 8):
 | Increment | State |
 | --- | --- |
 | Interactive prototype for approval | in progress, 13 November 2026 |
-| Server: wizard uploads, placement, batch state, moves, the sessions list | built, with the independent review's fixes; pending review, 13 November 2026 |
+| Server: wizard uploads, placement, batch state, moves, the sessions list | built, with the independent review's and the joint review's fixes; pending review, 13 November 2026 |
 | Accuracy: nested answers, the false-issue pattern | in progress, 13 November 2026 |
 | The wizard in the app, built to the approved prototype | after the prototype is approved |

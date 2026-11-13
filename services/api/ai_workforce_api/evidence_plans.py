@@ -5118,9 +5118,13 @@ def link_file(
     requirement_id: UUID,
     actor: UUID,
     body: LinkBody,
+    *,
+    placement_reason: str | None = None,
 ) -> None:
     """A person says a file the control already holds serves a requirement, with why: the
-    design walkthrough's file for an interim item, one file for two phases."""
+    design walkthrough's file for an interim item, one file for two phases. For a file
+    the D&I evidence wizard has, `placement_reason` is why its placement followed (by
+    default, a link on the D&I list)."""
     from ai_workforce_api.evidence_wizard import LINKED_ON_LIST, follow_filing, lock_wizard
 
     reason = " ".join(body.reason.split())
@@ -5185,7 +5189,9 @@ def link_file(
         )  # fmt: skip
         if wizard is not None:
             # The wizard's placement follows the file (superseding, kept).
-            follow_filing(cursor, project_id, body.file_id, actor, LINKED_ON_LIST)
+            follow_filing(
+                cursor, project_id, body.file_id, actor, placement_reason or LINKED_ON_LIST
+            )
 
 
 def unlink_file(
