@@ -36,6 +36,7 @@ from ai_workforce_api.evidence_analysis import (
     queue_analysis,
     schedule_analyses,
 )
+from ai_workforce_api.evidence_assurance import hand_over_open, queue_safely
 from ai_workforce_api.evidence_findings import mark_stale_for_file
 from ai_workforce_api.evidence_intake import (
     IntakeState,
@@ -127,6 +128,7 @@ def register_evidence_versions(
             lambda c, p: withdraw(c, p, organization_id, project_id, file_id, reason),
         )
         schedule_runs(tests(), runs)
+        hand_over_open(settings, analyses, project_id)
         return result
 
     @app.post(f"{base}/restore")
@@ -142,6 +144,7 @@ def register_evidence_versions(
             lambda c, p: restore(c, p, organization_id, project_id, file_id, body.reason),
         )
         schedule_runs(tests(), runs)
+        hand_over_open(settings, analyses, project_id)
         return result
 
     @app.post(f"{base}/replace")
@@ -432,6 +435,9 @@ def withdraw(
             (organization_id, project_id, file_id, reason, principal.id),
         )
         mark_stale_for_file(cursor, file_id, "The file was withdrawn.", {})
+        # The assurance chain's run of a request it was on is out of date, and the
+        # request's other files are checked again without it.
+        queue_safely(cursor, project_id, file_id, principal.id)
         match = cursor.execute(
             "SELECT id FROM evidence_matches WHERE evidence_file_id = %s", (file_id,)
         ).fetchone()
@@ -490,6 +496,9 @@ def restore(
             cursor, organization_id, project_id, principal.id, "evidence.restored", file_id,
             {"reason": reason},
         )  # fmt: skip
+        # Back in force: the assurance chain checks its request again where it is D&I
+        # evidence (a run of the very same basis is copied, never run twice).
+        queue_safely(cursor, project_id, file_id, principal.id)
     return _register(connection, principal, organization_id, project_id, file_id), runs
 
 
@@ -635,6 +644,9 @@ def replace(
             (organization_id, project_id, file_id, reason, principal.id, new_id),
         )
         mark_stale_for_file(cursor, file_id, "The file was replaced.", {"file_id": str(new_id)})
+        # The assurance chain's run of a request it was on is out of date; the new run
+        # is queued when the new version has been read.
+        queue_safely(cursor, project_id, file_id, principal.id)
         runs = _off_testing(cursor, project_id, control_id, file_id)
         _audit(
             cursor, organization_id, project_id, principal.id, "evidence.uploaded", new_id,

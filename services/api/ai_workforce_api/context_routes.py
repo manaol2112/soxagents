@@ -207,6 +207,12 @@ def register_control_context(
     ) -> None:
         sheets = resume_testing(connection, project_id, control_id)
         _after_commit(lambda: schedule_runs(scheduler, sheets))
+        # The assurance chain's runs rest on the approved attributes and their criteria:
+        # those a change put out of date are marked so and queued again
+        # (docs/evidence-assurance.md).
+        from ai_workforce_api.evidence_assurance import follow_control
+
+        follow_control(connection, project_id, control_id, actor, scheduler)
         # Settled attributes open the planning gate for operating evidence: it is
         # requested now (evidence_plans.release), as far as the planning gate allows.
         from ai_workforce_api.evidence_plans import release

@@ -5873,6 +5873,28 @@ def register_evidence_plans(
 
         schedule(scheduler, ids)
 
+    def assured(
+        c: psycopg.Connection[Any], p: Principal, project_id: UUID, control_id: UUID,
+        file_id: UUID | None,
+    ) -> None:  # fmt: skip
+        """A person linked a file to a requirement, or took one off: the assurance chain
+        follows (docs/evidence-assurance.md). A file newly in force on a D&I requirement
+        gets its run; a run whose file no longer serves its requirement goes out of
+        date. Handed to the worker once the request has committed."""
+        from ai_workforce_api.after_commit import after_commit
+        from ai_workforce_api.evidence_assurance import (
+            follow_control,
+            queue_safely,
+            schedule_assessments,
+        )
+
+        if file_id is None:
+            follow_control(c, project_id, control_id, p.id, scheduler)
+            return
+        with transaction(c) as cursor:
+            queued = queue_safely(cursor, project_id, file_id, p.id)
+        after_commit(lambda: schedule_assessments(scheduler, queued))
+
     def settled(
         c: psycopg.Connection[Any], p: Principal, organization_id: UUID, project_id: UUID,
         control_id: UUID,
@@ -6114,6 +6136,7 @@ def register_evidence_plans(
         def work(c: psycopg.Connection[Any], p: Principal) -> EvidencePlanBody:
             allowed(c, p, organization_id, project_id, control_id)
             link_file(c, organization_id, project_id, control_id, requirement_id, p.id, body)
+            assured(c, p, project_id, control_id, body.file_id)
             return plan_body(c, project_id, control_id)
 
         return run(request, work)
@@ -6128,6 +6151,7 @@ def register_evidence_plans(
             unlink_file(
                 c, organization_id, project_id, control_id, requirement_id, link_id, p.id, body
             )
+            assured(c, p, project_id, control_id, None)
             return plan_body(c, project_id, control_id)
 
         return run(request, work)

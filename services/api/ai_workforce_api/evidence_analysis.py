@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, field_validator
 
+from ai_workforce_api.after_commit import after_commit, committed
 from ai_workforce_api.agent_runs import cancel_requested, finish_cancelled
 from ai_workforce_api.authorization import (
     Action,
@@ -41,6 +42,12 @@ from ai_workforce_api.evidence_apps import (
     request_default,
     rules_tag,
     save_tag,
+)
+from ai_workforce_api.evidence_assurance import (
+    CUSTODY_FAILED_NOTE,
+    queue_after_reading,
+    queue_safely,
+    schedule_assessments,
 )
 from ai_workforce_api.evidence_classify import (
     CLASSIFY_SCHEMA,
@@ -63,7 +70,11 @@ from ai_workforce_api.evidence_extraction import (
     with_ocr,
     without_ocr,
 )
-from ai_workforce_api.evidence_findings import derive_from_analysis, reassess_on_reading
+from ai_workforce_api.evidence_findings import (
+    ReaderFindings,
+    derive_from_analysis,
+    reassess_on_reading,
+)
 from ai_workforce_api.evidence_links import (
     RequestRef,
     control_request,
@@ -230,7 +241,7 @@ def run_analysis(
     # A storage outage raises, so the attempt is retried.
     content = store(settings, connection).get(str(key))
     if digest_of(content) != digest or len(content) != int(size):
-        _fail(connection, analysis_id, "The stored file no longer matches its custody record.")
+        _fail(connection, analysis_id, CUSTODY_FAILED_NOTE)
         _audit(
             connection,
             organization_id,
@@ -240,6 +251,10 @@ def run_analysis(
             file_id,
             {"content_sha256": str(digest)},
         )
+        # The assurance chain holds the file where it is D&I evidence: nothing of it is
+        # checked against the attributes (docs/evidence-assurance.md, the gate's CUSTODY).
+        with transaction(connection) as cursor:
+            queue_after_reading(cursor, project_id, file_id, requester)
         return "FAILED"
 
     # Every model call of this read goes through one caller: the reader's FAST tier, the
@@ -407,8 +422,13 @@ def run_analysis(
         if saved is None:
             return "SKIPPED"
         # The findings this reading gives, and the open findings it answers
-        # (docs/evidence-intelligence.md, increment 2).
-        derive_from_analysis(cursor, organization_id, project_id, analysis_id)
+        # (docs/evidence-intelligence.md, increment 2). The reader's own findings wait
+        # until the end of this transaction, which knows by then whether the assurance
+        # chain covers the file; the deterministic checks are recorded here.
+        reader_findings = ReaderFindings()
+        derive_from_analysis(
+            cursor, organization_id, project_id, analysis_id, reader=reader_findings
+        )
         reassess_on_reading(cursor, organization_id, project_id, analysis_id)
         if filing is not None:
             filed = _save_filing(cursor, filing[0], decided, request)
@@ -505,6 +525,14 @@ def run_analysis(
                 )
         # The control's tester places the new file on its samples and tests them.
         runs_for_file(cursor, organization_id, project_id, file_id, requester)
+        # The assurance chain (docs/evidence-assurance.md): where the file is in force on
+        # a D&I requirement, its run is recorded here, in the reading's own transaction,
+        # and the worker picks it up once this has committed. For a file the chain covers,
+        # the reader's own model-derived findings are not proposed to a person: they were
+        # never checked by a second reading. A reading by the rules is not the model's.
+        covered = queue_after_reading(cursor, project_id, file_id, requester)
+        if not (covered and source == "MODEL"):
+            reader_findings.record(cursor)
     return "READY"
 
 
@@ -879,6 +907,16 @@ def _context(
 def fail_analysis(connection: psycopg.Connection[Any], analysis_id: UUID) -> None:
     """After the last retry, an analysis is failed so a person can run it again."""
     _fail(connection, analysis_id, "Reading the file did not finish.")
+    # The assurance chain waits for a request's files to be read: this one will not be,
+    # so its request is checked on its other files, with this one named as left out.
+    row = connection.execute(
+        "SELECT project_id, evidence_file_id, requested_by_user_id FROM evidence_analyses "
+        "WHERE id = %s AND status = 'FAILED'",
+        (analysis_id,),
+    ).fetchone()
+    if row is not None:
+        with transaction(connection) as cursor:
+            queue_after_reading(cursor, row[0], row[1], row[2])
 
 
 def _fail(connection: psycopg.Connection[Any], analysis_id: UUID, note: str) -> None:
@@ -1051,9 +1089,15 @@ def register_evidence_analysis(
         body: ConfirmBody,
         request: Request,
     ) -> AnalysisBody:
-        return run(
-            request,
-            lambda c, p: _confirm(c, p, organization_id, project_id, analysis_id, body, settings),
+        # A confirmed kind clears the assurance chain's hold: the run it queues is handed
+        # to the worker once the confirmation has committed.
+        return committed(
+            lambda: run(
+                request,
+                lambda c, p: _confirm(
+                    c, p, organization_id, project_id, analysis_id, body, settings, scheduler
+                ),
+            )
         )
 
     @app.get("/organizations/{organization_id}/evidence-settings")
@@ -1256,6 +1300,7 @@ def _confirm(
     analysis_id: UUID,
     body: ConfirmBody,
     settings: Settings | None = None,
+    scheduler: object | None = None,
 ) -> AnalysisBody:
     _person(connection, principal, organization_id, project_id)
     with transaction(connection) as cursor:
@@ -1307,6 +1352,10 @@ def _confirm(
                 connection, cursor, settings, organization_id, project_id, current[3],
                 principal.id,
             )  # fmt: skip
+        # The file's kind is a person's now: the assurance chain's KIND_UNSURE hold is
+        # cleared and the check starts (or starts again under the confirmed kind).
+        queued = queue_safely(cursor, project_id, UUID(str(current[3])), principal.id)
+    after_commit(lambda: schedule_assessments(scheduler, queued))
     return _select(connection, organization_id, project_id, analysis_id)
 
 

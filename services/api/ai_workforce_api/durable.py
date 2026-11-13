@@ -18,6 +18,7 @@ from ai_workforce_api.control_reviews import fail_reperformance, open_reperforma
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.durable_workflow import (
     AnalysisRequest,
+    AssessmentRequest,
     ConsoleTurnWorkflow,
     ControlReviewWorkflow,
     ControlTestingWorkflow,
@@ -25,6 +26,7 @@ from ai_workforce_api.durable_workflow import (
     DurableEffectWorkflow,
     EffectRequest,
     EvidenceAnalysisWorkflow,
+    EvidenceAssessmentWorkflow,
     EvidencePlanRunWorkflow,
     FollowUpRequest,
     FollowUpWorkflow,
@@ -118,6 +120,12 @@ class TemporalAdapter:
         except Exception as error:
             raise DurableUnavailable() from error
 
+    def schedule_evidence_assessments(self, run_ids: list[UUID]) -> None:
+        try:
+            asyncio.run(_schedule_assessments(self._address, run_ids))
+        except Exception as error:
+            raise DurableUnavailable() from error
+
     def schedule_console_turns(self, message_ids: list[UUID]) -> None:
         try:
             asyncio.run(_schedule_turns(self._address, message_ids))
@@ -196,6 +204,7 @@ async def serve(
     prior: Callable[[UUID], str] | None = None,
     narrative: Callable[[UUID], str] | None = None,
     policy: Callable[[UUID], str] | None = None,
+    assess: Callable[[UUID], str] | None = None,
 ) -> AsyncIterator[None]:
     client = await Client.connect(address)
     worker = Worker(
@@ -217,6 +226,7 @@ async def serve(
             PriorYearWorkflow,
             NarrativeWorkflow,
             PolicyEvidenceWorkflow,
+            EvidenceAssessmentWorkflow,
         ],
         activities=activities_for(
             database_url,
@@ -234,6 +244,7 @@ async def serve(
             prior,
             narrative,
             policy,
+            assess,
         ),
     )
     async with worker:
@@ -251,7 +262,42 @@ async def serve(
         await resume_prior_year_runs(client, database_url)
         await resume_narrative_runs(client, database_url)
         await resume_policy_evidence_runs(client, database_url)
+        await resume_assessments(client, database_url)
         yield
+
+
+async def resume_assessments(client: Client, database_url: str) -> int:
+    """Restart the assurance chain's runs left queued or abandoned."""
+    from ai_workforce_api.evidence_assurance import open_assessments
+
+    try:
+        with connect(database_url) as connection:
+            ids = open_assessments(connection)
+        for run_id in ids:
+            await start_assessment(client, run_id)
+    except Exception:
+        logger.warning("evidence assessments could not be resumed")
+        return 0
+    return len(ids)
+
+
+async def start_assessment(client: Client, run_id: UUID) -> None:
+    payload: AssessmentRequest = {"run_id": str(run_id)}
+    try:
+        await client.start_workflow(
+            EvidenceAssessmentWorkflow.run,
+            payload,
+            id=f"evidence-assessment:{run_id}",
+            task_queue=TASK_QUEUE,
+        )
+    except WorkflowAlreadyStartedError:
+        return
+
+
+async def _schedule_assessments(address: str, run_ids: list[UUID]) -> None:
+    client = await Client.connect(address)
+    for run_id in run_ids:
+        await start_assessment(client, run_id)
 
 
 async def resume_narrative_runs(client: Client, database_url: str) -> int:
@@ -723,6 +769,7 @@ def activities_for(
     prior: Callable[[UUID], str] | None = None,
     narrative: Callable[[UUID], str] | None = None,
     policy: Callable[[UUID], str] | None = None,
+    assess: Callable[[UUID], str] | None = None,
 ) -> list[Any]:
     @activity.defn(name="record_effect")
     async def record_effect(
@@ -836,7 +883,47 @@ def activities_for(
                 await _schedule_workpapers(address, await asyncio.to_thread(design))
             except Exception:
                 logger.warning("the design draft could not be scheduled; it resumes on restart")
+        # The reading has committed: the assurance run it recorded, if any, starts.
+        await open_assessments_now()
         return result
+
+    async def open_assessments_now() -> None:
+        """Hand the assurance chain's queued runs to the engine."""
+        if not address or assess is None:
+            return
+        from ai_workforce_api.evidence_assurance import open_assessments
+
+        def pending() -> list[UUID]:
+            with connect(database_url) as connection:
+                return open_assessments(connection)
+
+        try:
+            await _schedule_assessments(address, await asyncio.to_thread(pending))
+        except Exception:
+            logger.warning(
+                "evidence assessments could not be scheduled; they will resume on restart"
+            )
+
+    @activity.defn(name="assess_evidence_file")
+    async def assess_evidence_file(run_id: str) -> str:
+        if assess is None:
+            return "SKIPPED"
+        # The two readings call the model and the database, so they run off the event loop.
+        result = await asyncio.to_thread(assess, UUID(run_id))
+        if result == "STALE":
+            # The run was out of date: what stands now was queued in its place.
+            await open_assessments_now()
+        return result
+
+    @activity.defn(name="fail_evidence_assessment")
+    async def fail_evidence_assessment(run_id: str) -> None:
+        from ai_workforce_api.evidence_assurance import fail_assessment
+
+        def fail() -> None:
+            with connect(database_url) as connection:
+                fail_assessment(connection, UUID(run_id))
+
+        await asyncio.to_thread(fail)
 
     @activity.defn(name="fail_evidence_analysis")
     async def fail_evidence_analysis(analysis_id: str) -> None:
@@ -845,6 +932,8 @@ def activities_for(
                 fail_analysis(connection, UUID(analysis_id))
 
         await asyncio.to_thread(fail)
+        # Its request is checked on its other files now, with this one left out.
+        await open_assessments_now()
 
     @activity.defn(name="draft_workpaper")
     async def draft_workpaper(workpaper_id: str) -> str:
@@ -1026,6 +1115,8 @@ def activities_for(
         await asyncio.to_thread(fail)
 
     return [
+        assess_evidence_file,
+        fail_evidence_assessment,
         run_policy_evidence,
         fail_policy_evidence_run,
         run_narrative,
