@@ -1,8 +1,8 @@
 {
- "batch_id": "d15d8bb5-541d-4147-a383-9960e0294df7",
+ "batch_id": "cbceb9bf-8553-4866-97ec-89fc191a1204",
  "chosen_requirement_id": null,
- "control_id": "01a1d586-d0c9-76f3-bc16-f5bb2226cbfb",
- "created_at": "2026-11-13T15:29:10.163289Z",
+ "control_id": "01a1d5c0-1441-7e7f-8f37-ffb61bf80534",
+ "created_at": "2026-11-13T16:31:49.537567Z",
  "files": [
   {
    "addresses": [
@@ -31,24 +31,24 @@
    },
    "duplicate": false,
    "extension": "txt",
-   "file_id": "396197d9-3fc5-45d8-a204-163c4b835302",
+   "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
    "name": "access policy.txt",
    "placement": {
     "method": "AGENT",
     "reason": "The reader found it covers \u201cAccess management policy\u201d.",
     "requirement_ids": [
-     "01a1d586-d4d1-791e-a585-5401fad41505"
+     "01a1d5c0-1d84-74c5-8cdb-719bf1a0688a"
     ],
     "status": "PLACED",
     "suggestions": [],
     "version": 1
    },
    "read": {
-    "finished_at": "2026-11-13T15:29:10.403359Z",
+    "finished_at": "2026-11-13T16:31:50.027178Z",
     "method": "TEXT",
     "note": "",
     "pages": null,
-    "started_at": "2026-11-13T15:29:10.370072Z",
+    "started_at": "2026-11-13T16:31:49.915346Z",
     "status": "READY"
    },
    "size_bytes": 211,
@@ -81,24 +81,24 @@
    },
    "duplicate": false,
    "extension": "txt",
-   "file_id": "2e4f0a9a-19fc-4f87-9d52-452f144f6868",
+   "file_id": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
    "name": "ticket REQ-1041.txt",
    "placement": {
     "method": "AGENT",
     "reason": "The reader found it covers \u201cWalkthrough instance: one access request from request to grant\u201d.",
     "requirement_ids": [
-     "01a1d586-d4d4-783e-afd5-2880c73c201a"
+     "01a1d5c0-1d89-7db1-801e-e6f012953a44"
     ],
     "status": "PLACED",
     "suggestions": [],
     "version": 1
    },
    "read": {
-    "finished_at": "2026-11-13T15:29:10.476340Z",
+    "finished_at": "2026-11-13T16:31:50.199119Z",
     "method": "TEXT",
     "note": "",
     "pages": null,
-    "started_at": "2026-11-13T15:29:10.449435Z",
+    "started_at": "2026-11-13T16:31:50.144421Z",
     "status": "READY"
    },
    "size_bytes": 162,
@@ -131,24 +131,24 @@
    },
    "duplicate": false,
    "extension": "txt",
-   "file_id": "eeef0733-d71e-4ae4-a042-874dab6d86a8",
+   "file_id": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
    "name": "sap change log.txt",
    "placement": {
     "method": "AGENT",
     "reason": "The reader found it covers \u201cWalkthrough instance: one access request from request to grant\u201d in part, and it is the only item a file of this kind (change history or audit log) fits.",
     "requirement_ids": [
-     "01a1d586-d4d4-783e-afd5-2880c73c201a"
+     "01a1d5c0-1d89-7db1-801e-e6f012953a44"
     ],
     "status": "PLACED",
     "suggestions": [],
     "version": 1
    },
    "read": {
-    "finished_at": "2026-11-13T15:29:10.540043Z",
+    "finished_at": "2026-11-13T16:31:50.350613Z",
     "method": "TEXT",
     "note": "",
     "pages": null,
-    "started_at": "2026-11-13T15:29:10.511542Z",
+    "started_at": "2026-11-13T16:31:50.291180Z",
     "status": "READY"
    },
    "size_bytes": 85,
@@ -164,7 +164,7 @@
    },
    "duplicate": false,
    "extension": "txt",
-   "file_id": "99cb6375-a2d2-4ffe-a1a3-ef38443782e1",
+   "file_id": "e9fe71f5-0640-4bbe-acb6-6a564d0fdcdf",
    "name": "parking minutes.txt",
    "placement": {
     "method": "AGENT",
@@ -175,11 +175,11 @@
     "version": 1
    },
    "read": {
-    "finished_at": "2026-11-13T15:29:10.597058Z",
+    "finished_at": "2026-11-13T16:31:50.483536Z",
     "method": "TEXT",
     "note": "",
     "pages": null,
-    "started_at": "2026-11-13T15:29:10.574164Z",
+    "started_at": "2026-11-13T16:31:50.430735Z",
     "status": "READY"
    },
    "size_bytes": 78,
@@ -195,7 +195,7 @@
    },
    "duplicate": false,
    "extension": "txt",
-   "file_id": "7a09e825-4fbe-40a3-88eb-3cf4ca49f7fd",
+   "file_id": "0d6ac527-e8b5-4c54-a97c-39eefc193e98",
    "name": "access notes.txt",
    "placement": {
     "method": "AGENT",
@@ -205,23 +205,23 @@
     "suggestions": [
      {
       "reason": "The reader found it covers this item in part.",
-      "requirement_id": "01a1d586-d4d4-783e-afd5-2880c73c201a",
+      "requirement_id": "01a1d5c0-1d89-7db1-801e-e6f012953a44",
       "title": "Walkthrough instance: one access request from request to grant"
      },
      {
       "reason": "The reader found it covers this item in part.",
-      "requirement_id": "01a1d586-d4d1-791e-a585-5401fad41505",
+      "requirement_id": "01a1d5c0-1d84-74c5-8cdb-719bf1a0688a",
       "title": "Access management policy"
      }
     ],
     "version": 1
    },
    "read": {
-    "finished_at": "2026-11-13T15:29:10.654061Z",
+    "finished_at": "2026-11-13T16:31:50.612560Z",
     "method": "TEXT",
     "note": "",
     "pages": null,
-    "started_at": "2026-11-13T15:29:10.631077Z",
+    "started_at": "2026-11-13T16:31:50.543074Z",
     "status": "READY"
    },
    "size_bytes": 82,
@@ -230,11 +230,31 @@
  ],
  "items": [
   {
+   "addresses": {
+    "b6747ed0-858a-4e2f-9aeb-0df50a90a900": [
+     {
+      "code": "A",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "C",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "D",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "E",
+      "verdict": "SUPPORTED"
+     }
+    ]
+   },
    "assurance": {
     "attributes": [
      {
       "absent": [],
-      "attribute_id": "01a1d586-d0d6-74c4-9baa-e305a6fb686f",
+      "attribute_id": "01a1d5c0-144b-708b-adec-7411f29713db",
       "code": "A",
       "elements": [
        {
@@ -242,7 +262,7 @@
         "key": "wording",
         "passages": [
          {
-          "file_id": "396197d9-3fc5-45d8-a204-163c4b835302",
+          "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
           "location": {
            "cell": null,
            "column": null,
@@ -263,7 +283,7 @@
       "finding_status": null,
       "passages": [
        {
-        "file_id": "396197d9-3fc5-45d8-a204-163c4b835302",
+        "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
         "location": {
          "cell": null,
          "column": null,
@@ -283,7 +303,7 @@
      },
      {
       "absent": [],
-      "attribute_id": "01a1d586-d0e1-7e9d-bb33-190fa9670c45",
+      "attribute_id": "01a1d5c0-144d-7ff4-ae5c-0ac6adf37ada",
       "code": "B",
       "elements": [
        {
@@ -321,7 +341,7 @@
      },
      {
       "absent": [],
-      "attribute_id": "01a1d586-d0e2-7645-9ad4-3e3ead08d01e",
+      "attribute_id": "01a1d5c0-144e-7d5c-a593-6467bec869df",
       "code": "C",
       "elements": [
        {
@@ -329,7 +349,7 @@
         "key": "wording",
         "passages": [
          {
-          "file_id": "396197d9-3fc5-45d8-a204-163c4b835302",
+          "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
           "location": {
            "cell": null,
            "column": null,
@@ -350,7 +370,7 @@
       "finding_status": null,
       "passages": [
        {
-        "file_id": "396197d9-3fc5-45d8-a204-163c4b835302",
+        "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
         "location": {
          "cell": null,
          "column": null,
@@ -370,7 +390,7 @@
      },
      {
       "absent": [],
-      "attribute_id": "01a1d586-d0e2-7af5-80d2-dc173c0adede",
+      "attribute_id": "01a1d5c0-144f-78ee-b11a-58193c1710d2",
       "code": "D",
       "elements": [
        {
@@ -378,7 +398,7 @@
         "key": "wording",
         "passages": [
          {
-          "file_id": "396197d9-3fc5-45d8-a204-163c4b835302",
+          "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
           "location": {
            "cell": null,
            "column": null,
@@ -399,7 +419,7 @@
       "finding_status": null,
       "passages": [
        {
-        "file_id": "396197d9-3fc5-45d8-a204-163c4b835302",
+        "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
         "location": {
          "cell": null,
          "column": null,
@@ -419,7 +439,7 @@
      },
      {
       "absent": [],
-      "attribute_id": "01a1d586-d0e2-7f01-a7c3-7f70c06efb02",
+      "attribute_id": "01a1d5c0-1450-740f-9687-aa4140bc415d",
       "code": "E",
       "elements": [
        {
@@ -427,7 +447,7 @@
         "key": "wording",
         "passages": [
          {
-          "file_id": "396197d9-3fc5-45d8-a204-163c4b835302",
+          "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
           "location": {
            "cell": null,
            "column": null,
@@ -448,7 +468,7 @@
       "finding_status": null,
       "passages": [
        {
-        "file_id": "396197d9-3fc5-45d8-a204-163c4b835302",
+        "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
         "location": {
          "cell": null,
          "column": null,
@@ -468,34 +488,72 @@
      }
     ],
     "file_ids": [
-     "396197d9-3fc5-45d8-a204-163c4b835302"
+     "b6747ed0-858a-4e2f-9aeb-0df50a90a900"
     ],
-    "finished_at": "2026-11-13T15:29:10.777693Z",
+    "finished_at": "2026-11-13T16:31:51.014077Z",
     "held": null,
     "held_files": [],
     "lens": "DESIGN_DOCUMENT",
     "note": "",
     "out_of_date": [],
     "read_in_part": false,
-    "requirement_id": "01a1d586-d4d1-791e-a585-5401fad41505",
-    "run_id": "01a1d586-e829-7dec-9125-31087a9cfcc9",
+    "requirement_id": "01a1d5c0-1d84-74c5-8cdb-719bf1a0688a",
+    "run_id": "01a1d5c0-479c-7122-9029-f5482a02d524",
     "stage": "DONE",
     "status": "REVIEWED"
    },
    "file_ids": [
-    "396197d9-3fc5-45d8-a204-163c4b835302"
+    "b6747ed0-858a-4e2f-9aeb-0df50a90a900"
    ],
    "letters": [],
-   "request_title": "Request PBC-777D83A4",
-   "requirement_id": "01a1d586-d4d1-791e-a585-5401fad41505",
+   "request_title": "Request PBC-B137D849",
+   "requirement_id": "01a1d5c0-1d84-74c5-8cdb-719bf1a0688a",
    "title": "Access management policy"
   },
   {
+   "addresses": {
+    "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7": [
+     {
+      "code": "A",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "C",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "D",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "E",
+      "verdict": "SUPPORTED"
+     }
+    ],
+    "ac5ec489-8dd0-4846-95b2-08d8ccf9a990": [
+     {
+      "code": "A",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "C",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "D",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "E",
+      "verdict": "SUPPORTED"
+     }
+    ]
+   },
    "assurance": {
     "attributes": [
      {
       "absent": [],
-      "attribute_id": "01a1d586-d0d6-74c4-9baa-e305a6fb686f",
+      "attribute_id": "01a1d5c0-144b-708b-adec-7411f29713db",
       "code": "A",
       "elements": [
        {
@@ -503,7 +561,7 @@
         "key": "wording",
         "passages": [
          {
-          "file_id": "2e4f0a9a-19fc-4f87-9d52-452f144f6868",
+          "file_id": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
           "location": {
            "cell": null,
            "column": null,
@@ -515,7 +573,7 @@
           "quote": "Approved by: Priya Shah, line manager, on 2026-03-03"
          },
          {
-          "file_id": "eeef0733-d71e-4ae4-a042-874dab6d86a8",
+          "file_id": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
           "location": {
            "cell": null,
            "column": null,
@@ -536,7 +594,7 @@
       "finding_status": null,
       "passages": [
        {
-        "file_id": "2e4f0a9a-19fc-4f87-9d52-452f144f6868",
+        "file_id": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
         "location": {
          "cell": null,
          "column": null,
@@ -548,7 +606,7 @@
         "quote": "Approved by: Priya Shah, line manager, on 2026-03-03"
        },
        {
-        "file_id": "eeef0733-d71e-4ae4-a042-874dab6d86a8",
+        "file_id": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
         "location": {
          "cell": null,
          "column": null,
@@ -570,7 +628,7 @@
       "absent": [
        "No record that shows it."
       ],
-      "attribute_id": "01a1d586-d0e1-7e9d-bb33-190fa9670c45",
+      "attribute_id": "01a1d5c0-144d-7ff4-ae5c-0ac6adf37ada",
       "code": "B",
       "elements": [
        {
@@ -584,7 +642,7 @@
        }
       ],
       "expected": true,
-      "finding_id": "01a1d586-e8b1-7c04-8512-66b554ae37a1",
+      "finding_id": "01a1d5c0-49a3-78b5-8924-97479bc0243a",
       "finding_status": "PROPOSED",
       "passages": [],
       "result": "NOT_MET",
@@ -595,7 +653,7 @@
      },
      {
       "absent": [],
-      "attribute_id": "01a1d586-d0e2-7645-9ad4-3e3ead08d01e",
+      "attribute_id": "01a1d5c0-144e-7d5c-a593-6467bec869df",
       "code": "C",
       "elements": [
        {
@@ -603,7 +661,7 @@
         "key": "wording",
         "passages": [
          {
-          "file_id": "2e4f0a9a-19fc-4f87-9d52-452f144f6868",
+          "file_id": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
           "location": {
            "cell": null,
            "column": null,
@@ -615,7 +673,7 @@
           "quote": "Approved by: Priya Shah, line manager, on 2026-03-03"
          },
          {
-          "file_id": "eeef0733-d71e-4ae4-a042-874dab6d86a8",
+          "file_id": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
           "location": {
            "cell": null,
            "column": null,
@@ -636,7 +694,7 @@
       "finding_status": null,
       "passages": [
        {
-        "file_id": "2e4f0a9a-19fc-4f87-9d52-452f144f6868",
+        "file_id": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
         "location": {
          "cell": null,
          "column": null,
@@ -648,7 +706,7 @@
         "quote": "Approved by: Priya Shah, line manager, on 2026-03-03"
        },
        {
-        "file_id": "eeef0733-d71e-4ae4-a042-874dab6d86a8",
+        "file_id": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
         "location": {
          "cell": null,
          "column": null,
@@ -668,7 +726,7 @@
      },
      {
       "absent": [],
-      "attribute_id": "01a1d586-d0e2-7af5-80d2-dc173c0adede",
+      "attribute_id": "01a1d5c0-144f-78ee-b11a-58193c1710d2",
       "code": "D",
       "elements": [
        {
@@ -676,7 +734,7 @@
         "key": "wording",
         "passages": [
          {
-          "file_id": "2e4f0a9a-19fc-4f87-9d52-452f144f6868",
+          "file_id": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
           "location": {
            "cell": null,
            "column": null,
@@ -688,7 +746,7 @@
           "quote": "Approved by: Priya Shah, line manager, on 2026-03-03"
          },
          {
-          "file_id": "eeef0733-d71e-4ae4-a042-874dab6d86a8",
+          "file_id": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
           "location": {
            "cell": null,
            "column": null,
@@ -709,7 +767,7 @@
       "finding_status": null,
       "passages": [
        {
-        "file_id": "2e4f0a9a-19fc-4f87-9d52-452f144f6868",
+        "file_id": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
         "location": {
          "cell": null,
          "column": null,
@@ -721,7 +779,7 @@
         "quote": "Approved by: Priya Shah, line manager, on 2026-03-03"
        },
        {
-        "file_id": "eeef0733-d71e-4ae4-a042-874dab6d86a8",
+        "file_id": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
         "location": {
          "cell": null,
          "column": null,
@@ -741,7 +799,7 @@
      },
      {
       "absent": [],
-      "attribute_id": "01a1d586-d0e2-7f01-a7c3-7f70c06efb02",
+      "attribute_id": "01a1d5c0-1450-740f-9687-aa4140bc415d",
       "code": "E",
       "elements": [
        {
@@ -749,7 +807,7 @@
         "key": "wording",
         "passages": [
          {
-          "file_id": "2e4f0a9a-19fc-4f87-9d52-452f144f6868",
+          "file_id": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
           "location": {
            "cell": null,
            "column": null,
@@ -761,7 +819,7 @@
           "quote": "Approved by: Priya Shah, line manager, on 2026-03-03"
          },
          {
-          "file_id": "eeef0733-d71e-4ae4-a042-874dab6d86a8",
+          "file_id": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
           "location": {
            "cell": null,
            "column": null,
@@ -782,7 +840,7 @@
       "finding_status": null,
       "passages": [
        {
-        "file_id": "2e4f0a9a-19fc-4f87-9d52-452f144f6868",
+        "file_id": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
         "location": {
          "cell": null,
          "column": null,
@@ -794,7 +852,7 @@
         "quote": "Approved by: Priya Shah, line manager, on 2026-03-03"
        },
        {
-        "file_id": "eeef0733-d71e-4ae4-a042-874dab6d86a8",
+        "file_id": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
         "location": {
          "cell": null,
          "column": null,
@@ -814,24 +872,24 @@
      }
     ],
     "file_ids": [
-     "2e4f0a9a-19fc-4f87-9d52-452f144f6868",
-     "eeef0733-d71e-4ae4-a042-874dab6d86a8"
+     "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
+     "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7"
     ],
-    "finished_at": "2026-11-13T15:29:10.827878Z",
+    "finished_at": "2026-11-13T16:31:51.193954Z",
     "held": null,
     "held_files": [],
     "lens": "INSTANCE_RECORD",
     "note": "",
     "out_of_date": [],
     "read_in_part": false,
-    "requirement_id": "01a1d586-d4d4-783e-afd5-2880c73c201a",
-    "run_id": "01a1d586-e82f-7842-8012-f10a97032427",
+    "requirement_id": "01a1d5c0-1d89-7db1-801e-e6f012953a44",
+    "run_id": "01a1d5c0-47a0-7535-a778-2bfbb01a2d65",
     "stage": "DONE",
     "status": "REVIEWED"
    },
    "file_ids": [
-    "2e4f0a9a-19fc-4f87-9d52-452f144f6868",
-    "eeef0733-d71e-4ae4-a042-874dab6d86a8"
+    "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
+    "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7"
    ],
    "letters": [
     "A",
@@ -840,12 +898,12 @@
     "D",
     "E"
    ],
-   "request_title": "Request PBC-777D83A4",
-   "requirement_id": "01a1d586-d4d4-783e-afd5-2880c73c201a",
+   "request_title": "Request PBC-B137D849",
+   "requirement_id": "01a1d5c0-1d89-7db1-801e-e6f012953a44",
    "title": "Walkthrough instance: one access request from request to grant"
   }
  ],
- "server_now": "2026-11-13T15:29:10.878778Z",
+ "server_now": "2026-11-13T16:31:51.283474Z",
  "stages": {
   "checked_items": 2,
   "files": 5,

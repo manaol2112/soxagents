@@ -1,8 +1,8 @@
 {
- "batch_id": "ea453457-e709-424d-9c9d-fccfd79e49c4",
+ "batch_id": "46934601-94a1-4a8d-8844-1dfdbf0185cf",
  "chosen_requirement_id": null,
- "control_id": "01a1d586-d0c9-76f3-bc16-f5bb2226cbfb",
- "created_at": "2026-11-13T15:29:11.204601Z",
+ "control_id": "01a1d5c0-1441-7e7f-8f37-ffb61bf80534",
+ "created_at": "2026-11-13T16:31:52.140029Z",
  "files": [
   {
    "addresses": [
@@ -31,24 +31,24 @@
    },
    "duplicate": true,
    "extension": "txt",
-   "file_id": "396197d9-3fc5-45d8-a204-163c4b835302",
+   "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
    "name": "access policy.txt",
    "placement": {
     "method": "AGENT",
     "reason": "The reader found it covers \u201cAccess management policy\u201d.",
     "requirement_ids": [
-     "01a1d586-d4d1-791e-a585-5401fad41505"
+     "01a1d5c0-1d84-74c5-8cdb-719bf1a0688a"
     ],
     "status": "PLACED",
     "suggestions": [],
     "version": 1
    },
    "read": {
-    "finished_at": "2026-11-13T15:29:10.403359Z",
+    "finished_at": "2026-11-13T16:31:50.027178Z",
     "method": "TEXT",
     "note": "",
     "pages": null,
-    "started_at": "2026-11-13T15:29:10.370072Z",
+    "started_at": "2026-11-13T16:31:49.915346Z",
     "status": "READY"
    },
    "size_bytes": 211,
@@ -59,7 +59,7 @@
    "classification": null,
    "duplicate": false,
    "extension": "csv",
-   "file_id": "538b5974-c7b9-405b-9cd9-cab512f8954d",
+   "file_id": "9a4da39b-1659-47c5-936a-643e125813f5",
    "name": "second listing.csv",
    "placement": {
     "method": "AGENT",
@@ -83,11 +83,31 @@
  ],
  "items": [
   {
+   "addresses": {
+    "b6747ed0-858a-4e2f-9aeb-0df50a90a900": [
+     {
+      "code": "A",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "C",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "D",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "E",
+      "verdict": "SUPPORTED"
+     }
+    ]
+   },
    "assurance": {
     "attributes": [
      {
       "absent": [],
-      "attribute_id": "01a1d586-d0d6-74c4-9baa-e305a6fb686f",
+      "attribute_id": "01a1d5c0-144b-708b-adec-7411f29713db",
       "code": "A",
       "elements": [
        {
@@ -95,7 +115,7 @@
         "key": "wording",
         "passages": [
          {
-          "file_id": "396197d9-3fc5-45d8-a204-163c4b835302",
+          "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
           "location": {
            "cell": null,
            "column": null,
@@ -116,7 +136,7 @@
       "finding_status": null,
       "passages": [
        {
-        "file_id": "396197d9-3fc5-45d8-a204-163c4b835302",
+        "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
         "location": {
          "cell": null,
          "column": null,
@@ -136,7 +156,7 @@
      },
      {
       "absent": [],
-      "attribute_id": "01a1d586-d0e1-7e9d-bb33-190fa9670c45",
+      "attribute_id": "01a1d5c0-144d-7ff4-ae5c-0ac6adf37ada",
       "code": "B",
       "elements": [
        {
@@ -174,7 +194,7 @@
      },
      {
       "absent": [],
-      "attribute_id": "01a1d586-d0e2-7645-9ad4-3e3ead08d01e",
+      "attribute_id": "01a1d5c0-144e-7d5c-a593-6467bec869df",
       "code": "C",
       "elements": [
        {
@@ -182,7 +202,7 @@
         "key": "wording",
         "passages": [
          {
-          "file_id": "396197d9-3fc5-45d8-a204-163c4b835302",
+          "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
           "location": {
            "cell": null,
            "column": null,
@@ -203,7 +223,7 @@
       "finding_status": null,
       "passages": [
        {
-        "file_id": "396197d9-3fc5-45d8-a204-163c4b835302",
+        "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
         "location": {
          "cell": null,
          "column": null,
@@ -223,7 +243,7 @@
      },
      {
       "absent": [],
-      "attribute_id": "01a1d586-d0e2-7af5-80d2-dc173c0adede",
+      "attribute_id": "01a1d5c0-144f-78ee-b11a-58193c1710d2",
       "code": "D",
       "elements": [
        {
@@ -231,7 +251,7 @@
         "key": "wording",
         "passages": [
          {
-          "file_id": "396197d9-3fc5-45d8-a204-163c4b835302",
+          "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
           "location": {
            "cell": null,
            "column": null,
@@ -252,7 +272,7 @@
       "finding_status": null,
       "passages": [
        {
-        "file_id": "396197d9-3fc5-45d8-a204-163c4b835302",
+        "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
         "location": {
          "cell": null,
          "column": null,
@@ -272,7 +292,7 @@
      },
      {
       "absent": [],
-      "attribute_id": "01a1d586-d0e2-7f01-a7c3-7f70c06efb02",
+      "attribute_id": "01a1d5c0-1450-740f-9687-aa4140bc415d",
       "code": "E",
       "elements": [
        {
@@ -280,7 +300,7 @@
         "key": "wording",
         "passages": [
          {
-          "file_id": "396197d9-3fc5-45d8-a204-163c4b835302",
+          "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
           "location": {
            "cell": null,
            "column": null,
@@ -301,7 +321,7 @@
       "finding_status": null,
       "passages": [
        {
-        "file_id": "396197d9-3fc5-45d8-a204-163c4b835302",
+        "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
         "location": {
          "cell": null,
          "column": null,
@@ -321,30 +341,30 @@
      }
     ],
     "file_ids": [
-     "396197d9-3fc5-45d8-a204-163c4b835302"
+     "b6747ed0-858a-4e2f-9aeb-0df50a90a900"
     ],
-    "finished_at": "2026-11-13T15:29:10.777693Z",
+    "finished_at": "2026-11-13T16:31:51.014077Z",
     "held": null,
     "held_files": [],
     "lens": "DESIGN_DOCUMENT",
     "note": "",
     "out_of_date": [],
     "read_in_part": false,
-    "requirement_id": "01a1d586-d4d1-791e-a585-5401fad41505",
-    "run_id": "01a1d586-e829-7dec-9125-31087a9cfcc9",
+    "requirement_id": "01a1d5c0-1d84-74c5-8cdb-719bf1a0688a",
+    "run_id": "01a1d5c0-479c-7122-9029-f5482a02d524",
     "stage": "DONE",
     "status": "REVIEWED"
    },
    "file_ids": [
-    "396197d9-3fc5-45d8-a204-163c4b835302"
+    "b6747ed0-858a-4e2f-9aeb-0df50a90a900"
    ],
    "letters": [],
-   "request_title": "Request PBC-777D83A4",
-   "requirement_id": "01a1d586-d4d1-791e-a585-5401fad41505",
+   "request_title": "Request PBC-B137D849",
+   "requirement_id": "01a1d5c0-1d84-74c5-8cdb-719bf1a0688a",
    "title": "Access management policy"
   }
  ],
- "server_now": "2026-11-13T15:29:11.293224Z",
+ "server_now": "2026-11-13T16:31:52.708965Z",
  "stages": {
   "checked_items": 1,
   "files": 2,

@@ -2582,6 +2582,28 @@ describe("the list's line and the session remembered here", () => {
         action: "See results",
       },
     );
+    // Reopened from the list before its state is read, with no file at work but not
+    // finished (its items may still be checked): in progress, never "analyzed".
+    const unfinished = progressLine({
+      progress: null,
+      summary: {
+        batchId: BATCH,
+        createdAt: CREATED,
+        createdBy: "Robert John",
+        chosenRequirementId: null,
+        files: 7,
+        inProgress: false,
+        needsPerson: 0,
+        notDesign: 0,
+        finished: false,
+        finishedAt: null,
+      },
+      seconds: 20,
+    });
+    assert.equal(unfinished?.done, false);
+    assert.equal(unfinished?.action, "Show progress");
+    assert.doesNotMatch(unfinished?.text ?? "", /analyzed/);
+    assert.match(unfinished?.text ?? "", /^Analyzing 7 files/);
     assert.equal(
       progressLine({ progress: null, summary: null, seconds: 0 }),
       null,

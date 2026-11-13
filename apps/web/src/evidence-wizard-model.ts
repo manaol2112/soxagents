@@ -2868,7 +2868,9 @@ export function progressLine(facts: {
     return null;
   }
   const files = p?.files ?? s?.files ?? 0;
-  const done = p !== null ? p.done : s?.inProgress === false;
+  // Before the batch is read, only the list's `finished` ends a session: a session with
+  // no file at work (in_progress 0) may still be checking its items.
+  const done = p !== null ? p.done : s?.finished === true;
   if (!done) {
     const stage = p?.stages.find((item) => item.state === "active") ?? null;
     // The items whose check is still to come or at work, exactly; not every item.

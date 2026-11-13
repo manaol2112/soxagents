@@ -1,8 +1,8 @@
 {
- "batch_id": "9f52650f-35bc-4b2a-bf83-b8bc3314a2f9",
+ "batch_id": "23d2602e-7812-4b33-b91e-52674a57eb29",
  "chosen_requirement_id": null,
- "control_id": "01a1d586-d0c9-76f3-bc16-f5bb2226cbfb",
- "created_at": "2026-11-13T15:29:11.853947Z",
+ "control_id": "01a1d5c0-1441-7e7f-8f37-ffb61bf80534",
+ "created_at": "2026-11-13T16:31:54.338785Z",
  "files": [
   {
    "addresses": [],
@@ -14,7 +14,7 @@
    },
    "duplicate": true,
    "extension": "txt",
-   "file_id": "017fbbf1-005a-462b-8c80-a460584881ce",
+   "file_id": "40ca2d5f-19c3-416b-8a3a-2045c7b35c44",
    "name": "unplaced scan.txt",
    "placement": {
     "method": "AGENT",
@@ -25,11 +25,11 @@
     "version": 1
    },
    "read": {
-    "finished_at": "2026-11-13T15:29:11.807761Z",
+    "finished_at": "2026-11-13T16:31:54.219234Z",
     "method": "TEXT",
     "note": "",
     "pages": null,
-    "started_at": "2026-11-13T15:29:11.780082Z",
+    "started_at": "2026-11-13T16:31:54.142773Z",
     "status": "READY"
    },
    "size_bytes": 41,
@@ -37,7 +37,7 @@
   }
  ],
  "items": [],
- "server_now": "2026-11-13T15:29:11.885739Z",
+ "server_now": "2026-11-13T16:31:54.432700Z",
  "stages": {
   "checked_items": 0,
   "files": 1,

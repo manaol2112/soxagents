@@ -8,24 +8,24 @@
  },
  "duplicate": false,
  "extension": "txt",
- "file_id": "7a09e825-4fbe-40a3-88eb-3cf4ca49f7fd",
+ "file_id": "0d6ac527-e8b5-4c54-a97c-39eefc193e98",
  "name": "access notes.txt",
  "placement": {
   "method": "PERSON",
   "reason": "Placed by a person.",
   "requirement_ids": [
-   "01a1d586-d4d4-783e-afd5-2880c73c201a"
+   "01a1d5c0-1d89-7db1-801e-e6f012953a44"
   ],
   "status": "PLACED",
   "suggestions": [],
   "version": 2
  },
  "read": {
-  "finished_at": "2026-11-13T15:29:10.654061Z",
+  "finished_at": "2026-11-13T16:31:50.612560Z",
   "method": "TEXT",
   "note": "",
   "pages": null,
-  "started_at": "2026-11-13T15:29:10.631077Z",
+  "started_at": "2026-11-13T16:31:50.543074Z",
   "status": "READY"
  },
  "size_bytes": 82,

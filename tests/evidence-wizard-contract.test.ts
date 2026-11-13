@@ -7,7 +7,10 @@ import { describe, it } from "node:test";
 
 import { parseAssurance } from "../apps/web/src/evidence-assurance-model.ts";
 import {
+  addressesLine,
   attributeRows,
+  type BatchFile,
+  type BatchItem,
   batchToShow,
   fileLines,
   itemCards,
@@ -377,5 +380,104 @@ describe("review scenarios on the server's JSON", () => {
     // sends the person.
     assert.equal(line.duplicate, true);
     assert.equal(line.movable, true);
+  });
+});
+
+type RawAddresses = Record<string, { code: string }[]>;
+type RawItem = {
+  requirement_id: string;
+  title: string;
+  addresses: RawAddresses;
+  assurance: { status: string };
+};
+
+describe("the server's items[].addresses, read per item", () => {
+  it("parses each item's own map, file by file, as the server sent it", () => {
+    const raw = load("batch-state-all.json");
+    const batch = parseBatch(raw);
+    assert.ok(batch !== null);
+    for (const each of raw.items as RawItem[]) {
+      const mine: BatchItem | undefined = batch.items.find(
+        (item) => item.requirementId === each.requirement_id,
+      );
+      assert.ok(mine?.addresses, each.title);
+      const map = each.addresses as RawAddresses;
+      assert.deepEqual(
+        Object.keys(mine.addresses).sort(),
+        Object.keys(map).sort(),
+      );
+      for (const [fileId, list] of Object.entries(map)) {
+        assert.deepEqual(
+          (mine.addresses[fileId] ?? []).map((a) => a.code),
+          list.map((a) => a.code),
+        );
+      }
+    }
+  });
+
+  it("each item card shows a file's letters from its own item's map", () => {
+    const raw = load("batch-state-all.json");
+    const batch = parseBatch(raw);
+    assert.ok(batch !== null);
+    let shown = 0;
+    for (const each of raw.items as RawItem[]) {
+      for (const [fileId, list] of Object.entries(each.addresses)) {
+        const file = batch.files.find((f) => f.fileId === fileId) ?? null;
+        assert.ok(file !== null, fileId);
+        const line = addressesLine(file, batch, each.requirement_id);
+        const codes = [...new Set(list.map((a) => a.code))];
+        if (codes.length === 0) {
+          assert.equal(line.kind, "none");
+        } else {
+          assert.equal(line.kind, "letters");
+          assert.deepEqual(line.kind === "letters" ? line.letters : [], codes);
+          shown += 1;
+        }
+      }
+    }
+    assert.ok(shown > 0, "the fixture has letters to show");
+  });
+
+  it("the item's map wins over the file's own list", () => {
+    // The server's JSON with one file's own list changed: the item card still reads
+    // the item's map, so a letter from another check never shows on this item.
+    const raw = load("batch-state-all.json");
+    const each = raw.items.find((item: { addresses: RawAddresses }) =>
+      Object.values(item.addresses).some((list) => list.length > 0),
+    );
+    const [fileId, list] = Object.entries(each.addresses as RawAddresses).find(
+      ([, codes]) => codes.length > 0,
+    ) as [string, { code: string }[]];
+    for (const file of raw.files) {
+      if (file.file_id === fileId) {
+        file.addresses = [{ code: "Z", verdict: "ISSUE" }];
+      }
+    }
+    const batch = parseBatch(raw);
+    assert.ok(batch !== null);
+    const file = batch.files.find((f) => f.fileId === fileId) ?? null;
+    const line = addressesLine(file, batch, each.requirement_id);
+    assert.equal(line.kind, "letters");
+    assert.deepEqual(line.kind === "letters" ? line.letters : [], [
+      ...new Set(list.map((a) => a.code)),
+    ]);
+  });
+
+  it("an item being checked again says its letters come later", () => {
+    const raw = load("batch-state-after-move.json");
+    const batch = parseBatch(raw);
+    assert.ok(batch !== null);
+    const queued = (raw.items as RawItem[]).find(
+      (item) => item.assurance.status !== "REVIEWED",
+    );
+    assert.ok(queued, "the fixture has an item being checked again");
+    for (const fileId of Object.keys(queued.addresses)) {
+      const file: BatchFile | null =
+        batch.files.find((f) => f.fileId === fileId) ?? null;
+      assert.equal(
+        addressesLine(file, batch, queued.requirement_id).kind,
+        "later",
+      );
+    }
   });
 });

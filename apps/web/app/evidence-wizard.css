@@ -260,6 +260,16 @@ button.wz-close {
   color: var(--success);
 }
 
+/* Asking before queued files are dropped. */
+.wz-note.is-warning {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.wz-note.is-warning > svg {
+  color: var(--warning);
+}
+
 .wz-acts {
   display: flex;
   flex-wrap: wrap;

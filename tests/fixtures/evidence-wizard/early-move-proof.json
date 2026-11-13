@@ -4,30 +4,26 @@
    "method": "AGENT",
    "reason": "The reader found it covers \u201cAccess management policy\u201d.",
    "requirement_ids": [
-    "01a1d587-31e9-78df-8149-e58ffbfd93d9"
+    "01a1d5c0-7bb5-7f64-a001-47a7162f4016"
    ],
    "status": "PLACED",
    "suggestions": [],
    "version": 1
   },
   "requests": [
-   "01a1d587-3a58-7de7-8274-1baac0b7c977",
-   "01a1d587-446d-7200-be4d-b8f5873d112f"
+   "01a1d5c0-8c29-71bb-a5a5-15ed887db013"
   ],
   "runs": [
-   "01a1d587-31eb-79a9-b510-9fe9c7262c1e",
-   "01a1d587-31e9-78df-8149-e58ffbfd93d9"
+   "01a1d5c0-7bb5-7f64-a001-47a7162f4016",
+   "01a1d5c0-7bba-741c-a5d9-209abf6c0573"
   ]
  },
  "at_move": {
-  "request_status": "RECEIVED",
+  "request_status": "DRAFT",
   "requests": [
-   "01a1d587-3a58-7de7-8274-1baac0b7c977",
-   "01a1d587-446d-7200-be4d-b8f5873d112f"
+   "01a1d5c0-8c29-71bb-a5a5-15ed887db013"
   ],
-  "runs": [
-   "01a1d587-31eb-79a9-b510-9fe9c7262c1e"
-  ]
+  "runs": []
  },
- "request": "01a1d587-3a58-7de7-8274-1baac0b7c977"
+ "request": "01a1d5c0-8c29-71bb-a5a5-15ed887db013"
 }
