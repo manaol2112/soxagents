@@ -687,10 +687,35 @@ export function settledRunLine(
     return null;
   }
   const said = plainNote(failureNote);
-  if (said === "" || needingCriteria(context).length > 0) {
+  if (said === "" || !allHaveCriteria(context)) {
     return null;
   }
-  return `${SETTLED_RUN_LEAD} ${said}`;
+  // The line offers no Run again, so the server's own "Run again" is not repeated.
+  const why = withoutRunAgain(said);
+  return why === "" ? SETTLED_RUN_LEAD : `${SETTLED_RUN_LEAD} ${why}`;
+}
+
+/** Settled for the quiet line: the control has approved attributes and every one has its
+ * criteria. A control with none gets the failure line with its Run again. */
+function allHaveCriteria(context: { approved: Attribute[] }): boolean {
+  return context.approved.length > 0 && needingCriteria(context).length === 0;
+}
+
+/** A sentence without its closing call to run the agents again: a last sentence that
+ * starts "Run again" (or "Run them again"), or a last clause such as ", so run them
+ * again". What remains is plain; "" when nothing does. */
+export function withoutRunAgain(text: string): string {
+  const parts = plainNote(text).split(/(?<=[.!?])\s+/);
+  const last = parts.at(-1) ?? "";
+  if (/^(?:Please )?run (?:it |them |the agents )?again\b/i.test(last)) {
+    parts.pop();
+  } else if (parts.length > 0) {
+    parts[parts.length - 1] = last.replace(
+      /[,;:]?\s*(?:(?:so|and|or|then|please)\s+)?run (?:it |them |the agents )?again\b[^.!?]*([.!?])$/i,
+      "$1",
+    );
+  }
+  return plainNote(parts.join(" "));
 }
 
 /**
@@ -730,12 +755,17 @@ export function runFailureLine(
   const settled = context.attributesRerunUseful === false;
   // Every attribute has its criteria and the server said why the run could not be used:
   // the quiet settledRunLine, never an error.
-  if (said !== "" && needingCriteria(context).length === 0) {
+  if (said !== "" && allHaveCriteria(context)) {
     return null;
   }
   if (run === "STOPPED" || said !== "") {
     const unusable = PLANNER_UNUSABLE.test(said) || PLANNER_UNUSABLE.test(note);
-    if (missing.length === 0 && (settled || (waiting && unusable))) {
+    // Settled work shows no error (12 November 2026); a control with no approved
+    // attribute is not settled, and gets this line with its Run again.
+    if (
+      missing.length === 0 &&
+      ((settled && context.approved.length > 0) || (waiting && unusable))
+    ) {
       return null;
     }
     if (missing.length > 0) {

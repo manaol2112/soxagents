@@ -23,6 +23,7 @@ import {
   pendingCriteriaLine,
   SETTLED_RUN_LEAD,
   settledRunLine,
+  withoutRunAgain,
 } from "../apps/web/src/control-context-model.ts";
 import {
   PLAN_FALLBACK_LINE,
@@ -263,6 +264,60 @@ describe("the Attributes step after Run again", () => {
     assert.equal(
       attributesLine(attributesRun({}), `${UNUSABLE_NOTE}`),
       CRITERIA_NOT_WRITTEN,
+    );
+  });
+
+  it("keeps the quiet line for a control whose approved attributes all have criteria", () => {
+    const note =
+      "The planner's answer could not be used. It named no attribute.";
+    // No approved attribute: not settled. The failure line, with its Run again.
+    const empty = attributesRun({
+      attributesFailureNote: note,
+      approved: [],
+      attributesRerunUseful: false,
+    });
+    assert.equal(settledRunLine(empty), null);
+    assert.equal(attributesLine(empty), note);
+    const stopped = attributesRun({
+      attributesRun: "STOPPED",
+      attributesRunNote: UNUSABLE_NOTE,
+      approved: [],
+      attributesRerunUseful: false,
+    });
+    assert.equal(attributesLine(stopped), UNUSABLE_NOTE);
+    // Approved attributes, every one with criteria: the quiet line.
+    assert.equal(
+      settledRunLine({ ...empty, approved: [owned("a")] }),
+      `${SETTLED_RUN_LEAD} ${note}`,
+    );
+  });
+
+  it("drops the server's Run again from the quiet line, which offers none", () => {
+    const settled = (failure: string) =>
+      settledRunLine({
+        attributesRun: "",
+        attributesFailureNote: failure,
+        approved: [owned("a")],
+      });
+    assert.equal(
+      settled("The planner's answer could not be used. Run again."),
+      `${SETTLED_RUN_LEAD} The planner's answer could not be used.`,
+    );
+    assert.equal(
+      settled("The planner was busy, so run them again."),
+      `${SETTLED_RUN_LEAD} The planner was busy.`,
+    );
+    assert.equal(
+      settled(
+        "The reviewer did not finish. Run again, or write the criteria yourself.",
+      ),
+      `${SETTLED_RUN_LEAD} The reviewer did not finish.`,
+    );
+    assert.equal(settled("Run again."), SETTLED_RUN_LEAD);
+    // A sentence that only mentions a run keeps its words.
+    assert.equal(
+      withoutRunAgain("The agents ran again at noon and stopped."),
+      "The agents ran again at noon and stopped.",
     );
   });
 
