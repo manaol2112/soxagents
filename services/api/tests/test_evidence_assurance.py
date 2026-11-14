@@ -1094,7 +1094,10 @@ def test_a_held_file_is_left_out_and_named_and_an_unsure_kind_is_read(
 
     Old expectation (the first engine's gate, for new runs): a file read by the rules was
     held as KIND_UNSURE, alone it held the whole run, a person's confirmation of its kind
-    started the check, and a second unsure file was left out and named.
+    started the check, and a second unsure file was left out and named. (The old test read
+    the ticket first and the change log second; here the change log is the file first
+    taken for a population and the ticket the one read by the rules, so that the passage
+    both readings quote for attribute A sits in the file whose kind is not sure.)
     New expectation: a file whose kind is not sure passes the gate and is read; it is
     listed under the review's confirmations instead. Everything the old test asserted
     about a held file still holds, and is asserted here on a hold engine 2 keeps (a
@@ -1104,9 +1107,9 @@ def test_a_held_file_is_left_out_and_named_and_an_unsure_kind_is_read(
     not read, the two lists cover every file, an absence is never told while a file is
     left out, and a confirmed population stays out with its own sentence."""
     bench = _Bench(migrated, "gate")
-    ticket = bench.add("ticket REQ-1041.txt", TICKET)
-    # The reader took the ticket for a population. No file passed, so the whole run is
-    # held, and the file responsible is named with its own code and sentence.
+    log = bench.add("sap change log.txt", LOG)
+    # The reader took the change log for a population. No file passed, so the whole run
+    # is held, and the file responsible is named with its own code and sentence.
     bench.read_next(_reading("population"))
     [(first_run, status, _stale, held, _reused, _why)] = bench.runs()
     assert (status, held) == ("HELD", "POPULATION")
@@ -1114,7 +1117,7 @@ def test_a_held_file_is_left_out_and_named_and_an_unsure_kind_is_read(
     assert entry["status"] == "HELD" and entry["stage"] == "GATE"
     assert entry["held"] == {"code": "POPULATION", "reason": POPULATION_PURPOSE}
     assert entry["held_files"] == [
-        {"file_id": ticket, "code": "POPULATION", "reason": POPULATION_PURPOSE}
+        {"file_id": log, "code": "POPULATION", "reason": POPULATION_PURPOSE}
     ]
     assert entry["file_ids"] == [] and entry["attributes"] == []
     assert entry["engine_version"] == 2 and entry["review"] is None
@@ -1126,7 +1129,7 @@ def test_a_held_file_is_left_out_and_named_and_an_unsure_kind_is_read(
     assert again.status_code == 202 and again.json()["run_id"] == str(first_run)
 
     # A person confirms the kind: the hold is cleared and the check is handed to the worker.
-    assert bench.confirm(ticket, "walkthrough").status_code == 200
+    assert bench.confirm(log, "change_history").status_code == 200
     runs = bench.runs()
     assert [(r[1], r[2]) for r in runs] == [("HELD", True), ("PENDING", False)]
     # Why the held run is out of date is said in a sentence.
@@ -1144,19 +1147,19 @@ def test_a_held_file_is_left_out_and_named_and_an_unsure_kind_is_read(
     # A second file arrives before the worker took the run, read by the rules (no model):
     # the reader is not sure of its kind. The queued run takes it in (no second run) and,
     # from engine 2, it is read, not left out.
-    log = bench.add("sap change log.txt", LOG)
+    ticket = bench.add("ticket REQ-1041.txt", TICKET)
     bench.read_next(None)
     runs = bench.runs()
     assert [(r[1], r[2]) for r in runs] == [("HELD", True), ("PENDING", False)]
     entry = bench.entry()
-    assert entry["file_ids"] == [ticket, log] and entry["held_files"] == []
+    assert set(entry["file_ids"]) == {log, ticket} and entry["held_files"] == []
     # A third file is a population: the gate leaves it out of this single-instance item,
     # and names it with the reason.
     listing = bench.add("new users march.csv", LISTING)
     bench.read_next(_reading("population"))
     assert [(r[1], r[2]) for r in bench.runs()] == [("HELD", True), ("PENDING", False)]
     entry = bench.entry()
-    assert entry["file_ids"] == [ticket, log]
+    assert set(entry["file_ids"]) == {log, ticket}
     assert entry["held_files"] == [
         {"file_id": listing, "code": "POPULATION", "reason": POPULATION_PURPOSE}
     ]
@@ -1168,8 +1171,9 @@ def test_a_held_file_is_left_out_and_named_and_an_unsure_kind_is_read(
     # files do not show cannot be told, so nothing is an issue.
     readings = _Readings(_first_met_rest("NOT_MET"), _first_met_rest("NOT_MET"))
     assert bench.check(readings) == ["READY"]
+    # The population is not read. The ticket, whose kind is not sure, is read with the
+    # change log.
     assert LISTING not in readings.requests[0].prompt and TICKET in readings.requests[0].prompt
-    # The file whose kind is not sure is read with the others.
     assert LOG in readings.requests[0].prompt
     assert '"other_files_not_read": true' in readings.requests[0].prompt
     done = bench.entry()
@@ -1195,21 +1199,24 @@ def test_a_held_file_is_left_out_and_named_and_an_unsure_kind_is_read(
     assert bench.assurance()["summary"]["issues"] == 0
     # The file read with an unsure kind is listed for a person to confirm, by name; the
     # one a person confirmed is not.
-    assert [c["file_id"] for c in done["review"]["confirmations"]] == [log]
+    assert [c["file_id"] for c in done["review"]["confirmations"]] == [ticket]
     assert done["review"]["confirmations"][0]["reason"].startswith(
-        "The reader is not sure what kind of evidence sap change log.txt is; it was read as"
+        "The reader is not sure what kind of evidence ticket REQ-1041.txt is; it was read as"
     )
     assert done["review"]["completeness"]["state"] == "INCOMPLETE"
 
     # The second file is a population: confirmed, it stays out, with its own sentence.
-    assert bench.confirm(log, "population").status_code == 200
+    assert bench.confirm(ticket, "population").status_code == 200
     entry = bench.entry()
     assert entry["status"] == "QUEUED"
-    assert entry["file_ids"] == [ticket]
-    assert entry["held_files"] == [
-        {"file_id": log, "code": "POPULATION", "reason": POPULATION_PURPOSE},
-        {"file_id": listing, "code": "POPULATION", "reason": POPULATION_PURPOSE},
-    ]
+    assert entry["file_ids"] == [log]
+    assert sorted(entry["held_files"], key=lambda f: str(f["file_id"])) == sorted(
+        [
+            {"file_id": ticket, "code": "POPULATION", "reason": POPULATION_PURPOSE},
+            {"file_id": listing, "code": "POPULATION", "reason": POPULATION_PURPOSE},
+        ],
+        key=lambda f: str(f["file_id"]),
+    )
     assert bench.runs()[-2][5] in (
         "Which of the files can be checked changed.",
         "A file's kind changed, so it is read differently.",
