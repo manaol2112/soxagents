@@ -140,7 +140,7 @@ def test_owners_are_suggested_from_records_confirmed_in_bulk_and_never_invented(
     outcome = {item["id"]: item for item in result["outcomes"]}
     assert (result["done"], result["refused"]) == (5, 2)
     assert "changed" in outcome[blank["system"]["id"]]["detail"]
-    assert "outside the client's email domains" in outcome[blank["none"]["id"]]["detail"]
+    assert "outside the organization's email domains" in outcome[blank["none"]["id"]]["detail"]
     after = {row["id"]: row for row in _all(owner, team)}
     assert after[blank["owner"]["id"]]["recipient"] == "dana.reyes@client.example"
     assert after[blank["control"]["id"]]["recipient"] == "maria.chen@client.example"

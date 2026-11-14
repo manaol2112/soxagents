@@ -384,14 +384,14 @@ def rules_assessment(
         if item.domain == "ACCESS":
             calls.append(ControlCall(
                 item.control_ref, item.library_key or None, "RECOMMENDED",
-                f"The client decides who has access to {details.name}, whoever hosts it.",
+                f"The organization decides who has access to {details.name}, whoever hosts it.",
                 confidence="MODERATE",
             ))  # fmt: skip
         elif item.library_key in usual:
             calls.append(ControlCall(
                 item.control_ref, item.library_key or None, "POTENTIAL",
                 f"Usual for {details.layer.lower().replace('_', ' ')} systems.",
-                missing="Whether the client or a provider performs it is not established.",
+                missing="Whether the organization or a provider performs it is not established.",
                 confidence="LOW",
             ))  # fmt: skip
         else:

@@ -166,7 +166,7 @@ def test_many_requests_are_assigned_at_once_after_a_preview(migrated: Database) 
     assert _list(owner, team)["kpis"]["needs_assignment"] == len(unassigned)
     outside = _bulk(owner, team, chosen[:1], action="ASSIGN", recipient="x@elsewhere.example")
     assert outside.json()["outcomes"][0]["ok"] is False
-    assert "outside the client's email domains" in outside.json()["outcomes"][0]["detail"]
+    assert "outside the organization's email domains" in outside.json()["outcomes"][0]["detail"]
     applied = _bulk(owner, team, chosen, action="ASSIGN", recipient="ops@client.example")
     assert applied.status_code == 200, applied.text
     assert applied.json()["done"] == len(chosen) and applied.json()["refused"] == 0

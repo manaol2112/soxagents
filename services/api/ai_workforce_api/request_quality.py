@@ -59,7 +59,7 @@ def wording_problems(text: str) -> list[str]:
     if internal is not None:
         found.append(
             f'Leave out the audit team\'s own terms ("{internal.group(0).strip()}"): the '
-            "client reads this."
+            "recipient reads this."
         )
     return found
 
@@ -226,7 +226,9 @@ def quality_from(
             key="wording",
             label="Clear and specific",
             ok=not problems,
-            detail=problems[0] if problems else "Asks for specific items, in the client's terms.",
+            detail=problems[0]
+            if problems
+            else "Asks for specific items, in the organization's terms.",
         )
     )
     if control_id is None:

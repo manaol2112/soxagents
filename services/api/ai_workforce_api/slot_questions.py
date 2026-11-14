@@ -48,12 +48,12 @@ QUESTIONS: dict[str, str] = {
     "hr-system": "Which system does HR record leavers in?",
     "infra-admin-role": "Who is allowed direct access to the database and operating system?",
     "infra-reviewer": "Who reviews access to the database and operating system?",
-    "privileged-definition": "Which roles or accounts does the client treat as privileged?",
+    "privileged-definition": "Which roles or accounts does the organization treat as privileged?",
     "privileged-reviewer": "Who approves privileged access?",
     "removal-days": "Within how many days of leaving must access be removed?",
     "review-deadline": "By when must each periodic access review be completed?",
     "review-owner": "Who performs the periodic review of user access?",
-    "security-policy": "Which policy sets the client's information security requirements?",
+    "security-policy": "Which policy sets the organization's information security requirements?",
     "sod-reviewer": "Who reviews segregation-of-duties conflicts and approves rule changes?",
     "sod-ruleset": "Which segregation-of-duties ruleset is used?",
     "sod-tool": "Which tool checks access for segregation-of-duties conflicts?",
@@ -92,7 +92,7 @@ QUESTIONS: dict[str, str] = {
     "scan-tool": "Which tool scans for vulnerabilities?",
     "schedule-approver": "Who approves changes to the job schedule?",
     "scheduler": "Which tool schedules and runs the batch jobs?",
-    "service-orgs": "Which service organizations does the client rely on?",
+    "service-orgs": "Which service organizations does the organization rely on?",
     "soc-reviewer": "Who reviews the service organizations' SOC reports?",
     "vuln-owner": "Who reviews vulnerability scan findings?",
     "vuln-sla": "Within how many days must critical and high vulnerabilities be fixed?",
@@ -318,16 +318,20 @@ def hint_for(slot: Slot) -> str:
             "process narrative, or the walkthrough."
         )
     if slot.kind == "SYSTEM":
-        return "Use the product name the client uses, as in its system inventory."
+        return "Use the product name the organization uses, as in its system inventory."
     if slot.kind in ("DAYS", "PERIOD"):
         return (
-            "As the client's policy or procedure states it. If no document sets it, record "
+            "As the organization's policy or procedure states it. If no document sets it, "
+            "record "
             "what the control owner says and note that it is not documented."
         )
     if slot.kind in ("AMOUNT", "PERCENT"):
-        return "As the client's procedure sets it, in the reporting currency where it is an amount."
+        return (
+            "As the organization's procedure sets it, in the reporting currency where it is "
+            "an amount."
+        )
     if slot.kind == "REPORT":
         return "The report name or transaction code as it is run in the system."
     if asks_for_document(slot):
-        return "The document's title and version, as the client names it."
-    return "As the client's documentation or the control owner describes it."
+        return "The document's title and version, as the organization names it."
+    return "As the organization's documentation or the control owner describes it."

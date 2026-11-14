@@ -1250,7 +1250,7 @@ def _store(
             summary,
             serial_steps,
             serial_sections,
-            "Drafted and reviewed from the client's answers.",
+            "Drafted and reviewed from the organization's answers.",
             control_id,
         ),
     )

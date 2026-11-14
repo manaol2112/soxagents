@@ -244,7 +244,7 @@ def _about(extract: Extract, generated_by: str, generated_at: datetime) -> list[
     filters = result.get("filters") or {}
     lines = [
         ("Engagement", str(result["engagement"])),
-        ("Client", str(result["client"])),
+        ("Organization", str(result["client"])),
         ("Report", TITLES[extract.dataset]),
         (
             "Filters",

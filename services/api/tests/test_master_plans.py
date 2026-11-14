@@ -958,7 +958,7 @@ def test_each_blocker_says_where_it_is_resolved() -> None:
     # A process question does not hold approval, and is resolved on the process.
     assert ("Who reviews the listing?", False, "PROCESS") in found
     assert (
-        "The client's value for the role that approves privileged access is not recorded.",
+        "The organization's value for the role that approves privileged access is not recorded.",
         False,
         "VALUES",
     ) in found

@@ -386,7 +386,7 @@ def _design_workpaper(ctx: Context, ref: str, control_id: UUID) -> None:
     version = _version(ctx, "workpapers", workpaper_id)
     _prepare(
         ctx.connection, ctx.principal("morgan"), ctx.organization_id, ctx.project_id,
-        workpaper_id, PrepareBody(version=version, note="Design evaluated from the control's description and the client's configuration."),
+        workpaper_id, PrepareBody(version=version, note="Design evaluated from the control's description and the organization's configuration."),
     )  # fmt: skip
 
 

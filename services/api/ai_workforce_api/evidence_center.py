@@ -156,7 +156,7 @@ BUILT_IN: dict[str, str] = {
     "attention": "Needs my attention",
     "unassigned": "Unassigned",
     "approval": "Awaiting approval",
-    "client": "Awaiting client",
+    "client": "Awaiting the organization",
     "validation": "Received, needs validation",
     "overdue": "Overdue",
     "completed": "Completed",

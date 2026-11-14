@@ -68,7 +68,7 @@ def test_the_agent_drafts_challenges_from_the_definition_only(migrated: Database
         "Incomplete access listings",
         "Approvals outside the tool",
     ]
-    assert "nothing here is known about the client" in result.note
+    assert "nothing here is known about the organization" in result.note
     # One model call, recorded as every call is; the challenges themselves are not saved.
     assert calls == (1,) and stored == (0,)
     prompt = provider.requests[0].prompt

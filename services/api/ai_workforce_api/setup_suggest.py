@@ -108,7 +108,7 @@ def suggest_period_end(facts: SetupFacts) -> tuple[date | None, str]:
         return None, "Name the fiscal year in the engagement's name, or set the date here."
     return date(year, 12, 31), (
         f"The engagement is for fiscal year {year}; a calendar year end is assumed. "
-        "Change it if the client's fiscal year ends on another date."
+        "Change it if the organization's fiscal year ends on another date."
     )
 
 
@@ -130,7 +130,7 @@ def suggest_cadence(facts: SetupFacts) -> tuple[tuple[int, int, int], str]:
 
 def suggest_scope(facts: SetupFacts) -> tuple[str, str]:
     """A scope narrative from the records, in plain audit language."""
-    client = facts.client_name or "the client"
+    client = facts.client_name or "the organization"
     kind = facts.engagement_type
     year = fiscal_year_of(facts.project_name, facts.today)
     period = (
@@ -179,7 +179,7 @@ def suggest_scope(facts: SetupFacts) -> tuple[str, str]:
         )
     text = " ".join(parts)[:MAX_SCOPE]
     reason = (
-        "Written from the engagement's name, client, kind, controls, and systems. "
+        "Written from the engagement's name, organization, kind, controls, and systems. "
         "Edit it to match the engagement letter."
     )
     return text, reason

@@ -1073,7 +1073,7 @@ def _basis_words(basis: str) -> str:
     return {
         "STANDARD": "the standard",
         "CUSTOM": "a customized standard",
-        "CLIENT": "the client's own procedures",
+        "CLIENT": "the organization's own procedures",
     }.get(basis, basis.lower())
 
 

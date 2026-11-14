@@ -302,7 +302,8 @@ def check_answer(raw: dict[str, Any], facts: Facts) -> SuggestionBody:
         basis["owner"] = "RECORDS" if answer.owner_basis == "RECORDS" else "PRODUCT"
     note = (
         "" if answer.recognized
-        else "The agent does not recognise this system. Describe it from the client's records."
+        else "The agent does not recognise this system. Describe it from the organization's "
+        "records."
     )  # fmt: skip
     return SuggestionBody(layer=layer, basis=basis, source="MODEL", note=note, **values)
 

@@ -176,7 +176,7 @@ def _by_rules(asked: _Asked, text: str) -> InterpretResult:
             intent="EXPLAIN",
             value="",
             reply=reason
-            or "It records how the client runs the control, so the test and "
+            or "It records how the organization runs the control, so the test and "
             "the evidence requested match it.",
             source="RULES",
         )
@@ -190,7 +190,7 @@ def _checked(result: InterpretResult, asked: _Asked) -> InterpretResult:
     value = clean_line(result.value, 300).strip()
     if value == "":
         return InterpretResult(
-            intent="UNCLEAR", value="", reply="What is the client's answer to this point?",
+            intent="UNCLEAR", value="", reply="What is the organization's answer to this point?",
             source=result.source,
         )  # fmt: skip
     if contains_secret({"value": value}):
@@ -581,7 +581,7 @@ def _rcm_needs(frequency: str, nature: str, owner: str) -> list[NeedBody]:
         ),
         NeedBody(
             key="rcm-owner", kind="RCM", label="Control owner",
-            question="Who owns the control at the client?",
+            question="Who owns the control at the organization?",
             value=owner,
             options=[],
             why="Evidence requests go to the owner; without one they go to the PBC "

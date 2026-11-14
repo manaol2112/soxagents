@@ -833,7 +833,7 @@ _bank(
         "wt-ac03-listing-check", "POPULATION", 20,
         "Before the review starts, does anyone check that the listing is complete, for example "
         "by agreeing its count to the system?",
-        "The listing's completeness is an attribute, and a check the client performs is "
+        "The listing's completeness is an attribute, and a check the organization performs is "
         "evidence the tester can inspect and reperform.",
         ("ac03-listing", "EVIDENCE"),
         yes="Before the review starts, the listing is checked for completeness against the "
@@ -888,7 +888,8 @@ _bank(
         "wt-ac04-listing-check", "POPULATION", 20,
         "Is the privileged listing checked against each layer's own list of administrators "
         "before it is reviewed?",
-        "The listing must agree to the system's privileged users, and a client check is "
+        "The listing must agree to the system's privileged users, and the organization's own "
+        "check is "
         "evidence the tester can reperform.",
         ("ac04-complete", "EVIDENCE"),
         yes="Before it is reviewed, the privileged listing is checked against each layer's own "
@@ -1626,7 +1627,8 @@ _bank(
         ("POPULATION", "SCOPE"),
         ("A periodic comparison with an approved baseline", "The database's own change log",
          "A periodic review of the settings by someone independent", "Nothing"),
-        "To find changes to the settings that are not logged, the client relies on {answer}.",
+        "To find changes to the settings that are not logged, the organization relies on "
+        "{answer}.",
         when=("wt-cm04-log-enabled", "No"),
     ),
 )  # fmt: skip
@@ -1681,7 +1683,8 @@ _bank(
         ("A periodic review of database activity by someone independent",
          "A reconciliation that would show an unexpected change",
          "Database activity monitoring alerts", "Nothing"),
-        "Without that log, to find a data change that was not requested, the client relies "
+        "Without that log, to find a data change that was not requested, the organization "
+        "relies "
         "on {answer}.",
         when=("wt-cm05-logging", "No"),
     ),

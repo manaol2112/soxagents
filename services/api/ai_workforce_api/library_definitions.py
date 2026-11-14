@@ -97,7 +97,7 @@ def _control(cursor: psycopg.Cursor[Any], control_id: UUID) -> tuple[Any, ...] |
 _CONFIGURATION_DESIGN = (
     "Authentication settings are the control. They are tested as a configuration: "
     "each configured value against the security policy, and the change history for the "
-    "period. An annual review of the settings, if the client also performs one, is a "
+    "period. An annual review of the settings, if the organization also performs one, is a "
     "separate control."
 )
 
@@ -201,7 +201,7 @@ def link_definitions(cursor: psycopg.Cursor[Any], control_id: UUID, actor: UUID 
                 "updated_at = clock_timestamp() WHERE id = %s",
                 (
                     "Repeats the library standard's attribute, which is kept, worded with the "
-                    "client's values.",
+                    "organization's values.",
                     actor, row_id,
                 ),
             )  # fmt: skip
@@ -242,7 +242,7 @@ def link_definitions(cursor: psycopg.Cursor[Any], control_id: UUID, actor: UUID 
             (
                 control[0], control[1], control_id, position, item.text,
                 "DOCUMENTED" if "DESIGN" in item.basis else "INFERRED",
-                f"From the library standard; it depends on the client: {item.question}"[:500],
+                f"From the library standard; it depends on the organization: {item.question}"[:500],
                 actor, item.key, control_id, item.text,
             ),
         ).rowcount  # fmt: skip
@@ -272,7 +272,8 @@ def _confirm_design(
         [Issue(
             origin="ATTRIBUTES", kind="AMBIGUOUS", topic="Control design to confirm",
             detail=definition.design_confirmation,
-            why="The library's definition rests on this design. If the client's control works "
+            why="The library's definition rests on this design. If the organization's control "
+            "works "
             "differently, its attributes test the wrong thing.",
             resolve="Confirm the design with the control owner, adjust the attributes if "
             "needed, and resolve this with a note of what was confirmed.",
@@ -389,7 +390,8 @@ def library_update(connection: psycopg.Connection[Any], control_id: UUID) -> Upd
         items=items,
         note="Attributes the team added stay as they are. Open and signed-off test sheets "
         "keep the attributes they were created with; new sheets use the adopted ones. The "
-        "description follows the version 3 statement, with the client's values once filled.",
+        "description follows the version 3 statement, with the organization's values once "
+        "filled.",
         fields=_field_changes(str(row[0]), row[2:]),
         splits=[
             SplitControl(
@@ -558,7 +560,7 @@ def adopt(
                     organization_id, project_id, control_id,
                     position if position is not None else end, item.text, status,
                     (
-                        f"From the library standard; it depends on the client: {item.reason}"
+                        f"From the library standard; it depends on the organization: {item.reason}"
                         if dependent
                         else "Library v3."
                     )[:500],

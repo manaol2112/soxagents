@@ -690,7 +690,7 @@ def _import(
                     organization_id,
                     project_id,
                     name,
-                    "Identified from the client RCM." if confirmed is not None else "",
+                    "Identified from the organization's RCM." if confirmed is not None else "",
                     layers.get(name.lower(), "APPLICATION"),
                 ),
             ).fetchone()

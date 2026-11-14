@@ -1171,7 +1171,7 @@ def contacts(connection: psycopg.Connection[Any], project_id: UUID) -> list[Cont
         "SELECT name, email, role FROM engagement_contacts WHERE project_id = %s ORDER BY name",
         (project_id,),
     ).fetchall():
-        add(str(row[0]), str(row[1]), str(row[2]) or "Client contact", "CONTACT")
+        add(str(row[0]), str(row[1]), str(row[2]) or "Organization contact", "CONTACT")
     for row in connection.execute(
         """
         SELECT DISTINCT lower(recipient) FROM pbc_requests
@@ -1249,7 +1249,7 @@ def address_problem(settings: Settings, address: str, domains: list[str]) -> str
     if not recipient_allowed(settings, clean):
         return f"{clean} cannot receive evidence requests."
     if domains and clean.rsplit("@", 1)[1] not in domains:
-        return f"{clean} is outside the client's email domains ({', '.join(domains)})."
+        return f"{clean} is outside the organization's email domains ({', '.join(domains)})."
     return None
 
 
@@ -1382,7 +1382,7 @@ def request_checks(
     if placeholder:
         instructions = "The wording is still being drafted."
     elif len(text) < 40:
-        instructions = "Describe what the client must provide."
+        instructions = "Describe what the recipient must provide."
     elif contains_secret({"wording": text}):
         instructions = "Remove the credential from the wording."
     else:
@@ -1555,7 +1555,7 @@ def problem_code(key: str, detail: str) -> str:
         if detail.endswith("cannot receive evidence requests."):
             # The deployment's outbound allowlist: a system setting, not the engagement's.
             return "RECIPIENT_NOT_ALLOWED"
-        if "is outside the client's email domains" in detail:
+        if "is outside the organization's email domains" in detail:
             return "RECIPIENT_OUTSIDE_DOMAINS"
         return "RECIPIENT_INVALID"
     if key == "due":
