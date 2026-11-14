@@ -138,6 +138,9 @@ export type AssuredAttribute = {
    * page does not know, or one its own result contradicts): shown as needing the
    * person's judgment, without the claim that two readings disagree. */
   understood: boolean;
+  /** Unsettled only because a file was not read (or was read in part): both readings stand
+   * the same, and it waits on the file, not on a choice between readings. */
+  pending: "" | "FILE_NOT_READ" | "READ_IN_PART";
   result: Result | null;
   /** What a supported attribute's evidence shows; null where it is not supported or
    * the server did not say. */
@@ -380,6 +383,11 @@ function parseAttribute(
     expected: value.expected === true,
     verdict,
     understood: said !== null && stands,
+    pending:
+      verdict === "UNSETTLED" &&
+      (value.pending === "FILE_NOT_READ" || value.pending === "READ_IN_PART")
+        ? value.pending
+        : "",
     result: verdict === "UNSETTLED" ? null : result,
     shows:
       (verdict === "SUPPORTED" || verdict === "PARTLY_SUPPORTED") &&
@@ -680,6 +688,7 @@ export type AttributeState =
   | "ISSUE"
   | "DECIDED"
   | "JUDGMENT"
+  | "WAITING"
   | "NOT_ADDRESSED";
 
 export type Tone = "success" | "danger" | "warning" | "neutral";
@@ -698,6 +707,9 @@ export const STATE_WORDS: Record<
   ISSUE: { label: "Issue", icon: "risk", tone: "danger" },
   DECIDED: { label: "Issue decided", icon: "check", tone: "neutral" },
   JUDGMENT: { label: "Your judgment needed", icon: "help", tone: "warning" },
+  // Not concluded only because a file of the request has not been read (14 November 2026):
+  // the readings agree, so nothing is asked of the person's judgment; the file is.
+  WAITING: { label: "Waiting on a file", icon: "clock", tone: "warning" },
   NOT_ADDRESSED: { label: "Not addressed", icon: "minus", tone: "neutral" },
 };
 
@@ -778,7 +790,7 @@ export const RESULT_UNREAD =
 
 function stateOf(item: AssuredAttribute): AttributeState {
   if (item.verdict === "UNSETTLED") {
-    return "JUDGMENT";
+    return item.pending === "FILE_NOT_READ" ? "WAITING" : "JUDGMENT";
   }
   if (item.verdict === "PARTLY_SUPPORTED") {
     return "PARTLY";
@@ -920,18 +932,24 @@ function attributeLine(
       };
     }),
     absent: item.absent,
+    // The server's own sentence heads the row (it says whether the readings disagree,
+    // neither could tell, or a reading did not finish), so it is not said again here: only
+    // where there is none, or the result could not be read as sent.
     judgment:
       state !== "JUDGMENT"
         ? null
-        : item.understood
-          ? READINGS_DISAGREE
-          : RESULT_UNREAD,
+        : !item.understood
+          ? RESULT_UNREAD
+          : item.summary === ""
+            ? READINGS_DISAGREE
+            : null,
     readings: item.views.map((view) => ({
       who: ROLE_WORDS[view.role],
       result: resultWords(view.result),
       reason: view.reason,
     })),
     findingId: item.findingId,
+    // A row that waits on a file says so on its line; it opens on request.
     open: state === "ISSUE" || state === "JUDGMENT",
   };
 }
@@ -1203,10 +1221,11 @@ export function requestCheck(
   const rank: Record<AttributeState, number> = {
     ISSUE: 0,
     JUDGMENT: 1,
-    SUPPORTED: 2,
-    PARTLY: 3,
-    DECIDED: 4,
-    NOT_ADDRESSED: 5,
+    WAITING: 2,
+    SUPPORTED: 3,
+    PARTLY: 4,
+    DECIDED: 5,
+    NOT_ADDRESSED: 6,
   };
   const place = (line: AttributeLine) => {
     const at = attributes.findIndex((each) => each.id === line.attributeId);
@@ -1272,6 +1291,7 @@ export type StateGroupKey =
   | "PARTLY"
   | "ISSUE"
   | "JUDGMENT"
+  | "WAITING"
   | "DECIDED";
 
 export type StateGroup = {
@@ -1293,6 +1313,7 @@ const GROUP_WORDS: Record<
   PARTLY: { words: "shown in part", state: "PARTLY" },
   ISSUE: { words: "issue", state: "ISSUE" },
   JUDGMENT: { words: "your judgment needed", state: "JUDGMENT" },
+  WAITING: { words: "waiting on a file", state: "WAITING" },
   DECIDED: { words: "issue decided", state: "DECIDED" },
 };
 
@@ -1580,6 +1601,7 @@ export function assuranceRow(input: {
     "PARTLY",
     "ISSUE",
     "JUDGMENT",
+    "WAITING",
     "DECIDED",
   ];
   const states: StateGroup[] = keys
@@ -1640,6 +1662,7 @@ export function assuranceRow(input: {
       ].sort((a, b) => at(a) - at(b) || a.localeCompare(b)),
       issues: lettersOf("ISSUE"),
       judged: lettersOf("JUDGMENT"),
+      waiting: lettersOf("WAITING"),
       decided: lettersOf("DECIDED"),
       leftOut: left,
       span: input.span,
@@ -1666,6 +1689,8 @@ export function acceptNote(facts: {
   /** Open issues. */
   issues: readonly string[];
   judged: readonly string[];
+  /** Not concluded only because a file of the request has not been read. */
+  waiting?: readonly string[];
   /** Issues a person has decided. */
   decided: readonly string[];
   /** Files of the request the readings did not include. */
@@ -1679,7 +1704,8 @@ export function acceptNote(facts: {
   if (facts.standing !== "REVIEWED") {
     return "This evidence has not been checked against the attributes, so accepting marks no attribute as evidenced.";
   }
-  const open = facts.issues.length + facts.judged.length > 0;
+  const waiting = facts.waiting ?? [];
+  const open = facts.issues.length + facts.judged.length + waiting.length > 0;
   const many = (letters: readonly string[]) => letters.length !== 1;
   return [
     facts.implemented.length > 0
@@ -1696,7 +1722,10 @@ export function acceptNote(facts: {
       ? `Both readings found an issue on ${span(facts.issues)}.`
       : "",
     facts.judged.length > 0
-      ? `The readings do not agree on ${span(facts.judged)}: your judgment is needed.`
+      ? `Your judgment is needed on ${span(facts.judged)}.`
+      : "",
+    waiting.length > 0
+      ? `${span(waiting)} ${many(waiting) ? "are" : "is"} not concluded: a file of this request has not been read yet.`
       : "",
     open ? "You can still accept; accepting does not settle these." : "",
     facts.decided.length > 0

@@ -340,9 +340,24 @@ def test_contradicted_needs_two_verified_passages() -> None:
 def test_an_absence_is_not_told_from_files_read_in_part_or_with_a_file_left_out() -> None:
     whole = _chain()
     assert _result(_says(A=_not_met()), whole).result == "NOT_MET"
+    # Rewritten 14 November 2026 (product owner: "What do you mean a file on this request
+    # has not been checked? The explanation should be very clear."). Old expectation: the
+    # reason was the fixed READ_IN_PART / FILE_NOT_CHECKED sentence. New: it names the file
+    # (the fixed sentence only where no name is known) and says what follows from it.
+    named = _chain(left_out=True)
+    named = ChainInput(**{**named.__dict__, "left_out_names": ("sap change log.txt",)})
     for chain, reason in (
-        (_chain(files=(_file(truncated=True),)), READ_IN_PART),
+        (
+            _chain(files=(_file(truncated=True),)),
+            "ticket.txt is long and was read only in part, so nothing can be concluded as "
+            "missing: it may be in the part not read.",
+        ),
         (_chain(left_out=True), FILE_NOT_CHECKED),
+        (
+            named,
+            "sap change log.txt has not been read yet, so nothing can be concluded as "
+            "missing: it may be in that file.",
+        ),
     ):
         for claimed in (_not_met(), _element("NOT_ADDRESSED")):
             found = _result(_says(A=claimed), chain)
@@ -356,9 +371,23 @@ def test_an_absence_is_not_told_from_files_read_in_part_or_with_a_file_left_out(
         # Rule 5 is for the attributes the request asks for (A); B is not linked, so its
         # agreed NOT_MET is shown for reference, never raised (review items 2 and 10).
         both = check_opinion(_says(A=_not_met(), B=_not_met()), chain)
-        assert [o.verdict for o in compare(both, both, chain)] == ["UNSETTLED", "NOT_ADDRESSED"]
+        compared = compare(both, both, chain)
+        assert [o.verdict for o in compared] == ["UNSETTLED", "NOT_ADDRESSED"]
+        # The readings agree, and it waits on the file: said so, never "do not agree".
+        assert compared[0].pending == chain.pending != ""
+        assert compared[0].summary != UNSETTLED_TEXT
+        assert compared[0].summary.startswith("Not concluded")
+        assert compared[1].pending == ""
         assert _result(_says(B=_element("NOT_ADDRESSED")), chain, "B").result == "NOT_ADDRESSED"
-    assert "has not been checked" in FILE_NOT_CHECKED and "read in part" in READ_IN_PART
+    waiting = compare(
+        check_opinion(_says(A=_not_met()), named), check_opinion(_says(A=_not_met()), named), named
+    )[0]
+    assert (waiting.pending, waiting.summary) == (
+        "FILE_NOT_READ",
+        "Not concluded yet. sap change log.txt has not been read, and what the other files "
+        "do not show may be in it. The check runs again once it is read.",
+    )
+    assert "has not been read yet" in FILE_NOT_CHECKED and "read only in part" in READ_IN_PART
 
 
 def test_an_attributes_result_is_the_weakest_of_its_elements() -> None:
@@ -484,7 +513,17 @@ def test_every_row_of_the_comparison_table(first: str, second: str) -> None:
             assert [(v.role, v.result) for v in outcome.views] == [
                 ("ASSESSOR", first), ("REVIEWER", second),
             ]  # fmt: skip
-            assert outcome.summary == (UNLINKED_TEXT if reference else UNSETTLED_TEXT)
+            # Two readings that both cannot tell agree: said so (14 November 2026), not
+            # "the two readings do not agree" as before.
+            agreed_open = first == second == "CANNOT_TELL"
+            assert outcome.summary == (
+                UNLINKED_TEXT
+                if reference
+                else chain_module.NEITHER_COULD_TELL
+                if agreed_open
+                else UNSETTLED_TEXT
+            )
+            assert outcome.pending == ""
             assert outcome.passages == () and outcome.absent == ()
         elif split:
             assert [(v.role, v.result) for v in outcome.views] == [
@@ -1095,7 +1134,16 @@ def test_a_held_file_is_left_out_and_named_and_a_confirmed_kind_starts_the_check
         if code == "A":
             continue
         assert attribute["verdict"] == "UNSETTLED" and attribute["finding_id"] is None
-        assert all("has not been checked" in v["reason"] for v in attribute["views"])
+        # Rewritten 14 November 2026: the reason names the file left out (was "A file on
+        # this request has not been checked ...").
+        assert all(
+            v["reason"].startswith("sap change log.txt has not been read yet")
+            for v in attribute["views"]
+        )
+        assert attribute["pending"] == "FILE_NOT_READ"
+        assert attribute["summary"].startswith(
+            "Not concluded yet. sap change log.txt has not been read"
+        )
     assert bench.findings() == []
     assert bench.assurance()["summary"]["issues"] == 0
 

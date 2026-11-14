@@ -182,17 +182,96 @@ RETRY_TOKENS, RETRY_SECONDS = 16000, 300
 CUT_OFF_TWICE = "Its answer was cut off at the answer limit, also when asked again with more room."
 UNSETTLED_TEXT = "The two readings do not agree. Your judgment is needed."
 UNCHECKED_EXCEPTION = (
-    "An exception is shown by the evidence, but a file on this request has not been "
-    "checked. Your judgment is needed."
+    "The evidence shows an exception, but a file on this request has not been read yet "
+    "and may answer it. Your judgment is needed."
 )
 UNLINKED_TEXT = (
     "This request does not ask for this attribute; what the readings found is shown for reference."
 )
-READ_IN_PART = "A file was read in part, so what the files do not show cannot be told from them."
-FILE_NOT_CHECKED = (
-    "A file on this request has not been checked, so what the files do not show cannot "
-    "be told from them."
+# Why nothing can be concluded as missing (rule 5), said so a person knows which file and
+# what to do (product owner, 14 November 2026: "What do you mean a file on this request has
+# not been checked? The explanation should be very clear."). These two are the sentences
+# when the file's name is not known; _not_read and _in_part name the files.
+READ_IN_PART = (
+    "A file is long and was read only in part, so nothing can be concluded as missing: "
+    "it may be in the part not read."
 )
+FILE_NOT_CHECKED = (
+    "A file on this request has not been read yet, so nothing can be concluded as missing: "
+    "it may be in that file."
+)
+# The summaries of an attribute both readings leave open for that reason, and of one
+# neither could tell or one reading did not finish: never "the readings do not agree" where
+# they agree.
+NEITHER_COULD_TELL = "Neither reading could tell from these files. Your judgment is needed."
+READING_UNFINISHED = (
+    "A reading did not finish, so this is not concluded. Run the check again, or judge it yourself."
+)
+Pending = Literal["FILE_NOT_READ", "READ_IN_PART", ""]
+
+
+def _named(names: tuple[str, ...]) -> str:
+    """Up to three file names, then how many more."""
+    shown = ", ".join(names[:3])
+    return shown if len(names) <= 3 else f"{shown} and {len(names) - 3} more"
+
+
+def _not_read(names: tuple[str, ...]) -> str:
+    if not names:
+        return FILE_NOT_CHECKED
+    if len(names) == 1:
+        return (
+            f"{names[0]} has not been read yet, so nothing can be concluded as missing: "
+            "it may be in that file."
+        )
+    return (
+        f"{len(names)} files have not been read yet ({_named(names)}), so nothing can be "
+        "concluded as missing: it may be in those files."
+    )
+
+
+def _in_part(names: tuple[str, ...]) -> str:
+    if not names:
+        return READ_IN_PART
+    if len(names) == 1:
+        return (
+            f"{names[0]} is long and was read only in part, so nothing can be concluded as "
+            "missing: it may be in the part not read."
+        )
+    return (
+        f"{len(names)} files are long and were read only in part ({_named(names)}), so "
+        "nothing can be concluded as missing: it may be in the parts not read."
+    )
+
+
+def _waiting_summary(names: tuple[str, ...]) -> str:
+    """An attribute left open only because a file was not read: what waits, and on what."""
+    if not names:
+        return (
+            "Not concluded yet. A file on this request has not been read, and what the "
+            "other files do not show may be in it. The check runs again once it is read."
+        )
+    if len(names) == 1:
+        return (
+            f"Not concluded yet. {names[0]} has not been read, and what the other files do "
+            "not show may be in it. The check runs again once it is read."
+        )
+    return (
+        f"Not concluded yet. {len(names)} files have not been read ({_named(names)}), and "
+        "what the other files do not show may be in them. The check runs again once they "
+        "are read."
+    )
+
+
+def _part_summary(names: tuple[str, ...]) -> str:
+    which = "A file" if not names else names[0] if len(names) == 1 else _named(names)
+    was = "were" if len(names) > 1 else "was"
+    return (
+        f"Not concluded. {which} {was} read only in part, and what is not shown may be in "
+        "the part not read. Your judgment is needed."
+    )
+
+
 SEVERAL_PLACES = "found in several places"
 # Lines that state that something was done or is in order, without being the record of
 # it: a remark, a note, a summary, or "all ... were obtained". An ASSERTION whatever the
@@ -317,17 +396,28 @@ class ChainInput:
     files_left_out: bool = False
     # The requirement's categories, for each file's own lens (file_lens).
     categories: tuple[str, ...] = ()
+    # The names of the files left out, for the sentences that say so; () when not known.
+    left_out_names: tuple[str, ...] = ()
 
     @property
     def read_in_part(self) -> bool:
         return any(file.truncated for file in self.files)
 
     @property
-    def absence_unknown(self) -> str:
-        """Why an absence cannot be told from these files; empty when it can."""
+    def pending(self) -> Pending:
+        """Why an absence cannot be told from these files, as a code; "" when it can."""
         if self.files_left_out:
-            return FILE_NOT_CHECKED
-        return READ_IN_PART if self.read_in_part else ""
+            return "FILE_NOT_READ"
+        return "READ_IN_PART" if self.read_in_part else ""
+
+    @property
+    def absence_unknown(self) -> str:
+        """Why an absence cannot be told from these files, naming them; empty when it can."""
+        if self.files_left_out:
+            return _not_read(self.left_out_names)
+        if self.read_in_part:
+            return _in_part(tuple(file.name for file in self.files if file.truncated))
+        return ""
 
 
 @dataclass(frozen=True)
@@ -407,6 +497,8 @@ class AttributeView:
     result: Result
     reason: str
     elements: tuple[ElementView, ...]
+    # CANNOT_TELL only because an absence cannot be told from these files (rule 5).
+    absence_unknown: bool = False
 
     @property
     def passages(self) -> tuple[Passage, ...]:
@@ -509,6 +601,9 @@ class Outcome:
     # For SUPPORTED and PARTLY_SUPPORTED only: what the support shows for D&I.
     shows: Shows | None = None
     elements: tuple[ElementOutcome, ...] = ()
+    # UNSETTLED only because a file was not read, or was read in part: both readings stand
+    # the same, and it waits on the file, not on a person's choice between readings.
+    pending: Pending = ""
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -518,6 +613,7 @@ class Outcome:
             "verdict": self.verdict,
             "result": self.result,
             "summary": self.summary,
+            "pending": self.pending,
             "shows": self.shows,
             "passages": [passage.as_json() for passage in self.passages],
             "absent": list(self.absent),
@@ -1282,6 +1378,11 @@ def check_opinion(output: dict[str, Any], chain: ChainInput) -> Opinion:
                 result=result,
                 reason=_joined(why, "" if reason == why else reason),
                 elements=tuple(elements),
+                absence_unknown=(
+                    result == "CANNOT_TELL"
+                    and chain.absence_unknown != ""
+                    and why.startswith(chain.absence_unknown)
+                ),
             )
         )
     return Opinion(views=tuple(views), dropped=dropped, set_aside=set_aside)
@@ -1548,6 +1649,19 @@ def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome
                     f"The evidence does not bear on attribute {attribute.code}, and its "
                     "request did not say it would."
                 )
+        pending: Pending = ""
+        if verdict == "UNSETTLED" and not unchecked and one.result == two.result == "CANNOT_TELL":
+            # The readings agree: neither can tell. Where that is only because a file was
+            # not read (or read in part), it waits on the file, and says which.
+            if one.absence_unknown and two.absence_unknown:
+                pending = chain.pending
+                summary = (
+                    _waiting_summary(chain.left_out_names)
+                    if pending == "FILE_NOT_READ"
+                    else _part_summary(tuple(file.name for file in chain.files if file.truncated))
+                )
+            else:
+                summary = NEITHER_COULD_TELL
         views: tuple[View, ...] = ()
         if unchecked:
             views, passages, absent = unchecked, (), ()
@@ -1578,6 +1692,7 @@ def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome
                 summary=summary,
                 shows=shows,
                 elements=_agreed_elements(one, two, deviations),
+                pending=pending,
             )
         )
     return tuple(outcomes)
@@ -1615,7 +1730,7 @@ def _unsettled(chain: ChainInput, failed: Role, reason: str, first: Opinion | No
                 passages=(),
                 absent=(),
                 views=views,
-                summary=UNSETTLED_TEXT,
+                summary=READING_UNFINISHED,
                 elements=tuple(
                     ElementOutcome(key, text, None, (), ()) for key, text in elements_of(attribute)
                 ),
@@ -3314,6 +3429,11 @@ def _assess(
             for file in included
         ),  # fmt: skip
         files_left_out=len(included) < len(request.files),
+        left_out_names=tuple(
+            file.file_name
+            for file in request.files
+            if file.file_id not in {each.file_id for each in included}
+        ),
     )
     from ai_workforce_api.controls import BUSINESS_TESTER, DOMAIN_AGENTS
 
@@ -3587,6 +3707,9 @@ class AttributeBody(BaseModel):
     verdict: Verdict
     result: Result | None
     summary: str
+    # UNSETTLED only because a file was not read ("FILE_NOT_READ") or was read in part
+    # ("READ_IN_PART"): both readings stand the same, and it waits on the file.
+    pending: Pending = ""
     # SUPPORTED and PARTLY_SUPPORTED only: DESIGN (a policy or procedure requires it) or
     # IMPLEMENTATION (the records of an instance show it); null otherwise.
     shows: Shows | None = None
@@ -3782,6 +3905,13 @@ def read_assurance(
                         verdict=item["verdict"],
                         result=item.get("result"),
                         summary=str(item.get("summary") or ""),
+                        pending=(
+                            "FILE_NOT_READ"
+                            if item.get("pending") == "FILE_NOT_READ"
+                            else "READ_IN_PART"
+                            if item.get("pending") == "READ_IN_PART"
+                            else ""
+                        ),  # fmt: skip
                         passages=[
                             PassageBody(
                                 quote=str(p.get("quote") or ""),

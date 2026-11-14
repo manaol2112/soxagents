@@ -2218,8 +2218,16 @@ function labelOf(state: AttrState, item: AssuredAttribute | null): string {
   if (state === "SUPPORTED" && item?.shows === "IMPLEMENTATION") {
     return "Supported (implementation)";
   }
+  // Not concluded only because a file has not been read: the file is waited on, not the
+  // person's judgment (14 November 2026).
+  if (state === "JUDGMENT" && item?.pending === "FILE_NOT_READ") {
+    return WAITING_LABEL;
+  }
   return ATTR_WORDS[state].label;
 }
+
+/** The label of an attribute that waits on a file not read yet. */
+export const WAITING_LABEL = "Waiting on a file";
 
 /** The files a passage can be in: this session's and the item's own. */
 function namesFor(
@@ -2341,7 +2349,7 @@ export function attributeRows(
         wording: wordingOf(letter, attribute.attributeId),
         state,
         label: labelOf(state, attribute),
-        icon: words.icon,
+        icon: attribute.pending === "FILE_NOT_READ" ? "clock" : words.icon,
         tone: words.tone,
         reason,
         quotes: state === "JUDGMENT" ? [] : quotesOf(attribute, names),

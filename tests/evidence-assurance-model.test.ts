@@ -246,6 +246,7 @@ describe("parseAssurance (section 6)", () => {
       expected: true,
       verdict: "SUPPORTED",
       understood: true,
+      pending: "",
       result: "MET",
       shows: "IMPLEMENTATION",
       elements: [],
@@ -1078,9 +1079,19 @@ describe("a request's check, in every status", () => {
       "A step requiring approval before provisioning",
     ]);
     assert.equal(issue?.judgment, null);
-    assert.equal(judged?.judgment, READINGS_DISAGREE);
+    // Rewritten 14 November 2026 (product owner: "The explanation should be very clear";
+    // the sentence stood on the row's line and again, in bold, under it). Old expectation:
+    // the judgment line repeated "The two readings do not agree. Your judgment is needed."
+    // New: the server's sentence heads the row once; the line under it is kept for a row
+    // with no sentence of its own.
     assert.equal(
-      judged?.judgment,
+      judged?.summary,
+      "The readings differ on the quarterly review.",
+    );
+    assert.equal(judged?.label, "Your judgment needed");
+    assert.equal(judged?.judgment, null);
+    assert.equal(
+      READINGS_DISAGREE,
       "The two readings do not agree. Your judgment is needed.",
     );
     assert.deepEqual(judged?.readings, [
@@ -1430,7 +1441,7 @@ describe("a request row", () => {
     assert.deepEqual(view?.designIds, [E]);
     assert.equal(
       view?.acceptNote,
-      `Accepting marks attribute A as evidenced. E: ${DESIGN_ONLY}. Both readings found an issue on B. The readings do not agree on C: your judgment is needed. You can still accept; accepting does not settle these.`,
+      `Accepting marks attribute A as evidenced. E: ${DESIGN_ONLY}. Both readings found an issue on B. Your judgment is needed on C. You can still accept; accepting does not settle these.`,
     );
     assert.equal(
       DESIGN_ONLY,
@@ -1597,7 +1608,7 @@ describe("beside Accept", () => {
     );
     assert.equal(
       acceptNote({ ...facts, judged: ["C"] }),
-      "Accepting marks no attribute as evidenced: the two readings find no record of an instance that shows one. The readings do not agree on C: your judgment is needed. You can still accept; accepting does not settle these.",
+      "Accepting marks no attribute as evidenced: the two readings find no record of an instance that shows one. Your judgment is needed on C. You can still accept; accepting does not settle these.",
     );
   });
 

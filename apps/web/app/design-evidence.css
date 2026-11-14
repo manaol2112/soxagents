@@ -361,6 +361,37 @@ button.de-caret > svg {
   white-space: normal;
 }
 
+/* A file's name opens its preview: a link, not a filled button. The rule is on the button's
+   own class (14 November 2026): each older list reset it inside its own container, so in a
+   new container it took the default button, dark ink on the accent (about 2:1). A list
+   that wants another size sets it; none has to remember the reset. */
+button.ep-file-open {
+  display: inline;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  padding: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  line-height: 1.35;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+button.ep-file-open:hover,
+button.ep-file-open:focus-visible {
+  color: var(--accent-text);
+  background: none;
+  border: 0;
+  text-decoration: underline;
+}
+
 .de-file-text small {
   color: var(--text-tertiary);
   font-size: var(--fs-xs);

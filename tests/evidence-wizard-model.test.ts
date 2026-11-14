@@ -2286,7 +2286,7 @@ describe("step 3: the results", () => {
     );
     assert.equal(
       items[1]?.accept.note,
-      "Accepting marks attributes A to D as evidenced. Both readings found an issue on E. The readings do not agree on F: your judgment is needed. You can still accept; accepting does not settle these.",
+      "Accepting marks attributes A to D as evidenced. Both readings found an issue on E. Your judgment is needed on F. You can still accept; accepting does not settle these.",
     );
     const accepted = itemResults(batchOf(finishedBatch()), {
       items: ITEMS.map((item) =>

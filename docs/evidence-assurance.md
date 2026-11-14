@@ -306,8 +306,23 @@ first gave nothing.
   attribute proposes ANSWERED, "a person decides"); no second finding is
   raised for the attribute. No agent closes a finding. A finding nobody acted on goes stale
   with its run.
-- `UNSETTLED`: shown as "The two readings do not agree. Your judgment is needed.", with
-  each reading's result and reason. Never a finding, never counted as support.
+- `UNSETTLED`: shown with each reading's result and reason. Never a finding, never
+  counted as support. Its sentence says why it is open (14 November 2026; the product
+  owner: "The explanation should be very clear"), and never that the readings disagree
+  where they agree:
+  - the readings differ: "The two readings do not agree. Your judgment is needed.";
+  - neither could tell: "Neither reading could tell from these files. Your judgment is
+    needed.";
+  - a reading did not finish: "A reading did not finish, so this is not concluded. Run the
+    check again, or judge it yourself.";
+  - both left it open only because a file of the request was not read (`pending`
+    `FILE_NOT_READ`): "Not concluded yet. <file> has not been read, and what the other
+    files do not show may be in it. The check runs again once it is read." The row reads
+    "Waiting on a file", not "Your judgment needed": the file is waited on, not a choice
+    between readings. Read only in part (`pending` `READ_IN_PART`) stays a person's
+    judgment, with the file named.
+  Each reading's reason names the file too ("<file> has not been read yet, so nothing can
+  be concluded as missing: it may be in that file.").
 - For a file the chain covers (a file its readings include), the reader's own
   model-derived findings (source `READER`: gaps, partial and uncovered items) are **not**
   proposed to a person: they were never checked by a second reading. The reader's answer
