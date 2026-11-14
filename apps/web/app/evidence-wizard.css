@@ -2086,6 +2086,62 @@ button.wz-q-clear {
   min-width: 0;
 }
 
+/* The check's review of an item's evidence, above its attributes: the agent's
+   proposal (its edge and its title's colour), the outcome in words with a mark, why,
+   and what to ask for next. Nothing in it is styled as approved. */
+.wz-review {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+  margin: 0.7rem 0 0.3rem;
+  padding: 0.1rem 0 0.1rem 0.75rem;
+  border-left: 3px solid var(--ai-border);
+}
+
+.wz-review p {
+  margin: 0;
+}
+
+.wz-review-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.6rem;
+  min-width: 0;
+}
+
+.wz-review-title {
+  color: var(--ai);
+  font-size: var(--fs-xs);
+  font-weight: 650;
+}
+
+.wz-review .wz-ar-reason {
+  overflow-wrap: anywhere;
+}
+
+.wz-review-asks {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.wz-review-asks > .wz-rc-label {
+  margin: 0;
+}
+
+.wz-review-asks > ol {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .wz-ar {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr);

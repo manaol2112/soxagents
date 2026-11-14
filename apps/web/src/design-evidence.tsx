@@ -31,12 +31,22 @@ import type { RequestRow as RequestsRow } from "./design-requests-model";
 import {
   type AttributeLine,
   assuranceProblem,
+  CHECKED_IN_CODE,
   type CheckAction,
+  CONSIDERATIONS_TITLE,
   checkPollDelay,
+  FILES_TITLE,
+  FOLLOW_UP_TITLE,
+  type FollowUpLine,
   offeredAction,
+  RESOLVED_TITLE,
+  REVIEW_FOR,
+  REVIEW_TITLE,
   type RequestCheck,
+  type ReviewView,
   type RowFile,
   rereadProblem,
+  type ShownPassage,
   STILL_CHECKING,
 } from "./evidence-assurance-model";
 import { centerHref, DEFAULT_QUERY } from "./evidence-center-model";
@@ -1920,10 +1930,12 @@ function CheckOfRequest({
           : act.label}
     </button>
   );
-  const leftOut =
-    check.leftOut.length === 0 ? null : (
+  // A file named on its own line, with the one action that clears it: a file left out
+  // of the readings, or one read with its type still to confirm.
+  const fileLines = (items: RequestCheck["leftOut"]) =>
+    items.length === 0 ? null : (
       <ul className="de-left-out">
-        {check.leftOut.map((item) => {
+        {items.map((item) => {
           const act = offer(item.action);
           const name =
             files.find((file) => file.id === item.fileId)?.name ?? "the file";
@@ -1937,6 +1949,7 @@ function CheckOfRequest({
         })}
       </ul>
     );
+  const leftOut = fileLines(check.leftOut);
   if (check.standing === "CHECKING") {
     return (
       <div className="de-check is-checking">
@@ -1983,6 +1996,11 @@ function CheckOfRequest({
   }
   return (
     <div className="de-check is-reviewed">
+      {/* The review of the evidence (a check of the second engine only), read first.
+          A check without one reads exactly as it did. */}
+      {check.review !== null ? (
+        <CheckReview ids={ids} review={check.review} files={files} />
+      ) : null}
       <p className="de-check-line">
         <UiIcon name="shield" size={13} />
         <span>
@@ -1993,6 +2011,7 @@ function CheckOfRequest({
         </span>
       </p>
       {leftOut}
+      {fileLines(check.confirm)}
       {check.attributes.length > 0 ? (
         <ul className="de-attrs">
           {check.attributes.map((line) => (
@@ -2169,6 +2188,27 @@ function AttributeCheck({
               ))}
             </ul>
           ) : null}
+          {line.checks.length > 0 ? (
+            // Comparisons of the records' own values: each sentence states the values,
+            // with whether it passed in words and a mark.
+            <div className="de-code-checks">
+              <span>{CHECKED_IN_CODE}</span>
+              <ul
+                className="de-elements"
+                aria-label={`Attribute ${line.letter}: checked in code`}
+              >
+                {line.checks.map((item) => (
+                  <li key={item.key}>
+                    <span className={`de-state tone-${item.tone}`}>
+                      <UiIcon name={item.icon} size={12} />
+                      {item.result}
+                    </span>
+                    <span className="de-element-text">{item.sentence}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {line.readings.length > 0 ? (
             <div className="de-views">
               {line.readings.map((reading) => (
@@ -2200,52 +2240,13 @@ function AttributeCheck({
               {line.passages.length > 0 ? (
                 <ul className="de-passages">
                   {line.passages.map((passage) => (
-                    <li
+                    <PassageLine
                       key={`${passage.fileId ?? ""}-${passage.location}-${passage.quote}`}
-                    >
-                      <q>{passage.quote}</q>
-                      <span className="de-where">
-                        {passage.fileLabel !== "" ? (
-                          <span className="de-where-file">
-                            {passage.fileLabel}
-                          </span>
-                        ) : null}
-                        <span>
-                          {passage.location !== ""
-                            ? passage.location
-                            : "In the file"}
-                        </span>
-                        {passage.opens && passage.fileId !== null ? (
-                          <PreviewButton
-                            organizationId={ids.organizationId}
-                            projectId={ids.projectId}
-                            files={files.map((file) => ({
-                              id: file.id,
-                              fileName: file.name,
-                            }))}
-                            startFileId={passage.fileId}
-                            citations={[
-                              {
-                                fileId: passage.fileId,
-                                fileName:
-                                  files.find(
-                                    (file) => file.id === passage.fileId,
-                                  )?.name ?? "",
-                                quote: passage.quote,
-                                found: true,
-                                location: passage.location,
-                                page: passage.page,
-                                box: null,
-                                label: line.letter,
-                              },
-                            ]}
-                            sourcesTitle="What the readings rest on"
-                            label="Open in the file"
-                            className="de-link"
-                          />
-                        ) : null}
-                      </span>
-                    </li>
+                      ids={ids}
+                      passage={passage}
+                      files={files}
+                      label={line.letter}
+                    />
                   ))}
                 </ul>
               ) : null}
@@ -2269,6 +2270,340 @@ function AttributeCheck({
           )}
         </div>
       </details>
+    </li>
+  );
+}
+
+/** A file's own words with where they sit, opening in the file where the viewer can:
+ * the same line under an attribute and under a consideration of the review. */
+function PassageLine({
+  ids,
+  passage,
+  files,
+  label,
+}: {
+  ids: Ids;
+  passage: ShownPassage;
+  /** The row's in-force files: a passage opens in its own. */
+  files: RowFile[];
+  /** What the passage is cited for in the viewer: an attribute's letter, or "". */
+  label: string;
+}) {
+  return (
+    <li>
+      <q>{passage.quote}</q>
+      <span className="de-where">
+        {passage.fileLabel !== "" ? (
+          <span className="de-where-file">{passage.fileLabel}</span>
+        ) : null}
+        <span>
+          {passage.location !== "" ? passage.location : "In the file"}
+        </span>
+        {passage.opens && passage.fileId !== null ? (
+          <PreviewButton
+            organizationId={ids.organizationId}
+            projectId={ids.projectId}
+            files={files.map((file) => ({
+              id: file.id,
+              fileName: file.name,
+            }))}
+            startFileId={passage.fileId}
+            citations={[
+              {
+                fileId: passage.fileId,
+                fileName:
+                  files.find((file) => file.id === passage.fileId)?.name ?? "",
+                quote: passage.quote,
+                found: true,
+                location: passage.location,
+                page: passage.page,
+                box: null,
+                label,
+              },
+            ]}
+            sourcesTitle="What the readings rest on"
+            label="Open in the file"
+            className="de-link"
+          />
+        ) : null}
+      </span>
+    </li>
+  );
+}
+
+/**
+ * The review of a request's evidence (docs/evidence-assurance.md, section 10), read
+ * before the attributes: the proposed outcome in words with its mark and why, the
+ * attributes the request asks for in three groups, what to ask for next, and, folded,
+ * what else a careful reader would raise and what there is to say of the files. It is
+ * the check's proposal: it approves and decides nothing, and holds no action but Copy
+ * and opening a passage in its file. Accept and the findings' decisions stay on the row.
+ */
+function CheckReview({
+  ids,
+  review,
+  files,
+}: {
+  ids: Ids;
+  review: ReviewView;
+  /** The row's in-force files: a passage opens in its own. */
+  files: RowFile[];
+}) {
+  const id = useId();
+  return (
+    <section className="de-review" aria-labelledby={`${id}-title`}>
+      <div className="de-review-lead">
+        <p className="de-review-head">
+          <span className="de-review-title" id={`${id}-title`}>
+            <UiIcon name="sparkles" size={12} />
+            {REVIEW_TITLE}
+          </span>
+          <span className="de-review-for">{REVIEW_FOR}</span>
+          <span className={`de-state tone-${review.tone}`}>
+            <UiIcon name={review.icon} size={12} />
+            {review.label}
+          </span>
+          {review.completeness !== null ? (
+            <span className="de-state tone-warning">
+              <UiIcon name="info" size={12} />
+              {review.completeness.label}
+            </span>
+          ) : null}
+        </p>
+        <p className="de-review-why">{review.explanation}</p>
+        {review.completeness !== null ? (
+          <p className="de-review-quiet">
+            {review.completeness.reasons.join(" ")}
+          </p>
+        ) : null}
+        {review.groups.length > 0 ? (
+          <>
+            {/* One line: each group in words with its mark, then its letters. Read
+                out as the one sentence it is. */}
+            <p className="sr-only">{`Attributes: ${review.countsLine}.`}</p>
+            <ul className="de-review-groups" aria-hidden="true">
+              {review.groups.map((group) => (
+                <li key={group.key}>
+                  <span className={`de-state tone-${group.tone}`}>
+                    <UiIcon name={group.icon} size={12} />
+                    {group.label}
+                  </span>
+                  {group.letters.map((letter) => (
+                    <span key={letter} className="dr-code">
+                      {letter}
+                    </span>
+                  ))}
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : null}
+      </div>
+      {review.followUps.length > 0 || review.more !== "" ? (
+        <div className="de-review-part">
+          <p className="de-review-label" id={`${id}-asks`}>
+            {FOLLOW_UP_TITLE}
+          </p>
+          {review.followUps.length > 0 ? (
+            <ol className="de-follow" aria-labelledby={`${id}-asks`}>
+              {review.followUps.map((item, at) => (
+                <FollowUpItem key={item.key} item={item} place={at + 1} />
+              ))}
+            </ol>
+          ) : null}
+          {review.more !== "" ? (
+            <p className="de-review-quiet">{review.more}</p>
+          ) : null}
+        </div>
+      ) : null}
+      {review.resolved.length > 0 ? (
+        <details className="de-fold">
+          <summary>
+            <span className="de-attr-caret" aria-hidden="true">
+              <UiIcon name="chevron" size={12} />
+            </span>
+            {RESOLVED_TITLE}
+            <span className="de-fold-count">{review.resolved.length}</span>
+          </summary>
+          <ul className="de-fold-body de-fold-list">
+            {review.resolved.map((item) => (
+              <li key={item.key}>
+                {item.letters.map((letter) => (
+                  <span key={letter} className="dr-code">
+                    {letter}
+                  </span>
+                ))}
+                <span>{item.request}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+      {review.considerations.length > 0 ? (
+        <details className="de-fold">
+          <summary>
+            <span className="de-attr-caret" aria-hidden="true">
+              <UiIcon name="chevron" size={12} />
+            </span>
+            {CONSIDERATIONS_TITLE}
+            <span className="de-fold-count">
+              {review.considerations.length}
+            </span>
+          </summary>
+          <div className="de-fold-body">
+            <p className="de-review-quiet">
+              Observations only: none is an attribute or an issue.
+            </p>
+            <ul className="de-fold-list">
+              {review.considerations.map((item) => (
+                <li key={item.key} className="de-consider">
+                  <span>{item.text}</span>
+                  {item.passages.length > 0 ? (
+                    <ul className="de-passages">
+                      {item.passages.map((passage) => (
+                        <PassageLine
+                          key={`${passage.fileId ?? ""}-${passage.location}-${passage.quote}`}
+                          ids={ids}
+                          passage={passage}
+                          files={files}
+                          label=""
+                        />
+                      ))}
+                    </ul>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </details>
+      ) : null}
+      {review.concerns.length > 0 ||
+      review.files.length > 0 ||
+      review.contextThin !== null ? (
+        <details className="de-fold">
+          <summary>
+            <span className="de-attr-caret" aria-hidden="true">
+              <UiIcon name="chevron" size={12} />
+            </span>
+            {FILES_TITLE}
+          </summary>
+          <div className="de-fold-body">
+            {review.concerns.length > 0 || review.files.length > 0 ? (
+              <ul className="de-fold-list">
+                {review.concerns.map((item) => (
+                  <li key={item.key} className="de-consider">
+                    {item.files !== "" ? (
+                      <span className="de-where-file">{item.files}</span>
+                    ) : null}
+                    <span>{item.text}</span>
+                  </li>
+                ))}
+                {review.files.map((file) => (
+                  <li key={file.fileId} className="de-consider">
+                    <span className="de-where-file">{file.name}</span>
+                    <span>{file.notes.join(" ")}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {review.contextThin !== null ? (
+              <p className="de-review-quiet">{review.contextThin}</p>
+            ) : null}
+          </div>
+        </details>
+      ) : null}
+    </section>
+  );
+}
+
+/** One thing to ask for: the request as the main line with Copy, what kind of ask it
+ * is and for which attributes, and what is missing, why and what else would do on
+ * request. Copy puts the request's text on the clipboard and says so; it sends
+ * nothing (a follow-up is sent from the row's own follow-up step). */
+function FollowUpItem({ item, place }: { item: FollowUpLine; place: number }) {
+  const [copied, setCopied] = useState<"" | "done" | "failed">("");
+  useEffect(() => {
+    if (copied === "") {
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setCopied(""),
+      copied === "done" ? 2000 : 6000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(item.request);
+      setCopied("done");
+    } catch {
+      setCopied("failed");
+    }
+  };
+  const details =
+    item.missing !== "" || item.why !== "" || item.alternatives !== "";
+  return (
+    <li className="de-follow-item">
+      <p className="de-follow-ask">{item.request}</p>
+      <div className="de-follow-meta">
+        <span className="de-follow-facts">
+          {[item.kind, item.priority, item.serves]
+            .filter((part) => part !== "")
+            .join(" · ")}
+        </span>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm de-copy"
+          onClick={() => void copy()}
+        >
+          <UiIcon name={copied === "done" ? "check" : "copy"} size={13} />
+          {copied === "done" ? "Copied" : "Copy"}
+          {copied === "done" ? null : (
+            <span className="sr-only"> request {place}</span>
+          )}
+        </button>
+        {/* Said politely to a screen reader; seen only where copying did not work. */}
+        <span
+          className={copied === "failed" ? "de-copy-note" : "sr-only"}
+          role="status"
+        >
+          {copied === "done"
+            ? "Copied"
+            : copied === "failed"
+              ? "Could not copy. Select the request's text and copy it."
+              : ""}
+        </span>
+      </div>
+      {details ? (
+        <details className="de-fold de-follow-more">
+          <summary>
+            <span className="de-attr-caret" aria-hidden="true">
+              <UiIcon name="chevron" size={12} />
+            </span>
+            Details<span className="sr-only"> of request {place}</span>
+          </summary>
+          <dl className="de-fold-body de-follow-why">
+            {item.missing !== "" ? (
+              <div>
+                <dt>What is missing</dt>
+                <dd>{item.missing}</dd>
+              </div>
+            ) : null}
+            {item.why !== "" ? (
+              <div>
+                <dt>Why it matters</dt>
+                <dd>{item.why}</dd>
+              </div>
+            ) : null}
+            {item.alternatives !== "" ? (
+              <div>
+                <dt>An alternative</dt>
+                <dd>{item.alternatives}</dd>
+              </div>
+            ) : null}
+          </dl>
+        </details>
+      ) : null}
     </li>
   );
 }

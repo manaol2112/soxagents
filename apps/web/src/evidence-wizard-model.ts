@@ -29,6 +29,7 @@ import {
   READINGS_DISAGREE,
   RESULT_UNREAD,
   type Result,
+  type ReviewView,
   requestCheck,
   VERDICTS,
   type Verdict,
@@ -2437,12 +2438,47 @@ export type ItemResult = {
   hold: { text: string; short: string; rerun: string | null } | null;
   attributes: AttributeRow[];
   tally: Tally[];
+  /** The check's review of the item's evidence (docs/evidence-assurance.md, section
+   * 10), read above its attributes: the proposed outcome in words with its mark, why,
+   * and what to ask for next. Null for a check without one (the first engine's, or one
+   * that has not finished), which reads exactly as it did. */
+  review: ItemReview | null;
   accept: {
     state: "accepted" | "open" | "waiting";
     /** What accepting marks as evidenced, and what it leaves open (the list's words). */
     note: string;
   };
 };
+
+/** An item's review as the Results step shows it: the D&I list's own words. */
+export type ItemReview = {
+  /** "Additional evidence needed": proposed, never a conclusion. */
+  label: string;
+  icon: IconName;
+  tone: Tone;
+  explanation: string;
+  /** Each follow-up's request, as the list words it. */
+  followUps: Array<{ key: string; request: string }>;
+  /** "2 more follow-ups are not listed here."; "" where every one is listed. */
+  more: string;
+};
+
+/** The review of a finished check as the Results step shows it, or null. */
+export function itemReview(review: ReviewView | null): ItemReview | null {
+  return review === null
+    ? null
+    : {
+        label: review.label,
+        icon: review.icon,
+        tone: review.tone,
+        explanation: review.explanation,
+        followUps: review.followUps.map((item) => ({
+          key: item.key,
+          request: item.request,
+        })),
+        more: review.more,
+      };
+}
 
 export type ResultsSummary = {
   /** "5 of 7 files sorted into 2 items. 1 file needs you; 1 is not D&I evidence." */
@@ -2558,6 +2594,11 @@ export function itemResults(
       // While the check runs again its counts are from before the change: not shown.
       tally:
         status === "REVIEWED" && !rechecking ? tallyOf(attributes, false) : [],
+      // The review is the finished check's own: while it runs again there is none.
+      review:
+        status === "REVIEWED" && !rechecking
+          ? itemReview(row?.check.review ?? null)
+          : null,
       accept: accepted
         ? {
             state: "accepted",

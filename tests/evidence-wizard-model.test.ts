@@ -2246,6 +2246,118 @@ describe("step 3: the results", () => {
     );
   });
 
+  it("leads an item with its review: the proposed outcome, why, and what to ask for", () => {
+    // An item whose check is the first engine's has no review, and reads as it did.
+    assert.deepEqual(
+      results().items.map((item) => item.review),
+      [null, null],
+    );
+    const base = finishedBatch();
+    const reviewed = (review: unknown, over: Record<string, unknown> = {}) =>
+      results(
+        finishedBatch({
+          items: [
+            {
+              ...base.items[0],
+              assurance: {
+                ...POLICY_CHECK,
+                engine_version: 2,
+                attributes: POLICY_CHECK.attributes.map((item) => ({
+                  ...item,
+                  assessment:
+                    item.verdict === "SUPPORTED"
+                      ? "SATISFIED"
+                      : "NOT_DEMONSTRATED",
+                  checks: [],
+                })),
+                review,
+                ...over,
+              },
+            },
+            base.items[1],
+          ],
+        }),
+      ).items;
+    const review = {
+      overall: "ADDITIONAL_EVIDENCE",
+      explanation:
+        "4 of 5 requested attributes are supported. F is not demonstrated: the policy has no investigation step.",
+      completeness: { state: "COMPLETE", reasons: [] },
+      context_thin: false,
+      files: [],
+      confirmations: [],
+      concerns: [],
+      follow_ups: [
+        {
+          key: `${F}:pass`,
+          attribute_ids: [F],
+          codes: ["F"],
+          elements: ["pass"],
+          missing: "The investigation step.",
+          why: "Nothing shows inappropriate access is followed up.",
+          request:
+            "Provide the procedure for investigating access found inappropriate.",
+          alternatives: "",
+          kind: "EVIDENCE",
+          priority: "HIGH",
+          raised_by: ["ASSESSOR"],
+          status: "OPEN",
+        },
+      ],
+      follow_ups_more: 1,
+      follow_ups_dropped: 0,
+      resolved: [],
+      considerations: [],
+    };
+    const [policy, other] = reviewed(review);
+    assert.deepEqual(policy?.review, {
+      label: "Additional evidence needed",
+      icon: "plus",
+      tone: "warning",
+      explanation:
+        "4 of 5 requested attributes are supported. F is not demonstrated: the policy has no investigation step.",
+      followUps: [
+        {
+          key: `${F}:pass`,
+          request:
+            "Provide the procedure for investigating access found inappropriate.",
+        },
+      ],
+      more: "1 more follow-up is not listed here.",
+    });
+    // The other item, and everything else of this one, is as it was.
+    assert.equal(other?.review, null);
+    const [before] = results().items;
+    assert.deepEqual(policy?.attributes, before?.attributes);
+    assert.deepEqual(policy?.tally, before?.tally);
+    assert.deepEqual(policy?.accept, before?.accept);
+    // Sufficient evidence lists nothing to ask for.
+    const [sufficient] = reviewed(
+      {
+        ...review,
+        overall: "SUFFICIENT",
+        explanation: "",
+        follow_ups: [],
+        follow_ups_more: 0,
+      },
+      {
+        attributes: POLICY_CHECK.attributes
+          .filter((item) => item.verdict === "SUPPORTED")
+          .map((item) => ({ ...item, assessment: "SATISFIED", checks: [] })),
+      },
+    );
+    assert.equal(sufficient?.review?.label, "Sufficient evidence");
+    assert.deepEqual(sufficient?.review?.followUps, []);
+    assert.equal(sufficient?.review?.more, "");
+    // No review while the check runs again, and none for a review that is not one.
+    assert.equal(
+      reviewed(review, { status: "CHECKING", stage: "ASSESS" })[0]?.review,
+      null,
+    );
+    assert.equal(reviewed("SUFFICIENT")[0]?.review, null);
+    assert.equal(reviewed(review, { engine_version: 1 })[0]?.review, null);
+  });
+
   it("shows what a check found before, marked, while it runs again after a move", () => {
     const previous = { [REVIEW]: batchOf(finishedBatch()).items[1]?.check };
     const rerun = results(

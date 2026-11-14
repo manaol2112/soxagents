@@ -263,6 +263,9 @@ describe("parseAssurance (section 6)", () => {
       views: [],
       findingId: null,
       findingStatus: null,
+      // Engine 2's fields, at their defaults for an engine 1 check.
+      assessment: null,
+      checks: [],
     });
     assert.deepEqual(read.summary, {
       checking: 0,

@@ -845,6 +845,280 @@ button.ep-file-open:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* The review of a request's evidence (docs/evidence-assurance.md, section 10): the
+   check's proposal, read before the attributes. Its lead carries the agent's edge and
+   its title the agent's colour, as everything proposed and not yet decided does; the
+   outcome is its words with a mark, and nothing here is styled as approved. */
+.de-review {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+  padding-bottom: 0.15rem;
+}
+
+.de-review p {
+  margin: 0;
+}
+
+.de-review-lead {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0.1rem 0 0.1rem 0.7rem;
+  border-left: 3px solid var(--ai-border);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.de-review-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.5rem;
+  min-width: 0;
+}
+
+.de-review-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--ai);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.de-review-title > svg {
+  flex: none;
+}
+
+.de-review-for {
+  margin-left: -0.2rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+/* Why the evidence is or is not sufficient: the one thing read after the outcome. */
+.de-review-why {
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.de-review-quiet {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* Satisfied, open, potential exception: each group's words with a mark, then its
+   letters. */
+.de-review-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.9rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.de-review-groups > li {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.3rem;
+  min-width: 0;
+}
+
+.de-review-part {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.de-review-label {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+/* What to ask for next: the request is the line, Copy beside what kind of ask it is. */
+.de-follow {
+  display: grid;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.de-follow-item {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+  padding: 0.4rem 0;
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.de-follow-ask {
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.de-follow-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2rem 0.6rem;
+  min-width: 0;
+}
+
+.de-follow-facts {
+  flex: 1 1 10rem;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+/* "Copy" and "Copied" take the same room, so nothing moves when it is pressed. */
+button.de-copy {
+  flex: none;
+  min-width: 5.5rem;
+}
+
+/* Seen only where copying did not work: it says what to do instead. */
+.de-copy-note {
+  flex-basis: 100%;
+  color: var(--danger);
+  font-size: var(--fs-xs);
+}
+
+/* A part of the review that opens on request (200 ms): a follow-up's details, the
+   resolved follow-ups, the considerations, what there is to say of the files. */
+.de-fold {
+  min-width: 0;
+}
+
+.de-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 24px;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+  transition: color 120ms ease;
+}
+
+.de-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.de-fold > summary:hover {
+  color: var(--text-strong);
+}
+
+.de-fold > summary:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.de-fold > summary > .de-attr-caret {
+  margin-left: 0;
+}
+
+.de-fold[open] > summary > .de-attr-caret > svg {
+  transform: rotate(90deg);
+}
+
+.de-fold-count {
+  color: var(--text-tertiary);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.de-fold-body {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0.3rem 0 0.2rem calc(20px + 0.3rem);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  animation: tar-open 200ms ease;
+}
+
+.de-fold-list {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.de-fold-body > .de-fold-list {
+  padding: 0;
+}
+
+.de-fold-list > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.4rem;
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.de-fold-list > li.de-consider {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.de-follow-more > summary {
+  font-size: var(--fs-xs);
+}
+
+.de-follow-why > div {
+  display: grid;
+  grid-template-columns: 8.5rem minmax(0, 1fr);
+  gap: 0.1rem 0.6rem;
+  min-width: 0;
+}
+
+.de-follow-why dt {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1.7;
+}
+
+.de-follow-why dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* Under an opened attribute: the comparisons of the records' values, made in code. */
+.de-code-checks {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.de-code-checks > span {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
 /* Accept, with what accepting marks as evidenced said first. */
 .de-accept {
   display: grid;
@@ -926,6 +1200,15 @@ button.ep-file-open:focus-visible {
     flex-basis: 100%;
     order: 1;
   }
+
+  /* The review's folds take the row's width, and a follow-up's details stack. */
+  .de-fold-body {
+    padding-left: 0;
+  }
+
+  .de-follow-why > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -939,5 +1222,13 @@ button.ep-file-open:focus-visible {
   .de-attr-body,
   .de-unasked-list {
     animation: none;
+  }
+
+  .de-fold-body {
+    animation: none;
+  }
+
+  .de-fold > summary {
+    transition: none;
   }
 }

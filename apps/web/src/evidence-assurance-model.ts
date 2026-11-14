@@ -17,6 +17,12 @@
  * out of what the row says without saying so. D&I needs both the design and its
  * implementation: an attribute is evidenced only where the records of an instance show
  * it, never on a policy's word alone.
+ *
+ * Engine 2 (section 10) adds, for a finished check, the review a person reads first:
+ * whether the evidence is sufficient for what the request tests, what is still open,
+ * and what to ask for. It is proposed and never a conclusion: nothing of it accepts
+ * evidence or decides a finding. A check of the first engine carries none, and reads
+ * exactly as it did.
  */
 
 import {
@@ -128,6 +134,34 @@ export type AssuredElement = {
   absent: string[];
 };
 
+/** Where an attribute the request asks for stands (section 10.6). */
+export const ASSESSMENTS = [
+  "SATISFIED",
+  "PARTIALLY_SUPPORTED",
+  "CONTRADICTED",
+  "NOT_DEMONSTRATED",
+  "INDETERMINATE",
+] as const;
+export type Assessment = (typeof ASSESSMENTS)[number];
+
+export const CODE_CHECK_STATUSES = [
+  "PASSED",
+  "FAILED",
+  // It fails on one reading's values only.
+  "FAILED_ONE",
+  "NOT_RUN",
+] as const;
+export type CodeCheckStatus = (typeof CODE_CHECK_STATUSES)[number];
+
+/** A comparison of the records' own values (a date before another, two names that
+ * differ), made in code on the server, with its one sentence. */
+export type CodeCheck = {
+  element: string;
+  test: string;
+  status: CodeCheckStatus;
+  sentence: string;
+};
+
 export type AssuredAttribute = {
   /** "" where the server sent none this page can read: its code is then its letter. */
   attributeId: string;
@@ -155,10 +189,130 @@ export type AssuredAttribute = {
   findingId: string | null;
   /** The finding's status, where the server sent one this page knows. */
   findingStatus: FindingStatus | null;
+  /** Where the attribute stands for the request (engine 2); null for an attribute the
+   * request does not ask for, and for every attribute of an engine 1 check. */
+  assessment: Assessment | null;
+  /** The comparisons made in code for the attribute's elements (engine 2); empty
+   * otherwise. */
+  checks: CodeCheck[];
 };
 
 /** A file the gate left out of the readings; the run went ahead on the rest. */
 export type HeldFile = { fileId: string; code: HeldCode; reason: string };
+
+// The review of a request's evidence (section 10.7)
+
+export const OUTCOMES = [
+  "SUFFICIENT",
+  "ADDITIONAL_EVIDENCE",
+  "CLARIFICATION",
+  "POTENTIAL_EXCEPTION",
+  "UNABLE_TO_CONCLUDE",
+] as const;
+/** The check's proposed outcome for a request. Never a conclusion. */
+export type Outcome = (typeof OUTCOMES)[number];
+
+export const COMPLETENESS_STATES = [
+  "COMPLETE",
+  "INCOMPLETE",
+  "PARTLY_UNREADABLE",
+  "RELIABILITY_UNRESOLVED",
+] as const;
+export type CompletenessState = (typeof COMPLETENESS_STATES)[number];
+
+const RELEVANCES = [
+  "RELEVANT",
+  "PARTLY_RELEVANT",
+  "NOT_RELEVANT",
+  "CANNOT_TELL",
+] as const;
+export type FileRelevance = (typeof RELEVANCES)[number];
+
+const SOURCES = [
+  "SYSTEM_RECORD",
+  "MANAGEMENT_PREPARED",
+  "DOCUMENT",
+  "UNKNOWN",
+] as const;
+export type FileSource = (typeof SOURCES)[number];
+
+const LEGIBILITIES = ["CLEAR", "PARTLY_UNREADABLE", "UNREADABLE"] as const;
+export type FileLegibility = (typeof LEGIBILITIES)[number];
+
+const REPORT_BASES = [
+  "SHOWN",
+  "PARTLY_SHOWN",
+  "NOT_SHOWN",
+  "NOT_A_REPORT",
+] as const;
+export type ReportBasis = (typeof REPORT_BASES)[number];
+
+/** What the two readings say of one file the check read. */
+export type ReviewFile = {
+  fileId: string;
+  relevance: FileRelevance;
+  source: FileSource;
+  legibility: FileLegibility;
+  reportBasis: ReportBasis;
+  notes: string[];
+};
+
+const PRIORITIES = ["HIGH", "MEDIUM", "LOW"] as const;
+export type FollowUpPriority = (typeof PRIORITIES)[number];
+
+/** Something to ask for, for an element the files do not show. Text for the person,
+ * who sends it through the request's own follow-up step: the check sends nothing. */
+export type FollowUp = {
+  /** "" where the server sent none. */
+  key: string;
+  attributeIds: string[];
+  codes: string[];
+  elements: string[];
+  missing: string;
+  why: string;
+  request: string;
+  alternatives: string;
+  kind: "EVIDENCE" | "CLARIFICATION";
+  priority: FollowUpPriority;
+  raisedBy: View["role"][];
+  status: "OPEN" | "RESOLVED";
+};
+
+export type Review = {
+  overall: Outcome;
+  explanation: string;
+  completeness: { state: CompletenessState; reasons: string[] };
+  /** No fact of the control's understanding is confirmed. */
+  contextThin: boolean;
+  files: ReviewFile[];
+  /** Files read as the type they appear to be: a person still confirms the type. */
+  confirmations: HeldFile[];
+  /** What code found on the facts both readings state alike (another system named,
+   * different subjects, a date outside the period), each in one sentence. */
+  concerns: Array<{ code: string; sentence: string; fileIds: string[] }>;
+  followUps: FollowUp[];
+  /** Open follow-ups the server (or this page's bound) did not list. */
+  followUpsMore: number;
+  /** Asks a reading made for an element that is shown: counted, never listed. */
+  followUpsDropped: number;
+  /** Follow-ups of the earlier check whose element the new evidence now supports. */
+  resolved: Array<{ key: string; request: string; codes: string[] }>;
+  /** What a careful auditor would raise that no attribute asks about. An observation:
+   * never a finding, an attribute, or a change to the test plan. */
+  considerations: Array<{
+    text: string;
+    passages: Passage[];
+    raisedBy: View["role"][];
+  }>;
+};
+
+/** The bounds on what is read of a review: a longer list is cut, never trusted. */
+export const REVIEW_BOUNDS = {
+  followUps: 12,
+  considerations: 10,
+  files: 60,
+  checks: 12,
+} as const;
 
 /** One request's latest run. */
 export type AssuredRequest = {
@@ -183,6 +337,11 @@ export type AssuredRequest = {
    * (run-failure.ts); absent otherwise. */
   failureNote?: string;
   finishedAt: string | null;
+  /** Which engine made the run: 1 unless the server says 2 (section 10.1). */
+  engineVersion: 1 | 2;
+  /** The review of a finished engine 2 check; null for engine 1, for a check that is
+   * not finished and current, and where what the server sent is not a review. */
+  review: Review | null;
 };
 
 /** The server's counts. Each is null where it sent none this page can read. */
@@ -209,6 +368,10 @@ const strings = (value: unknown, limit: number): string[] =>
     .map(str)
     .filter((item) => item !== "")
     .slice(0, limit);
+
+/** Sentences as sent: at most `limit` of them, each cut at `max` characters. */
+const texts = (value: unknown, limit: number, max: number): string[] =>
+  strings(value, limit).map((item) => item.slice(0, max));
 
 const heldCode = (value: unknown): HeldCode =>
   HELD_CODES.find((item) => item === value) ?? "OTHER";
@@ -322,9 +485,60 @@ const ISSUE_RESULTS: readonly Result[] = [
   "NOT_ADDRESSED",
 ];
 
+/** The verdicts each assessment can come from (the table of section 10.6). */
+const ASSESSMENT_VERDICTS: Record<Assessment, readonly Verdict[]> = {
+  SATISFIED: ["SUPPORTED"],
+  PARTIALLY_SUPPORTED: ["PARTLY_SUPPORTED", "ISSUE"],
+  CONTRADICTED: ["ISSUE", "UNSETTLED"],
+  NOT_DEMONSTRATED: ["ISSUE", "NOT_ADDRESSED"],
+  INDETERMINATE: VERDICTS,
+};
+
+/**
+ * Where an attribute stands, as sent, or the cautious reading: one this page does not
+ * know, one its own verdict cannot come from (satisfied without support), one on a
+ * result this page could not take as it stands, and one missing on an attribute the
+ * request asks for all read as not determined. Never as satisfied.
+ */
+function assessmentOf(
+  value: unknown,
+  facts: { verdict: Verdict; understood: boolean; expected: boolean },
+): Assessment | null {
+  if (value === null || value === undefined) {
+    return facts.expected ? "INDETERMINATE" : null;
+  }
+  const said = ASSESSMENTS.find((item) => item === value) ?? null;
+  return said !== null &&
+    facts.understood &&
+    ASSESSMENT_VERDICTS[said].includes(facts.verdict)
+    ? said
+    : "INDETERMINATE";
+}
+
+/** A comparison made in code. A status this page does not know reads as not run: a
+ * comparison supports nothing by itself, and is never shown as passed unless said. */
+function parseCodeCheck(value: unknown): CodeCheck | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const sentence = str(value.sentence).slice(0, 400);
+  const test = str(value.test).slice(0, 40);
+  if (sentence === "" && test === "") {
+    return null;
+  }
+  return {
+    element: str(value.element).slice(0, 80),
+    test,
+    status:
+      CODE_CHECK_STATUSES.find((item) => item === value.status) ?? "NOT_RUN",
+    sentence,
+  };
+}
+
 function parseAttribute(
   value: unknown,
   only: string | null,
+  engine: 1 | 2 = 1,
 ): AssuredAttribute | null {
   if (!isRecord(value)) {
     return null;
@@ -372,6 +586,8 @@ function parseAttribute(
             ? result === null || result === "NOT_ADDRESSED"
             : said === "UNSETTLED";
   const verdict: Verdict = said !== null && stands ? said : "UNSETTLED";
+  const understood = said !== null && stands;
+  const expected = value.expected === true;
   const findingId = verdict === "ISSUE" ? uuidOrNull(value.finding_id) : null;
   const views = (Array.isArray(value.views) ? value.views : [])
     .map(parseView)
@@ -380,9 +596,9 @@ function parseAttribute(
   return {
     attributeId,
     code,
-    expected: value.expected === true,
+    expected,
     verdict,
-    understood: said !== null && stands,
+    understood,
     pending:
       verdict === "UNSETTLED" &&
       (value.pending === "FILE_NOT_READ" || value.pending === "READ_IN_PART")
@@ -416,6 +632,18 @@ function parseAttribute(
         ? null
         : (FINDING_STATUSES.find((item) => item === value.finding_status) ??
           null),
+    // Engine 2 only: an engine 1 result is shown exactly as before.
+    assessment:
+      engine === 2
+        ? assessmentOf(value.assessment, { verdict, understood, expected })
+        : null,
+    checks:
+      engine === 2
+        ? (Array.isArray(value.checks) ? value.checks : [])
+            .map(parseCodeCheck)
+            .filter((item): item is CodeCheck => item !== null)
+            .slice(0, REVIEW_BOUNDS.checks)
+        : [],
   };
 }
 
@@ -440,6 +668,172 @@ const distinct = <T>(items: readonly T[], key: (item: T) => string): T[] => {
     return true;
   });
 };
+
+const roles = (value: unknown): View["role"][] =>
+  distinct(
+    (Array.isArray(value) ? value : []).filter(
+      (item): item is View["role"] =>
+        item === "ASSESSOR" || item === "REVIEWER",
+    ),
+    (item) => item,
+  );
+
+const uuids = (value: unknown, limit: number): string[] =>
+  distinct(
+    (Array.isArray(value) ? value : [])
+      .map(uuidOrNull)
+      .filter((id): id is string => id !== null),
+    (id) => id,
+  ).slice(0, limit);
+
+const codesOf = (value: unknown): string[] =>
+  distinct(texts(value, 12, 8), (item) => item);
+
+function parseReviewFile(value: unknown): ReviewFile | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const fileId = uuidOrNull(value.file_id);
+  if (fileId === null) {
+    return null;
+  }
+  return {
+    fileId,
+    // Not said, or not known to this page: its relevance and its source read as not
+    // known, never as relevant or as a system's own record. Its legibility and a
+    // report's basis then say nothing of the file (the check's completeness, decided
+    // on the server, is what says a file could not be read).
+    relevance:
+      RELEVANCES.find((item) => item === value.relevance) ?? "CANNOT_TELL",
+    source: SOURCES.find((item) => item === value.source) ?? "UNKNOWN",
+    legibility:
+      LEGIBILITIES.find((item) => item === value.legibility) ?? "CLEAR",
+    reportBasis:
+      REPORT_BASES.find((item) => item === value.report_basis) ??
+      "NOT_A_REPORT",
+    notes: texts(value.notes, 4, 300),
+  };
+}
+
+function parseFollowUp(value: unknown): FollowUp | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const request = str(value.request).slice(0, 600);
+  const missing = str(value.missing).slice(0, 400);
+  // Nothing to ask for and nothing named as missing: not a follow-up.
+  if (request === "" && missing === "") {
+    return null;
+  }
+  return {
+    key: str(value.key).slice(0, 160),
+    attributeIds: uuids(value.attribute_ids, 12),
+    codes: codesOf(value.codes),
+    elements: texts(value.elements, 12, 80),
+    missing,
+    why: str(value.why).slice(0, 400),
+    request,
+    alternatives: str(value.alternatives).slice(0, 400),
+    // A kind this page does not know is an ask for evidence, the stronger of the two.
+    kind: value.kind === "CLARIFICATION" ? "CLARIFICATION" : "EVIDENCE",
+    priority: PRIORITIES.find((item) => item === value.priority) ?? "MEDIUM",
+    raisedBy: roles(value.raised_by),
+    // Open unless the server says the new evidence resolved it.
+    status: value.status === "RESOLVED" ? "RESOLVED" : "OPEN",
+  };
+}
+
+/** One entry per key: a key listed twice keeps its first entry; entries without a key
+ * are all kept. */
+const byKey = <T extends { key: string }>(items: readonly T[]): T[] =>
+  items.filter(
+    (item, at) =>
+      item.key === "" ||
+      items.findIndex((each) => each.key === item.key) === at,
+  );
+
+/**
+ * The review as section 10.7 sends it; null where what came is not an object. Every
+ * part is read on its own: a part that is missing or not as documented falls back to
+ * the cautious reading (an outcome this page does not know is "unable to conclude", a
+ * completeness it does not know is not complete), and every list is bounded.
+ */
+function parseReview(value: unknown, only: string | null): Review | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const list = (items: unknown): unknown[] =>
+    Array.isArray(items) ? items : [];
+  const completeness = isRecord(value.completeness) ? value.completeness : null;
+  const followUps = byKey(
+    list(value.follow_ups)
+      .map(parseFollowUp)
+      .filter((item): item is FollowUp => item !== null),
+  );
+  const listed = followUps.slice(0, REVIEW_BOUNDS.followUps);
+  const open = (items: readonly FollowUp[]) =>
+    items.filter((item) => item.status === "OPEN").length;
+  return {
+    overall:
+      OUTCOMES.find((item) => item === value.overall) ?? "UNABLE_TO_CONCLUDE",
+    explanation: str(value.explanation).slice(0, 600),
+    completeness: {
+      state:
+        COMPLETENESS_STATES.find((item) => item === completeness?.state) ??
+        "INCOMPLETE",
+      reasons: texts(completeness?.reasons, 6, 300),
+    },
+    contextThin: value.context_thin === true,
+    files: distinct(
+      list(value.files)
+        .map(parseReviewFile)
+        .filter((item): item is ReviewFile => item !== null),
+      (item) => item.fileId,
+    ).slice(0, REVIEW_BOUNDS.files),
+    confirmations: distinct(
+      list(value.confirmations)
+        .map(parseHeldFile)
+        .filter((item): item is HeldFile => item !== null),
+      (item) => item.fileId,
+    ).slice(0, REVIEW_BOUNDS.files),
+    concerns: list(value.concerns)
+      .filter(isRecord)
+      .map((item) => ({
+        code: str(item.code).slice(0, 40),
+        sentence: str(item.sentence).slice(0, 400),
+        fileIds: uuids(item.file_ids, 12),
+      }))
+      .filter((item) => item.sentence !== "")
+      .slice(0, 12),
+    followUps: listed,
+    // What this page's bound cut is counted with what the server did not list.
+    followUpsMore:
+      (count(value.follow_ups_more) ?? 0) + (open(followUps) - open(listed)),
+    followUpsDropped: count(value.follow_ups_dropped) ?? 0,
+    resolved: byKey(
+      list(value.resolved)
+        .filter(isRecord)
+        .map((item) => ({
+          key: str(item.key).slice(0, 160),
+          request: str(item.request).slice(0, 600),
+          codes: codesOf(item.codes),
+        }))
+        .filter((item) => item.request !== ""),
+    ).slice(0, REVIEW_BOUNDS.followUps),
+    considerations: list(value.considerations)
+      .filter(isRecord)
+      .map((item) => ({
+        text: str(item.text).slice(0, 500),
+        passages: list(item.passages)
+          .map((each) => parsePassage(each, only))
+          .filter((each): each is Passage => each !== null)
+          .slice(0, 4),
+        raisedBy: roles(item.raised_by),
+      }))
+      .filter((item) => item.text !== "")
+      .slice(0, REVIEW_BOUNDS.considerations),
+  };
+}
 
 function parseRequest(value: unknown): AssuredRequest | null {
   if (!isRecord(value)) {
@@ -467,6 +861,8 @@ function parseRequest(value: unknown): AssuredRequest | null {
     (id) => id,
   );
   const only = fileIds.length === 1 ? (fileIds[0] ?? null) : null;
+  // Forward only (section 10.1): a run is the first engine's unless the server says 2.
+  const engineVersion = value.engine_version === 2 ? 2 : 1;
   return {
     requirementId,
     runId: uuidOrNull(value.run_id),
@@ -494,7 +890,7 @@ function parseRequest(value: unknown): AssuredRequest | null {
       status === "REVIEWED"
         ? distinct(
             (Array.isArray(value.attributes) ? value.attributes : [])
-              .map((item) => parseAttribute(item, only))
+              .map((item) => parseAttribute(item, only, engineVersion))
               .filter((item): item is AssuredAttribute => item !== null),
             (item) => item.attributeId || `code:${item.code}`,
           )
@@ -505,13 +901,21 @@ function parseRequest(value: unknown): AssuredRequest | null {
       ? { failureNote: failureNoteOf(value) }
       : {}),
     finishedAt: str(value.finished_at) || null,
+    engineVersion,
+    // Like the attributes: nothing of a run is shown before it finishes, or once it is
+    // out of date. An engine 1 run has no review, whatever came with it.
+    review:
+      status === "REVIEWED" && engineVersion === 2
+        ? parseReview(value.review, only)
+        : null,
   };
 }
 
-const count = (value: unknown): number | null =>
-  typeof value === "number" && Number.isInteger(value) && value >= 0
+function count(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
     ? value
     : null;
+}
 
 function parseSummary(value: unknown): AssuranceSummary | null {
   if (!isRecord(value)) {
@@ -820,6 +1224,39 @@ export type ElementLine = {
   absent: string[];
 };
 
+/** A comparison made in code, as an opened attribute lists it: its sentence, and
+ * whether it passed, in words with a mark. */
+export type CheckLine = {
+  key: string;
+  sentence: string;
+  /** "Passed", "Failed", "Failed on one reading's values", "Not run". */
+  result: string;
+  icon: IconName;
+  tone: Tone;
+};
+
+/** Over an attribute's comparisons. */
+export const CHECKED_IN_CODE = "Checked in code:";
+
+/** A comparison's status in words with its mark. A comparison that passes supports
+ * nothing by itself, and one that fails is a fact of the records, not a conclusion. */
+export const CODE_CHECK_WORDS: Record<
+  CodeCheckStatus,
+  { label: string; icon: IconName; tone: Tone }
+> = {
+  PASSED: { label: "Passed", icon: "check", tone: "success" },
+  FAILED: { label: "Failed", icon: "x", tone: "danger" },
+  FAILED_ONE: {
+    label: "Failed on one reading's values",
+    icon: "help",
+    tone: "warning",
+  },
+  NOT_RUN: { label: "Not run", icon: "minus", tone: "neutral" },
+};
+
+/** Said of a comparison the server sent without its sentence. */
+const CHECK_UNSAID = "A comparison of the values the records state.";
+
 export type AttributeLine = {
   /** The attribute's id, or its code where the server sent no id. */
   key: string;
@@ -854,6 +1291,8 @@ export type AttributeLine = {
   findingId: string | null;
   /** It opens by itself: an open issue, or a judgment the person owes. */
   open: boolean;
+  /** The comparisons made in code for the attribute (engine 2); empty otherwise. */
+  checks: CheckLine[];
 };
 
 export type Lettered = { id: string; letter: string; text: string };
@@ -877,6 +1316,26 @@ function labelOf(item: AssuredAttribute, state: AttributeState): string {
     return said === undefined ? words.label : `${words.label}: ${said}`;
   }
   return words.label;
+}
+
+/** A passage as the row shows it: named by its file where the request has more than
+ * one, and opening in it where the file is one of the row's. */
+function shownPassage(
+  passage: Passage,
+  files: readonly RowFile[],
+  many: boolean,
+): ShownPassage {
+  const file = files.find((each) => each.id === passage.fileId);
+  return {
+    ...passage,
+    fileLabel: !many
+      ? ""
+      : (file?.name ??
+        (passage.fileId === null
+          ? "The file is not named"
+          : "A file no longer on this request")),
+    opens: file !== undefined,
+  };
 }
 
 function attributeLine(
@@ -918,19 +1377,9 @@ function attributeLine(
     icon: words.icon,
     tone: words.tone,
     summary: item.summary,
-    passages: item.passages.map((passage) => {
-      const file = files.find((each) => each.id === passage.fileId);
-      return {
-        ...passage,
-        fileLabel: !many
-          ? ""
-          : (file?.name ??
-            (passage.fileId === null
-              ? "The file is not named"
-              : "A file no longer on this request")),
-        opens: file !== undefined,
-      };
-    }),
+    passages: item.passages.map((passage) =>
+      shownPassage(passage, files, many),
+    ),
     absent: item.absent,
     // The server's own sentence heads the row (it says whether the readings disagree,
     // neither could tell, or a reading did not finish), so it is not said again here: only
@@ -951,6 +1400,13 @@ function attributeLine(
     findingId: item.findingId,
     // A row that waits on a file says so on its line; it opens on request.
     open: state === "ISSUE" || state === "JUDGMENT",
+    checks: item.checks.map((check, at) => ({
+      key: `${check.element}:${check.test}:${at}`,
+      sentence: sentence(check.sentence) || CHECK_UNSAID,
+      result: CODE_CHECK_WORDS[check.status].label,
+      icon: CODE_CHECK_WORDS[check.status].icon,
+      tone: CODE_CHECK_WORDS[check.status].tone,
+    })),
   };
 }
 
@@ -1062,11 +1518,18 @@ export type RequestCheck = {
   /** Attributes the request does not ask for and the evidence does not bear on: one
    * folded line, both readings on open. */
   notAsked: AttributeLine[];
+  /** The review of a finished engine 2 check, read first; null for engine 1 and for a
+   * check that is not finished. */
+  review: ReviewView | null;
+  /** Files the check read as the type they appear to be (engine 2): each named, with
+   * the row's own action that confirms the type. Empty otherwise. */
+  confirm: LeftOutLine[];
 };
 
 /** A sentence as the server sent it, closed with a full stop. */
-const sentence = (text: string) =>
-  text === "" || /[.!?…]$/.test(text) ? text : `${text}.`;
+function sentence(text: string): string {
+  return text === "" || /[.!?…]$/.test(text) ? text : `${text}.`;
+}
 
 /** The check's one sentence for a run that ended without a usable answer (it failed), or
  * null: nothing of the run is shown, and the server's reason (its failure sentence, else
@@ -1159,6 +1622,8 @@ export function requestCheck(
     attributes: [],
     notAddressed: [],
     notAsked: [],
+    review: null,
+    confirm: [],
   };
   if (request.status === "NOT_CHECKED") {
     return {
@@ -1257,6 +1722,418 @@ export function requestCheck(
     notAsked: lines.filter(
       (line) => line.state === "NOT_ADDRESSED" && !line.expected,
     ),
+    review: reviewView(request, attributes, files, span),
+    // A file read with its type not confirmed: the row's own "Confirm the file's
+    // type", once per file (a file left out for the same reason already carries it).
+    confirm: (request.review?.confirmations ?? [])
+      .filter(
+        (item) =>
+          files.some((file) => file.id === item.fileId) &&
+          !request.heldFiles.some((held) => held.fileId === item.fileId) &&
+          (item.code === "KIND_UNSURE" || item.reason !== ""),
+      )
+      .map((item) => ({
+        fileId: item.fileId,
+        line: `${nameOf(item.fileId)}: ${sentence(item.reason) || TYPE_NOT_CONFIRMED}`,
+        action:
+          item.code === "KIND_UNSURE"
+            ? fileAction(item.code, item.fileId)
+            : null,
+      })),
+  };
+}
+
+// The review of a request's evidence, as its row shows it (section 10)
+
+/** Over the review: it is the check's proposal. A person decides. */
+export const REVIEW_TITLE = "Proposed assessment";
+export const REVIEW_FOR = "for your review";
+export const FOLLOW_UP_TITLE = "Recommended follow-up";
+export const RESOLVED_TITLE = "Resolved by the new evidence";
+export const CONSIDERATIONS_TITLE = "Additional considerations";
+export const FILES_TITLE = "About the files";
+
+/** The outcome in words with its mark: the colour repeats them and never replaces
+ * them. Each is a proposal: none says the control works, or that it does not. */
+export const OUTCOME_WORDS: Record<
+  Outcome,
+  { label: string; icon: IconName; tone: Tone }
+> = {
+  SUFFICIENT: {
+    label: "Sufficient evidence",
+    icon: "checkCircle",
+    tone: "success",
+  },
+  ADDITIONAL_EVIDENCE: {
+    label: "Additional evidence needed",
+    icon: "plus",
+    tone: "warning",
+  },
+  CLARIFICATION: {
+    label: "Clarification needed",
+    icon: "message",
+    tone: "warning",
+  },
+  POTENTIAL_EXCEPTION: {
+    label: "Potential exception to investigate",
+    icon: "risk",
+    tone: "danger",
+  },
+  UNABLE_TO_CONCLUDE: {
+    label: "Unable to conclude yet",
+    icon: "help",
+    tone: "neutral",
+  },
+};
+
+/** Why, where the server sent no explanation of its own. */
+const OUTCOME_REASONS: Record<Outcome, string> = {
+  SUFFICIENT: "The evidence supports every attribute this request asks for.",
+  ADDITIONAL_EVIDENCE:
+    "The evidence does not yet support every attribute this request asks for.",
+  CLARIFICATION:
+    "A clarification is needed before every attribute this request asks for is supported.",
+  POTENTIAL_EXCEPTION:
+    "The records may show an exception. It is yours to investigate.",
+  UNABLE_TO_CONCLUDE: "The evidence does not yet allow a view either way.",
+};
+
+/** Under an outcome this page could not take as it stands: "sufficient" beside an
+ * attribute that is not satisfied, an open follow-up, or support that still needs
+ * corroboration. It is then not shown as sufficient. */
+export const REVIEW_UNREAD =
+  "This assessment could not be read as it was sent, so the evidence is not shown as sufficient. Your judgment is needed.";
+
+/** How complete the evidence is, where it is not complete. Passing custody is never
+ * called reliability. */
+export const COMPLETENESS_WORDS: Record<
+  Exclude<CompletenessState, "COMPLETE">,
+  string
+> = {
+  INCOMPLETE: "Evidence incomplete",
+  PARTLY_UNREADABLE: "Partly unreadable",
+  RELIABILITY_UNRESOLVED: "Reliability to resolve",
+};
+
+/** Why, where the server sent no sentence of its own. */
+const COMPLETENESS_REASONS: Record<
+  Exclude<CompletenessState, "COMPLETE">,
+  string
+> = {
+  INCOMPLETE: "The check does not say that every file was read in full.",
+  PARTLY_UNREADABLE: "Part of the evidence could not be read.",
+  RELIABILITY_UNRESOLVED:
+    "The support rests on a file whose source or basis is not shown.",
+};
+
+export type ReviewGroupKey = "SATISFIED" | "OPEN" | "EXCEPTION";
+
+/** The three groups the attributes a request asks for fall into. */
+export const REVIEW_GROUP_WORDS: Record<
+  ReviewGroupKey,
+  { label: string; icon: IconName; tone: Tone }
+> = {
+  SATISFIED: { label: "Satisfied", icon: "check", tone: "success" },
+  OPEN: { label: "Open", icon: "minusCircle", tone: "warning" },
+  EXCEPTION: { label: "Potential exception", icon: "risk", tone: "danger" },
+};
+
+const GROUP_OF: Record<Assessment, ReviewGroupKey> = {
+  SATISFIED: "SATISFIED",
+  PARTIALLY_SUPPORTED: "OPEN",
+  NOT_DEMONSTRATED: "OPEN",
+  INDETERMINATE: "OPEN",
+  CONTRADICTED: "EXCEPTION",
+};
+
+const FOLLOW_UP_KINDS: Record<FollowUp["kind"], string> = {
+  EVIDENCE: "Evidence",
+  CLARIFICATION: "Clarification",
+};
+
+const PRIORITY_WORDS: Record<FollowUpPriority, string> = {
+  HIGH: "High priority",
+  MEDIUM: "Medium priority",
+  LOW: "Low priority",
+};
+
+/** Said once where no fact of the control's understanding is confirmed. */
+export const CONTEXT_THIN =
+  "No fact of this control's understanding is confirmed yet, so the evidence was checked against the attributes' wording alone.";
+
+/** Said of a file the check read with its type not confirmed. */
+const TYPE_NOT_CONFIRMED =
+  "Its type is not confirmed, so it was read as the type it appears to be.";
+export const TYPE_TO_CONFIRM = "Its type is still to be confirmed.";
+
+const RELEVANCE_NOTES: Partial<Record<FileRelevance, string>> = {
+  NOT_RELEVANT: "It does not appear relevant to this request.",
+  CANNOT_TELL: "Whether it is relevant to this request could not be told.",
+};
+const LEGIBILITY_NOTES: Partial<Record<FileLegibility, string>> = {
+  PARTLY_UNREADABLE: "Part of it could not be read.",
+  UNREADABLE: "It could not be read.",
+};
+const SOURCE_NOTES: Partial<Record<FileSource, string>> = {
+  MANAGEMENT_PREPARED:
+    "It was prepared by a person, not taken from a system's own record.",
+  UNKNOWN: "Its source is not known.",
+};
+const BASIS_NOTES: Partial<Record<ReportBasis, string>> = {
+  NOT_SHOWN:
+    "It is a report that does not show its source, run date or parameters.",
+  PARTLY_SHOWN:
+    "It is a report that shows only part of its source, run date and parameters.",
+};
+
+/** One thing to ask for, as the review lists it. Whether one reading or both raised it
+ * is not shown: it is one ask. */
+export type FollowUpLine = {
+  key: string;
+  /** The main line, and what Copy copies. */
+  request: string;
+  /** "Evidence" or "Clarification". */
+  kind: string;
+  /** "High priority", "Medium priority", "Low priority". */
+  priority: string;
+  /** The attributes it serves, by the list's letters. */
+  letters: string[];
+  /** "For attribute C"; "" where it names none. */
+  serves: string;
+  /** On request: what is missing, why it matters, and what else would do. */
+  missing: string;
+  why: string;
+  alternatives: string;
+};
+
+/** The review of a finished engine 2 check, in the row's words. */
+export type ReviewView = {
+  /** The outcome as this page reads it. */
+  state: Outcome;
+  label: string;
+  icon: IconName;
+  tone: Tone;
+  /** Why the evidence is or is not sufficient, in at most three sentences. */
+  explanation: string;
+  /** The attributes the request asks for, each letter under one group. */
+  groups: Array<{
+    key: ReviewGroupKey;
+    label: string;
+    icon: IconName;
+    tone: Tone;
+    letters: string[];
+  }>;
+  /** "Satisfied A, B · Open C · Potential exception D"; "" where the request asks for
+   * none. */
+  countsLine: string;
+  /** Null where the evidence is complete. */
+  completeness: { label: string; reasons: string[] } | null;
+  /** Empty where the evidence is sufficient. */
+  followUps: FollowUpLine[];
+  /** "2 more follow-ups are not listed here."; "" where every one is listed. */
+  more: string;
+  /** Follow-ups of the earlier check that the new evidence resolved. */
+  resolved: Array<{ key: string; request: string; letters: string[] }>;
+  considerations: Array<{
+    key: string;
+    text: string;
+    passages: ShownPassage[];
+  }>;
+  /** What the check found on the facts the files state, each in one sentence, with
+   * the files it names. */
+  concerns: Array<{ key: string; text: string; files: string }>;
+  /** Only the files with something to say. */
+  files: Array<{ fileId: string; name: string; notes: string[] }>;
+  /** One quiet sentence where the control's understanding is thin; null otherwise. */
+  contextThin: string | null;
+};
+
+/**
+ * The review of a request's evidence as its row shows it; null where the check has
+ * none (engine 1, or not finished). It words what the server decided and decides
+ * nothing: the one thing it will not do is repeat "sufficient" where what came with it
+ * says otherwise.
+ */
+export function reviewView(
+  request: AssuredRequest,
+  attributes: readonly Lettered[],
+  files: readonly RowFile[],
+  span: Span,
+): ReviewView | null {
+  const review = request.review;
+  if (review === null || request.status !== "REVIEWED") {
+    return null;
+  }
+  const order = attributes.map((item) => item.letter);
+  const at = (letter: string) =>
+    order.indexOf(letter) < 0 ? order.length : order.indexOf(letter);
+  // In the attributes' order, as the row's letters are; a letter once.
+  const inOrder = (letters: readonly string[]) =>
+    distinct(
+      letters.filter((letter) => letter !== ""),
+      (letter) => letter,
+    ).sort((a, b) => at(a) - at(b) || a.localeCompare(b));
+  // An attribute's letter is the list's, by its id; its code where the list has none.
+  const letterOfId = (id: string): string =>
+    attributes.find((each) => each.id === id)?.letter ??
+    request.attributes.find((each) => each.attributeId === id)?.code ??
+    "";
+  const letterOfCode = (code: string): string => {
+    const item = request.attributes.find((each) => each.code === code);
+    return (
+      attributes.find(
+        (each) => item !== undefined && each.id === item.attributeId,
+      )?.letter ?? code
+    );
+  };
+  const lettersOf = (item: { attributeIds?: string[]; codes: string[] }) => {
+    const byId = inOrder((item.attributeIds ?? []).map(letterOfId));
+    return byId.length > 0 ? byId : inOrder(item.codes.map(letterOfCode));
+  };
+  const nameOf = (fileId: string) =>
+    files.find((each) => each.id === fileId)?.name ??
+    "A file no longer on this request";
+  const many =
+    new Set([...files.map((file) => file.id), ...request.fileIds]).size > 1;
+
+  const asked = request.attributes.filter((item) => item.assessment !== null);
+  const groupKeys: ReviewGroupKey[] = ["SATISFIED", "OPEN", "EXCEPTION"];
+  const groups = groupKeys
+    .map((key) => ({
+      key,
+      ...REVIEW_GROUP_WORDS[key],
+      letters: inOrder(
+        asked
+          .filter(
+            (item) =>
+              item.assessment !== null && GROUP_OF[item.assessment] === key,
+          )
+          .map((item) => letterOfId(item.attributeId) || item.code),
+      ),
+    }))
+    .filter((group) => group.letters.length > 0);
+
+  const open = review.followUps.filter((item) => item.status === "OPEN");
+  // "Sufficient" stands only as section 10.6 defines it: every attribute the request
+  // asks for satisfied, nothing left to ask, and no support still to corroborate.
+  const stands =
+    review.overall !== "SUFFICIENT" ||
+    (asked.length > 0 &&
+      asked.every((item) => item.assessment === "SATISFIED") &&
+      open.length === 0 &&
+      review.followUpsMore === 0 &&
+      review.completeness.state !== "RELIABILITY_UNRESOLVED");
+  const state: Outcome = stands ? review.overall : "UNABLE_TO_CONCLUDE";
+
+  const completeness =
+    review.completeness.state === "COMPLETE"
+      ? null
+      : {
+          label: COMPLETENESS_WORDS[review.completeness.state],
+          reasons:
+            review.completeness.reasons.length > 0
+              ? review.completeness.reasons.map(sentence)
+              : [COMPLETENESS_REASONS[review.completeness.state]],
+        };
+
+  const confirming = new Set(
+    review.confirmations
+      .filter((item) => item.code === "KIND_UNSURE")
+      .map((item) => item.fileId),
+  );
+  const notesOf = (file: ReviewFile | null, fileId: string): string[] => {
+    const flags = [
+      file === null ? undefined : RELEVANCE_NOTES[file.relevance],
+      file === null ? undefined : LEGIBILITY_NOTES[file.legibility],
+      file === null ? undefined : SOURCE_NOTES[file.source],
+      file === null ? undefined : BASIS_NOTES[file.reportBasis],
+      confirming.has(fileId) ? TYPE_TO_CONFIRM : undefined,
+    ].filter((note): note is string => note !== undefined);
+    // A file with nothing to say is not listed, whatever notes came with it.
+    return flags.length === 0
+      ? []
+      : distinct([...flags, ...(file?.notes ?? []).map(sentence)], (note) =>
+          note.toLowerCase(),
+        );
+  };
+
+  return {
+    state,
+    ...OUTCOME_WORDS[state],
+    explanation: !stands
+      ? REVIEW_UNREAD
+      : review.explanation !== ""
+        ? review.explanation
+        : OUTCOME_REASONS[state],
+    groups,
+    countsLine: groups
+      .map((group) => `${group.label} ${group.letters.join(", ")}`)
+      .join(" · "),
+    completeness,
+    followUps: open.map((item, index) => {
+      const letters = lettersOf(item);
+      return {
+        key: item.key !== "" ? item.key : `ask-${index}`,
+        // The ask is the main line; where the server named only what is missing, that.
+        request: item.request !== "" ? item.request : item.missing,
+        kind: FOLLOW_UP_KINDS[item.kind],
+        priority: PRIORITY_WORDS[item.priority],
+        letters,
+        serves:
+          letters.length === 0
+            ? ""
+            : `For attribute${letters.length === 1 ? "" : "s"} ${span(letters)}`,
+        missing: item.request !== "" ? item.missing : "",
+        why: item.why,
+        alternatives: item.alternatives,
+      };
+    }),
+    more:
+      review.followUpsMore > 0
+        ? `${review.followUpsMore} more follow-up${review.followUpsMore === 1 ? " is" : "s are"} not listed here.`
+        : "",
+    resolved: [
+      ...review.resolved.map((item) => ({ ...item, attributeIds: [] })),
+      ...review.followUps
+        .filter((item) => item.status === "RESOLVED" && item.request !== "")
+        .map((item) => ({
+          key: item.key,
+          request: item.request,
+          codes: item.codes,
+          attributeIds: item.attributeIds,
+        })),
+    ].map((item, index) => ({
+      key: item.key !== "" ? `done-${item.key}` : `done-${index}`,
+      request: item.request,
+      letters: lettersOf(item),
+    })),
+    considerations: review.considerations.map((item, index) => ({
+      key: `note-${index}`,
+      text: sentence(item.text),
+      passages: item.passages.map((passage) =>
+        shownPassage(passage, files, many),
+      ),
+    })),
+    concerns: review.concerns.map((item, index) => ({
+      key: `concern-${index}`,
+      text: sentence(item.sentence),
+      files: item.fileIds
+        .filter((id) => files.some((file) => file.id === id))
+        .map(nameOf)
+        .join(", "),
+    })),
+    files: [
+      ...review.files.map((file) => ({
+        fileId: file.fileId,
+        notes: notesOf(file, file.fileId),
+      })),
+      ...[...confirming]
+        .filter((id) => !review.files.some((file) => file.fileId === id))
+        .map((id) => ({ fileId: id, notes: notesOf(null, id) })),
+    ]
+      .filter((file) => file.notes.length > 0)
+      .map((file) => ({ ...file, name: nameOf(file.fileId) })),
+    contextThin: review.contextThin ? CONTEXT_THIN : null,
   };
 }
 
@@ -1417,6 +2294,8 @@ export function notChecked(requirementId: string): AssuredRequest {
     outOfDate: [],
     note: "",
     finishedAt: null,
+    engineVersion: 1,
+    review: null,
   };
 }
 

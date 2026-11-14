@@ -15,7 +15,9 @@ import { EVIDENCE_KIND_LABELS, EVIDENCE_KINDS } from "./analysis-model";
 import {
   type AssuredRequest,
   assuranceProblem,
+  FOLLOW_UP_TITLE,
   type Lettered,
+  REVIEW_TITLE,
 } from "./evidence-assurance-model";
 import { FileChanges } from "./evidence-change";
 import { type Picked, walk } from "./evidence-intake";
@@ -3246,6 +3248,37 @@ function ResultCard({
                 <span className="wz-problem" role="alert">
                   {rerunProblem}
                 </span>
+              ) : null}
+            </li>
+          ) : null}
+          {item.review !== null ? (
+            // The check's review of the item's evidence, above its attributes: the
+            // proposed outcome and why, then what to ask for. It decides nothing.
+            <li className="wz-review">
+              <p className="wz-review-head">
+                <span className="wz-review-title">{REVIEW_TITLE}</span>
+                <span className={`wz-state tone-${item.review.tone}`}>
+                  <UiIcon name={item.review.icon} size={13} />
+                  {item.review.label}
+                </span>
+              </p>
+              <p className="wz-ar-reason">{item.review.explanation}</p>
+              {item.review.followUps.length > 0 || item.review.more !== "" ? (
+                <div className="wz-review-asks">
+                  <h4 className="wz-rc-label" id={`${id}-asks`}>
+                    {FOLLOW_UP_TITLE}
+                  </h4>
+                  {item.review.followUps.length > 0 ? (
+                    <ol aria-labelledby={`${id}-asks`}>
+                      {item.review.followUps.map((ask) => (
+                        <li key={ask.key}>{ask.request}</li>
+                      ))}
+                    </ol>
+                  ) : null}
+                  {item.review.more !== "" ? (
+                    <p className="wz-why">{item.review.more}</p>
+                  ) : null}
+                </div>
               ) : null}
             </li>
           ) : null}
