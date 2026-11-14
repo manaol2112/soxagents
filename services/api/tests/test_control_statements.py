@@ -116,7 +116,7 @@ def test_no_formal_document_reads_as_established_practice() -> None:
         "Each order is approved by the approvers [the delegation of authority] requires."
     )
     assert render(text, {"doa": NO_DOCUMENT}, labels) == (
-        "Each order is approved by the approvers the client's established practice requires."
+        "Each order is approved by the approvers established practice requires."
     )
 
 
@@ -192,7 +192,8 @@ def test_a_client_with_no_formal_document_records_that_and_testing_is_not_held(
     after = _context(client, team, control)["design"]
     # The wording reads as what happens; the answer is kept as given, for the audit file.
     assert f"[{slot.fills}]" not in after["text"]
-    assert "the client's established practice" in after["text"]
+    assert "established practice" in after["text"]
+    assert "client" not in after["text"]
     assert NO_DOCUMENT not in after["text"]
     held = next(s for s in after["slots"] if s["key"] == "access-policy")
     assert (held["value"], held["blocks"]) == (NO_DOCUMENT, False)

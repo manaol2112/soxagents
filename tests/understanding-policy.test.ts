@@ -5,7 +5,7 @@ import { describe, it } from "node:test";
 // The governing-policy question in Control Understanding (product owner, 13 November 2026:
 // "Policy should always be optional ... an option here that policy is not available instead
 // of linking ... if yes, ask it to add the name of the policy"). The step offers two answers:
-// the client has a policy (named, then added to the D&I evidence requests) or no formal policy
+// there is a policy (named, then added to the D&I evidence requests) or no formal policy
 // (saved as the "No formal document" value, which the wording reads as established practice).
 
 const source = readFileSync(
@@ -31,13 +31,10 @@ describe("the policy question in Control Understanding", () => {
 
   it("offers a named policy or no formal policy, and says a policy is not required", () => {
     const step = policyStep();
-    assert.match(step, /The client has a policy/);
+    assert.match(step, /There is a policy/);
     assert.match(step, /No formal policy/);
     assert.match(step, /A formal policy is not\s+required/);
-    assert.match(
-      step,
-      /placeholder="The policy's name, as the client calls it"/,
-    );
+    assert.match(step, /placeholder="The policy's name, as it is titled"/);
   });
 
   it("saves no formal policy as the shared no-document value", () => {
@@ -56,6 +53,15 @@ describe("the policy question in Control Understanding", () => {
     assert.match(step, /choice === "NAMED" \?/);
     assert.match(step, /Add it to the D&amp;I\s+evidence requests/);
     assert.match(step, /href=\{documentsHref\}/);
+  });
+
+  it("never says the client: internal audit uses the tool for its own organization", () => {
+    // Product owner, 13 November 2026: "I don't want to say the client".
+    const visible = policyStep()
+      .split("\n")
+      .filter((line) => !/^\s*(\/\/|\*|\/\*\*)/.test(line))
+      .join("\n");
+    assert.doesNotMatch(visible, /\bclients?\b/i);
   });
 
   it("keeps the step skippable and never saves an empty answer", () => {

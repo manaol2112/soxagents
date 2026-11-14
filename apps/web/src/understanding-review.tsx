@@ -418,11 +418,11 @@ export function UnderstandingReview({
   }
 
   /**
-   * Which policy governs the control: optional, since many clients have none (product owner,
+   * Which policy governs the control: optional, since many organizations have none (product owner,
    * 13 November 2026: "Policy should always be optional ... Just an option here that policy
    * is not available instead of linking. ... if yes, ask it to add the name of the policy").
-   * No formal policy is an answer on the record (it reads as the client's established
-   * practice); a policy is recorded by its name, and the person adds it to the D&I evidence
+   * No formal policy is an answer on the record (it reads as established practice;
+   * the product never says "the client", since internal audit uses it for its own organization); a policy is recorded by its name, and the person adds it to the D&I evidence
    * requests and uploads it there.
    */
   function policyPoint(
@@ -459,8 +459,8 @@ export function UnderstandingReview({
         {chips}
         {title}
         <p className="ur-hint" id="ur-hint">
-          A formal policy is not required. Many clients have none: choose No
-          formal policy, and the control reads as the client&apos;s established
+          A formal policy is not required, and many organizations have none.
+          Choose No formal policy, and the control reads as established
           practice.
           {need.source === "SYSTEM" || need.source === "OTHER_SYSTEM"
             ? ` "${current}" is used for ${need.source === "SYSTEM" ? "this system's other controls" : "the same control on another system"}; confirm it or choose another answer.`
@@ -483,7 +483,7 @@ export function UnderstandingReview({
               }
             />
             <span className="ur-dot" aria-hidden="true" />
-            <span className="ur-option-text">The client has a policy</span>
+            <span className="ur-option-text">There is a policy</span>
           </label>
           <label className={`ur-option${choice === "NONE" ? " is-on" : ""}`}>
             <input
@@ -508,7 +508,7 @@ export function UnderstandingReview({
               maxLength={300}
               value={name}
               disabled={!canAct || busy}
-              placeholder="The policy's name, as the client calls it"
+              placeholder="The policy's name, as it is titled"
               aria-label="The policy's name"
               onChange={(event) => {
                 const value = event.target.value;

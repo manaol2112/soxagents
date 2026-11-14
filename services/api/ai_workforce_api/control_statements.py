@@ -140,11 +140,13 @@ class Statement:
         return {match for value in fields for match in SLOT.findall(value)}
 
 
-# A client without a formal document says so, on the record (product owner, 4 November 2026:
+# An organization without a formal document says so, on the record (product owner, 4 November 2026:
 # "There are companies that don't have a formal policy so this should be optional"). The answer
 # is kept in these words for the audit file, and the control's wording reads as the second.
 NO_DOCUMENT = "No formal document"
-NO_DOCUMENT_READS = "the client's established practice"
+# The product does not say "the client": internal audit teams use it for their own
+# organization (product owner, 13 November 2026).
+NO_DOCUMENT_READS = "established practice"
 
 
 def shown(value: str) -> str:
