@@ -269,7 +269,8 @@ set's scorer uses too). An answer whose `attributes` arrives as the text of its 
 read as the JSON it is (`models.unnested`, as the planner's answer is: the first live run,
 13 November 2026, lost three readings, and so three cases, to it); every check applies to what is
 read, and the call's record keeps what the provider returned and says it was re-read. A
-reading whose answer was cut off at its allowance of 8,192 output tokens (the provider's
+reading whose answer was cut off at its allowance (8,192 output tokens for the first
+engine; 12,000 from engine 2, whose answer is larger: section 10.4) (the provider's
 stop reason, or JSON text that ends part way) is asked once more with 16,000 and 300
 seconds, the same prompt, as a model call of its own through the same budgets and with the
 claim's lease extended; the cut-off call stays on record (`NOT_USED`, asked again) and is
@@ -297,7 +298,9 @@ first gave nothing.
   elements not shown); for a deviation it names the element and quotes the record ("Not
   met: approved by someone other than the requester. The ticket shows “...”."). The question it proposes for the
   control owner is written from the firm's own attribute wording, never from the model's
-  words.
+  words. From engine 2, where the run's review holds a follow-up for the attribute, the
+  question is that follow-up's request instead (section 10.5, item 5), and an issue a
+  comparison made in code decided says so in its observation.
 - An issue a person already has in hand (accepted, sent, answered, asked again,
   escalated) is never marked stale by a client's reply or upload: the reading that arrives
   attaches to it (matched on its requirement where it rests on several files) and proposes
@@ -415,13 +418,14 @@ Role = Literal["ASSESSOR", "REVIEWER"]
 Shows = Literal["DESIGN", "IMPLEMENTATION"]
 PassageBasis = Literal["RECORD", "REQUIREMENT", "ASSERTION", "INSTRUCTION"]
 HeldCode = Literal["CUSTODY", "READ_FAILED", "UNREADABLE", "KIND_UNSURE", "POPULATION", "NO_ATTRIBUTES", "TOO_LARGE"]
-# Prompt versions: evidence-assurance-assessor/5, evidence-assurance-reviewer/5 (13 November 2026)
+# Prompt versions: evidence-assurance-assessor/6, evidence-assurance-reviewer/6 (14 November 2026;
+# an engine 1 run carries /5: ENGINE_PROMPTS)
 
 @dataclass(frozen=True)
 class AttributeSpec: id: UUID; code: str; text: str; criteria: dict[str, Any] | None; expected: bool; linked_elsewhere: bool = False
 
 @dataclass(frozen=True)
-class FileSpec: id: UUID; name: str; kind: str; text: str; truncated: bool; sha256: str
+class FileSpec: id: UUID; name: str; kind: str; text: str; truncated: bool; sha256: str; kind_unsure: bool = False
 
 @dataclass(frozen=True)
 class ChainInput:
@@ -430,22 +434,38 @@ class ChainInput:
     files: tuple[FileSpec, ...]          # the files the readings include, in prompt order
     files_left_out: bool = False         # a file of the request was held by the gate
     categories: tuple[str, ...] = ()     # the requirement's, for each file's own lens
+    left_out_names: tuple[str, ...] = () # the files left out, for the sentences that name them
+    context: ControlContext | None = None  # engine 2 (10.2); None reads as a thin understanding
+    left_out: tuple[LeftOut, ...] = ()   # engine 2: each file left out, with the gate's code and sentence
 
 @dataclass(frozen=True)
 class GateFacts: custody_failed: bool; readable: bool; kind: str; kind_confirmed: bool; confidence: str; source: str; read_failed: bool = False
 
-def gate(facts: GateFacts) -> Held | None: ...                       # one file
+def gate(facts: GateFacts, engine: int = 1, *, population_asked: bool = False) -> Held | None: ...   # one file, as an engine reads it
 def run_gate(files: Sequence[tuple[Held | None, int]], attributes: int) -> Held | None: ...   # the run
 def lens_for(categories: tuple[str, ...], kinds: Sequence[str]) -> Lens: ...
 def elements_of(attribute: AttributeSpec) -> tuple[tuple[str, str], ...]: ...   # (key, text)
 def prompt_for(chain: ChainInput, role: Role) -> tuple[str, str]: ...   # (system, prompt)
 def reading_request(system: str, prompt: str, *, retry: bool = False) -> ModelRequest: ...   # both readings, database run and scorer
 def cut_off(status: str, raw: ModelRaw, schema: dict[str, Any] = OPINION_SCHEMA) -> bool: ...   # ask again with more room
-def check_opinion(output: dict[str, Any], chain: ChainInput) -> Opinion: ...   # rules 1 to 6
+def check_opinion(output: dict[str, Any], chain: ChainInput) -> Opinion: ...   # rules 1 to 6; engine 2: facts, checks, asks, remarks, files
 def attribute_result(elements: Sequence[ElementView]) -> Result: ...   # rule 6
 def compare(first: Opinion, second: Opinion, chain: ChainInput) -> tuple[Outcome, ...]: ...
-def run_chain(ask: Callable[[Role, str, str], dict[str, Any] | None], chain: ChainInput) -> ChainResult: ...
+def review_of(first: Opinion, second: Opinion, chain: ChainInput, outcomes: Sequence[Outcome],
+              previous_follow_ups: Sequence[Mapping[str, Any]] = ()) -> tuple[tuple[Outcome, ...], dict[str, Any]]: ...   # engine 2 (10.5 to 10.7)
+def run_chain(ask: Callable[[Role, str, str], dict[str, Any] | None], chain: ChainInput,
+              previous_follow_ups: Sequence[Mapping[str, Any]] = ()) -> ChainResult: ...
 ```
+
+Engine 2 (section 10) adds, all with defaults so a chain built without them still runs:
+`ControlContext` (assurance_context.py: `statement`, `risk`, `control_type`, `nature`,
+`frequency`, `performer`, `reviewer`, `owner`, `system`, `period_from`, `period_to`,
+`understanding` (a tuple of `UnderstandingFact(ref, question, answer, kind, confirmed_at,
+confirmed_by)`), `request_title`, `request_description`; `thin`, `period`, `as_prompt()`,
+`sha256`); on `Opinion`: `files`, `facts`, `facts_dropped`, `checks`, `asks`, `remarks`;
+on `Outcome`: `assessment` and `checks`; on `ChainResult`: `review` (the object of 10.7;
+None when a reading gave no usable answer). `run_chain` is `compare` followed by
+`review_of`: the outcomes it returns are the ones code lets stand.
 
 `Outcome` has `attribute_id`, `code`, `expected`, `verdict`, `result` (the agreed one, or
 None when the readings differ or what they agree on is shown for reference), `passages`
@@ -508,7 +528,9 @@ The reviewer's prompt never contains anything from the assessor's answer. A test
 
 One entry per DESIGN requirement that has a file in force: its latest run, or
 `NOT_CHECKED` (with `run_id` null, `held` null, `file_ids`, `held_files` and `attributes`
-empty) where it has none.
+empty) where it has none. From engine 2 each entry also carries `engine_version` and
+`review`, and each attribute `assessment` and `checks` (section 10.7); nothing above is
+removed or renamed.
 
 - `held` is null unless the whole run is HELD. `held_files` lists every file the readings
   did not include, each with its code and sentence: a file its own gate held, and, when
@@ -706,6 +728,22 @@ they never fill it in. The rules add: judge each element against the process the
 understanding describes, not against the presence of a word; do not add a requirement
 that neither the attributes nor the understanding state.
 
+As built (assurance_context.py; `load_context` in evidence_assurance.py): the design is
+`control_design.design_for` (its statement, risk, type, nature, frequency, operator,
+reviewer and owner; none of it for a control with no library statement), the system is
+the control's application (`engagement_applications.name`), the audit period is the
+engagement's (`engagement_settings.period_start` and `period_end`), and the request is the
+requirement's own title and description. Every text is one bounded line (statement 1,500
+characters, risk 600, a fact's question 220 and answer 500, the request's title 300 and
+description 1,500). The hash is taken from the very form the prompt carries, without each
+fact's ref (its place in the list) and with the facts in an order of their own, so the
+same understanding always gives the same hash. The hash is compared like any other part
+of the basis: the queueing that follows a person's change (`follow_control`, which the
+walkthrough's own route already calls) marks the engine 2 run out of date and records the
+run that reads the understanding as it now stands; a change nothing told the queueing
+about (the audit period) shows as out of date when the list is read. An engine 1 run has
+no context, and no change to it ever puts that run out of date.
+
 ### 10.3 The gate
 
 For engine 2 a file whose kind is not sure (`KIND_UNSURE`) is **read**, as the kind the
@@ -715,6 +753,16 @@ that did not finish and a file with nothing readable stay hard stops. A populati
 out of a single-instance item as before, with the reason said by purpose ("a population
 shows who or what is in scope, not that one instance was performed"); it is read where the
 item itself asks for a population.
+
+As built: an item asks for a population when its categories name `POPULATION`
+(`evidence_requirements.categories`; `gate(facts, 2, population_asked=True)`). The
+confirmations of a reviewed run are given by the API only for the files whose kind is
+still not sure: a person who confirms the very kind the reader took changes nothing a
+run rests on, so no run is recorded, and the file is no longer listed. The evidence
+wizard still holds an unsure file to the first engine's rule before it places it (a
+person places it); its sentence no longer says the check waits for the kind ("The reader
+is not sure what kind of evidence this file is. Confirm its kind, or choose the item it
+belongs to.").
 
 ### 10.4 What a reading answers in addition (prompts /6)
 
@@ -751,13 +799,24 @@ The rules tell both readings: a follow-up is asked only for something an approve
 attribute's element needs and the files do not show; say when nothing more is needed; a
 consideration is an observation, never a new requirement.
 
+As built: a reading's allowance is 12,000 output tokens (8,192 before), since the answer
+now also carries these parts; a reading cut off is still asked once more with 16,000. An
+entry of one of these parts that is not of its shape (a kind or a test outside its
+vocabulary, a missing quote) is left out and, for a fact, counted; it never rejects the
+reading, whose elements are held to their own shape exactly as before. Nothing in these
+parts can make support.
+
 ### 10.5 What code decides
 
 Applied after the rules of section 3, stage 4:
 
 1. **Facts.** A fact stands only if its quote is found in the file it names (rule 1) and its
    value is in that quote. Dates are parsed in code; a date whose day and month could be
-   read either way is not compared.
+   read either way is not compared. As built, the quote must also sit on a line that is a
+   record: never one the deterministic guards flag, nor one code reads as someone's
+   account (a remark, a note, "all approvals were obtained"). What never shows an element
+   never shows a failure of one either. A reading's dropped facts are counted
+   (`facts_dropped`).
 2. **Checks.** Each named comparison is made in code on each reading's own facts: PASS, FAIL
    or NOT_RUN (a fact missing or not parseable), with one sentence that states the values
    ("Approved 11 January 2027, performed 10 January 2027: the approval is after.").
@@ -770,11 +829,23 @@ Applied after the rules of section 3, stage 4:
      sentence.
    - A check that passes supports nothing by itself: support is still two agreed MET
      answers on verified passages.
+   - As built: a comparison is made only where it is named for an element of the run's
+     attributes. A failure on both readings makes the element a deviation with the
+     passages its facts are read from, and the summary reads "A check of the records
+     shows attribute C is not met: <sentence>". Beside a file left out or read in part it
+     follows item 4, as any exception does: `UNSETTLED` with the sentence and "<file> has
+     not been read yet and may answer it. Your judgment is needed.", assessment
+     `CONTRADICTED`, outcome `POTENTIAL_EXCEPTION`.
 3. **Code's own checks**, on facts both readings state alike: the SYSTEM a file names is not
    the control's system (`WRONG_SYSTEM`), or the files name different SUBJECTs for one
    instance (`DIFFERENT_SUBJECT`): an attribute whose passages are all in such a file is not
    supported (`UNSETTLED`, with the sentence). A date outside the audit period
-   (`OUTSIDE_PERIOD`) is a consideration unless an attribute's element asks for it.
+   (`OUTSIDE_PERIOD`) is a consideration unless an attribute's element asks for it. As
+   built, the rule is applied element by element, which is stricter: an element all of
+   whose passages are in such files is not shown, and an attribute with such an element
+   is not supported. An element asks for the period when a reading names an `IN_PERIOD`
+   comparison; the date is then no consideration, and the comparison's result is the
+   element's.
 4. **An exception is never hidden by a missing file.** An exception both readings show
    while a file is left out or read in part stays a person's (`UNSETTLED`, as before), but
    its assessment is `CONTRADICTED` and the request's outcome `POTENTIAL_EXCEPTION`.
@@ -786,7 +857,16 @@ Applied after the rules of section 3, stage 4:
    six are shown, by priority. An element that waits on a file not read gets no follow-up:
    the file is the next step. A follow-up of the previous run whose element is now
    supported is listed as resolved by the new evidence; one whose element is still open
-   stays open however many files arrived.
+   stays open however many files arrived. As built: an element is open as `NOT_SHOWN`,
+   `PARTLY`, `CANNOT_TELL`, `DISAGREE` (the readings differ, or a comparison fails on one
+   of them), `DEVIATION` (the records show it is not met: a clarification) or
+   `WAITING_FILE` (left open only because a file was not read, or was read in part; also
+   an exception shown beside such a file). The rest of an attribute another request also
+   asks for is not open on this request. The previous run is the requirement's latest
+   earlier engine 2 run with a review. The finding of an `ISSUE` takes as its question the
+   requests of the follow-ups that cover its attribute, so what a person accepts, edits
+   and sends is what the check found missing; a request with a link or a request for
+   credentials is not proposed, and nothing is sent by the check.
 6. **Considerations.** Kept with a verified quote, the two readings' merged, at most five.
    Never a finding, never an attribute, never a change to the test plan.
 
@@ -855,6 +935,14 @@ provisioning record is not among the files. 1 follow-up would resolve it.").
 
 - `GET …/evidence-assurance`: each request's entry gains `engine_version` and `review` (the
   object above, or null); each attribute `assessment` and `checks`. Nothing is removed.
+  `review` is given only for a `REVIEWED` entry (nothing of a run is shown before it
+  finishes, and nothing of one that is out of date). Each follow-up also carries `keys`,
+  every "<attribute id>:<element>" it covers (one request may answer several elements);
+  `raised_by` holds `ASSESSOR`, `REVIEWER`, or `CODE` where neither reading asked, and a
+  consideration code raises (a date outside the period) is raised by `CODE`. The review
+  is written with the outcome in the statement that finishes the run, is copied by a run
+  that reuses an earlier one of the same basis, and is kept under 200,000 bytes (a
+  request with a great many files loses its files' notes first, never a file).
 - A follow-up is text for the person, who sends it through the existing request and
   follow-up steps after their approval. Nothing is sent by the check.
 
@@ -874,5 +962,6 @@ the owner's approval of its cost.
 | The evaluation set and the live scoring command | built; first live run 13 November 2026 (section 8) |
 | Readings read as written and asked again when cut off; the eight cases' assignee | built 13 November 2026, a live re-run of the wrong cases to follow |
 | Prompts /5: the quote rule, placeholders, a split shortfall, shortfall attribution, designation; the case `assigner_team_not_designated` | built 13 November 2026, the same live re-run to follow |
+| Engine 2 (section 10): the control's context and its hash, prompts /6 and the larger answer, facts and comparisons checked in code, concerns, follow-ups and considerations, the two dimensions and the proposed outcome, `review` saved and read through the API | built 14 November 2026 with scripted readings (test_assurance_engine2.py); the thirty-four scenarios and the screen to follow; not yet run live |
 | Prompt caching of the file text across the two readings (models.py) | planned, after the chain is measured |
 | Interim and roll-forward evidence | planned |
