@@ -215,7 +215,7 @@ describe("what the panel says where nothing is needed from the person", () => {
     const finishing = frame({
       tone: "active",
       status: "Requests accepted",
-      line: "Drafting starts when the planner finishes. Each request is approved before it goes to the client.",
+      line: "Drafting starts when the planner finishes. Each request is approved before it goes to the organization.",
     });
     assert.equal(finishing.line?.working, true);
     assert.match(

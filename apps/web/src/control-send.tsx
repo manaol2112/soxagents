@@ -442,7 +442,7 @@ function ReviewStep({
                     {changed ? <small>Was {item.recipient}</small> : null}
                     {outsideDomains(edit.recipient, result.domains) ? (
                       <small className="rs-warn">
-                        Outside the client&apos;s email domains
+                        Outside the organization&apos;s email domains
                       </small>
                     ) : null}
                     <span className="rs-cc">
@@ -453,7 +453,7 @@ function ReviewStep({
                           className={`rs-chip${outsideDomains(address, result.domains) ? " is-outside" : ""}`}
                           title={
                             outsideDomains(address, result.domains)
-                              ? "Outside the client's email domains"
+                              ? "Outside the organization's email domains"
                               : undefined
                           }
                         >
@@ -1057,7 +1057,7 @@ function OwnerStep({
               id={`${id}-email`}
               type="email"
               aria-label="Owner's email"
-              placeholder="name@client.com"
+              placeholder="name@organization.com"
               value={email}
               autoComplete="off"
               onChange={(event) => setEmail(event.target.value)}

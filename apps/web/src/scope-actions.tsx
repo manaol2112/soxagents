@@ -497,7 +497,7 @@ function SelectControlsDrawer({
       title={`Map controls to ${name}`}
       subtitle={
         rcm
-          ? "Select controls from your library or import a client RCM."
+          ? "Select controls from your library or import the organization's RCM."
           : "Select controls from your library."
       }
       className="mc"
@@ -600,7 +600,7 @@ function SelectControlsDrawer({
           {rcm ? (
             <OpenScopeAction
               event={RCM_UPLOAD_EVENT}
-              label="Upload client RCM"
+              label="Upload the organization's RCM"
               icon="upload"
               className="btn-secondary mc-rcm"
             />
@@ -1011,7 +1011,7 @@ export function RcmUpload({
   };
   return (
     <Drawer
-      title="Upload client's RCM"
+      title="Upload the organization's RCM"
       icon="upload"
       busy={busy}
       onClose={close}
@@ -1085,7 +1085,7 @@ export function RcmUpload({
       </form>
       <p className="as-note">
         <UiIcon name="info" size={14} />
-        The client&apos;s matrix is read in its own format and terms. Its
+        The organization&apos;s matrix is read in its own format and terms. Its
         columns are matched to the firm&apos;s next, then its controls are
         reviewed before any is imported.
       </p>
@@ -1330,8 +1330,8 @@ export function FinalizeScope({
         <UiIcon name="info" size={14} />
         Finalizing creates each control&apos;s walkthrough, evidence request,
         test, and review. Evidence requests are drafted for approval: nothing is
-        sent to the client until an approver confirms it. Later scope changes
-        update the work at once.
+        sent to the organization until an approver confirms it. Later scope
+        changes update the work at once.
       </p>
     </Drawer>
   );

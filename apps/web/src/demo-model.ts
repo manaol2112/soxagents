@@ -278,6 +278,6 @@ export function demoStrip(
   // The demo's record is read only for a firm on a running trial; without it (the trial
   // ended), the engagement is still the synthetic demo it was.
   return demo.datasetComplete || demo.state === "NONE"
-    ? `Synthetic demo engagement for ${DEMO_CLIENT}. Nothing here is real client data. Simulated FY2027 audit scenario: system activity timestamps reflect when this demo was generated.`
-    : `Demo preparation: a placeholder engagement for the ${DEMO_CLIENT} demo. The complete dataset is not available yet; nothing here is real client data.`;
+    ? `Synthetic demo engagement for ${DEMO_CLIENT}. Nothing here is real organization data. Simulated FY2027 audit scenario: system activity timestamps reflect when this demo was generated.`
+    : `Demo preparation: a placeholder engagement for the ${DEMO_CLIENT} demo. The complete dataset is not available yet; nothing here is real organization data.`;
 }

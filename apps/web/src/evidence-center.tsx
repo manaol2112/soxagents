@@ -1647,7 +1647,7 @@ function NewRequest({
             />
           </label>
           <label htmlFor={`${id}-desc`}>
-            What the client is asked to provide
+            What the organization is asked to provide
             <textarea
               id={`${id}-desc`}
               rows={6}

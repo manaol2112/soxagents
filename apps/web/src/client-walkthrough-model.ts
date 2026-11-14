@@ -94,7 +94,7 @@ export function categoryOf(
   return {
     label:
       named === ""
-        ? "Client detail"
+        ? "Organization-specific detail"
         : named.charAt(0).toUpperCase() + named.slice(1),
     icon: "message",
   };

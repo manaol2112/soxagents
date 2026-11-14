@@ -129,9 +129,9 @@ export function DescribeDialog({
       >
         <h2 id={`${id}-title`}>Describe {controlRef}</h2>
         <p id={`${id}-body`}>
-          The client's RCM does not say these about the control. Answer what you
-          know; the planner's proposals are filled in to confirm or edit. What
-          you leave blank stays open and does not prevent approval.
+          The organization's RCM does not say these about the control. Answer
+          what you know; the planner's proposals are filled in to confirm or
+          edit. What you leave blank stays open and does not prevent approval.
         </p>
         <AnswerProgress answered={given.length} total={questions.length} />
         {/* The questions scroll inside the dialog, as the client values' do, so an open

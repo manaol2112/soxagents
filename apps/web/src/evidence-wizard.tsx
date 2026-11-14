@@ -1622,7 +1622,7 @@ function Footer({ view, wizard }: { view: WindowView; wizard: WindowActions }) {
       <footer className="wz-foot">
         {note(
           "lock",
-          "Files are kept with a custody record. Nothing is sent to the client.",
+          "Files are kept with a custody record. Nothing is sent to the organization.",
         )}
         <div className="wz-acts">
           {view.draft?.addMore === true ? (

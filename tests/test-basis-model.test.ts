@@ -116,7 +116,7 @@ describe("a control's test basis", () => {
     assert.ok(stated !== null);
     assert.equal(
       basisLine(stated),
-      "Client's procedures: the client's RCM states 2 test procedures.",
+      "Organization's procedures: the organization's RCM states 2 test procedures.",
     );
   });
 

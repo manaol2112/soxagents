@@ -81,7 +81,7 @@ const TESTINGS: TestingStatus[] = [
 ];
 const TABS = [
   "Overview",
-  "Client context",
+  "Organization context",
   "Governing documents",
   "Plan",
   "Evidence",
@@ -96,7 +96,7 @@ const stepOf = (key: string) =>
 const TAB_STEP: Record<
   Exclude<
     Tab,
-    "Overview" | "Client context" | "Governing documents" | "History"
+    "Overview" | "Organization context" | "Governing documents" | "History"
   >,
   (typeof STEPS)[number] | undefined
 > = {
@@ -341,7 +341,7 @@ function Detail({
     { label: "Frequency", value: row.frequency || "Not stated", icon: "clock" },
   ];
   const count = (item: Tab) =>
-    item === "Client context" && loaded !== null
+    item === "Organization context" && loaded !== null
       ? questions.length
       : item === "Governing documents" && loaded !== null
         ? documents.length
@@ -412,12 +412,14 @@ function Detail({
               </SetupForm>
             ) : null}
           </>
-        ) : tab === "Client context" ? (
+        ) : tab === "Organization context" ? (
           context === null ? (
-            <p className="cpg-muted">Loading the client-specific questions…</p>
+            <p className="cpg-muted">
+              Loading the organization-specific questions…
+            </p>
           ) : questions.length === 0 ? (
             <p className="cpg-muted">
-              This control has no client-specific questions.
+              This control has no organization-specific questions.
             </p>
           ) : (
             <ul className="cpg-list">

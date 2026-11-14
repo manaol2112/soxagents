@@ -124,7 +124,7 @@ const ACTOR_WORDS: Record<string, string> = {
   PREPARER: "The preparer",
   APPROVER: "An approver",
   REVIEWER: "The reviewer",
-  CLIENT: "The control owner (client)",
+  CLIENT: "The control owner",
   AGENT: "An agent",
   NONE: "No one",
 };

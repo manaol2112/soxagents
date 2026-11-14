@@ -71,8 +71,8 @@ export function AgentQuestionPoint({
         {conflict
           ? "The sources disagree. Choose the one that reflects how the control runs, or say it in your own words."
           : screens[0]?.suggested !== ""
-            ? "The agents' answer is selected. Confirm it holds for this client, or choose another."
-            : "Choose the answer that holds for this client."}{" "}
+            ? "The agents' answer is selected. Confirm it holds for this organization, or choose another."
+            : "Choose the answer that holds for this organization."}{" "}
         <button
           type="button"
           className="ur-skip"
@@ -158,7 +158,7 @@ export function AgentQuestionPoint({
                 maxLength={300}
                 value={words[screen.step] ?? ""}
                 disabled={!canAct || busy}
-                placeholder="Type the client's answer"
+                placeholder="Type the organization's answer"
                 aria-label={`Answer to: ${screen.question || row.question}`}
                 onChange={(event) => {
                   const value = event.target.value;

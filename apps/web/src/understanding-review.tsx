@@ -1167,7 +1167,7 @@ export function UnderstandingReview({
               maxLength={ANSWER_MAX}
               value={pick.other ?? ""}
               disabled={locked}
-              placeholder="Type the client's answer"
+              placeholder="Type the organization's answer"
               aria-label={`Other answer to: ${need.question || need.label}`}
               aria-describedby={`${id}-other-hint`}
               aria-invalid={issue !== "" && (pick.other ?? "").trim() !== ""}
@@ -1277,7 +1277,7 @@ export function UnderstandingReview({
           maxLength={300}
           value={typed[need.key] ?? ""}
           disabled={!canAct || busy}
-          placeholder="Type the client's answer"
+          placeholder="Type the organization's answer"
           aria-label={`Answer to: ${need.question || need.label}`}
           onChange={(event) => {
             const value = event.target.value;
@@ -1813,7 +1813,7 @@ export function UnderstandingReview({
     const hint = onFile
       ? "On record. Change it, or continue."
       : need.source === "USUAL"
-        ? "Selected from usual practice. Confirm it holds for this client, or choose another."
+        ? "Selected from usual practice. Confirm it holds for this organization, or choose another."
         : need.source === "PRIOR_YEAR"
           ? "Last year's answer is selected. Confirm it still holds."
           : need.source === "SYSTEM"
@@ -1903,7 +1903,7 @@ export function UnderstandingReview({
             maxLength={300}
             value={text}
             disabled={!canAct || busy}
-            placeholder="Type the client's answer"
+            placeholder="Type the organization's answer"
             aria-label={`Answer to: ${need.question || need.label}`}
             onChange={(event) => {
               const value = event.target.value;
@@ -2035,7 +2035,7 @@ export function UnderstandingReview({
           maxLength={WALKTHROUGH_TEXT_MAX}
           value={pick[0] ?? ""}
           disabled={locked}
-          placeholder="Type the client's answer"
+          placeholder="Type the organization's answer"
           aria-labelledby={`${id}-q`}
           onChange={(event) => setPick(need, [event.target.value])}
         />
@@ -2117,7 +2117,7 @@ export function UnderstandingReview({
             maxLength={OTHER_MAX}
             value={other}
             disabled={locked}
-            placeholder="How it works at this client"
+            placeholder="How it works at this organization"
             aria-describedby={`${id}-other-hint`}
             aria-invalid={otherError}
             onChange={(event) => {
@@ -2585,7 +2585,7 @@ export function UnderstandingReview({
           }
           eyebrow={AGENT_NAME}
           title="Fill from walkthrough notes"
-          description="Paste notes or a client's email. The planner proposes answers, each with the words it rests on. Nothing is saved until you choose."
+          description="Paste notes or an email from the organization. The planner proposes answers, each with the words it rests on. Nothing is saved until you choose."
           closeHref=""
           className="ur-notes-dialog"
           onClose={closeNotes}
@@ -2610,7 +2610,7 @@ export function UnderstandingReview({
                   rows={8}
                   maxLength={20000}
                   disabled={readingNotes}
-                  placeholder="Paste walkthrough notes or a client's email about this control"
+                  placeholder="Paste walkthrough notes or an email from the organization about this control"
                   aria-label="Walkthrough notes"
                   onChange={(event) => setNotes(event.target.value)}
                 />

@@ -80,7 +80,7 @@ export function matchesSummary(matches: StandardMatches | null): {
       detail:
         "Following its standard plans the control from the standard's procedures and proposes its attributes for approval." +
         (rest > 0
-          ? ` ${plural(rest, "other control")} matched only partly or not at all and ${rest === 1 ? "follows" : "follow"} the client's procedures until decided on the control.`
+          ? ` ${plural(rest, "other control")} matched only partly or not at all and ${rest === 1 ? "follows" : "follow"} the organization's procedures until decided on the control.`
           : ""),
     };
   }
@@ -88,7 +88,7 @@ export function matchesSummary(matches: StandardMatches | null): {
     return {
       title: `${plural(matches.unmatched, "imported control has", "imported controls have")} not been matched to the firm's standards`,
       detail:
-        "Until matched and decided, they follow the client's procedures; where the client documents none, their plans use generic steps.",
+        "Until matched and decided, they follow the organization's procedures; where the organization documents none, their plans use generic steps.",
     };
   }
   return null;

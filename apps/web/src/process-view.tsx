@@ -84,7 +84,7 @@ export function ProcessesCard({
       <CardHeader
         title="Business processes"
         titleId="processes-title"
-        description="Each process is scoped on its own. Open one to see its controls in scope and the starter controls the library offers for it. Name the client's own processes beside the standard cycles, and write controls for any of them."
+        description="Each process is scoped on its own. Open one to see its controls in scope and the starter controls the library offers for it. Name the organization's own processes beside the standard cycles, and write controls for any of them."
         aside={
           <span className="sys-counts">
             <span className="num">{plural(inScope, "control")} in scope</span>
@@ -100,7 +100,7 @@ export function ProcessesCard({
         <EmptyState
           icon="grid"
           title="No business process controls yet"
-          detail="Add starter controls from the library, upload the client's RCM, name a process, or write a control below."
+          detail="Add starter controls from the library, upload the organization's RCM, name a process, or write a control below."
         />
       ) : (
         <SystemRows
@@ -600,7 +600,7 @@ function ProcessDetail({
           </summary>
           <p className="form-hint">
             Reviewed controls for {row.label.toLowerCase()}. Add the ones that
-            apply to this client.
+            apply to this organization.
           </p>
           <section className="sys-more-group" aria-label={row.label}>
             <ul>
@@ -700,7 +700,7 @@ export function ReportsCard({
           detail={
             systems.length === 0
               ? "Add the in-scope systems on the IT controls tab first. Key reports are tested per system."
-              : "Add a report from the library below for the system it comes from, or upload the client's RCM."
+              : "Add a report from the library below for the system it comes from, or upload the organization's RCM."
           }
         />
       ) : (

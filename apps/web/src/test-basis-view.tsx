@@ -118,8 +118,9 @@ export function TestBasisCard({
         </p>
       ) : (
         <p className="tb-sub">
-          No decision recorded: the default for a{" "}
-          {basis.source === "LIBRARY" ? "library" : "client's"} control.
+          No decision recorded: the default for{" "}
+          {basis.source === "LIBRARY" ? "a library" : "an organization's"}{" "}
+          control.
         </p>
       )}
       {basis.standard !== null &&
@@ -142,7 +143,7 @@ export function TestBasisCard({
           onToggle={(event) => setShowClient(event.currentTarget.open)}
         >
           <summary>
-            The client's documented test{" "}
+            The organization's documented test{" "}
             {basis.clientProcedures.length === 1 ? "procedure" : "procedures"} (
             {basis.clientProcedures.length})
           </summary>
@@ -176,7 +177,7 @@ export function TestBasisCard({
               disabled={action.pending}
               onClick={() => choose("CLIENT", null)}
             >
-              Use the client's procedures
+              Use the organization's procedures
             </button>
           ) : null}
           {standardKey !== null && basis.basis !== "STANDARD" ? (
@@ -220,8 +221,8 @@ export function TestBasisCard({
           {basis.run.noMatch ? (
             <p className="tb-none">
               No reliable match: none of the standards is this control as
-              described. Keep the client's procedures, or propose a new standard
-              on the Library.
+              described. Keep the organization's procedures, or propose a new
+              standard on the Library.
             </p>
           ) : null}
           <ul className="tb-list">
@@ -249,7 +250,7 @@ export function TestBasisCard({
         <div className="tb-decide">
           <p className="tb-decide-title">
             {choosing.basis === "CLIENT"
-              ? "Use the client's documented procedures as the test basis"
+              ? "Use the organization's documented procedures as the test basis"
               : choosing.basis === "STANDARD"
                 ? `Follow ${choosing.libraryKey ?? "the standard"} as the test basis`
                 : `Start from ${choosing.libraryKey ?? "the standard"} and tailor it`}
@@ -257,7 +258,7 @@ export function TestBasisCard({
           <p className="tb-sub">
             {BASIS_MEANINGS[choosing.basis]}
             {choosing.basis !== "CLIENT" && choosing.libraryKey !== standardKey
-              ? " The standard's attributes are proposed for you to decide; the client's own stay for you to keep or retire; the control is planned again and the plan goes for approval."
+              ? " The standard's attributes are proposed for you to decide; the organization's own stay for you to keep or retire; the control is planned again and the plan goes for approval."
               : ""}
           </p>
           <label htmlFor={noteId}>Why (optional), kept with the decision</label>

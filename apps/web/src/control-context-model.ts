@@ -845,7 +845,7 @@ export function openRows(
 /** Where the wording came from, as a row's small line. */
 const SOURCE_LINES: Record<Attribute["sourceKind"], string> = {
   LIBRARY: "Library standard",
-  RCM: "Client RCM",
+  RCM: "Organization's RCM",
   MANUAL: "Written by the team",
   AGENT: "Drafted by the agent",
   DOCUMENT: "Supporting document",
@@ -1324,7 +1324,7 @@ export function narrativeProgress(
   const reading =
     answers + documents + attributes > 0
       ? `${plural(answers, "answer")}, ${plural(documents, "document")} and ${plural(attributes, "attribute")}`
-      : "The client's answers, the documents and the attributes";
+      : "The organization's answers, the documents and the attributes";
   const plan: Array<{ key: string; label: string; detail: string }> = [
     {
       key: "PREPARING",
@@ -1359,7 +1359,7 @@ export function narrativeProgress(
     {
       key: "CHECKING",
       label: "Final checks",
-      detail: "Structure and coverage, then the points for the client",
+      detail: "Structure and coverage, then the points for the organization",
     },
   ];
   const at =
@@ -1507,7 +1507,7 @@ export function reviewHeadline(
   if (review.incomplete) {
     return `The reviewer agent did not finish its review. Run it again${
       review.questions > 0
-        ? `; ${plural(review.questions, "point")} also wait for the client's confirmation`
+        ? `; ${plural(review.questions, "point")} also wait for the organization's confirmation`
         : ""
     }.`;
   }
@@ -1517,8 +1517,8 @@ export function reviewHeadline(
   if (review.questions > 0) {
     const points = plural(review.questions, "point");
     return review.findings.length > 0
-      ? `${plural(review.findings.length, "issue")} to resolve, and ${points} for the client to confirm in the walkthrough.`
-      : `Waiting on ${points} for the client to confirm in the walkthrough. The narrative is drafted again once they are confirmed.`;
+      ? `${plural(review.findings.length, "issue")} to resolve, and ${points} for the organization to confirm in the walkthrough.`
+      : `Waiting on ${points} for the organization to confirm in the walkthrough. The narrative is drafted again once they are confirmed.`;
   }
   return "The review found issues to resolve before approval.";
 }
@@ -1670,7 +1670,7 @@ export const BASIS_LABELS: Record<StepBasis, string> = {
 
 export const SOURCE_LABELS: Record<Attribute["sourceKind"], string> = {
   LIBRARY: "Control library",
-  RCM: "Client RCM",
+  RCM: "Organization's RCM",
   MANUAL: "Written by the team",
   AGENT: "Agent",
   DOCUMENT: "Supporting document",
@@ -1689,7 +1689,7 @@ export function attributeLetter(index: number): string {
 /** Where the wording came from, inside a sentence. */
 const SOURCE_PHRASES: Record<Attribute["sourceKind"], string> = {
   LIBRARY: "the control library",
-  RCM: "the client's RCM",
+  RCM: "the organization's RCM",
   MANUAL: "the team",
   AGENT: "the agent",
   DOCUMENT: "supporting documents",

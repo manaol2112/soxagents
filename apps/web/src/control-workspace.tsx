@@ -332,8 +332,8 @@ export function ControlHistory({
         <div>
           <h3 id="ph-title">History</h3>
           <p>
-            Track changes to the plan, client answers, evidence requirements,
-            and approvals for this control.
+            Track changes to the plan, the organization&apos;s answers, evidence
+            requirements, and approvals for this control.
           </p>
         </div>
         <label className="ph-filter">

@@ -345,7 +345,7 @@ export function controlsTourSteps(onboarding: Onboarding): TourStep[] {
       title: "Set up the engagement's controls",
       body: [
         "The systems in scope, the business processes, the policies and procedures that govern them, and the references that describe them. The controls selected for each are listed on the Controls page; each gets its walkthrough, evidence request, test, and review once the scope is finalized.",
-        "Nothing is requested from the client until a plan is approved, and nothing is sent until an approver confirms it.",
+        "Nothing is requested from the organization until a plan is approved, and nothing is sent until an approver confirms it.",
       ],
       done: true,
     },
@@ -361,7 +361,7 @@ export function controlsTourSteps(onboarding: Onboarding): TourStep[] {
           ]
         : [
             "Start with the systems the controls run on, such as the ERP and its database.",
-            "Each system is scoped on its own: describe it, and the agent recommends the controls for it. Uploading the client's RCM finds the systems it names instead.",
+            "Each system is scoped on its own: describe it, and the agent recommends the controls for it. Uploading the organization's RCM finds the systems it names instead.",
           ],
       done: hasSystems,
     },
@@ -373,7 +373,7 @@ export function controlsTourSteps(onboarding: Onboarding): TourStep[] {
       body: [
         state.processes > 0
           ? `${plural(state.processes, "process", "processes")} in scope.`
-          : "Business process controls are scoped by process: the standard cycles, such as order to cash, and any process of the client's own.",
+          : "Business process controls are scoped by process: the standard cycles, such as order to cash, and any process of the organization's own.",
         "An engagement over IT general controls only can leave this tab empty.",
       ],
       done: state.processes > 0,
@@ -508,9 +508,9 @@ export function controlsBrief(onboarding: Onboarding): ControlsBrief {
       },
     ],
     next: !hasSystems
-      ? "Next: add the first system, or upload the client's RCM, which finds the systems it names."
+      ? "Next: add the first system, or upload the organization's RCM, which finds the systems it names."
       : state.controls === 0
-        ? "Next: load the standard library for these systems, or upload the client's RCM."
+        ? "Next: load the standard library for these systems, or upload the organization's RCM."
         : "Controls are in place; their work has started.",
     tip: "A control added later, or taken out of scope, updates the engagement's work at once: added controls get their work, and a control taken out has its open work cancelled.",
   };

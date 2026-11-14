@@ -361,7 +361,7 @@ describe("the control's workflow", () => {
     ]);
     assert.deepEqual(state(cleared, "oeevidence"), [
       "active",
-      "1 with the client",
+      "1 with the organization",
     ]);
     assert.deepEqual(
       cleared.filter((step) => step.next).map((step) => step.key),

@@ -573,7 +573,7 @@ describe("insightOf", () => {
     assert.ok(insight.next.detail.includes("3 findings"));
     assert.deepEqual(insight.questions, [
       "What is still missing for ITGC-AC-01?",
-      "Draft follow-up questions for the client about Access Security Policy.docx.",
+      "Draft follow-up questions for the organization about Access Security Policy.docx.",
       "Compare this policy with the prior-year policy.",
       "What changed after the latest upload?",
     ]);

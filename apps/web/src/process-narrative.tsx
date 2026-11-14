@@ -248,7 +248,7 @@ export function ProcessNarrative({
           </h4>
           <p>
             {approved
-              ? "How the control operates at this client, as approved. The test plan follows it."
+              ? "How the control operates at this organization, as approved. The test plan follows it."
               : "Drafted from the confirmed answers and checked by a reviewer agent. Review and update as needed."}
           </p>
         </div>

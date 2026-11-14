@@ -10,15 +10,15 @@ export type TestBasisKind = (typeof TEST_BASES)[number];
 
 export const BASIS_LABELS: Record<TestBasisKind, string> = {
   STANDARD: "Standard",
-  CLIENT: "Client's procedures",
+  CLIENT: "Organization's procedures",
   CUSTOM: "Customized standard",
 };
 
 export const BASIS_MEANINGS: Record<TestBasisKind, string> = {
   STANDARD:
-    "The standard's procedures and attributes govern, with the client's values filled in. A procedure a person rewords is shown as a deviation on the plan review.",
+    "The standard's procedures and attributes govern, with the organization's values filled in. A procedure a person rewords is shown as a deviation on the plan review.",
   CLIENT:
-    "The client's documented procedures and attributes govern. The standard is reference only; the plan is built from the control's own facts.",
+    "The organization's documented procedures and attributes govern. The standard is reference only; the plan is built from the control's own facts.",
   CUSTOM:
     "The standard is the starting point and the firm tailors it. Edits are recorded as the person's; nothing is flagged as a deviation.",
 };
@@ -164,8 +164,8 @@ export function basisLine(basis: TestBasis): string {
   const word = BASIS_LABELS[basis.basis];
   if (basis.basis === "CLIENT") {
     return basis.clientProceduresStated
-      ? `${word}: the client's RCM states ${basis.clientProcedures.length} test ${basis.clientProcedures.length === 1 ? "procedure" : "procedures"}.`
-      : `${word}: the client's RCM states no specific test procedure, only that the control operates as described.`;
+      ? `${word}: the organization's RCM states ${basis.clientProcedures.length} test ${basis.clientProcedures.length === 1 ? "procedure" : "procedures"}.`
+      : `${word}: the organization's RCM states no specific test procedure, only that the control operates as described.`;
   }
   if (basis.standard === null) {
     return `${word}: no standard is chosen yet.`;

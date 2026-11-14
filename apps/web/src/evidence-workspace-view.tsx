@@ -169,7 +169,7 @@ export function EvidenceWorkspace({
         <PlanDetails ids={ids} plan={plan} canAct={canAct} />
         {rcmItems.length > 0 ? (
           <div className="ep-list">
-            <h4>Evidence named in the client's RCM</h4>
+            <h4>Evidence named in the organization's RCM</h4>
             <ul>
               {rcmItems.map((item) => (
                 <li key={item}>{item}</li>
