@@ -28,7 +28,7 @@ from typing import Any
 from uuid import UUID
 
 import pytest
-from support import Database
+from support import Database, approve_control_plan
 from test_attributes_follow_understanding import (
     ADDED,
     _answer_required,
@@ -712,3 +712,45 @@ def test_each_record_says_what_failed_what_was_kept_and_what_to_do() -> None:
         console.failure_note("USER", "DONE", "x", False, False),
     ]
     assert quiet == [""] * len(quiet)
+
+
+def test_criteria_waiting_in_the_approved_plans_revision_are_named_on_the_attributes_step(
+    migrated: Database,
+) -> None:
+    """ITGC-AC-01, 13 November 2026: the plan was approved by a person, so the planner's
+    tailored criteria waited in the plan's pending revision and the step read "Needs
+    criteria" with nothing said. The context names the attributes, and accepting the
+    revision applies them."""
+    team, control, _scheduler, client = _ready(migrated, "aa-pending")
+    approve_control_plan(migrated, control)
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    with connect(migrated.url) as connection:
+        assert run_plan(connection, _Script(migrated, team, control), plan_id) == "DONE"
+    writable = _rows(
+        migrated,
+        "SELECT id, coalesce(code, '') FROM control_attributes WHERE engagement_control_id = %s "
+        "AND status = 'APPROVED' AND coalesce(criteria_origin, '') NOT IN ('PERSON', 'SEEDED') "
+        "AND criteria_accepted_at IS NULL ORDER BY position, created_at",
+        UUID(control),
+    )
+    assert writable
+    ids = [row[0] for row in writable]
+    context = _context(team, control)
+    assert context["plan_revision_pending"] is True
+    assert context["attributes_pending_criteria"] == [
+        {"attribute_id": str(row[0]), "code": row[1]} for row in writable
+    ]
+    # Nothing is written on the attributes until a person accepts the revision.
+    conditions = "SELECT condition FROM control_attributes WHERE id = ANY(%s)"
+    assert all(row[0] == "" for row in _rows(migrated, conditions, ids))
+    version = team["owner"].get(f"{_path(team, control)}/evidence-plan").json()["version"]
+    accepted = team["owner"].post(
+        f"{_path(team, control)}/evidence-plan/pending-revision",
+        json={"version": version, "decision": "ACCEPT"},
+    )
+    assert accepted.status_code == 200, accepted.text
+    context = _context(team, control)
+    assert context["plan_revision_pending"] is False
+    assert context["attributes_pending_criteria"] == []
+    assert all(row[0] != "" for row in _rows(migrated, conditions, ids))

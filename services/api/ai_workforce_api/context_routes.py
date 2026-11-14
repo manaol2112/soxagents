@@ -65,7 +65,12 @@ from ai_workforce_api.control_context import (
     store_document,
 )
 from ai_workforce_api.db import transaction
-from ai_workforce_api.evidence_plans import attributes_rerun_useful, attributes_run
+from ai_workforce_api.evidence_plans import (
+    PendingCriteriaBody,
+    attributes_rerun_useful,
+    attributes_run,
+    pending_criteria,
+)
 from ai_workforce_api.model_providers import live_model, provider_for
 from ai_workforce_api.models import ModelProvider
 from ai_workforce_api.pbc_drafting import load_context
@@ -123,6 +128,13 @@ class ContextBody(BaseModel):
     # note. Present whether or not a rerun would do anything (attributes_rerun_useful): the
     # step said nothing when it would not (the product owner, 13 November 2026).
     attributes_failure_note: str = ""
+    # The plan a person approved has a revision from the planner waiting for a decision
+    # (its changes are proposed, never applied), and the approved attributes whose criteria
+    # that revision proposes, in their order: their criteria apply only when a person
+    # accepts the revision (POST .../controls/{id}/evidence-plan/pending-revision with
+    # {"version", "decision": "ACCEPT"}). Until then the step reads "Needs criteria".
+    plan_revision_pending: bool = False
+    attributes_pending_criteria: list[PendingCriteriaBody] = []
     note: str = ""
 
 
@@ -1324,6 +1336,7 @@ def _body(
     readiness = assess(connection, project_id, control_id)
     running, stage, run_note = attributes_run(connection, control_id)
     agent_notes = notes_for(connection, control_id)
+    revision_pending, criteria_pending = pending_criteria(connection, control_id)
     return ContextBody(
         control_id=control_id,
         classifications=current,
@@ -1345,6 +1358,8 @@ def _body(
         attributes_run_note=run_note,
         attributes_rerun_useful=attributes_rerun_useful(connection, project_id, control_id),
         attributes_agent_notes=agent_notes,
+        plan_revision_pending=revision_pending,
+        attributes_pending_criteria=criteria_pending,
         attributes_failure_note=attributes_failure_note(
             connection, control_id, agent_notes, running, run_note
         ),

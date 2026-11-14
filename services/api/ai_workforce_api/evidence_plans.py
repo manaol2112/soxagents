@@ -4404,6 +4404,64 @@ def latest_plan_failure_note(connection: psycopg.Connection[Any], control_id: UU
     return "" if row is None else plan_failure_note(str(row[0]), str(row[1] or ""))
 
 
+class PendingCriteriaBody(BaseModel):
+    """An approved attribute whose criteria the plan's pending revision proposes."""
+
+    attribute_id: UUID
+    code: str
+
+
+def pending_criteria(
+    connection: psycopg.Connection[Any], control_id: UUID
+) -> tuple[bool, list[PendingCriteriaBody]]:
+    """Whether the control's plan has a revision waiting for a person (a plan a person
+    approved gets the planner's changes proposed, never applied: persist), and the approved
+    attributes whose criteria that revision proposes: those the planner may write
+    (CRITERIA_WRITABLE_SQL), matched by wording as _criteria_differ matches them, where the
+    proposed criteria differ from the attribute's own. In the attributes' order. On
+    ITGC-AC-01 (13 November 2026) the criteria for A1, A4 and A5 waited there and the
+    Attributes step read "Needs criteria" with nothing said."""
+    row = connection.execute(
+        "SELECT pending_revision FROM evidence_plans WHERE engagement_control_id = %s",
+        (control_id,),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return False, []
+    revision = row[0] if isinstance(row[0], dict) else {}
+    proposed = {
+        " ".join(str(item.get("attribute") or "").split()).lower(): item
+        for item in revision.get("criteria") or []
+        if isinstance(item, dict)
+    }
+    found: list[PendingCriteriaBody] = []
+    for (
+        attribute_id,
+        code,
+        text,
+        condition,
+        passes,
+        fails,
+        judgment,
+        automatable,
+    ) in connection.execute(
+        f"""
+            SELECT a.id, coalesce(a.code, ''), a.text, a.condition, a.pass_criteria,
+                   a.fail_criteria, a.judgment_required, a.automatable
+            FROM control_attributes a
+            WHERE a.engagement_control_id = %s AND {CRITERIA_WRITABLE_SQL}
+            ORDER BY a.position, a.created_at
+            """,
+        (control_id,),
+    ).fetchall():
+        item = proposed.get(" ".join(str(text).split()).lower())
+        if item is not None and (condition, passes, fails, judgment, automatable) != (
+            item.get("condition"), item.get("pass_criteria"), item.get("fail_criteria"),
+            bool(item.get("judgment_required")), item.get("automatable"),
+        ):  # fmt: skip
+            found.append(PendingCriteriaBody(attribute_id=attribute_id, code=str(code)))
+    return True, found
+
+
 def plan_run_failure_note(connection: psycopg.Connection[Any], control_id: UUID) -> str:
     """The `failure_note` of the control's evidence plan and master plan: a plan run that
     failed (its run note), or the latest run whose planner answer could not be used."""
