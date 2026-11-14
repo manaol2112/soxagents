@@ -403,8 +403,8 @@ function evidenceState(
       tone: "active",
       status:
         accepted > 0
-          ? `${sent} with client · ${accepted} accepted`
-          : `${sent} with the client`,
+          ? `${sent} with the organization · ${accepted} accepted`
+          : `${sent} with the organization`,
     };
   }
   if (accepted === 0) {

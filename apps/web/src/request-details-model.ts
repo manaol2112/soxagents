@@ -517,7 +517,7 @@ export const SOURCE_LABELS: Record<AttachmentSource, string> = {
 export const CONTACT_ROLES: Record<Contact["source"], string> = {
   OWNER: "Control owner",
   COORDINATOR: "Evidence coordinator",
-  CONTACT: "Client contact",
+  CONTACT: "Organization contact",
   RECIPIENT: "Previous recipient",
 };
 
@@ -567,7 +567,7 @@ export function addressProblem(
   }
   const domain = clean.split("@")[1] ?? "";
   if (domains.length > 0 && !domains.includes(domain)) {
-    return `${clean} is outside the client's email domains (${domains.join(", ")}).`;
+    return `${clean} is outside the organization's email domains (${domains.join(", ")}).`;
   }
   return null;
 }

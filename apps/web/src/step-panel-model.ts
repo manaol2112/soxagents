@@ -332,7 +332,7 @@ export function agentNote(
         .filter((item) => !item.filled)
         .map((item) => item.label.toLowerCase());
       return {
-        did: "Read the control from the client's RCM.",
+        did: "Read the control from the organization's RCM.",
         found:
           missing.length === 0
             ? ["Every detail the methodology needs is recorded."]

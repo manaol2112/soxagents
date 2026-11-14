@@ -811,7 +811,7 @@ export const STEP_BRIEF: Record<SetupStepKey, string> = {
   answers: "Confirm key details and settle what the records leave open.",
   process: "Confirm how the process runs.",
   attributes: "Confirm and refine test attributes.",
-  documents: "Link any governing policies the client has.",
+  documents: "Link any governing policies the organization has.",
   plan: "Approve procedures and evidence requests.",
 };
 

@@ -178,7 +178,10 @@ describe("a step's panel frame", () => {
     assert.match(frame.need.detail, /They are drafted next/);
     assert.doesNotMatch(frame.need.detail, /planner/);
     // Kept: each drafted request is still approved before it goes out.
-    assert.match(frame.need.detail, /approved before it goes to the client/);
+    assert.match(
+      frame.need.detail,
+      /approved before it goes to the organization/,
+    );
     // The list's own line is the step's, where it has one.
     const said = (line: string, tone: "active" | "idle") =>
       panelFrame(
@@ -203,7 +206,7 @@ describe("a step's panel frame", () => {
     );
     assert.equal(held.action, undefined);
     const finishing = said(
-      "Drafting starts when the planner finishes. Each request is approved before it goes to the client.",
+      "Drafting starts when the planner finishes. Each request is approved before it goes to the organization.",
       "active",
     );
     assert.equal(finishing.kind, "agent");

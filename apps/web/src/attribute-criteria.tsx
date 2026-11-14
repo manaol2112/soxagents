@@ -377,7 +377,7 @@ function CriteriaEditor({
     <div className="tc-edit" id={id}>
       {(
         [
-          ["condition", "The condition tested, at this client"],
+          ["condition", "The condition tested, at this organization"],
           ["pass_criteria", "Passes when"],
           ["fail_criteria", "Fails when"],
         ] as const
@@ -404,8 +404,8 @@ function CriteriaEditor({
       </label>
       {hint ? (
         <p className="tc-hint">
-          Name this client's system, tool, roles and policy, and keep every part
-          of the standard's requirement.
+          Name this organization's system, tool, roles and policy, and keep
+          every part of the standard's requirement.
         </p>
       ) : null}
       <div className="tc-edit-acts">

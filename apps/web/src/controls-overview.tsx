@@ -450,7 +450,7 @@ export function ControlsTable({
             type="email"
             value={owner.email}
             maxLength={200}
-            placeholder="name@client.example"
+            placeholder="name@organization.example"
             onChange={(event) =>
               setOwner({ ...owner, email: event.target.value })
             }

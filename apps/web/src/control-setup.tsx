@@ -89,7 +89,7 @@ const STEP_HELP: Record<SetupStepKey, string> = {
   attributes:
     "What the test checks on each item. Decide each one the agent proposes: approved attributes become the testing criteria.",
   documents:
-    "Policies, procedures, narratives or diagrams that govern this control, where the client has them. The agent reads them to sharpen the plan and the evidence requests.",
+    "Policies, procedures, narratives or diagrams that govern this control, where the organization has them. The agent reads them to sharpen the plan and the evidence requests.",
   plan: "The test plan the agent drafted from everything above: procedures, attributes and the evidence each needs. Once a person approves it, evidence can be requested.",
 };
 
@@ -1259,7 +1259,7 @@ function AnswersStep({
               placeholder={
                 choices.length > 0
                   ? "Or reply in your own words"
-                  : "Type the client's answer"
+                  : "Type the organization's answer"
               }
               aria-label={`Reply to: ${question}`}
               onChange={(event) => setMessage(event.target.value)}
@@ -1378,7 +1378,7 @@ function AnswersStep({
             maxLength={step !== undefined ? 140 : 300}
             value={words}
             disabled={locked}
-            placeholder="Type the client's answer"
+            placeholder="Type the organization's answer"
             aria-label={`Answer to: ${question}`}
             onChange={(event) =>
               setTyped((now) => ({ ...now, [keyOf]: event.target.value }))
@@ -1497,11 +1497,11 @@ function DocumentQuestions({
             <p className="cs-source">
               <UiIcon name="sparkles" size={13} />
               {current === NO_DOCUMENT
-                ? "Recorded: the client has no formal document. The control is tested against its established practice."
+                ? "Recorded: the organization has no formal document. The control is tested against its established practice."
                 : current === ""
                   ? choices.length > 0
                     ? "Choose the linked document that answers this, or record that there is none."
-                    : "Link or upload the document below, or record that the client has none."
+                    : "Link or upload the document below, or record that the organization has none."
                   : linked
                     ? "Answered by the linked document selected."
                     : choices.length > 0

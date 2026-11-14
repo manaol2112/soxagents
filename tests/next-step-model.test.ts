@@ -296,7 +296,7 @@ describe("the control's next step (product owner, 10 November 2026)", () => {
       designRequests: {
         tone: "active" as const,
         status: "Requests accepted",
-        line: "Drafting starts when the planner finishes. Each request is approved before it goes to the client.",
+        line: "Drafting starts when the planner finishes. Each request is approved before it goes to the organization.",
       },
       busy: new Set(["designevidence" as const]),
     };

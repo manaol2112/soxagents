@@ -220,8 +220,8 @@ export function AuthenticationPoint({
     ) : (
       <p className="au-basis is-none">
         No password policy is on file for this system. The settings are recorded
-        as stated by the client, and the D&amp;I assessment weighs the missing
-        policy.
+        as stated by the organization, and the D&amp;I assessment weighs the
+        missing policy.
       </p>
     );
 
@@ -481,7 +481,7 @@ export function AuthenticationPoint({
           maxLength={120}
           value={own}
           disabled={!canAct || saving}
-          placeholder="Type the client's setting"
+          placeholder="Type the organization's setting"
           aria-label={`Answer to: ${setting.question}`}
           onChange={(event) => setTyped(event.target.value)}
         />

@@ -1435,7 +1435,7 @@ export function carriedCopy(
     hint:
       waiting === 0
         ? "Last year's answers are confirmed."
-        : `${waiting} ${waiting === 1 ? "answer was" : "answers were"} given by the client last year. Untick any that changed; it is asked on its own.`,
+        : `${waiting} ${waiting === 1 ? "answer was" : "answers were"} given by the organization last year. Untick any that changed; it is asked on its own.`,
     step: "Last year's answers",
     confirmed: (done) => `${done} ${answers(done)} from last year confirmed.`,
   };

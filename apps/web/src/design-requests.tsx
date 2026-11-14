@@ -1114,7 +1114,9 @@ export function RequestDialog({
           />
         </div>
         <div className="tae-field">
-          <label htmlFor={`${id}-description`}>What the client provides</label>
+          <label htmlFor={`${id}-description`}>
+            What the organization provides
+          </label>
           <textarea
             id={`${id}-description`}
             value={description}
@@ -1176,8 +1178,8 @@ export function RequestDialog({
         ) : null}
         <p className="tae-note" id={`${id}-note`}>
           {adding
-            ? "Added as required and accepted as you write it. Nothing goes to the client until the drafted request is approved."
-            : "Recorded as edited by the team. Nothing goes to the client until the drafted request is approved."}
+            ? "Added as required and accepted as you write it. Nothing goes to the organization until the drafted request is approved."
+            : "Recorded as edited by the team. Nothing goes to the organization until the drafted request is approved."}
         </p>
         <Problem text={action.problem} />
         <DialogFoot

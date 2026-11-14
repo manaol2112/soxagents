@@ -849,7 +849,7 @@ describe("the D&I requests list: where it stands", () => {
     // Said only because the server says the planner is at work.
     assert.equal(
       view.header.line,
-      "Drafting starts when the planner finishes. Each request is approved before it goes to the client.",
+      "Drafting starts when the planner finishes. Each request is approved before it goes to the organization.",
     );
     assert.deepEqual(
       view.rows.map((row) => row.state),
@@ -1434,7 +1434,7 @@ describe("the D&I Evidence step's pill and decision row", () => {
     assert.match(drafting?.detail ?? "", /^Drafting the requests\./);
     assert.match(
       drafting?.detail ?? "",
-      /approved before it goes to the client/,
+      /approved before it goes to the organization/,
     );
   });
 
@@ -1456,7 +1456,7 @@ describe("the D&I Evidence step's pill and decision row", () => {
     const finishing = requestsNeed(
       REQUESTS_STATUS.accepted,
       "active",
-      "Drafting starts when the planner finishes. Each request is approved before it goes to the client.",
+      "Drafting starts when the planner finishes. Each request is approved before it goes to the organization.",
     );
     assert.equal(finishing?.kind, "agent");
     assert.match(
@@ -2129,7 +2129,7 @@ describe("the D&I requests list: actions", () => {
         409,
         "it has already been requested from the client; waive it instead",
       ) ?? "",
-      /already gone to the client/,
+      /already gone to the organization/,
     );
     assert.match(
       requestsProblem(409, "link only the control's approved attributes") ?? "",

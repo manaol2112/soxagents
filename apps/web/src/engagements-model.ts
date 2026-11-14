@@ -71,7 +71,7 @@ export function portfolioLine(projects: readonly Listed[]): string {
   const line =
     clients === 0
       ? engagements
-      : `${engagements} across ${clients} client${clients === 1 ? "" : "s"}`;
+      : `${engagements} across ${clients} organization${clients === 1 ? "" : "s"}`;
   return archived === 0 ? line : `${line} · ${archived} archived`;
 }
 

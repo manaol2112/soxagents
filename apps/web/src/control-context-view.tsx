@@ -478,7 +478,7 @@ export function DesignPanel({
                   <UiIcon name="check" size={16} />
                 </span>
                 <div>
-                  <h4>Client-specific information</h4>
+                  <h4>Organization-specific information</h4>
                   <p>
                     {standing.answered}{" "}
                     {standing.answered === 1 ? "answer" : "answers"} confirmed.
@@ -615,7 +615,7 @@ export function DesignPanel({
                       key: `answer-${slot.key}`,
                       kind: "answer" as const,
                       title: slot.value,
-                      detail: `Client-specific answer · ${slot.question || sentence(slot.label)}`,
+                      detail: `Organization-specific answer · ${slot.question || sentence(slot.label)}`,
                       slotKey: slot.key,
                     })),
                   ...walkthrough.documents.map((item) => ({

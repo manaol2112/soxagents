@@ -376,8 +376,8 @@ export function ControlDetails({
             {QUESTION[each.key]}
           </h3>
           <p className="ur-hint">
-            The {each.label.toLowerCase()} comes from the client's RCM or the
-            control library. Record it in the RCM and import it again from
+            The {each.label.toLowerCase()} comes from the organization's RCM or
+            the control library. Record it in the RCM and import it again from
             Controls setup.
           </p>
           {why}
@@ -421,7 +421,8 @@ export function ControlDetails({
             {system !== "" ? ` on ${system}` : ""}?
           </h3>
           <p className="ur-hint">
-            The person who performs or answers for the control at the client.
+            The person who performs or answers for the control at the
+            organization.
           </p>
           {suggestion !== null ? (
             <p className="cd-suggest" id="cd-suggest">
@@ -464,7 +465,7 @@ export function ControlDetails({
                 aria-describedby={
                   suggestion !== null ? "cd-suggest" : undefined
                 }
-                placeholder="name@client.com"
+                placeholder="name@organization.com"
                 aria-invalid={mail.trim() !== "" && !EMAIL.test(mail.trim())}
                 onChange={(event) => {
                   setEmail(event.target.value);
@@ -578,7 +579,7 @@ export function ControlDetails({
         <h3 className="ur-q">{controlRef}'s details are recorded</h3>
         <p className="ur-hint">
           Everything the methodology needs from the RCM is on record. Change a
-          detail from the record if the client's RCM changes.
+          detail from the record if the organization's RCM changes.
         </p>
         {nextHref !== null ? (
           <div className="ur-foot-actions">
@@ -622,7 +623,7 @@ export function ControlDetails({
           <AgentAvatar size={30} state={saving ? "working" : "idle"} />
         </span>
         <div className="ur-head-text">
-          <p className="ur-eyebrow">From the client's RCM</p>
+          <p className="ur-eyebrow">From the organization's RCM</p>
           <h2 id="cd-title">
             {missing.length === 0
               ? `${controlRef}'s details are recorded`

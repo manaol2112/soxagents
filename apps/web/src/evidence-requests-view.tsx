@@ -472,7 +472,7 @@ export function EvidenceRequests({
         {view === "groups" ? (
           <div className="er-sheet">
             <p className="er-lead">
-              The requests as they go to the client, each with its review,
+              The requests as they go to the organization, each with its review,
               approval, and what came back. A phase's list and its selected
               samples go out as separate requests.
             </p>

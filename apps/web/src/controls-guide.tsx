@@ -337,7 +337,7 @@ export function ControlsAddMenu({
           onSelect: raise(SELECT_CONTROLS_EVENT),
         },
         {
-          label: "Upload the client's RCM",
+          label: "Upload the organization's RCM",
           icon: "upload",
           unavailable: controlsSet
             ? "The controls are set up; select more from the library."
@@ -367,7 +367,7 @@ export function RcmInsteadButton() {
       onClick={() => document.dispatchEvent(new Event(RCM_UPLOAD_EVENT))}
     >
       <UiIcon name="upload" size={14} />
-      Upload the client's RCM instead
+      Upload the organization's RCM instead
     </button>
   );
 }

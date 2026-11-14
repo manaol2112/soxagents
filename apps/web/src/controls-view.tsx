@@ -1513,7 +1513,11 @@ function ControlRecord({
                     <DefinitionSection
                       key="statement"
                       title="Control statement"
-                      note={work.values ? "Client values to record" : ""}
+                      note={
+                        work.values
+                          ? "Organization-specific values to record"
+                          : ""
+                      }
                     >
                       <DesignPanel
                         ids={ids}
@@ -1753,7 +1757,7 @@ function ControlRecord({
     planSource === "LIBRARY"
       ? "Standard"
       : planSource === "UPLOAD"
-        ? "Client"
+        ? "Organization"
         : "";
   const objective = context?.testing?.objective ?? "";
   const askHref = sectionHref(model, "console");

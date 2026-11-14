@@ -533,7 +533,7 @@ export function RequestReview({
 
           <section className="rr-section" aria-labelledby={`${id}-ask`}>
             <div className="rr-section-head">
-              <h4 id={`${id}-ask`}>Request to the client</h4>
+              <h4 id={`${id}-ask`}>Request to the recipient</h4>
               {editable && !editing && detail !== null ? (
                 <button
                   type="button"
@@ -921,7 +921,7 @@ export function RequestReview({
           </p>
           <p className="rr-panel-note">
             {unsent
-              ? "Obtained during the walkthrough or otherwise in hand? Upload it here. The request is recorded as received from the audit team and is not sent to the client."
+              ? "Obtained during the walkthrough or otherwise in hand? Upload it here. The request is recorded as received from the audit team and is not sent to the organization."
               : "Upload files received outside the portal. They are filed to this request."}
           </p>
           <RequestUpload
@@ -1030,7 +1030,7 @@ function ClientResponses({
       aria-labelledby={`${id}-client`}
     >
       <div className="rr-section-head">
-        <h4 id={`${id}-client`}>Client responses</h4>
+        <h4 id={`${id}-client`}>Responses</h4>
         {client?.submittedAt ? (
           <span className="pill pill-dot tone-success">
             Submitted {formatDate(client.submittedAt)}
@@ -2258,7 +2258,7 @@ function References({
           ) : (sources?.workpapers ?? []).length === 0 ? (
             <p className="rr-none">
               No prior-year workpaper is available for this control from the
-              client's earlier engagements.
+              organization's earlier engagements.
             </p>
           ) : (
             <ul>
@@ -2636,7 +2636,7 @@ function EditWording({
         <span>
           {plain
             ? "Editing the wording as plain text."
-            : "Edit the opening and each item. The client receives them as a numbered checklist."}
+            : "Edit the opening and each item. The recipient receives them as a numbered checklist."}
         </span>
         <button
           type="button"
@@ -2657,7 +2657,7 @@ function EditWording({
       </div>
       {plain ? (
         <label htmlFor={`${id}-desc`}>
-          Wording sent to the client
+          Wording sent to the recipient
           <textarea
             id={`${id}-desc`}
             rows={14}
@@ -2779,7 +2779,7 @@ function EditWording({
                   <summary>Note, format, and alternatives</summary>
                   <div className="rr-edit-grid">
                     <label htmlFor={`${id}-item-${index}-detail`}>
-                      Note to the client
+                      Note to the recipient
                       <textarea
                         id={`${id}-item-${index}-detail`}
                         rows={2}

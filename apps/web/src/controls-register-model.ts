@@ -644,7 +644,7 @@ export function actionCenterFromQueue(
     ],
     [
       "reply",
-      "Read the client's replies",
+      "Read the evidence owners' replies",
       "Replies and unmatched emails in the mailbox.",
     ],
     ["task", "Clear a blocked task", "Plan tasks that wait on a person."],

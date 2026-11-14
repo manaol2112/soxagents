@@ -92,7 +92,7 @@ describe("the control's journey", () => {
       yours: false,
       journey: journey({ reopened: "Item 2 approval is missing" }),
     });
-    assert.equal(theirs.who, "The control owner (client)");
+    assert.equal(theirs.who, "The control owner");
     assert.equal(theirs.reason, "Testing reopened: Item 2 approval is missing");
     const stale = needsYou({
       nextStep: "Approve the test plan",

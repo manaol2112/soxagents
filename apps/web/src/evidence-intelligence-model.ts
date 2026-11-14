@@ -844,7 +844,7 @@ function questionsOf(
   const questions = [`What is still missing for ${controlRef}?`];
   if (findings.some((f) => f.source === "READER")) {
     questions.push(
-      `Draft follow-up questions for the client about ${file.fileName}.`,
+      `Draft follow-up questions for the organization about ${file.fileName}.`,
     );
   }
   if (trace.length > 0) {

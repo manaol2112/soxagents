@@ -358,7 +358,7 @@ export function matchGroups(reference: PriorYearReference): {
 }
 
 export const PROPOSAL_LABEL: Record<ProposalKind, string> = {
-  ANSWER: "Client-specific answers",
+  ANSWER: "Organization-specific answers",
   EXCEPTION: "Prior-year exceptions",
   APPROACH: "Prior test approach",
   DESIGN_CHANGE: "Design changes",

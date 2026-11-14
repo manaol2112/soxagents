@@ -44,7 +44,7 @@ export type Kpi = (typeof KPIS)[number];
 export const KPI_LABELS: Record<Kpi, string> = {
   needs_assignment: "Needs assignment",
   awaiting_approval: "Awaiting approval",
-  awaiting_client: "Awaiting client",
+  awaiting_client: "Awaiting the organization",
   received: "Evidence received",
   needs_review: "Needs review",
   overdue: "Overdue",

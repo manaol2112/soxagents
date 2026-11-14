@@ -83,7 +83,7 @@ export const SOURCE_LABEL: Record<string, string> = {
   LIBRARY: "Library",
   UPLOAD: "RCM",
   AGENT: "Agent",
-  MANUAL: "Client",
+  MANUAL: "Organization",
 };
 
 const ITGC = ["ACCESS", "CHANGE", "OPERATIONS"];

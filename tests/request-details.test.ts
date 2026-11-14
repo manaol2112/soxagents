@@ -258,7 +258,7 @@ describe("the request details", () => {
     );
     assert.equal(
       addressProblem("dana@elsewhere.example", ["client.example"]),
-      "dana@elsewhere.example is outside the client's email domains (client.example).",
+      "dana@elsewhere.example is outside the organization's email domains (client.example).",
     );
     assert.equal(
       addressProblem("nope", ["client.example"]),

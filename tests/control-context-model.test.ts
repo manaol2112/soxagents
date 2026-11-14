@@ -676,14 +676,14 @@ describe("the reviewed process narrative", () => {
     // Held only for the client's facts: the questions are in the walkthrough.
     assert.equal(
       reviewHeadline(review, 4),
-      "Waiting on 1 point for the client to confirm in the walkthrough. The narrative is drafted again once they are confirmed.",
+      "Waiting on 1 point for the organization to confirm in the walkthrough. The narrative is drafted again once they are confirmed.",
     );
     assert.equal(
       reviewHeadline(
         { ...review, findings: ["A2 is unexplained."], questions: 3 },
         4,
       ),
-      "1 issue to resolve, and 3 points for the client to confirm in the walkthrough.",
+      "1 issue to resolve, and 3 points for the organization to confirm in the walkthrough.",
     );
     assert.equal(
       reviewHeadline(
@@ -708,7 +708,7 @@ describe("the reviewed process narrative", () => {
     // A review the agent did not finish is said as such, not counted as a point.
     assert.equal(
       reviewHeadline({ ...review, incomplete: true, questions: 6 }, 4),
-      "The reviewer agent did not finish its review. Run it again; 6 points also wait for the client's confirmation.",
+      "The reviewer agent did not finish its review. Run it again; 6 points also wait for the organization's confirmation.",
     );
   });
 
@@ -1098,7 +1098,7 @@ describe("testing attributes", () => {
     });
     assert.equal(
       mixed,
-      "3 approved testing attributes, from the control library, the team and the client's RCM. 1 proposed change waits on a decision.",
+      "3 approved testing attributes, from the control library, the team and the organization's RCM. 1 proposed change waits on a decision.",
     );
     const none = attributesSummary({ approved: [], proposed: [] });
     assert.match(none, /^No testing attributes yet/);
@@ -1381,7 +1381,7 @@ describe("the Attributes step's rows", () => {
           criteria: { ...tailored, origin: "PERSON", owned: true },
         }),
       ),
-      "Client RCM · criteria by the team",
+      "Organization's RCM · criteria by the team",
     );
     assert.equal(
       attributeSourceLine(

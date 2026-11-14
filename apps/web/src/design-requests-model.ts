@@ -442,7 +442,7 @@ export const HELD_LINES: Readonly<Record<string, string>> = {
 /** What an accepted list says while nothing is at work on it and the server gives no
  * sentence of its own: the server drafts it; nothing is asked of the person. */
 export const SETTLED_LINE =
-  "The requests are accepted and every attribute is addressed. They are drafted next, and each is approved before it goes to the client.";
+  "The requests are accepted and every attribute is addressed. They are drafted next, and each is approved before it goes to the organization.";
 
 /** Why a request the agent proposes cannot be edited, re-linked or excepted yet: the
  * server refuses each with this sentence until a person accepts the request. */
@@ -475,7 +475,7 @@ export const REQUESTS_STATUS = {
 
 const SOURCE_WORDS: Record<string, string> = {
   LIBRARY: "the control library",
-  RCM: "the client's RCM",
+  RCM: "the organization's RCM",
   MANUAL: "the team",
   AGENT: "the agent, approved by the team",
   DOCUMENT: "supporting documents, approved by the team",
@@ -483,7 +483,7 @@ const SOURCE_WORDS: Record<string, string> = {
 
 const SOURCE_SHORT: Record<string, string> = {
   LIBRARY: "Library",
-  RCM: "Client RCM",
+  RCM: "Organization's RCM",
   MANUAL: "Team",
   AGENT: "Agent · approved",
   DOCUMENT: "Document · approved",
@@ -791,7 +791,7 @@ export function requestsView(input: RequestsInput): RequestsView {
                 // planner is at work.
                 tone: "active",
                 status: REQUESTS_STATUS.accepted,
-                line: `${WORKING_LINES.settled}. Each request is approved before it goes to the client.`,
+                line: `${WORKING_LINES.settled}. Each request is approved before it goes to the organization.`,
               }
             : // At rest: the server is about to release it, or says what it waits for.
               { tone: "idle", status: REQUESTS_STATUS.accepted, line: sentence }
@@ -974,7 +974,7 @@ export function requestsNeed(
         title: status,
         detail:
           line ||
-          `${WORKING_LINES.drafting}. Each one is approved before it goes to the client.`,
+          `${WORKING_LINES.drafting}. Each one is approved before it goes to the organization.`,
       };
     case "EMPTY":
       return {
@@ -1205,7 +1205,7 @@ export function requestsProblem(status: number, detail = ""): string | null {
   if (status === 409) {
     const known: Record<string, string> = {
       "it has already been requested from the client; waive it instead":
-        "This request has already gone to the client, so it cannot be deleted.",
+        "This request has already gone to the organization, so it cannot be deleted.",
       "the request carrying it has gone for approval":
         "This request has gone for approval, so its wording is locked.",
       "link only the control's approved attributes":

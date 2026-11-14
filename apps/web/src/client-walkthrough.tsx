@@ -350,8 +350,8 @@ export function ClientWalkthrough({
           <small>Control understanding</small>
           <h4 id="wt-title">Understand how this control operates</h4>
           <p>
-            Answer a few focused questions to build a client-specific process
-            narrative.
+            Answer a few focused questions to build an organization-specific
+            process narrative.
           </p>
         </div>
         <div className="cu-head-side">

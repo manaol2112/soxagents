@@ -534,7 +534,7 @@ const LATE: readonly string[] = ["OVERDUE", "ESCALATED"];
 
 const SOURCE_WORDS: Record<string, string> = {
   LIBRARY: "the control library",
-  RCM: "the client's RCM",
+  RCM: "the organization's RCM",
   MANUAL: "the team",
   AGENT: "the agent, approved by the team",
   DOCUMENT: "supporting documents, approved by the team",
@@ -542,7 +542,7 @@ const SOURCE_WORDS: Record<string, string> = {
 
 const SOURCE_SHORT: Record<string, string> = {
   LIBRARY: "Library",
-  RCM: "Client RCM",
+  RCM: "Organization's RCM",
   MANUAL: "Team",
   AGENT: "Agent · approved",
   DOCUMENT: "Document · approved",

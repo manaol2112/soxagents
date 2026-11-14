@@ -49,12 +49,12 @@ describe("the engagements page", () => {
         engagement("FY 2027 Audit", " rosa corp"),
         engagement("SOX FY27", "Raul Corp"),
       ]),
-      "3 engagements across 2 clients",
+      "3 engagements across 2 organizations",
     );
     assert.equal(portfolioLine([engagement("SOX", "")]), "1 engagement");
     assert.equal(
       portfolioLine([engagement("SOX", "Raul Corp")]),
-      "1 engagement across 1 client",
+      "1 engagement across 1 organization",
     );
   });
 
@@ -96,7 +96,7 @@ describe("archived engagements", () => {
         engagement("FY 2027 Audit", "Rosa Corp"),
         engagement("FY 2027 Audit", "Robert Corp", "ARCHIVED"),
       ]),
-      "1 engagement across 1 client · 1 archived",
+      "1 engagement across 1 organization · 1 archived",
     );
     assert.equal(
       portfolioLine([engagement("Old", "Robert Corp", "ARCHIVED")]),
