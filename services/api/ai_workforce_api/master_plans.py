@@ -3280,6 +3280,11 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
     ) -> MasterPlanBody:  # fmt: skip
         def work(c: psycopg.Connection[Any], p: Principal) -> MasterPlanBody:
             allowed(c, p, organization_id, project_id, control_id, Action.TASK_UPDATE)
+            from ai_workforce_api.evidence_plans import ATTRIBUTES_UPDATING, attributes_updating
+
+            if attributes_updating(c, control_id):
+                # The criteria are about to change: accepted once the agents finish.
+                raise PlanState(ATTRIBUTES_UPDATING)
             accept_criteria(c, organization_id, project_id, control_id, p.id, body)
             settled(c, p, organization_id, project_id, control_id)
             return read(c, p, organization_id, project_id, control_id)

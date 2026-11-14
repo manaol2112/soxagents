@@ -277,7 +277,14 @@ export type AttributeReviewSummary = {
 /** STOPPED: their last run did not finish (its process died, it failed, or the planner's
  * answer could not be used); never shown as working. */
 export type AttributesRun = "" | "PENDING" | "WORKING" | "STOPPED";
-export type AttributesStage = "" | "ATTRIBUTES" | "CRITERIA" | "REVIEW";
+/** UNDERSTANDING: the narrative is being redrafted from the latest answers, and the
+ * attributes follow it (14 November 2026). */
+export type AttributesStage =
+  | ""
+  | "ATTRIBUTES"
+  | "CRITERIA"
+  | "REVIEW"
+  | "UNDERSTANDING";
 
 /** An attribute's criteria as tailored to the control: who stated them (a person, the
  * planner agent, or the demo), who accepted the agent's, and whether a person owns them
@@ -520,6 +527,8 @@ export function attributesWorking(
       return "Tailoring pass/fail criteria";
     case "REVIEW":
       return "Reviewing against the control and its understanding";
+    case "UNDERSTANDING":
+      return "Updating from the latest answers to the understanding";
     default:
       return "The planner is tailoring the attributes and their criteria from the understanding";
   }
@@ -814,12 +823,18 @@ export function offersAgentRun(
  */
 export function openAttributeQuestionsLine(
   issues: ReadonlyArray<
-    Pick<ContextIssue, "origin" | "status" | "topic" | "raisedBy">
+    Pick<
+      ContextIssue,
+      "origin" | "status" | "topic" | "raisedBy" | "wordingPending"
+    >
   >,
   toAccept: boolean,
 ): string | null {
   const open = issues.filter(
-    (issue) => issue.status === "OPEN" && issue.raisedBy === "AGENT",
+    (issue) =>
+      issue.status === "OPEN" &&
+      issue.raisedBy === "AGENT" &&
+      issue.wordingPending !== true,
   );
   if (open.length === 0) {
     return null;
@@ -1111,6 +1126,9 @@ export type ContextIssue = {
   proposalBasis: "" | "SOURCES" | "TYPICAL";
   /** The reviewer agent wrote its interview and the checks cleared it (0140, 0141). */
   wordingReviewed?: boolean;
+  /** The reviewer agent is still checking its wording (14 November 2026): not shown yet, so
+   * no draft question reaches a person. */
+  wordingPending?: boolean;
   /** The question as short steps, each answer leading on or ending it; [] until written. */
   interview?: InterviewStep[];
 };
@@ -2214,6 +2232,7 @@ export function parseContext(value: unknown): ControlContext | null {
         "",
       ),
       wordingReviewed: item.wording_reviewed === true,
+      wordingPending: item.wording_pending === true,
       interview: records(item.interview).map((step) => ({
         key: str(step.key),
         question: str(step.question),
@@ -2310,7 +2329,7 @@ export function parseContext(value: unknown): ControlContext | null {
         : null,
     attributesStage: oneOf(
       value.attributes_stage,
-      ["", "ATTRIBUTES", "CRITERIA", "REVIEW"] as const,
+      ["", "ATTRIBUTES", "CRITERIA", "REVIEW", "UNDERSTANDING"] as const,
       "",
     ),
     note: str(value.note),
@@ -2743,6 +2762,8 @@ export function contextProblem(status: number, detail = ""): string | null {
       "attribute exists": "That attribute is already on the control.",
       "attribute changed":
         "An attribute changed while you were working. Nothing was saved; refresh and try again.",
+      "the attributes are being updated":
+        "The agents are updating the attributes from the latest answers. Nothing was accepted; decide once they finish.",
       "the attribute it replaces changed":
         "The attribute a proposal replaces has changed. Nothing was saved; refresh and try again.",
       "an attribute is listed twice":

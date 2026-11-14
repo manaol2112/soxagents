@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from ai_workforce_api import authentication_profile, walkthrough_answers
 from ai_workforce_api.actions import contains_secret
-from ai_workforce_api.control_context import ContextState, linked_documents
+from ai_workforce_api.control_context import WORDING_PENDING_SQL, ContextState, linked_documents
 from ai_workforce_api.control_design import CopyBody, SlotBody, copy_values, design_for
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.model_providers import call_note
@@ -559,6 +559,9 @@ class UnderstandingReviewBody(BaseModel):
     # wait for, in a sentence, when they are not.
     attributes_settled: bool = False
     attributes_waiting: str = ""
+    # The agents' new questions whose wording the reviewer agent is still checking: not
+    # among the needs until checked, so no draft wording reaches a person.
+    questions_checking: int = 0
 
 
 def _rcm_needs(frequency: str, nature: str, owner: str) -> list[NeedBody]:
@@ -1016,14 +1019,23 @@ def understanding_review(
         if at < len(statement.text):
             statement_parts.append(StatementPart(text=statement.text[at:]))
 
-    # The agents' open questions, answered in the conversation, each on its own record.
-    for issue_id, origin, question, topic, why in connection.execute(
+    # The agents' open questions, answered in the conversation, each on its own record. One
+    # whose wording the reviewer agent is still checking is not a point yet: it is counted
+    # (questions_checking) and appears once checked (control_context.WORDING_PENDING_SQL).
+    checking = 0
+    for issue_id, origin, question, topic, why, pending in connection.execute(
         """
-        SELECT id, origin, question, topic, why FROM control_context_issues
+        SELECT id, origin, question, topic, why, """
+        + WORDING_PENDING_SQL
+        + """
+        FROM control_context_issues i
         WHERE engagement_control_id = %s AND status = 'OPEN' ORDER BY created_at
         """,
         (control_id,),
     ).fetchall():
+        if pending:
+            checking += 1
+            continue
         for_issue: list[NeededFor] = ["EVIDENCE"]
         if str(origin) in ("ATTRIBUTES", "SOURCES"):
             for_issue.append("ATTRIBUTES")
@@ -1117,6 +1129,7 @@ def understanding_review(
         attributes_proposed=proposed,
         attributes_settled=unsettled is None,
         attributes_waiting=unsettled or "",
+        questions_checking=checking,
     )
 
 

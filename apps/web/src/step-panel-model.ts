@@ -116,6 +116,11 @@ const link = (step: WorkflowStep): PanelLink => ({
 
 const OUT_OF_ORDER = ["Started before D&I sign-off", "Not relied on"];
 
+/** The status that says the agents are updating a step a person decides (the attributes,
+ * while the D&I release holds them for the agents). Not "Plan being drafted": the team
+ * drafts Scope & Sampling, and approving it stays the next step. */
+const AGENTS_AT_WORK = /^Being updated$/;
+
 function needOf(step: WorkflowStep, steps: readonly WorkflowStep[]): PanelNeed {
   if (step.tone === "skipped") {
     return {
@@ -202,6 +207,17 @@ function needOf(step: WorkflowStep, steps: readonly WorkflowStep[]): PanelNeed {
   }
   if (step.tone === "done") {
     return { kind: "done", title: step.status, detail: "" };
+  }
+  // A step a person decides, while the agents update or draft it (product owner, 14 November
+  // 2026: "if the attributes are still being updated, they should not be accepted"): the
+  // agents' line, never a call to decide what is about to change.
+  if (step.tone === "active" && AGENTS_AT_WORK.test(step.status)) {
+    return {
+      kind: "agent",
+      title: step.status,
+      detail:
+        "The agents are updating this step from the latest answers. It is ready to decide once they finish.",
+    };
   }
   return {
     kind: "act",

@@ -4017,3 +4017,11 @@
   justify-content: space-between;
   gap: 4px 10px;
 }
+
+/* The agents' new question while the reviewer agent checks its wording (14 November 2026). */
+.ur-checking {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.5rem 0 0;
+}

@@ -1657,6 +1657,41 @@ _GRANT_RECORD = {
 }
 
 
+def _accepted_by_owner(migrated: Database, team: dict[str, Any], control: str) -> None:
+    """Every approved attribute's criteria written by the agent and accepted by the owner, as
+    the Attributes step leaves them once a person accepts them (the library's come approved
+    at launch with no criteria: accepted by nobody yet)."""
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE control_attributes SET criteria_origin = 'AGENT', "
+            "condition = 'The request names the role.', "
+            "pass_criteria = 'The request names the role granted.', "
+            "fail_criteria = 'The request names no role.' "
+            "WHERE engagement_control_id = %s AND status = 'APPROVED'",
+            (UUID(control),),
+        )
+        # Its own statement: a change to the criteria clears an acceptance (0122).
+        connection.execute(
+            "UPDATE control_attributes SET criteria_accepted_by = %s, "
+            "criteria_accepted_at = clock_timestamp() "
+            "WHERE engagement_control_id = %s AND status = 'APPROVED'",
+            (team["owner_id"], UUID(control)),
+        )
+        connection.commit()
+
+
+def test_attributes_the_library_approved_at_launch_are_not_accepted_by_anyone(
+    migrated: Database,
+) -> None:
+    # The understanding's questions are asked then: nobody has decided the attributes yet.
+    team, control, _scheduler, _client_ = _ready(migrated, "afu-launch-not-accepted")
+    with connect(migrated.url) as connection:
+        assert not control_attributes.attributes_accepted(connection.cursor(), UUID(control))
+    _accepted_by_owner(migrated, team, control)
+    with connect(migrated.url) as connection:
+        assert control_attributes.attributes_accepted(connection.cursor(), UUID(control))
+
+
 def _open_questions(migrated: Database, control: str) -> list[tuple[Any, ...]]:
     return _rows(
         migrated,
@@ -1668,6 +1703,7 @@ def _open_questions(migrated: Database, control: str) -> list[tuple[Any, ...]]:
 
 def test_a_run_on_accepted_attributes_asks_no_follow_up_question(migrated: Database) -> None:
     team, control, _scheduler, client = _ready(migrated, "afu-accepted-ask")
+    _accepted_by_owner(migrated, team, control)
     with connect(migrated.url) as connection:
         assert control_attributes.attributes_accepted(connection.cursor(), UUID(control))
     _answer_required(migrated, team, control, client)
@@ -1751,6 +1787,7 @@ def test_once_accepted_the_narrative_asks_nothing_and_accepting_closes_its_quest
     # ITGC-AC-01, 14 November 2026: answering the attribute agent's questions redrafted the
     # narrative, whose agent asked four more after every attribute was accepted.
     team, control, _scheduler, _client_ = _ready(migrated, "afu-accepted-narrative")
+    _accepted_by_owner(migrated, team, control)
     point = process_narrative._Question(
         topic="Who raises the access request",
         question="Who raises the access request in ServiceNow?",
@@ -1813,3 +1850,102 @@ def _open_questions_any(migrated: Database, control: str) -> list[tuple[Any, ...
         "AND status = 'OPEN' ORDER BY created_at",
         UUID(control),
     )
+
+
+def test_a_question_is_shown_only_once_the_reviewer_agent_has_checked_its_wording(
+    migrated: Database,
+) -> None:
+    # ITGC-AC-02, 14 November 2026: the planner's two-part draft was on screen for the half
+    # minute before the reviewer agent rewrote it into three one-click steps.
+    from ai_workforce_api.control_context import Issue, issues_for, raise_issues
+    from ai_workforce_api.understanding_chat import understanding_review
+
+    team, control, _scheduler, _client_ = _ready(migrated, "afu-wording-pending")
+    draft = "Which record gives the leaving date, and are the accounts disabled in Workday?"
+    with connect(migrated.url) as connection:
+        with connection.transaction():
+            cursor = connection.cursor()
+            # The run that raises it is working, under its lease.
+            cursor.execute(
+                "UPDATE evidence_plans SET run_status = 'WORKING', run_stage = 'ATTRIBUTES', "
+                "run_lease_until = clock_timestamp() + interval '5 minutes' "
+                "WHERE engagement_control_id = %s",
+                (UUID(control),),
+            )
+            raise_issues(
+                cursor, team["org"], team["project"], UUID(control),
+                [Issue("ATTRIBUTES", "MISSING", "Termination date source", draft, "", "")],
+                "AGENT",
+            )  # fmt: skip
+        held = [i for i in issues_for(connection, UUID(control)) if i.status == "OPEN"]
+        assert [(i.topic, i.wording_pending) for i in held] == [("Termination date source", True)]
+        review = understanding_review(connection, team["project"], UUID(control))
+        assert review.questions_checking == 1
+        assert all(need.question != draft for need in review.needs)
+        # The run is over: one the reviewer could not clear is asked, said to be unchecked.
+        connection.execute(
+            "UPDATE evidence_plans SET run_status = 'IDLE', run_stage = '', "
+            "run_lease_until = NULL WHERE engagement_control_id = %s",
+            (UUID(control),),
+        )
+        connection.commit()
+        held = [i for i in issues_for(connection, UUID(control)) if i.status == "OPEN"]
+        assert [(i.wording_pending, i.wording_reviewed) for i in held] == [(False, False)]
+        review = understanding_review(connection, team["project"], UUID(control))
+        assert review.questions_checking == 0
+        assert any(need.kind == "QUESTION" for need in review.needs)
+
+
+def test_no_one_accepts_the_attributes_while_a_redraft_of_the_understanding_runs(
+    migrated: Database,
+) -> None:
+    # ITGC-AC-02, 14 November 2026: an answer queued a narrative redraft; the step said
+    # "Being updated" and D&I waited on the attributes, yet Accept all took the decision. One
+    # rule now: the D&I release's (any narrative run queued or at work) is the step's too.
+    from ai_workforce_api.evidence_plans import ATTRIBUTES_UPDATING, attributes_updating
+
+    team, control, _scheduler, _client_ = _ready(migrated, "afu-redraft-holds")
+    owner = team["owner"]
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE control_attributes SET criteria_origin = 'AGENT', "
+            "criteria_accepted_at = NULL, condition = 'c', pass_criteria = 'p', "
+            "fail_criteria = 'f' WHERE engagement_control_id = %s AND status = 'APPROVED'",
+            (UUID(control),),
+        )
+        connection.execute(
+            "INSERT INTO process_narrative_runs (engagement_control_id, organization_id, "
+            "project_id, run_status) VALUES (%s, %s, %s, 'PENDING') "
+            "ON CONFLICT (engagement_control_id) DO UPDATE SET run_status = 'PENDING', "
+            "stage = ''",
+            (UUID(control), team["org"], team["project"]),
+        )
+        connection.commit()
+        assert attributes_run(connection, UUID(control)) == ("WORKING", "UNDERSTANDING", "")
+        assert attributes_updating(connection, UUID(control))
+        assert attribute_waits(connection, team["project"], UUID(control)) == {
+            UUID(control): UPDATING
+        }
+    body = owner.get(f"{_path(team, control)}/context").json()
+    assert (body["attributes_run"], body["attributes_stage"]) == ("WORKING", "UNDERSTANDING")
+    rows = body["attributes"]["approved"]
+    items = [{"attribute_id": item["id"], "version": item["version"]} for item in rows]
+    refused = owner.post(f"{_path(team, control)}/attributes/accept", json={"items": items})
+    assert (refused.status_code, refused.json()["detail"]) == (409, ATTRIBUTES_UPDATING)
+    criteria = owner.post(
+        f"{_path(team, control)}/master-plan/criteria/accept",
+        json={"attributes": [{"id": item["id"], "version": item["version"]} for item in rows]},
+    )
+    assert criteria.status_code == 409 and criteria.json()["detail"] == ATTRIBUTES_UPDATING
+    assert all(row[7] is False for row in _approved(migrated, control)), "nothing was accepted"
+    # The redraft is done: the same decision goes through.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE process_narrative_runs SET run_status = 'IDLE' "
+            "WHERE engagement_control_id = %s",
+            (UUID(control),),
+        )
+        connection.commit()
+        assert not attributes_updating(connection, UUID(control))
+    accepted = owner.post(f"{_path(team, control)}/attributes/accept", json={"items": items})
+    assert accepted.status_code == 200, accepted.text

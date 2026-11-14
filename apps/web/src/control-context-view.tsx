@@ -1012,6 +1012,10 @@ export function AttributesPanel({
   const plan = selectionPlan(selected, context);
   const issues = context.issues.filter((item) => item.origin !== "PROCESS");
   const lastOne = context.approved.length <= 1;
+  // The agents are updating the attributes (a redraft of the understanding included, as the
+  // D&I release reads it): nothing is decided meanwhile; the server refuses it too.
+  const updating =
+    attributesWorking(context.attributesRun, context.attributesStage) !== null;
 
   function toggle(set: ReadonlySet<string>, each: string): Set<string> {
     const next = new Set(set);
@@ -1206,7 +1210,7 @@ export function AttributesPanel({
             <button
               type="button"
               className="ta-icon-button"
-              disabled={action.pending}
+              disabled={action.pending || updating}
               aria-label={proposed ? `Review ${name}` : `Edit ${name}`}
               title={proposed ? "Review" : "Edit"}
               onClick={() =>
@@ -1425,7 +1429,7 @@ export function AttributesPanel({
               <button
                 type="button"
                 className="btn-secondary"
-                disabled={action.pending}
+                disabled={action.pending || updating}
                 onClick={() =>
                   action.run("generate", { intent: "attributes-generate" })
                 }
@@ -1479,7 +1483,7 @@ export function AttributesPanel({
                 <button
                   type="button"
                   className="btn btn-sm"
-                  disabled={action.pending}
+                  disabled={action.pending || updating}
                   onClick={() => void decideMany("APPROVE", plan.proposals)}
                 >
                   {action.busy === "many-APPROVE"
@@ -1489,7 +1493,7 @@ export function AttributesPanel({
                 <button
                   type="button"
                   className="btn-secondary btn-sm"
-                  disabled={action.pending}
+                  disabled={action.pending || updating}
                   onClick={() => void decideMany("REJECT", plan.proposals)}
                 >
                   {action.busy === "many-REJECT"
@@ -1502,7 +1506,7 @@ export function AttributesPanel({
               <button
                 type="button"
                 className="btn-secondary btn-sm ta-retire"
-                disabled={action.pending || plan.retireBlocked}
+                disabled={action.pending || updating || plan.retireBlocked}
                 title={
                   plan.retireBlocked
                     ? "A control keeps at least one attribute."
@@ -3015,12 +3019,12 @@ function DocumentDialog({
               File
               <input
                 type="file"
-                accept=".docx,.pdf,.txt,.md,.xlsx,.csv"
+                accept=".docx,.pdf,.txt,.md,.xlsx,.csv,.png,.jpg,.jpeg,image/png,image/jpeg"
                 onChange={(event) => setFile(event.target.files?.[0] ?? null)}
               />
               <span className="form-hint">
-                Word, PDF, Excel, or text, under 5 MB. Its text is kept; the
-                file is not.
+                Word, PDF, Excel, text, or an image (PNG or JPEG), under 5 MB.
+                An image is read by OCR. Its text is kept; the file is not.
               </span>
             </label>
           ) : (

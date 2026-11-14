@@ -1918,7 +1918,17 @@ function DropZone({
         </p>
         <p className="wz-drop-over">Release to add the files</p>
       </div>
+      {/* Files first (product owner, 14 November 2026: Choose a folder alone read as the way
+          to pick files, and a folder picker greys out single files such as a PNG). */}
       <div className="wz-drop-acts">
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          onClick={() => filesInput.current?.click()}
+        >
+          <UiIcon name="file" size={13} />
+          Choose files
+        </button>
         <button
           type="button"
           className="btn btn-secondary btn-sm"

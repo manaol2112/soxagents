@@ -35,6 +35,7 @@ import {
   type CopyTargets,
   carriedCopy,
   carriedSource,
+  checkingLine,
   confirmsByProposal,
   copyChoices,
   copyTargetLine,
@@ -293,6 +294,19 @@ export function UnderstandingReview({
   useEffect(() => {
     void read();
   }, [read]);
+
+  // A new question the reviewer agent is still checking appears once checked: read again
+  // shortly while any is (14 November 2026; the draft wording is never shown).
+  const checkingNow = review?.questionsChecking ?? 0;
+  useEffect(() => {
+    if (checkingNow === 0 || review === null) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void read();
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [checkingNow, review, read]);
 
   /** Starts from another system's answers, or none ("none"): the review is read again with
    * them proposed. Nothing is written; each proposal is confirmed or changed as before. When
@@ -2521,6 +2535,12 @@ export function UnderstandingReview({
               {progress.done} of {progress.total} confirmed
             </span>
           </div>
+        ) : null}
+        {checkingNow > 0 ? (
+          <p className="ur-hint ur-checking" role="status">
+            <span className="spinner small" aria-hidden="true" />{" "}
+            {checkingLine(checkingNow)}
+          </p>
         ) : null}
       </header>
 

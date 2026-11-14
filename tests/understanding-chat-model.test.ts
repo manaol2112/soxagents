@@ -717,6 +717,7 @@ describe("the guided review: one point at a time (mock-up approved 9 November 20
     attributesProposed: 0,
     attributesSettled: false,
     attributesWaiting: "",
+    questionsChecking: 0,
     startFrom: { chosen: null, options: [] },
   });
   const lastYear = (key: string) =>

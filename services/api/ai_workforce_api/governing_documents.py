@@ -258,12 +258,12 @@ def read_reference(
         if text:
             return ReadDocument(
                 file_name=read.file_name, sha256=read.sha256, text=text, readable=True,
-                note="The diagram was read by OCR; check its steps against the image.",
+                note="The image was read by OCR; check the text against the image.",
             )  # fmt: skip
     return ReadDocument(
         file_name=read.file_name, sha256=read.sha256, text="", readable=False,
-        note="The image could not be read here. Upload the diagram as a PDF or a Word "
-        "document with its steps as text.",
+        note="The image could not be read here. Upload it as a PDF or a Word document "
+        "with its text.",
     )  # fmt: skip
 
 

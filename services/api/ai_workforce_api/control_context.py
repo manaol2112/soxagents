@@ -287,6 +287,8 @@ class IssueBody(BaseModel):
     # answer means.
     wording_reviewed: bool = False
     interview: list[dict[str, Any]] = []
+    # The reviewer agent is still checking its wording (WORDING_PENDING_SQL): not shown yet.
+    wording_pending: bool = False
 
 
 @dataclass(frozen=True)
@@ -370,8 +372,10 @@ def raise_issues(
 # No follow-up questions once the attributes are accepted (product owner, 14 November 2026:
 # "I don't want to have any follow-up questions when the attributes are already approved and
 # accepted. What's the point? All questions are already asked and answered in the control
-# understanding"). Accepted: approved attributes, no proposal waiting, and no agent criteria
-# waiting on a person (the test control_attributes.accept_many applies). Seen on ITGC-AC-01
+# understanding"). Accepted by a person: approved attributes, no proposal waiting, and every
+# approved attribute's criteria accepted by a person or written by one. Not merely settled:
+# the library's attributes come approved at launch with no criteria, before anyone decided
+# anything, and the understanding's questions are asked then. Seen on ITGC-AC-01
 # that day: answering the attribute agent's three questions redrafted the narrative, whose
 # agent asked four more (two already answered), and the understanding reopened after every
 # attribute was accepted.
@@ -385,11 +389,8 @@ _ACCEPTED_SQL = """
        AND NOT EXISTS (
                SELECT 1 FROM control_attributes a
                WHERE a.engagement_control_id = %(control)s AND a.status = 'APPROVED'
-                 AND a.criteria_origin IN ('AGENT', 'SEEDED')
                  AND a.criteria_accepted_at IS NULL
-                 AND (a.judgment_required IS TRUE
-                      OR (a.condition <> '' AND a.pass_criteria <> ''
-                          AND a.fail_criteria <> '')))
+                 AND a.criteria_origin IS DISTINCT FROM 'PERSON')
 """
 
 # The agents' follow-up questions: on the attributes, their sources, and the process.
@@ -444,6 +445,28 @@ def supersede_agent_issues(
     )
 
 
+# An agent's question whose wording the reviewer agent is still checking (product owner,
+# 14 November 2026: "The questions being raised by the agent are not very clear and not easy
+# to understand"). The reviewer runs inside the run that raised it, about half a minute
+# later; until then the draft (a two-part question, paragraphs for answers) is not shown.
+# Once the run is over, a question still not reviewed is one the reviewer could not clear,
+# shown with its draft wording and said to be unchecked. Only a run at work counts: a queued
+# one reviews nothing yet, and a question raised outside a run is reviewed before the
+# request that raised it returns.
+WORDING_PENDING_SQL = """
+    (i.raised_by = 'AGENT' AND NOT i.wording_reviewed AND i.status = 'OPEN' AND (
+        EXISTS (SELECT 1 FROM evidence_plans p
+                WHERE p.engagement_control_id = i.engagement_control_id
+                  AND p.run_status = 'WORKING'
+                  AND p.run_lease_until >= clock_timestamp())
+        OR EXISTS (SELECT 1 FROM process_narrative_runs r
+                   WHERE r.engagement_control_id = i.engagement_control_id
+                     AND r.run_status = 'WORKING'
+                     AND (r.run_lease_until IS NULL
+                          OR r.run_lease_until >= clock_timestamp()))))
+"""
+
+
 def issues_for(connection: psycopg.Connection[Any], control_id: UUID) -> list[IssueBody]:
     return [
         IssueBody(
@@ -477,14 +500,17 @@ def issues_for(connection: psycopg.Connection[Any], control_id: UUID) -> list[Is
             interview=[item for item in row[21] if isinstance(item, dict)]
             if isinstance(row[21], list)
             else [],
+            wording_pending=bool(row[22]),
         )
         for row in connection.execute(
             """
             SELECT id, origin, kind, topic, detail, why, resolve, quotes, raised_by, status,
                    resolution_note, version, question, suggestions, proposal,
                    narrative_section, attribute_codes, point_round, point_kind, proposal_basis,
-                   wording_reviewed, interview
-            FROM control_context_issues
+                   wording_reviewed, interview, """
+            + WORDING_PENDING_SQL
+            + """
+            FROM control_context_issues i
             WHERE engagement_control_id = %s AND status <> 'SUPERSEDED'
             ORDER BY CASE status WHEN 'OPEN' THEN 0 ELSE 1 END, created_at
             """,

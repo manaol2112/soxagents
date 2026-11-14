@@ -60,7 +60,6 @@ from ai_workforce_api.control_context import (
     link_document,
     linked_documents,
     raise_issues,
-    read_document,
     sources_for,
     store_document,
 )
@@ -113,7 +112,7 @@ class ContextBody(BaseModel):
     # "Run again", and shows a stopped run's note, only then.
     attributes_rerun_useful: bool = False
     # What they are doing: proposing attributes, tailoring criteria, or reviewing the set.
-    attributes_stage: Literal["ATTRIBUTES", "CRITERIA", "REVIEW", ""] = ""
+    attributes_stage: Literal["ATTRIBUTES", "CRITERIA", "REVIEW", "UNDERSTANDING", ""] = ""
     # The agents of the step whose last answer could not be used (13 November 2026), in the
     # order of the run: the attribute agent, the reviewer of its drafts, the planner, the
     # reviewer of the set. Each says what failed, what was kept and what to do next, and
@@ -390,6 +389,7 @@ def register_control_context(
     ) -> ContextBody:
         def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
             _allowed(c, p, organization_id, project_id, control_id)
+            _not_while_updating(c, control_id)
             control_attributes.decide(
                 c, organization_id, project_id, control_id, attribute_id, p.id, body
             )
@@ -408,6 +408,7 @@ def register_control_context(
     ) -> ContextBody:
         def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
             _allowed(c, p, organization_id, project_id, control_id)
+            _not_while_updating(c, control_id)
             control_attributes.decide_many(c, organization_id, project_id, control_id, p.id, body)
             changed(c, project_id, control_id, p.id)
             return _body(c, project_id, control_id)
@@ -427,6 +428,7 @@ def register_control_context(
 
         def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
             _allowed(c, p, organization_id, project_id, control_id)
+            _not_while_updating(c, control_id)
             control_attributes.accept_many(c, organization_id, project_id, control_id, p.id, body)
             changed(c, project_id, control_id, p.id)
             return _body(c, project_id, control_id)
@@ -1074,8 +1076,17 @@ def register_control_context(
         content_type = request.headers.get("content-type", "")
 
         def work(c: psycopg.Connection[Any], p: Principal) -> UploadResult:
+            # Imported here: governing_documents imports this module.
+            from ai_workforce_api.governing_documents import read_reference
+
             _project(c, p, organization_id, project_id)
-            read = read_document(content, file_name, content_type)
+            # A screenshot or scan of a policy is read by OCR, as on the Systems & Processes
+            # page, with the firm's own choice of engine (product owner, 14 November 2026:
+            # "Why png files are not being accepted in the D&I evidence upload?").
+            read = read_reference(
+                c, settings, model(), organization_id, project_id, p.id, content,
+                file_name, content_type,
+            )  # fmt: skip
             if not read.readable:
                 return UploadResult(document=None, readable=False, note=read.note)
             with transaction(c) as cursor:
@@ -1408,6 +1419,15 @@ def _project(
     )
     if action is Action.TASK_UPDATE and principal.kind is not PrincipalKind.USER:
         raise NotVisible()
+
+
+def _not_while_updating(connection: psycopg.Connection[Any], control_id: UUID) -> None:
+    """A person's decision on the attributes waits while the agents update them: what they
+    would accept is about to change (evidence_plans.attributes_updating)."""
+    from ai_workforce_api.evidence_plans import ATTRIBUTES_UPDATING, attributes_updating
+
+    if attributes_updating(connection, control_id):
+        raise ContextState(ATTRIBUTES_UPDATING)
 
 
 def _allowed(

@@ -971,3 +971,42 @@ def test_a_later_review_replaces_the_agents_earlier_conflicts(migrated: Database
     second = _context(client, team, control["id"])
     assert [i for i in second["issues"] if i["status"] == "OPEN"] == []
     assert second["readiness"]["state"] != "CONFLICT_REQUIRES_REVIEW"
+
+
+def test_a_policy_screenshot_on_the_control_is_read_by_ocr(migrated: Database) -> None:
+    # Product owner, 14 November 2026: "Why png files are not being accepted in the D&I
+    # evidence upload?" The control's own upload read text files only; a screenshot or scan
+    # of a policy is now read as on the Systems & Processes page: by the firm's OCR engines.
+    from corpus import _png
+
+    from ai_workforce_api.evidence_ocr import local_ocr_available
+    from ai_workforce_api.settings import Settings
+
+    team, client, _scheduler = _engagement(migrated, "ctx-policy-png")
+    control = _control(client, team, "ITGC-AC-01")
+    image = _png(["Access Management Policy", "Every access request is approved by the manager."])
+    uploaded = client.post(
+        f"{_base(team)}/source-documents/upload",
+        params={
+            "kind": "POLICY",
+            "title": "Access management policy",
+            "file_name": "access-policy.png",
+            "control_id": [control["id"]],
+        },
+        content=image,
+        headers={"content-type": "image/png"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    body = uploaded.json()
+    if local_ocr_available(Settings(database_url=migrated.url)):
+        assert body["readable"] is True, body
+        assert body["note"] == "The image was read by OCR; check the text against the image."
+        assert body["document"]["control_ids"] == [control["id"]]
+        with connect(migrated.url) as connection:
+            text = connection.execute(
+                "SELECT text FROM source_documents WHERE id = %s", (body["document"]["id"],)
+            ).fetchone()
+        assert text is not None and "approved" in str(text[0]).lower()
+    else:
+        # No OCR engine and the firm keeps images in: nothing kept, and the way forward said.
+        assert body["readable"] is False and "PDF" in body["note"]

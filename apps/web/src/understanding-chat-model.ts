@@ -569,6 +569,9 @@ export type Review = {
    * and what they still wait for when they are not. */
   attributesSettled: boolean;
   attributesWaiting: string;
+  /** The agents' new questions the reviewer agent is still checking: not among the needs
+   * until checked (14 November 2026). */
+  questionsChecking: number;
   /** The other systems the answers can start from; nothing chosen and none offered when the
    * API leaves it out. */
   startFrom: StartFrom;
@@ -825,6 +828,12 @@ export function parseReview(body: unknown): Review | null {
         : 0,
     attributesSettled: item.attributes_settled === true,
     attributesWaiting: text(item.attributes_waiting),
+    questionsChecking:
+      typeof item.questions_checking === "number" &&
+      Number.isInteger(item.questions_checking) &&
+      item.questions_checking > 0
+        ? item.questions_checking
+        : 0,
     startFrom: readStartFrom(item.start_from),
   };
 }
@@ -2402,6 +2411,13 @@ export function toggleMultiple(
 /** Why a pick on a question that takes more than one answer cannot be saved, in words that
  * say how to recover; "" when nothing holds it back. Nothing chosen is not a problem here:
  * the save waits for a choice. */
+/** What the screen says while the reviewer agent checks the agents' new questions. */
+export function checkingLine(count: number): string {
+  return count === 1
+    ? "The reviewer agent is checking the wording of a new question. It appears here once it reads clearly."
+    : `The reviewer agent is checking the wording of ${count} new questions. They appear here once they read clearly.`;
+}
+
 export function multipleProblem(need: Need, pick: MultiplePick): string {
   if (pick.other !== null && pick.other.trim() === "") {
     return "Describe the other answer, or untick Other (specify).";

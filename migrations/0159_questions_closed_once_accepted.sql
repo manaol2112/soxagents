@@ -7,8 +7,10 @@
 -- agents' open questions about them (control_attributes.close_questions_once_accepted), and
 -- the agents (the attribute run, the narrative and the process understanding) ask none on
 -- accepted attributes. This migration applies the same rule
--- once to the questions already open: on every control whose attributes are accepted
--- (approved attributes, no proposal waiting, no agent criteria waiting on a person), the
+-- once to the questions already open: on every control whose attributes a person accepted
+-- (approved attributes, no proposal waiting, and every approved attribute's criteria
+-- accepted by a person or written by one; the library's attributes, approved at launch with
+-- no criteria, are not accepted by anyone), the
 -- agent's open ATTRIBUTES, SOURCES and PROCESS questions are marked SUPERSEDED with the note
 -- "Closed when the attributes were accepted." and one audit record per control names them.
 -- Nobody answered or dismissed them, so resolved_by and resolved_at stay empty. Archived
@@ -35,10 +37,8 @@ WITH accepted AS (
       AND NOT EXISTS (
           SELECT 1 FROM control_attributes a
           WHERE a.engagement_control_id = e.id AND a.status = 'APPROVED'
-            AND a.criteria_origin IN ('AGENT', 'SEEDED')
             AND a.criteria_accepted_at IS NULL
-            AND (a.judgment_required IS TRUE
-                 OR (a.condition <> '' AND a.pass_criteria <> '' AND a.fail_criteria <> '')))
+            AND a.criteria_origin IS DISTINCT FROM 'PERSON')
 ),
 closed AS (
     UPDATE control_context_issues i

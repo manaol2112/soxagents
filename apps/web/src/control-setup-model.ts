@@ -588,6 +588,8 @@ export type SetupIssue = {
   proposalBasis: string;
   raisedBy?: string;
   wordingReviewed?: boolean;
+  /** The reviewer agent is still checking its wording: left out until it is checked. */
+  wordingPending?: boolean;
   interview?: readonly InterviewStep[];
 };
 
@@ -603,66 +605,71 @@ export function agentQuestions(
   issues: readonly SetupIssue[],
   settled: Readonly<Record<string, string>> = {},
 ): Prefill[] {
-  return issues
-    .filter((issue) => issue.status === "OPEN" || issue.id in settled)
-    .map((issue): Prefill => {
-      const conflict = issue.kind === "CONFLICT";
-      const proposal = conflict ? "" : issue.proposal.trim();
-      const answer = settled[issue.id];
-      const asked = issue.question.trim();
-      const detail = issue.detail.trim();
-      const base = {
-        key: issue.id,
-        // Never a statement as the heading: a conflict asks for the person's decision, and
-        // an older question raised without its wording is headed by its topic.
-        question:
-          asked !== ""
-            ? asked
-            : conflict
-              ? "Which of these reflects how the control runs?"
-              : issue.topic.trim() || detail,
-        context: asked === "" && detail !== issue.topic.trim() ? detail : "",
-        topic: issue.topic.trim(),
-        steps: conflict ? [] : (issue.interview ?? []),
-        unchecked: issue.raisedBy === "AGENT" && issue.wordingReviewed !== true,
-        required: true,
-        proposalId: null,
-        why: issue.why.trim(),
-        issue: {
-          id: issue.id,
-          version: issue.version,
-          point: issue.origin === "PROCESS" && issue.question.trim() !== "",
-          conflict,
-        },
-      };
-      if (answer !== undefined) {
-        return { ...base, value: answer, source: "RECORDED", options: [] };
-      }
-      // A conflict's sides as plain statements where the agents gave one for each side
-      // (12 November 2026); the sources' own words otherwise.
-      const sides = issue.suggestions
-        .map((item) => item.trim())
-        .filter(Boolean);
-      const options = !conflict
-        ? issue.suggestions
-        : sides.length >= 2
-          ? sides
-          : issue.quotes.map((item) => `${item.title}: "${item.quote}"`);
-      return {
-        ...base,
-        value: proposal,
-        source: conflict
-          ? "CONFLICT"
-          : proposal === ""
-            ? "NONE"
-            : issue.proposalBasis === "SOURCES"
-              ? "SOURCES"
-              : "TYPICAL",
-        options: [
-          ...new Set(options.map((item) => item.trim()).filter(Boolean)),
-        ].filter((item) => item !== proposal),
-      };
-    });
+  return (
+    issues
+      .filter((issue) => issue.status === "OPEN" || issue.id in settled)
+      // A draft the reviewer agent is still checking is never shown (14 November 2026).
+      .filter((issue) => issue.wordingPending !== true || issue.id in settled)
+      .map((issue): Prefill => {
+        const conflict = issue.kind === "CONFLICT";
+        const proposal = conflict ? "" : issue.proposal.trim();
+        const answer = settled[issue.id];
+        const asked = issue.question.trim();
+        const detail = issue.detail.trim();
+        const base = {
+          key: issue.id,
+          // Never a statement as the heading: a conflict asks for the person's decision, and
+          // an older question raised without its wording is headed by its topic.
+          question:
+            asked !== ""
+              ? asked
+              : conflict
+                ? "Which of these reflects how the control runs?"
+                : issue.topic.trim() || detail,
+          context: asked === "" && detail !== issue.topic.trim() ? detail : "",
+          topic: issue.topic.trim(),
+          steps: conflict ? [] : (issue.interview ?? []),
+          unchecked:
+            issue.raisedBy === "AGENT" && issue.wordingReviewed !== true,
+          required: true,
+          proposalId: null,
+          why: issue.why.trim(),
+          issue: {
+            id: issue.id,
+            version: issue.version,
+            point: issue.origin === "PROCESS" && issue.question.trim() !== "",
+            conflict,
+          },
+        };
+        if (answer !== undefined) {
+          return { ...base, value: answer, source: "RECORDED", options: [] };
+        }
+        // A conflict's sides as plain statements where the agents gave one for each side
+        // (12 November 2026); the sources' own words otherwise.
+        const sides = issue.suggestions
+          .map((item) => item.trim())
+          .filter(Boolean);
+        const options = !conflict
+          ? issue.suggestions
+          : sides.length >= 2
+            ? sides
+            : issue.quotes.map((item) => `${item.title}: "${item.quote}"`);
+        return {
+          ...base,
+          value: proposal,
+          source: conflict
+            ? "CONFLICT"
+            : proposal === ""
+              ? "NONE"
+              : issue.proposalBasis === "SOURCES"
+                ? "SOURCES"
+                : "TYPICAL",
+          options: [
+            ...new Set(options.map((item) => item.trim()).filter(Boolean)),
+          ].filter((item) => item !== proposal),
+        };
+      })
+  );
 }
 
 /** Answers too long for two to a row, such as a full statement to confirm or a quote. */

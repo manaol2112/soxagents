@@ -2679,7 +2679,20 @@ def reclaim_interrupted_plan_runs(connection: psycopg.Connection[Any]) -> int:
 
 
 AttributesRun = Literal["PENDING", "WORKING", "STOPPED", ""]
-AttributesStage = Literal["ATTRIBUTES", "CRITERIA", "REVIEW", ""]
+# UNDERSTANDING: the narrative's run is redrafting from the latest answers, before its own
+# attribute stage; the attributes follow it, so they are being updated all the same.
+AttributesStage = Literal["ATTRIBUTES", "CRITERIA", "REVIEW", "UNDERSTANDING", ""]
+
+# What a person's decision on the attributes is refused with while the agents update them.
+ATTRIBUTES_UPDATING = "the attributes are being updated"
+
+
+def attributes_updating(connection: psycopg.Connection[Any], control_id: UUID) -> bool:
+    """Whether the agents are updating the control's attributes now, by the rule the D&I
+    release holds them with (attributes_run): no person accepts or decides them meanwhile
+    (product owner, 14 November 2026: "if the attributes are still being updated, they
+    should not be accepted")."""
+    return attributes_run(connection, control_id)[0] in ("WORKING", "PENDING")
 
 
 def attributes_run(
@@ -2704,11 +2717,20 @@ def attributes_run(
         """
         SELECT p.run_status, p.run_stage,
                p.run_lease_until IS NOT NULL AND p.run_lease_until >= clock_timestamp(),
-               (SELECT r.stage FROM process_narrative_runs r
+               -- The narrative's run holds the attributes as the D&I release reads it
+               -- (phase_release.NARRATIVE_AT_WORK_SQL): queued, or at work under a live
+               -- lease, at any stage (product owner, 14 November 2026: "if the attributes
+               -- are still being updated, they should not be accepted"; the step said
+               -- "Being updated" and still took the acceptance while a redraft drafted).
+               (SELECT CASE WHEN r.stage IN ('ATTRIBUTES', 'EVIDENCE') THEN r.stage
+                            ELSE 'UNDERSTANDING' END
+                FROM process_narrative_runs r
                 WHERE r.engagement_control_id = p.engagement_control_id
-                  AND r.stage IN ('ATTRIBUTES', 'EVIDENCE')
-                  AND r.run_status = 'WORKING'
-                  AND (r.run_lease_until IS NULL OR r.run_lease_until >= clock_timestamp())),
+                  AND (r.run_status = 'PENDING'
+                       OR (r.run_status = 'WORKING'
+                           AND (r.run_lease_until IS NULL
+                                OR r.run_lease_until >= clock_timestamp())))
+                LIMIT 1),
                p.source, p.run_note, p.project_id
         FROM evidence_plans p WHERE p.engagement_control_id = %s
         """,
@@ -2729,7 +2751,13 @@ def attributes_run(
                 "",
             )  # fmt: skip
     if narrative != "":
-        return "WORKING", "ATTRIBUTES" if narrative == "ATTRIBUTES" else "CRITERIA", ""
+        return (
+            "WORKING",
+            "ATTRIBUTES" if narrative == "ATTRIBUTES"
+            else "CRITERIA" if narrative == "EVIDENCE"
+            else "UNDERSTANDING",
+            "",
+        )  # fmt: skip
     if stage != "" and status in ("WORKING", "FAILED"):
         return "STOPPED", "", STOPPED_NOTE
     if status == "IDLE" and row[4] == "FALLBACK" and str(row[5]).startswith(UNUSABLE_NOTE):

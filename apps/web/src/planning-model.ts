@@ -2121,6 +2121,8 @@ export function planningProblem(status: number, detail = ""): string | null {
     const known: Record<string, string> = {
       "the plan changed":
         "The plan changed since this page loaded. Refresh to see the current version.",
+      "the attributes are being updated":
+        "The agents are updating the attributes from the latest answers. Nothing was accepted; decide once they finish.",
       "the procedure changed":
         "The procedure changed since this page loaded. Refresh and try again.",
       "the requirement changed":
