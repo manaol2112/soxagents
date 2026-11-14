@@ -43,6 +43,7 @@ import {
   type ControlContext,
   contextProblem,
   criteriaToAccept,
+  criteriaToWrite,
   type Design,
   DOCUMENT_KINDS,
   type DocumentKind,
@@ -51,10 +52,10 @@ import {
   firstUnifiedToDecide,
   type LibraryUpdate,
   NATURE_LABELS,
-  needingCriteria,
   offersAgentRun,
   PROCEDURE_PHASES,
   type ProcessStep,
+  pendingCriteriaLine,
   reviewUnfinished,
   runFailureLine,
   SECTION_HEADINGS,
@@ -69,6 +70,7 @@ import {
   unifiedRows,
   unifiedState,
 } from "./control-context-model";
+import { planningHref } from "./planning-model";
 import {
   type NarrativeAttribute,
   NarrativeSources,
@@ -1633,7 +1635,10 @@ function EmbeddedAttributes({
   // (run again, or write the criteria the run did not write). Never "Needs criteria" on
   // the rows and nothing else.
   const failure = runFailureLine(context);
-  const toWrite = needingCriteria(context)[0]?.item ?? null;
+  // The first attribute whose criteria a person writes: not one whose criteria wait in a
+  // change to the test plan, which the step links to instead.
+  const toWrite = criteriaToWrite(context)[0]?.item ?? null;
+  const pending = pendingCriteriaLine(context);
   // The row whose criteria form "Write criteria" opened.
   const [writing, setWriting] = useState<string | null>(null);
   // Once the row's criteria are written (or nothing is missing), its form opens only on
@@ -2037,6 +2042,26 @@ function EmbeddedAttributes({
         <p className="ta-run-note tone-warning" role="status">
           <UiIcon name="info" size={13} />
           {unreviewed}
+        </p>
+      ) : null}
+      {!running && pending !== null ? (
+        // The planner's criteria were written into a change to the approved test plan:
+        // said, with where that change is decided (the Test plans page's "Accept the
+        // planner's revision"), never as criteria nobody wrote.
+        <p className="ta-run-note tone-warning has-acts" role="status">
+          <UiIcon name="info" size={13} />
+          <span>{pending}</span>
+          <span className="ta-run-acts">
+            <a
+              className="btn btn-ghost btn-sm"
+              href={planningHref(ids.organizationId, ids.projectId, {
+                control: ids.controlId,
+                tab: "attributes",
+              })}
+            >
+              Review the change
+            </a>
+          </span>
         </p>
       ) : null}
       {status}

@@ -15,9 +15,11 @@ import {
   type AttributeReviewSummary,
   runFailureLine as attributesLine,
   CRITERIA_NOT_WRITTEN,
+  criteriaToWrite,
   narrativeFailureLine,
   needingCriteria,
   parseContext,
+  pendingCriteriaLine,
 } from "../apps/web/src/control-context-model.ts";
 import {
   PLAN_FALLBACK_LINE,
@@ -290,6 +292,158 @@ describe("the Attributes step after Run again", () => {
       }),
     );
     assert.equal(line, STOPPED_NOTE);
+  });
+});
+
+describe("criteria the planner wrote into a change to the approved test plan", () => {
+  // The real cause of the product owner's case: the criteria were written, but wait in
+  // the person-approved plan's pending revision.
+  const five = [
+    owned("a"),
+    attribute("b"),
+    attribute("c"),
+    attribute("d"),
+    attribute("e"),
+  ];
+  const pendingOf = (...ids: string[]) =>
+    ids.map((id) => ({ attributeId: id, code: `ATTR_${id.toUpperCase()}` }));
+
+  it("says where the criteria wait and that the change applies them", () => {
+    assert.equal(
+      pendingCriteriaLine({
+        approved: [
+          attribute("a"),
+          owned("b"),
+          owned("c"),
+          attribute("d"),
+          attribute("e"),
+        ],
+        attributesPendingCriteria: pendingOf("a", "d", "e"),
+        planRevisionPending: true,
+      }),
+      "The planner proposed criteria for A, D and E in a change to the test plan. Review the change to apply them.",
+    );
+    assert.equal(
+      pendingCriteriaLine({
+        approved: five,
+        attributesPendingCriteria: pendingOf("b"),
+        planRevisionPending: true,
+      }),
+      "The planner proposed criteria for B in a change to the test plan. Review the change to apply them.",
+    );
+  });
+
+  it("never says the planner's answer could not be used for those attributes", () => {
+    const context = attributesRun({
+      attributesRun: "STOPPED",
+      attributesRunNote: UNUSABLE_NOTE,
+      attributesRerunUseful: true,
+      approved: five,
+      attributesPendingCriteria: pendingOf("b", "c", "d", "e"),
+      planRevisionPending: true,
+    });
+    assert.equal(attributesLine(context), null);
+    assert.deepEqual(criteriaToWrite(context), []);
+    // An attribute outside the change still gets its own sentence and Write criteria.
+    const mixed = {
+      ...context,
+      attributesPendingCriteria: pendingOf("b", "c"),
+    };
+    assert.equal(attributesLine(mixed), CRITERIA_NOT_WRITTEN);
+    assert.deepEqual(
+      criteriaToWrite(mixed).map(({ letter }) => letter),
+      ["D", "E"],
+    );
+    // A finished run that left only waiting criteria says nothing of its own either.
+    assert.equal(
+      attributesLine({
+        ...context,
+        attributesRun: "",
+        attributesRunNote: "",
+        attributesRerunUseful: false,
+      }),
+      null,
+    );
+  });
+
+  it("says nothing once no change waits", () => {
+    assert.equal(
+      pendingCriteriaLine({
+        approved: five,
+        attributesPendingCriteria: pendingOf("b"),
+        planRevisionPending: false,
+      }),
+      null,
+    );
+    assert.equal(pendingCriteriaLine({ approved: five }), null);
+    // Criteria already owned are not waiting.
+    assert.equal(
+      pendingCriteriaLine({
+        approved: five,
+        attributesPendingCriteria: pendingOf("a"),
+        planRevisionPending: true,
+      }),
+      null,
+    );
+  });
+
+  it("reads the server's fields", () => {
+    const A = "01a13300-0000-7000-8000-00000000000a";
+    const context = parseContext({
+      control_id: "01a13300-0000-7000-8000-000000000002",
+      attributes_run: "",
+      attributes_rerun_useful: false,
+      attributes_failure_note: "",
+      plan_revision_pending: true,
+      attributes_pending_criteria: [
+        { attribute_id: A, code: "A1" },
+        { attribute_id: "not-an-id", code: "A2" },
+      ],
+      attributes_agent_notes: [
+        {
+          agent: "planner",
+          step: "CRITERIA",
+          failed: true,
+          kept: true,
+          next_step: "Run again.",
+          sentence:
+            "The planner ran out of time, so the plan was kept as it was.",
+          model_call_id: "01a13300-0000-7000-8000-0000000000ff",
+          at: "2026-11-13T10:00:00Z",
+        },
+      ],
+    });
+    assert.ok(context !== null);
+    assert.equal(context.planRevisionPending, true);
+    assert.deepEqual(context.attributesPendingCriteria, [
+      { attributeId: A, code: "A1" },
+    ]);
+    assert.equal(context.attributesAgentNotes?.[0]?.failed, true);
+    // A failed agent's sentence stands in where the run sent no failure sentence of its own.
+    assert.equal(
+      attributesLine({
+        ...context,
+        attributesRerunUseful: true,
+        approved: [owned("a")],
+      }),
+      "The planner ran out of time, so the plan was kept as it was.",
+    );
+    // The confirmed field, also when nothing the agents read changed.
+    const failed = parseContext({
+      control_id: "01a13300-0000-7000-8000-000000000002",
+      attributes_rerun_useful: false,
+      attributes_failure_note:
+        "The planner's answer could not be used. Run again.",
+    });
+    assert.ok(failed !== null);
+    assert.equal(
+      attributesLine({
+        ...failed,
+        approved: [attribute("b")],
+        reviewSummary: REVIEWED,
+      }),
+      CRITERIA_NOT_WRITTEN,
+    );
   });
 });
 

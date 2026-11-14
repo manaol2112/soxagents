@@ -566,6 +566,67 @@ export function needingCriteria(context: {
     .filter(({ item }) => criteriaState(item.criteria) === "MISSING");
 }
 
+/** An attribute whose criteria the planner wrote into a change to a person-approved test
+ * plan (the plan's pending revision): written, and waiting for that change to be decided. */
+export type PendingCriteria = { attributeId: string; code: string };
+
+type PendingInput = {
+  approved: Attribute[];
+  attributesPendingCriteria?: readonly PendingCriteria[];
+  planRevisionPending?: boolean | null;
+};
+
+/** The attributes that need criteria because the planner's criteria wait in the plan's
+ * pending revision, in their order with their letters; empty where no revision waits. */
+export function pendingCriteria(
+  context: PendingInput,
+): Array<{ item: Attribute; letter: string }> {
+  const waiting = new Set(
+    (context.attributesPendingCriteria ?? []).map((item) => item.attributeId),
+  );
+  if (waiting.size === 0 || context.planRevisionPending === false) {
+    return [];
+  }
+  return needingCriteria(context).filter(({ item }) => waiting.has(item.id));
+}
+
+/** The attributes that need criteria a person writes, or a run writes again: those not
+ * waiting in the plan's pending revision. What "Write criteria" opens. */
+export function criteriaToWrite(
+  context: PendingInput,
+): Array<{ item: Attribute; letter: string }> {
+  const pending = new Set(pendingCriteria(context).map(({ item }) => item.id));
+  return needingCriteria(context).filter(({ item }) => !pending.has(item.id));
+}
+
+const lettersSaid = (letters: readonly string[]): string =>
+  letters.length === 1
+    ? (letters[0] ?? "")
+    : `${letters.slice(0, -1).join(", ")} and ${letters.at(-1)}`;
+
+/** What the Attributes step says when the planner's criteria wait in a change to the test
+ * plan (product owner's case, 13 November 2026: the criteria were written, but into the
+ * approved plan's pending revision), or null. The step links to where the change is
+ * decided. */
+export function pendingCriteriaLine(context: PendingInput): string | null {
+  const pending = pendingCriteria(context);
+  if (pending.length === 0) {
+    return null;
+  }
+  return `The planner proposed criteria for ${lettersSaid(pending.map(({ letter }) => letter))} in a change to the test plan. Review the change to apply them.`;
+}
+
+/** One agent's part in the latest attributes run (`attributes_agent_notes`). */
+export type AttributesAgentNote = {
+  agent: string;
+  step: string;
+  failed: boolean;
+  kept: boolean;
+  nextStep: string;
+  sentence: string;
+  at: string;
+};
+
 /**
  * The Attributes step's one sentence for an agents' run that ended without a usable
  * answer, or null while they work or when nothing needs saying. The server's failure
@@ -581,11 +642,17 @@ export function runFailureLine(
     attributesRunNote: string;
     attributesRerunUseful?: boolean | null;
     attributesFailureNote?: string;
+    attributesAgentNotes?: readonly AttributesAgentNote[];
+    attributesPendingCriteria?: readonly PendingCriteria[];
+    planRevisionPending?: boolean | null;
     approved: Attribute[];
     proposed: Attribute[];
     reviewSummary: AttributeReviewSummary | null;
   },
-  failureNote: string = context.attributesFailureNote ?? "",
+  failureNote: string = context.attributesFailureNote ||
+    (context.attributesAgentNotes ?? []).find((item) => item.failed)
+      ?.sentence ||
+    "",
 ): string | null {
   const run = context.attributesRun;
   if (run === "PENDING" || run === "WORKING") {
@@ -593,13 +660,16 @@ export function runFailureLine(
   }
   const said = plainNote(failureNote);
   const note = plainNote(context.attributesRunNote);
-  const missing = needingCriteria(context);
+  // Criteria waiting in the plan's pending revision were written: said by
+  // pendingCriteriaLine, never as an answer that could not be used.
+  const missing = criteriaToWrite(context);
+  const waiting = pendingCriteria(context).length > 0;
   const settled = context.attributesRerunUseful === false;
   if (run === "STOPPED" || said !== "") {
-    if (missing.length === 0 && settled) {
+    const unusable = PLANNER_UNUSABLE.test(said) || PLANNER_UNUSABLE.test(note);
+    if (missing.length === 0 && (settled || (waiting && unusable))) {
       return null;
     }
-    const unusable = PLANNER_UNUSABLE.test(said) || PLANNER_UNUSABLE.test(note);
     if (missing.length > 0) {
       return unusable
         ? CRITERIA_NOT_WRITTEN
@@ -1479,6 +1549,12 @@ export type ControlContext = {
   /** The server's sentence for an attributes run that ended without a usable answer
    * (ATTRIBUTES_FAILURE_FIELD), or "" (run-failure.ts). */
   attributesFailureNote?: string;
+  /** Each agent's part in the latest attributes run, its failure said plainly. */
+  attributesAgentNotes?: AttributesAgentNote[];
+  /** The attributes whose criteria the planner wrote into the plan's pending revision. */
+  attributesPendingCriteria?: PendingCriteria[];
+  /** A change to the person-approved test plan waits to be decided. */
+  planRevisionPending?: boolean;
   note: string;
 };
 
@@ -2071,6 +2147,22 @@ export function parseContext(value: unknown): ControlContext | null {
     ),
     attributesRunNote: str(value.attributes_run_note),
     attributesFailureNote: plainNote(str(value[ATTRIBUTES_FAILURE_FIELD])),
+    attributesAgentNotes: records(value.attributes_agent_notes).map((item) => ({
+      agent: str(item.agent),
+      step: str(item.step),
+      failed: item.failed === true,
+      kept: item.kept === true,
+      nextStep: plainNote(str(item.next_step)),
+      sentence: plainNote(str(item.sentence)),
+      at: str(item.at),
+    })),
+    attributesPendingCriteria: records(value.attributes_pending_criteria)
+      .filter((item) => UUID.test(str(item.attribute_id)))
+      .map((item) => ({
+        attributeId: str(item.attribute_id),
+        code: str(item.code),
+      })),
+    planRevisionPending: value.plan_revision_pending === true,
     attributesRerunUseful:
       typeof value.attributes_rerun_useful === "boolean"
         ? value.attributes_rerun_useful
