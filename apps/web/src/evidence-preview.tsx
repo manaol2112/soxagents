@@ -44,6 +44,9 @@ type Props = {
    * (docs/evidence-annotations.md). Without it, as for every other file, nothing is asked
    * and the preview is as it was. */
   annotations?: { controlId: string; requirementId: string } | undefined;
+  /** The annotation to open on, where the file was opened from a reference to it (the
+   * D&I workpaper's views). */
+  startAnnotationId?: string | undefined;
 };
 
 /** A button that opens the evidence preview, with the cited passages marked. */
@@ -122,6 +125,7 @@ function PreviewDialog({
   sourcesTitle = "What the tester relied on",
   container = null,
   annotations,
+  startAnnotationId,
   onClose,
 }: Props & { onClose: () => void }) {
   const first = startFileId ?? citations[0]?.fileId ?? files[0]?.id ?? "";
@@ -161,6 +165,10 @@ function PreviewDialog({
   // "Add annotation" on a file that has none yet.
   const [adding, setAdding] = useState(false);
   const leaveAdding = useCallback(() => setAdding(false), []);
+  const pick = useMemo(
+    () => (startAnnotationId === undefined ? null : { id: startAnnotationId }),
+    [startAnnotationId],
+  );
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -290,6 +298,7 @@ function PreviewDialog({
             headSlot={headSlot}
             startAdding={adding}
             onEmpty={leaveAdding}
+            pick={pick}
             pdf={(input) => (
               <PdfViewer
                 url={preview}
@@ -537,7 +546,7 @@ const ZOOMS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2, 2.5] as const;
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 2.5;
 
-function PdfViewer({
+export function PdfViewer({
   url,
   citations,
   focused,
@@ -859,7 +868,7 @@ function PdfViewer({
   );
 }
 
-function TextViewer({
+export function TextViewer({
   url,
   citations,
   focused,

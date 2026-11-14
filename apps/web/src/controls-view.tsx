@@ -111,6 +111,7 @@ import { carriersOf, evidenceList } from "./design-evidence-model";
 import { showsEvidenceWorkspace } from "./design-release-model";
 import { DesignRequests } from "./design-requests";
 import { requestsView } from "./design-requests-model";
+import { DesignWorkpaperStep } from "./design-workpaper-view";
 import { firstNameFrom } from "./engagement-guide-model";
 import {
   byApplication,
@@ -2556,7 +2557,7 @@ function ControlRecord({
       {section === "workpaper" ? (
         <div className="stp-papers">
           <h4 className="stp-subhead">Design and implementation</h4>
-          <WorkpapersTab compact {...workpaperProps} stage="DESIGN" />
+          <DesignWorkpaperStep {...workpaperProps} />
           <h4 className="stp-subhead">Operating effectiveness</h4>
           <WorkpapersTab compact {...workpaperProps} stage="EFFECTIVENESS" />
         </div>
@@ -2703,11 +2704,7 @@ function ControlRecord({
                         keepOpen={keepWorkpaper}
                         plain
                       >
-                        <WorkpapersTab
-                          compact
-                          {...workpaperProps}
-                          stage="DESIGN"
-                        />
+                        <DesignWorkpaperStep {...workpaperProps} />
                       </PhaseStep>
                     </PhasePanel>
                   ) : null

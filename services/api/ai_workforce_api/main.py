@@ -39,6 +39,7 @@ from ai_workforce_api.demo_requests import register_demo_requests, register_libr
 from ai_workforce_api.demo_tour import register_demo_tour
 from ai_workforce_api.design_conclusions import register_design_conclusions
 from ai_workforce_api.design_requests import register_design_requests
+from ai_workforce_api.design_workpaper import register_design_workpaper
 from ai_workforce_api.engagement_close import (
     register_closed_engagements,
     register_engagement_close,
@@ -246,6 +247,7 @@ def create_app(
     register_control_context(app, resolved, drafts if isinstance(drafts, TestScheduler) else None)
     register_test_sheets(app, resolved, drafts if isinstance(drafts, TestScheduler) else None)
     register_workpapers(app, resolved, drafts)
+    register_design_workpaper(app, resolved)
     register_control_reviews(app, resolved, drafts)
     register_demo_requests(app, resolved)
     register_library_summary(app)

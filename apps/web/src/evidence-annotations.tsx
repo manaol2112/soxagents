@@ -328,6 +328,17 @@ type Props = {
     citations: EvidenceCitation[];
     focused: EvidenceCitation | null;
   }) => ReactNode;
+  /** An annotation the page asks to see (a reference of the D&I workpaper): it is
+   * selected each time one is asked for, and the person moves on from it as from any. */
+  pick?: { id: string } | null;
+  /** Shown in a page, not in the dialog (the workpaper's evidence pane): the keys are
+   * heard only while the focus is inside it, so the page's own keys stay the page's, and
+   * it takes the focus only for what a person selects inside it, never when it appears,
+   * when its annotations arrive, or for an annotation asked for from outside (`pick`). */
+  inline?: boolean;
+  /** Where the focus goes back to when an annotation asked for from outside is closed:
+   * what asked for it (the reference chip), if it is still there. */
+  returnFocus?: (() => HTMLElement | null) | undefined;
 };
 
 /** The preview's body for a file with annotations: evidence left, the review right. */
@@ -342,6 +353,9 @@ export function AnnotatedEvidence({
   onEmpty,
   pdf,
   text,
+  pick = null,
+  inline = false,
+  returnFocus,
 }: Props) {
   const kind = previewKind(file.fileName);
   // A box is drawn on a page: an image, or a PDF's page.
@@ -361,7 +375,9 @@ export function AnnotatedEvidence({
   const onPageInView = useCallback((page: number) => {
     pageInView.current = page;
   }, []);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(pick?.id ?? null);
+  // Whether the annotation in view was asked for from outside, not selected in here.
+  const [asked, setAsked] = useState(pick !== null);
   const [mode, setMode] = useState<Mode>(
     startAdding && set.canEdit && drawable ? { kind: "draw" } : VIEW,
   );
@@ -395,22 +411,36 @@ export function AnnotatedEvidence({
     }
   }, [annotations.length, mode.kind, onEmpty]);
 
+  // A reference selected elsewhere on the page: its annotation is the one in view.
+  useEffect(() => {
+    if (pick !== null) {
+      setAsked(true);
+      setSelectedId(pick.id);
+      setMode(VIEW);
+      setRemoving(false);
+      setProblem(null);
+    }
+  }, [pick]);
+
   const dialogOf = () =>
     root.current?.closest<HTMLElement>('[role="dialog"]') ?? null;
 
   function select(id: string | null) {
+    setAsked(false);
     setSelectedId(id);
     setMode(VIEW);
     setRemoving(false);
     setProblem(null);
   }
 
-  /** Closes the callout and hands the focus back to the annotation's line. */
+  /** Closes the callout and hands the focus back: to what asked for the annotation from
+   * outside where something did, else to the annotation's line. */
   function close() {
     const line =
       selectedId === null ? null : rowButtons.current.get(selectedId);
+    const back = asked ? (returnFocus?.() ?? null) : null;
     select(null);
-    (line ?? dialogOf())?.focus();
+    (back ?? line ?? dialogOf())?.focus();
   }
 
   function step(direction: 1 | -1) {
@@ -576,6 +606,12 @@ export function AnnotatedEvidence({
       if (here === null || event.defaultPrevented) {
         return;
       }
+      if (
+        inline &&
+        !(event.target instanceof Node && here.contains(event.target))
+      ) {
+        return;
+      }
       const dialog = here.closest<HTMLElement>('[role="dialog"]');
       if (dialog !== null && !isTopmostDialog(dialog)) {
         return;
@@ -707,6 +743,7 @@ export function AnnotatedEvidence({
                   onClose={close}
                   problem={problem}
                   asking={removing}
+                  quiet={inline && asked}
                   actions={
                     set.canEdit ? (
                       <ReviewActions
@@ -1462,16 +1499,20 @@ function CalloutShell({
 }
 
 /** Moves the focus into the callout when what it shows changes: to its first action, or
- * to itself where there is none to take. */
-function useCalloutFocus<T extends HTMLElement>(key: string) {
+ * to itself where there is none to take. `quiet` leaves the focus where it is (a callout
+ * shown in a page for an annotation nobody selected in it). */
+function useCalloutFocus<T extends HTMLElement>(key: string, quiet = false) {
   const box = useRef<T>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: the focus moves when the callout's subject does, named by `key`.
   useEffect(() => {
+    if (quiet) {
+      return;
+    }
     const node = box.current;
     (node?.querySelector<HTMLElement>("[data-first]") ?? node)?.focus({
       preventScroll: true,
     });
-  }, [key]);
+  }, [key, quiet]);
   return box;
 }
 
@@ -1487,6 +1528,7 @@ function Basis({
   problem,
   actions,
   asking,
+  quiet = false,
 }: {
   annotation: Annotation;
   at: string;
@@ -1499,9 +1541,12 @@ function Basis({
   actions: ReactNode;
   /** Whether the actions ask before removing: the focus goes to the question. */
   asking: boolean;
+  /** Shown without taking the focus. */
+  quiet?: boolean;
 }) {
   const focus = useCalloutFocus<HTMLDivElement>(
     `${annotation.id}-${annotation.status}-${asking}`,
+    quiet,
   );
   const check = checkLine(annotation.checkSentence);
   const kept =

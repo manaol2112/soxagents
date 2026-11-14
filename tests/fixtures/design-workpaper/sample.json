@@ -1,0 +1,460 @@
+{
+  "control": {
+    "id": "00000000-0000-4000-8000-000000000003",
+    "ref": "ITGC-AC-02",
+    "title": "Timely Removal of Terminated User Access",
+    "system": "Workday",
+    "engagement": "SOX FY2027",
+    "area": "IT general controls"
+  },
+  "workpaper": {
+    "id": "00000000-0000-4000-8000-000000000007",
+    "reference": "ITGC-AC-02-WORK-TOD",
+    "status": "PREPARED",
+    "drafting": false,
+    "version": 4,
+    "shown_version": 1,
+    "current_version": 1,
+    "prepared_by": "Dana Lee",
+    "prepared_at": "2026-11-14T09:30:00Z"
+  },
+  "review": {
+    "status": "TO_SIGN",
+    "proposed": "EFFECTIVE",
+    "signed_verdict": null,
+    "signed_by": null,
+    "signed_at": null,
+    "out_of_date": []
+  },
+  "risk": "A former employee or contractor keeps access and records or changes financial data after leaving.",
+  "activity": "HR records each termination in Workday. The system administrator receives the termination list in real time and disables or removes the leaver's accounts in Workday within 1 business day of the termination date.",
+  "facts": [
+    {
+      "label": "Type",
+      "value": "Preventive"
+    },
+    {
+      "label": "Nature",
+      "value": "Manual"
+    },
+    {
+      "label": "Frequency",
+      "value": "As events occur"
+    },
+    {
+      "label": "System",
+      "value": "Workday"
+    },
+    {
+      "label": "Performed by",
+      "value": "HRIS Security"
+    },
+    {
+      "label": "Key control",
+      "value": "Yes"
+    }
+  ],
+  "understanding": "Control ITGC-AC-02 is a manual, event-driven control over Workday. HR records each termination in Workday. The system administrator receives the termination list and disables or removes the leaver's Workday accounts within 1 business day of the termination date [^1].\n\nWe walked through one instance with M. Santos, HRIS Security Administrator: the termination of Jordan Reyes (104582), Senior Payroll Analyst [^2].",
+  "procedures": [
+    "Inspected 7 files received for 2 requests.",
+    "Walked one instance through the control, from the HR termination to the removal of access, inspecting each system's own record.",
+    "Compared the termination date with the dates access was removed. The comparison was made in code from the dates the records state.",
+    "Inspected the parameters of the sign-on report, as information produced by the entity."
+  ],
+  "evidence": [
+    {
+      "ref": "E1",
+      "file_id": "00000000-0000-4000-8000-000000000021",
+      "file_name": "1_ex-a-bp-history.png",
+      "kind": "walkthrough",
+      "kind_words": "Walkthrough evidence",
+      "requirement_id": "00000000-0000-4000-8000-000000000004",
+      "requirement_title": "One leaver traced from termination to disablement",
+      "annotations": 2,
+      "reviewed": 0,
+      "left_out": null,
+      "image": true
+    },
+    {
+      "ref": "E2",
+      "file_id": "00000000-0000-4000-8000-000000000022",
+      "file_name": "2_ex-a2-notification.png",
+      "kind": "walkthrough",
+      "kind_words": "Walkthrough evidence",
+      "requirement_id": "00000000-0000-4000-8000-000000000004",
+      "requirement_title": "One leaver traced from termination to disablement",
+      "annotations": 2,
+      "reviewed": 0,
+      "left_out": null,
+      "image": true
+    },
+    {
+      "ref": "E3",
+      "file_id": "00000000-0000-4000-8000-000000000023",
+      "file_name": "3_ex-b-account-disabled.png",
+      "kind": "walkthrough",
+      "kind_words": "Walkthrough evidence",
+      "requirement_id": "00000000-0000-4000-8000-000000000004",
+      "requirement_title": "One leaver traced from termination to disablement",
+      "annotations": 7,
+      "reviewed": 2,
+      "left_out": null,
+      "image": true
+    },
+    {
+      "ref": "E4",
+      "file_id": "00000000-0000-4000-8000-000000000024",
+      "file_name": "4_ex-d-security-groups.png",
+      "kind": "walkthrough",
+      "kind_words": "Change history or audit log",
+      "requirement_id": "00000000-0000-4000-8000-000000000004",
+      "requirement_title": "One leaver traced from termination to disablement",
+      "annotations": 3,
+      "reviewed": 0,
+      "left_out": null,
+      "image": true
+    },
+    {
+      "ref": "E5",
+      "file_id": "00000000-0000-4000-8000-000000000025",
+      "file_name": "5_ex-c-okta-log.png",
+      "kind": "walkthrough",
+      "kind_words": "Change history or audit log",
+      "requirement_id": "00000000-0000-4000-8000-000000000004",
+      "requirement_title": "One leaver traced from termination to disablement",
+      "annotations": 2,
+      "reviewed": 0,
+      "left_out": null,
+      "image": true
+    },
+    {
+      "ref": "E6",
+      "file_id": "00000000-0000-4000-8000-000000000026",
+      "file_name": "6_ex-d2-servicenow-ticket.png",
+      "kind": "walkthrough",
+      "kind_words": "Walkthrough evidence",
+      "requirement_id": "00000000-0000-4000-8000-000000000004",
+      "requirement_title": "One leaver traced from termination to disablement",
+      "annotations": 2,
+      "reviewed": 0,
+      "left_out": null,
+      "image": true
+    },
+    {
+      "ref": "E7",
+      "file_id": "00000000-0000-4000-8000-000000000027",
+      "file_name": "7_ex-e-signons-report.png",
+      "kind": "report",
+      "kind_words": "Report or system listing",
+      "requirement_id": "00000000-0000-4000-8000-000000000006",
+      "requirement_title": "Sign-on activity after the termination",
+      "annotations": 1,
+      "reviewed": 0,
+      "left_out": null,
+      "image": true
+    }
+  ],
+  "walkthrough": {
+    "columns": [
+      "Step",
+      "Who",
+      "Evidence inspected",
+      "Result"
+    ],
+    "steps": [
+      {
+        "number": 1,
+        "when": "09/24/2026 10:12 AM",
+        "step": "HR starts the termination of Jordan Reyes (resignation); the HR Partner approves it.",
+        "who": "L. Moreno, HR",
+        "evidence": "Business process history: Terminate Employee, initiated and approved. [^1]",
+        "result": "Termination initiated 09/24/2026.",
+        "refs": [
+          "E1"
+        ]
+      },
+      {
+        "number": 2,
+        "when": "09/25/2026 9:41 AM",
+        "step": "HR Operations approves. Workday notifies HRIS Security and opens ServiceNow RITM0048213 by itself, due 1 business day after the effective date.",
+        "who": "K. Cho; Workday",
+        "evidence": "Notification email to HRIS Security Admins; ServiceNow ticket RITM0048213.",
+        "result": "Notification sent before the effective date.",
+        "refs": [
+          "E1",
+          "E2",
+          "E6"
+        ]
+      },
+      {
+        "number": 3,
+        "when": "09/30/2026 11:59 PM",
+        "step": "The termination takes effect and the Workday account is disabled the same day.",
+        "who": "Workday",
+        "evidence": "Workday account screen: Account Disabled Yes, 09/30/2026 11:59:00 PM PT.",
+        "result": "Disabled on the effective date.",
+        "refs": [
+          "E3"
+        ]
+      },
+      {
+        "number": 4,
+        "when": "10/01/2026 12:05 AM",
+        "step": "Okta deactivates the user and removes single sign-on to Workday.",
+        "who": "Workday-to-Okta",
+        "evidence": "Okta system log: user.lifecycle.deactivate.",
+        "result": "Single sign-on removed.",
+        "refs": [
+          "E5"
+        ]
+      },
+      {
+        "number": 5,
+        "when": "10/01/2026 10:18 AM",
+        "step": "The security administrator removes the last user-based security group (Payroll Administrator); none remain.",
+        "who": "M. Santos",
+        "evidence": "Security groups for the user, with the audit trail.",
+        "result": "No user-based security group remains.",
+        "refs": [
+          "E4"
+        ]
+      },
+      {
+        "number": 6,
+        "when": "10/01/2026 10:22 AM",
+        "step": "The ticket is closed with the work notes, before it fell due at 11:59 PM.",
+        "who": "M. Santos",
+        "evidence": "ServiceNow RITM0048213 work notes and closure.",
+        "result": "Closed before it fell due.",
+        "refs": [
+          "E6"
+        ]
+      },
+      {
+        "number": 7,
+        "when": "10/01 to 10/14/2026",
+        "step": "No sign-ons or attempted sign-ons on the account after removal.",
+        "who": "Workday report",
+        "evidence": "Workday Account Signons report for jreyes.",
+        "result": "0 items returned.",
+        "refs": [
+          "E7"
+        ]
+      }
+    ],
+    "source": "AGENT"
+  },
+  "attributes": [
+    {
+      "id": "00000000-0000-4000-8000-000000000011",
+      "code": "A",
+      "text": "The leaver's access was disabled or removed, as shown by the system's own record of the change",
+      "state": "SHOWN",
+      "state_words": "Shown",
+      "basis": "The Workday account reads Disabled; the audit trail shows the security group removed by M. Santos; Okta logs the deactivation.",
+      "tickmark": "AGREED",
+      "refs": [
+        {
+          "ref": "E3",
+          "annotation_ids": [
+            "00000000-0000-4000-8000-000000000104",
+            "00000000-0000-4000-8000-000000000105"
+          ],
+          "numbers": [
+            4,
+            5
+          ]
+        },
+        {
+          "ref": "E4",
+          "annotation_ids": [],
+          "numbers": []
+        },
+        {
+          "ref": "E5",
+          "annotation_ids": [],
+          "numbers": []
+        }
+      ],
+      "marks": {
+        "E3": "SHOWS",
+        "E4": "SHOWS",
+        "E5": "SHOWS",
+        "E1": "IDENTIFIES"
+      },
+      "checks": [],
+      "notes": ""
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000012",
+      "code": "B",
+      "text": "Every account of the leaver was disabled or removed, not only the primary one",
+      "state": "SHOWN",
+      "state_words": "Shown",
+      "basis": "Three places were checked: the Workday account, its security groups (none remain), and single sign-on through Okta.",
+      "tickmark": "AGREED",
+      "refs": [
+        {
+          "ref": "E3",
+          "annotation_ids": [
+            "00000000-0000-4000-8000-000000000104",
+            "00000000-0000-4000-8000-000000000105"
+          ],
+          "numbers": [
+            4,
+            5
+          ]
+        },
+        {
+          "ref": "E4",
+          "annotation_ids": [],
+          "numbers": []
+        },
+        {
+          "ref": "E5",
+          "annotation_ids": [],
+          "numbers": []
+        }
+      ],
+      "marks": {
+        "E3": "SHOWS",
+        "E4": "SHOWS",
+        "E5": "SHOWS"
+      },
+      "checks": [],
+      "notes": ""
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000013",
+      "code": "C",
+      "text": "Access was removed within 1 business day of the HR termination date",
+      "state": "SHOWN",
+      "state_words": "Shown",
+      "basis": "Effective 09/30/2026. Disabled 09/30 11:59 PM; single sign-on off 10/01 12:05 AM; group removed 10/01 10:18 AM. All before the limit of 10/01 11:59 PM.",
+      "tickmark": "COMPARED",
+      "refs": [
+        {
+          "ref": "E1",
+          "annotation_ids": [],
+          "numbers": []
+        },
+        {
+          "ref": "E3",
+          "annotation_ids": [
+            "00000000-0000-4000-8000-000000000103",
+            "00000000-0000-4000-8000-000000000105"
+          ],
+          "numbers": [
+            3,
+            5
+          ]
+        },
+        {
+          "ref": "E4",
+          "annotation_ids": [],
+          "numbers": []
+        },
+        {
+          "ref": "E5",
+          "annotation_ids": [],
+          "numbers": []
+        }
+      ],
+      "marks": {
+        "E1": "IDENTIFIES",
+        "E2": "IDENTIFIES",
+        "E3": "SHOWS",
+        "E4": "SHOWS",
+        "E5": "SHOWS",
+        "E6": "IDENTIFIES"
+      },
+      "checks": [
+        "Checked in code: termination 30 September 2026, disabled 30 September 2026: the same day."
+      ],
+      "notes": ""
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000014",
+      "code": "D",
+      "text": "Where access was removed late, activity on the account after the termination date was checked",
+      "state": "NOT_CONCLUDED",
+      "state_words": "Not concluded",
+      "basis": "Not triggered: access was removed on time. The sign-on report shows no activity after removal in any case.",
+      "tickmark": "NONE",
+      "refs": [
+        {
+          "ref": "E7",
+          "annotation_ids": [],
+          "numbers": []
+        }
+      ],
+      "marks": {
+        "E7": "SOURCE"
+      },
+      "checks": [],
+      "notes": ""
+    }
+  ],
+  "reports": [
+    {
+      "ref": "E7",
+      "report": "Workday Account Signons",
+      "source": "Workday, run on screen during the walkthrough",
+      "procedure": "Parameters inspected: system account jreyes; 10/01/2026 12:00 AM to 10/14/2026 11:59 PM; failed sign-ons included."
+    }
+  ],
+  "matters": [
+    {
+      "state": "OPEN",
+      "kind": "FOLLOW_UP",
+      "text": "The record that disabled the Workday account at 11:59 PM on 09/30/2026 does not name who or what made the change. Confirm that the account is disabled by the termination's effective date in Workday itself.",
+      "refs": [
+        "E3"
+      ]
+    },
+    {
+      "state": "NOTED",
+      "kind": "UNSETTLED",
+      "text": "Attribute D is not concluded: access was removed on time, so the check of later activity was not triggered.",
+      "refs": [
+        "E7"
+      ]
+    },
+    {
+      "state": "NOTED",
+      "kind": "NOTE",
+      "text": "One instance was walked through. Operating effectiveness is tested separately on a sample of the period's leavers.",
+      "refs": []
+    }
+  ],
+  "conclusion": {
+    "text": "The control is designed to remove a leaver's access within 1 business day of the termination date, and the instance walked through shows it in place: the Workday account was disabled on the effective date, single sign-on was deactivated five minutes after midnight, and the remaining security group was removed the next morning, within the limit.\n\nThis is a conclusion on design and implementation only, proposed for the preparer and an independent reviewer to sign.",
+    "source": "AGENT",
+    "proposed": "EFFECTIVE",
+    "words": "Effective",
+    "signed": false
+  },
+  "tickmarks": [
+    {
+      "mark": "AGREED",
+      "symbol": "✓",
+      "meaning": "Agreed to the system's own record, without exception."
+    },
+    {
+      "mark": "COMPARED",
+      "symbol": "≡",
+      "meaning": "Dates or values compared in code, within what the attribute allows."
+    },
+    {
+      "mark": "INSPECTED",
+      "symbol": "◊",
+      "meaning": "Report parameters inspected."
+    },
+    {
+      "mark": "EXCEPTION",
+      "symbol": "✗",
+      "meaning": "Exception shown."
+    }
+  ],
+  "can_edit": true
+}

@@ -1,0 +1,1919 @@
+/* The D&I workpaper in three views (docs/design-workpaper.md): the formal document, the
+   test matrix, and the workpaper with its evidence beside it, under one switcher, with the
+   existing workpaper card in a fold below.
+
+   Colour: the root tokens only, so both themes read the same rules. A state, a mark and a
+   tickmark are always words or a symbol as well as a tone. The views lay themselves out by
+   their own width (the container `dw`), not the window's, since they sit inside a step of
+   the control's page. The printed sheet reads the --mark-* tokens, which are a light page
+   in both themes. */
+
+.dw-step {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.dw {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  container: dw / inline-size;
+}
+
+/* Without weight, so each rule below sets its own spacing. */
+:where(.dw, .dw-print-root) :where(h4, h5, h6, p, dl, dd) {
+  margin: 0;
+}
+
+/* A tone: its strong colour, its soft fill and its edge. */
+:is(.dw-tile, .dw-verdict, .dw-cell, .dw-dot).is-success {
+  --dw-c: var(--success);
+  --dw-soft: var(--success-soft);
+}
+
+:is(.dw-tile, .dw-verdict, .dw-cell, .dw-dot).is-warning {
+  --dw-c: var(--warning);
+  --dw-soft: var(--warning-soft);
+}
+
+:is(.dw-tile, .dw-verdict, .dw-cell, .dw-dot).is-danger {
+  --dw-c: var(--danger);
+  --dw-soft: var(--danger-soft);
+}
+
+:is(.dw-tile, .dw-verdict, .dw-cell, .dw-dot).is-info {
+  --dw-c: var(--info);
+  --dw-soft: var(--info-soft);
+}
+
+:is(.dw-tile, .dw-verdict, .dw-cell, .dw-dot).is-ai {
+  --dw-c: var(--ai);
+  --dw-soft: var(--ai-soft);
+}
+
+:is(.dw-tile, .dw-verdict, .dw-cell, .dw-dot).is-neutral {
+  --dw-c: var(--neutral);
+  --dw-soft: var(--neutral-soft);
+}
+
+/* The switcher: Document, Matrix, Evidence. */
+
+.dw-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  min-height: 36px;
+}
+
+.dw-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+button.dw-tab {
+  height: 28px;
+  padding: 0 0.75rem;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+button.dw-tab:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+  border-color: transparent;
+}
+
+button.dw-tab.is-on {
+  color: var(--text-strong);
+  background: var(--surface);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-xs);
+}
+
+button.dw-tab:focus-visible:not(:disabled) {
+  box-shadow: var(--ring);
+}
+
+.dw-tab svg {
+  flex: none;
+  color: var(--text-tertiary);
+}
+
+.dw-tab.is-on svg {
+  color: var(--accent-text);
+}
+
+.dw-bar-note {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.dw-problem {
+  align-items: center;
+}
+
+.dw-problem button {
+  flex: none;
+  margin-left: auto;
+}
+
+.dw-panel {
+  min-width: 0;
+}
+
+/* While the workpaper is read: the shape of a header block and a few sections. */
+
+.dw-outline {
+  min-height: 26rem;
+  padding: 1.5rem 1.75rem;
+}
+
+.dw-outline-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 18rem);
+  gap: 1.75rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.dw-outline-sec {
+  margin-top: 1.5rem;
+}
+
+.dw-skel {
+  display: block;
+  height: 0.875rem;
+  margin: 0.5rem 0;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+  animation: dw-wait 1.2s ease-in-out infinite alternate;
+}
+
+.dw-skel.is-eyebrow {
+  width: 38%;
+  height: 0.625rem;
+}
+
+.dw-skel.is-title {
+  width: 70%;
+  height: 1.5rem;
+}
+
+.dw-skel.is-line {
+  width: 55%;
+}
+
+.dw-skel.is-block {
+  height: 6.5rem;
+  margin: 0;
+}
+
+.dw-skel.is-head {
+  width: 32%;
+  height: 0.625rem;
+}
+
+.dw-skel.is-short {
+  width: 64%;
+}
+
+@keyframes dw-wait {
+  to {
+    opacity: 0.45;
+  }
+}
+
+/* No workpaper yet. */
+
+.dw-empty {
+  display: flex;
+  gap: 0.875rem;
+  align-items: flex-start;
+  padding: 1.125rem 1.25rem;
+}
+
+.dw-empty-mark {
+  display: grid;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  color: var(--text-secondary);
+  background: var(--surface-sunken);
+  border-radius: var(--radius);
+}
+
+.dw-empty strong {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+}
+
+.dw-empty p {
+  max-width: 44rem;
+  margin: 0.125rem 0 0.625rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+}
+
+.dw-none {
+  padding: 0.625rem 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+  list-style: none;
+}
+
+.dw-card > .dw-none {
+  padding: 0.625rem 1.25rem 1rem;
+}
+
+.dw-quiet {
+  color: var(--text-tertiary);
+}
+
+/* Shared: reference chips, the attribute's letter, tickmarks, the Edit link. */
+
+.dw-refs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  vertical-align: middle;
+}
+
+.dw-ref,
+button.dw-ref {
+  display: inline-grid;
+  width: auto;
+  min-width: 26px;
+  height: 20px;
+  padding: 0 6px;
+  place-items: center;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 5px;
+  box-shadow: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+button.dw-ref {
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+button.dw-ref:hover {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent-text);
+}
+
+button.dw-ref.is-on,
+button.dw-ref.is-on:hover {
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+button.dw-ref:focus-visible:not(:disabled) {
+  box-shadow: var(--ring);
+}
+
+.dw-attr {
+  display: inline-grid;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  color: var(--surface);
+  background: var(--text-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.dw-tm {
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-base);
+  font-weight: 700;
+}
+
+button.dw-edit {
+  width: auto;
+  height: auto;
+  padding: 0.125rem 0.25rem;
+  color: var(--accent-strong);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+button.dw-edit:hover {
+  color: var(--accent-text);
+  background: transparent;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+button.dw-edit:focus-visible:not(:disabled) {
+  box-shadow: var(--ring);
+}
+
+.dw-left-out {
+  display: block;
+  color: var(--warning);
+  font-size: var(--fs-xs);
+}
+
+.dw-left-out.is-line {
+  font-size: var(--fs-sm);
+}
+
+.dw-checks {
+  display: grid;
+  gap: 2px;
+  margin: 0.375rem 0 0;
+  padding: 0;
+  /* A comparison's sentence, passed or not: its words say which, never a colour. */
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  list-style: none;
+}
+
+/* An exception on a file the evidence index does not list: said in words on the row. */
+.dw-stray {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--danger);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+/* Under a verdict: what still waits on a person. */
+.dw-open {
+  margin-top: 0.5rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.dw-stale {
+  margin: 0.5rem 0 0;
+  padding-left: 1.125rem;
+  color: var(--warning);
+  font-size: var(--fs-sm);
+}
+
+/* The verdict: the conclusion's headline and who stands behind it. A proposal carries the
+   agent's tone, never the tone of something approved. */
+
+.dw-verdict {
+  display: grid;
+  gap: 0.375rem;
+  justify-items: start;
+  align-content: start;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--dw-c, var(--border-strong));
+  border-radius: var(--radius-lg);
+}
+
+.dw-verdict small,
+.dw-tile small,
+.dw-who dt,
+.dw-two h6,
+.dw-prose h6,
+.dw-facts dt {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dw-verdict strong {
+  color: var(--text-strong);
+  font-size: var(--fs-lg);
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.dw-verdict .pill {
+  height: auto;
+  min-height: 20px;
+  padding-block: 2px;
+  line-height: 1.3;
+  white-space: normal;
+}
+
+/* Document: the classic workpaper ------------------------------------------------------ */
+
+.dw-sheet {
+  padding: 2.25rem 2.5rem 2rem;
+  color: var(--text);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+  container: dw-sheet / inline-size;
+}
+
+.dw-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(15rem, 20.5rem);
+  gap: 1.75rem;
+  align-items: start;
+  padding-bottom: 1.125rem;
+  border-bottom: 2px solid var(--text-strong);
+}
+
+.dw-eyebrow {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.dw-title {
+  margin-top: 0.4rem;
+  color: var(--text-strong);
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.dw-sub {
+  margin-top: 0.4rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+}
+
+.dw-sub strong {
+  color: var(--text-strong);
+}
+
+.dw-stone {
+  border: 1px solid var(--text-strong);
+  font-size: var(--fs-sm);
+}
+
+.dw-stone > div {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+  border-bottom: 1px solid var(--border);
+}
+
+.dw-stone > div:last-child {
+  border-bottom: 0;
+}
+
+.dw-stone dt {
+  padding: 6px 9px;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border-right: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.dw-stone dd {
+  padding: 6px 9px;
+  overflow-wrap: anywhere;
+}
+
+.dw-stone dd.is-pending {
+  color: var(--text-tertiary);
+}
+
+.dw-sec {
+  margin-top: 1.5rem;
+}
+
+.dw-sec-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--text-strong);
+}
+
+.dw-sec-head h5 {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* The heading a link elsewhere on the page lands on. */
+.dw-sec-head h5:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--accent-text);
+  outline-offset: 3px;
+}
+
+.dw-sec-head h5 span {
+  color: var(--text-tertiary);
+  font-weight: 600;
+}
+
+.dw-two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.625rem;
+  margin-top: 0.75rem;
+}
+
+.dw-two h6,
+.dw-prose h6 {
+  margin-bottom: 4px;
+}
+
+.dw-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+}
+
+.dw-facts > div {
+  padding: 8px 10px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.dw-prose {
+  margin-top: 0.875rem;
+}
+
+.dw-prose p + p,
+.dw-concl-text p + p {
+  margin-top: 0.5rem;
+}
+
+.dw-proc {
+  margin: 0.75rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.dw-proc li {
+  margin: 4px 0;
+}
+
+.dw-table-wrap {
+  margin-top: 0.75rem;
+  overflow-x: auto;
+}
+
+.dw-table {
+  width: 100%;
+  min-width: 38rem;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+
+.dw-table thead th {
+  padding: 7px 9px;
+  color: var(--text-tertiary);
+  text-align: left;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  font-size: var(--fs-2xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dw-table td,
+.dw-table tbody th {
+  padding: 8px 9px;
+  text-align: left;
+  vertical-align: top;
+  border: 1px solid var(--border);
+  font-weight: 400;
+}
+
+.dw-table .is-num {
+  width: 2.25rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.dw-table .is-when {
+  width: 9.5rem;
+  color: var(--text-secondary);
+}
+
+.dw-table .is-step {
+  min-width: 11rem;
+}
+
+.dw-table .is-refs {
+  width: 7.25rem;
+}
+
+.dw-table .is-state {
+  width: 9rem;
+}
+
+.dw-table .is-tm {
+  width: 2.75rem;
+  text-align: center;
+}
+
+.dw-table .is-attr {
+  width: 28%;
+}
+
+.dw-table .pill {
+  height: auto;
+  min-height: 20px;
+  padding-block: 2px;
+  line-height: 1.3;
+  white-space: normal;
+}
+
+.dw-table abbr {
+  text-decoration: none;
+}
+
+.dw-note {
+  margin-top: 0.375rem;
+  color: var(--text-secondary);
+}
+
+.dw-concl {
+  display: grid;
+  grid-template-columns: minmax(0, 18rem) minmax(0, 1fr);
+  margin-top: 0.75rem;
+  border: 1px solid var(--text-strong);
+}
+
+.dw-concl .dw-verdict {
+  background: var(--surface-muted);
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-left: 4px solid var(--dw-c, var(--border-strong));
+  border-radius: 0;
+}
+
+.dw-concl .dw-verdict strong {
+  font-family: var(--font-display);
+  font-size: var(--fs-xl);
+  font-weight: 600;
+}
+
+.dw-concl-text {
+  padding: 0.875rem 1rem;
+}
+
+.dw-legend {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+  gap: 1.625rem;
+  margin-top: 0.75rem;
+}
+
+.dw-legend ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dw-legend li > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dw-legend li {
+  display: flex;
+  gap: 9px;
+  align-items: baseline;
+  padding: 3px 0;
+  font-size: var(--fs-sm);
+}
+
+.dw-legend li > b,
+.dw-legend li > .dw-refs {
+  flex: none;
+  width: 2rem;
+}
+
+.dw-legend small {
+  color: var(--text-tertiary);
+  font-size: inherit;
+}
+
+.dw-sign {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.625rem;
+  margin-top: 2.25rem;
+}
+
+.dw-sign > div {
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding-top: 7px;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--text-strong);
+  font-size: var(--fs-sm);
+}
+
+.dw-sign b {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.dw-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  justify-content: space-between;
+  margin-top: 1.125rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+}
+
+@container dw-sheet (max-width: 640px) {
+  .dw-top,
+  .dw-two,
+  .dw-concl,
+  .dw-legend,
+  .dw-sign {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dw-concl .dw-verdict {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .dw-title {
+    font-size: var(--fs-title);
+  }
+}
+
+/* Matrix: the test matrix -------------------------------------------------------------- */
+
+.dw-board {
+  display: grid;
+  gap: 0.875rem;
+  min-width: 0;
+}
+
+.dw-vhead {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.625rem 1rem;
+  align-items: center;
+  padding: 0.875rem 1.25rem;
+}
+
+.dw-vhead > div:first-child {
+  flex: 1;
+  min-width: 14rem;
+}
+
+.dw-vhead h4 {
+  color: var(--text-strong);
+  font-size: var(--fs-xl);
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.dw-vhead p {
+  margin-top: 2px;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.dw-who {
+  display: flex;
+  gap: 1.125rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.dw-tiles {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.875rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dw-tile {
+  padding: 0.75rem 1rem 0.875rem;
+  border-left-width: 4px;
+}
+
+/* Over the glass layer's own edge colour (glass.css), which is loaded last. */
+.dw .dw-tile.card {
+  border-left-color: var(--dw-c, var(--border-strong));
+}
+
+.dw .dw-tile.card.is-neutral {
+  border-left-color: var(--border-strong);
+}
+
+.dw-tile strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-strong);
+  font-size: var(--fs-xl);
+  font-weight: 650;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.dw-tile p {
+  display: -webkit-box;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.dw-card {
+  min-width: 0;
+}
+
+.dw-card-head {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0.875rem 1.25rem 0;
+}
+
+.dw-card-head h5 {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.dw-grid-scroll {
+  margin: 0.625rem 1.25rem 0;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.dw-grid {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--fs-sm);
+}
+
+.dw-grid th,
+.dw-grid td {
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-weight: 400;
+}
+
+.dw-grid tr > :last-child {
+  border-right: 0;
+}
+
+.dw-grid tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.dw-grid thead th {
+  color: var(--text-tertiary);
+  vertical-align: middle;
+  background: var(--surface-muted);
+  font-size: var(--fs-2xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* The attribute stays in view while the files scroll under it: an opaque ground. */
+.dw-grid .is-first {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 17rem;
+  background: var(--glass-strong);
+}
+
+.dw-grid thead .is-first {
+  background: var(--surface-muted);
+}
+
+.dw-grid-attr {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 9px;
+  color: var(--text);
+}
+
+.dw-grid .is-file {
+  width: 5.5rem;
+  min-width: 5.5rem;
+  padding: 6px 4px;
+  text-align: center;
+}
+
+.dw-grid-ref {
+  display: block;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+}
+
+.dw-grid-name {
+  display: -webkit-box;
+  margin-top: 2px;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  line-height: 1.25;
+  letter-spacing: 0;
+  text-transform: none;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+.dw-grid .is-state {
+  width: 9rem;
+  min-width: 9rem;
+}
+
+.dw-grid .is-state .pill {
+  height: auto;
+  min-height: 20px;
+  padding-block: 2px;
+  line-height: 1.3;
+  white-space: normal;
+}
+
+.dw-grid .is-basis {
+  min-width: 17rem;
+  color: var(--text-secondary);
+}
+
+/* Under the attribute, where the grid is too narrow for a column of its own. */
+.dw-grid-basis {
+  display: none;
+  margin-top: 4px;
+  color: var(--text-secondary);
+}
+
+.dw-cell,
+button.dw-cell {
+  display: inline-grid;
+  gap: 3px;
+  justify-items: center;
+  width: auto;
+  min-width: 0;
+  height: auto;
+  padding: 3px 5px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+button.dw-cell {
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+button.dw-cell:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+button.dw-cell:focus-visible:not(:disabled) {
+  box-shadow: var(--ring);
+}
+
+.dw-cell.is-none {
+  color: var(--text-tertiary);
+  font-size: var(--fs-md);
+}
+
+/* A mark: a symbol in a ring of its tone, with its word under it in the cell. */
+.dw-dot {
+  display: inline-grid;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  color: var(--dw-c);
+  background: var(--dw-soft);
+  border: 1.5px solid var(--dw-c);
+  border-radius: 50%;
+  font-size: var(--fs-sm);
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.is-success > .dw-dot,
+.dw-dot.is-success {
+  color: var(--text-on-status);
+  background: var(--success);
+  border-color: var(--success);
+}
+
+.dw-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem 1rem;
+  align-items: center;
+  padding: 0.625rem 1.25rem 1rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.dw-key > span {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.dw-key .dw-dot {
+  width: 18px;
+  height: 18px;
+  font-size: 10px;
+}
+
+/* The walkthrough as a timeline: down the page by default, across it in the matrix. */
+
+.dw-track-scroll {
+  padding: 0.75rem 1.25rem 1.125rem;
+  overflow-x: auto;
+}
+
+.dw-track {
+  margin: 0 0 0 9px;
+  padding: 0 0 0 20px;
+  border-left: 2px solid var(--border-strong);
+  list-style: none;
+}
+
+.dw-stop {
+  position: relative;
+  padding: 1px 0 0.75rem;
+}
+
+.dw-stop:last-child {
+  padding-bottom: 0;
+}
+
+.dw-stop-n {
+  position: absolute;
+  top: 1px;
+  left: -31px;
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px var(--glass-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.dw-stop-head {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+}
+
+.dw-stop-head small {
+  color: var(--text-tertiary);
+  font-size: inherit;
+  font-weight: 450;
+}
+
+.dw-stop-head small::before {
+  content: " · ";
+}
+
+.dw-stop-text {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.dw-stop-result {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.dw-stop .dw-refs {
+  margin-top: 4px;
+}
+
+@container dw (min-width: 761px) {
+  .dw-track.is-across {
+    display: grid;
+    grid-auto-columns: minmax(7.75rem, 1fr);
+    grid-auto-flow: column;
+    margin: 0;
+    padding: 0;
+    border-left: 0;
+  }
+
+  .is-across .dw-stop {
+    padding: 0 8px;
+    text-align: center;
+  }
+
+  /* The line through the stops, from the first one's centre to the last one's. */
+  .is-across .dw-stop::before {
+    position: absolute;
+    top: 9px;
+    right: 0;
+    left: 0;
+    height: 2px;
+    background: var(--border-strong);
+    content: "";
+  }
+
+  .is-across .dw-stop:first-child::before {
+    left: 50%;
+  }
+
+  .is-across .dw-stop:last-child::before {
+    right: 50%;
+  }
+
+  .is-across .dw-stop-n {
+    position: relative;
+    top: auto;
+    left: auto;
+    margin: 0 auto 7px;
+    box-shadow: 0 0 0 4px var(--glass-strong);
+  }
+
+  .is-across .dw-stop-head small {
+    display: block;
+  }
+
+  .is-across .dw-stop-head small::before {
+    content: none;
+  }
+
+  /* Across the page a stop is its time, who and what happened; the result of each step
+     is in the document and beside the evidence. */
+  .is-across .dw-stop-result {
+    display: none;
+  }
+
+  .is-across .dw-stop-text {
+    margin: 2px 0 0;
+    line-height: 1.35;
+  }
+
+  .is-across .dw-refs {
+    justify-content: center;
+  }
+}
+
+.dw-halves {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.875rem;
+}
+
+.dw-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.625rem 1.25rem 1rem;
+  font-size: var(--fs-base);
+  list-style: none;
+}
+
+.dw-list li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.dw-list .pill {
+  flex: none;
+}
+
+.dw-thumbs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: 0.625rem;
+  margin: 0;
+  padding: 0.75rem 1.25rem 1.125rem;
+  list-style: none;
+}
+
+button.dw-thumb {
+  display: grid;
+  grid-template-rows: 86px auto;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: none;
+  font-weight: 400;
+  line-height: 1.3;
+  white-space: normal;
+  transition: border-color 120ms ease;
+}
+
+button.dw-thumb:hover {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--accent-text);
+}
+
+button.dw-thumb:focus-visible:not(:disabled) {
+  box-shadow: var(--ring);
+}
+
+/* The picture's place is kept before it arrives, so nothing moves when it does. */
+.dw-thumb-pic {
+  display: grid;
+  width: 100%;
+  height: 86px;
+  overflow: hidden;
+  place-items: center;
+  background: var(--surface-sunken);
+}
+
+.dw-thumb-pic img {
+  display: block;
+  width: 100%;
+  height: 86px;
+  object-fit: cover;
+  object-position: top left;
+}
+
+.dw-thumb-cap {
+  display: block;
+  width: 100%;
+  overflow-wrap: anywhere;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-xs);
+}
+
+.dw-thumb-cap .dw-ref {
+  margin-right: 5px;
+}
+
+@container dw (max-width: 1180px) {
+  .dw-grid .is-basis {
+    display: none;
+  }
+
+  .dw-grid tr > .is-state {
+    width: 7.5rem;
+    min-width: 7.5rem;
+    border-right: 0;
+  }
+
+  .dw-grid .is-first {
+    min-width: 14rem;
+  }
+
+  .dw-grid .is-file {
+    width: 4.75rem;
+    min-width: 4.75rem;
+  }
+
+  .dw-grid-basis {
+    display: block;
+  }
+}
+
+@container dw (max-width: 1000px) {
+  .dw-tiles {
+    grid-template-columns: repeat(auto-fit, minmax(11.5rem, 1fr));
+  }
+}
+
+@container dw (max-width: 760px) {
+  .dw-halves {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dw-sheet {
+    padding: 1.125rem 1rem 1.25rem;
+  }
+
+  .dw-grid .is-first {
+    min-width: 13rem;
+  }
+
+  .dw-who {
+    width: 100%;
+  }
+}
+
+/* Evidence: the workpaper with its evidence beside it ---------------------------------- */
+
+.dw-evi {
+  display: grid;
+  min-width: 0;
+  overflow: clip;
+}
+
+.dw-evi > .dw-vhead {
+  border-bottom: 1px solid var(--border);
+}
+
+.dw-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  min-width: 0;
+}
+
+.dw-paper {
+  display: grid;
+  gap: 1.125rem;
+  align-content: start;
+  min-width: 0;
+  padding: 0 1.25rem 1.25rem 0;
+  border-right: 1px solid var(--border);
+}
+
+.dw-paper > section {
+  min-width: 0;
+}
+
+.dw-paper .dw-card-head {
+  padding-bottom: 0.5rem;
+}
+
+.dw-paper > section > :not(.dw-card-head) {
+  margin-left: 1.25rem;
+}
+
+.dw-more {
+  margin-top: 0.5rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.dw-more summary {
+  width: fit-content;
+  color: var(--accent-strong);
+  border-radius: var(--radius-sm);
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.dw-more summary:focus-visible {
+  outline: 0;
+  box-shadow: var(--ring);
+}
+
+.dw-more p {
+  margin-top: 0.5rem;
+}
+
+.dw-arows {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dw-arow {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 11px;
+  align-items: start;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.dw-arow.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent-text);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.dw-arow-text {
+  color: var(--text-strong);
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+.dw-arow-basis {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.dw-arow .dw-refs {
+  margin-top: 6px;
+}
+
+.dw-viewer {
+  position: sticky;
+  top: calc(var(--header-height) + 0.5rem);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  align-self: start;
+  min-width: 0;
+  max-height: calc(100vh - var(--header-height) - 1rem);
+  padding: 1rem 1.125rem 1.125rem;
+  overflow-y: auto;
+  background: var(--surface-sunken);
+}
+
+.dw-files {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  margin: 0;
+  padding: 3px;
+  overflow-x: auto;
+  list-style: none;
+  scrollbar-width: thin;
+}
+
+button.dw-file {
+  display: grid;
+  flex: none;
+  gap: 2px;
+  justify-items: start;
+  width: 6.75rem;
+  height: auto;
+  padding: 5px 8px;
+  color: var(--text-secondary);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: none;
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  line-height: 1.25;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+button.dw-file b {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+button.dw-file span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.dw-file:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+  border-color: var(--border-control);
+}
+
+button.dw-file.is-on {
+  color: var(--text);
+  border-color: var(--accent-text);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+button.dw-file.is-on b {
+  color: var(--accent-text);
+}
+
+button.dw-file:focus-visible:not(:disabled) {
+  box-shadow: var(--ring);
+}
+
+.dw-viewer-head {
+  display: flex;
+  flex: none;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dw-viewer-head p {
+  display: grid;
+  min-width: 0;
+  font-size: var(--fs-base);
+}
+
+.dw-viewer-head b {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dw-viewer-head small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.dw-viewer-head button {
+  flex: none;
+}
+
+/* The preview's own viewer, in a pane instead of the dialog: the legend goes under the
+   evidence and the pane scrolls as one (as the dialog does on a narrow window). */
+.dw-pane {
+  flex: none;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.dw-pane .preview-body.ea-body {
+  display: block;
+}
+
+.dw-pane .ea-stage-col {
+  display: block;
+}
+
+.dw-pane .preview-stage {
+  overflow: visible;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+.dw-pane .ea-panel {
+  overflow: visible;
+  border-top: 1px solid var(--border-subtle);
+  border-left: 0;
+}
+
+.dw-pane .ea-key {
+  margin-left: 0;
+}
+
+/* The basis of an annotation with no box (a file shown as its text): under the evidence,
+   in the pane's own flow, so it never covers the few lines it is about. */
+.dw-pane .ea-sheet-host.is-foot {
+  position: static;
+  flex: 0 0 100%;
+  justify-items: stretch;
+  padding: 0;
+}
+
+.dw-pane .ea-callout.is-sheet {
+  width: 100%;
+}
+
+.dw-pane-wait {
+  height: 15rem;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  animation: dw-wait 1.2s ease-in-out infinite alternate;
+}
+
+.dw-pane.is-loading .ea-panel {
+  border-left: 0;
+}
+
+.dw-pane-note {
+  padding: 0.5rem 1rem;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-sm);
+}
+
+@container dw (max-width: 900px) {
+  .dw-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dw-paper {
+    padding-right: 1.25rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .dw-viewer {
+    position: static;
+    max-height: none;
+    overflow-y: visible;
+  }
+}
+
+@container dw (max-width: 480px) {
+  .dw-paper {
+    padding: 0 0.75rem 1rem 0;
+  }
+
+  .dw-paper > section > :not(.dw-card-head) {
+    margin-left: 0.75rem;
+  }
+
+  .dw-card-head,
+  .dw-vhead {
+    padding-inline: 0.75rem;
+  }
+
+  .dw-viewer {
+    padding: 0.75rem;
+  }
+
+  .dw-arow {
+    grid-template-columns: 22px minmax(0, 1fr);
+  }
+
+  .dw-arow > .pill {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .dw-grid-scroll,
+  .dw-thumbs,
+  .dw-list,
+  .dw-key,
+  .dw-track-scroll {
+    margin-inline: 0;
+    padding-inline: 0.75rem;
+  }
+
+  .dw-grid-scroll {
+    margin-inline: 0.75rem;
+    padding-inline: 0;
+  }
+}
+
+/* The fold under the views: today's workpaper card, unchanged. */
+
+.dw-fold {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.dw-fold > summary {
+  display: flex;
+  gap: 0.625rem;
+  align-items: center;
+  padding: 0.625rem 0.875rem;
+  border-radius: inherit;
+  cursor: pointer;
+  list-style: none;
+}
+
+.dw-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.dw-fold > summary:hover {
+  background: var(--surface-hover);
+}
+
+.dw-fold > summary:focus-visible {
+  outline: 0;
+  box-shadow: var(--ring);
+}
+
+.dw-fold-mark {
+  display: grid;
+  flex: none;
+  color: var(--text-tertiary);
+  transition: transform 150ms ease;
+}
+
+.dw-fold[open] .dw-fold-mark {
+  transform: rotate(90deg);
+}
+
+.dw-fold-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.dw-fold-copy strong {
+  color: var(--text-strong);
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+.dw-fold-copy small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.dw-fold-body {
+  padding: 0 0.875rem 0.875rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dw-skel,
+  .dw-pane-wait {
+    animation: none;
+  }
+
+  button.dw-tab,
+  button.dw-ref,
+  button.dw-cell,
+  button.dw-thumb,
+  button.dw-file,
+  .dw-arow,
+  .dw-fold-mark {
+    transition: none;
+  }
+}
+
+/* Print or save as PDF: only the sheet, on a light page whatever the theme.
+
+   The sheet is drawn a second time at the end of the page while it prints
+   (.dw-print-root), outside the app's scrolling panels, which would cut it at one page.
+   Everything else is taken off the paper. Its colours are the --mark-* tokens: one value
+   in both themes, each 4.5:1 or more on --mark-paper. */
+
+/* The sheet's own page: the margins are set for it by name, so no other print of the app
+   is changed. */
+.dw-print-root {
+  display: none;
+  page: dw;
+}
+
+@media print {
+  @page dw {
+    margin: 16mm 14mm;
+  }
+
+  html.dw-printing,
+  html.dw-printing body {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: var(--mark-paper) !important;
+  }
+
+  html.dw-printing body > *:not(.dw-print-root) {
+    display: none !important;
+  }
+
+  html.dw-printing .dw-print-root {
+    --paper-line: color-mix(in srgb, var(--mark-neutral) 45%, var(--mark-paper));
+
+    display: block;
+    color: var(--mark-ink);
+    background: var(--mark-paper);
+    color-scheme: light;
+
+    --surface: var(--mark-paper);
+    --surface-muted: transparent;
+    --surface-sunken: transparent;
+    --glass-strong: var(--mark-paper);
+    --text-strong: var(--mark-ink);
+    --text: var(--mark-ink);
+    --text-secondary: var(--mark-neutral);
+    --text-tertiary: var(--mark-neutral);
+    --text-on-status: var(--mark-paper);
+    --border: var(--paper-line);
+    --border-strong: var(--paper-line);
+    --border-subtle: var(--paper-line);
+    --accent-text: var(--mark-info);
+    --accent-strong: var(--mark-info);
+    --accent-soft: transparent;
+    --accent-border: var(--paper-line);
+    --success: var(--mark-success);
+    --success-soft: transparent;
+    --success-border: var(--mark-success);
+    --warning: var(--mark-ink);
+    --warning-soft: transparent;
+    --warning-border: var(--mark-ink);
+    --danger: var(--mark-danger);
+    --danger-soft: transparent;
+    --danger-border: var(--mark-danger);
+    --info: var(--mark-info);
+    --info-soft: transparent;
+    --info-border: var(--mark-info);
+    --neutral: var(--mark-neutral);
+    --neutral-soft: transparent;
+    --neutral-border: var(--mark-neutral);
+    --ai: var(--mark-source);
+    --ai-soft: transparent;
+    --ai-border: var(--mark-source);
+  }
+
+  .dw-print-root .dw-sheet {
+    padding: 0;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+
+  .dw-print-root .dw-table-wrap {
+    overflow: visible;
+  }
+
+  .dw-print-root .dw-table {
+    min-width: 0;
+  }
+
+  /* A row, a heading with what follows it, and the blocks that read as one are never
+     split across two pages; a table's header repeats on each page it runs to. */
+  .dw-print-root thead {
+    display: table-header-group;
+  }
+
+  .dw-print-root tr,
+  .dw-print-root .dw-top,
+  .dw-print-root .dw-concl,
+  .dw-print-root .dw-sign,
+  .dw-print-root .dw-facts,
+  .dw-print-root .dw-legend li,
+  .dw-print-root .dw-proc li {
+    break-inside: avoid;
+  }
+
+  .dw-print-root .dw-sec-head {
+    break-after: avoid;
+  }
+
+  .dw-print-root .dw-sign {
+    margin-top: 3rem;
+  }
+}

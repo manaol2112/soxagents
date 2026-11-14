@@ -1,0 +1,312 @@
+{
+ "control": {
+  "id": "01a1dc1a-9588-7f38-a4ca-471d988d5002",
+  "ref": "ITGC-AC-01",
+  "title": "User Access Provisioning and Approval",
+  "system": "SAP ERP",
+  "engagement": "SOX 2027",
+  "area": "IT general controls"
+ },
+ "workpaper": {
+  "id": "01a1dc1a-abcc-7edc-bbf5-d389e557a3cc",
+  "reference": "ITGC-AC-01-SE-TOD",
+  "status": "DRAFT",
+  "drafting": false,
+  "version": 2,
+  "shown_version": 1,
+  "current_version": 1,
+  "prepared_by": null,
+  "prepared_at": null
+ },
+ "review": {
+  "status": "NOT_READY",
+  "proposed": null,
+  "signed_verdict": null,
+  "signed_by": null,
+  "signed_at": null,
+  "out_of_date": []
+ },
+ "risk": "A user receives access no one with authority approved, or more access than was approved, and can record or change financial data inappropriately.",
+ "activity": "When a user needs new access or a change to access in SAP ERP, a request naming the user and the specific role or permission is raised in [the access request tool]. The user's manager and, where [the access management policy] requires it, the application owner approve the request in the tool. [the role that administers user access] grants only the approved access, and only after the approval is recorded.",
+ "facts": [
+  {
+   "label": "Frequency",
+   "value": "As events occur"
+  },
+  {
+   "label": "Nature",
+   "value": "Manual"
+  },
+  {
+   "label": "Control owner",
+   "value": "Access owner"
+  },
+  {
+   "label": "Applications",
+   "value": "SAP ERP"
+  },
+  {
+   "label": "Period end",
+   "value": "2027-12-31"
+  }
+ ],
+ "understanding": "Managers approve new access in the request tool before SAP Security grants it.",
+ "procedures": [
+  "Inspected 2 files received for 1 request: “Access management policy”.",
+  "Walked one instance of the control through 2 steps, recorded in the walkthrough.",
+  "Compared dates and values in code for attributes A and B: 2 comparisons made."
+ ],
+ "evidence": [
+  {
+   "ref": "E1",
+   "file_id": "785ceea8-fef6-4061-9a58-1b5de7ee9069",
+   "file_name": "ticket REQ-1041.txt",
+   "kind": "walkthrough",
+   "kind_words": "Walkthrough evidence",
+   "requirement_id": "01a1dc1a-9896-7063-877d-c30b5bb8ce10",
+   "requirement_title": "Access management policy",
+   "annotations": 2,
+   "reviewed": 0,
+   "left_out": null,
+   "image": false
+  },
+  {
+   "ref": "E2",
+   "file_id": "af36d2cf-3a7c-48e6-b3e9-4c7139af7744",
+   "file_name": "sap change log.txt",
+   "kind": "change_history",
+   "kind_words": "Change history or audit log",
+   "requirement_id": "01a1dc1a-9896-7063-877d-c30b5bb8ce10",
+   "requirement_title": "Access management policy",
+   "annotations": 1,
+   "reviewed": 0,
+   "left_out": null,
+   "image": false
+  }
+ ],
+ "walkthrough": {
+  "columns": [
+   "Step",
+   "Who",
+   "Evidence inspected",
+   "Result"
+  ],
+  "steps": [
+   {
+    "number": 1,
+    "when": "2026-03-03",
+    "step": "Access requested and approved",
+    "who": "Priya Shah",
+    "evidence": "ticket REQ-1041.txt: “Approved by: Priya Shah, line manager, on 2026-03-03”",
+    "result": "Approved",
+    "refs": [
+     "E1"
+    ]
+   },
+   {
+    "number": 2,
+    "when": "2026-03-04 09:12",
+    "step": "Access granted",
+    "who": "SAP Security",
+    "evidence": "sap change log.txt: “BASIS_ADMIN granted role FI_AP_CLERK to DLEE”",
+    "result": "Granted on 2026-03-04 09:12",
+    "refs": [
+     "E2"
+    ]
+   }
+  ],
+  "source": "AGENT"
+ },
+ "attributes": [
+  {
+   "id": "01a1dc1a-958a-7d2a-8102-0f2cfa04a8a3",
+   "code": "A",
+   "text": "A request exists that names the user and the specific access (application, role, or permission) that was granted",
+   "state": "SHOWN",
+   "state_words": "Shown",
+   "basis": "Both readings find this instance shows attribute A.",
+   "tickmark": "COMPARED",
+   "refs": [
+    {
+     "ref": "E1",
+     "annotation_ids": [
+      "01a1dc1a-aba3-7229-94e1-b5d9cde340ae"
+     ],
+     "numbers": [
+      2
+     ]
+    }
+   ],
+   "marks": {
+    "E1": "SHOWS"
+   },
+   "checks": [
+    "Approved 3 March 2026, performed 4 March 2026 09:12: in order."
+   ],
+   "notes": ""
+  },
+  {
+   "id": "01a1dc1a-958b-7e0e-b61f-c16fd65ba4b2",
+   "code": "B",
+   "text": "The request was approved by the user's manager and, where the access management policy requires it, by the application owner",
+   "state": "EXCEPTION",
+   "state_words": "Exception shown",
+   "basis": "A check of the records shows attribute B is not met: Performed 4 March 2026 09:12, approved 3 March 2026: the performance is after.",
+   "tickmark": "EXCEPTION",
+   "refs": [
+    {
+     "ref": "E1",
+     "annotation_ids": [
+      "01a1dc1a-aba2-7657-b0af-04897e0efd9d"
+     ],
+     "numbers": [
+      1
+     ]
+    },
+    {
+     "ref": "E2",
+     "annotation_ids": [
+      "01a1dc1a-aba3-79c1-9c66-fa1624c5a037"
+     ],
+     "numbers": [
+      1
+     ]
+    }
+   ],
+   "marks": {
+    "E1": "EXCEPTION",
+    "E2": "EXCEPTION"
+   },
+   "checks": [
+    "Performed 4 March 2026 09:12, approved 3 March 2026: the performance is after."
+   ],
+   "notes": ""
+  },
+  {
+   "id": "01a1dc1a-958c-727d-9c1d-fe57711511b9",
+   "code": "C",
+   "text": "The approval is dated on or before the date the access was granted in the system",
+   "state": "SHOWN",
+   "state_words": "Shown",
+   "basis": "Both readings find this instance shows attribute C.",
+   "tickmark": "AGREED",
+   "refs": [
+    {
+     "ref": "E1",
+     "annotation_ids": [
+      "01a1dc1a-aba3-7229-94e1-b5d9cde340ae"
+     ],
+     "numbers": [
+      2
+     ]
+    }
+   ],
+   "marks": {
+    "E1": "SHOWS"
+   },
+   "checks": [],
+   "notes": ""
+  },
+  {
+   "id": "01a1dc1a-958c-75d7-a4e0-1a64899b3d59",
+   "code": "D",
+   "text": "The access granted in the system is the access that was approved, and no more",
+   "state": "SHOWN",
+   "state_words": "Shown",
+   "basis": "Both readings find this instance shows attribute D.",
+   "tickmark": "AGREED",
+   "refs": [
+    {
+     "ref": "E1",
+     "annotation_ids": [
+      "01a1dc1a-aba3-7229-94e1-b5d9cde340ae"
+     ],
+     "numbers": [
+      2
+     ]
+    }
+   ],
+   "marks": {
+    "E1": "SHOWS"
+   },
+   "checks": [],
+   "notes": ""
+  },
+  {
+   "id": "01a1dc1a-958c-792a-8f37-2df4034fd1aa",
+   "code": "E",
+   "text": "The approver is not the user, and the administrator who granted the access did not approve it",
+   "state": "SHOWN",
+   "state_words": "Shown",
+   "basis": "Both readings find this instance shows attribute E.",
+   "tickmark": "AGREED",
+   "refs": [
+    {
+     "ref": "E1",
+     "annotation_ids": [
+      "01a1dc1a-aba3-7229-94e1-b5d9cde340ae"
+     ],
+     "numbers": [
+      2
+     ]
+    }
+   ],
+   "marks": {
+    "E1": "SHOWS"
+   },
+   "checks": [],
+   "notes": ""
+  }
+ ],
+ "reports": [],
+ "matters": [
+  {
+   "state": "OPEN",
+   "kind": "FINDING",
+   "text": "Attribute B not shown: the 2 files on the request",
+   "refs": [
+    "E2"
+   ]
+  },
+  {
+   "state": "OPEN",
+   "kind": "FOLLOW_UP",
+   "text": "The records show this is not met: The request was approved by the user's manager and, where the access management policy requires it, by the application owner. Explain it, or provide the record that corrects it.",
+   "refs": [
+    "E1",
+    "E2"
+   ]
+  },
+  {
+   "state": "NOTED",
+   "kind": "NOTE",
+   "text": "Operating effectiveness is tested separately; this workpaper covers design and implementation only.",
+   "refs": []
+  }
+ ],
+ "conclusion": {
+  "text": "The walkthrough supports the design; the timing of the grant needs a second look.",
+  "source": "AGENT",
+  "proposed": null,
+  "words": "Not concluded yet",
+  "signed": false
+ },
+ "tickmarks": [
+  {
+   "mark": "AGREED",
+   "symbol": "✓",
+   "meaning": "Agreed to the system's own record without exception."
+  },
+  {
+   "mark": "COMPARED",
+   "symbol": "≡",
+   "meaning": "Dates or values compared in code, within what the attribute allows."
+  },
+  {
+   "mark": "EXCEPTION",
+   "symbol": "✗",
+   "meaning": "Exception shown."
+  }
+ ],
+ "can_edit": true
+}
