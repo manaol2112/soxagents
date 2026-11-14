@@ -1142,6 +1142,74 @@ appear once; every word said before is still reachable in at most two steps.
 A check that is queued, working, held, failed, out of date or not run keeps its present
 one line and action. The evidence wizard's own summary is not changed.
 
+### 10.12 The check's result as "Needs attention" (14 November 2026; replaces the layout of 10.11)
+
+The first build of 10.11 was shown to the product owner and found still too heavy ("There
+are already attributes at the top then you listed the attributes again with result. Also the
+evidence are dump vertically ... Consolidate as much as possible"); two denser table
+mockups were refused ("Looks overwhelming"). Of three calmer mockups the owner chose the
+first ("I like A. Looks good."). 10.11's rule that only the screen changes, and its audit
+integrity rules, stand; its layout is replaced by this one. The first build was never
+committed.
+
+**The first screen of an opened request with a finished check** answers one question: what
+does this person need to do?
+
+1. **The verdict**: the review's own outcome in words with a mark, large ("Additional
+   evidence needed"), "Proposed for your review" beside it, and under it one sentence,
+   "1 of 4 attributes is shown. 3 need your attention." A check without a review (engine 1)
+   has the sentence alone as its verdict.
+2. **Needs attention**: only what waits on this person, one item each, at most two lines:
+   a marker (the attribute's letter, or the file's reference `E6`), a bold line, a quiet
+   line, and one control.
+   - An attribute with a gap (an issue, shown in part, not addressed, waiting on a file):
+     bold "Missing: " and the first thing not shown (its first sentence, "+2 more" where
+     there are more); quiet, the attribute's wording on one line; the control is a tick,
+     "Ask owner", on where the check recommends a follow-up for it.
+   - An attribute left to the person's judgment: bold, the sentence over the two readings;
+     the control is "Decide", which opens it. Its follow-ups start unticked.
+   - A file's type to confirm, or a file left out that has an action: bold, what to do;
+     quiet, the file's sentence; the control is the check's own action.
+   - A follow-up that names no attribute: one item with a tick.
+   - Findings a person has still to decide (proposed, or answered by the owner) are said
+     on their attribute's item ("Finding to decide") and counted in the sentence.
+3. **The quiet line**: what is fine, and what must not be lost, each in a few words:
+   "C shown" (each shown attribute, opening it), every caveat (the review's completeness
+   label, "Read in part", "1 file left out"), and "All details". A caveat is never clipped
+   or dropped from this line.
+4. **The footer**: one sentence and two actions. "Ask owner for N items" opens the row's
+   existing follow-up form with the ticked requests as its text (N counts requests, and
+   the form says how many fit where they do not all fit); "Accept evidence" is the row's
+   existing Accept. The sentence is the row's existing warning about accepting, in its
+   first sentence with the rest on request; where there is none, "Nothing is sent until you
+   approve it."
+5. **Files**: the row's line says "7 files", which opens the files as today's list (each
+   with its menu) in place; they are not listed until asked for. A file an item names is
+   numbered `E1`... in the order of the row's files.
+6. **All details** opens, in place: the request's wording, format and period, the
+   attributes it addresses in full, and the check's details as 10.11 item 6 lists them.
+
+**One attribute at a time.** Opening an item, a shown attribute or "Decide" replaces the
+first screen, inside the same row, with that attribute alone: "Summary" to go back, its
+place ("1 of 4") with previous and next, the attribute's full wording and its state in
+words; then a short table of what is Shown (the sentence, the first verified passage
+quoted, the file's reference and "Open") and what is Missing (each once); the two readings
+side by side for a judgment; the comparisons made in code; "Ask the owner" with each
+recommended follow-up for it and its tick; the finding on it with its existing actions
+(shown as its title, status and actions; its body and history on request); and "More about
+this attribute" for the rest (the elements in full, further passages, what is left to
+other requests). The footer moves on: "Next: B". The order is the items needing attention,
+then the rest. Leaving an attribute never discards something half typed in it.
+
+Kept from the review of the first build, as tested rules: the count of shown attributes
+never includes one shown only in design (the sentence says "1 shown in design" apart); an
+open issue never reads as the benign "Shown in part" (it keeps the check's own "met in
+part"); a row's short line never quotes a comparison that passed while another on it
+failed; the counts equal the lists; "N more follow-ups are not listed here" is always
+reachable; copying never silently copies less than was ticked; a short line is never cut
+at an abbreviation, an initial or a list number; every caveat of either engine is on the
+first screen.
+
 ## 9. Status
 
 | Increment | State |
@@ -1154,6 +1222,7 @@ one line and action. The evidence wizard's own summary is not changed.
 | Engine 2 (section 10): the control's context and its hash, prompts /6 and the larger answer, facts and comparisons checked in code, concerns, follow-ups and considerations, the two dimensions and the proposed outcome, `review` saved and read through the API | built 14 November 2026 with scripted readings (test_assurance_engine2.py); the thirty-four scenarios and the screen to follow; not yet run live |
 | Prompts /7: what a quote shows and where a file comes from, for the evidence annotations (docs/evidence-annotations.md) | built 14 November 2026 with scripted readings (test_evidence_annotations.py); not yet run live |
 | Checking again with the current engine, for a request an earlier engine checked (10.10) | built 14 November 2026 (`upgrade_engine`, route `/upgrade`, no migration; the row's action and menu item with a confirmation; `test_assurance_upgrade.py` in the fast and critical tiers, `tests/evidence-upgrade-model.test.ts`); independently reviewed and tightened the same day; used once by the product owner on the development data |
-| The check's result, simplified (10.11) | in progress, 14 November 2026 |
+| The check's result, simplified (10.11) | first build shown and refused as too heavy, 14 November 2026; never committed; replaced by 10.12 |
+| The check's result as "Needs attention", one attribute at a time (10.12) | in progress, 14 November 2026 |
 | Prompt caching of the file text across the two readings (models.py) | planned, after the chain is measured |
 | Interim and roll-forward evidence | planned |
