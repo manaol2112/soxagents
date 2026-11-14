@@ -1,6 +1,6 @@
 /** Evidence reading: what the evidence coordinator read from each stored file. */
 
-import { failureNoteOf, failureSentence } from "./run-failure.ts";
+import { failureNoteOf, failureSentence, plainNote } from "./run-failure.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CREDENTIAL =
@@ -96,12 +96,15 @@ export function runFailureLine(
   if (analysis.status === "PENDING" || analysis.status === "WORKING") {
     return null;
   }
+  const said = plainNote(failureNote);
+  if (said !== "") {
+    return said;
+  }
   if (analysis.status !== "FAILED" && analysis.classification !== null) {
     return null;
   }
   return failureSentence(
     "Reading the file did not finish, so nothing from it is classified. Read it again.",
-    failureNote,
     analysis.note,
   );
 }

@@ -117,6 +117,13 @@ export function runFailureLine(
   draft: Pick<RequestDraft, "status" | "source" | "note" | "failureNote">,
   failureNote: string = draft.failureNote ?? "",
 ): string | null {
+  if (draft.status === "PENDING" || draft.status === "DRAFTING") {
+    return null;
+  }
+  const said = plainNote(failureNote);
+  if (said !== "") {
+    return said;
+  }
   if (draft.status === "FAILED") {
     const note = plainNote(draft.note);
     return failureSentence(

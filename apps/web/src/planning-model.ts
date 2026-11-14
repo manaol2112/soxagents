@@ -8,7 +8,7 @@
  */
 
 import { type DesignWait, waitingOnOf } from "./design-requests-model.ts";
-import { failureNoteOf, failureSentence } from "./run-failure.ts";
+import { failureNoteOf, plainNote } from "./run-failure.ts";
 import {
   groupApproveBody,
   implementationName,
@@ -38,13 +38,15 @@ export function runFailureLine(
   plan: { runStatus: string; failureNote?: string },
   failureNote: string = plan.failureNote ?? "",
 ): string | null {
-  if (plan.runStatus !== "FAILED") {
-    return null;
+  // The server's sentence is shown whatever the status: it sends one only for a run
+  // that ended without a usable answer (lead's decision, 13 November 2026).
+  const said = plainNote(failureNote);
+  if (said !== "") {
+    return said;
   }
-  return failureSentence(
-    "The planner's last run did not finish, so the plan is kept as it was. Plan it again, or change the plan yourself.",
-    failureNote,
-  );
+  return plan.runStatus === "FAILED"
+    ? "The planner's last run did not finish, so the plan is kept as it was. Plan it again, or change the plan yourself."
+    : null;
 }
 
 export const STATE_LABELS: Record<PlanningState, string> = {

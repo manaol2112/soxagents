@@ -13,6 +13,7 @@ import { runFailureLine as answerLine } from "../apps/web/src/console-model.ts";
 import {
   type Attribute,
   type AttributeReviewSummary,
+  agentNotesSentence,
   runFailureLine as attributesLine,
   CRITERIA_NOT_WRITTEN,
   criteriaToWrite,
@@ -20,6 +21,8 @@ import {
   needingCriteria,
   parseContext,
   pendingCriteriaLine,
+  SETTLED_RUN_LEAD,
+  settledRunLine,
 } from "../apps/web/src/control-context-model.ts";
 import {
   PLAN_FALLBACK_LINE,
@@ -35,6 +38,10 @@ import {
 import { runFailureLine as fileReadLine } from "../apps/web/src/evidence-wizard-model.ts";
 import { runFailureLine as setupLine } from "../apps/web/src/onboarding-model.ts";
 import { runFailureLine as masterPlanLine } from "../apps/web/src/planning-model.ts";
+import {
+  parsePolicyEvidence,
+  runFailureLine as policyLine,
+} from "../apps/web/src/policy-evidence-model.ts";
 import { runFailureLine as referenceLine } from "../apps/web/src/references-model.ts";
 import { runFailureLine as reperformLine } from "../apps/web/src/review-model.ts";
 import {
@@ -241,9 +248,16 @@ describe("the Attributes step after Run again", () => {
       context.attributesFailureNote,
       "The attribute agent ran out of time.",
     );
+    // Every attribute has its criteria: the quiet line says it, never the error line.
+    assert.equal(attributesLine({ ...context, approved: [owned("a")] }), null);
     assert.equal(
-      attributesLine({ ...context, approved: [owned("a")] }),
-      "The attribute agent ran out of time.",
+      settledRunLine({ ...context, approved: [owned("a")] }),
+      `${SETTLED_RUN_LEAD} The attribute agent ran out of time.`,
+    );
+    // An attribute that needs criteria: the server's sentence leads the error line.
+    assert.equal(
+      attributesLine({ ...context, approved: [attribute("b")] }),
+      "The attribute agent ran out of time. Run again, or write the criteria yourself.",
     );
     // The planner's own failure sentence, with criteria missing, says the criteria.
     assert.equal(
@@ -252,7 +266,7 @@ describe("the Attributes step after Run again", () => {
     );
   });
 
-  it("says nothing while the agents work, or on settled work", () => {
+  it("says nothing while the agents work, and settled work gets no error and no Run again", () => {
     assert.equal(
       attributesLine(attributesRun({ attributesRun: "WORKING" })),
       null,
@@ -261,17 +275,38 @@ describe("the Attributes step after Run again", () => {
       attributesLine(attributesRun({ attributesRun: "PENDING" })),
       null,
     );
-    // Every criterion owned and nothing changed: a stopped run is not this person's
-    // problem (12 November 2026: "Why do I also keep getting this error?").
     assert.equal(
-      attributesLine(
-        attributesRun({
-          attributesRun: "STOPPED",
-          attributesRunNote: UNUSABLE_NOTE,
-          approved: [owned("a")],
-        }),
-      ),
+      settledRunLine({
+        attributesRun: "WORKING",
+        attributesFailureNote: "The planner ran out of time.",
+        approved: [owned("a")],
+      }),
       null,
+    );
+    // Every criterion owned and nothing changed: a stopped run's note is not this person's
+    // problem (12 November 2026: "Why do I also keep getting this error?").
+    const settled = attributesRun({
+      attributesRun: "STOPPED",
+      attributesRunNote: UNUSABLE_NOTE,
+      approved: [owned("a")],
+    });
+    assert.equal(attributesLine(settled), null);
+    assert.equal(settledRunLine(settled), null);
+    // Rewritten for the server's failure sentence (lead's decision, 13 November 2026).
+    // Old: settled work with a failure sentence showed nothing at all. New: the error
+    // line stays null (no warning tone, no Run again), and the quiet settledRunLine says
+    // the run could not be used and nothing changed, then the server's sentence. Why: a
+    // run a person asked for must never end in silence; the 12 November rule was about
+    // the alarming error and the Run again prompt, which settled work still never shows.
+    const failed = {
+      ...settled,
+      attributesFailureNote:
+        "The planner's answer could not be used. It named no attribute.",
+    };
+    assert.equal(attributesLine(failed), null);
+    assert.equal(
+      settledRunLine(failed),
+      "The agents' last run could not be used. Your attributes and criteria are unchanged. The planner's answer could not be used. It named no attribute.",
     );
     // No agent has run: Needs criteria is the person's to write, said by the row.
     assert.equal(
@@ -403,13 +438,22 @@ describe("criteria the planner wrote into a change to the approved test plan", (
         {
           agent: "planner",
           step: "CRITERIA",
-          failed: true,
-          kept: true,
+          // Sentences, not flags (lead's decision 6).
+          failed: "The planner ran out of time.",
+          kept: "The earlier plan is kept.",
           next_step: "Run again.",
-          sentence:
-            "The planner ran out of time, so the plan was kept as it was.",
+          sentence: "The planner ran out of time.",
           model_call_id: "01a13300-0000-7000-8000-0000000000ff",
           at: "2026-11-13T10:00:00Z",
+        },
+        {
+          agent: "reviewer",
+          step: "REVIEW",
+          failed: "",
+          kept: "",
+          next_step: "",
+          sentence: "The reviewer read the set.",
+          at: "2026-11-13T10:01:00Z",
         },
       ],
     });
@@ -418,15 +462,28 @@ describe("criteria the planner wrote into a change to the approved test plan", (
     assert.deepEqual(context.attributesPendingCriteria, [
       { attributeId: A, code: "A1" },
     ]);
-    assert.equal(context.attributesAgentNotes?.[0]?.failed, true);
-    // A failed agent's sentence stands in where the run sent no failure sentence of its own.
+    assert.equal(
+      context.attributesAgentNotes?.[0]?.failed,
+      "The planner ran out of time.",
+    );
+    assert.equal(context.attributesAgentNotes?.[1]?.failed, "");
+    // The failed agent's sentence, with what it kept, stands in where the run sent no
+    // failure sentence of its own; an agent that did not fail adds nothing.
+    assert.equal(
+      agentNotesSentence(context.attributesAgentNotes),
+      "The planner ran out of time. The earlier plan is kept.",
+    );
     assert.equal(
       attributesLine({
         ...context,
         attributesRerunUseful: true,
-        approved: [owned("a")],
+        approved: [attribute("b")],
       }),
-      "The planner ran out of time, so the plan was kept as it was.",
+      "The planner ran out of time. The earlier plan is kept. Run again, or write the criteria yourself.",
+    );
+    assert.equal(
+      settledRunLine({ ...context, approved: [owned("a")] }),
+      `${SETTLED_RUN_LEAD} The planner ran out of time. The earlier plan is kept.`,
     );
     // The confirmed field, also when nothing the agents read changed.
     const failed = parseContext({
@@ -764,6 +821,165 @@ describe("the console, file readings, setup, references and the master plan", ()
   });
 });
 
+describe("the review's fixes (13 November 2026)", () => {
+  it("drops a validator's bracket, never the sentence around it", () => {
+    assert.equal(
+      plainNote(
+        "The planner's answer could not be used (answers[0].criteria: Input should be a valid string). Run again.",
+      ),
+      "The planner's answer could not be used. Run again.",
+    );
+    assert.equal(
+      plainNote(
+        "The reviewer's answer could not be used (it does not match the schema).",
+      ),
+      "The reviewer's answer could not be used.",
+    );
+    // A plain bracket stays.
+    assert.equal(
+      plainNote("The plan was kept (version 3)."),
+      "The plan was kept (version 3).",
+    );
+  });
+
+  it("keeps whole sentences: never cut, and room for every agent's sentence", () => {
+    const long = `The planner ${"read the records and ".repeat(20)}stopped.`;
+    assert.ok(long.length > 300);
+    // A sentence over the cap is left out whole, never cut mid-sentence.
+    assert.equal(plainNote(`${long} The plan is kept.`), "The plan is kept.");
+    assert.doesNotMatch(plainNote(`${long} The plan is kept.`), /…/);
+    // A joined note of several agents, over 300 characters, is shown whole.
+    const joined = [
+      "The attribute agent's answer could not be used, so the attributes are as they were.",
+      "The planner's answer could not be used, so the plan was kept as it was.",
+      "The reviewer did not finish, so the attributes and criteria are as drafted and not reviewed.",
+      "The criteria reviewer did not finish, so the criteria are as the planner wrote them.",
+    ].join(" ");
+    assert.ok(joined.length > 300);
+    assert.equal(plainNote(joined), joined);
+  });
+
+  it("never repeats the workpaper's sentence", () => {
+    const paper = {
+      drafting: false,
+      draftNote: "The agent could not finish the draft. Draft again.",
+      currentVersion: 2,
+      failureNote:
+        "The agent could not finish the draft. Version 2 is kept as it was. Draft again.",
+    };
+    assert.equal(workpaperLine(paper), paper.failureNote);
+  });
+
+  it("shows the server's sentence whatever the finished status", () => {
+    const said =
+      "The agent's answer could not be used, so the rules' result stands.";
+    assert.equal(
+      masterPlanLine({ runStatus: "IDLE", failureNote: said }),
+      said,
+    );
+    assert.equal(
+      referenceLine({ runStatus: "IDLE", runNote: "", failureNote: said }),
+      said,
+    );
+    // The RCM's terms and systems the rules mapped after the agent's answer failed
+    // (FALLBACK, status READY).
+    for (const kind of ["systems", "terms", "soc"] as const) {
+      assert.equal(
+        setupLine({ status: "READY", failureNote: said }, kind),
+        said,
+      );
+    }
+    assert.equal(
+      narrativeFailureLine({
+        status: "IDLE",
+        mode: "DRAFT",
+        note: "",
+        failureNote: said,
+      }),
+      said,
+    );
+    assert.equal(
+      draftLine({
+        status: "DRAFTED",
+        source: "MODEL",
+        note: "",
+        failureNote: said,
+      }),
+      said,
+    );
+    assert.equal(
+      answerLine({ status: "DONE", content: "x", note: "", failureNote: said }),
+      said,
+    );
+    assert.equal(
+      readingLine({
+        status: "READY",
+        classification: {
+          kind: "population",
+          confidence: "high",
+          summary: "",
+          reason: "",
+          items: [],
+          gaps: [],
+          period: "",
+        },
+        note: "",
+        failureNote: said,
+      }),
+      said,
+    );
+    // Never while the run is still working.
+    assert.equal(
+      narrativeFailureLine({
+        status: "WORKING",
+        mode: "DRAFT",
+        note: "",
+        failureNote: said,
+      }),
+      null,
+    );
+    assert.equal(
+      draftLine({
+        status: "DRAFTING",
+        source: null,
+        note: "",
+        failureNote: said,
+      }),
+      null,
+    );
+  });
+
+  it("reads the policy check's failure sentence and says it on the item", () => {
+    const evidence = parsePolicyEvidence({
+      checking: false,
+      proposals: [],
+      documents: [],
+      failure_note:
+        "The agent could not check the policies on file. Check again later.",
+    });
+    assert.ok(evidence !== null);
+    const item = { id: "i1", categories: ["PROCESS_DOCUMENTATION"] };
+    assert.equal(
+      policyLine(evidence, item),
+      "The agent could not check the policies on file. Check again later.",
+    );
+    // Not on an item that asks for no document of the process, nor while checking.
+    assert.equal(
+      policyLine(evidence, { id: "i2", categories: ["CONFIGURATION"] }),
+      null,
+    );
+    assert.equal(policyLine({ ...evidence, checking: true }, item), null);
+    const quiet = parsePolicyEvidence({
+      checking: false,
+      proposals: [],
+      documents: [],
+    });
+    assert.ok(quiet !== null);
+    assert.equal(policyLine(quiet, item), null);
+    assert.equal("failureNote" in quiet, false);
+  });
+});
+
 // Source-level: a step model that parses an agent run's status also says its failure.
 
 /** A model that reads an agent run's state: a run's status or note field from the API, or
@@ -778,6 +994,7 @@ const READS_FAILURE = /from "\.\/run-failure\.ts"/;
 // it must stop parsing a run's status.
 const STEP_MODELS = [
   "analysis-model.ts",
+  "policy-evidence-model.ts",
   "console-model.ts",
   "control-context-model.ts",
   "design-requests-model.ts",
@@ -811,6 +1028,28 @@ describe("every step that waits on an agent run says when it ended without an an
       assert.ok(models.includes(name), `${name} exists`);
       assert.ok(parsesRun(source(name)), `${name} parses an agent run`);
     }
+  });
+
+  it("shows every failure_note a model reads", () => {
+    // A model that reads the server's failure sentence (failureNoteOf) passes it to a
+    // runFailureLine that leads with it: never read and dropped.
+    const readers = models.filter((name) =>
+      /\bfailureNoteOf\(/.test(source(name)),
+    );
+    assert.ok(readers.length >= STEP_MODELS.length - 2, readers.join(", "));
+    const dropped = readers.filter((name) => {
+      const text = source(name);
+      const line = text.slice(text.indexOf("export function runFailureLine("));
+      return (
+        !/export function runFailureLine\(/.test(text) ||
+        !/failureNote/.test(line.slice(0, line.indexOf("\n}\n")))
+      );
+    });
+    assert.deepEqual(
+      dropped,
+      [],
+      "these read a failure_note and do not show it",
+    );
   });
 
   it("gives every model that parses a run's status a failure line", () => {

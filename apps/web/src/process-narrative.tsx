@@ -282,9 +282,9 @@ export function ProcessNarrative({
 
       {working && live !== null ? (
         <NarrativeProgress run={live} />
-      ) : live?.status === "FAILED" ? (
+      ) : narrativeFailureLine(live ?? null) !== null ? (
         <p className="form-error" role="alert">
-          {narrativeFailureLine(live)}
+          {narrativeFailureLine(live ?? null)}
         </p>
       ) : null}
 

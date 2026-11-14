@@ -79,10 +79,12 @@ export function runFailureLine(
     return null;
   }
   const said = plainNote(failureNote);
-  const note = DRAFT_GAVE_UP.test(paper.draftNote)
+  if (said !== "") {
+    return said;
+  }
+  const why = DRAFT_GAVE_UP.test(paper.draftNote)
     ? plainNote(paper.draftNote)
     : "";
-  const why = said || note;
   if (why === "") {
     return null;
   }

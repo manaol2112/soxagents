@@ -61,6 +61,7 @@ import {
   SECTION_HEADINGS,
   SOURCE_LABELS,
   selectionPlan,
+  settledRunLine,
   type Testing,
   TYPE_LABELS,
   UNIFIED_CHIPS,
@@ -1635,6 +1636,8 @@ function EmbeddedAttributes({
   // (run again, or write the criteria the run did not write). Never "Needs criteria" on
   // the rows and nothing else.
   const failure = runFailureLine(context);
+  // The run could not be used, but every attribute has its criteria: a quiet line.
+  const settledRun = settledRunLine(context);
   // The first attribute whose criteria a person writes: not one whose criteria wait in a
   // change to the test plan, which the step links to instead.
   const toWrite = criteriaToWrite(context)[0]?.item ?? null;
@@ -2038,6 +2041,11 @@ function EmbeddedAttributes({
             </span>
           ) : null}
         </div>
+      ) : settledRun !== null ? (
+        <p className="ta-run-note" role="status">
+          <UiIcon name="info" size={13} />
+          <span>{settledRun}</span>
+        </p>
       ) : unreviewed !== null ? (
         <p className="ta-run-note tone-warning" role="status">
           <UiIcon name="info" size={13} />

@@ -189,6 +189,12 @@ export function AnalysisPanel({
           </ul>
         </div>
       ) : null}
+      {readingFailureLine(analysis) !== null ? (
+        // The reader's answer could not be used: the server's sentence, beside the result.
+        <p className="analysis-note" role="status">
+          {readingFailureLine(analysis)}
+        </p>
+      ) : null}
       {result.period !== "" || analysis.note !== "" ? (
         <p className="analysis-note">
           {[result.period, analysis.note]

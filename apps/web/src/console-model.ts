@@ -132,12 +132,15 @@ export function runFailureLine(
   message: Pick<ConsoleMessage, "status" | "content" | "note" | "failureNote">,
   failureNote: string = message.failureNote ?? "",
 ): string | null {
-  if (message.status !== "FAILED") {
+  if (message.status === "PENDING" || message.status === "WORKING") {
     return null;
   }
   const said = plainNote(failureNote);
   if (said !== "") {
     return said;
+  }
+  if (message.status !== "FAILED") {
+    return null;
   }
   const parts = [plainNote(message.content), plainNote(message.note)].filter(
     (part, at, all) => part !== "" && all.indexOf(part) === at,

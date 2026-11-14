@@ -620,12 +620,78 @@ export function pendingCriteriaLine(context: PendingInput): string | null {
 export type AttributesAgentNote = {
   agent: string;
   step: string;
-  failed: boolean;
-  kept: boolean;
+  /** What failed, in a sentence; "" when the agent's part did not fail. */
+  failed: string;
+  /** What was kept, in a sentence; "" when nothing needed keeping. */
+  kept: string;
   nextStep: string;
   sentence: string;
   at: string;
 };
+
+/** The failed agents' sentences of the latest run, each with what was kept, joined: what
+ * stands in where the run sent no failure sentence of its own; "" when no agent failed. */
+export function agentNotesSentence(
+  notes: readonly AttributesAgentNote[] | undefined,
+): string {
+  const parts: string[] = [];
+  for (const note of notes ?? []) {
+    if (note.failed.trim() === "") {
+      continue;
+    }
+    const what = plainNote(note.sentence) || plainNote(note.failed);
+    const kept = plainNote(note.kept);
+    for (const part of [what, kept]) {
+      if (part !== "" && !parts.some((each) => each.includes(part))) {
+        parts.push(part);
+      }
+    }
+  }
+  return plainNote(parts.join(" "));
+}
+
+/** What the Attributes step says, quietly, when the agents' last run could not be used and
+ * every attribute has its criteria (lead's decision, 13 November 2026): a run a person
+ * asked for never ends in silence, but settled work shows no error and no Run again (the
+ * 12 November rule). */
+export const SETTLED_RUN_LEAD =
+  "The agents' last run could not be used. Your attributes and criteria are unchanged.";
+
+/** The server's failure sentence for the attributes run: its own, else its agents'. */
+function attributesFailureOf(context: {
+  attributesFailureNote?: string;
+  attributesAgentNotes?: readonly AttributesAgentNote[];
+}): string {
+  return (
+    plainNote(context.attributesFailureNote) ||
+    agentNotesSentence(context.attributesAgentNotes)
+  );
+}
+
+/** The quiet line for a run that could not be used on attributes that all have their
+ * criteria, or null: SETTLED_RUN_LEAD, then the server's sentence. Never while the agents
+ * work, and never with an action. */
+export function settledRunLine(
+  context: {
+    attributesRun: AttributesRun;
+    attributesFailureNote?: string;
+    attributesAgentNotes?: readonly AttributesAgentNote[];
+    approved: Attribute[];
+  },
+  failureNote: string = attributesFailureOf(context),
+): string | null {
+  if (
+    context.attributesRun === "PENDING" ||
+    context.attributesRun === "WORKING"
+  ) {
+    return null;
+  }
+  const said = plainNote(failureNote);
+  if (said === "" || needingCriteria(context).length > 0) {
+    return null;
+  }
+  return `${SETTLED_RUN_LEAD} ${said}`;
+}
 
 /**
  * The Attributes step's one sentence for an agents' run that ended without a usable
@@ -649,10 +715,7 @@ export function runFailureLine(
     proposed: Attribute[];
     reviewSummary: AttributeReviewSummary | null;
   },
-  failureNote: string = context.attributesFailureNote ||
-    (context.attributesAgentNotes ?? []).find((item) => item.failed)
-      ?.sentence ||
-    "",
+  failureNote: string = attributesFailureOf(context),
 ): string | null {
   const run = context.attributesRun;
   if (run === "PENDING" || run === "WORKING") {
@@ -665,6 +728,11 @@ export function runFailureLine(
   const missing = criteriaToWrite(context);
   const waiting = pendingCriteria(context).length > 0;
   const settled = context.attributesRerunUseful === false;
+  // Every attribute has its criteria and the server said why the run could not be used:
+  // the quiet settledRunLine, never an error.
+  if (said !== "" && needingCriteria(context).length === 0) {
+    return null;
+  }
   if (run === "STOPPED" || said !== "") {
     const unusable = PLANNER_UNUSABLE.test(said) || PLANNER_UNUSABLE.test(note);
     if (missing.length === 0 && (settled || (waiting && unusable))) {
@@ -1179,10 +1247,16 @@ export function narrativeFailureLine(
   run: Pick<NarrativeRun, "status" | "mode" | "note" | "failureNote"> | null,
   failureNote: string = run?.failureNote ?? "",
 ): string | null {
-  if (run === null || run.status !== "FAILED") {
+  if (run === null || run.status === "PENDING" || run.status === "WORKING") {
     return null;
   }
-  return failureSentence(NARRATIVE_FAILED[run.mode], failureNote, run.note);
+  const said = plainNote(failureNote);
+  if (said !== "") {
+    return said;
+  }
+  return run.status === "FAILED"
+    ? failureSentence(NARRATIVE_FAILED[run.mode], run.note)
+    : null;
 }
 
 export type ProgressStep = {
@@ -2150,8 +2224,8 @@ export function parseContext(value: unknown): ControlContext | null {
     attributesAgentNotes: records(value.attributes_agent_notes).map((item) => ({
       agent: str(item.agent),
       step: str(item.step),
-      failed: item.failed === true,
-      kept: item.kept === true,
+      failed: str(item.failed),
+      kept: str(item.kept),
       nextStep: plainNote(str(item.next_step)),
       sentence: plainNote(str(item.sentence)),
       at: str(item.at),

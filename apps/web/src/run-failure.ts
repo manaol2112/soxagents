@@ -36,23 +36,49 @@ function plainPart(part: string): boolean {
   return !ONE_WORD.test(part) && !CODE_WORD.test(part) && !TRACE.test(part);
 }
 
+// A validator's words or a schema path, in brackets: "(answers[0].criteria: Input should
+// be a valid string)". The bracket goes; the sentence around it stays.
+const VALIDATOR =
+  /Input should be|does not match the schema|validation error|Field required|\[\d+\]\.|\w\.\w+\[\d+\]/i;
+
+function withoutValidator(text: string): string {
+  return text
+    .replace(/\s*\(([^()]*)\)/g, (bracket, inside: string) =>
+      VALIDATOR.test(inside) ? "" : bracket,
+    )
+    .replace(/\s+([.!?,;:])/g, "$1");
+}
+
+/** The longest sentence shown: a longer one is left out whole, never cut. */
+const SENTENCE_MAX = 300;
+/** The most a note shows, in whole sentences: room for every agent's sentence of a run. */
+const NOTE_MAX = 1200;
+
 /** A server's note fit to show a person: its plain sentences, ended with a full stop; ""
  * for nothing. A sentence that holds a code, a key, a trace or a payload is left out
- * ("The plan was kept. attribute_id is unknown." reads "The plan was kept."). */
+ * ("The plan was kept. attribute_id is unknown." reads "The plan was kept."), and so is a
+ * bracket of a validator's words or a schema path, with the sentence around it kept.
+ * Sentences are kept whole: one over SENTENCE_MAX is left out, and the note ends at the
+ * last whole sentence within NOTE_MAX. */
 export function plainNote(text: string | null | undefined): string {
-  const said = (text ?? "").replace(/\s+/g, " ").trim();
+  const said = withoutValidator((text ?? "").replace(/\s+/g, " ").trim());
   if (said === "") {
     return "";
   }
-  const kept = said
-    .split(/(?<=[.!?])\s+/)
-    .filter((part) => part !== "" && plainPart(part))
-    .join(" ");
-  if (kept === "") {
-    return "";
+  const kept: string[] = [];
+  let length = 0;
+  for (const part of said.split(/(?<=[.!?])\s+/)) {
+    const sentence = /[.!?…]$/.test(part) ? part : `${part}.`;
+    if (part === "" || !plainPart(part) || sentence.length > SENTENCE_MAX) {
+      continue;
+    }
+    if (length + sentence.length + (kept.length > 0 ? 1 : 0) > NOTE_MAX) {
+      break;
+    }
+    length += sentence.length + (kept.length > 0 ? 1 : 0);
+    kept.push(sentence);
   }
-  const capped = kept.length > 300 ? `${kept.slice(0, 297).trimEnd()}…` : kept;
-  return /[.!?…]$/.test(capped) ? capped : `${capped}.`;
+  return kept.join(" ");
 }
 
 /** The first of the server's sentences fit to show (its failure sentence first, then the

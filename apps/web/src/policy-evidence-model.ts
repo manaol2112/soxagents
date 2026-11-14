@@ -2,6 +2,8 @@
  * product owner on 28 October 2026): what the API answers (policy_evidence.py), and what
  * the item says. The agent proposes; nothing is evidence until a person uses it. */
 
+import { failureNoteOf, plainNote } from "./run-failure.ts";
+
 export type PolicyProposal = {
   id: string;
   itemId: string;
@@ -30,6 +32,9 @@ export type PolicyEvidence = {
   checking: boolean;
   proposals: PolicyProposal[];
   documents: PolicyDocument[];
+  /** The server's sentence for the agent's check of the policies that ended without a
+   * usable answer (`PolicyEvidenceBody.failure_note`, run-failure.ts); absent otherwise. */
+  failureNote?: string;
 };
 
 export const NO_POLICY_EVIDENCE: PolicyEvidence = {
@@ -81,7 +86,29 @@ export function parsePolicyEvidence(value: unknown): PolicyEvidence | null {
         effective: str(d.effective),
       }))
       .filter((d) => d.id !== "" && d.title !== ""),
+    ...(failureNoteOf(v) !== "" ? { failureNote: failureNoteOf(v) } : {}),
   };
+}
+
+/** The item's one sentence when the agent's check of the policies on file ended without a
+ * usable answer, or null while it checks or when it did not fail: the server's sentence,
+ * shown on an item that asks for a document of the process and has nothing proposed,
+ * where "Checking the policies on file" would otherwise have stood. */
+export function runFailureLine(
+  evidence: PolicyEvidence,
+  item: { id: string; categories: readonly string[] },
+  failureNote: string = evidence.failureNote ?? "",
+): string | null {
+  const said = plainNote(failureNote);
+  if (
+    said === "" ||
+    evidence.checking ||
+    !item.categories.includes("PROCESS_DOCUMENTATION") ||
+    proposalsFor(evidence, item.id).length > 0
+  ) {
+    return null;
+  }
+  return said;
 }
 
 /** The documents a person can file on an item: those not already proposed for it, the

@@ -54,13 +54,8 @@ import {
   choosable,
   type PolicyEvidence,
   proposalsFor,
-  stillChecking,
 } from "./policy-evidence-model";
-import {
-  CheckingPolicies,
-  PolicyOnFile,
-  usePolicyEvidence,
-} from "./policy-on-file";
+import { PolicyCheck, PolicyOnFile, usePolicyEvidence } from "./policy-on-file";
 import { RowMenu } from "./row-menu";
 import { UiIcon } from "./ui-icon";
 
@@ -966,7 +961,7 @@ function ItemCard({
           )}
         </p>
       )}
-      {stillChecking(policies, item) ? <CheckingPolicies /> : null}
+      <PolicyCheck evidence={policies} item={item} />
       <ul className="cc-list er-review">
         <RequirementRow
           item={item}

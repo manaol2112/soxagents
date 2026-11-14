@@ -12,6 +12,8 @@ import {
   type PolicyProposal,
   parsePolicyEvidence,
   policiesHref,
+  runFailureLine as policyFailureLine,
+  stillChecking,
 } from "./policy-evidence-model";
 import { UiIcon } from "./ui-icon";
 
@@ -237,6 +239,27 @@ export function PolicyOnFile({
 }
 
 /** While the agent reads the policies on file for an item that asks for one. */
+/** Where the item stands with the agent's check of the policies on file: still checking,
+ * or the check ended without a usable answer (the server's sentence); nothing otherwise. */
+export function PolicyCheck({
+  evidence,
+  item,
+}: {
+  evidence: PolicyEvidence;
+  item: { id: string; categories: readonly string[] };
+}) {
+  if (stillChecking(evidence, item)) {
+    return <CheckingPolicies />;
+  }
+  const failed = policyFailureLine(evidence, item);
+  return failed === null ? null : (
+    <p className="pf-checking" role="status">
+      <UiIcon name="info" size={13} />
+      {failed}
+    </p>
+  );
+}
+
 export function CheckingPolicies() {
   return (
     <p className="pf-checking" aria-live="polite">

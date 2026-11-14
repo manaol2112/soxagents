@@ -8,7 +8,7 @@
  * proposes from it. Nothing here decides: it reads what the API returns and says it.
  */
 
-import { failureNoteOf, failureSentence } from "./run-failure.ts";
+import { failureNoteOf, failureSentence, plainNote } from "./run-failure.ts";
 
 export type GoverningKind = "POLICY" | "PROCEDURE" | "NARRATIVE" | "FLOWCHART";
 
@@ -113,12 +113,17 @@ export function runFailureLine(
   reference: { runStatus: string; runNote: string; failureNote?: string },
   failureNote: string = reference.failureNote ?? "",
 ): string | null {
+  // The server's sentence is shown whatever the status: it sends one only for a run
+  // that ended without a usable answer (lead's decision, 13 November 2026).
+  const said = plainNote(failureNote);
+  if (said !== "") {
+    return said;
+  }
   if (reference.runStatus !== "FAILED") {
     return null;
   }
   return failureSentence(
     "The agent could not finish this reference, so what it matched stays. Analyse it again.",
-    failureNote,
     reference.runNote,
   );
 }

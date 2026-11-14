@@ -2,7 +2,7 @@ import type { Design } from "./control-context-model.ts";
 import type { EngagementPhase } from "./engagement-lifecycle.ts";
 import { formatDate } from "./format.ts";
 import type { Policy, PriorYearReference } from "./references-model.ts";
-import { failureNoteOf, failureSentence } from "./run-failure.ts";
+import { failureNoteOf, plainNote } from "./run-failure.ts";
 import type { StandardMatches } from "./standard-matches-model.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -785,10 +785,13 @@ export function runFailureLine(
   kind: SetupRun,
   failureNote: string = run.failureNote ?? "",
 ): string | null {
-  if (run.status !== "FAILED") {
-    return null;
+  // The server's sentence is shown whatever the status: it sends one only for a run
+  // that ended without a usable answer (lead's decision, 13 November 2026).
+  const said = plainNote(failureNote);
+  if (said !== "") {
+    return said;
   }
-  return failureSentence(SETUP_FAILED[kind], failureNote);
+  return run.status === "FAILED" ? SETUP_FAILED[kind] : null;
 }
 
 export type RcmSystems = {

@@ -1445,6 +1445,15 @@ function RcmSystemsCard({
           ) : undefined
         }
       />
+      {!working &&
+      systems.status !== "FAILED" &&
+      setupFailureLine(systems, "systems") !== null ? (
+        // The agent's answer could not be used (the RCM's words stand in): said over the
+        // systems it would have identified.
+        <div className="card-body">
+          <Banner tone="warning">{setupFailureLine(systems, "systems")}</Banner>
+        </div>
+      ) : null}
       {working ? (
         <div className="card-body systems-working" aria-live="polite">
           <AutoRefresh />
