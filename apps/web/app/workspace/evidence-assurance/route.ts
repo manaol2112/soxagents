@@ -5,7 +5,9 @@ import { assuranceWrite } from "../../../src/evidence-assurance-model";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 
 /** "Check again" on a D&I request whose check failed or is out of date
- * (docs/evidence-assurance.md, section 6). Called in the background; answers as JSON
+ * (docs/evidence-assurance.md, section 6), and "Check again with the current engine" on
+ * one an earlier engine finished (section 10.10: intent "upgrade", which assuranceWrite
+ * validates like "rerun"). Called in the background; answers as JSON
  * with the API's status (its 202 said as 200), and the page reads the checks again once
  * it is confirmed. The API decides who may run it and refuses while a check is at work. */
 export async function POST(request: Request) {

@@ -3318,6 +3318,15 @@ STILL_READING = (
     "A file on this request is still being read. The check starts once it has been read."
 )
 NOTHING_TO_CHECK = "No file is on this request to check."
+# Checking again with the current engine (docs/evidence-assurance.md, section 10.10).
+UPGRADE_REASON = "A person asked for the check again with the current engine."
+ALREADY_CURRENT_ENGINE = "This request was already checked by the current engine."
+ONLY_FINISHED_CHECK = "Only a finished check can be run again with the current engine."
+SET_ASIDE = "This request is set aside, so it is not checked."
+UPGRADE_NOT_QUEUED = (
+    "The current engine could not start a check on this request, so the earlier check "
+    "stays as it is."
+)
 
 
 class AssuranceState(Exception):
@@ -5963,6 +5972,134 @@ def rerun(
     return queued
 
 
+def upgrade_engine(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    control_id: UUID,
+    requirement_id: UUID,
+    actor: UUID,
+) -> list[UUID]:
+    """A person asks, for one request, that its finished check by an earlier engine be
+    replaced by a check of the current engine (section 10.10; forward only, section 10.1:
+    nothing is ever re-checked unless a person asks). In one transaction, the run on
+    record is marked out of date with its reason (it is kept, with its open findings
+    marked out of date; a finding a person has in hand keeps its status) and a new run is
+    queued through `reconcile`. Refused, with the old run untouched, unless the request
+    has a finished, current check of an earlier engine and no file is still being read."""
+    control = _control(connection, project_id, control_id)
+    if control is None:
+        raise NotVisible()
+    known = connection.execute(
+        "SELECT 1 FROM evidence_requirements WHERE id = %s AND engagement_control_id = %s "
+        "AND project_id = %s AND phase = 'DESIGN'",
+        (requirement_id, control_id, project_id),
+    ).fetchone()
+    if known is None:
+        raise NotVisible()
+    with transaction(connection) as cursor:
+        # Set aside: the item marked not applicable (or not accepted, or removed), its
+        # request cancelled, or the phase not applicable; what _linked's `expecting` counts.
+        expected = cursor.execute(
+            """
+            SELECT q.status IN ('PLANNED', 'AWAITING_DEPENDENCY', 'REQUESTED')
+                   AND NOT coalesce((q.pending_change ->> 'add')::boolean, false)
+                   AND coalesce(r.status, '') <> 'CANCELLED'
+                   AND coalesce(ph.applicability, '') <> 'NOT_APPLICABLE'
+            FROM evidence_requirements q
+            LEFT JOIN pbc_requests r ON r.id = q.pbc_request_id
+            LEFT JOIN evidence_plan_phases ph ON ph.plan_id = q.plan_id AND ph.phase = q.phase
+            WHERE q.id = %s
+            """,
+            (requirement_id,),
+        ).fetchone()
+        if expected is None or not expected[0]:
+            raise AssuranceState(SET_ASIDE)
+        request = next(
+            (
+                item
+                for item in _requests(connection, project_id, control_id)
+                if item.requirement_id == requirement_id
+            ),
+            None,
+        )
+        if request is None:
+            raise AssuranceState(NOTHING_TO_CHECK)
+        if request.waiting:
+            raise AssuranceState(STILL_READING)
+        row = cursor.execute(
+            f"SELECT {_RUN_COLUMNS} FROM evidence_assessments "  # noqa: S608
+            "WHERE requirement_id = %s AND stale_at IS NULL FOR UPDATE",
+            (requirement_id,),
+        ).fetchone()
+        if row is None:
+            # Another ask replaced the run while this one waited on its lock: its new run
+            # is on the way (a fresh statement sees what that ask committed).
+            working = cursor.execute(
+                "SELECT id, status = 'PENDING' FROM evidence_assessments "
+                "WHERE requirement_id = %s AND stale_at IS NULL "
+                "AND status IN ('PENDING', 'WORKING') LIMIT 1",
+                (requirement_id,),
+            ).fetchone()
+            if working is not None:
+                raise AssuranceState(
+                    ALREADY_RUNNING, [UUID(str(working[0]))] if working[1] else None
+                )
+            # A request whose only runs are out of date has its own action.
+            on_record = cursor.execute(
+                "SELECT 1 FROM evidence_assessments WHERE requirement_id = %s LIMIT 1",
+                (requirement_id,),
+            ).fetchone()
+            raise AssuranceState(NOTHING_TO_CHECK if on_record is None else ONLY_FINISHED_CHECK)
+        run = _run(row)
+        if run.stopped:
+            raise AssuranceState(ONLY_FINISHED_CHECK)  # it reads as failed
+        if run.status in ("PENDING", "WORKING"):
+            # A queued run is handed to the worker again, as `rerun` does.
+            raise AssuranceState(ALREADY_RUNNING, [run.id] if run.status == "PENDING" else None)
+        reviewed = run.status == "READY"
+        if reviewed:
+            # A finished run is as the list shows it: one whose basis no longer matches
+            # what would be read now reads as out of date, with its own action.
+            reviewed = not _changed(
+                connection, run,
+                _basis(
+                    request, control, _approved(connection, control_id),
+                    _linked(connection, control_id), run.engine_version,
+                    _Contexts(connection, project_id, control_id).sha256(request)
+                    if run.engine_version >= 2 else "",
+                ),
+            )  # fmt: skip
+        if not reviewed:
+            raise AssuranceState(ONLY_FINISHED_CHECK)
+        if run.engine_version == ENGINE_VERSION:
+            raise AssuranceState(ALREADY_CURRENT_ENGINE)
+        _mark_stale(cursor, run.id, [UPGRADE_REASON])
+        queued = reconcile(
+            cursor, project_id, control_id, actor, only_requirement=requirement_id
+        ).queued
+        if not queued:
+            # The current engine's gate held the request (or nothing was recorded): the
+            # transaction rolls back and the earlier check stays as it is, with the
+            # hold's own sentence. Never a request left with no current run.
+            held = cursor.execute(
+                "SELECT held_reason FROM evidence_assessments WHERE requirement_id = %s "
+                "AND stale_at IS NULL AND status = 'HELD' LIMIT 1",
+                (requirement_id,),
+            ).fetchone()
+            raise AssuranceState(
+                str(held[0]) if held is not None and held[0] else UPGRADE_NOT_QUEUED
+            )
+        _audit(
+            cursor, control.organization_id, project_id, actor, None,
+            "evidence.assessment_engine_upgrade_requested", requirement_id,
+            {
+                "control_id": str(control_id), "from_run": str(run.id),
+                "from_engine": run.engine_version, "to_runs": [str(item) for item in queued],
+            },
+        )  # fmt: skip
+    return queued
+
+
 def register_evidence_assurance(
     app: FastAPI, settings: Settings, scheduler: object | None = None
 ) -> None:
@@ -6005,6 +6142,31 @@ def register_evidence_assurance(
             if principal.kind is not PrincipalKind.USER:
                 raise NotVisible()
             queued = rerun(connection, project_id, control_id, requirement_id, principal.id)
+            after_commit(lambda: schedule_assessments(scheduler, queued))
+            body = read_assurance(connection, project_id, control_id, requirement_id)
+            if not body.requests:
+                raise AssuranceState(NOTHING_TO_CHECK)
+            return body.requests[0]
+
+        return run(request, work)
+
+    @app.post(
+        f"{base}/evidence-assurance/{{requirement_id}}/upgrade",
+        response_model=RequestBody,
+        status_code=202,
+    )
+    def check_again_with_current_engine(
+        organization_id: UUID, project_id: UUID, control_id: UUID, requirement_id: UUID,
+        request: Request,
+    ) -> RequestBody:  # fmt: skip
+        def work(connection: psycopg.Connection[Any], principal: Principal) -> RequestBody:
+            authorize(connection, principal=principal, action=Action.TASK_UPDATE,
+                      organization_id=organization_id, project_id=project_id)  # fmt: skip
+            if principal.kind is not PrincipalKind.USER:
+                raise NotVisible()
+            queued = upgrade_engine(
+                connection, project_id, control_id, requirement_id, principal.id
+            )
             after_commit(lambda: schedule_assessments(scheduler, queued))
             body = read_assurance(connection, project_id, control_id, requirement_id)
             if not body.requests:

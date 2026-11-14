@@ -938,6 +938,8 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
             attributes,
             span: (some) => lettersSpan(some, allLetters),
             keyed,
+            // A request set aside (not applicable, cancelled) is not checked again.
+            reading: reading > 0 || aside,
           });
     // Where the chain has an entry for the request, its two readings stand in for the
     // reader's single one: the reader's proposal and its follow-up points were never
@@ -1867,6 +1869,7 @@ export type MenuKey =
   | "upload"
   | "policy"
   | "held"
+  | "upgrade"
   | "follow-up"
   | "insufficient"
   | "waive"
@@ -1900,7 +1903,8 @@ export function sentReason(delivery: Delivery | null, state: string): string {
 
 /**
  * A row's menu, in the list's order: Edit · Change attributes · Upload a file · Use a
- * policy on file · Use a file the control holds · Ask a follow-up · Mark insufficient ·
+ * policy on file · Use a file the control holds · Check again with the current engine
+ * (only where it applies) · Ask a follow-up · Mark insufficient ·
  * Mark not applicable · Reopen decision · Delete. Every item is always listed; one that
  * cannot be used now says why. After sending, Edit and Delete are off.
  */
@@ -1956,6 +1960,16 @@ export function rowMenu(
             ? "The control holds no other file yet."
             : null,
     },
+    // Only while it applies: a finished check an earlier engine made (section 10.10).
+    ...(row.assurance?.check.action?.kind === "UPGRADE"
+      ? [
+          {
+            key: "upgrade" as const,
+            label: row.assurance.check.action.label,
+            unavailable: null,
+          },
+        ]
+      : []),
     {
       key: "follow-up",
       label: "Ask a follow-up",

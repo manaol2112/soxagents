@@ -1056,29 +1056,91 @@ for one request at a time, that its finished engine 1 check be replaced by an en
   and never for an engine 2 run.
 - **Confirmation** before anything happens: it says that the request's files are read again
   by the model, as the first check did; that the earlier result is kept in the history and
-  no longer shown as current; that open findings from the earlier result are closed as out
-  of date and are raised again only if the new check finds them; and that nothing is sent
-  to the organization.
+  no longer shown as current; that findings from it nobody has decided yet are closed as
+  out of date and raised again only if the new check finds them, while a finding a person
+  has in hand keeps its status and gets the new result on its history (as any later check
+  does: a result that supports the attribute proposes ANSWERED, and a person decides); and
+  that nothing is sent to the organization.
 - **What the server does**, in one transaction: the earlier run is marked out of date with
   the reason "A person asked for the check again with the current engine." (`stale_reason`
-  is free text; no migration), its open findings are marked out of date with it
-  (`mark_stale_for_assessment`), and a new run is queued on the current engine through
+  is free text; no migration), its PROPOSED findings are marked out of date with it
+  (`mark_stale_for_assessment`; a finding in hand is never marked stale), and a new run is queued on the current engine through
   `reconcile` for that requirement. One audit event, `evidence.assessment_engine_upgrade_requested`,
   with the person as actor, the requirement, the earlier run and its engine, and the new run.
   Asking twice queues one run (the second ask finds an engine 2 run and is refused with a
   plain sentence).
 - **API**: `POST .../evidence-assurance/{requirement_id}/upgrade` (TASK_UPDATE, a person, 202
   with the request's entry as `rerun` answers). 409 with a plain sentence when the request
-  has no run, is being read, is working, is not reviewed, or is already on the current
-  engine ("This request was already checked by the current engine.").
+  has no run, is being read, is working, is not reviewed, is set aside (the item marked not
+  applicable, its request cancelled, or the phase not applicable), or is already on the
+  current engine ("This request was already checked by the current engine."). Where the
+  current engine's gate would hold the request instead of checking it, the ask is refused
+  with the hold's own sentence and the earlier check stays as it is.
 - **What it never does**: no other request of the control or project is touched; no file is
-  read again for its text (only the check runs); no decision, approval or finding of a
-  person is changed (a finding a person already decided keeps its status); the earlier run's
-  records stay.
+  read again for its text (only the check runs); no decision or approval of a person is
+  changed, and a finding a person has in hand is never closed or marked stale (the new
+  result is attached to it for a person to decide); the earlier run's records stay.
 - **Tests**: the guards above (each state and role), the earlier run kept and marked out of
   date with its reason, its open findings out of date and a person's decided finding
   untouched, one new queued engine 2 run, one audit event, a second ask refused, another
   request of the control untouched, and a reviewer role refused.
+
+### 10.11 The check's result, simplified (14 November 2026)
+
+Asked for by the product owner after a re-run: "my main issue is I'm overwhelmed in terms
+of the heavy details ... A lot of wordings that is overwhelming. Propose an approach and
+show me a prototype before building." A two-screen prototype on that request was shown and
+approved ("Okay I like the prototypes"). The cause it answers: the same gap was written out
+four times (the summary, the follow-up, the attribute's element, the proposed finding) and
+everything was open at once.
+
+Only the screen changes. What the check stores, decides and proposes, the API, the findings
+and every action stay as they are; nothing is removed, and everything said today can still
+be reached. The D&I list's row for a request shows its finished check in this order:
+
+1. **The answer, in one line.** The proposed outcome as a pill in words with its mark (an
+   engine 1 check has none), beside it the completeness caveat as a second pill where the
+   evidence is not complete ("Reliability to resolve"), then the counts: "1 of 4 attributes
+   shown · 3 to ask for · 2 need you", and "Proposed for your review". No paragraph.
+2. **Attributes**, one row each, in the attributes' own order (A, B, C, ...): the letter,
+   the attribute's wording on one line (the full wording on open), its state in words with
+   a mark, and one short line: for a gap "Missing: " and the first thing not shown (its
+   first sentence, with "+2 more" where there are more); for a shown attribute the first
+   comparison made in code that passed, else the first sentence of what the check says it
+   shows; for a judgment, the sentence over the two readings. Rows are closed when the list
+   opens, and opening one closes the other.
+3. **An opened attribute** says each thing once: the full wording; each element as Shown
+   (its first verified passage quoted, with its file; further passages on request) or
+   Missing (what is not shown); the comparisons made in code; the two readings side by side
+   where a person's judgment is needed; and the finding on it with its existing actions,
+   shown as its title, status and actions (its body, which repeats the above, on request).
+4. **Needs you**: only what waits on this person, each one line with its one action: a
+   file's type to confirm, a file left out that has an action, each attribute left to a
+   person's judgment ("Review D" opens it), and one line for findings not yet decided
+   ("2 proposed findings to accept or dismiss", opening the first). Absent when empty.
+5. **Ask the owner**: the check's recommended follow-ups, one line each (the request's own
+   words on one line, the full text and its details on open), with the attribute letters
+   and the priority in words. Follow-ups of the same kind for the same attributes are
+   folded under the first ("1 similar"), each still reachable. Each line is ticked or not
+   (the first of each group ticked to start, a folded one not), and one action, "Add N to
+   the request", opens the row's existing follow-up form with the ticked requests as its
+   text for the person to edit and send through the existing path. "Copy all" copies the
+   ticked ones. Nothing is sent by this section; a person without the right to act sees
+   the list without the ticks and the action. Absent when the check recommends none.
+6. **Details of the check**, one closed line naming what is inside: the check's own
+   explanation, the completeness reasons, the considerations, what it found on the facts,
+   the notes about the files, follow-ups the new evidence resolved, what the check was
+   made against ("Checked against attributes A to D by two independent readings, reading
+   7 files together"), and the attributes the request does not ask for.
+
+Audit integrity, kept as tested rules: the outcome is never worded as more than proposed;
+a completeness caveat is never dropped from the first line; an issue or a judgment is
+never shown as shown, and its row's short line never omits that something is missing; the
+counts agree with the lists under them; a finding's actions are the existing ones and
+appear once; every word said before is still reachable in at most two steps.
+
+A check that is queued, working, held, failed, out of date or not run keeps its present
+one line and action. The evidence wizard's own summary is not changed.
 
 ## 9. Status
 
@@ -1091,6 +1153,7 @@ for one request at a time, that its finished engine 1 check be replaced by an en
 | Prompts /5: the quote rule, placeholders, a split shortfall, shortfall attribution, designation; the case `assigner_team_not_designated` | built 13 November 2026, the same live re-run to follow |
 | Engine 2 (section 10): the control's context and its hash, prompts /6 and the larger answer, facts and comparisons checked in code, concerns, follow-ups and considerations, the two dimensions and the proposed outcome, `review` saved and read through the API | built 14 November 2026 with scripted readings (test_assurance_engine2.py); the thirty-four scenarios and the screen to follow; not yet run live |
 | Prompts /7: what a quote shows and where a file comes from, for the evidence annotations (docs/evidence-annotations.md) | built 14 November 2026 with scripted readings (test_evidence_annotations.py); not yet run live |
-| Checking again with the current engine, for a request an earlier engine checked (10.10) | in progress, 14 November 2026 |
+| Checking again with the current engine, for a request an earlier engine checked (10.10) | built 14 November 2026 (`upgrade_engine`, route `/upgrade`, no migration; the row's action and menu item with a confirmation; `test_assurance_upgrade.py` in the fast and critical tiers, `tests/evidence-upgrade-model.test.ts`); independently reviewed and tightened the same day; used once by the product owner on the development data |
+| The check's result, simplified (10.11) | in progress, 14 November 2026 |
 | Prompt caching of the file text across the two readings (models.py) | planned, after the chain is measured |
 | Interim and roll-forward evidence | planned |

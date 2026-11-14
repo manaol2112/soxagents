@@ -339,6 +339,10 @@ export type AssuredRequest = {
   finishedAt: string | null;
   /** Which engine made the run: 1 unless the server says 2 (section 10.1). */
   engineVersion: 1 | 2;
+  /** The engine the server named, as it named it: 1 where it named none (forward only,
+   * section 10.1); null where what it sent is not a whole number. Only a known engine
+   * earlier than the current one is offered a check again (section 10.10). */
+  engine: number | null;
   /** The review of a finished engine 2 check; null for engine 1, for a check that is
    * not finished and current, and where what the server sent is not a review. */
   review: Review | null;
@@ -863,6 +867,13 @@ function parseRequest(value: unknown): AssuredRequest | null {
   const only = fileIds.length === 1 ? (fileIds[0] ?? null) : null;
   // Forward only (section 10.1): a run is the first engine's unless the server says 2.
   const engineVersion = value.engine_version === 2 ? 2 : 1;
+  const engine =
+    value.engine_version === undefined
+      ? 1
+      : typeof value.engine_version === "number" &&
+          Number.isInteger(value.engine_version)
+        ? value.engine_version
+        : null;
   return {
     requirementId,
     runId: uuidOrNull(value.run_id),
@@ -902,6 +913,7 @@ function parseRequest(value: unknown): AssuredRequest | null {
       : {}),
     finishedAt: str(value.finished_at) || null,
     engineVersion,
+    engine,
     // Like the attributes: nothing of a run is shown before it finishes, or once it is
     // out of date. An engine 1 run has no review, whatever came with it.
     review:
@@ -1425,7 +1437,35 @@ export type CheckActionKind =
   | "REPLACE"
   | "REREAD"
   | "PICK_INSTANCE"
-  | "RERUN";
+  | "RERUN"
+  // A finished check an earlier engine made, checked again by the current one
+  // (docs/evidence-assurance.md, section 10.10).
+  | "UPGRADE";
+
+/** The row's action and menu item for a finished check an earlier engine made
+ * (section 10.10), the confirmation before it runs, and what is said once it started. */
+export const UPGRADE_LABEL = "Check again with the current engine";
+export const UPGRADE_TITLE = "Check this request again?";
+export const UPGRADE_BODY =
+  "The files on this request are read again by the model, as for the first check. The earlier result stays in the history and is no longer shown as current. Findings from it that nobody has decided yet are closed as out of date and raised again only if the new check finds them. A finding someone has already acted on keeps its status, and the new result is added to it for a person to decide. Nothing is sent to the organization.";
+export const UPGRADE_CONFIRM = "Check again";
+export const UPGRADE_DONE =
+  "The check was started again with the current engine.";
+/** Why it cannot be confirmed now: another check call of the list is on its way. */
+export const UPGRADE_WAIT =
+  "Another check is being started on this list. Confirm once it has started.";
+
+/** The engine new checks are made by, and the engines this page knows (section 10). */
+export const CURRENT_ENGINE = 2;
+const KNOWN_ENGINES: readonly number[] = [1, 2];
+
+/** A finished check is offered again only where a known engine earlier than the
+ * current one made it: a future engine, or one the page cannot read, is not. */
+export function earlierEngine(engine: number | null): boolean {
+  return (
+    engine !== null && KNOWN_ENGINES.includes(engine) && engine < CURRENT_ENGINE
+  );
+}
 
 /** The one action that clears a hold, or runs the check. A file's action names its
  * file; running the check is the request's. */
@@ -1571,6 +1611,9 @@ export function requestCheck(
   attributes: readonly Lettered[],
   files: readonly RowFile[],
   span: Span,
+  /** Whether a file of the request is still waiting to be read. Said by the list only:
+   * where it is not said, a finished check is not offered again (section 10.10). */
+  options: { reading?: boolean } = {},
 ): RequestCheck {
   const all = attributes.map((item) => item.letter);
   const nameOf = (fileId: string) =>
@@ -1723,6 +1766,12 @@ export function requestCheck(
       (line) => line.state === "NOT_ADDRESSED" && !line.expected,
     ),
     review: reviewView(request, attributes, files, span),
+    // Checked again by the current engine: only a finished check an earlier engine
+    // made, with no file of the request waiting to be read. The server guards it too.
+    action:
+      earlierEngine(request.engine) && options.reading === false
+        ? { kind: "UPGRADE", label: UPGRADE_LABEL, fileId: null }
+        : null,
     // A file read with its type not confirmed: the row's own "Confirm the file's
     // type", once per file (a file left out for the same reason already carries it).
     confirm: (request.review?.confirmations ?? [])
@@ -2295,6 +2344,7 @@ export function notChecked(requirementId: string): AssuredRequest {
     note: "",
     finishedAt: null,
     engineVersion: 1,
+    engine: 1,
     review: null,
   };
 }
@@ -2450,6 +2500,8 @@ export function assuranceRow(input: {
   /** Attributes some request of the control sends with their elements (keyedOf): a
    * check of one without them does not show it whole. */
   keyed?: ReadonlySet<string>;
+  /** A file of the request is still waiting to be read (requestCheck). */
+  reading?: boolean;
 }): AssuranceRow | null {
   const request =
     input.assurance?.requests.find(
@@ -2463,6 +2515,7 @@ export function assuranceRow(input: {
     input.attributes,
     input.files,
     input.span,
+    input.reading === undefined ? {} : { reading: input.reading },
   );
   const order = input.attributes.map((item) => item.letter);
   const at = (letter: string) =>
@@ -2637,8 +2690,9 @@ export const STILL_CHECKING = "Still checking. Refresh to see the result.";
 type Fields = Record<string, unknown>;
 type AssuranceWrite = { path: string } | { error: "invalid" };
 
-/** The API call behind "Check again" and "Check now" (the /workspace/evidence-assurance
- * route): POST .../evidence-assurance/{requirement_id}/rerun, with no body. */
+/** The API call behind "Check again", "Check now" and "Check again with the current
+ * engine" (the /workspace/evidence-assurance route): POST
+ * .../evidence-assurance/{requirement_id}/rerun, or /upgrade, with no body. */
 export function assuranceWrite(fields: Fields): AssuranceWrite {
   const [organizationId, projectId, controlId, requirementId] = [
     "organization_id",
@@ -2646,8 +2700,9 @@ export function assuranceWrite(fields: Fields): AssuranceWrite {
     "control_id",
     "requirement_id",
   ].map((key) => str(fields[key]));
+  const intent = str(fields.intent);
   if (
-    str(fields.intent) !== "rerun" ||
+    (intent !== "rerun" && intent !== "upgrade") ||
     ![organizationId, projectId, controlId, requirementId].every((id) =>
       UUID.test(id ?? ""),
     )
@@ -2655,7 +2710,7 @@ export function assuranceWrite(fields: Fields): AssuranceWrite {
     return { error: "invalid" };
   }
   return {
-    path: `/organizations/${organizationId}/projects/${projectId}/controls/${controlId}/evidence-assurance/${requirementId}/rerun`,
+    path: `/organizations/${organizationId}/projects/${projectId}/controls/${controlId}/evidence-assurance/${requirementId}/${intent}`,
   };
 }
 

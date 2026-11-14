@@ -6,6 +6,7 @@ import {
   type ReactNode,
   useEffect,
   useId,
+  useRef,
   useState,
   useTransition,
 } from "react";
@@ -48,6 +49,11 @@ import {
   rereadProblem,
   type ShownPassage,
   STILL_CHECKING,
+  UPGRADE_BODY,
+  UPGRADE_CONFIRM,
+  UPGRADE_DONE,
+  UPGRADE_TITLE,
+  UPGRADE_WAIT,
 } from "./evidence-assurance-model";
 import { centerHref, DEFAULT_QUERY } from "./evidence-center-model";
 import { type DialogOpen, EvidenceDialog } from "./evidence-dialog";
@@ -128,6 +134,7 @@ const MENU_ICONS: Record<MenuKey, IconName> = {
   upload: "upload",
   policy: "file",
   held: "layers",
+  upgrade: "retry",
   "follow-up": "message",
   insufficient: "risk",
   waive: "minus",
@@ -137,8 +144,9 @@ const MENU_ICONS: Record<MenuKey, IconName> = {
 };
 
 /**
- * "Check again" on a request whose check failed or is out of date
- * (docs/evidence-assurance.md): one call, as the list's other actions make theirs.
+ * "Check again" on a request whose check failed or is out of date, and "Check again
+ * with the current engine" on one an earlier engine finished (docs/evidence-assurance.md,
+ * section 10.10): one call, as the list's other actions make theirs.
  * Success is said only once the server has answered, and the checks are then read again
  * in place (no reload; open rows and filters stay). A refusal because the check changed
  * under the person (409) reads them again too.
@@ -148,7 +156,20 @@ function useAssuranceAction(ids: Ids) {
   const [pending, startTransition] = useTransition();
   const [busy, setBusy] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
-  async function run(requirementId: string): Promise<boolean> {
+  // A second press while the first is on its way sends nothing.
+  const sending = useRef(false);
+  // Any call of the list's checks on its way (a check, or a file read again), known at
+  // once rather than at the next render.
+  const out = useRef("");
+  async function run(
+    requirementId: string,
+    intent: "rerun" | "upgrade" = "rerun",
+  ): Promise<boolean> {
+    if (sending.current) {
+      return false;
+    }
+    sending.current = true;
+    out.current = requirementId;
     setBusy(requirementId);
     setProblem(null);
     let status = 0;
@@ -161,7 +182,7 @@ function useAssuranceAction(ids: Ids) {
           organization_id: ids.organizationId,
           project_id: ids.projectId,
           control_id: ids.controlId,
-          intent: "rerun",
+          intent,
           requirement_id: requirementId,
         }),
       });
@@ -175,6 +196,8 @@ function useAssuranceAction(ids: Ids) {
       status = 0;
     }
     setBusy("");
+    out.current = "";
+    sending.current = false;
     const message = assuranceProblem(status, detail);
     setProblem(message);
     if (message === null || status === 409) {
@@ -189,6 +212,7 @@ function useAssuranceAction(ids: Ids) {
     analysis: { id: string; version: number },
   ): Promise<boolean> {
     setBusy(`reread-${fileId}`);
+    out.current = `reread-${fileId}`;
     setProblem(null);
     let status = 0;
     try {
@@ -209,6 +233,7 @@ function useAssuranceAction(ids: Ids) {
       status = 0;
     }
     setBusy("");
+    out.current = "";
     const message = rereadProblem(status);
     setProblem(message);
     if (message === null || status === 409) {
@@ -216,7 +241,24 @@ function useAssuranceAction(ids: Ids) {
     }
     return message === null;
   }
-  return { run, reread, busy, pending: pending || busy !== "", problem };
+  /** "busy" where another call of the list's checks is still on its way: nothing was
+   * sent, and the person is told so rather than left with a dialog that closed. */
+  async function upgrade(
+    requirementId: string,
+  ): Promise<"done" | "refused" | "busy"> {
+    if (sending.current || out.current !== "") {
+      return "busy";
+    }
+    return (await run(requirementId, "upgrade")) ? "done" : "refused";
+  }
+  return {
+    run,
+    upgrade,
+    reread,
+    busy,
+    pending: pending || busy !== "",
+    problem,
+  };
 }
 
 /**
@@ -1090,6 +1132,10 @@ function Row({
   // Files are dragged over the row: it shows it takes them.
   const [over, setOver] = useState(false);
   const [asking, setAsking] = useState<Asking | null>(null);
+  // "Check again with the current engine", asked once more before it runs: where it was
+  // chosen from, so focus can come back to it.
+  const [upgrading, setUpgrading] = useState<"action" | "menu" | null>(null);
+  const rowRef = useRef<HTMLLIElement>(null);
   const [words, setWords] = useState("");
   const [picker, setPicker] = useState<"policy" | "held" | null>(null);
   const [fileForm, setFileForm] = useState<{
@@ -1159,10 +1205,26 @@ function Row({
     }
   }
 
+  /** The request's check made again by the current engine, once the person has
+   * confirmed. The dialog stays open, its buttons off, until the server has answered,
+   * so one click sends one request; then it closes. Success is said on the list once
+   * the server confirmed, and a refusal is said there too (assuranceProblem), as for
+   * "Check again". Where another check call was still on its way nothing is sent, and
+   * the dialog stays open and says so. */
+  async function upgradeCheck(): Promise<"done" | "refused" | "busy"> {
+    const result = await checks.upgrade(item.id);
+    if (result === "done") {
+      onDone(UPGRADE_DONE);
+    }
+    return result;
+  }
+
   /** The one action that clears a hold, or runs the check again. */
   const actOn = (act: CheckAction) => {
     if (act.kind === "RERUN") {
       void checkAgain();
+    } else if (act.kind === "UPGRADE") {
+      setUpgrading("action");
     } else if (act.fileId === null) {
       return;
     } else if (act.kind === "REREAD") {
@@ -1285,6 +1347,7 @@ function Row({
           onToggle();
         }
       },
+      upgrade: () => setUpgrading("menu"),
       "follow-up": followUp,
       insufficient: () => ask({ kind: "INSUFFICIENT" }),
       waive: () => ask({ kind: "WAIVE" }),
@@ -1292,18 +1355,27 @@ function Row({
       reopen: () => ask({ kind: "NOT_REVIEWED" }),
       delete: onRemove,
     };
-    return rowMenu(row, {
-      policies: documents.length,
-      held: held.length,
-      attributes: attributeCount,
-    }).map((entry) => ({
-      label: entry.label,
-      icon: MENU_ICONS[entry.key],
-      // After an upload nothing is offered until the plan is read again.
-      unavailable: locked ? LOCKED : entry.unavailable,
-      ...(entry.danger === true ? { danger: true } : {}),
-      onSelect: run[entry.key],
-    }));
+    return (
+      rowMenu(row, {
+        policies: documents.length,
+        held: held.length,
+        attributes: attributeCount,
+      })
+        // Nor a check again while another check call of the list is on its way.
+        .map((entry) =>
+          entry.key === "upgrade" && checks.pending
+            ? { ...entry, unavailable: UPGRADE_WAIT }
+            : entry,
+        )
+        .map((entry) => ({
+          label: entry.label,
+          icon: MENU_ICONS[entry.key],
+          // After an upload nothing is offered until the plan is read again.
+          unavailable: locked ? LOCKED : entry.unavailable,
+          ...(entry.danger === true ? { danger: true } : {}),
+          onSelect: run[entry.key],
+        }))
+    );
   };
 
   const lines = new Map(
@@ -1869,6 +1941,7 @@ function Row({
   return (
     <li
       id={`req-${item.id}`}
+      ref={rowRef}
       // While the list is locked (an upload just ended and the plan is being read
       // again) a drop is not taken: the row may travel in another request by now.
       onDropCapture={
@@ -1907,7 +1980,145 @@ function Row({
       className={`tar de-row is-${row.state.toLowerCase()}${open ? " is-open" : ""}${row.aside ? " is-aside" : ""}${over ? " is-over" : ""}`}
     >
       {content}
+      {canAct && upgrading !== null ? (
+        <UpgradeDialog
+          busy={checks.busy === item.id}
+          // The list is busy with another call: confirming waits, and says why.
+          waiting={
+            locked
+              ? LOCKED
+              : checks.pending && checks.busy !== item.id
+                ? UPGRADE_WAIT
+                : null
+          }
+          onConfirm={() => upgradeCheck()}
+          onClose={() => {
+            const from = upgrading;
+            setUpgrading(null);
+            // Back to where it was chosen; the action is gone once the check is
+            // current, so the row's own button is the next stop.
+            window.requestAnimationFrame(() => {
+              const root = rowRef.current;
+              (from === "menu"
+                ? root?.querySelector<HTMLElement>(".row-menu-button")
+                : root?.querySelector<HTMLElement>(".de-check-upgrade")
+              )?.focus();
+              if (root !== null && root !== undefined) {
+                if (!root.contains(document.activeElement)) {
+                  root.querySelector<HTMLElement>(".de-head")?.focus();
+                }
+              }
+            });
+          }}
+        />
+      ) : null}
     </li>
+  );
+}
+
+/**
+ * "Check again with the current engine", asked once more (docs/evidence-assurance.md,
+ * section 10.10): the confirmation dialog the list's other consequential actions use.
+ * Only its confirm button sends; Escape, Cancel or a click outside closes it and nothing
+ * is sent. It closes once the server has answered; while another check call of the list
+ * is on its way, confirming is off and the dialog says why.
+ */
+function UpgradeDialog({
+  busy,
+  waiting,
+  onConfirm,
+  onClose,
+}: {
+  /** This request's call is on its way. */
+  busy: boolean;
+  /** Why it cannot be confirmed now (another call of the list is out); null otherwise. */
+  waiting: string | null;
+  /** Called once per press; the dialog closes when the server answered, and a refusal
+   * is said on the list, as the list's other check actions say theirs. "busy": nothing
+   * was sent, and the dialog stays open and says so. */
+  onConfirm: () => Promise<"done" | "refused" | "busy">;
+  onClose: () => void;
+}) {
+  const id = useId();
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const element = dialog.current;
+    if (element !== null && !element.open) {
+      element.showModal();
+    }
+  }, []);
+  const sent = useRef(false);
+  const [held, setHeld] = useState<string | null>(null);
+  const why = waiting ?? held;
+  // Once the list's other call is done, what was said of it goes too.
+  useEffect(() => {
+    if (waiting === null) {
+      setHeld(null);
+    }
+  }, [waiting]);
+  const close = () => dialog.current?.close();
+  return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: a click on the backdrop cancels; Escape and Cancel do too, through the dialog itself.
+    <dialog
+      ref={dialog}
+      className="confirm-dialog"
+      aria-labelledby={`${id}-title`}
+      aria-describedby={`${id}-body`}
+      onCancel={(event) => {
+        // Not while the call is out: the answer is still to come.
+        if (busy) {
+          event.preventDefault();
+        }
+      }}
+      onClose={onClose}
+      onClick={(event) => {
+        if (event.target === event.currentTarget && !busy) {
+          close();
+        }
+      }}
+    >
+      <div className="confirm-dialog-body">
+        <h2 id={`${id}-title`}>{UPGRADE_TITLE}</h2>
+        <p id={`${id}-body`}>{UPGRADE_BODY}</p>
+        {why !== null ? (
+          <p className="confirm-impact-state" role="status">
+            {why}
+          </p>
+        ) : null}
+        <div className="confirm-dialog-actions">
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={busy}
+            onClick={close}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={busy || waiting !== null}
+            onClick={() => {
+              // One press sends; a second one before the button is off sends nothing.
+              if (!sent.current) {
+                sent.current = true;
+                setHeld(null);
+                void onConfirm().then((result) => {
+                  if (result === "busy") {
+                    // Nothing was sent: said, and it can be confirmed again.
+                    sent.current = false;
+                    setHeld(UPGRADE_WAIT);
+                  } else {
+                    close();
+                  }
+                });
+              }
+            }}
+          >
+            {busy ? "Starting…" : UPGRADE_CONFIRM}
+          </button>
+        </div>
+      </div>
+    </dialog>
   );
 }
 
@@ -2047,6 +2258,20 @@ function CheckOfRequest({
             <strong className="de-check-part"> {check.readInPart}</strong>
           ) : null}
         </span>
+        {/* A check an earlier engine made: checked again by the current one, asked
+            once more first (section 10.10). Quiet: the result is what is read. */}
+        {action !== null && action.kind === "UPGRADE" ? (
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm de-check-upgrade"
+            disabled={disabled}
+            aria-haspopup="dialog"
+            aria-label={`${action.label}: this request`}
+            onClick={() => onAct(action)}
+          >
+            {busy === requirementId ? "Starting…" : action.label}
+          </button>
+        ) : null}
       </p>
       {leftOut}
       {fileLines(check.confirm)}
