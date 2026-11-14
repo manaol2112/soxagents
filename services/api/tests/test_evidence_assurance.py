@@ -22,7 +22,7 @@ Audit integrity (critical tier):
   check, never a guess; an answer sent one level too deep is read as written, and a
   reading cut off at its allowance is asked once more with a larger one, as a model call
   of its own (cut off again, the check fails);
-- prompts /5 (every rule kept under /6): both readings are told the quote rule the
+- prompts /5 (every rule kept under /6 and /7): both readings are told the quote rule the
   strict match applies and the
   placeholder, shortfall-attribution and designation rules; a placeholder is an exception
   shown unless a reading relies on another document of the request, and never support;
@@ -2756,15 +2756,21 @@ def test_the_readings_are_told_the_rules_the_code_applies() -> None:
     versions were /5. New: they are /6, the version new runs are recorded under
     (docs/evidence-assurance.md, section 10.4), and /5 is what an engine 1 run still
     carries. Every /5 rule asserted here is still told, word for word; what /6 adds is
-    asserted in test_assurance_engine2.py."""
+    asserted in test_assurance_engine2.py.
+
+    Rewritten again the same day (evidence annotations, prompts /7). Old expectation: the
+    versions were /6. New: they are /7, because each quote may now say what it shows and
+    each file where it comes from (docs/evidence-annotations.md, section 2): two optional
+    parts that describe what is quoted and change no result. Every rule asserted here is
+    still told, word for word; what /7 adds is asserted in test_evidence_annotations.py."""
     from ai_workforce_api.console_citations import (
         MIN_PASSAGE_CHARS,
         MIN_PASSAGE_WORDS,
         find_passage,
     )
 
-    assert chain_module.ASSESSOR_PROMPT_VERSION == "evidence-assurance-assessor/6"
-    assert chain_module.REVIEWER_PROMPT_VERSION == "evidence-assurance-reviewer/6"
+    assert chain_module.ASSESSOR_PROMPT_VERSION == "evidence-assurance-assessor/7"
+    assert chain_module.REVIEWER_PROMPT_VERSION == "evidence-assurance-reviewer/7"
     assert chain_module.ENGINE_PROMPTS[1] == (
         "evidence-assurance-assessor/5", "evidence-assurance-reviewer/5",
     )  # fmt: skip

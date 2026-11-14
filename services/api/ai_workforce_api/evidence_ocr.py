@@ -28,6 +28,9 @@ LOCAL_TIMEOUT_SECONDS = 90
 MAX_MODEL_IMAGES = 5
 MODEL_LONG_EDGE = 1_568
 MAX_PAGE_TEXT = 20_000
+# The words of one page kept with their boxes, and the longest a word's text is kept.
+MAX_PAGE_WORDS = 5_000
+MAX_WORD_TEXT = 60
 _STATUS_WORDS = {
     "TIMEOUT": "it timed out",
     "RATE_LIMITED": "rate limited",
@@ -62,6 +65,17 @@ class OcrResult:
     note: str
 
 
+@dataclass(frozen=True)
+class OcrWord:
+    """One word the local engine read, with its box in the image's pixels."""
+
+    text: str
+    left: int
+    top: int
+    width: int
+    height: int
+
+
 class OcrEngine(Protocol):
     @property
     def engine(self) -> Engine: ...
@@ -89,27 +103,56 @@ class TesseractOcr:
         found = shutil.which("tesseract")
         return None if found is None else (found,)
 
+    def _run(self, image: bytes, *output: str) -> bytes:
+        """One image through the command, on stdin: the same languages and page
+        segmentation whatever the output asked for."""
+        try:
+            finished = subprocess.run(
+                [*self._command, "stdin", "stdout", "-l", self._languages, "--psm", "3", *output],
+                input=image,
+                capture_output=True,
+                timeout=LOCAL_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except FileNotFoundError:
+            raise OcrUnavailable("The OCR engine is not installed.") from None
+        except subprocess.TimeoutExpired:
+            raise OcrFailed("OCR took too long.") from None
+        if finished.returncode != 0:
+            # stderr can echo file details, so it is not logged.
+            logger.warning("local OCR failed with exit code %s", finished.returncode)
+            raise OcrFailed("The OCR engine could not read the image.")
+        return finished.stdout
+
     def read(self, images: Sequence[bytes]) -> OcrResult:
         texts: list[str] = []
         for image in images:
-            try:
-                finished = subprocess.run(
-                    [*self._command, "stdin", "stdout", "-l", self._languages, "--psm", "3"],
-                    input=image,
-                    capture_output=True,
-                    timeout=LOCAL_TIMEOUT_SECONDS,
-                    check=False,
-                )
-            except FileNotFoundError:
-                raise OcrUnavailable("The OCR engine is not installed.") from None
-            except subprocess.TimeoutExpired:
-                raise OcrFailed("OCR took too long.") from None
-            if finished.returncode != 0:
-                # stderr can echo file details, so it is not logged.
-                logger.warning("local OCR failed with exit code %s", finished.returncode)
-                raise OcrFailed("The OCR engine could not read the image.")
-            texts.append(finished.stdout.decode("utf-8", errors="replace")[:MAX_PAGE_TEXT])
+            texts.append(self._run(image).decode("utf-8", errors="replace")[:MAX_PAGE_TEXT])
         return OcrResult(engine="LOCAL", texts=tuple(texts), model_call_id=None, note="")
+
+    def words(self, image: bytes) -> tuple[OcrWord, ...]:
+        """The words of one image in reading order, each with its box in the image's own
+        pixels (the engine's TSV output), read with the very settings `read` uses, so they
+        are the words of the text it gives. For where a passage is on the page
+        (evidence_annotations.py); the image never leaves the machine."""
+        found: list[OcrWord] = []
+        table = self._run(image, "tsv").decode("utf-8", errors="replace")
+        for line in table.split("\n")[1:]:
+            # level, page, block, paragraph, line, word, left, top, width, height, conf, text
+            cells = line.split("\t", 11)
+            if len(cells) < 12 or cells[0] != "5":
+                continue
+            text = cells[11].strip()
+            try:
+                left, top, width, height = (int(cell) for cell in cells[6:10])
+            except ValueError:
+                continue
+            if not text or width <= 0 or height <= 0 or left < 0 or top < 0:
+                continue
+            found.append(OcrWord(text[:MAX_WORD_TEXT], left, top, width, height))
+            if len(found) >= MAX_PAGE_WORDS:
+                break
+        return tuple(found)
 
 
 OCR_SYSTEM_PROMPT = """You transcribe images of audit evidence for a SOX audit team: \

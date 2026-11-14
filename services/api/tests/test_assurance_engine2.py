@@ -261,9 +261,14 @@ def test_the_prompt_carries_the_understanding_as_data_with_delimiters_inert() ->
 
 
 def test_the_readings_are_told_the_engine_2_rules_and_asked_for_the_new_parts() -> None:
+    # Rewritten 14 November 2026 (evidence annotations, prompts /7). Old expectation: an
+    # engine 2 run carried prompts /6. New: /7, which adds two optional parts that change
+    # no result (what a quote shows, and the words that show where a file comes from:
+    # docs/evidence-annotations.md, section 2; asserted in test_evidence_annotations.py).
+    # Every engine 2 rule and every part asserted below is still told and asked for.
     assert engine.ENGINE_VERSION == 2
     assert engine.ENGINE_PROMPTS[2] == (
-        "evidence-assurance-assessor/6", "evidence-assurance-reviewer/6",
+        "evidence-assurance-assessor/7", "evidence-assurance-reviewer/7",
     )  # fmt: skip
     for role in ("ASSESSOR", "REVIEWER"):
         system, _prompt = prompt_for(_records(), role)
@@ -982,10 +987,17 @@ def test_the_review_is_saved_read_through_the_api_and_copied_by_a_reused_run(
         ["B"], "CLARIFICATION", ["CODE"],
     )  # fmt: skip
     # The record holds what the API gives, saved with the run when it finished.
+    # Rewritten 14 November 2026 (evidence annotations). Old expectation: the stored review
+    # was exactly what this API gives. New: the run also keeps, with its review, the
+    # annotations proposed from it (`annotations`; docs/evidence-annotations.md, section 2),
+    # so that a run copying it proposes the same with no model call; they are given by the
+    # annotations' own routes, never in `review`. Everything else of the stored review is
+    # still exactly what the API gives.
     [(stored, engine_version, context_sha)] = bench.rows(
         "SELECT review, engine_version, context_sha256 FROM evidence_assessments WHERE id = %s",
         UUID(done["run_id"]),
     )
+    assert isinstance(stored.pop("annotations"), list)
     assert stored == review and engine_version == 2 and len(context_sha) == 64
     [(opinion,)] = bench.rows(
         "SELECT assessor_opinion FROM evidence_assessments WHERE id = %s", UUID(done["run_id"])
@@ -1054,6 +1066,8 @@ def test_the_review_is_saved_read_through_the_api_and_copied_by_a_reused_run(
     assert runs[-1][4] == runs[0][0] and len(readings.requests) == 4
     assert back.json()["review"] == after["review"]
     [(copied,)] = bench.rows("SELECT review FROM evidence_assessments WHERE id = %s", runs[-1][0])
+    # The copy keeps the proposals of the run it copies too (the rewrite noted above).
+    assert isinstance(copied.pop("annotations"), list)
     assert copied == review
     live = [f for f in bench.findings() if not f["stale"]]
     assert len(live) == 1 and live[0]["question"] == finding["question"]

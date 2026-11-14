@@ -50,6 +50,7 @@ from ai_workforce_api.evidence_analysis import (
     analysis_runner,
     register_evidence_analysis,
 )
+from ai_workforce_api.evidence_annotations import register_evidence_annotations
 from ai_workforce_api.evidence_assurance import (
     assessment_runner,
     register_evidence_assurance,
@@ -232,6 +233,7 @@ def create_app(
     register_evidence_mapping(app, resolved, model_provider)
     register_evidence_findings(app, resolved)
     register_evidence_assurance(app, resolved, drafts)
+    register_evidence_annotations(app, resolved)
     register_evidence_wizard(app, resolved, drafts)
     register_walkthrough_instances(app, resolved)
     register_sample_traces(app, resolved)

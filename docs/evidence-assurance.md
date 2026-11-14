@@ -418,7 +418,7 @@ Role = Literal["ASSESSOR", "REVIEWER"]
 Shows = Literal["DESIGN", "IMPLEMENTATION"]
 PassageBasis = Literal["RECORD", "REQUIREMENT", "ASSERTION", "INSTRUCTION"]
 HeldCode = Literal["CUSTODY", "READ_FAILED", "UNREADABLE", "KIND_UNSURE", "POPULATION", "NO_ATTRIBUTES", "TOO_LARGE"]
-# Prompt versions: evidence-assurance-assessor/6, evidence-assurance-reviewer/6 (14 November 2026;
+# Prompt versions: evidence-assurance-assessor/7, evidence-assurance-reviewer/7 (14 November 2026;
 # an engine 1 run carries /5: ENGINE_PROMPTS)
 
 @dataclass(frozen=True)
@@ -799,6 +799,21 @@ The rules tell both readings: a follow-up is asked only for something an approve
 attribute's element needs and the files do not show; say when nothing more is needed; a
 consideration is an observation, never a new requirement.
 
+Prompts /7 (14 November 2026, evidence annotations; docs/evidence-annotations.md, section
+2) add two optional parts that describe what is quoted and change no result: each quote
+of an element may carry `shows`, one plain sentence of at most 200 characters saying what
+the passage shows for the element, with values as the file writes them; and each `files`
+entry may carry `quote` (with `context`), the file's own words that show where it comes
+from (who captured or exported it, a report's run line). As built: `shows` is kept on the
+passage as one bounded line and dropped whole where it holds a secret, an address or a
+link (`said_sentence`); a file's `quote` is kept only where it is found, strictly, in the
+file it is said of and not on a line the guards flag (`Opinion.sources`). Neither is part
+of the checked answer on record, and no verdict, fact, comparison, follow-up or finding
+reads them: the same two answers give the same outcomes and the same review with or
+without them. Every /6 rule is kept. An engine 2 run recorded under /6 reads as out of
+date ("The check's instructions were updated.") and is run again by the event or the
+person that starts a check, as after any change of the instructions.
+
 As built: a reading's allowance is 12,000 output tokens (8,192 before), since the answer
 now also carries these parts; a reading cut off is still asked once more with 16,000. An
 entry of one of these parts that is not of its shape (a kind or a test outside its
@@ -947,6 +962,13 @@ provisioning record is not among the files. 1 follow-up would resolve it.").
   request with a great many files loses its files' notes first, never a file).
 - A follow-up is text for the person, who sends it through the existing request and
   follow-up steps after their approval. Nothing is sent by the check.
+- The record's `review` also keeps `annotations`: the annotations proposed in code from
+  the run (docs/evidence-annotations.md, section 2), each `{file_id, kind, label,
+  statement, quote, attribute_ids, page, start, end, nth, check_sentence}`, within what the
+  review has left of its size and never more than 60,000 bytes. They are kept there so
+  that a run copying an earlier one of the same basis proposes the same with no model
+  call; `GET …/evidence-assurance` does not give them (the annotations' own routes do),
+  and nothing of the check reads them.
 
 ### 10.8 After the independent review and the scenario tests (14 November 2026)
 
@@ -1027,5 +1049,6 @@ the owner's approval of its cost.
 | Readings read as written and asked again when cut off; the eight cases' assignee | built 13 November 2026, a live re-run of the wrong cases to follow |
 | Prompts /5: the quote rule, placeholders, a split shortfall, shortfall attribution, designation; the case `assigner_team_not_designated` | built 13 November 2026, the same live re-run to follow |
 | Engine 2 (section 10): the control's context and its hash, prompts /6 and the larger answer, facts and comparisons checked in code, concerns, follow-ups and considerations, the two dimensions and the proposed outcome, `review` saved and read through the API | built 14 November 2026 with scripted readings (test_assurance_engine2.py); the thirty-four scenarios and the screen to follow; not yet run live |
+| Prompts /7: what a quote shows and where a file comes from, for the evidence annotations (docs/evidence-annotations.md) | built 14 November 2026 with scripted readings (test_evidence_annotations.py); not yet run live |
 | Prompt caching of the file text across the two readings (models.py) | planned, after the chain is measured |
 | Interim and roll-forward evidence | planned |
