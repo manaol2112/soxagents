@@ -59,7 +59,7 @@ function onboarding(extra: Record<string, unknown> = {}): Onboarding {
         step: "rcm",
         title: "Controls",
         complete: false,
-        issues: ["Load the standard library or upload the client's RCM."],
+        issues: ["Load the standard library or upload the organization's RCM."],
         advisories: [],
       },
       { step: "workpapers", title: "Templates", complete: true, issues: [] },

@@ -92,7 +92,7 @@ QUESTIONS: dict[str, str] = {
     "scan-tool": "Which tool scans for vulnerabilities?",
     "schedule-approver": "Who approves changes to the job schedule?",
     "scheduler": "Which tool schedules and runs the batch jobs?",
-    "service-orgs": "Which service organizations does the organization rely on?",
+    "service-orgs": "Which service organizations does the control rely on?",
     "soc-reviewer": "Who reviews the service organizations' SOC reports?",
     "vuln-owner": "Who reviews vulnerability scan findings?",
     "vuln-sla": "Within how many days must critical and high vulnerabilities be fixed?",

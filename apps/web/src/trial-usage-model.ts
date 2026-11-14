@@ -214,7 +214,7 @@ export function usageMeters(usage: TrialUsage): UsageMeter[] {
     ),
     meter(
       "members",
-      "Organization users",
+      "Workspace members",
       usage.usage.members,
       usage.limits.members,
       "Members of your firm; the demo's people are not counted.",

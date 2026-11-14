@@ -587,9 +587,8 @@ export function EvidenceReadingCard({
                       <strong>Read by the AI model</strong>
                       <small>
                         Screenshots and scanned pages are sent to the AI model
-                        for more accurate reading, so the organization&apos;s
-                        images leave the firm. Reading inside the workspace is
-                        the fallback.
+                        for more accurate reading, so the images leave the
+                        workspace. Reading inside the workspace is the fallback.
                       </small>
                     </span>
                   </label>

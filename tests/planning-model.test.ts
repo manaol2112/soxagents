@@ -914,7 +914,7 @@ describe("what holds approval, as work", () => {
       blocker("1 proposed attribute waits for a decision.", true, "ATTRIBUTES"),
       blocker("Control design to confirm: …", true, "ATTRIBUTES"),
       blocker(
-        "The client's value for the roles is not recorded.",
+        "The organization's value for the roles is not recorded.",
         false,
         "VALUES",
       ),

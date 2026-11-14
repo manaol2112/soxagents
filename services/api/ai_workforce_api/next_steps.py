@@ -160,7 +160,7 @@ def plan_steps(connection: psycopg.Connection[Any], project_id: UUID) -> list[St
     if described:
         steps.append(StepBody(
             stage="PLANS", kind="plans_describe",
-            title=f"Describe {_plural(described, 'organization-specific control')}",
+            title=f"Describe {_plural(described, 'control')} from the organization's RCM",
             detail="Optional: the organization's RCM leaves how they operate unsaid. Each "
             "plan's Describe the control asks it; approval does not wait for it.",
             section="testing",

@@ -1057,7 +1057,7 @@ function OwnerStep({
               id={`${id}-email`}
               type="email"
               aria-label="Owner's email"
-              placeholder="name@organization.com"
+              placeholder="name@organization.example"
               value={email}
               autoComplete="off"
               onChange={(event) => setEmail(event.target.value)}

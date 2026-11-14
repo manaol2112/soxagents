@@ -465,7 +465,7 @@ export function ControlDetails({
                 aria-describedby={
                   suggestion !== null ? "cd-suggest" : undefined
                 }
-                placeholder="name@organization.com"
+                placeholder="name@organization.example"
                 aria-invalid={mail.trim() !== "" && !EMAIL.test(mail.trim())}
                 onChange={(event) => {
                   setEmail(event.target.value);

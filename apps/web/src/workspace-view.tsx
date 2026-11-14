@@ -270,7 +270,9 @@ const NAV_GROUPS: ReadonlyArray<{ label: string; items: NavItem[] }> = [
   },
   {
     // The organization's own pages, the same whichever engagement is open.
-    label: "Organization",
+    // "Workspace", not "Organization": the audited entities are "organizations" (product
+    // owner, 13 November 2026), so the firm's own pages are named for the workspace.
+    label: "Workspace",
     items: [
       {
         id: "projects",
@@ -2128,7 +2130,7 @@ function EvidenceMain({
               <summary className="btn btn-sm btn-ghost">More actions</summary>
               <div className="ec-more-pop">
                 <a href={exportHref(ids, query)}>Export requests</a>
-                <a href={portalHref}>Organization communication settings</a>
+                <a href={portalHref}>Evidence owner communication settings</a>
                 <a href={tabHref("files")}>Evidence library</a>
               </div>
             </details>
@@ -2174,7 +2176,7 @@ function EvidenceMain({
           aria-current={view.tab === "mailbox" ? "page" : undefined}
           className={toReview > 0 ? "is-alert" : undefined}
         >
-          Organization Portal <span className="view-count">{toReview}</span>
+          Evidence Portal <span className="view-count">{toReview}</span>
         </a>
       </nav>
       {view.tab === "requests" &&

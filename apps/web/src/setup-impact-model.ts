@@ -93,7 +93,7 @@ export function scopeImpact(value: unknown): SetupImpact | null {
   }
   if (sent > 0) {
     lines.push(
-      `${plural(sent, "request has", "requests have")} already been sent to the organization and ${sent === 1 ? "remains" : "remain"} on record. Inform the organization if the evidence is no longer required.`,
+      `${plural(sent, "request has", "requests have")} already been sent to the organization and ${sent === 1 ? "remains" : "remain"} on record. Tell the recipients if the evidence is no longer required.`,
     );
   }
   if (tested > 0) {
