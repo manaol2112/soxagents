@@ -661,6 +661,210 @@ no longer accepts `UNSETTLED`, since the missing role owner approval is now stat
 B's shortfall, not C's. No other verdict changed: `remark_all_approvals_obtained` B already
 accepted `PARTLY_MET`.
 
+## 10. Engine 2: sufficiency, checks in code, follow-ups (14 November 2026)
+
+Asked for by the product owner on 14 November 2026: the check should answer the question a
+senior IT auditor answers, "has sufficient appropriate evidence been obtained for what this
+request tests, and if not, exactly what is missing", grounded in the approved control
+understanding, with objective comparisons made in code, and never by agreement of two
+readings alone. Everything in sections 1 to 9 stands unless this section changes it. The
+three stages (read and classify, place, check), the two blind readings, the findings and a
+person's decisions are kept; no agent, queue, screen or approval stage is added.
+
+### 10.1 Forward only
+
+`evidence_assessments.engine_version` (migration 0160; existing rows are 1, new runs 2).
+
+- A run is compared with what is in force **as its own engine reads it**: an engine 1 run
+  keeps the engine 1 gate, hash inputs and prompt versions (/5), so the upgrade marks no
+  run out of date and queues nothing. No historical evidence is read again, no finding is
+  reopened, no accepted evidence needs a new decision.
+- A new run is recorded only for an event that already records one (a file added, replaced,
+  withdrawn or restored, a kind confirmed, an attribute or a link changed, a person's
+  "Check again"). It is an engine 2 run. The earlier run is kept, out of date, as before.
+- Engine 1 results are shown exactly as before. The new parts of the API (10.7) are absent
+  for them.
+
+### 10.2 The control's context (what the readings are given)
+
+Besides the control's reference, title and activity, both readings get, as data inside
+`control_and_attributes` under `understanding` (delimiters made inert as for everything
+else placed there):
+
+- the control as designed: its statement with the organization's values in place, the risk
+  it addresses, type, nature, frequency, who performs, reviews and owns it, where known;
+- the system the control is tested on and the audit period (from, to), where known;
+- the confirmed understanding (understanding_authority.facts, as its agents get it: the
+  walkthrough answers, the control's values and the answered questions, newest first, at
+  most 40);
+- what this request asked for: the requirement's title and description.
+
+The context's hash is part of an engine 2 run's basis: a change to it puts the run out of
+date ("The control's understanding changed."). Where the understanding is thin (no
+confirmed fact), the readings are told so and the result says so (10.6, `context_thin`);
+they never fill it in. The rules add: judge each element against the process the
+understanding describes, not against the presence of a word; do not add a requirement
+that neither the attributes nor the understanding state.
+
+### 10.3 The gate
+
+For engine 2 a file whose kind is not sure (`KIND_UNSURE`) is **read**, as the kind the
+reader took it for, and the run lists it under `confirmations` (the person still confirms
+its kind, which records a new run only if the kind changes the lens). Custody, a reading
+that did not finish and a file with nothing readable stay hard stops. A population is left
+out of a single-instance item as before, with the reason said by purpose ("a population
+shows who or what is in scope, not that one instance was performed"); it is read where the
+item itself asks for a population.
+
+### 10.4 What a reading answers in addition (prompts /6)
+
+Each reading still answers every attribute, element by element (section 3). It adds, all
+optional and capped:
+
+- `files`: for each file index, `relevance` (RELEVANT, PARTLY_RELEVANT, NOT_RELEVANT,
+  CANNOT_TELL; with one sentence), `source` (SYSTEM_RECORD: a system's own record, log,
+  export or screen; MANAGEMENT_PREPARED: prepared by a person, such as a spreadsheet or a
+  memo; DOCUMENT: a policy, procedure or narrative; UNKNOWN), `legibility` (CLEAR,
+  PARTLY_UNREADABLE, UNREADABLE; with what could not be read), and for a report, listing
+  or extract whether it shows its source, run date and parameters (`report_basis`: SHOWN,
+  PARTLY_SHOWN, NOT_SHOWN, NOT_A_REPORT).
+- `facts` (at most 24): facts the records state, each `id` ("F1"), `kind`, `value`, the
+  file's index and the exact `quote` it is read from. Kinds: SUBJECT (the user, change or
+  transaction the instance is about), REFERENCE (a ticket, request or change number),
+  REQUESTED (what was asked for or approved), PERFORMED (what was actually granted, changed
+  or done), APPROVER, PERFORMER, APPROVED_AT, PERFORMED_AT, TRIGGER_AT (the event that
+  starts the clock: a termination date, a request date), SYSTEM, EXTRACTED_AT, PERIOD_FROM,
+  PERIOD_TO, VALUE (a configured or reported value).
+- `checks` (at most 12): the comparisons an element calls for, each naming the attribute's
+  code, the element's key, a `test` and the two facts: NOT_AFTER (left is at or before
+  right), BEFORE, SAME, DIFFERENT, WITHIN_DAYS (with `days`), IN_PERIOD (left within the
+  audit period). The reading names the comparison; **code makes it** (10.5).
+- `follow_ups` (at most 8): for an element the files do not show, the missing fact, why it
+  matters to the test, the specific record or clarification to ask for, an acceptable
+  alternative, `kind` (EVIDENCE or CLARIFICATION), `priority` (HIGH, MEDIUM, LOW), and
+  whether it may be in the files already (`may_be_in_files`).
+- `considerations` (at most 5): something a careful auditor would raise that no attribute
+  asks about (a screenshot of the current state offered as proof of a past event, a report
+  with no parameters), each with a quote.
+
+The rules tell both readings: a follow-up is asked only for something an approved
+attribute's element needs and the files do not show; say when nothing more is needed; a
+consideration is an observation, never a new requirement.
+
+### 10.5 What code decides
+
+Applied after the rules of section 3, stage 4:
+
+1. **Facts.** A fact stands only if its quote is found in the file it names (rule 1) and its
+   value is in that quote. Dates are parsed in code; a date whose day and month could be
+   read either way is not compared.
+2. **Checks.** Each named comparison is made in code on each reading's own facts: PASS, FAIL
+   or NOT_RUN (a fact missing or not parseable), with one sentence that states the values
+   ("Approved 11 January 2027, performed 10 January 2027: the approval is after.").
+   - Both readings name the same comparison for the same element and it FAILS on both, on
+     values that agree: the element is not met, a deviation shown by the records, whatever
+     either reading answered. The attribute is an `ISSUE` (`NOT_MET`), and its summary says
+     a check of the records shows it. **Two readings that both say MET do not stand
+     against it.**
+   - It fails on one reading only: the attribute is not supported. `UNSETTLED`, with the
+     sentence.
+   - A check that passes supports nothing by itself: support is still two agreed MET
+     answers on verified passages.
+3. **Code's own checks**, on facts both readings state alike: the SYSTEM a file names is not
+   the control's system (`WRONG_SYSTEM`), or the files name different SUBJECTs for one
+   instance (`DIFFERENT_SUBJECT`): an attribute whose passages are all in such a file is not
+   supported (`UNSETTLED`, with the sentence). A date outside the audit period
+   (`OUTSIDE_PERIOD`) is a consideration unless an attribute's element asks for it.
+4. **An exception is never hidden by a missing file.** An exception both readings show
+   while a file is left out or read in part stays a person's (`UNSETTLED`, as before), but
+   its assessment is `CONTRADICTED` and the request's outcome `POTENTIAL_EXCEPTION`.
+5. **Follow-ups.** Kept only for an element that is open after the comparison, on an
+   attribute the request asks for; one a reading asks for an element that is shown is
+   dropped (counted). The two readings' asks for one element become one; an open element
+   neither reading asked about gets one written by code from the element and what is
+   absent. Asks with the same request are one follow-up covering several elements. At most
+   six are shown, by priority. An element that waits on a file not read gets no follow-up:
+   the file is the next step. A follow-up of the previous run whose element is now
+   supported is listed as resolved by the new evidence; one whose element is still open
+   stays open however many files arrived.
+6. **Considerations.** Kept with a verified quote, the two readings' merged, at most five.
+   Never a finding, never an attribute, never a change to the test plan.
+
+### 10.6 Two dimensions, and the outcome
+
+Per attribute the request asks for, `assessment`:
+
+| Assessment | From |
+| --- | --- |
+| `SATISFIED` | `SUPPORTED` |
+| `PARTIALLY_SUPPORTED` | `PARTLY_SUPPORTED`, or an `ISSUE` `PARTLY_MET` |
+| `CONTRADICTED` | an `ISSUE` resting on a deviation or a contradiction (records show it is not met), a failed check, or an exception shown beside a file not read |
+| `NOT_DEMONSTRATED` | an `ISSUE` resting on absence (`NOT_MET` with nothing shown, `NOT_ADDRESSED`): nothing shows it, and nothing shows a failure |
+| `INDETERMINATE` | any other `UNSETTLED` |
+
+Per run, `completeness`: `COMPLETE`; `INCOMPLETE` (a file left out or read in part);
+`PARTLY_UNREADABLE` (a file with nothing readable or whose reading failed, or one both
+readings find partly unreadable); `RELIABILITY_UNRESOLVED` (support rests on a file both
+readings find MANAGEMENT_PREPARED or of UNKNOWN source, or on a report that does not show
+its source, run date or parameters). The worst applies, in that order of the list's
+reverse; each comes with its sentences. Custody passing is never called reliability.
+
+Per run, `overall`, proposed and never a conclusion:
+
+| Outcome | When |
+| --- | --- |
+| `POTENTIAL_EXCEPTION` | an asked attribute is `CONTRADICTED` |
+| `SUFFICIENT` | every asked attribute is `SATISFIED`, and completeness is not `RELIABILITY_UNRESOLVED`; no follow-up is listed |
+| `CLARIFICATION` | every open follow-up is a clarification |
+| `ADDITIONAL_EVIDENCE` | a follow-up asks for evidence, or support needs corroboration |
+| `UNABLE_TO_CONCLUDE` | otherwise (the readings disagree, a file cannot be read, a file is waited for) |
+
+with `explanation`: at most three sentences written in code from the counts and the first
+open element ("3 of 4 requested attributes are supported. C is not demonstrated: the
+provisioning record is not among the files. 1 follow-up would resolve it.").
+
+### 10.7 Records and API
+
+- Each attribute of `outcome` gains `assessment` (null for an attribute the request does
+  not ask for) and `checks`: `[{element, test, status: PASSED|FAILED|FAILED_ONE|NOT_RUN,
+  sentence}]`.
+- `evidence_assessments.review` (jsonb, null for engine 1):
+
+```json
+{
+  "overall": "ADDITIONAL_EVIDENCE",
+  "explanation": "…",
+  "completeness": {"state": "INCOMPLETE", "reasons": ["…"]},
+  "context_thin": false,
+  "files": [{"file_id": "…", "relevance": "RELEVANT", "source": "SYSTEM_RECORD",
+             "legibility": "CLEAR", "report_basis": "NOT_A_REPORT", "notes": ["…"]}],
+  "confirmations": [{"file_id": "…", "code": "KIND_UNSURE", "reason": "…"}],
+  "concerns": [{"code": "WRONG_SYSTEM", "sentence": "…", "file_ids": ["…"]}],
+  "follow_ups": [{"key": "<attribute id>:<element>", "attribute_ids": ["…"],
+                  "codes": ["C"], "elements": ["pass"], "missing": "…", "why": "…",
+                  "request": "…", "alternatives": "…", "kind": "EVIDENCE",
+                  "priority": "HIGH", "raised_by": ["ASSESSOR", "REVIEWER"],
+                  "status": "OPEN"}],
+  "follow_ups_more": 0,
+  "follow_ups_dropped": 1,
+  "resolved": [{"key": "…", "request": "…", "codes": ["B"]}],
+  "considerations": [{"text": "…", "passages": [{"quote": "…", "file_id": "…",
+                      "location": {}}], "raised_by": ["REVIEWER"]}]
+}
+```
+
+- `GET …/evidence-assurance`: each request's entry gains `engine_version` and `review` (the
+  object above, or null); each attribute `assessment` and `checks`. Nothing is removed.
+- A follow-up is text for the person, who sends it through the existing request and
+  follow-up steps after their approval. Nothing is sent by the check.
+
+### 10.8 Tests
+
+Pure tests with scripted readings and synthetic files only (no model, no client evidence):
+the thirty-four cases the product owner listed (services/api/tests/test_assurance_scenarios.py),
+beside the modules' own tests. The evaluation set (section 8) is not re-run live without
+the owner's approval of its cost.
+
 ## 9. Status
 
 | Increment | State |
