@@ -165,6 +165,8 @@ def test_remapping_redoes_every_term_and_needs_no_model(migrated: Database) -> N
         "source": "MODEL",
         "note": "",
         "model_available": False,
+        # Added 13 November 2026 (B1i): "" while nothing failed.
+        "failure_note": "",
     }
     assert scheduler.scans == [import_id]
     with connect(migrated.url) as connection:

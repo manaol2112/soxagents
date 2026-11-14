@@ -1235,6 +1235,9 @@ class MasterPlanBody(BaseModel):
     changes_since_approval: list[ChangeItem] = Field(default_factory=list)
     # For a client's control whose RCM gives no test attributes: the standard it matches.
     suggested_standard: SuggestedStandard | None = None
+    # One plain sentence for the person when the planner's last run gave no usable answer
+    # (B1i; evidence_plans.plan_run_failure_note); "" otherwise.
+    failure_note: str = ""
 
 
 def body_of(
@@ -1284,9 +1287,12 @@ def body_of(
     def ordered(codes: list[str]) -> list[str]:
         return sorted(set(codes), key=lambda code: (code[0], int(code[1:] or 0)))
 
+    from ai_workforce_api.evidence_plans import plan_run_failure_note
+
     return MasterPlanBody(
         control_id=plan.control_id,
         plan_id=plan.plan_id,
+        failure_note=plan_run_failure_note(connection, plan.control_id),
         control=ControlSection(
             control_ref=plan.control_ref,
             title=plan.title,

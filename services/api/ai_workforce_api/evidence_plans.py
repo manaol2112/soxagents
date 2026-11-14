@@ -40,6 +40,7 @@ from pydantic import BaseModel, Field
 
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.after_commit import committed
+from ai_workforce_api.agent_answers import note_unusable, note_used
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -76,6 +77,7 @@ from ai_workforce_api.evidence_planning import (
     prompt_for,
     rules_plan,
     suite_wording,
+    unheld_quotes_left_out,
 )
 from ai_workforce_api.model_providers import (
     call_note,
@@ -84,7 +86,7 @@ from ai_workforce_api.model_providers import (
 )
 from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.pbc import Delivery, delivery_of
-from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
+from ai_workforce_api.provenance import AgentCaller, Call, Job, agent_actor
 from ai_workforce_api.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -398,6 +400,11 @@ class Planned:
     # FALLBACK only: what happened to the planner's answer, with nothing about what stood
     # in for it. A run that keeps the existing plan says this (generate, B1h).
     problem: str = ""
+    # The planner's last call, for what the system made of its answer (agent_answers), and
+    # MODEL only: the places of the facts left out because their quote is not in the
+    # control's records (unheld_quotes_left_out).
+    call: Call | None = None
+    dropped: tuple[str, ...] = ()
 
 
 # The planner's prompt version, recorded on every call (Milestone 3a).
@@ -510,8 +517,15 @@ def plan_for(
                 "evidence instead."
             )
             break
+        # A fact quoting words the records do not hold is left out of the answer before it
+        # is checked, never kept and never filled in (13 November 2026: a whole plan was
+        # rejected for one such quote). The plan's note and the call's outcome say so.
+        output, dropped = unheld_quotes_left_out(call.raw.output, facts)
         try:
-            return Planned(check_plan(call.raw.output, facts), "MODEL", "", call.call_id)
+            return Planned(
+                check_plan(output, facts), "MODEL", _dropped_note(dropped), call.call_id,
+                call=call, dropped=dropped,
+            )  # fmt: skip
         except ValueError as error:
             problem = str(error)
             happened = f"The agent's plan was rejected ({problem})."
@@ -537,7 +551,20 @@ def plan_for(
         call_id = call.call_id
     # The rules' plan stands in for the model's: FALLBACK, with the failed call linked.
     # Whether it is written is generate's decision: never over a plan that stands.
-    return Planned(rules, "FALLBACK", note[:500], call_id, happened[:400])
+    return Planned(rules, "FALLBACK", note[:500], call_id, happened[:400], call=call)
+
+
+def _dropped_note(dropped: tuple[str, ...]) -> str:
+    """The plan's note when facts of the planner's understanding were left out because
+    their quote is not in the control's records; empty when none was."""
+    if not dropped:
+        return ""
+    one = len(dropped) == 1
+    return (
+        f"{len(dropped)} fact{'' if one else 's'} of the planner's understanding quoted "
+        f"words the control's records do not hold, so {'it was' if one else 'they were'} "
+        "left out."
+    )
 
 
 @dataclass
@@ -3539,6 +3566,11 @@ class EvidencePlanBody(BaseModel):
     # The planner's last answer could not be used and the plan was kept as it was (B1h):
     # the sentence and why, while that run is the plan's latest. Empty otherwise.
     kept_note: str = ""
+    # One plain sentence for the person when the planner's last answer could not be used
+    # (B1i): what failed and what was kept (the latest run's note: the plan kept as it was,
+    # or the rules' plan written in its place) and what to do next; "" when the plan's
+    # latest run used the planner's answer, or no run happened.
+    failure_note: str = ""
     # A control change was recorded that the plan has not been generated for since: when,
     # and the sentence the plan shows. Operating evidence, samples and testing wait for the
     # evidence to be planned again (GATE_CHANGE).
@@ -3762,6 +3794,7 @@ def plan_body(
         version=int(plan[9]),
         design_requests=design_requests(connection, project_id, control_id, requirements),
         kept_note=runs[0].note if runs and runs[0].note.startswith(KEPT_NOTE) else "",
+        failure_note=plan_run_failure_note(connection, control_id),
         change_unplanned_at=unplanned,
         change_wait=change_wait(unplanned),
     )
@@ -4277,22 +4310,48 @@ def generate(
     planned = plan_for(
         connection, provider, facts, requester, organization_id, project_id, control_id
     )
+    kept = ""
     with transaction(connection) as cursor:
         if planned.source == "FALLBACK":
             kept = _keep_standing_plan(
                 cursor, organization_id, project_id, control_id, planned, requester
             )
-            if kept:
-                return Changes([], [], [], [], []), [], kept
-        changes = persist(
-            cursor, organization_id, project_id, control_id, planned, facts, requester,
-            settle=False,
-        )  # fmt: skip
-        issued = issue(cursor, organization_id, project_id, control_id, requester, "evidence_plan")
-        drafts = queue_drafts(
-            cursor, organization_id, project_id, requester, control_id, issued.drafts
-        )
+        if not kept:
+            changes = persist(
+                cursor, organization_id, project_id, control_id, planned, facts, requester,
+                settle=False,
+            )  # fmt: skip
+            issued = issue(
+                cursor, organization_id, project_id, control_id, requester, "evidence_plan"
+            )
+            drafts = queue_drafts(
+                cursor, organization_id, project_id, requester, control_id, issued.drafts
+            )
+    _planner_outcome(connection, planned, bool(kept))
+    if kept:
+        return Changes([], [], [], [], []), [], kept
     return changes, drafts, planned.note
+
+
+def _planner_outcome(connection: psycopg.Connection[Any], planned: Planned, kept: bool) -> None:
+    """What the system made of the planner's last answer, on its call's record (agent_answers):
+    used, with the facts left out for a quote the records do not hold; or not used, with the
+    person's sentence of what failed, what was kept and what to do."""
+    if planned.source == "MODEL":
+        note_used(connection, planned.call, {"dropped": list(planned.dropped)})
+        return
+    if planned.source != "FALLBACK":
+        return
+    note_unusable(
+        connection,
+        planned.call,
+        planned.problem,
+        planned.problem or "The planner's answer could not be used.",
+        "The plan was kept as it was; no criteria were tailored and no evidence changed."
+        if kept
+        else "The reviewed rules planned the evidence instead; no criteria were tailored.",
+        "Run again. Or write the attributes' criteria on the Attributes step yourself.",
+    )
 
 
 # A failed or rejected planner run never makes a control's plan worse (product owner, 12
@@ -4317,6 +4376,46 @@ _PLAN_STANDS_SQL = """
                 WHERE a.engagement_control_id = p.engagement_control_id
                   AND a.status = 'APPROVED' AND a.criteria_accepted_at IS NOT NULL))
 """
+
+
+PLAN_AGAIN = (
+    "Plan the evidence again. Or write the attributes' criteria and edit the plan yourself."
+)
+
+
+def plan_failure_note(source: str, note: str) -> str:
+    """The person's sentence for a plan run whose planner answer could not be used: a
+    FALLBACK run's own note (kept, or the rules planned instead) and what to do next."""
+    if source != "FALLBACK" or not note.strip():
+        return ""
+    return f"{note.strip()} {PLAN_AGAIN}"
+
+
+def latest_plan_failure_note(connection: psycopg.Connection[Any], control_id: UUID) -> str:
+    """plan_failure_note for the control's latest plan run, read whether or not a rerun
+    would do anything (the Attributes step said nothing when it would not, 13 November
+    2026)."""
+    row = connection.execute(
+        "SELECT r.source, r.note FROM evidence_plan_runs r "
+        "JOIN evidence_plans p ON p.id = r.plan_id WHERE p.engagement_control_id = %s "
+        "ORDER BY r.created_at DESC, r.id DESC LIMIT 1",
+        (control_id,),
+    ).fetchone()
+    return "" if row is None else plan_failure_note(str(row[0]), str(row[1] or ""))
+
+
+def plan_run_failure_note(connection: psycopg.Connection[Any], control_id: UUID) -> str:
+    """The `failure_note` of the control's evidence plan and master plan: a plan run that
+    failed (its run note), or the latest run whose planner answer could not be used."""
+    row = connection.execute(
+        "SELECT run_status, run_note FROM evidence_plans WHERE engagement_control_id = %s",
+        (control_id,),
+    ).fetchone()
+    if row is None or str(row[0]) in ("PENDING", "WORKING"):
+        return ""
+    if str(row[0]) == "FAILED" and str(row[1] or "").strip():
+        return f"{str(row[1]).strip()} {PLAN_AGAIN}"
+    return latest_plan_failure_note(connection, control_id)
 
 
 def _keep_standing_plan(

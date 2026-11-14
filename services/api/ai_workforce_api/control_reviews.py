@@ -271,6 +271,8 @@ def open_reperformances(connection: psycopg.Connection[Any]) -> list[UUID]:
 
 # What a re-performance that gave up says; the register reads it as a stopped agent.
 REPERFORM_FAILED = "The re-performance did not finish. Re-perform to try again."
+# How a re-performance the model did only in part says so, after "<failed> of <total>".
+PARTLY_REPERFORMED = "items could not be re-performed by the model."
 # The reviewer's prompt version, recorded on every call (Milestone 3a).
 REVIEWER_PROMPT_VERSION = "independent-reviewer/6"
 
@@ -282,6 +284,28 @@ def fail_reperformance(connection: psycopg.Connection[Any], review_id: UUID) -> 
             "reperform_note = %s WHERE id = %s AND reperform_status IN ('PENDING', 'WORKING')",
             (REPERFORM_FAILED, review_id),
         )
+
+
+def reperform_failure_note(status: str, source: str | None, note: str) -> str:
+    """The reviewer agent's last re-performance, said for a person when it gave no usable
+    answer: one that gave up (REPERFORM_FAILED) changed nothing; one whose every model call
+    failed (FALLBACK) left the rules' checks; one the model did only in part (MODEL with
+    PARTLY_REPERFORMED) kept the items it did."""
+    if status in ("PENDING", "WORKING") or not note:
+        return ""
+    if note == REPERFORM_FAILED:
+        return (
+            f"{note} The review's notes stay as they were; you can also re-perform the "
+            "testing by hand."
+        )
+    if source == "FALLBACK":
+        return f"{note} Re-perform to try the model again, or re-perform the items by hand."
+    if source == "MODEL" and PARTLY_REPERFORMED in note:
+        return (
+            f"{note} The items it re-performed stand; re-perform to try the rest again, or "
+            "re-perform them by hand."
+        )
+    return ""
 
 
 ReviewRunner = Callable[[UUID], str]
@@ -826,7 +850,7 @@ def run_reperformance(
         if model_items:
             source = "MODEL"
             if failed_items:
-                note = f"{failed_items} of {model_items + failed_items} items could not be re-performed by the model. {last_failure}"  # noqa: E501
+                note = f"{failed_items} of {model_items + failed_items} {PARTLY_REPERFORMED} {last_failure}"  # noqa: E501
         elif failed_items:
             source = "FALLBACK"
             note = f"{last_failure} The model did not re-perform the items; the rules' checks stand on their own."  # noqa: E501
@@ -1057,6 +1081,11 @@ class ReviewBody(BaseModel):
     reperformed_at: datetime | None
     reperform_source: str | None
     reperform_note: str
+    # One plain sentence for the person when the reviewer agent's last re-performance gave
+    # no usable answer, in whole or for some items: what failed (its reperform_note), what
+    # was kept, and what to do next; "" when it succeeded, runs, was cancelled, or no
+    # model ran.
+    failure_note: str = ""
     cancel_state: CancelState = "NONE"
     sheet_status: str | None
     sheet_signed_by: str | None
@@ -1216,6 +1245,9 @@ def _review(
         reperformed_at=row[6],
         reperform_source=None if row[7] is None else str(row[7]),
         reperform_note=str(row[8]),
+        failure_note=reperform_failure_note(
+            str(row[5]), None if row[7] is None else str(row[7]), str(row[8])
+        ),
         cancel_state=cancel_state(row[5], row[18], row[19], row[8]),
         sheet_status=None if sheet is None else str(sheet[0]),
         sheet_signed_by=None if sheet is None or sheet[1] is None else str(sheet[1]),

@@ -29,6 +29,7 @@ from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.control_context import ContextState, linked_documents
 from ai_workforce_api.control_design import CopyBody, SlotBody, copy_values, design_for
 from ai_workforce_api.inbound import clean_line
+from ai_workforce_api.model_providers import call_note
 from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.slot_options import MULTIPLE_SLOTS
@@ -1257,6 +1258,9 @@ class NotesResult(BaseModel):
     asked: int
     source: Literal["MODEL", "RULES"]
     walkthrough_proposed: int = 0
+    # One plain sentence for the person when the agent's reading of the notes gave no
+    # usable answer and the reviewed rules read them instead (B1i); "" otherwise.
+    failure_note: str = ""
 
 
 NOTES_SCHEMA: dict[str, Any] = {
@@ -1439,6 +1443,7 @@ def answers_from_text(
     offered answer named word for word)."""
     raw: list[dict[str, Any]] | None = None
     source: Literal["MODEL", "RULES"] = "RULES"
+    failure = ""
     if provider is not None:
         call = AgentCaller(
             connection,
@@ -1476,6 +1481,16 @@ def answers_from_text(
         if isinstance(output, dict) and isinstance(output.get("answers"), list):
             raw = [item for item in output["answers"] if isinstance(item, dict)]
             source = "MODEL"
+        else:
+            failed = (
+                call_note(call.status)
+                if call.status != "SUCCEEDED"
+                else "The model's answer was not in the required format."
+            )
+            failure = (
+                f"The agent could not read the notes: {failed} The reviewed rules read them "
+                "instead, so check each answer before you use it, or read the notes again."
+            )
     if raw is None:
         raw = (rules or _notes_by_rules)(questions, text)
     asked = {question["key"]: question for question in questions}
@@ -1502,4 +1517,4 @@ def answers_from_text(
                 current=current.get(key, ""),
             )
         )  # fmt: skip
-    return NotesResult(answers=answers, asked=len(questions), source=source)
+    return NotesResult(answers=answers, asked=len(questions), source=source, failure_note=failure)

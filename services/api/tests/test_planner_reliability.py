@@ -226,8 +226,21 @@ def test_text_that_is_not_exactly_the_answer_is_left_as_it_arrived() -> None:
         assert _left({"understanding": text, "assumptions": ["None."]}), text
     # Text where the schema asks for text is never parsed.
     assert _left({"understanding": {"summary": '{"a": 1}'}, "phases": []})
-    # Nothing is read inside the rows of a list.
-    assert _left(ANSWER | {"phases": [{"phase": "DESIGN", "requirements": '["one"]'}]})
+    # Rewritten on 13 November 2026 (the reading became every agent's, at any depth, after
+    # the reviewer of the drafts on ITGC-AC-01 sent a row's property in the wrong shape and
+    # the screen said nothing; docs/control-workflow-plan.md, B1i). Old expectation: nothing
+    # was read inside the rows of a list, so a row's list sent as its own JSON text was left
+    # and the answer failed. New: a row's property sent as exactly the text of the JSON the
+    # schema declares is read (the schema decides, one value, nothing lifted out of it);
+    # nothing is ever lifted out of a text inside a row, and a row's text that is not
+    # exactly one value of the declared kind is still left. Methodology: the representation
+    # changes, never a word of the answer, and every check applies to what is read.
+    in_row = ANSWER | {
+        "phases": [{"phase": "DESIGN", "requirements": '["one"]'}, {"phase": "INTERIM"}]
+    }
+    assert unnested(SCHEMA, in_row) == (ANSWER, ("phases[0].requirements",))
+    assert _left(ANSWER | {"phases": [{"phase": "DESIGN", "requirements": '["one"],"phase":"X"'}]})
+    assert _left(ANSWER | {"phases": [{"phase": "DESIGN", "requirements": '{"one": 1}'}]})
 
 
 def test_a_property_written_twice_is_never_read() -> None:
@@ -300,7 +313,8 @@ def test_the_adapter_reads_the_observed_shape_only_when_asked_and_keeps_what_was
     assert (read.status, read.error, read.raw.output) == ("SUCCEEDED", "", ANSWER)
     # What the provider returned is kept beside what was read, with what was read from text.
     assert read.raw.returned == deep and read.raw.unnested == ("understanding", "phases")
-    # Every other agent's answer is read exactly as the provider returned it.
+    # A call that turns the reading off is read exactly as the provider returned it (since
+    # 13 November 2026 the reading is on for every agent's call; none turns it off).
     plain = outcome(_Fixed(ModelRaw(deep, (), 10, 10)), _asked(SCHEMA, unnest=False), CONFIG)
     assert (plain.status, plain.raw.output) == ("MALFORMED", deep)
     assert plain.raw.returned is None and plain.raw.unnested == ()

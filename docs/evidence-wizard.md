@@ -242,7 +242,7 @@ the file's reading, then the batch, then the plan, then a request, so none waits
       "file_id": "…", "name": "…", "size_bytes": 0, "extension": "pdf", "duplicate": false,
       "stage": "STORED | READING | READ | SORTED | NEEDS_PERSON | NOT_DESIGN | FAILED",
       "read": { "status": "PENDING | WORKING | READY | FAILED", "method": "TEXT | OCR | NONE",
-                "pages": 0, "started_at": "…", "finished_at": "…", "note": "" },
+                "pages": 0, "started_at": "…", "finished_at": "…", "note": "", "failure_note": "" },
       "classification": { "kind": "policy", "label": "Policy or procedure",
                           "confidence": "high | medium | low", "summary": "…" },
       "placement": {
@@ -282,7 +282,7 @@ once per state, and not at all before any placed item has a check (each item is 
   holding the session's files. A file filed to another control since is `NOT_DESIGN`, its
   reading that control's.
 - `classification` is null until the file is read; `read.pages`, `started_at` and
-  `finished_at` are null where unknown; `read.method` is `NONE` until the reading ends.
+  `finished_at` are null where unknown; `read.method` is `NONE` until the reading ends. `read.failure_note` is one plain sentence when the reading failed (what failed, that the file is kept, what to do), "" otherwise.
 - A file not yet placed shows `{ "status": "PENDING", "method": "AGENT", "version": 0 }`.
 - `stages`: `stored` and `files` count the listed files; `read` the readings that ended
   (or files filed elsewhere since); `sorted` the files with a placement; `checked_items` the

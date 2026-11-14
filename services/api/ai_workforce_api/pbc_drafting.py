@@ -964,17 +964,21 @@ def run_draft(
     return final
 
 
+# What a draft that gave up after its last retry says (fail_draft).
+DRAFT_FAILED = "Drafting did not finish."
+
+
 def fail_draft(connection: psycopg.Connection[Any], draft_id: UUID) -> None:
     """After the last retry, a draft is marked failed so a person can redraft it."""
     with transaction(connection) as cursor:
         cursor.execute(
             """
             UPDATE pbc_drafts
-            SET status = 'FAILED', lease_until = NULL, note = 'Drafting did not finish.',
+            SET status = 'FAILED', lease_until = NULL, note = %s,
                 version = version + 1, updated_at = clock_timestamp()
             WHERE id = %s AND status IN ('PENDING', 'DRAFTING')
             """,
-            (draft_id,),
+            (DRAFT_FAILED, draft_id),
         )
 
 
@@ -1744,6 +1748,24 @@ class DraftBody(BaseModel):
     attempts: int
     updated_at: datetime
     version: int
+    # One plain sentence for the person when the agent's last draft gave no usable answer:
+    # what failed, what was kept, and what to do next; "" when the model drafted, no model
+    # ran, or the draft is still pending (failure_note).
+    failure_note: str = ""
+
+
+def draft_failure_note(status: str, source: str | None, note: str) -> str:
+    """The draft's own recorded failure, with what was kept and the next step added. A
+    rules draft after a failed or rejected model draft (FALLBACK) still rewrote the
+    request; a draft that gave up (FAILED) left the request's wording as it was."""
+    if status == "FAILED":
+        return (
+            f"{note or DRAFT_FAILED} The request keeps its current wording. Redraft it, or "
+            "write the request yourself."
+        )
+    if status == "DRAFTED" and source == "FALLBACK" and note:
+        return f"{note} Redraft to try the model again, or edit the request yourself."
+    return ""
 
 
 class DraftState(Exception):
@@ -1802,6 +1824,9 @@ def _draft(row: tuple[Any, ...]) -> DraftBody:
         attempts=int(row[7]),
         updated_at=row[8],
         version=int(row[9]),
+        failure_note=draft_failure_note(
+            str(row[3]), None if row[4] is None else str(row[4]), str(row[6])
+        ),
     )
 
 

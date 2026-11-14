@@ -193,6 +193,68 @@ class RunBody(BaseModel):
     # {attributes, evidence, evidence_proposed, note}, and when.
     plan_outcome: dict[str, Any] | None = None
     planned_at: Any = None
+    # One plain sentence for the person when the last run ended without a usable answer
+    # from its agents: what failed, what was kept, and what to do next. "" when it
+    # succeeded, is still working, or never ran. Read from what the run recorded.
+    failure_note: str = ""
+
+
+# What the page says when the narrative's last run ended without a usable answer. Each is
+# derived from the run's recorded status, mode, review and plan outcome; none is stored.
+NARRATIVE_FAILED = (
+    "The narrative could not be drafted, so it stays as it was. Draft it again, or write the "
+    "narrative yourself."
+)
+REVIEW_FAILED = (
+    "The narrative could not be reviewed, so it stays as it was. Run the review again, or "
+    "approve it on your own review."
+)
+PLAN_FAILED = (
+    "The agents could not update the test plan from the approved narrative, so the "
+    "attributes and evidence plan stay as they were. Update the plan again, or edit them "
+    "yourself."
+)
+REVIEW_UNFINISHED = (
+    f"{UNFINISHED} The narrative is kept as drafted but has not been reviewed; run the "
+    "review again."
+)
+DRAFT_BY_RULES = (
+    "The drafting agent did not answer, so the reviewed rules drafted this narrative from "
+    "what is on record. Check it before you approve it, or draft it again."
+)
+EVIDENCE_BY_RULES = (
+    "The evidence planner did not answer, so the reviewed rules planned the evidence and the "
+    "approved narrative was not applied to it. Update the plan again, or edit the evidence "
+    "plan yourself."
+)
+
+
+def failure_note(run: RunBody, review: ReviewBody | None, built_by: str, version: int) -> str:
+    """The sentence for a run whose agents gave no usable answer, or "". A run still waiting
+    or working has none: its outcome is not known yet."""
+    if run.status in ("PENDING", "WORKING"):
+        return ""
+    if run.status == "FAILED":
+        return {"PLAN": PLAN_FAILED, "REVIEW": REVIEW_FAILED}.get(run.mode, NARRATIVE_FAILED)
+    if run.status != "IDLE":
+        return ""
+    if run.mode == "PLAN":
+        outcome = run.plan_outcome or {}
+        return EVIDENCE_BY_RULES if outcome.get("evidence_fallback") is True else ""
+    if review is None:
+        return ""
+    if review.incomplete:
+        return REVIEW_UNFINISHED
+    # A model reviewed the narrative, yet the rules drafted it: the drafter had a model and
+    # gave no usable answer. Only for the narrative this review is of.
+    if (
+        run.mode == "DRAFT"
+        and review.reviewer == "AGENT"
+        and built_by == "RULES"
+        and review.version == version
+    ):
+        return DRAFT_BY_RULES
+    return ""
 
 
 class VersionBody(BaseModel):
@@ -251,7 +313,11 @@ def understanding(connection: psycopg.Connection[Any], control_id: UUID) -> Unde
     ).fetchone()
     run, review = _run_state(connection, control_id)
     if row is None:
+        if run is not None:
+            run.failure_note = failure_note(run, review, "", 0)
         return UnderstandingBody(status="NONE", run=run, review=review)
+    if run is not None:
+        run.failure_note = failure_note(run, review, str(row[3]), int(row[9]))
     return UnderstandingBody(
         status=row[0],
         summary=str(row[1]),

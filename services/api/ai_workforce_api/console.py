@@ -75,6 +75,12 @@ LIVE_SECONDS = 0.25
 TurnRunner = Callable[[UUID], str]
 # Minutes after which a confirmed step that never reported back can no longer be running.
 STEP_RUN_MINUTES = 15
+# The notes an answer settles with that are not a failure of the agent's run: no model was
+# configured, so no run happened (the answer says so itself).
+NO_MODEL_NOTE = "No model is configured."
+# The agent ran out of rounds: what failed, and what to do, as failure_note splits them.
+STEP_LIMIT_FAILED = "The agent stopped after its step limit."
+STEP_LIMIT_NEXT = "Ask it to continue."
 UNKNOWN_OUTCOME = (
     "This step started but did not report back, so whether it ran is not known. Check the "
     "records before asking for it again."
@@ -273,7 +279,7 @@ def run_turn(
             "The assistant is not available in this workspace yet. "
             "Ask your administrator to turn it on, then ask again.",
             [],
-            "No model is configured.",
+            NO_MODEL_NOTE,
         )
         return "DONE"
     context = ToolContext(
@@ -386,7 +392,7 @@ def run_turn(
             )
         turn.append({"role": "user", "content": results})
     else:
-        note = "The agent stopped after its step limit. Ask it to continue."
+        note = f"{STEP_LIMIT_FAILED} {STEP_LIMIT_NEXT}"
     if unanswered and not turn:
         # Nothing ran, so the turn failed outright and the person can retry it as is.
         _finish(
@@ -800,6 +806,46 @@ class MessageBody(BaseModel):
     can_retry: bool = False
     # Checked quotes from evidence files, numbered as [^n] in the content.
     citations: list[dict[str, Any]] = []
+    # One plain sentence for the person when the agent's turn ended without a full answer:
+    # what failed, what was kept, and what to do next. "" for a question, a turn still
+    # working, a turn answered in full, or one that never ran (no model configured).
+    failure_note: str = ""
+
+
+def failure_note(role: str, status: str, note: str, has_steps: bool, can_retry: bool) -> str:
+    """The person's sentence for an agent turn that ended without a full answer, read from
+    what the turn recorded: its status and its note (why it stopped, in words). A FAILED
+    turn did nothing; a DONE turn with a note stopped part way and keeps what it said and
+    the steps it ran or prepared. Nothing new is stored: the sentence is the turn's own
+    note with what was kept and what to do added."""
+    reason = note.strip()
+    if role != "AGENT" or status not in ("DONE", "FAILED"):
+        return ""
+    if status == "DONE" and reason in ("", NO_MODEL_NOTE):
+        return ""
+    if not reason:
+        reason = "The agent did not finish."
+    next_step = ""
+    if reason.endswith(STEP_LIMIT_NEXT) and reason.startswith(STEP_LIMIT_FAILED):
+        reason, next_step = STEP_LIMIT_FAILED, STEP_LIMIT_NEXT
+    if not reason.endswith((".", "!", "?")):
+        reason = f"{reason}."
+    if has_steps:
+        kept = "The steps it ran or prepared are kept below."
+    elif status == "DONE":
+        kept = "What it said before it stopped is kept below."
+    else:
+        kept = "Nothing was done."
+    if not next_step:
+        again = "retry the question" if can_retry else "ask the question again"
+        next_step = (
+            f"Confirm the steps you want, or {again}."
+            if has_steps
+            else f"{again.capitalize()}, or ask it in other words."
+            if status == "DONE"
+            else f"{again.capitalize()} when you are ready."
+        )
+    return f"{reason} {kept} {next_step}"
 
 
 class ThreadBody(BaseModel):
@@ -1039,27 +1085,29 @@ def _thread_body(
                 decided_by_name=None if row[10] is None else str(row[10]),
             )
         )
+    bodies: list[MessageBody] = []
+    for index, row in enumerate(messages):
+        role, status, note = str(row[1]), str(row[3]), str(row[4])
+        steps = by_message.get(row[0], [])
+        can_retry = index == len(messages) - 1 and role == "AGENT" and status in ("DONE", "FAILED")
+        bodies.append(
+            MessageBody(
+                id=row[0],
+                role=role,
+                content=str(row[2]),
+                status=status,
+                note=note,
+                created_at=row[5],
+                actions=steps,
+                citations=list(row[6]) if isinstance(row[6], list) else [],
+                can_retry=can_retry,
+                failure_note=failure_note(role, status, note, bool(steps), can_retry),
+            )
+        )
     return ThreadBody(
         id=thread_id,
         title="" if title_row is None else str(title_row[0]),
-        messages=[
-            MessageBody(
-                id=row[0],
-                role=str(row[1]),
-                content=str(row[2]),
-                status=str(row[3]),
-                note=str(row[4]),
-                created_at=row[5],
-                actions=by_message.get(row[0], []),
-                citations=list(row[6]) if isinstance(row[6], list) else [],
-                can_retry=(
-                    index == len(messages) - 1
-                    and str(row[1]) == "AGENT"
-                    and str(row[3]) in ("DONE", "FAILED")
-                ),
-            )
-            for index, row in enumerate(messages)
-        ],
+        messages=bodies,
         model_configured=live_model(settings),
     )
 

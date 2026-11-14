@@ -33,6 +33,7 @@ from ai_workforce_api.inbound import clean_line, clean_text
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.test_rounds import round_signed_off, start_rollforward
 from ai_workforce_api.testing_engine import (
+    FAILED_NOTE,
     RESULTS,
     Conclusion,
     ItemView,
@@ -116,6 +117,11 @@ class SheetBody(BaseModel):
     # Why the last run stopped before finishing (testing_engine.fail_run), or "": an agent
     # execution failure, distinct from exceptions in the results.
     run_note: str = ""
+    # One plain sentence for the person when the tester's last run gave no usable answer:
+    # the run stopped (run_note) or its model calls failed for items (their FAILED state),
+    # what was kept, and what to do next; "" when it succeeded, runs, was cancelled (see
+    # cancel_state), or never ran.
+    failure_note: str = ""
     proposed_conclusion: Conclusion
     conclusion: str | None
     signed_by: str | None
@@ -852,6 +858,7 @@ def _sheet(connection: psycopg.Connection[Any], project_id: UUID, sheet_id: UUID
                 "need human review: a person decides",
             )
         )
+    cancelled = cancel_state(row[6], row[21], row[22], row[20])
     return SheetBody(
         id=row[0],
         control_id=row[1],
@@ -880,7 +887,34 @@ def _sheet(connection: psycopg.Connection[Any], project_id: UUID, sheet_id: UUID
         application_name="" if row[18] is None else str(row[18]),
         waiting_note=str(row[19] or ""),
         run_note=str(row[20] or ""),
-        cancel_state=cancel_state(row[6], row[21], row[22], row[20]),
+        failure_note=run_failure_note(
+            str(row[6]), str(row[20] or ""), cancelled, [i for i in items if i.state == "FAILED"]
+        ),
+        cancel_state=cancelled,
+    )
+
+
+def run_failure_note(
+    status: str, run_note: str, cancelled: CancelState, failed: list[ItemBody]
+) -> str:
+    """The tester's last run, said for a person when it gave no usable answer. A stopped
+    run says so in its own note (testing_engine.fail_run); a run whose model calls failed
+    for items finished, and each failed item records why (testing_engine.FAILED_NOTE and
+    the call's note). The results already recorded stay either way."""
+    if status in ("PENDING", "WORKING") or cancelled == "CANCELLED":
+        return ""
+    if run_note:
+        return (
+            f"{run_note} The results already recorded stay, and the items it did not reach "
+            "show as not tested; you can also test them by hand."
+        )
+    if not failed:
+        return ""
+    why = failed[0].note.removeprefix(FAILED_NOTE).strip() or "The model call failed."
+    return (
+        f"{_items(len(failed), 'could not be tested', 'could not be tested')}: {why} This is "
+        "a technical failure, not a testing result, and the results already recorded stay. "
+        "Run the tester again, or test those items by hand."
     )
 
 

@@ -116,6 +116,10 @@ class Call:
     raw: ModelRaw
     call_id: UUID | None
     attempts: int
+    # Why the last attempt gave no usable answer, as its record keeps it: the error class,
+    # or where a malformed answer broke the schema ("answer.phases: required, missing").
+    # Only the schema's names, never a word of the answer. Empty when it succeeded.
+    error: str = ""
 
     @property
     def readable(self) -> bool:
@@ -266,7 +270,7 @@ class AgentCaller:
                     "CANCELLED", nothing, request, prompt_version, attempt, None,
                     "cancelled before the call", inputs,
                 )  # fmt: skip
-                return Call("CANCELLED", nothing, call_id, attempt)
+                return Call("CANCELLED", nothing, call_id, attempt, "cancelled before the call")
             estimate = estimate_micros(self.config, request)
             refusal = self._over_budget(estimate)
             # A trial firm's call is also reserved against its allowance (Step 2): the
@@ -279,7 +283,7 @@ class AgentCaller:
                     "BUDGET_EXCEEDED", nothing, request, prompt_version, attempt, None, refusal,
                     inputs,
                 )  # fmt: skip
-                return Call("BUDGET_EXCEEDED", nothing, call_id, attempt)
+                return Call("BUDGET_EXCEEDED", nothing, call_id, attempt, refusal)
             started = time.perf_counter()
             found = outcome(cast(ModelProvider, self._provider), request, self.config)
             duration = int((time.perf_counter() - started) * 1000)
@@ -290,7 +294,7 @@ class AgentCaller:
                 found.error, inputs,
             )  # fmt: skip
             settle_call(self._connection, reservation, call_id, cost)
-            last = Call(found.status, found.raw, call_id, attempt)
+            last = Call(found.status, found.raw, call_id, attempt, found.error)
             if found.status == "SUCCEEDED" or not self._retry:
                 return last
             # Only a transient failure is tried again (the caller may still read a

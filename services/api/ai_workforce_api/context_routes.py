@@ -29,6 +29,7 @@ from ai_workforce_api import (
 )
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.after_commit import after_commit, committed
+from ai_workforce_api.agent_answers import AgentNoteBody, notes_for
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -108,6 +109,20 @@ class ContextBody(BaseModel):
     attributes_rerun_useful: bool = False
     # What they are doing: proposing attributes, tailoring criteria, or reviewing the set.
     attributes_stage: Literal["ATTRIBUTES", "CRITERIA", "REVIEW", ""] = ""
+    # The agents of the step whose last answer could not be used (13 November 2026), in the
+    # order of the run: the attribute agent, the reviewer of its drafts, the planner, the
+    # reviewer of the set. Each says what failed, what was kept and what to do next, and
+    # `sentence` is the three as one note to show (agent_answers.AgentNoteBody). Empty when
+    # every agent's last answer was used. Read from the calls' outcome records, so it holds
+    # after a reload, and a later run whose answer is used clears it.
+    attributes_agent_notes: list[AgentNoteBody] = []
+    # The same as one plain note for the Attributes step, "" when nothing failed: the
+    # agents' notes above in the run's order; when the planner has none of its own (a run
+    # from before 13 November 2026), its last plan run that kept the plan or let the rules
+    # plan instead (evidence_plans.latest_plan_failure_note); and otherwise a stopped run's
+    # note. Present whether or not a rerun would do anything (attributes_rerun_useful): the
+    # step said nothing when it would not (the product owner, 13 November 2026).
+    attributes_failure_note: str = ""
     note: str = ""
 
 
@@ -1308,6 +1323,7 @@ def _body(
     current = classifications_of(row[0], str(row[1]), str(row[2]))
     readiness = assess(connection, project_id, control_id)
     running, stage, run_note = attributes_run(connection, control_id)
+    agent_notes = notes_for(connection, control_id)
     return ContextBody(
         control_id=control_id,
         classifications=current,
@@ -1328,8 +1344,34 @@ def _body(
         attributes_stage=stage,
         attributes_run_note=run_note,
         attributes_rerun_useful=attributes_rerun_useful(connection, project_id, control_id),
+        attributes_agent_notes=agent_notes,
+        attributes_failure_note=attributes_failure_note(
+            connection, control_id, agent_notes, running, run_note
+        ),
         note=note,
     )
+
+
+def attributes_failure_note(
+    connection: psycopg.Connection[Any],
+    control_id: UUID,
+    notes: list[AgentNoteBody],
+    running: str,
+    run_note: str,
+) -> str:
+    """The Attributes step's failure note (ContextBody.attributes_failure_note)."""
+    if running in ("PENDING", "WORKING"):
+        return ""
+    parts = [note.sentence for note in notes]
+    if not any(note.step == "engagement-planner" for note in notes):
+        from ai_workforce_api.evidence_plans import latest_plan_failure_note
+
+        planner = latest_plan_failure_note(connection, control_id)
+        if planner:
+            parts.append(planner)
+    if not parts and running == "STOPPED" and run_note:
+        parts.append(run_note)
+    return " ".join(parts)
 
 
 # Access

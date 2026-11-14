@@ -3621,6 +3621,18 @@ class RequestBody(BaseModel):
     finished_at: datetime | None = None
     # Why a FAILED run stopped, in a sentence; empty otherwise.
     note: str = ""
+    # One plain sentence for the person when the check gave no usable answer (B1i): why it
+    # stopped, what was kept and what to do; "" unless FAILED.
+    failure_note: str = ""
+
+
+def check_failure_note(note: str) -> str:
+    """RequestBody.failure_note for a FAILED check, from its note."""
+    reason = note.strip() or "The check did not finish."
+    return (
+        f"{reason} No verdict was recorded and the files stay as they are. Check the request "
+        "again, or review its files against the attributes yourself."
+    )
 
 
 class SummaryBody(BaseModel):
@@ -3857,6 +3869,11 @@ def read_assurance(
                 out_of_date=reasons,
                 finished_at=run.finished_at,
                 note=(STOPPED if run.stopped else run.note) if status == "FAILED" else "",
+                failure_note=(
+                    check_failure_note(STOPPED if run.stopped else run.note)
+                    if status == "FAILED"
+                    else ""
+                ),
             )
         )
     return AssuranceBody(requests=entries, summary=summary)

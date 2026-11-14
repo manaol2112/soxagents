@@ -131,6 +131,9 @@ class ReferenceBody(BaseModel):
     run_status: Literal["PENDING", "WORKING", "IDLE", "FAILED"]
     run_note: str
     matches: list[MatchBody]
+    # One plain sentence for the person when the agent's last run on the reference gave no
+    # usable answer (B1i): what failed, what was kept, what to do; "" otherwise.
+    failure_note: str = ""
 
 
 def _proposals(
@@ -220,6 +223,7 @@ def references(connection: psycopg.Connection[Any], project_id: UUID) -> list[Re
             run_status=row[6],
             run_note=str(row[7]),
             matches=matches.get(UUID(str(row[0])), []),
+            failure_note=_failure_note(connection, UUID(str(row[0])), str(row[6]), str(row[7])),
         )  # fmt: skip
         for row in connection.execute(
             """
@@ -234,6 +238,24 @@ def references(connection: psycopg.Connection[Any], project_id: UUID) -> list[Re
             (project_id,),
         ).fetchall()
     ]
+
+
+def _failure_note(
+    connection: psycopg.Connection[Any], document_id: UUID, status: str, note: str
+) -> str:
+    """ReferenceBody.failure_note: a run that could not finish says so in its note; a
+    finished run whose model call gave no usable answer, from that call's record."""
+    if status in ("PENDING", "WORKING"):
+        return ""
+    if status == "FAILED":
+        return f"{note} The matches and proposals found so far are kept."
+    from ai_workforce_api.agent_answers import unusable_call_note
+
+    return unusable_call_note(
+        connection, "source_document", document_id, ("prior-year-match", "prior-year-analysis"),
+        "The matches and proposals found so far are kept.",
+        "Run it again, or match the controls and review the prior year yourself.",
+    )  # fmt: skip
 
 
 def proposals_for(connection: psycopg.Connection[Any], control_id: UUID) -> list[ProposalBody]:

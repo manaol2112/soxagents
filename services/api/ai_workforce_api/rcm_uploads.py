@@ -127,6 +127,9 @@ class TermsBody(BaseModel):
     source: str | None
     note: str
     model_available: bool
+    # One plain sentence for the person when the agent's last mapping gave no usable answer
+    # (B1i): it did not finish, or the reviewed rules mapped in its place; "" otherwise.
+    failure_note: str = ""
 
 
 class ControlPreview(BaseModel):
@@ -174,6 +177,22 @@ class SystemsBody(BaseModel):
     note: str
     version: int
     proposals: list[SystemView]
+    # One plain sentence for the person when the agent's last scan gave no usable answer
+    # (B1i): it did not finish, or the reviewed rules scanned in its place; "" otherwise.
+    failure_note: str = ""
+
+
+def run_failure_note(status: str, source: str | None, note: str, what: str) -> str:
+    """TermsBody.failure_note and SystemsBody.failure_note, from the run's own status,
+    source and note: a run that did not finish, or one the reviewed rules stood in for."""
+    if status == "FAILED":
+        return (
+            f"{note.strip() or 'The agent did not finish.'} Nothing of this run is kept. "
+            f"Run it again, or set the {what} yourself."
+        )
+    if source == "FALLBACK" and note.strip():
+        return f"{note.strip()} Check the {what} before you import, or run it again."
+    return ""
 
 
 class SystemChoice(BaseModel):
@@ -1142,11 +1161,17 @@ def _body(connection: psycopg.Connection[Any], project_id: UUID, stored: _Stored
             source=stored.terms_source,
             note=stored.terms_note,
             model_available=False,
+            failure_note=run_failure_note(
+                stored.terms_status, stored.terms_source, stored.terms_note, "terms"
+            ),
         ),
         systems=SystemsBody(
             status=stored.systems_status,
             source=stored.systems_source,
             note=stored.systems_note,
+            failure_note=run_failure_note(
+                stored.systems_status, stored.systems_source, stored.systems_note, "systems"
+            ),
             version=stored.systems_version,
             proposals=[
                 SystemView(**system.model_dump(), controls=len(system.control_refs))

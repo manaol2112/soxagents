@@ -101,7 +101,8 @@ FILE_KEYS = {
     "file_id", "name", "size_bytes", "extension", "duplicate", "stage", "read", "classification",
     "placement", "addresses",
 }  # fmt: skip
-READ_KEYS = {"status", "method", "pages", "started_at", "finished_at", "note"}
+# `failure_note` added 13 November 2026 (B1i): the reading's plain sentence when it fails.
+READ_KEYS = {"status", "method", "pages", "started_at", "finished_at", "note", "failure_note"}
 CLASSIFICATION_KEYS = {"kind", "label", "confidence", "summary"}
 PLACEMENT_KEYS = {"status", "method", "requirement_ids", "reason", "suggestions", "version"}
 ITEM_KEYS = {

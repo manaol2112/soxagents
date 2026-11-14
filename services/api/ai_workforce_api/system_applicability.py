@@ -1050,6 +1050,18 @@ class SocReportBody(BaseModel):
     cuecs: list[CuecBody]
     uploaded_by: str | None
     created_at: datetime
+    # One plain sentence for the person when the agent's reading of the report gave no
+    # usable answer (B1i): its note (what failed and what to do) and what was kept; "" for
+    # a report read, or still being read.
+    failure_note: str = ""
+
+
+def report_failure_note(status: str, note: str) -> str:
+    """SocReportBody.failure_note, from the report's own status and note."""
+    if status != "FAILED":
+        return ""
+    reason = note.strip() or "The agent could not read the report. Upload it again to retry."
+    return f"{reason} Nothing of the reading was kept."
 
 
 def assessment_body(
@@ -1175,7 +1187,7 @@ def report_bodies(connection: psycopg.Connection[Any], application_id: UUID) -> 
                         for i in (row[13] or []) if isinstance(i, dict)],
             subservice=[str(i) for i in (row[14] or [])],
             cuecs=cuecs, uploaded_by=None if row[15] is None else str(row[15]),
-            created_at=row[16],
+            created_at=row[16], failure_note=report_failure_note(str(row[2]), str(row[3])),
         ))  # fmt: skip
     return reports
 

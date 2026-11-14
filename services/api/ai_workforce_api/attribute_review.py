@@ -45,6 +45,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from ai_workforce_api import understanding_authority as authority
 from ai_workforce_api.actions import contains_secret
+from ai_workforce_api.agent_answers import generate_read, note_unusable, note_used
 from ai_workforce_api.control_context import line
 from ai_workforce_api.db import transaction
 from ai_workforce_api.models import ModelProvider, ModelRequest
@@ -743,19 +744,23 @@ def review_set(
     data, rows = _inputs(connection, project_id, control_id)
     if not rows:
         return ""
-    call = AgentCaller(
+    # Read by its own model, and asked once more with what was wrong when it does not fit
+    # (agent_answers.generate_read, 13 November 2026).
+    answered = generate_read(
         connection,
-        provider,
-        Job(
-            "independent-reviewer",
-            "engagement_control",
-            control_id,
-            organization_id,
-            project_id,
-            requester,
-            agent_instance_id=agent_actor(connection, project_id, "independent-reviewer"),
-        ),  # fmt: skip
-    ).generate(
+        AgentCaller(
+            connection,
+            provider,
+            Job(
+                "independent-reviewer",
+                "engagement_control",
+                control_id,
+                organization_id,
+                project_id,
+                requester,
+                agent_instance_id=agent_actor(connection, project_id, "independent-reviewer"),
+            ),  # fmt: skip
+        ),
         ModelRequest(
             operation="generate",
             prompt=(
@@ -770,14 +775,11 @@ def review_set(
         ),
         PROMPT_VERSION,
         {"control": str(control_id), "attributes": len(rows)},
+        _Answer.model_validate,
     )
+    call = answered.call
     now = datetime.now(UTC)
-    answer: _Answer | None = None
-    if call.status in ("SUCCEEDED", "MALFORMED") and call.raw.output is not None:
-        try:
-            answer = _Answer.model_validate(call.raw.output)
-        except ValidationError:
-            answer = None
+    answer = answered.value
     if answer is None:
         with transaction(connection) as cursor:
             _store(
@@ -785,7 +787,16 @@ def review_set(
                 _Stored(status="NOT_REVIEWED", reviewed_at=now, prompt_version=PROMPT_VERSION,
                         model_call_id=call.call_id, note=NOT_REVIEWED),
             )  # fmt: skip
+        note_unusable(
+            connection,
+            call,
+            answered.problem,
+            f"The reviewer of the attributes could not use its answer ({answered.problem}).",
+            "The attributes and their criteria were kept as they were, not reviewed.",
+            "Run again. Or check each attribute and its criteria yourself before you accept them.",
+        )
         return NOT_REVIEWED
+    note_used(connection, call)
     # What a revision may state a figure from: everything the reviewer was given.
     known = plain(_json(data))
     items: dict[str, _StoredItem] = {}

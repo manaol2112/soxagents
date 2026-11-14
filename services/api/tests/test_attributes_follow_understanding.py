@@ -541,9 +541,19 @@ def test_a_review_that_does_not_finish_blocks_nothing_and_a_save_mid_run_is_read
     # The save was not queued (a run was working), so the run read it in a second pass, and
     # only one more.
     assert scheduler.plans == [plan_id]
+    # Rewritten on 13 November 2026 (agent_answers.generate_read; docs/control-workflow-
+    # plan.md, B1i). Old expectation: the reviewer of the set was asked once a pass, and its
+    # malformed answer ended the review. New: it is asked once more with a correction naming
+    # the place that failed, and when that answer fails too the review ends as before (not
+    # reviewed, nothing applied). Methodology: a correction is a new answer checked whole;
+    # nothing of a rejected answer is used.
     assert [who for who in agents.calls if who != "other"] == [
-        "attributes", "planner", "set-review", "attributes", "planner", "set-review",
+        "attributes", "planner", "set-review", "set-review",
+        "attributes", "planner", "set-review", "set-review",
     ]  # fmt: skip
+    reviews = [index for index, who in enumerate(agents.calls) if who == "set-review"]
+    correction = agents.prompts[reviews[1]]
+    assert "could not be used" in correction and "attributes[0].verdict" in correction
     assert _plan_run(migrated, control)[1:] == ("IDLE", "")
     with connect(migrated.url) as connection:
         assert not understanding_due(connection, team["project"], UUID(control))

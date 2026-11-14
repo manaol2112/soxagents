@@ -1146,6 +1146,24 @@ class AnalysisBody(BaseModel):
     confirmed_by_name: str | None
     updated_at: datetime
     version: int
+    # One plain sentence for the person when the reading gave no usable answer (B1i): it
+    # failed, or the reviewed rules classified the file in the model's place; "" otherwise.
+    failure_note: str = ""
+
+
+def analysis_failure_note(status: str, source: str | None, note: str) -> str:
+    """AnalysisBody.failure_note, from the reading's own status, source and note."""
+    if status == "FAILED":
+        return (
+            f"{note.strip() or 'The file could not be read.'} Nothing of this reading is kept. "
+            "Read the file again, or classify it yourself."
+        )
+    if source == "FALLBACK" and note.strip():
+        return (
+            f"{note.strip()} Check the classification before you confirm it, or read the "
+            "file again."
+        )
+    return ""
 
 
 class VersionBody(BaseModel):
@@ -1281,6 +1299,9 @@ def _body(row: tuple[Any, ...]) -> AnalysisBody:
         confirmed_by_name=None if row[21] is None else str(row[21]),
         updated_at=row[22],
         version=int(row[23]),
+        failure_note=analysis_failure_note(
+            str(row[3]), None if row[16] is None else str(row[16]), str(row[17])
+        ),
     )
 
 

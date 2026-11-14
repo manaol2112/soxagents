@@ -275,6 +275,23 @@ def fail_draft(connection: psycopg.Connection[Any], workpaper_id: UUID) -> None:
         )
 
 
+def draft_failure_note(status: str, note: str, agent_version: tuple[str, str] | None) -> str:
+    """The agent's last draft, said for a person when it gave no usable answer: a draft
+    that gave up (DRAFT_FAILED) saved nothing, and one whose model call failed or was
+    rejected saved the records' plain words (a FALLBACK version whose note is the
+    draft_note). Waiting for evidence, no model, and a cancellation are not failures."""
+    if status in ("PENDING", "WORKING") or not note:
+        return ""
+    if note == DRAFT_FAILED:
+        return (
+            f"{note} The workpaper keeps its last saved version; you can also write the "
+            "sections yourself."
+        )
+    if agent_version is not None and agent_version == ("FALLBACK", note):
+        return f"{note} Draft again to try the agent, or write the sections yourself."
+    return ""
+
+
 def draft_runner(settings: Settings, provider: ModelProvider | None = None) -> DraftRunner:
     model = provider if provider is not None else provider_for(settings)
     use_model = provider is not None or live_model(settings)
@@ -785,6 +802,10 @@ class WorkpaperBody(BaseModel):
     drafting: bool
     draft_state: RunState = "IDLE"
     draft_note: str
+    # One plain sentence for the person when the agent's last draft gave no usable answer:
+    # what failed (its draft_note), what was kept, and what to do next; "" when the agent
+    # drafted, is drafting, waits for evidence, was cancelled, or no model is configured.
+    failure_note: str = ""
     cancel_state: CancelState = "NONE"
     current_version: int
     shown_version: int
@@ -1052,6 +1073,8 @@ def _body(
             (workpaper_id,),
         ).fetchall()
     ]
+    # The agent's last draft is the newest version it saved (a person's edits are PERSON).
+    agent_version = next((v for v in versions if v.source != "PERSON"), None)
     return WorkpaperBody(
         id=row[0],
         control_id=row[1],
@@ -1062,6 +1085,11 @@ def _body(
         drafting=row[6] in ("PENDING", "WORKING"),
         draft_state=run_state(row[6]),
         draft_note=str(row[7]),
+        failure_note=draft_failure_note(
+            str(row[6]),
+            str(row[7]),
+            None if agent_version is None else (agent_version.source, agent_version.note),
+        ),
         cancel_state=cancel_state(row[6], row[13], row[14], row[7]),
         current_version=int(row[8]),
         shown_version=shown,

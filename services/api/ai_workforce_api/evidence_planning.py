@@ -2144,12 +2144,15 @@ def check_plan(
             texts.append(link.procedure)
         phases.append(design_links_proposed(item, facts, traits.profile))
     sources = check_sources(facts)
-    for fact in plan.understanding.facts:
-        # A fact said to come from the records quotes them; the quote must be there.
-        if fact.basis == "SOURCE" and (
-            len(fact.quote.strip()) < 3 or _normal(fact.quote) not in sources
-        ):
-            raise ValueError("plan quotes a source that does not say it")
+    held_in = quote_text(sources)
+    for index, fact in enumerate(plan.understanding.facts):
+        # A fact said to come from the records quotes them; the quote must be there. The
+        # place is named, so a correction can say which (13 November 2026).
+        if fact.basis == "SOURCE" and not quote_held(fact.quote, held_in):
+            raise ValueError(
+                "plan quotes a source that does not say it: understanding.facts"
+                f"[{index}].quote is not in the control's records"
+            )
         texts.extend([fact.value, fact.quote])
     criteria, unclear = _checked_criteria(plan, allowed)
     for criterion in criteria:
@@ -2523,6 +2526,63 @@ def _check_requirements(
 
 def _normal(text: str) -> str:
     return " ".join(text.lower().split())
+
+
+# Typographic punctuation a model writes for the plain kind its source has, or the other way
+# round: the same words (console_citations folds a citation's quotes the same way).
+_QUOTE_FOLD = str.maketrans(
+    {"’": "'", "‘": "'", "“": '"', "”": '"', "–": "-",
+     "—": "-", " ": " "}
+)  # fmt: skip
+# The escapes of the JSON the records were shown to the planner in, as a model may copy
+# them into a quote: a quoted word, a line break, a tab.
+_JSON_ESCAPES = (('\\"', '"'), ("\\n", " "), ("\\t", " "))
+
+
+def quote_text(text: str) -> str:
+    """A quote, or the records it is looked for in, folded for matching: case and spacing
+    (_normal), typographic quotes and dashes, and the escapes of the JSON the records were
+    shown in. Nothing else: every word must be there, in its order."""
+    for escape, plain in _JSON_ESCAPES:
+        text = text.replace(escape, plain)
+    return _normal(text.translate(_QUOTE_FOLD))
+
+
+def quote_held(quote: str, held_in: str) -> bool:
+    """Whether the records (folded by quote_text) hold the quote word for word, its own
+    opening and closing marks and a closing full stop aside, as console_citations reads a
+    citation. At least three characters."""
+    needle = quote_text(quote).strip(" .…\"'")
+    return len(needle) >= 3 and needle in held_in
+
+
+def unheld_quotes_left_out(output: Any, facts: PlanFacts) -> tuple[Any, tuple[str, ...]]:
+    """The planner's answer without the facts of its understanding that say they come from
+    the records and quote words the records do not hold, and where each was (13 November
+    2026: a whole plan was rejected for one such quote, and the plan asked for in its place
+    differed elsewhere). The claim resting on a quote the records do not hold is never
+    kept: the fact is left out, nothing is put in its place, and check_plan still rejects
+    any such fact. An answer not in the plan's shape is returned as it is, for check_plan
+    to reject."""
+    understanding = output.get("understanding") if isinstance(output, dict) else None
+    found = understanding.get("facts") if isinstance(understanding, dict) else None
+    if not isinstance(understanding, dict) or not isinstance(found, list):
+        return output, ()
+    held_in = quote_text(check_sources(facts))
+    kept: list[Any] = []
+    dropped: list[str] = []
+    for index, fact in enumerate(found):
+        if (
+            isinstance(fact, dict)
+            and fact.get("basis") == "SOURCE"
+            and not quote_held(str(fact.get("quote") or ""), held_in)
+        ):
+            dropped.append(f"understanding.facts[{index}]")
+            continue
+        kept.append(fact)
+    if not dropped:
+        return output, ()
+    return {**output, "understanding": {**understanding, "facts": kept}}, tuple(dropped)
 
 
 # The model planner

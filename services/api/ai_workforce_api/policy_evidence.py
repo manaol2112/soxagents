@@ -478,6 +478,9 @@ class PolicyEvidenceBody(BaseModel):
     proposals: list[ProposalBody]
     # The policies and procedures that apply to the control, to file one by choice.
     documents: list[DocumentBody] = Field(default_factory=list)
+    # One plain sentence for the person when the agent's last reading of the policies gave
+    # no usable answer (B1i): what failed, what was kept, what to do; "" otherwise.
+    failure_note: str = ""
 
 
 _MONTHS = (
@@ -535,11 +538,12 @@ def proposals_for(
     ).fetchall()
     state = connection.execute(
         "SELECT run_status = 'PENDING' OR (run_status = 'WORKING' "
-        "AND run_lease_until >= clock_timestamp()) FROM policy_evidence_runs "
-        "WHERE project_id = %s",
+        "AND run_lease_until >= clock_timestamp()), run_status, run_note "
+        "FROM policy_evidence_runs WHERE project_id = %s",
         (project_id,),
     ).fetchone()
     return PolicyEvidenceBody(
+        failure_note=_failure_note(connection, project_id, state),
         documents=[
             DocumentBody(
                 id=d[0],
@@ -567,6 +571,26 @@ def proposals_for(
             for r in rows
         ],
     )
+
+
+def _failure_note(
+    connection: psycopg.Connection[Any], project_id: UUID, state: tuple[Any, ...] | None
+) -> str:
+    """PolicyEvidenceBody.failure_note: a reading that could not finish says so in its
+    note; a finished one whose last model call gave no usable answer, from that call."""
+    if state is None or bool(state[0]):
+        return ""
+    if str(state[1]) == "FAILED":
+        return (
+            f"{state[2]} The policies already proposed are kept; you can also file one by choice."
+        )
+    from ai_workforce_api.agent_answers import unusable_call_note
+
+    return unusable_call_note(
+        connection, "project", project_id, (PROMPT_VERSION.split("/", 1)[0],),
+        "The policies already proposed are kept.",
+        "Ask for the reading again, or file a policy by choice.",
+    )  # fmt: skip
 
 
 # A person's decision

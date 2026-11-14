@@ -26,10 +26,11 @@ from uuid import UUID
 
 import psycopg
 from psycopg.types.json import Json
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from ai_workforce_api import understanding_authority as authority
 from ai_workforce_api.actions import contains_secret
+from ai_workforce_api.agent_answers import generate_read, note_unusable, note_used
 from ai_workforce_api.attribute_review import (
     ReviewMark,
     ReviewSummary,
@@ -57,7 +58,6 @@ from ai_workforce_api.control_context import (
 from ai_workforce_api.db import transaction
 from ai_workforce_api.definition_registry import attribute_for
 from ai_workforce_api.library_definitions import DefinitionBody, definition_body
-from ai_workforce_api.model_providers import call_note
 from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.question_review import review_open_questions
@@ -870,19 +870,26 @@ def generate(
         connection, control_id, authority.packaged(package, understood, narrative_at)
     )
     agent = agent_actor(connection, project_id, ATTRIBUTE_AGENT)
-    call = AgentCaller(
+    # The answer is read by its own model, and asked once more with what was wrong when it
+    # does not fit (agent_answers.generate_read, 13 November 2026). When neither answer
+    # fits, nothing is written: the attributes and proposals on the control stay as they
+    # were, and the person is told so on the call's record (the context's
+    # attributes_agent_notes).
+    answered = generate_read(
         connection,
-        provider,
-        Job(
-            ATTRIBUTE_AGENT,
-            "engagement_control",
-            control_id,
-            organization_id,
-            project_id,
-            requester,
-            agent_instance_id=agent,
-        ),  # fmt: skip
-    ).generate(
+        AgentCaller(
+            connection,
+            provider,
+            Job(
+                ATTRIBUTE_AGENT,
+                "engagement_control",
+                control_id,
+                organization_id,
+                project_id,
+                requester,
+                agent_instance_id=agent,
+            ),  # fmt: skip
+        ),
         ModelRequest(
             operation="generate",
             prompt=(
@@ -898,14 +905,21 @@ def generate(
         ),
         PROMPT_VERSION,
         {"control": str(control_id), "sources": len(sources)},
+        _Answer.model_validate,
     )
-    status, raw, call_id = call.status, call.raw, call.call_id
-    if status not in ("SUCCEEDED", "MALFORMED") or raw.output is None:
-        return 0, call_note(status) or "The agent did not answer."
-    try:
-        answer = _Answer.model_validate(raw.output)
-    except ValidationError:
-        return 0, "The agent's proposals did not fit, so none were kept."
+    call_id = answered.call.call_id
+    answer = answered.value
+    if answer is None:
+        return 0, note_unusable(
+            connection,
+            answered.call,
+            answered.problem,
+            f"The attribute agent's answer could not be used ({answered.problem}).",
+            "The attributes, their criteria and the proposals already on the control were "
+            "kept as they were; nothing was proposed.",
+            "Run again. Or add the attributes and write their criteria on this step yourself.",
+        )
+    note_used(connection, answered.call)
     proposals, review_note, fixes, reviewed, review_call = _review(
         connection, provider, organization_id, project_id, control_id, requester, package,
         sources, answer.attributes,
@@ -1498,19 +1512,21 @@ def _review(
     is the reviewer's, and the reviewer's model call."""
     if not any(item.action != "RETIRE" for item in drafted):
         return drafted, "", [], False, None
-    call = AgentCaller(
+    answered = generate_read(
         connection,
-        provider,
-        Job(
-            "independent-reviewer",
-            "engagement_control",
-            control_id,
-            organization_id,
-            project_id,
-            requester,
-            agent_instance_id=agent_actor(connection, project_id, "independent-reviewer"),
-        ),  # fmt: skip
-    ).generate(
+        AgentCaller(
+            connection,
+            provider,
+            Job(
+                "independent-reviewer",
+                "engagement_control",
+                control_id,
+                organization_id,
+                project_id,
+                requester,
+                agent_instance_id=agent_actor(connection, project_id, "independent-reviewer"),
+            ),  # fmt: skip
+        ),
         ModelRequest(
             operation="generate",
             prompt=(
@@ -1527,16 +1543,24 @@ def _review(
         ),
         REVIEW_PROMPT_VERSION,
         {"control": str(control_id), "drafted": len(drafted)},
+        _Reviewed.model_validate,
     )
     unreviewed = "The reviewer agent did not finish, so the attributes are as drafted."
-    if call.status not in ("SUCCEEDED", "MALFORMED") or call.raw.output is None:
+    reviewed = answered.value
+    if reviewed is None:
+        note_unusable(
+            connection,
+            answered.call,
+            answered.problem,
+            f"The reviewer of the drafted attributes could not use its answer "
+            f"({answered.problem}).",
+            "The attribute agent's drafts were kept as drafted, not reviewed.",
+            "Run again. Or check each draft yourself before you accept it.",
+        )
         return drafted, unreviewed, [], False, None
-    try:
-        reviewed = _Reviewed.model_validate(call.raw.output)
-    except ValidationError:
-        return drafted, unreviewed, [], False, None
+    note_used(connection, answered.call)
     fixes = [text for text in (line(item, 300) for item in reviewed.fixes) if text]
-    return reviewed.attributes, "", fixes, True, call.call_id
+    return reviewed.attributes, "", fixes, True, answered.call.call_id
 
 
 def _criteria(item: _Proposal) -> tuple[str, str, str] | None:

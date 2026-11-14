@@ -157,10 +157,14 @@ class ModelRequest:
     web_search: int = 0
     # A larger answer than the default, for long structured outputs. 0 keeps the default.
     max_tokens: int = 0
-    # Read a property that arrives as JSON text as the JSON it is (unnested), for a long
-    # nested answer. Off unless the caller asks: every other agent's answer is read exactly
-    # as the provider returned it.
-    unnest: bool = False
+    # Read the answer's representation as the schema declares it (models.unnested): a
+    # property the schema declares as an object or a list that arrives as JSON text, at any
+    # depth, and a wrapper the model put around the whole answer. Only the representation
+    # changes, never a word of the answer, and every check applies to what is read. On for
+    # every agent since 13 November 2026 (it was the planner's and the evidence readings'
+    # only); no caller turns it off, and test_agent_answers fails for one that does without
+    # being listed there with its reason.
+    unnest: bool = True
 
 
 @dataclass(frozen=True)
@@ -512,8 +516,10 @@ def _create(
 def _complete(
     provider: ModelProvider, request: ModelRequest, config: ModelConfig
 ) -> tuple[str, ModelRaw]:
-    status, raw, _error, _transient = _attempt(provider, request, config)
-    return status, raw
+    # Through the same reading as every agent's call (outcome): the answer as the schema
+    # declares it. A shape that still does not fit is MALFORMED here as it was before.
+    found = outcome(provider, request, config)
+    return found.status, found.raw
 
 
 def _attempt(
@@ -844,6 +850,15 @@ def _mismatch(schema: dict[str, Any], value: object, path: str = "answer") -> st
     named by the schema's own property names and positions, and what was found by its type
     only: nothing of the value is repeated."""
     kind = schema.get("type")
+    if isinstance(kind, list):
+        # A choice of types (prior_year's `control`: an integer or null; setup_drafting's
+        # `period_end`): a value of any of them fits. Before 13 November 2026 such a
+        # property never fitted, so every answer with it was recorded as malformed.
+        if any(_mismatch({**schema, "type": one}, value, path) is None for one in kind):
+            return None
+        return f"{path}: expected one of {', '.join(map(str, kind))}, got {_kind(value)}"
+    if kind == "null":
+        return None if value is None else f"{path}: expected null, got {_kind(value)}"
     if kind == "object":
         if not isinstance(value, dict):
             return f"{path}: expected object, got {_kind(value)}"
@@ -887,6 +902,15 @@ def _mismatch(schema: dict[str, Any], value: object, path: str = "answer") -> st
 
 # The longest text read as a property's JSON: a plan's is some 13,000 characters.
 _UNNEST_CHARACTERS = 200_000
+# How deep the reading goes into the answer: deeper than any agent's schema.
+_UNNEST_DEPTH = 24
+# What a model calls the wrapper it sometimes puts around the whole answer: the output
+# tool's own name, or the words a tool call or a reply is usually given under.
+_WRAPPERS = frozenset(
+    {OUTPUT_TOOL, "output", "input", "parameters", "arguments", "properties", "result",
+     "response", "answer"}
+)  # fmt: skip
+_NOT_READ = object()
 
 
 def _no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -902,31 +926,84 @@ def _no_constant(name: str) -> Any:
     raise ValueError(f"{name} is not JSON")
 
 
+def _json_text(text: str) -> Any:
+    """The JSON a text is, read strictly (no property written twice at any depth, no NaN or
+    Infinity, nothing after it, not over the length a plan could be), or _NOT_READ."""
+    if len(text) > _UNNEST_CHARACTERS or text.lstrip()[:1] not in ("{", "["):
+        return _NOT_READ
+    try:
+        return json.loads(text, object_pairs_hook=_no_duplicates, parse_constant=_no_constant)
+    except ValueError, RecursionError:
+        return _NOT_READ
+
+
 def unnested(
     schema: dict[str, Any], value: dict[str, Any]
 ) -> tuple[dict[str, Any], tuple[str, ...]]:
-    """The answer with a property that arrived as JSON text read as the JSON it is, and
-    the names of the properties read that way (none: the answer is returned as it came).
+    """The answer read as the schema declares it, and where it was read so (none: the
+    answer is returned as it came, the same object). The one reading every agent's answer
+    goes through (ModelRequest.unnest, on for every call since 13 November 2026; before, the
+    planner's and the evidence readings' only). It changes the answer's representation,
+    never a word of it: nothing is invented, and every check of the caller applies to what
+    is read. Four shapes, each seen in the wild:
 
-    Only for a call that asks for it (ModelRequest.unnest: the planner, and since 13
-    November 2026 the evidence assurance readings, whose `attributes` arrived as text in
-    three readings of the live run that day). A model
-    filling a large nested schema sometimes writes an object or a list as text and carries
-    on inside that text with the properties that follow: the planner's answer of 12
-    November 2026 had `understanding` as the text `{...},"phases":[...]` and no `phases`
-    (B1h). Every word of the answer is there, one level too deep.
+    1. A wrapper around the whole answer (`{"record_output": {...}}`): an answer of one
+       property that the schema does not declare, named as a model names such a wrapper
+       (_WRAPPERS), holding an object (or its JSON text) that, read, fits the schema whole.
+       Named "wrapper:<name>".
+    2. A property written one level too deep, at the top level of the answer (the planner,
+       12 November 2026, B1h): `understanding` as the text `{...},"phases":[...]` and no
+       `phases`. Read only when the text is exactly that: valid JSON for the property the
+       schema declares (an object or a list), followed by nothing but properties the schema
+       *requires* and the answer does not have (the text may close the answer's own brace).
+       Never an optional property (a verdict or an approval the answer did not state must
+       not appear because some text carried it), never a property written twice.
+    3. A property the schema declares as an object or a list sent as the text of its JSON,
+       at any depth, the rows of a list included (`attributes`, 13 November 2026; a row's
+       `follows`): read when the text is exactly one JSON value of the declared kind. Named
+       by its place: "attributes[0].follows". Nothing is lifted out of such a text.
+    4. An optional property the schema declares as an object sent as null (the reviewer of
+       the drafts, 13 November 2026: `attributes[0].follows`): left out, which the schema
+       allows and which is what null says. Never a required one, never a list or a scalar
+       (an empty list or a default could read as a finding of nothing). Named
+       "<place>: null left out".
 
-    A text is read only when it is exactly that, at the top level of the answer: valid JSON
-    for the property the schema declares (an object or a list), followed by nothing but
-    properties the schema requires and the answer does not have. Never an optional
-    property, never a property written twice at any depth (the later one would silently
-    win), never NaN or Infinity, never a text longer than a plan could be, and nothing
-    inside the rows of a list. Anything else, and any failure to read, leaves the answer as
-    it arrived, to fail the shape check as before. Nothing is invented or dropped, and the
-    caller's checks apply to what is read."""
-    properties, required = schema.get("properties"), schema.get("required", [])
-    if schema.get("type") != "object" or not isinstance(properties, dict):
+    Anything else is left as it arrived and fails the shape check as before, a recorded
+    MALFORMED call. Never NaN or Infinity, never a text over 200,000 characters, never
+    deeper than _UNNEST_DEPTH; a text too deeply nested to parse is left."""
+    if schema.get("type") != "object" or not isinstance(schema.get("properties"), dict):
         return value, ()
+    names: list[str] = []
+    found = _unwrapped(schema, value, names)
+    found = _carried(schema, found, names)
+    found = _read_deep(schema, found, "", names, 0)
+    return (found, tuple(names)) if names else (value, ())
+
+
+def _unwrapped(schema: dict[str, Any], value: dict[str, Any], names: list[str]) -> dict[str, Any]:
+    """Shape 1: the answer inside a wrapper, when the schema says it is the answer."""
+    properties = schema["properties"]
+    if len(value) != 1:
+        return value
+    ((wrapper, inner),) = value.items()
+    if wrapper in properties or wrapper not in _WRAPPERS:
+        return value
+    if isinstance(inner, str):
+        inner = _json_text(inner)
+    if not isinstance(inner, dict) or not any(key in properties for key in inner):
+        return value
+    read: list[str] = []
+    candidate = _read_deep(schema, _carried(schema, inner, read), "", read, 0)
+    if not isinstance(candidate, dict) or _mismatch(schema, candidate) is not None:
+        return value
+    names += [f"wrapper:{wrapper}", *read]
+    return candidate
+
+
+def _carried(schema: dict[str, Any], value: dict[str, Any], names: list[str]) -> dict[str, Any]:
+    """Shape 2, and shape 3 at the top level: a top-level property's text read with what
+    it carries (see unnested)."""
+    properties, required = schema["properties"], schema.get("required", [])
     found = dict(value)
     read_as_json: list[str] = []
     for name, text in value.items():
@@ -938,14 +1015,20 @@ def unnested(
             continue
         if len(text) > _UNNEST_CHARACTERS:
             continue
-        try:
-            read = json.loads(
-                "{" + json.dumps(name) + ":" + text + "}",
-                object_pairs_hook=_no_duplicates,
-                parse_constant=_no_constant,
-            )
-        except ValueError, RecursionError:
-            continue
+        read: Any = _NOT_READ
+        # The text is the property and what follows it in the answer; it may close the
+        # answer's own brace too (the model wrote the rest of its answer inside the text).
+        for opened in (
+            "{" + json.dumps(name) + ":" + text + "}",
+            "{" + json.dumps(name) + ":" + text,
+        ):
+            try:
+                read = json.loads(
+                    opened, object_pairs_hook=_no_duplicates, parse_constant=_no_constant
+                )
+                break
+            except ValueError, RecursionError:
+                continue
         if not isinstance(read, dict) or _kind(read.get(name)) != kind:
             continue
         carried = [key for key in read if key != name]
@@ -956,7 +1039,66 @@ def unnested(
             continue
         found.update(read)
         read_as_json += [name, *carried]
-    return (found, tuple(read_as_json)) if read_as_json else (value, ())
+    if not read_as_json:
+        return value
+    names += read_as_json
+    return found
+
+
+def _read_deep(schema: dict[str, Any], value: Any, path: str, names: list[str], depth: int) -> Any:
+    """Shapes 3 and 4 below the top level, the schema deciding at every place. The value
+    itself is never changed: a place read differently is a copy."""
+    if depth > _UNNEST_DEPTH:
+        return value
+    kind = schema.get("type")
+    if kind == "object" and isinstance(value, dict):
+        properties = schema.get("properties")
+        required = schema.get("required", [])
+        if not isinstance(properties, dict) or not isinstance(required, list):
+            return value
+        out: dict[str, Any] | None = None
+        for key, item in value.items():
+            declared = properties.get(key)
+            if not isinstance(declared, dict):
+                continue
+            where = f"{path}.{key}" if path else key
+            if item is None and declared.get("type") == "object" and key not in required:
+                out = dict(value) if out is None else out
+                del out[key]
+                names.append(f"{where}: null left out")
+                continue
+            new = _own_text(declared, item, where, names)
+            new = _read_deep(declared, new, where, names, depth + 1)
+            if new is not item:
+                out = dict(value) if out is None else out
+                out[key] = new
+        return value if out is None else out
+    if kind == "array" and isinstance(value, list):
+        items = schema.get("items")
+        if not isinstance(items, dict):
+            return value
+        rows: list[Any] | None = None
+        for index, item in enumerate(value):
+            where = f"{path}[{index}]"
+            new = _own_text(items, item, where, names)
+            new = _read_deep(items, new, where, names, depth + 1)
+            if new is not item:
+                rows = list(value) if rows is None else rows
+                rows[index] = new
+        return value if rows is None else rows
+    return value
+
+
+def _own_text(declared: dict[str, Any], item: Any, where: str, names: list[str]) -> Any:
+    """Shape 3 at one place: a text that is exactly one JSON value of the declared kind."""
+    kind = declared.get("type")
+    if not isinstance(item, str) or kind not in ("object", "array"):
+        return item
+    read = _json_text(item)
+    if read is _NOT_READ or _kind(read) != kind:
+        return item
+    names.append(where)
+    return read
 
 
 def _fill(schema: dict[str, Any]) -> object:

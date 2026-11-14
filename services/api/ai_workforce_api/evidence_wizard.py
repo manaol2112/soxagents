@@ -1750,6 +1750,17 @@ class ReadBody(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     note: str
+    # One plain sentence for the person when the file's reading gave no usable answer
+    # (B1i): why, what was kept and what to do; "" unless FAILED.
+    failure_note: str = ""
+
+
+def read_failure_note(status: str, note: str) -> str:
+    """ReadBody.failure_note, from the reading's status and note."""
+    if status != "FAILED":
+        return ""
+    reason = note.strip() or "The file could not be read."
+    return f"{reason} The file is kept. Read it again, or place it on its item yourself."
 
 
 class ClassificationBody(BaseModel):
@@ -2008,6 +2019,7 @@ def _file_body(
             started_at=row[7],
             finished_at=row[8],
             note=clean_line(str(row[9]), 300) if read_status in ("READY", "FAILED") else "",
+            failure_note=read_failure_note(read_status, clean_line(str(row[9]), 300)),
         ),
         classification=_classification(row),
         placement=PlacementBody(
