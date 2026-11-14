@@ -2224,6 +2224,7 @@ function ControlRecord({
               context={context}
               canAct={canAct}
               showQuestions={false}
+              questionsHref={stepHrefsWf.understanding ?? null}
               embedded={embedded}
             />
           ),

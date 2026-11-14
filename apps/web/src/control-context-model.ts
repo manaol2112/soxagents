@@ -803,6 +803,40 @@ export function offersAgentRun(
   return !ran || rerunUseful !== false;
 }
 
+/**
+ * The agents' open questions that can change the attributes, said where the attributes are
+ * accepted (product owner, 14 November 2026: "I already accepted the attributes. Why a new
+ * question showed up after I accepted the attributes??"). The guided setup asks them in
+ * Control Understanding, not on the Attributes step, so without this line a person could
+ * accept attributes that an open question is about to change. Null when none is open.
+ */
+export function openAttributeQuestionsLine(
+  issues: ReadonlyArray<Pick<ContextIssue, "origin" | "status" | "topic">>,
+  toAccept: boolean,
+): string | null {
+  const open = issues.filter(
+    (issue) => issue.status === "OPEN" && issue.origin !== "PROCESS",
+  );
+  if (open.length === 0) {
+    return null;
+  }
+  const topics = open
+    .slice(0, 3)
+    .map((issue) => issue.topic.trim())
+    .filter((topic) => topic !== "");
+  const more = open.length > topics.length ? "; and more" : "";
+  const about = topics.length > 0 ? ` (${topics.join("; ")}${more})` : "";
+  const asked =
+    open.length === 1
+      ? `The agents raised a question that can change these attributes${about}.`
+      : `The agents raised ${open.length} questions that can change these attributes${about}.`;
+  const them = open.length === 1 ? "it" : "them";
+  // Accepted already: an answer that changes an attribute comes back as a proposal here.
+  return toAccept
+    ? `${asked} Answer ${them} in Control Understanding before accepting.`
+    : `${asked} Answer ${them} in Control Understanding; a change to an accepted attribute comes back here for a decision.`;
+}
+
 /** Whether an agent has already worked on the attributes, so asking again is a re-run. */
 export function agentRan(context: {
   approved: Attribute[];

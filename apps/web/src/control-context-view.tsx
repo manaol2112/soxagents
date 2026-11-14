@@ -53,6 +53,7 @@ import {
   type LibraryUpdate,
   NATURE_LABELS,
   offersAgentRun,
+  openAttributeQuestionsLine,
   PROCEDURE_PHASES,
   type ProcessStep,
   pendingCriteriaLine,
@@ -970,6 +971,7 @@ export function AttributesPanel({
   canAct,
   compact = false,
   showQuestions = true,
+  questionsHref = null,
   embedded = false,
 }: {
   ids: Ids;
@@ -977,6 +979,9 @@ export function AttributesPanel({
   canAct: boolean;
   /** Off in the guided setup, which asks the open questions on its own step. */
   showQuestions?: boolean;
+  /** Where those questions are answered (Control Understanding), when they are not shown
+   * here: the list then says they are open, and links to them. */
+  questionsHref?: string | null;
   /** Inside the Attributes step's panel (product owner, 11 November 2026, approved
    * preview): the panel's frame gives the title, the status, the decision and the agent's
    * line, so this is the work alone: one list of rows that open on request, the first that
@@ -1284,6 +1289,8 @@ export function AttributesPanel({
         ids={ids}
         context={context}
         canAct={canAct}
+        showQuestions={showQuestions}
+        questionsHref={questionsHref}
         busy={action.pending}
         busyKey={action.busy}
         open={opened}
@@ -1397,6 +1404,15 @@ export function AttributesPanel({
             <UiIcon name="info" size={18} />
           </button>
         </section>
+      )}
+      {showQuestions ? null : (
+        <OpenQuestionsNote
+          line={openAttributeQuestionsLine(
+            context.issues,
+            context.proposed.length > 0,
+          )}
+          href={questionsHref}
+        />
       )}
       {compact ? null : (
         <div className="ta-head">
@@ -1582,10 +1598,38 @@ export function AttributesPanel({
  * decision is the panel's own, so the same server calls, versions and audit apply, and each
  * shows success only once the server has confirmed it.
  */
+/** The agents' open questions that can change the attributes, where they are not listed. */
+function OpenQuestionsNote({
+  line,
+  href,
+}: {
+  line: string | null;
+  href: string | null;
+}) {
+  if (line === null) {
+    return null;
+  }
+  return (
+    <p className="ta-run-note tone-warning has-acts" role="status">
+      <UiIcon name="info" size={13} />
+      <span>{line}</span>
+      {href !== null ? (
+        <span className="ta-run-acts">
+          <a className="btn btn-ghost btn-sm" href={href}>
+            Answer the questions
+          </a>
+        </span>
+      ) : null}
+    </p>
+  );
+}
+
 function EmbeddedAttributes({
   ids,
   context,
   canAct,
+  showQuestions,
+  questionsHref,
   busy,
   busyKey,
   open,
@@ -1603,6 +1647,9 @@ function EmbeddedAttributes({
   ids: Ids;
   context: ControlContext;
   canAct: boolean;
+  /** Whether the open questions are listed with the attributes (see AttributesPanel). */
+  showQuestions: boolean;
+  questionsHref: string | null;
   busy: boolean;
   busyKey: string;
   /** The rows the person opened, or null until they open or close one: the first row that
@@ -1674,6 +1721,11 @@ function EmbeddedAttributes({
   }, [running, router]);
   const locked = busy || running;
   const toAccept = acceptableRows(rows);
+  // The agents' open questions, asked on Control Understanding in the guided setup: said
+  // here, since answering one can change the attributes accepted on this list.
+  const questionsOpen = showQuestions
+    ? null
+    : openAttributeQuestionsLine(context.issues, toAccept.length > 0);
   const unreviewed = reviewUnfinished(context.reviewSummary);
   const first = running ? null : firstUnifiedToDecide(rows);
   const opened = open ?? new Set(first !== null ? [first] : []);
@@ -2052,6 +2104,7 @@ function EmbeddedAttributes({
           {unreviewed}
         </p>
       ) : null}
+      <OpenQuestionsNote line={questionsOpen} href={questionsHref} />
       {!running && pending !== null ? (
         // The planner's criteria were written into a change to the approved test plan:
         // said, with where that change is decided (the Test plans page's "Accept the
