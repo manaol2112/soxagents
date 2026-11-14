@@ -156,5 +156,6 @@ placement, and source-level checks of the viewer.
 | Increment | State |
 | --- | --- |
 | Mockups on a sample file, the compact one approved | done, 14 November 2026 |
-| Server: positions, proposals, records, API | in progress, 14 November 2026 |
-| The preview: boxes, legend, callout, review, edit, add, annotated copy | in progress, 14 November 2026 |
+| Server: positions, proposals, records, API | built 14 November 2026 with scripted readings and synthetic files (migration 0161, evidence_annotations.py, prompts /7; test_evidence_annotations.py); not yet run live |
+| The preview: boxes, legend, callout, review, edit, add, annotated copy | built 14 November 2026 (`evidence-annotations.tsx`, `evidence-annotations-model.ts`, `evidence-annotations.css`, route `/workspace/evidence-annotations`); opened from a D&I file's menu ("Annotations") and from its preview; checked in a headless browser against scripted answers, not yet against the running app or by eye in both themes |
+| Scanned PDFs boxed; the annotated copy in the workpaper | planned |

@@ -61,7 +61,13 @@ type Ids = { organizationId: string; projectId: string; controlId: string };
  * file already added. */
 export type DialogOpen =
   | { mode: "add"; itemId: string | null }
-  | { mode: "review"; fileId: string };
+  | {
+      mode: "review";
+      fileId: string;
+      /** The D&I request the file was opened from: its full preview shows the file's
+       * annotations for that request (docs/evidence-annotations.md). */
+      requirementId?: string;
+    };
 
 type Tab = "preview" | "data" | "details";
 
@@ -724,6 +730,16 @@ export function EvidenceDialog({
                     { id: insight.file.id, fileName: insight.file.fileName },
                   ]}
                   citations={citationsOf(insight, focused)}
+                  annotations={
+                    open.mode === "review" &&
+                    open.requirementId !== undefined &&
+                    open.fileId === insight.file.id
+                      ? {
+                          controlId: ids.controlId,
+                          requirementId: open.requirementId,
+                        }
+                      : undefined
+                  }
                   label={<UiIcon name="expand" size={16} />}
                   className="ed-view-expand"
                 />

@@ -95,6 +95,18 @@
   --ai-soft: #f4f1ff;
   --ai-border: #ddd4fb;
 
+  /* Marks drawn over evidence (docs/evidence-annotations.md): the file is shown as it is,
+     a light page in both themes, so each keeps one value. Each is 4.5:1 or more on white
+     and under --mark-paper, and sits inside a ring of --mark-paper so it reads on a dark
+     image too; --mark-ink is the text of the annotated copy, which is a light page. */
+  --mark-paper: #ffffff;
+  --mark-ink: #0b1220;
+  --mark-success: #127436;
+  --mark-info: #2b47b8;
+  --mark-source: #6d4fd8;
+  --mark-danger: #c42b2b;
+  --mark-neutral: #4f596b;
+
   /* Navigation */
   --navy: #0e1f36;
   --navy-raised: #162b48;
@@ -218,6 +230,15 @@
   --ai: #c2afff;
   --ai-soft: rgb(167 139 250 / 14%);
   --ai-border: rgb(167 139 250 / 34%);
+
+  /* Over evidence, which stays a light page: the same values as the light theme. */
+  --mark-paper: #ffffff;
+  --mark-ink: #0b1220;
+  --mark-success: #127436;
+  --mark-info: #2b47b8;
+  --mark-source: #6d4fd8;
+  --mark-danger: #c42b2b;
+  --mark-neutral: #4f596b;
 
   --navy: #0a101d;
   --navy-raised: #141d30;

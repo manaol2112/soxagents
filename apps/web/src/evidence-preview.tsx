@@ -4,6 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import {
+  AnnotatedEvidence,
+  AnnotationsLoading,
+  type PdfMarks,
+  useEvidenceAnnotations,
+} from "./evidence-annotations";
+import {
   type Box,
   type EvidenceCitation,
   fileQuery,
@@ -34,6 +40,10 @@ type Props = {
    * the preview sits in its top layer and is not made inert beneath it (the D&I evidence
    * wizard's "Open in the file"). */
   container?: HTMLElement | null;
+  /** The D&I request the file serves: its annotations are read and reviewed in the preview
+   * (docs/evidence-annotations.md). Without it, as for every other file, nothing is asked
+   * and the preview is as it was. */
+  annotations?: { controlId: string; requirementId: string } | undefined;
 };
 
 /** A button that opens the evidence preview, with the cited passages marked. */
@@ -111,6 +121,7 @@ function PreviewDialog({
   title,
   sourcesTitle = "What the tester relied on",
   container = null,
+  annotations,
   onClose,
 }: Props & { onClose: () => void }) {
   const first = startFileId ?? citations[0]?.fileId ?? files[0]?.id ?? "";
@@ -125,12 +136,42 @@ function PreviewDialog({
   const file = files.find((item) => item.id === fileId) ?? files[0];
   const mine = citations.filter((item) => item.fileId === file?.id);
   const query = fileQuery(organizationId, projectId);
+  // A file on a D&I request has annotations to read; any other file asks for none.
+  const controlId = annotations?.controlId;
+  const requirementId = annotations?.requirementId;
+  const shownId = file?.id;
+  const scope = useMemo(
+    () =>
+      controlId === undefined ||
+      requirementId === undefined ||
+      shownId === undefined
+        ? null
+        : {
+            organizationId,
+            projectId,
+            controlId,
+            requirementId,
+            fileId: shownId,
+          },
+    [organizationId, projectId, controlId, requirementId, shownId],
+  );
+  const notes = useEvidenceAnnotations(scope);
+  // Where the header takes the annotated file's own actions.
+  const [headSlot, setHeadSlot] = useState<HTMLElement | null>(null);
+  // "Add annotation" on a file that has none yet.
+  const [adding, setAdding] = useState(false);
+  const leaveAdding = useCallback(() => setAdding(false), []);
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     dialog.current?.focus();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && isTopmostDialog(dialog.current)) {
+      // An Escape something inside already took (the open annotation) closes only that.
+      if (
+        event.key === "Escape" &&
+        !event.defaultPrevented &&
+        isTopmostDialog(dialog.current)
+      ) {
         onClose();
       }
     };
@@ -156,6 +197,13 @@ function PreviewDialog({
     return null;
   }
   const focused = focus === null ? null : (citations[focus] ?? null);
+  // The annotated layout only once the annotations are here, and there are some (or one
+  // is being added); otherwise the preview below is the one every file has.
+  const annotated =
+    notes.set !== null && (notes.set.annotations.length > 0 || adding)
+      ? notes.set
+      : null;
+  const preview = `/workspace/evidence-files/${file.id}/preview?${query}`;
   // On the page itself, so no scrolling panel or transformed parent can clip it.
   return createPortal(
     // biome-ignore lint/a11y/noStaticElementInteractions: a click on the backdrop closes; Escape and the close button do too.
@@ -187,6 +235,7 @@ function PreviewDialog({
               value={file.id}
               onChange={(event) => {
                 setFileId(event.target.value);
+                setAdding(false);
                 const index = citations.findIndex(
                   (item) => item.fileId === event.target.value,
                 );
@@ -203,6 +252,18 @@ function PreviewDialog({
               ))}
             </select>
           ) : null}
+          <span className="ea-head" ref={setHeadSlot} />
+          {annotated === null &&
+          notes.set?.canEdit === true &&
+          previewKind(file.fileName) !== "text" ? (
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              onClick={() => setAdding(true)}
+            >
+              Add annotation
+            </button>
+          ) : null}
           <a
             className="btn btn-secondary btn-sm"
             href={`/workspace/evidence-files/${file.id}?${query}`}
@@ -218,84 +279,128 @@ function PreviewDialog({
             <UiIcon name="x" size={16} />
           </button>
         </header>
-        <div
-          className={`preview-body ${citations.length > 0 ? "has-sources" : ""}`}
-        >
-          <div className="preview-stage">
-            <Viewer
-              key={file.id}
-              file={file}
-              query={query}
-              citations={mine}
-              focused={
-                focused !== null && focused.fileId === file.id ? focused : null
-              }
-            />
-          </div>
-          {citations.length > 0 ? (
-            <aside className="preview-sources" aria-label={sourcesTitle}>
-              <div className="preview-sources-head">
-                <strong>{sourcesTitle}</strong>
-                <span className="preview-nav">
-                  <button
-                    type="button"
-                    className="btn-ghost btn-sm"
-                    disabled={focus === null || focus <= 0}
-                    onClick={() => go((focus ?? 0) - 1)}
-                    aria-label="Previous source"
-                  >
-                    <span className="icon-back" aria-hidden="true">
-                      <UiIcon name="chevron" size={14} />
-                    </span>
-                  </button>
-                  <span className="num">
-                    {focus === null ? "–" : focus + 1} of {citations.length}
-                  </span>
-                  <button
-                    type="button"
-                    className="btn-ghost btn-sm"
-                    disabled={focus !== null && focus >= citations.length - 1}
-                    onClick={() => go(focus === null ? 0 : focus + 1)}
-                    aria-label="Next source"
-                  >
-                    <UiIcon name="chevron" size={14} />
-                  </button>
-                </span>
-              </div>
-              <ol>
-                {citations.map((item, index) => (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: citations keep their order.
-                  <li key={`${item.fileId}-${index}`}>
+        {annotated !== null ? (
+          <AnnotatedEvidence
+            key={file.id}
+            file={file}
+            url={preview}
+            set={annotated}
+            busy={notes.busy}
+            act={notes.act}
+            headSlot={headSlot}
+            startAdding={adding}
+            onEmpty={leaveAdding}
+            pdf={(input) => (
+              <PdfViewer
+                url={preview}
+                citations={input.citations}
+                focused={input.focused}
+                marks={input.marks}
+              />
+            )}
+            text={(input) => (
+              <TextViewer
+                url={`/workspace/evidence-files/${file.id}/reading?${query}`}
+                citations={input.citations}
+                focused={input.focused}
+              />
+            )}
+          />
+        ) : (
+          <div
+            className={`preview-body ${
+              citations.length > 0 || notes.status === "loading"
+                ? "has-sources"
+                : ""
+            }`}
+          >
+            <div className="preview-stage">
+              <Viewer
+                key={file.id}
+                file={file}
+                query={query}
+                citations={mine}
+                focused={
+                  focused !== null && focused.fileId === file.id
+                    ? focused
+                    : null
+                }
+              />
+              {notes.status === "failed" ? (
+                <p className="preview-note">
+                  The annotations could not be loaded. The file is shown without
+                  them.
+                </p>
+              ) : null}
+            </div>
+            {citations.length > 0 ? (
+              <aside className="preview-sources" aria-label={sourcesTitle}>
+                <div className="preview-sources-head">
+                  <strong>{sourcesTitle}</strong>
+                  <span className="preview-nav">
                     <button
                       type="button"
-                      className={`source-item ${focus === index ? "is-focused" : ""}`}
-                      onClick={() => go(index)}
+                      className="btn-ghost btn-sm"
+                      disabled={focus === null || focus <= 0}
+                      onClick={() => go((focus ?? 0) - 1)}
+                      aria-label="Previous source"
                     >
-                      <span className="source-num">{index + 1}</span>
-                      <span className="source-body">
-                        <span className="source-meta">
-                          {item.label !== "" ? (
-                            <strong>{item.label}</strong>
-                          ) : null}
-                          <span>{item.fileName}</span>
-                          {item.location !== "" ? (
-                            <span>{item.location}</span>
-                          ) : null}
-                        </span>
-                        <q>{item.quote}</q>
-                        {!item.found ? (
-                          <small>
-                            Boxed on the image; the words were not read by OCR.
-                          </small>
-                        ) : null}
+                      <span className="icon-back" aria-hidden="true">
+                        <UiIcon name="chevron" size={14} />
                       </span>
                     </button>
-                  </li>
-                ))}
-              </ol>
-            </aside>
-          ) : null}
-        </div>
+                    <span className="num">
+                      {focus === null ? "–" : focus + 1} of {citations.length}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn-ghost btn-sm"
+                      disabled={focus !== null && focus >= citations.length - 1}
+                      onClick={() => go(focus === null ? 0 : focus + 1)}
+                      aria-label="Next source"
+                    >
+                      <UiIcon name="chevron" size={14} />
+                    </button>
+                  </span>
+                </div>
+                <ol>
+                  {citations.map((item, index) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: citations keep their order.
+                    <li key={`${item.fileId}-${index}`}>
+                      <button
+                        type="button"
+                        className={`source-item ${focus === index ? "is-focused" : ""}`}
+                        onClick={() => go(index)}
+                      >
+                        <span className="source-num">{index + 1}</span>
+                        <span className="source-body">
+                          <span className="source-meta">
+                            {item.label !== "" ? (
+                              <strong>{item.label}</strong>
+                            ) : null}
+                            <span>{item.fileName}</span>
+                            {item.location !== "" ? (
+                              <span>{item.location}</span>
+                            ) : null}
+                          </span>
+                          <q>{item.quote}</q>
+                          {!item.found ? (
+                            <small>
+                              Boxed on the image; the words were not read by
+                              OCR.
+                            </small>
+                          ) : null}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+              </aside>
+            ) : notes.status === "loading" ? (
+              <AnnotationsLoading />
+            ) : null}
+          </div>
+        )}
       </div>
     </div>,
     container ?? document.body,
@@ -437,11 +542,15 @@ function PdfViewer({
   citations,
   focused,
   tools = false,
+  marks: layer,
 }: {
   url: string;
   citations: EvidenceCitation[];
   focused: EvidenceCitation | null;
   tools?: boolean;
+  /** Draws its own layer over the page from the passages found on it, in place of the
+   * highlights (the annotations of a file on a D&I request). */
+  marks?: PdfMarks;
 }) {
   // Relative to the width that fits the stage: 1 fits, 2 is twice that.
   const [zoom, setZoom] = useState(1);
@@ -452,6 +561,8 @@ function PdfViewer({
   const [state, setState] = useState<PdfState>({ status: "loading" });
   const [page, setPage] = useState(focused?.page ?? citations[0]?.page ?? 1);
   const [boxes, setBoxes] = useState<Array<{ box: Box; index: number }>>([]);
+  // The page the boxes were found on: until a page is drawn, the last one's are not its.
+  const [boxedPage, setBoxedPage] = useState(0);
   // The passages to mark, by their content: the parent passes a new array on each of its
   // renders, and a new array alone must not draw the page again.
   const marks = JSON.stringify(
@@ -616,6 +727,7 @@ function PdfViewer({
       }
     }
     setBoxes(found);
+    setBoxedPage(page);
   }, [page, quotes, state, zoom]);
 
   useEffect(() => {
@@ -722,20 +834,26 @@ function PdfViewer({
       ) : null}
       <div className="pdf-page">
         <canvas ref={canvas} />
-        {boxes.map((entry, position) => (
-          <Highlight
-            // biome-ignore lint/suspicious/noArrayIndexKey: boxes keep their order.
-            key={position}
-            box={entry.box}
-            focused={citations[entry.index] === focused}
-            number={
-              boxes.findIndex((other) => other.index === entry.index) ===
-              position
-                ? entry.index + 1
-                : null
-            }
-          />
-        ))}
+        {layer !== undefined
+          ? layer(
+              boxedPage === page ? boxes : [],
+              page,
+              state.status === "ready" && boxedPage === page,
+            )
+          : boxes.map((entry, position) => (
+              <Highlight
+                // biome-ignore lint/suspicious/noArrayIndexKey: boxes keep their order.
+                key={position}
+                box={entry.box}
+                focused={citations[entry.index] === focused}
+                number={
+                  boxes.findIndex((other) => other.index === entry.index) ===
+                  position
+                    ? entry.index + 1
+                    : null
+                }
+              />
+            ))}
       </div>
     </div>
   );

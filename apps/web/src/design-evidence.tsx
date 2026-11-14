@@ -74,7 +74,7 @@ import {
   Problem,
   usePlanAction,
 } from "./evidence-plan-view";
-import { PreviewButton } from "./evidence-preview";
+import { EvidencePreview, PreviewButton } from "./evidence-preview";
 import { formatOf, wordingOf } from "./evidence-requests-model";
 import {
   carriesFiles,
@@ -1098,6 +1098,11 @@ function Row({
   } | null>(null);
   // A change to one of its files, confirmed by the server.
   const [fileDone, setFileDone] = useState<string | null>(null);
+  // The file whose annotations are open in the preview (its menu's "Annotations").
+  const [annotating, setAnnotating] = useState<{
+    id: string;
+    fileName: string;
+  } | null>(null);
   // The assurance chain's check of the request, and the findings its issues are.
   const assured = row.assurance;
   const findingsAction = useFindingsAction(ids);
@@ -1597,6 +1602,21 @@ function Row({
                           file,
                         );
                         const fileMenu: RowMenuItem[] = [
+                          // The file with the basis the agent proposed for it, to
+                          // review (docs/evidence-annotations.md): a file on a D&I
+                          // request only.
+                          ...(item.phase === "DESIGN"
+                            ? [
+                                {
+                                  label: "Annotations",
+                                  onSelect: () =>
+                                    setAnnotating({
+                                      id: file.fileId,
+                                      fileName: file.name,
+                                    }),
+                                },
+                              ]
+                            : []),
                           ...(line?.actions ?? []),
                           ...(canAct &&
                           file.via === "LINK" &&
@@ -1624,6 +1644,11 @@ function Row({
                                     onDialog({
                                       mode: "review",
                                       fileId: file.fileId,
+                                      // The request it is opened from: the dialog's
+                                      // full preview shows its annotations.
+                                      ...(item.phase === "DESIGN"
+                                        ? { requirementId: item.id }
+                                        : {}),
                                     })
                                   }
                                 >
@@ -1657,6 +1682,19 @@ function Row({
                       })}
                     </ul>
                   )}
+                  {annotating !== null ? (
+                    <EvidencePreview
+                      organizationId={ids.organizationId}
+                      projectId={ids.projectId}
+                      files={[annotating]}
+                      title={item.title}
+                      annotations={{
+                        controlId: ids.controlId,
+                        requirementId: item.id,
+                      }}
+                      onClose={() => setAnnotating(null)}
+                    />
+                  ) : null}
                   {assured !== null && row.reading === 0 ? (
                     <CheckOfRequest
                       ids={ids}
