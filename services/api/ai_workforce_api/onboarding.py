@@ -1729,10 +1729,10 @@ def _readiness(
     # control added afterwards gets its work then (scope_changes.reconcile_scope).
     if not included:
         rcm_advisories.append(
-            "No controls yet: load the standard library or upload the client's RCM."
+            "No controls yet: load the standard library or upload the organization's RCM."
             if settings.kicked_off_at is not None
             else "No controls yet. After launch, set up the systems and controls in "
-            "Controls: load the standard library or upload the client's RCM."
+            "Controls: load the standard library or upload the organization's RCM."
         )
     # Systems come from the RCM: identified on upload, or added here for the library.
     on_systems = [c for c in included if runs_on_a_system(c.domain)]
@@ -2039,7 +2039,7 @@ def _update_profile(
     _authorize_setup(connection, principal, organization_id, project_id)
     client = body.client_name.strip()
     if contains_secret({"client": client}):
-        raise ValueError("client name holds a secret")
+        raise ValueError("organization name holds a secret")
     scope = None if body.scope is None else _checked_scope(body.scope)
     with transaction(connection) as cursor:
         from ai_workforce_api.clients import assign_client, fold

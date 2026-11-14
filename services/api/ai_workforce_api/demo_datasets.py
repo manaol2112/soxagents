@@ -96,7 +96,7 @@ class PlaceholderDataset:
                 context.organization_id,
                 f"SOX ITGC demo FY{context.today.year}",
                 free_slug(cursor, context.organization_id, context.slug),
-                "Synthetic demo engagement. Nothing here is real client data.",
+                "Synthetic demo engagement. Nothing here is real organization data.",
                 context.requested_by,
             ),
         )

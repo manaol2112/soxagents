@@ -411,20 +411,20 @@ def evaluate(facts: Facts) -> ReadinessBody:
     for label, why in facts.values_missing:
         criteria.append(
             Blocker(
-                detail=f"The control needs the client's value for {label}.",
-                why=f"{why} The library cannot set it for the client.",
-                resolve="Enter it under Client values on the Design tab.",
+                detail=f"The control needs the organization's value for {label}.",
+                why=f"{why} The library cannot set it for the organization.",
+                resolve="Enter it under Organization-specific values on the Design tab.",
             )
         )
     for text, question in facts.questions:
         criteria.append(
             Blocker(
                 detail=f"Proposed by the library: {text}",
-                why=f"The library cannot know this for the client: {question} Until it is "
+                why=f"The library cannot know this for the organization: {question} Until it is "
                 "answered, testing would leave out a condition the control description "
                 "requires.",
-                resolve="On the Design tab, approve it with the client's value in place of the "
-                "bracketed text, or reject it with the reason it does not apply.",
+                resolve="On the Design tab, approve it with the organization's value in place of "
+                "the bracketed text, or reject it with the reason it does not apply.",
             )
         )
     criteria += [Blocker(detail=f"{topic}: {detail}", why=why, resolve=resolve)

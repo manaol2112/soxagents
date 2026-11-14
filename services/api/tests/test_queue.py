@@ -658,7 +658,9 @@ def test_every_blocker_is_a_hold_with_its_code_and_where_it_is_cleared() -> None
         == "RECIPIENT_NOT_ALLOWED"
     )
     assert (
-        problem_code("cc", "y@other.example is outside the client's email domains (a.example).")
+        problem_code(
+            "cc", "y@other.example is outside the organization's email domains (a.example)."
+        )
         == "RECIPIENT_OUTSIDE_DOMAINS"
     )
     assert problem_code("recipient", "nope is not a valid email address.") == "RECIPIENT_INVALID"

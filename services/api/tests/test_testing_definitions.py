@@ -369,7 +369,7 @@ def test_a_control_copied_from_version_2_adopts_version_3_when_a_person_chooses(
     assert [a["text"] for a in approved if a is not timely] == [
         item.text for item in definition.approved
     ]
-    assert timely["note"].startswith("From the library standard; it depends on the client:")
+    assert timely["note"].startswith("From the library standard; it depends on the organization:")
     assert body["attributes"]["proposed"] == []
     history = {a["text"]: a["note"] for a in body["attributes"]["history"]}
     assert history[retiring["was"]].startswith("Retired by library v4:")

@@ -164,7 +164,7 @@ def challenges(
         ],
         source="MODEL",
         note="Drafted by the planning agent from the control's definition. Guidance only: "
-        "nothing here is known about the client.",
+        "nothing here is known about the organization.",
     )
 
 

@@ -138,7 +138,7 @@ def create_client(
         organization_id=organization_id,
     )
     if body.name == "" or contains_secret({"client": body.name}):
-        raise ValueError("client name is invalid")
+        raise ValueError("organization name is invalid")
     with transaction(connection) as cursor:
         row = cursor.execute(
             """
@@ -173,7 +173,7 @@ def rename_client(
     if access.role not in _ORG_WIDE:
         raise AccessDenied()
     if body.name == "" or contains_secret({"client": body.name}):
-        raise ValueError("client name is invalid")
+        raise ValueError("organization name is invalid")
     with transaction(connection) as cursor:
         current = cursor.execute(
             "SELECT version FROM clients WHERE id = %s AND organization_id = %s FOR UPDATE",
@@ -228,7 +228,7 @@ def assign_client(
             chosen = None
         else:
             if contains_secret({"client": folded}):
-                raise ValueError("client name is invalid")
+                raise ValueError("organization name is invalid")
             cursor.execute(
                 """
                 INSERT INTO clients (organization_id, name, created_by) VALUES (%s, %s, %s)

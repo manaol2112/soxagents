@@ -47,7 +47,7 @@ REQUEST_GROUPS: dict[str, str] = {
 GROUP_LABELS = {
     "draft": "Draft",
     "awaiting_approval": "Awaiting approval",
-    "with_client": "With the client",
+    "with_client": "With the organization",
     "partly_received": "Partly received",
     "received": "Received",
     "closed": "Closed without receipt",
@@ -1209,7 +1209,8 @@ def status(
                 1 for r in live if r["phase"] == FUTURE_PHASE and r["status_group"] in NOT_SENT
             ),
             "cancelled_left_out": sum(1 for r in requests if r["status_group"] == "cancelled"),
-            "rule": "Pending = not yet received (draft, awaiting approval, with the client, partly "
+            "rule": "Pending = not yet received (draft, awaiting approval, with the organization, "
+            "partly "
             "received). Overdue = sent, not fully received, and past its due date. Future "
             "phase = a roll-forward request not yet sent; it is counted in pending.",
             "requirements": requirement_states,

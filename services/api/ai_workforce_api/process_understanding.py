@@ -1056,7 +1056,8 @@ def rules_map(
         if statement.strip()
         else (
             "Built from the control's RCM record. Steps marked inferred are the common "
-            "practice for a control of this kind: confirm each against the client's process, "
+            "practice for a control of this kind: confirm each against the organization's "
+            "process, "
             "or replace it, before confirming the understanding."
         )
     )

@@ -47,7 +47,7 @@ ROLE_WORDS: dict[str, str] = {
     "PREPARER": "the preparer",
     "REVIEWER": "the independent reviewer",
     "APPROVER": "an approver",
-    "CLIENT": "the control owner (client)",
+    "CLIENT": "the organization's control owner",
     "OWNER": "the engagement owner",
     "AGENT": "an agent",
     "NONE": "no one",

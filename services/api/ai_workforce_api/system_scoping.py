@@ -907,16 +907,16 @@ def adapt_control(
     wording = (
         "the library standard it matches, worded for this system"
         if candidate.library_key
-        else "the client's wording, with the other system's name replaced"
+        else "the organization's wording, with the other system's name replaced"
     )
     raise_issues(
         cursor, organization_id, project_id, control_id,
         [Issue(
             origin="ATTRIBUTES", kind="AMBIGUOUS",
             topic="Confirm the control for this system",
-            detail=f"Adapted for {system} from the client's {sources}. Its description is "
+            detail=f"Adapted for {system} from the organization's {sources}. Its description is "
             f"{wording}.",
-            why="The client's RCM describes this control for other systems only; how it "
+            why="The organization's RCM describes this control for other systems only; how it "
             f"operates for {system} is not documented yet.",
             resolve=f"Confirm with the control owner that {system} has this control and "
             "that the description fits, edit it if needed, and resolve this with a note.",

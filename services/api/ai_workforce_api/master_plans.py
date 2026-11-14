@@ -1013,7 +1013,7 @@ def blockers_of(plan: _Plan) -> list[Blocker]:
             add("CLARIFICATION", f"{fact.label}: {fact.question}", False,
                 "FACTS" if stated else "VALUES")  # fmt: skip
     for label, _why in plan.values_missing:
-        add("CLARIFICATION", f"The client's value for {label} is not recorded.", False,
+        add("CLARIFICATION", f"The organization's value for {label} is not recorded.", False,
             "VALUES")  # fmt: skip
     if plan.provisional:
         add("CLARIFICATION", "Critical information is missing; the plan rests on assumptions.",

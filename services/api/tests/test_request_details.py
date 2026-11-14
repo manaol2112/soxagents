@@ -356,7 +356,8 @@ def test_recipients_are_assigned_inline_within_the_clients_domains(migrated: Dat
         ({"recipient": "not-an-email"}, "not-an-email is not a valid email address."),
         (
             {"recipient": "someone@elsewhere.example"},
-            "someone@elsewhere.example is outside the client's email domains (client.example).",
+            "someone@elsewhere.example is outside the organization's email domains "
+            "(client.example).",
         ),
         (
             {"cc": ["iam@client.example"]},
@@ -368,7 +369,8 @@ def test_recipients_are_assigned_inline_within_the_clients_domains(migrated: Dat
         ),
         (
             {"cc": ["auditor@elsewhere.example"]},
-            "auditor@elsewhere.example is outside the client's email domains (client.example).",
+            "auditor@elsewhere.example is outside the organization's email domains "
+            "(client.example).",
         ),
         (
             {"due_on": (datetime.now(UTC) - timedelta(days=1)).date().isoformat()},
@@ -505,7 +507,7 @@ def test_contacts_are_added_inline_and_saved_to_the_engagement(migrated: Databas
     assert [item["email"] for item in listed].count("alex.rivera@client.example") == 1
     outside = owner.post(base, json={"name": "Sam", "email": "sam@elsewhere.example"})
     assert outside.status_code == 409
-    assert "outside the client's email domains" in outside.json()["detail"]
+    assert "outside the organization's email domains" in outside.json()["detail"]
     assert len(_audit(migrated, team["project"], "engagement_contact.added")) == 1
 
 

@@ -153,15 +153,15 @@ def plan_steps(connection: psycopg.Connection[Any], project_id: UUID) -> list[St
     if values:
         steps.append(StepBody(
             stage="PLANS", kind="plans_values",
-            title=f"Answer {_plural(values, 'client value')}",
+            title=f"Answer {_plural(values, 'organization-specific value')}",
             detail="Asked on the test plans; testing waits for some of them.",
             section="testing",
         ))  # fmt: skip
     if described:
         steps.append(StepBody(
             stage="PLANS", kind="plans_describe",
-            title=f"Describe {_plural(described, 'client control')}",
-            detail="Optional: the client's RCM leaves how they operate unsaid. Each "
+            title=f"Describe {_plural(described, 'organization-specific control')}",
+            detail="Optional: the organization's RCM leaves how they operate unsaid. Each "
             "plan's Describe the control asks it; approval does not wait for it.",
             section="testing",
         ))  # fmt: skip
