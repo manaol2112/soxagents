@@ -2127,7 +2127,7 @@ describe("the D&I requests list: actions", () => {
     assert.match(
       requestsProblem(
         409,
-        "it has already been requested from the client; waive it instead",
+        "it has already been requested from the organization; waive it instead",
       ) ?? "",
       /already gone to the organization/,
     );

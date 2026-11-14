@@ -271,7 +271,7 @@ const CLOSE_OUT_REFUSALS: Record<string, ProjectNoticeCode> = {
   "the engagement is completed; reopen it to change it": "completed",
   "engagement is not active: it is completed and read-only": "completed",
   "engagement is not active: it is archived and read-only": "archived",
-  "client and period end are locked after launch": "locked",
+  "organization and period end are locked after launch": "locked",
 };
 
 export type ProjectNoticeCode =
@@ -329,7 +329,7 @@ export function noticeForStatus(
   }
   if (
     status === 422 &&
-    detail === "an engagement rolls forward from its own client's"
+    detail === "an engagement rolls forward from its own organization's"
   ) {
     return "rollforward";
   }

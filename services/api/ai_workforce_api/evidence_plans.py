@@ -5670,7 +5670,7 @@ def remove(
             raise PlanState("the requirement changed")
         if row[1] not in ("PLANNED", "AWAITING_DEPENDENCY"):
             raise PlanState(
-                "it has already been requested from the client; waive it instead"
+                "it has already been requested from the organization; waive it instead"
                 if row[1] == "REQUESTED"
                 else "the requirement is not open"
             )

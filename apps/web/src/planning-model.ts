@@ -2125,7 +2125,7 @@ export function planningProblem(status: number, detail = ""): string | null {
         "The procedure changed since this page loaded. Refresh and try again.",
       "the requirement changed":
         "This evidence item changed since the page loaded. Refresh and try again.",
-      "it has already been requested from the client; waive it instead":
+      "it has already been requested from the organization; waive it instead":
         "This item was already requested from the organization, so it cannot be removed. Waive it on the Request step instead.",
       "the requirement is not open": "This item is no longer open.",
       "sample evidence is requested with the samples the team selects":

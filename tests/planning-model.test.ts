@@ -2560,7 +2560,7 @@ describe("adding and removing evidence", () => {
     assert.equal(
       planningProblem(
         409,
-        "it has already been requested from the client; waive it instead",
+        "it has already been requested from the organization; waive it instead",
       ),
       "This item was already requested from the organization, so it cannot be removed. Waive it on the Request step instead.",
     );

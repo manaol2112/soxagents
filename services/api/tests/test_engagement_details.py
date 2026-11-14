@@ -96,7 +96,7 @@ def test_after_launch_the_client_and_period_stay(migrated: Database) -> None:
     assert detail["launched"] is True
     locked = owner.patch(f"{project}/details", json=_form(detail, client_name="Other Co"))
     assert locked.status_code == 409
-    assert locked.json()["detail"] == "client and period end are locked after launch"
+    assert locked.json()["detail"] == "organization and period end are locked after launch"
     moved = owner.patch(f"{project}/details", json=_form(detail, period_end="2030-12-31"))
     assert moved.status_code == 409
     renamed = owner.patch(f"{project}/details", json=_form(detail, name="SOX FY27 Interim"))

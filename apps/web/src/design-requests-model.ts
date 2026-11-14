@@ -1204,7 +1204,7 @@ export function requestsProblem(status: number, detail = ""): string | null {
   }
   if (status === 409) {
     const known: Record<string, string> = {
-      "it has already been requested from the client; waive it instead":
+      "it has already been requested from the organization; waive it instead":
         "This request has already gone to the organization, so it cannot be deleted.",
       "the request carrying it has gone for approval":
         "This request has gone for approval, so its wording is locked.",

@@ -80,7 +80,10 @@ describe("the setup agent's guide on the New engagement page", () => {
   });
 
   it("speaks to the client chosen and its history", () => {
-    assert.match(step(blank, "client").body[0] ?? "", /firm's 2 organizations/);
+    assert.match(
+      step(blank, "client").body[0] ?? "",
+      /the 2 organizations on record/,
+    );
     const earlier = step(
       { ...blank, client: { kind: "existing", id: "c1" } },
       "client",

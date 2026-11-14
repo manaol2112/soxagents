@@ -515,7 +515,7 @@ def create_project(
         _audit(cursor, organization_id, project_id, principal.id, "project.created", body.status)
         if body.rollforward_from is not None:
             if client_id is None or client_of(cursor, body.rollforward_from) != client_id:
-                raise ValueError("an engagement rolls forward from its own client's")
+                raise ValueError("an engagement rolls forward from its own organization's")
             copied = roll_forward(
                 cursor, organization_id, body.rollforward_from, project_id, principal.id
             )
@@ -799,7 +799,7 @@ def _run[T](settings: Settings, work: Callable[[psycopg.Connection[Any]], T]) ->
         raise HTTPException(status_code=409, detail="project changed") from None
     except ProjectDetailsLocked:
         raise HTTPException(
-            status_code=409, detail="client and period end are locked after launch"
+            status_code=409, detail="organization and period end are locked after launch"
         ) from None
     except ValueError:
         raise HTTPException(status_code=422, detail="project fields are invalid") from None

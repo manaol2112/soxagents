@@ -133,15 +133,13 @@ function clientBody(facts: GuideFacts): string[] {
     return choice.name.trim() === ""
       ? ["Enter the new organization's name."]
       : [
-          `${choice.name.trim()} is added to the firm's organizations when the engagement is created.`,
+          `${choice.name.trim()} is added to Organizations when the engagement is created.`,
         ];
   }
   return facts.clients.length === 0
-    ? [
-        "Enter the organization's name. It is added to the firm's organizations.",
-      ]
+    ? ["Enter the organization's name. It is added to Organizations."]
     : [
-        `Choose one of the firm's ${plural(facts.clients.length, "organization")}, or add a new one.`,
+        `Choose one of the ${plural(facts.clients.length, "organization")} on record, or add a new one.`,
         "For an organization audited before, an earlier engagement can be the starting point.",
       ];
 }

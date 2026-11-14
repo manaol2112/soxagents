@@ -556,7 +556,7 @@ def test_a_person_adds_and_removes_evidence_and_no_run_brings_it_back(
     )
     assert (refused.status_code, refused.json()["detail"]) == (
         409,
-        "it has already been requested from the client; waive it instead",
+        "it has already been requested from the organization; waive it instead",
     )
     # A planned item the agents proposed comes off the plan, kept on record.
     removed = None

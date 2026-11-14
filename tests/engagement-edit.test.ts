@@ -66,7 +66,7 @@ describe("editing an engagement with its form", () => {
     assert.equal(
       noticeForStatus(
         409,
-        "client and period end are locked after launch",
+        "organization and period end are locked after launch",
         "details",
       ),
       "locked",

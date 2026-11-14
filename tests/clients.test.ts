@@ -101,7 +101,7 @@ describe("a new engagement for a client", () => {
     assert.equal(
       noticeForStatus(
         422,
-        "an engagement rolls forward from its own client's",
+        "an engagement rolls forward from its own organization's",
         "create",
       ),
       "rollforward",
