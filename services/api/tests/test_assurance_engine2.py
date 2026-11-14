@@ -506,10 +506,20 @@ def test_a_comparison_that_fails_on_one_reading_takes_support_away_and_a_pass_gi
     assert issue.assessment == "NOT_DEMONSTRATED"
     assert [c.status for c in issue.checks] == ["PASSED"]
     assert issue.summary == "Both readings find the evidence does not show attribute A."
-    # And one that could not be made changes nothing either.
+    # Rewritten 14 November 2026 (the scenario tests; old expectation: a comparison that
+    # could not be made changes nothing, the attribute stays SUPPORTED). New: where it could
+    # not be made because a fact it names is not in the files (never stated, or its quote
+    # not found), the readings themselves said the comparison decides the element and what
+    # they compared is not there: the attribute is a person's. A fabricated approval beside
+    # a real grant line had left "approved before granted" supported on the grant alone.
     not_run = met | {"facts": TIMES[:1], "checks": [BEFORE_GRANT]}
     kept = run_chain(_both(not_run), chain).outcomes[0]
-    assert (kept.verdict, [c.status for c in kept.checks]) == ("SUPPORTED", ["NOT_RUN"])
+    assert (kept.verdict, [c.status for c in kept.checks]) == ("UNSETTLED", ["NOT_RUN"])
+    assert kept.summary == (
+        "A comparison a reading named for attribute A rests on a fact that is not in the "
+        "files, so what is left does not show it. Your judgment is needed."
+    )
+    assert kept.assessment == "INDETERMINATE"
 
 
 def test_a_failed_comparison_beside_a_file_not_read_stays_a_persons_and_is_not_hidden() -> None:
@@ -1156,8 +1166,12 @@ def test_a_change_to_the_context_puts_an_engine_2_run_out_of_date_and_never_an_e
     assert recorded == loaded.sha256
 
     # A person answers a walkthrough question: the understanding is no longer thin, and
-    # the run that read the earlier one is out of date, for that reason. What stands now
-    # is queued, as for any other change to what a run rests on.
+    # the run that read the earlier one is out of date, for that reason.
+    # Rewritten 14 November 2026, after the independent review (old expectation: the run is
+    # marked out of date and a new run is queued at once). New: a change to the
+    # understanding alone queues nothing. Answers are saved one by one and each check is
+    # two model readings, so the list says the check is out of date and a person starts it
+    # again ("Check again"); new evidence or any other change still records a run at once.
     saved = bench.owner.put(
         f"{bench.base}/controls/{bench.control}/walkthrough-answers",
         json={"answers": {"wt-ac01-provisioning": {
@@ -1172,6 +1186,22 @@ def test_a_change_to_the_context_puts_an_engine_2_run_out_of_date_and_never_an_e
         "Other: SAP Security assigns the role in SU01 from the approved ticket"
     ]
     assert now.understanding[0].kind == "WALKTHROUGH_ANSWER"
+    assert [(r[1], r[2]) for r in bench.runs()] == [("READY", False)]
+    shown = bench.entry()
+    assert shown["status"] == "OUT_OF_DATE" and shown["review"] is None
+    assert shown["out_of_date"] == ["The control's understanding changed."]
+    # Saving the same answer again changes nothing: when it was confirmed is not hashed.
+    assert bench.owner.put(
+        f"{bench.base}/controls/{bench.control}/walkthrough-answers",
+        json={"answers": {"wt-ac01-provisioning": {
+            "value": "Other: SAP Security assigns the role in SU01 from the approved ticket",
+            "not_applicable": False,
+        }}},
+    ).status_code == 200  # fmt: skip
+    assert context().sha256 == now.sha256
+    # The person starts it again: the old run goes out of date for that reason, and the
+    # new one is queued.
+    assert bench.rerun().status_code == 202
     runs = bench.runs()
     assert [(r[1], r[2]) for r in runs] == [("READY", True), ("PENDING", False)]
     assert runs[0][5] == "The control's understanding changed."

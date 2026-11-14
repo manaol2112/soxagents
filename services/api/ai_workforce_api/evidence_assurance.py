@@ -942,8 +942,12 @@ complete or correct a value: write a date the way the file writes it.
 was granted, the approver is not the requester, done within a number of days, within the \
 audit period): the attribute's code, the element's key, the test and the ids of the facts. \
 NOT_AFTER: left is at or before right. BEFORE: left is before right. SAME and DIFFERENT: \
-the two values are, or are not, the same. WITHIN_DAYS: right is no more than days calendar \
-days after left. IN_PERIOD: left is within the audit period (no right). You name the \
+the two values are, or are not, the same; name SAME only for two codes or two references \
+(a role's technical name, a ticket number), never for a name against a user id or a \
+description against a code. WITHIN_DAYS: right is no more than days calendar days after \
+left; never name it for a limit in business or working days, which you judge yourself. \
+IN_PERIOD: left, a date of the instance, is within the audit period (no right). Name the \
+facts in the order the element requires them: what must come first is left. You name the \
 comparison; it is made in code from the facts, and its result stands whatever you \
 answered. Name no comparison that no element calls for.
 - In follow_ups, ask only for something an element of an attribute needs and the files do \
@@ -1946,6 +1950,9 @@ def _stated_facts(
     return tuple(facts.values()), stated - len(facts)
 
 
+_WORKING_DAYS = re.compile(r"\b(?:business|working|work)[\s-]+days?\b|\bweekdays?\b", re.I)
+
+
 def _named_checks(
     answer: _Answer, chain: ChainInput, facts: Sequence[Fact]
 ) -> tuple[CheckRun, ...]:
@@ -1953,9 +1960,9 @@ def _named_checks(
     attribute, made in code on the reading's own facts and the audit period. One named
     for no element of the chain's attributes is not made: no element calls for it."""
     elements = {
-        (attribute.code.strip().upper(), key)
+        (attribute.code.strip().upper(), key): f"{attribute.text} {text}"
         for attribute in chain.attributes
-        for key, _text in elements_of(attribute)
+        for key, text in elements_of(attribute)
     }
     asks = [
         CheckAsk(
@@ -1967,7 +1974,12 @@ def _named_checks(
             days=item.days,
         )
         for item in answer.checks
-        if (item.attribute.strip().upper(), item.element.strip().lower()) in elements
+        if (said := elements.get((item.attribute.strip().upper(), item.element.strip().lower())))
+        is not None
+        # Code counts calendar days. A limit in business or working days (a Friday to the
+        # Monday after is one business day and three calendar days) is the readings' and
+        # a person's to judge: counted here it would fail what is on time.
+        and not (item.test == "WITHIN_DAYS" and _WORKING_DAYS.search(said))
     ]
     return run_checks(asks, {fact.id: fact for fact in facts}, chain.given.period)
 
@@ -2319,6 +2331,14 @@ CHECK_SPLIT = (
 CONCERN_SPLIT = (
     "Attribute {code} is not supported by these files: {sentence} Your judgment is needed."
 )
+CHECK_UNFOUNDED = (
+    "A comparison a reading named for attribute {code} rests on a fact that is not in the "
+    "files, so what is left does not show it. Your judgment is needed."
+)
+CONCERN_ASTRAY = (
+    "What the readings found on attribute {code} is read from a file that is not this "
+    "control's instance: {sentence} Your judgment is needed."
+)
 NOT_REQUESTED = "It is not one of the requested attributes."
 READ_AS: dict[str, str] = {
     "population": "a population or listing",
@@ -2333,6 +2353,8 @@ READ_AS: dict[str, str] = {
 # The concerns that say a file cannot support an element (section 10.5, item 3).
 _UNFIT: frozenset[str] = frozenset({"WRONG_SYSTEM", "DIFFERENT_SUBJECT"})
 MAX_CONCERNS = 12
+MAX_REASONS = 24
+MAX_CONFIRMATIONS = 60
 
 
 def confirmation_reason(name: str, kind: str) -> str:
@@ -2612,8 +2634,9 @@ def _outside_remark(
 
 def _fitted(review: dict[str, Any]) -> dict[str, Any]:
     """The review within its size: where it would be too large to keep (a request with a
-    great many files), each file's notes are cut to the first, then left out. A file is
-    never dropped from it."""
+    great many files), each file's notes are cut to the first, then left out; only then
+    are the completeness sentences, the confirmations and at last the files themselves
+    bounded, with what was left out counted."""
     for most, limit in ((None, None), (1, 120), (0, 0)):
         if most is not None:
             review = {
@@ -2623,9 +2646,28 @@ def _fitted(review: dict[str, Any]) -> dict[str, Any]:
                     for file in review["files"]
                 ],
             }
-        if len(json.dumps(review, ensure_ascii=False).encode("utf-8")) <= REVIEW_LIMIT:
-            break
+        if _review_size(review) <= REVIEW_LIMIT:
+            return review
+    # Still too large (hundreds of files on one request): the sentences and the lists that
+    # grow with the files are bounded, the rest counted, so the run can always be saved (a
+    # save that fails is retried, and each retry pays both readings again).
+    reasons = [str(item) for item in review["completeness"]["reasons"]]
+    if len(reasons) > MAX_REASONS:
+        reasons = [*reasons[:MAX_REASONS], f"And {len(reasons) - MAX_REASONS} more."]
+    review = {
+        **review,
+        "completeness": {**review["completeness"], "reasons": reasons},
+        "confirmations": review["confirmations"][:MAX_CONFIRMATIONS],
+    }
+    files = review["files"]
+    while _review_size(review) > REVIEW_LIMIT and len(review["files"]) > 1:
+        kept = review["files"][: len(review["files"]) // 2]
+        review = {**review, "files": kept, "files_more": len(files) - len(kept)}
     return review
+
+
+def _review_size(review: dict[str, Any]) -> int:
+    return len(json.dumps(review, ensure_ascii=False).encode("utf-8"))
 
 
 def review_of(
@@ -2663,6 +2705,14 @@ def review_of(
             for file_id in concern.file_ids:
                 unfit.setdefault(file_id, concern)
 
+    # The comparisons that could not be made because a fact they name is not in the files.
+    unfounded = {
+        (run.attribute, run.element)
+        for runs in (first.checks, second.checks)
+        for run in runs
+        if run.status == "NOT_RUN"
+        and (run.left is None or (run.right is None and run.test != "IN_PERIOD"))
+    }
     adjusted: list[Outcome] = []
     forced: dict[tuple[UUID, str], ElementState] = {}
     told: dict[UUID, str] = {}
@@ -2682,9 +2732,41 @@ def review_of(
         # An exception both readings show that the comparison left to a person (beside a
         # file not read, or where the readings differ on what else they find).
         exception = outcome.verdict == "UNSETTLED" and any(e.deviation for e in outcome.elements)
+        # An exception the readings read only from a file for another system or another
+        # subject says nothing of this control's instance either (the independent review
+        # of 14 November 2026: such a file's self-approval stayed an ISSUE beside its own
+        # WRONG_SYSTEM concern). Not an issue, not support: a person's.
+        strayed = [
+            passage
+            for element in outcome.elements
+            if element.deviation
+            for passage in element.passages
+        ]
         if failed:
             outcome = _check_failed(outcome, failed, chain, first, second)
             told[outcome.attribute_id] = failed[0].sentence
+        elif (
+            outcome.verdict == "ISSUE"
+            and strayed
+            and all(passage.file_id in unfit for passage in strayed)
+        ):
+            sentence = unfit[strayed[0].file_id].sentence
+            keys = {element.key for element in outcome.elements if element.deviation}
+            outcome = replace(
+                _unsupported(
+                    outcome, keys, CONCERN_ASTRAY.format(code=outcome.code, sentence=sentence),
+                    first, second,
+                ),
+                elements=tuple(
+                    replace(element, result=None, passages=(), absent=(), deviation=False)
+                    if element.key in keys
+                    else element
+                    for element in outcome.elements
+                ),
+            )  # fmt: skip
+            for key in keys:
+                forced.setdefault((outcome.attribute_id, key), "NOT_SHOWN")
+            told[outcome.attribute_id] = sentence
         elif supports:
             # What takes an attribute's support away, element by element: the element's
             # state for the follow-ups, the clause for the explanation, and the summary.
@@ -2705,16 +2787,32 @@ def review_of(
                     check.element, "NOT_SHOWN", sentence,
                     CONCERN_SPLIT.format(code=outcome.code, sentence=sentence),
                 ))  # fmt: skip
-            # Stricter than "an attribute whose passages are all in such a file": an
-            # element all of whose passages are in such files is not shown, and an
-            # attribute with such an element is not supported.
+            # A comparison a reading named for an element, resting on a fact that is not
+            # in the files (its quote was not found, or it was never stated): the reading
+            # itself said this comparison decides the element, and what it compared is
+            # not there. The element is not shown on the passages that are left (the
+            # scenario tests of 14 November 2026: a fabricated approval beside a real
+            # grant line left "approved before granted" supported on the grant alone).
+            for key in sorted({e for code, e in unfounded if code == outcome.code.strip().upper()}):
+                doubts.append((
+                    key, "CANNOT_TELL",
+                    "a comparison named for it rests on a fact that is not in the files",
+                    CHECK_UNFOUNDED.format(code=outcome.code),
+                ))  # fmt: skip
+            # An element that rests, even in part, on a file for another system or another
+            # subject is not shown by this control's instance, and an attribute with such
+            # an element is not supported (stricter than "all its passages": a grant read
+            # from another application's log beside this one's ticket shows nothing of
+            # this instance).
             for element in outcome.elements:
-                if (
-                    element.result == "MET"
-                    and element.passages
-                    and all(passage.file_id in unfit for passage in element.passages)
+                if element.result == "MET" and any(
+                    passage.file_id in unfit for passage in element.passages
                 ):
-                    sentence = unfit[element.passages[0].file_id].sentence
+                    sentence = next(
+                        unfit[passage.file_id].sentence
+                        for passage in element.passages
+                        if passage.file_id in unfit
+                    )
                     doubts.append((
                         element.key, "NOT_SHOWN", sentence,
                         CONCERN_SPLIT.format(code=outcome.code, sentence=sentence),
@@ -2748,11 +2846,19 @@ def review_of(
 
     # A date outside the period is a consideration, unless an element asks for the period
     # (a reading then names the comparison, and its result is the element's).
-    asked_for_period = any(check.test == "IN_PERIOD" for check in checks)
+    # Only a comparison that was made, on a date in that file: one named and not run, or
+    # one on another file's date, hides nothing.
+    compared = {
+        fact.file_id
+        for check in checks
+        if check.test == "IN_PERIOD" and check.status != "NOT_RUN"
+        for fact in check.facts
+    }
     outside = [
         remark
         for concern in concerns
-        if concern.code == "OUTSIDE_PERIOD" and not asked_for_period
+        if concern.code == "OUTSIDE_PERIOD"
+        and not any(file_id in compared for file_id in concern.file_ids)
         if (remark := _outside_remark(concern, first, second, chain)) is not None
     ]
     considerations = reconcile_considerations([*outside, *first.remarks], second.remarks)
@@ -3993,6 +4099,25 @@ def reconcile(
             basis_then = _basis(request, control, attributes, linked, on_record.engine_version)
             held_then = _gate_of(request, len(attributes), on_record.engine_version)
         same = on_record is not None and on_record.basis_sha256 == basis_then.sha256
+        if (
+            on_record is not None
+            and not same
+            and not earlier
+            and not rerun_failed
+            and on_record.status != "PENDING"
+            and replace(basis, context_sha256=on_record.context_sha256).sha256
+            == on_record.basis_sha256
+        ):
+            # Only the control's understanding changed (an answer saved, a value filled
+            # in). The list shows the check as out of date, with that reason, and a person
+            # starts it again: a check is two model readings, and answers are saved one by
+            # one, so nothing is queued for each of them. New evidence, or any other
+            # change, records the run as before, with the understanding as it then stands.
+            # A run still queued takes the new understanding in place (below); one the
+            # worker has taken reads the understanding as it stands when it starts.
+            if held is None:
+                found.covered |= set(basis.file_ids)
+            continue
         if request.waiting:
             # A file is still being read. What is on record no longer rests on the files
             # in force; the run that does is recorded when the reading lands. A run
@@ -4455,6 +4580,16 @@ _KIND_PHRASES: dict[str, str] = {
 QUESTION_LIMIT = 1000
 
 
+# What a question for the evidence owner never carries: an address, a link of any scheme, a
+# site, or a secret to hand over.
+_UNSENDABLE = re.compile(
+    r"@|\b[a-z][a-z0-9+.\-]*://|\bwww\.|\b[a-z0-9\-]+\.(?:com|net|org|io|co|example|biz|info)\b"
+    r"|\bpasswords?\b|\bpassphrases?\b|\bcredentials?\b|\bsecrets?\b|\bhash(?:es)?\b"
+    r"|\b(?:api|access|refresh)[\s_-]?(?:keys?|tokens?)\b|\bprivate[\s_-]?keys?\b",
+    re.I,
+)
+
+
 def _requests_by_attribute(follow_ups: Sequence[Any]) -> dict[str, str]:
     """What a run's review would ask for each attribute (by its id), as the finding's
     question: the requests of the follow-ups that cover it, in the review's order, each
@@ -4467,6 +4602,14 @@ def _requests_by_attribute(follow_ups: Sequence[Any]) -> dict[str, str]:
             continue
         request = clean_line(str(follow_up.get("request") or ""), ASK_REQUEST_LIMIT)
         if len(request) < 10 or not clean_follow_up(request):
+            continue
+        # A question a person may send to the evidence owner is not one reading's words
+        # alone: the request both readings asked for, or the sentence code wrote. And
+        # whoever wrote it, it names no address, link or site to send anything to and asks
+        # for no secret. Otherwise the finding keeps its own plain question.
+        raised = follow_up.get("raised_by")
+        by = set(raised) if isinstance(raised, list) else set()
+        if not (by >= {"ASSESSOR", "REVIEWER"} or by == {"CODE"}) or _UNSENDABLE.search(request):
             continue
         ids = follow_up.get("attribute_ids")
         for attribute_id in dict.fromkeys(str(i) for i in (ids if isinstance(ids, list) else [])):
@@ -4670,7 +4813,7 @@ def run_assessment(
               AND (status = 'PENDING'
                    OR (status = 'WORKING' AND lease_until < clock_timestamp()))
             RETURNING project_id, engagement_control_id, requirement_id, requested_by,
-                      basis_sha256, attempts, engine_version
+                      basis_sha256, attempts, engine_version, context_sha256
             """,
             (LEASE_MINUTES, token, run_id, MAX_ATTEMPTS),
         ).fetchone()
@@ -4730,13 +4873,31 @@ def _assess(
         )
     )  # fmt: skip
     texts: dict[UUID, str] = {}
+    queued_on = str(claimed[4])
+    if (
+        basis is not None
+        and basis.sha256 != queued_on
+        and int(claimed[6] or 1) == ENGINE_VERSION
+        and replace(basis, context_sha256=str(claimed[7] or "")).sha256 == queued_on
+    ):
+        # Only the control's understanding changed since the run was queued: it reads the
+        # understanding as it stands now, and its record says so before anything is read.
+        with transaction(connection) as cursor:
+            taken = cursor.execute(
+                "UPDATE evidence_assessments SET context_sha256 = %s, basis_sha256 = %s "
+                "WHERE id = %s AND status = 'WORKING' AND stale_at IS NULL "
+                "AND claim_token = %s RETURNING id",
+                (basis.context_sha256, basis.sha256, run_id, token),
+            ).fetchone()
+        if taken is not None:
+            queued_on = basis.sha256
     current = (
         control is not None
         and request is not None
         and basis is not None
         and not request.waiting
         and _gate_of(request, len(attributes)) is None
-        and basis.sha256 == str(claimed[4])
+        and basis.sha256 == queued_on
     )
     if current and request is not None and basis is not None:
         for file_id, text in connection.execute(

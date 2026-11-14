@@ -100,9 +100,10 @@ class ControlContext:
 
     @property
     def thin(self) -> bool:
-        """No fact of the understanding is confirmed: the evidence can only be judged
-        against the attributes."""
-        return not self.understanding
+        """No fact of the understanding was confirmed by a person: the evidence can only be
+        judged against the attributes. A value the records filled in by themselves is not
+        a person's understanding (understanding_authority.confirmed_by_a_person)."""
+        return not any(fact.confirmed_by == "PERSON" for fact in self.understanding)
 
     @property
     def period(self) -> tuple[date | None, date | None]:
@@ -139,18 +140,15 @@ class ControlContext:
     @property
     def sha256(self) -> str:
         """The hash of what the readings are given. A fact's ref is its place in the list
-        and says nothing by itself, so the facts are hashed without it and in an order of
-        their own: the same understanding always gives the same hash."""
+        and when it was confirmed is not part of what it says (saving the same answer again
+        stamps a new time), so the facts are hashed without either and in an order of their
+        own: the same understanding always gives the same hash, and a check is never out of
+        date for an answer that did not change."""
         shown = self.as_prompt()
         facts = sorted(
-            (
-                [
-                    fact["kind"], fact["question"], fact["answer"], fact["confirmed_at"] or "",
-                    fact["confirmed_by"],
-                ]
-                for fact in shown["confirmed"]
-            ),
-        )  # fmt: skip
+            [fact["kind"], fact["question"], fact["answer"], fact["confirmed_by"]]
+            for fact in shown["confirmed"]
+        )
         return hashlib.sha256(
             json.dumps({**shown, "confirmed": facts}, ensure_ascii=False, sort_keys=True).encode(
                 "utf-8"

@@ -1203,7 +1203,16 @@ def test_a_held_file_is_left_out_and_named_and_an_unsure_kind_is_read(
     assert done["review"]["confirmations"][0]["reason"].startswith(
         "The reader is not sure what kind of evidence ticket REQ-1041.txt is; it was read as"
     )
-    assert done["review"]["completeness"]["state"] == "INCOMPLETE"
+    # Rewritten after the independent review of 14 November 2026 (old expectation:
+    # INCOMPLETE). A is supported on the ticket, and these scripted readings say nothing of
+    # where the ticket comes from, so what A rests on needs corroboration: unresolved
+    # reliability is the worst state and a file left out no longer hides it. Both reasons
+    # are kept.
+    completeness = done["review"]["completeness"]
+    assert completeness["state"] == "RELIABILITY_UNRESOLVED"
+    assert any("was not part of the check" in reason for reason in completeness["reasons"])
+    assert any("needs corroboration" in reason for reason in completeness["reasons"])
+    assert done["review"]["overall"] != "SUFFICIENT"
 
     # The second file is a population: confirmed, it stays out, with its own sentence.
     assert bench.confirm(ticket, "population").status_code == 200

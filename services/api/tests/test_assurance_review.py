@@ -312,15 +312,21 @@ def test_a_source_only_one_reading_names_is_unknown() -> None:
 @pytest.mark.parametrize(
     ("one", "two", "stands"),
     [
+        # Rewritten after the independent review of 14 November 2026. Old expectation: the
+        # worse legibility of the two stands. New: what both readings find stands (section
+        # 10.6: "one both readings find partly unreadable"); one reading alone made an
+        # all-satisfied request read "a file was not read" though every file was read.
         ("CLEAR", "CLEAR", "CLEAR"),
-        ("CLEAR", "PARTLY_UNREADABLE", "PARTLY_UNREADABLE"),
-        ("CLEAR", "UNREADABLE", "UNREADABLE"),
+        ("CLEAR", "PARTLY_UNREADABLE", "CLEAR"),
+        ("CLEAR", "UNREADABLE", "CLEAR"),
         ("PARTLY_UNREADABLE", "PARTLY_UNREADABLE", "PARTLY_UNREADABLE"),
-        ("PARTLY_UNREADABLE", "UNREADABLE", "UNREADABLE"),
+        ("PARTLY_UNREADABLE", "UNREADABLE", "PARTLY_UNREADABLE"),
         ("UNREADABLE", "UNREADABLE", "UNREADABLE"),
     ],
 )
-def test_the_worse_legibility_stands(one: Legibility, two: Legibility, stands: Legibility) -> None:
+def test_the_legibility_both_readings_find_stands(
+    one: Legibility, two: Legibility, stands: Legibility
+) -> None:
     for first, second in ((one, two), (two, one)):
         (only,) = reconcile_files(
             [FileSaid(TICKET, legibility=first)], [FileSaid(TICKET, legibility=second)], [TICKET]
@@ -508,7 +514,9 @@ def test_an_incomplete_screenshot_both_readings_find_partly_unreadable() -> None
 
 
 def test_an_incomplete_screenshot_only_one_reading_finds_partly_unreadable() -> None:
-    """Named case: the worse legibility stands, so one reading is enough to say so."""
+    """Named case, rewritten after the independent review of 14 November 2026 (old: one
+    reading is enough to call the evidence partly unreadable). One reading alone settles
+    nothing: the file stays clear, its note is kept, and completeness is not touched."""
     clear = FileSaid(SCREENSHOT, "RELEVANT", "", "SYSTEM_RECORD")
     partly = FileSaid(
         SCREENSHOT,
@@ -520,10 +528,14 @@ def test_an_incomplete_screenshot_only_one_reading_finds_partly_unreadable() -> 
     )
     for first, second in (([clear], [partly]), ([partly], [clear])):
         reviews = reconcile_files(first, second, [SCREENSHOT])
-        assert completeness_of(reviews, names=NAMES, relied_on={SCREENSHOT}) == (
-            "PARTLY_UNREADABLE",
-            ("role-screen.png is partly unreadable: The right edge is cut off.",),
-        )
+        assert reviews[0].legibility == "CLEAR"
+        assert reviews[0].notes == ("The right edge is cut off.",)
+        assert completeness_of(reviews, names=NAMES, relied_on={SCREENSHOT}) == ("COMPLETE", ())
+    both = reconcile_files([partly], [partly], [SCREENSHOT])
+    assert completeness_of(both, names=NAMES, relied_on={SCREENSHOT}) == (
+        "PARTLY_UNREADABLE",
+        ("role-screen.png is partly unreadable: The right edge is cut off.",),
+    )
 
 
 def test_a_file_a_reading_could_not_read_is_said_plainly() -> None:
@@ -640,7 +652,10 @@ def test_the_worst_state_applies_and_every_sentence_is_kept() -> None:
         "access-listing.xlsx was prepared by a person, not produced by a system: what it "
         "shows needs corroboration."
     )
-    # Unreadable is worse than incomplete, which is worse than unresolved reliability.
+    # Rewritten after the independent review of 14 November 2026. Old expectation:
+    # unreadable is worse than incomplete, which is worse than unresolved reliability. New,
+    # as section 10.6 orders them: unresolved reliability is the worst, so a file left out
+    # never hides it (it did, and an all-satisfied request then read as sufficient).
     assert completeness_of(
         reviews,
         names=NAMES,
@@ -648,7 +663,7 @@ def test_the_worst_state_applies_and_every_sentence_is_kept() -> None:
         read_in_part=["change-log-2027.txt"],
         relied_on={LISTING},
     ) == (
-        "PARTLY_UNREADABLE",
+        "RELIABILITY_UNRESOLVED",
         (
             "scan-0007.pdf could not be read: Nothing readable was extracted.",
             "role-screen.png is partly unreadable.",
@@ -660,9 +675,14 @@ def test_the_worst_state_applies_and_every_sentence_is_kept() -> None:
     assert completeness_of(
         reviews[1:], names=NAMES, left_out=[population], relied_on={LISTING}
     ) == (
-        "INCOMPLETE",
+        "RELIABILITY_UNRESOLVED",
         ("all-users.csv was not part of the check: It is a population.", unresolved),
     )
+    # With nothing resting on the listing, unreadable is worse than incomplete.
+    assert completeness_of(reviews, names=NAMES, left_out=[population, scan])[0] == (
+        "PARTLY_UNREADABLE"
+    )
+    assert completeness_of(reviews[1:], names=NAMES, left_out=[population])[0] == "INCOMPLETE"
     assert completeness_of(reviews[1:], names=NAMES, relied_on={LISTING}) == (
         "RELIABILITY_UNRESOLVED",
         (unresolved,),
@@ -676,7 +696,7 @@ def test_a_file_with_no_name_is_still_a_sentence_and_a_name_is_cleaned() -> None
     ]
     names = {LISTING: "access\n listing.xlsx"}
     assert completeness_of(reviews, names=names, relied_on={LISTING}) == (
-        "PARTLY_UNREADABLE",
+        "RELIABILITY_UNRESOLVED",
         (
             "A file is partly unreadable.",
             "The source of access listing.xlsx is not shown, so what it shows needs corroboration.",
@@ -782,9 +802,20 @@ def test_sufficient_evidence_asks_for_nothing_more() -> None:
     )
 
 
-@pytest.mark.parametrize("completeness", ["INCOMPLETE", "PARTLY_UNREADABLE"])
+@pytest.mark.parametrize(
+    ("completeness", "said"),
+    [
+        ("INCOMPLETE", "A file was not read; what the read files show still stands."),
+        # Its own sentence (the independent review of 14 November 2026): "a file was not
+        # read" was said where every file was read and part of one could not be.
+        (
+            "PARTLY_UNREADABLE",
+            "Part of the evidence could not be read; what was read still stands.",
+        ),
+    ],
+)
 def test_a_file_not_read_does_not_undo_what_the_read_files_show(
-    completeness: Completeness,
+    completeness: Completeness, said: str
 ) -> None:
     overall, explanation = overall_of(
         [A, B], completeness=completeness, follow_up_kinds=[], waiting_on_file=True
@@ -792,8 +823,25 @@ def test_a_file_not_read_does_not_undo_what_the_read_files_show(
     assert overall == "SUFFICIENT"
     assert explanation == (
         "All 2 requested attributes are supported. No further evidence is needed for this "
-        "request. A file was not read; what the read files show still stands."
+        f"request. {said}"
     )
+
+
+def test_unresolved_reliability_is_never_hidden_by_a_file_left_out() -> None:
+    """The false pass the independent review reproduced: support rests on a file prepared
+    by a person, and a population left out by the gate made the state INCOMPLETE and the
+    outcome SUFFICIENT."""
+    reviews = [review(LISTING, source="MANAGEMENT_PREPARED")]
+    state, _reasons = completeness_of(
+        reviews,
+        names=NAMES,
+        left_out=[LeftOut("all-users.csv", "POPULATION", "It is a population.")],
+        relied_on={LISTING},
+    )
+    assert state == "RELIABILITY_UNRESOLVED"
+    overall, explanation = overall_of([A, B], completeness=state, follow_up_kinds=[])
+    assert overall == "ADDITIONAL_EVIDENCE"
+    assert "No further evidence is needed" not in explanation
 
 
 def test_support_that_rests_on_an_unreliable_report_needs_corroboration() -> None:

@@ -241,10 +241,14 @@ _CLOCK = (
 )
 # Zone abbreviations a record may print after a time. They are kept as written and never
 # turned into an offset: several of them (CST, IST, BST) name more than one zone.
+# Only names that are zones: a word after a time that is not one of these is not read as a
+# zone (a user id such as WD_SECURITY or ADMIN often follows a time in a log line, and a
+# time misread as zoned no longer matches the value a reading states for it).
 _ZONE_NAMES = (
-    "ACDT|ACST|AEDT|AEST|AKDT|AKST|AWST|BST|CDT|CEST|CET|CST|CT|EDT|EEST|EET|EST|ET|HKT"
-    "|HST|ICT|IST|JST|KST|MDT|MSK|MST|MT|MYT|NZDT|NZST|PDT|PHT|PKT|PST|PT|SAST|SGT|WEST"
-    "|WET|WIB"
+    "ACDT|ACST|AEDT|AEST|AKDT|AKST|AMT|ART|AST|AWST|AZT|BDT|BRT|BST|CAT|CDT|CEST|CET|CLT"
+    "|COT|CST|CT|EAT|EDT|EEST|EET|EST|ET|GMT|GST|HKT|HST|ICT|IRST|IST|JST|KST|MDT|MMT|MSK"
+    "|MST|MT|MYT|NPT|NZDT|NZST|NZT|PDT|PET|PHT|PKT|PST|PT|SAST|SGT|SST|TRT|UZT|WAT|WEST"
+    "|WET|WIB|WIT|WITA"
 )
 _TIME_AFTER = re.compile(
     rf"(?P<sep>T|\s*,\s*(?:at\s+)?|\s+(?:at\s+)?|\s*@\s*|\s+-\s+){_CLOCK}",
@@ -483,6 +487,16 @@ def _order(left: When, right: When) -> int | None:
             first, second = _moment(left, fine=fine), _moment(right, fine=fine)
             return (first > second) - (first < second)
     if left.day != right.day:
+        # A time written with an offset or a zone, set against one that is not on the same
+        # footing, may fall on the neighbouring day once both are in one zone
+        # ("11 January 00:30 +08:00" is 10 January 16:30 UTC): the dates then decide only
+        # when they are more than a day apart.
+        zoned_time = any(
+            when.clock is not None and (when.offset is not None or when.zone)
+            for when in (left, right)
+        )
+        if zoned_time and abs((left.day - right.day).days) <= 1:
+            return None
         return 1 if left.day > right.day else -1
     return None
 
@@ -538,7 +552,12 @@ _GENERIC_SYSTEM_WORDS = frozenset(
 
 
 def _norm(text: str) -> str:
-    folded = _APOSTROPHES.sub("", _plain(text).casefold())
+    # An accent is a way of writing the letter, not another name: "Núñez" and "Nunez".
+    bare = "".join(
+        char for char in unicodedata.normalize("NFKD", _plain(text))
+        if not unicodedata.combining(char)
+    )  # fmt: skip
+    folded = _APOSTROPHES.sub("", bare.casefold())
     return _THOUSANDS.sub("", folded)
 
 
@@ -952,13 +971,28 @@ def _order_check(
         # Calendar days between the dates as written; the times do not enter into it.
         apart = (second.day - first.day).days
         if apart < 0:
-            return "FAIL", f"{stated}: the second date is earlier than the first."
+            # The action came before the event that starts the clock (an account disabled
+            # the day before the termination takes effect): not late, and not for a count
+            # of days to judge.
+            return (
+                "NOT_RUN",
+                f"{stated}: the second date is earlier than the first, so the days allowed "
+                "are not counted.",
+            )
         gap = "the same day" if apart == 0 else f"{_days(apart)} apart"
         if apart <= allowed:
             return "PASS", f"{stated}: {gap}, within the {_days(allowed)} allowed."
         return "FAIL", f"{stated}: {gap}, more than the {_days(allowed)} allowed."
     order = _order(first, second)
     if order is None:
+        if first.day != second.day:
+            # Neighbouring days, one time shown with a zone the other is not in: which came
+            # first is not told by the dates as written.
+            return (
+                "NOT_RUN",
+                f"{stated}: their times are not shown in the same time zone and the dates "
+                "are a day apart, so the order cannot be told.",
+            )
         if ask.test == "NOT_AFTER":
             # The same day is not after, whatever the time that is not shown.
             return "PASS", f"{stated}: the same day."
@@ -988,6 +1022,16 @@ def _period_check(left: Fact, when: When, period: Period) -> tuple[RunStatus, st
     return "FAIL", f"{stated}: outside {_period_text(*bounds)}."
 
 
+_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_./\-]*", re.ASCII)
+
+
+def _code_like(value: str) -> bool:
+    """A value written as a code: one unbroken token holding a digit or an underscore
+    ("FI_AP_CLERK", "REQ-1041", "U10432"), not words."""
+    text = value.strip()
+    return bool(_CODE.fullmatch(text)) and any(char.isdigit() or char == "_" for char in text)
+
+
 def _match_check(ask: CheckAsk, left: Fact, right: Fact) -> tuple[RunStatus, str]:
     dated = (left.kind in TIME_KINDS, right.kind in TIME_KINDS)
     if dated == (True, True):
@@ -1014,12 +1058,36 @@ def _match_check(ask: CheckAsk, left: Fact, right: Fact) -> tuple[RunStatus, str
     match = compare_values(left.value, right.value, system=both_systems)
     if match == "UNSURE":
         if ask.test == "SAME":
+            # What was asked for against what was done, both written as codes: a code that
+            # extends another is another code ("HR_PARTNER_VIEW" and "HR_PARTNER_VIEW_ALL"
+            # are two roles), not a shorter way of writing it.
+            if (
+                {left.kind, right.kind} <= {"REQUESTED", "PERFORMED"}
+                and _code_like(left.value)
+                and _code_like(right.value)
+                and "_" in left.value
+                and "_" in right.value
+            ):
+                return "FAIL", f"{stated}: not the same."
             return "NOT_RUN", f"{stated}: these cannot be matched with certainty."
         return "NOT_RUN", f"{stated}: these cannot be told apart with certainty."
     if ask.test == "SAME":
         if match == "SAME":
             return "PASS", f"{stated}: the same."
-        return "FAIL", f"{stated}: not the same."
+        # Two wordings that differ may still name one thing (a role's display name and its
+        # technical name, a person and a user id, "Enabled" and "TRUE"): only two codes or
+        # two references that differ are different for certain. Anything else is left to
+        # the readings and a person.
+        coded = (left.kind == right.kind == "REFERENCE") or (
+            _code_like(left.value) and _code_like(right.value)
+        )
+        if coded:
+            return "FAIL", f"{stated}: not the same."
+        return (
+            "NOT_RUN",
+            f"{stated}: these read differently, but one may be another way of writing the "
+            "other, so the comparison is not made.",
+        )
     if match == "DIFFERENT":
         return "PASS", f"{stated}: different."
     return "FAIL", f"{stated}: the same."
@@ -1079,6 +1147,16 @@ def run_check(ask: CheckAsk, facts: Mapping[str, Fact], period: Period) -> Check
                 "passage it was read from, so it is not compared.",
             )
     if right is None:
+        if left.kind not in _PERIOD_KINDS:
+            # When a report was run, or the period it covers, is not when the control was
+            # performed: an extract made after the period's end is no exception.
+            return result(
+                "NOT_RUN",
+                _capital(
+                    f"{_NOUN[left.kind]} is not a date of the instance, so it is not compared "
+                    "with the audit period."
+                ),
+            )
         when = _read_date(left)
         if isinstance(when, str):
             return result("NOT_RUN", when)

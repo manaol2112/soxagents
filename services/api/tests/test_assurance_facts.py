@@ -401,8 +401,43 @@ def test_a_time_with_an_offset_is_not_ordered_against_one_without() -> None:
         "so the order cannot be told."
     )
     assert order("NOT_AFTER", "2027-01-10T09:00:00Z", "2027-01-10 10:00:00").status == "PASS"
-    # On different dates the date decides.
-    assert order("BEFORE", "2027-01-09T09:00:00Z", "2027-01-10 10:00:00").status == "PASS"
+    # Rewritten after the independent review of 14 November 2026. Old expectation: on
+    # different dates the date decides (09 January 09:00Z before 10 January 10:00: PASS).
+    # New: a time with an offset, set against one without, may fall on the neighbouring day
+    # once both are in one zone, so the dates decide only when more than a day apart.
+    assert order("BEFORE", "2027-01-09T09:00:00Z", "2027-01-10 10:00:00").status == "NOT_RUN"
+    assert order("BEFORE", "2027-01-08T09:00:00Z", "2027-01-10 10:00:00").status == "PASS"
+    # The case the review reproduced: 00:30 on the 11th at UTC+8 is 16:30 UTC on the 10th,
+    # before a grant at 20:00 on the 10th. It was a FAIL ("the approval is after").
+    assert order("NOT_AFTER", "2027-01-11 00:30 +08:00", "2027-01-10 20:00").status == "NOT_RUN"
+    assert order("NOT_AFTER", "2027-01-13 00:30 +08:00", "2027-01-10 20:00").status == "FAIL"
+
+
+def test_more_zone_names_are_known_and_a_word_after_a_time_is_not_a_zone() -> None:
+    # GST and EAT were in no list: read as local times they failed, though 09:00 GST is
+    # 05:00 UTC and 08:30 EAT 05:30 UTC.
+    assert order("NOT_AFTER", "10 Jan 2027 09:00 GST", "10 Jan 2027 08:30 EAT").status == "PASS"
+    assert order("BEFORE", "10 Jan 2027 09:00 GST", "10 Jan 2027 08:30 EAT").status == "NOT_RUN"
+    assert order("BEFORE", "10 Jan 2027 08:00 GST", "10 Jan 2027 09:30 GST").status == "PASS"
+    # A user id after a time is not a zone (the scenario tests of 14 November 2026: taking
+    # any capital word for one dropped the fact, and a late approval read as supported).
+    for line in (
+        "2027-03-03 14:30 WD_SECURITY assigned role HR_PARTNER_VIEW",
+        "2027-03-03 14:30 ADMIN assigned role HR_PARTNER_VIEW",
+        "2027-03-03 14:30 BASIS_ADMIN granted role",
+    ):
+        when = parse_when(line)
+        assert when is not None and when.zone == "" and when.offset is None, line
+        assert value_in_quote("2027-03-03 14:30", line, kind="PERFORMED_AT"), line
+
+
+def test_a_code_that_extends_another_is_another_code() -> None:
+    kinds: tuple[FactKind, FactKind] = ("REQUESTED", "PERFORMED")
+    made = match("SAME", "HR_PARTNER_VIEW", "HR_PARTNER_VIEW_ALL", kinds)
+    assert made.status == "FAIL"
+    assert made.sentence == "Asked for HR_PARTNER_VIEW, done HR_PARTNER_VIEW_ALL: not the same."
+    # A person's id against a longer one is not decided here.
+    assert match("SAME", "U10432", "U104321", ("SUBJECT", "SUBJECT")).status != "PASS"
 
 
 def test_times_in_zones_that_are_not_resolved_are_ordered_only_within_one_zone() -> None:
@@ -457,11 +492,15 @@ def test_within_days_counts_calendar_days() -> None:
     assert date(2027, 1, 8).weekday() == 4
     assert within("8 Jan 2027", "11 Jan 2027", 1).status == "FAIL"
 
+    # Rewritten after the independent review of 14 November 2026. Old expectation: an
+    # action dated before its trigger FAILS ("the second date is earlier than the first").
+    # New: it is not counted. An account disabled the day before the termination takes
+    # effect is not late, and a failure on both readings would have made it an exception.
     earlier = within("5 Jan 2027", "4 Jan 2027", 1)
-    assert earlier.status == "FAIL"
+    assert earlier.status == "NOT_RUN"
     assert earlier.sentence == (
         "Trigger date 5 January 2027, performed 4 January 2027: "
-        "the second date is earlier than the first."
+        "the second date is earlier than the first, so the days allowed are not counted."
     )
 
     unsaid = within("5 Jan 2027", "6 Jan 2027", None)
@@ -633,9 +672,20 @@ def test_different_surnames_are_different() -> None:
     different = match("DIFFERENT", "Jordan Reyes", "Dana Lee")
     assert different.status == "PASS"
     assert different.sentence == "Approver Jordan Reyes, performer Dana Lee: different."
+    # Rewritten after the independent review of 14 November 2026. Old expectation: SAME
+    # on two wordings that differ FAILS. New: only two codes or two references that differ
+    # are different for certain; names and words are left to the readings and a person
+    # ("Bob Smith" and "Robert Smith" failed, as did a person's name against a user id).
     same = match("SAME", "Jordan Reyes", "Jordan Lee")
-    assert same.status == "FAIL"
-    assert same.sentence == "Approver Jordan Reyes, performer Jordan Lee: not the same."
+    assert same.status == "NOT_RUN"
+    assert same.sentence == (
+        "Approver Jordan Reyes, performer Jordan Lee: these read differently, but one may "
+        "be another way of writing the other, so the comparison is not made."
+    )
+    assert match("SAME", "Bob Smith", "Robert Smith").status == "NOT_RUN"
+    assert match("SAME", "Jordan Reyes", "U10432").status == "NOT_RUN"
+    # An accent is a way of writing the letter.
+    assert match("SAME", "María José Núñez", "Maria Jose Nunez").status == "PASS"
 
 
 def test_the_approver_who_is_the_performer_fails_a_different_check() -> None:
@@ -647,15 +697,30 @@ def test_the_approver_who_is_the_performer_fails_a_different_check() -> None:
 def test_what_was_done_is_set_against_what_was_asked_for() -> None:
     kinds: tuple[FactKind, FactKind] = ("REQUESTED", "PERFORMED")
     assert match("SAME", "SAP_FI_DISPLAY", "SAP FI Display", kinds).status == "PASS"
-    differs = match("SAME", "Display role", "Admin role", kinds)
+    # Rewritten after the independent review of 14 November 2026 (old: "Display role"
+    # against "Admin role" FAILS). A role's display name against its technical name
+    # ("Accounts Payable Display" and "Z_AP_DISPLAY_ALL") failed the same way and became
+    # an exception: words are not compared for sameness in code. Two codes are.
+    assert match("SAME", "Display role", "Admin role", kinds).status == "NOT_RUN"
+    assert match("SAME", "Accounts Payable Display", "Z_AP_DISPLAY_ALL", kinds).status == (
+        "NOT_RUN"
+    )
+    assert match("SAME", "Enabled", "TRUE", ("VALUE", "VALUE")).status == "NOT_RUN"
+    differs = match("SAME", "FI_AP_DISPLAY", "FI_AP_ADMIN", kinds)
     assert differs.status == "FAIL"
-    assert differs.sentence == "Asked for Display role, done Admin role: not the same."
+    assert differs.sentence == "Asked for FI_AP_DISPLAY, done FI_AP_ADMIN: not the same."
+    refs: tuple[FactKind, FactKind] = ("REFERENCE", "REFERENCE")
+    assert match("SAME", "REQ-1041", "REQ-1042", refs).status == "FAIL"
+    assert match("SAME", "REQ-1041", "req 1041", refs).status == "PASS"
 
 
 def test_two_systems_are_matched_as_systems() -> None:
     kinds: tuple[FactKind, FactKind] = ("SYSTEM", "SYSTEM")
     assert match("SAME", "Workday", "Workday HCM", kinds).status == "PASS"
-    assert match("SAME", "Workday", "SAP ERP", kinds).status == "FAIL"
+    # Rewritten after the independent review of 14 November 2026 (old: FAIL). A file that
+    # names another system takes support away through the WRONG_SYSTEM concern; two system
+    # names that differ are not an exception shown by the records.
+    assert match("SAME", "Workday", "SAP ERP", kinds).status == "NOT_RUN"
     # Not systems: an extra word leaves the two unmatched.
     assert match("SAME", "Workday", "Workday HCM", ("VALUE", "VALUE")).status == "NOT_RUN"
 
@@ -1180,3 +1245,17 @@ def test_a_file_without_a_name_is_still_told() -> None:
         "A file names the system SAP ERP; this control is tested on Workday.",
         "One file is about Jordan Reyes and another file about Dana Lee.",
     ]
+
+
+def test_only_a_date_of_the_instance_is_set_against_the_audit_period() -> None:
+    # A report extracted after the period's end is no exception (the independent review of
+    # 14 November 2026: IN_PERIOD took EXTRACTED_AT and the period's own dates).
+    period = (date(2027, 1, 1), date(2027, 12, 31))
+    in_period = ask("IN_PERIOD", right="")
+    kinds: tuple[FactKind, ...] = ("EXTRACTED_AT", "PERIOD_FROM", "PERIOD_TO")
+    for kind in kinds:
+        made = run_check(in_period, table(fact("F1", kind, "2028-01-15")), period)
+        assert made.status == "NOT_RUN", kind
+        assert "is not a date of the instance" in made.sentence
+    performed = table(fact("F1", "PERFORMED_AT", "2028-01-15"))
+    assert run_check(in_period, performed, period).status == "FAIL"

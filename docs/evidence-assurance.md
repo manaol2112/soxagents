@@ -948,7 +948,69 @@ provisioning record is not among the files. 1 follow-up would resolve it.").
 - A follow-up is text for the person, who sends it through the existing request and
   follow-up steps after their approval. Nothing is sent by the check.
 
-### 10.8 Tests
+### 10.8 After the independent review and the scenario tests (14 November 2026)
+
+An independent review of engine 2 and the thirty-four scenario tests found the rules below
+too loose or too eager. Each is as the code now stands, and replaces what 10.2 to 10.7 say
+where they differ.
+
+Against a false pass:
+
+- Unresolved reliability is the worst completeness state (RELIABILITY_UNRESOLVED, then
+  PARTLY_UNREADABLE, then INCOMPLETE), so a file left out never hides it and the request is
+  not `SUFFICIENT` while it stands. A file is partly unreadable only where both readings
+  find it so; one reading's note is kept.
+- An element that rests, even in part, on a file for another system or another subject is
+  not shown, and its attribute is not supported (10.5 item 3 said "all its passages").
+- A comparison a reading named for an element that could not be made because a fact it
+  names is not in the files (its quote was not found, or it was never stated) takes the
+  attribute's support away: `UNSETTLED`. The reading said the comparison decides the
+  element, and what it compared is not there.
+- What was asked for against what was done, both written as codes: a code that extends
+  another is another code (`HR_PARTNER_VIEW` and `HR_PARTNER_VIEW_ALL`).
+
+Against a false exception:
+
+- SAME fails only for two references or two codes that differ. Words, names and a name
+  against an id are not compared for sameness in code (a role's display name and its
+  technical name, "Bob" and "Robert"): NOT_RUN, left to the readings and a person. Two
+  system names that differ are the WRONG_SYSTEM concern's, never a failed check.
+- WITHIN_DAYS counts calendar days and is not made for a limit in business or working
+  days; an action dated before its trigger is not counted (NOT_RUN), not failed.
+- A time shown with an offset or a zone, set against one that is not on the same footing,
+  is ordered by date only when the dates are more than a day apart. Only real zone names
+  are read as zones: a user id after a time is not one.
+- IN_PERIOD is made only on a date of the instance (approved, performed, the trigger),
+  never on when a report was run.
+- An exception the readings read only from a file for another system or another subject is
+  not an `ISSUE`: `UNSETTLED`, with the concern's sentence.
+
+Cost and safety:
+
+- A change to the control's understanding alone queues nothing: the list shows the check
+  as out of date ("The control's understanding changed.") and a person starts it again.
+  Answers are saved one by one, and each check is two model readings. New evidence, or any
+  other change, records the run as before, with the understanding as it then stands; a run
+  still queued takes the new understanding in place, and one the worker has just taken
+  reads it as it stands. The context's hash leaves out when a fact was confirmed, so saving
+  the same answer again changes nothing. The understanding is thin unless a person
+  confirmed at least one fact.
+- A finding's question, which a person may accept and send to the evidence owner, is the
+  request both readings asked for or the sentence code wrote, never one reading's words
+  alone, and never one that names an address, a link or a site, or asks for a secret.
+  Otherwise the finding keeps its own plain question.
+- The review always fits its size: after the files' notes, the completeness sentences, the
+  confirmations and at last the files are bounded, with what was left out counted
+  (`files_more`).
+
+Known and left as they are: a comparison trusts the order the readings name the facts in
+(both naming it the wrong way round on agreeing facts makes an issue a person then
+dismisses); code's own concerns need both readings to state the system or the subject; an
+exception shown still rests on the readings leaving `absent` empty for a record that shows
+it (stage 4); an engine 1 run in flight at the release is replaced by a queued engine 2 run
+that waits for the next start or event.
+
+### 10.9 Tests
 
 Pure tests with scripted readings and synthetic files only (no model, no client evidence):
 the thirty-four cases the product owner listed (services/api/tests/test_assurance_scenarios.py),

@@ -217,7 +217,9 @@ def reconcile_files(
 
     Where the readings differ the more cautious stands: the less relevant (NOT_RELEVANT
     only when both say so, otherwise CANNOT_TELL), the source only when both name the
-    same one, the worse legibility, and the worse report basis of those a reading names.
+    same one, the legibility both find (a file one reading alone finds partly unreadable
+    stays CLEAR, with that reading's note kept), and the worse report basis of those a
+    reading names.
     A reading that does not mention a file said nothing of it, so a file neither mentions
     is CANNOT_TELL, UNKNOWN, CLEAR, NOT_A_REPORT. An entry for a file not in `file_ids`
     is ignored.
@@ -246,7 +248,9 @@ def reconcile_files(
                 file_id=file_id,
                 relevance=_relevance(mine.relevance, theirs.relevance),
                 source=mine.source if mine.source == theirs.source else "UNKNOWN",
-                legibility=max(
+                # What both readings find: one reading alone settles nothing, and its
+                # note is kept all the same.
+                legibility=min(
                     mine.legibility, theirs.legibility, key=_LEGIBILITY_RANK.__getitem__
                 ),
                 report_basis=_report_basis(mine.report_basis, theirs.report_basis),
@@ -357,13 +361,16 @@ def completeness_of(
         )
         for sentence in _reliability(name, "UNKNOWN", "NOT_A_REPORT")
     )
+    # The worst that applies, as section 10.6 orders them: unresolved reliability first,
+    # so no other condition hides it from the outcome (the independent review of
+    # 14 November 2026: a file left out masked it, and the request read as sufficient).
     state: Completeness = (
-        "PARTLY_UNREADABLE"
+        "RELIABILITY_UNRESOLVED"
+        if unresolved
+        else "PARTLY_UNREADABLE"
         if unreadable
         else "INCOMPLETE"
         if incomplete
-        else "RELIABILITY_UNRESOLVED"
-        if unresolved
         else "COMPLETE"
     )
     return state, _distinct((*unreadable, *incomplete, *unresolved))
@@ -413,6 +420,7 @@ POTENTIAL = "This is a potential exception for the auditor to investigate, not a
 NEEDS_CORROBORATION = "What it rests on needs corroboration before it is relied on."
 NOTHING_MORE = "No further evidence is needed for this request."
 FILE_NOT_READ = "A file was not read; what the read files show still stands."
+PART_UNREAD = "Part of the evidence could not be read; what was read still stands."
 FILE_AWAITED = "A file is still to be read before this can be concluded."
 JUDGMENT = "A person's judgment is needed to conclude."
 CONTEXT_THIN = (
@@ -491,8 +499,10 @@ def overall_of(
     elif supported == len(lines):
         if completeness == "RELIABILITY_UNRESOLVED":
             overall, closing = "ADDITIONAL_EVIDENCE", NEEDS_CORROBORATION
-        elif completeness in ("INCOMPLETE", "PARTLY_UNREADABLE"):
+        elif completeness == "INCOMPLETE":
             overall, closing = "SUFFICIENT", f"{NOTHING_MORE} {FILE_NOT_READ}"
+        elif completeness == "PARTLY_UNREADABLE":
+            overall, closing = "SUFFICIENT", f"{NOTHING_MORE} {PART_UNREAD}"
         else:
             overall, closing = "SUFFICIENT", NOTHING_MORE
     elif waiting_on_file and not follow_ups:
