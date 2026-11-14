@@ -999,6 +999,14 @@ def misplaced(schema: dict[str, Any], value: Any) -> tuple[str, ...]:
         or not isinstance(value, dict)
     ):
         return ()
+    # Inside a recognised wrapper too (shape 1): the wrapped answer gets its one correction
+    # as an unwrapped one does.
+    if len(value) == 1:
+        ((wrapper, inner),) = value.items()
+        if wrapper not in schema["properties"] and wrapper in _WRAPPERS:
+            inner = _json_text(inner) if isinstance(inner, str) else inner
+            if isinstance(inner, dict):
+                value = inner
     carried: list[str] = []
     _carried(schema, value, [], carried)
     return tuple(carried)

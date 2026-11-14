@@ -640,3 +640,28 @@ def _all_pass(attributes: int) -> dict[str, Any]:
 
 def _row(client: Any, team: dict[str, Any], control_id: str) -> dict[str, Any]:
     return next(row for row in _controls(client, team) if row["id"] == control_id)
+
+
+def test_a_rejected_reviewer_answer_is_said_in_plain_words(migrated: Database) -> None:
+    """B1i review (13 November 2026): when the reviewer's re-performance is rejected by its
+    check, the review's note and failure_note say so in fixed plain words; the check's own
+    words are only on the call's outcome."""
+    team, client, _sheet_body, _file = _prepared_control(migrated, "review-plain", "LOG")
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    provider = _Provider([{"results": [{"index": 99, "result": "PASS", "note": "x"}]}])
+    with connect(migrated.url) as connection:
+        assert run_reperformance(connection, provider, UUID(review["id"])) == "DONE"
+        reasons = [
+            row[0]["reason"]
+            for row in connection.execute(
+                "SELECT o.outcome FROM model_calls m JOIN model_call_outcomes o "
+                "ON o.model_call_id = m.id WHERE m.project_id = %s "
+                "AND o.outcome ->> 'validation' = 'REJECTED'",
+                (team["project"],),
+            ).fetchall()
+        ]
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    plain = "the answer broke a rule its work is checked against."
+    assert review["reperform_note"].startswith("The reviewer could not finish ")
+    assert plain in review["reperform_note"] and plain in review["failure_note"]
+    assert reasons and all(reason not in review["failure_note"] for reason in reasons)

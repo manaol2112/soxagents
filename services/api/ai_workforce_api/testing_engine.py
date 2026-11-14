@@ -29,6 +29,7 @@ import psycopg
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError
 
+from ai_workforce_api.agent_answers import plain_problem
 from ai_workforce_api.agent_runs import cancel_requested, finish_cancelled
 from ai_workforce_api.control_design import design_for
 from ai_workforce_api.control_instances import FAMILY_FILES, family_ids, shared_with_family
@@ -1682,7 +1683,8 @@ def _test_item(
                 source = "MODEL"
                 record_outcome(connection, call_id, outcome_of(call.raw.output, results))
             except ValueError as error:
-                note = f"The tester's answer could not be used: {error}."
+                # Plain words for the person; the check's words stay on the outcome.
+                note = f"The tester could not finish: {plain_problem(str(error))}."
                 record_outcome(
                     connection, call_id, {"validation": "REJECTED", "reason": str(error)}
                 )

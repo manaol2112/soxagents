@@ -77,7 +77,6 @@ from ai_workforce_api.evidence_planning import (
     prompt_for,
     rules_plan,
     suite_wording,
-    unheld_quotes_left_out,
 )
 from ai_workforce_api.model_providers import (
     call_note,
@@ -400,11 +399,8 @@ class Planned:
     # FALLBACK only: what happened to the planner's answer, with nothing about what stood
     # in for it. A run that keeps the existing plan says this (generate, B1h).
     problem: str = ""
-    # The planner's last call, for what the system made of its answer (agent_answers), and
-    # MODEL only: the places of the facts left out because their quote is not in the
-    # control's records (unheld_quotes_left_out).
+    # The planner's last call, for what the system made of its answer (agent_answers).
     call: Call | None = None
-    dropped: tuple[str, ...] = ()
 
 
 # The planner's prompt version, recorded on every call (Milestone 3a).
@@ -518,21 +514,13 @@ def plan_for(
                 "evidence instead."
             )
             break
-        # A fact quoting words the records do not hold is a rejection, corrected like any
-        # other, on every answer but the last. On the last it is left out (never kept,
-        # never filled in) only when nothing else in the answer repeats what it claims;
-        # otherwise the answer is rejected and the plan kept (unheld_quotes_left_out). The
-        # plan's note and the call's outcome say what was left out.
+        # A fact quoting words the records do not hold is a rejection, on every answer:
+        # corrected on each but the last, and on the last the plan is kept (13 November
+        # 2026, the review of B1i). Such an answer is never used, in whole or in part: a
+        # search of the answer's words cannot tell a repeated or paraphrased claim from an
+        # honest one, so a fabricated quote must never pass.
         try:
-            output, dropped = (
-                unheld_quotes_left_out(call.raw.output, facts)
-                if attempt == PLAN_CORRECTIONS
-                else (call.raw.output, ())
-            )
-            return Planned(
-                check_plan(output, facts), "MODEL", _dropped_note(dropped), call.call_id,
-                call=call, dropped=dropped,
-            )  # fmt: skip
+            return Planned(check_plan(call.raw.output, facts), "MODEL", "", call.call_id, call=call)
         except ValueError as error:
             problem = str(error)
             happened = f"The agent's plan was rejected ({problem})."
@@ -559,19 +547,6 @@ def plan_for(
     # The rules' plan stands in for the model's: FALLBACK, with the failed call linked.
     # Whether it is written is generate's decision: never over a plan that stands.
     return Planned(rules, "FALLBACK", note[:500], call_id, happened[:400], call=call)
-
-
-def _dropped_note(dropped: tuple[str, ...]) -> str:
-    """The plan's note when facts of the planner's understanding were left out because
-    their quote is not in the control's records; empty when none was."""
-    if not dropped:
-        return ""
-    one = len(dropped) == 1
-    return (
-        f"{len(dropped)} fact{'' if one else 's'} of the planner's understanding quoted "
-        f"words the control's records do not hold, so {'it was' if one else 'they were'} "
-        "left out."
-    )
 
 
 @dataclass
@@ -4345,7 +4320,7 @@ def _planner_outcome(connection: psycopg.Connection[Any], planned: Planned, kept
     used, with the facts left out for a quote the records do not hold; or not used, with the
     person's sentence of what failed, what was kept and what to do."""
     if planned.source == "MODEL":
-        note_used(connection, planned.call, {"dropped": list(planned.dropped)})
+        note_used(connection, planned.call)
         return
     if planned.source != "FALLBACK":
         return

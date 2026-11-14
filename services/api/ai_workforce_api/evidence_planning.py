@@ -2556,59 +2556,6 @@ def quote_held(quote: str, held_in: str) -> bool:
     return len(needle) >= 3 and needle in held_in
 
 
-def _texts_of(value: Any) -> list[str]:
-    """Every text in an answer, at any depth."""
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, dict):
-        return [text for item in value.values() for text in _texts_of(item)]
-    if isinstance(value, list):
-        return [text for item in value for text in _texts_of(item)]
-    return []
-
-
-def unheld_quotes_left_out(output: Any, facts: PlanFacts) -> tuple[Any, tuple[str, ...]]:
-    """The planner's last answer without the facts of its understanding that say they come
-    from the records and quote words the records do not hold, and where each was (13
-    November 2026). The claim resting on a quote the records do not hold is never kept: the
-    fact is left out and nothing is put in its place. Only when nothing else in the answer
-    repeats what the fact claims (its value, in the summary, a rationale, a procedure, a
-    criterion, another fact or any other text): otherwise leaving the fact out would keep
-    the claim, so the answer is rejected (ValueError) and the plan stays as it was. Only
-    for the last answer (plan_for): every earlier one is corrected instead. An answer not
-    in the plan's shape is returned as it is, for check_plan to reject."""
-    understanding = output.get("understanding") if isinstance(output, dict) else None
-    found = understanding.get("facts") if isinstance(understanding, dict) else None
-    if not isinstance(understanding, dict) or not isinstance(found, list):
-        return output, ()
-    held_in = quote_text(check_sources(facts))
-    kept: list[Any] = []
-    dropped: list[str] = []
-    for index, fact in enumerate(found):
-        if (
-            isinstance(fact, dict)
-            and fact.get("basis") == "SOURCE"
-            and not quote_held(str(fact.get("quote") or ""), held_in)
-        ):
-            claim = quote_text(str(fact.get("value") or "")).strip(" .\u2026\"'")
-            others = quote_text(
-                " \n ".join(_texts_of({**output, "understanding": {
-                    **understanding, "facts": [f for f in found if f is not fact]}}))
-            )  # fmt: skip
-            if claim and claim in others:
-                raise ValueError(
-                    "plan quotes a source that does not say it: understanding.facts"
-                    f"[{index}].quote is not in the control's records, and the answer "
-                    "repeats what that fact claims elsewhere"
-                )
-            dropped.append(f"understanding.facts[{index}]")
-            continue
-        kept.append(fact)
-    if not dropped:
-        return output, ()
-    return {**output, "understanding": {**understanding, "facts": kept}}, tuple(dropped)
-
-
 # The model planner
 
 

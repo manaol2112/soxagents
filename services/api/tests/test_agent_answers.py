@@ -540,7 +540,7 @@ def test_the_shapes_of_itgc_ac_01_are_read_and_a_quote_the_records_lack_is_never
     assert plan[0] == "MODEL"
     facts = plan[1].get("facts", [])
     assert [fact["field"] for fact in facts] == ["DESCRIPTION"]
-    assert plan[2] == "" and calls[3][4]["dropped"] == []
+    assert plan[2] == "" and calls[3][4] == {"validation": "ACCEPTED"}
     # Nothing failed, so the step has nothing to say.
     context = _context(team, control)
     assert context["attributes_agent_notes"] == [] and context["attributes_failure_note"] == ""
@@ -787,13 +787,15 @@ def test_criteria_waiting_in_the_approved_plans_revision_are_named_on_the_attrib
 # The independent review of B1i (13 November 2026)
 
 
-def test_a_misquote_is_corrected_and_dropped_on_the_last_answer_only_if_nothing_repeats_it(
-    migrated: Database,
-) -> None:
-    """Decision 1: a fact whose quote the records do not hold is a rejection with a
-    correction on every answer but the last. On the last it is left out only when nothing
-    else in the answer repeats what it claims; otherwise the answer is rejected and the plan
-    kept, with the reason recorded (the review's probe: the CFO in the summary)."""
+def test_an_answer_with_a_fabricated_quote_is_never_used(migrated: Database) -> None:
+    """Rewritten on 13 November 2026 after the confirmation pass of B1i. Old expectation:
+    on the planner's last answer, a fact whose quote the records do not hold was left out
+    and the rest of the plan used, unless the answer repeated the fact's value elsewhere.
+    New: such an answer is never used, on any attempt: each but the last is corrected, the
+    last is rejected and the plan kept, with the plain sentence. Why: a literal search
+    cannot catch a claim repeated in other words, or repeated word for word in a quote the
+    check does not see (the review's probes: a made-up quote kept in the summary, a short
+    value such as "IT" matching everywhere), so a fabricated quote must never pass."""
     from test_planner_reliability import AC01, _agent_plan, _Answers
     from test_planning_gate import _control, _launched
 
@@ -802,64 +804,51 @@ def test_a_misquote_is_corrected_and_dropped_on_the_last_answer_only_if_nothing_
     org, project = UUID(str(team["org"])), UUID(str(team["project"]))
     with connect(migrated.url) as connection:
         good = _agent_plan(connection, project, control, "The agent's reading of the control.")
-    unheld = {"field": "PERFORMER", "value": "Somebody unnamed", "basis": "SOURCE",
-              "quote": "Somebody unnamed grants all access."}  # fmt: skip
-    misquoted = json.loads(json.dumps(good))
-    misquoted["understanding"]["facts"] = [unheld]
-    # Nothing else repeats the claim: corrected twice, then left out of the last answer.
-    planner = _Answers(misquoted)
-    with connect(migrated.url) as connection:
-        _changes, _drafts, note = generate(connection, planner, org, project, control,
-                                           team["owner_id"])  # fmt: skip
+        # The plan the agent made before: the one a rejected answer must leave as it is.
+        generate(connection, _Answers(good), org, project, control, team["owner_id"])
         connection.commit()
-    assert len(planner.requests) == 3
-    assert all("understanding.facts[0].quote" in r.prompt for r in planner.requests[1:])
-    plan = _rows(
-        migrated,
-        "SELECT source, understanding FROM evidence_plans WHERE engagement_control_id = %s",
-        control,
-    )[0]
-    assert plan[0] == "MODEL" and plan[1].get("facts", []) == []
-    assert "left out" in note
-    last = _rows(
-        migrated,
-        "SELECT o.outcome FROM model_calls m JOIN model_call_outcomes o "
-        "ON o.model_call_id = m.id WHERE m.target_id = %s "
-        "AND m.prompt_version LIKE 'engagement-planner/%%' ORDER BY m.created_at DESC LIMIT 1",
-        control,
-    )[0][0]
-    assert last == {"validation": "ACCEPTED", "dropped": ["understanding.facts[0]"]}
-    # The probe's case: the summary repeats what the misquoted fact claims. Leaving the
-    # fact out would keep the claim, so the answer is rejected and the plan kept.
-    cfo = json.loads(json.dumps(good))
     claim = "The CFO approves every access grant before it is provisioned"
-    cfo["understanding"]["summary"] = f"{claim}. {good['understanding']['summary']}"
-    cfo["understanding"]["facts"] = [
-        {"field": "REVIEWER", "value": "The CFO", "basis": "SOURCE", "quote": f"{claim}."}
-    ]
-    planner = _Answers(cfo)
-    with connect(migrated.url) as connection:
-        _changes, _drafts, note = generate(connection, planner, org, project, control,
-                                           team["owner_id"])  # fmt: skip
-        connection.commit()
-    assert len(planner.requests) == 3
-    summary = _rows(
-        migrated,
-        "SELECT understanding ->> 'summary' FROM evidence_plans WHERE engagement_control_id = %s",
-        control,
-    )[0][0]
-    assert "CFO" not in summary and note.startswith(KEPT_NOTE)
-    outcome_row = _rows(
-        migrated,
-        "SELECT o.outcome FROM model_calls m JOIN model_call_outcomes o "
-        "ON o.model_call_id = m.id WHERE m.target_id = %s "
-        "AND m.prompt_version LIKE 'engagement-planner/%%' ORDER BY m.created_at DESC LIMIT 1",
-        control,
-    )[0][0]
-    assert "repeats what that fact claims" in outcome_row["reason"]
-    assert outcome_row["note"]["failed"] == (
-        "The planner could not finish: the answer quoted the records for something they do not say."
-    )
+    for value, summary in (
+        ("Somebody unnamed", good["understanding"]["summary"]),  # nothing repeats it
+        ("The CFO", f"{claim}. {good['understanding']['summary']}"),  # the summary does
+        ("IT", good["understanding"]["summary"]),  # a short value found everywhere
+    ):
+        answer = json.loads(json.dumps(good))
+        answer["understanding"]["summary"] = summary
+        answer["understanding"]["facts"] = [
+            {"field": "REVIEWER", "value": value, "basis": "SOURCE", "quote": f"{claim}."}
+        ]
+        planner = _Answers(answer)
+        with connect(migrated.url) as connection:
+            _changes, _drafts, note = generate(connection, planner, org, project, control,
+                                               team["owner_id"])  # fmt: skip
+            connection.commit()
+        # Corrected on every answer but the last, each correction naming the place.
+        assert len(planner.requests) == 3, value
+        assert all("understanding.facts[0].quote" in r.prompt for r in planner.requests[1:])
+        # Never used: the plan is the one made before, with no word of the answer.
+        plan = _rows(
+            migrated,
+            "SELECT understanding FROM evidence_plans WHERE engagement_control_id = %s",
+            control,
+        )[0][0]
+        assert plan["summary"] == good["understanding"]["summary"], value
+        assert value not in [fact.get("value") for fact in plan.get("facts", [])]
+        assert note.startswith(KEPT_NOTE), value
+        last = _rows(
+            migrated,
+            "SELECT o.outcome FROM model_calls m JOIN model_call_outcomes o "
+            "ON o.model_call_id = m.id WHERE m.target_id = %s "
+            "AND m.prompt_version LIKE 'engagement-planner/%%' ORDER BY m.created_at DESC "
+            "LIMIT 1",
+            control,
+        )[0][0]
+        assert last["validation"] == "REJECTED"
+        assert "understanding.facts[0].quote" in last["reason"]
+        assert last["note"]["failed"] == (
+            "The planner could not finish: the answer quoted the records for something they "
+            "do not say."
+        )
 
 
 def test_a_property_inside_another_is_lifted_only_for_the_planner_and_the_readings() -> None:
@@ -897,6 +886,12 @@ def test_a_property_inside_another_is_lifted_only_for_the_planner_and_the_readin
                 else:
                     assert found.status == "MALFORMED" and found.raw.output == answer, where
                     assert models.misplaced(schema, answer) == (f"{carried} inside {host}",)
+                    # Inside a recognised wrapper too, as an object or as its text.
+                    for wrapped in ({OUTPUT_TOOL: answer}, {"output": json.dumps(answer)}):
+                        if "output" not in props:
+                            assert models.misplaced(schema, wrapped) == (
+                                f"{carried} inside {host}",
+                            )
                 checked += 1
     assert checked > 0
 

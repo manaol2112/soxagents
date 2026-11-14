@@ -36,6 +36,7 @@ from psycopg.types.json import Json
 from pydantic import BaseModel, Field
 
 from ai_workforce_api import independence
+from ai_workforce_api.agent_answers import plain_problem
 from ai_workforce_api.agent_runs import (
     CancelState,
     RunState,
@@ -813,7 +814,10 @@ def run_reperformance(
                     )
                 except ValueError as error:
                     failed_items += 1
-                    last_failure = f"The reviewer's answer for {item.label} was rejected: {error}."
+                    # Plain words for the person; the check's words stay on the outcome.
+                    last_failure = (
+                        f"The reviewer could not finish {item.label}: {plain_problem(str(error))}."
+                    )
                     record_outcome(
                         connection, call_id, {"validation": "REJECTED", "reason": str(error)}
                     )

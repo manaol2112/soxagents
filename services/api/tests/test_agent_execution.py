@@ -547,3 +547,42 @@ def _session(database: Database, user_id: UUID) -> TestClient:
         ),
         cookies={"aw_session": _token(database, user_id)},
     )
+
+
+class _Unusable:
+    """A tester whose answer fits the schema and fails the tester's own check."""
+
+    def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
+        del request, config
+        return ModelRaw({"results": [{"index": 99, "result": "PASS", "note": "x"}]}, (), 9, 9)
+
+
+def test_a_rejected_tester_answer_is_said_in_plain_words(migrated: Database) -> None:
+    """B1i review (13 November 2026): the item's note and the sheet's failure_note say in
+    fixed plain words that the answer could not be used; the check's own words are only on
+    the call's outcome."""
+    team, client, sheet = _ready_sheet(migrated, "exec-plain")
+    with connect(migrated.url) as connection:
+        assert (
+            run_sheet(connection, _Unusable(), UUID(sheet["id"]), None, _settings(migrated))
+            == "DONE"
+        )
+        notes = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT note FROM test_items WHERE test_sheet_id = %s", (sheet["id"],)
+            ).fetchall()
+        ]
+        reasons = [
+            row[0]["reason"]
+            for row in connection.execute(
+                "SELECT o.outcome FROM model_calls m JOIN model_call_outcomes o "
+                "ON o.model_call_id = m.id WHERE m.project_id = %s",
+                (team["project"],),
+            ).fetchall()
+        ]
+    plain = "The tester could not finish: the answer broke a rule its work is checked against."
+    assert notes and all(note.endswith(plain) for note in notes)
+    assert reasons and all(reason and reason not in plain for reason in reasons)
+    current = _sheet(client, team)
+    assert plain in current["failure_note"] and "index" not in current["failure_note"]
