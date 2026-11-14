@@ -843,9 +843,11 @@ Applied after the rules of section 3, stage 4:
    (`OUTSIDE_PERIOD`) is a consideration unless an attribute's element asks for it. As
    built, the rule is applied element by element, which is stricter: an element all of
    whose passages are in such files is not shown, and an attribute with such an element
-   is not supported. An element asks for the period when a reading names an `IN_PERIOD`
-   comparison; the date is then no consideration, and the comparison's result is the
-   element's.
+   is not supported. A comparison that fails on a fact read from such a file says nothing
+   of this control's instance: it is never an `ISSUE`, and it takes the attribute's
+   support away (`UNSETTLED`, with the concern's sentence). An element asks for the period
+   when a reading names an `IN_PERIOD` comparison; the date is then no consideration, and
+   the comparison's result is the element's.
 4. **An exception is never hidden by a missing file.** An exception both readings show
    while a file is left out or read in part stays a person's (`UNSETTLED`, as before), but
    its assessment is `CONTRADICTED` and the request's outcome `POTENTIAL_EXCEPTION`.

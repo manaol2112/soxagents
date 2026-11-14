@@ -2669,8 +2669,15 @@ def review_of(
     for given in outcomes:
         outcome = given
         named = tuple(c for c in checks if c.attribute == outcome.code.strip().upper())
-        failed = [check for check in named if check.status == "FAILED"]
-        failed_one = [check for check in named if check.status == "FAILED_ONE"]
+        # A comparison that fails on facts read from a file for another system or another
+        # subject says nothing of this control's instance: it is no exception shown, and
+        # it does take the attribute's support away (below).
+        astray = [
+            check
+            for check in named
+            if check.status == "FAILED" and any(fact.file_id in unfit for fact in check.facts)
+        ]
+        failed = [check for check in named if check.status == "FAILED" and check not in astray]
         supports = outcome.verdict in ("SUPPORTED", "PARTLY_SUPPORTED")
         # An exception both readings show that the comparison left to a person (beside a
         # file not read, or where the readings differ on what else they find).
@@ -2678,35 +2685,47 @@ def review_of(
         if failed:
             outcome = _check_failed(outcome, failed, chain, first, second)
             told[outcome.attribute_id] = failed[0].sentence
-        elif failed_one and supports:
-            keys = {check.element for check in failed_one}
-            outcome = _unsupported(
-                outcome, keys,
-                CHECK_SPLIT.format(code=outcome.code, sentence=failed_one[0].sentence),
-                first, second,
-            )  # fmt: skip
-            forced.update({(outcome.attribute_id, key): "DISAGREE" for key in keys})
-            told[outcome.attribute_id] = failed_one[0].sentence
-        elif supports and unfit:
+        elif supports:
+            # What takes an attribute's support away, element by element: the element's
+            # state for the follow-ups, the clause for the explanation, and the summary.
+            doubts: list[tuple[str, ElementState, str, str]] = []
+            for check in named:
+                if check.status == "FAILED_ONE":
+                    doubts.append((
+                        check.element, "DISAGREE",
+                        "a check of the records fails on one reading "
+                        f"({check.sentence.rstrip('.')})",
+                        CHECK_SPLIT.format(code=outcome.code, sentence=check.sentence),
+                    ))  # fmt: skip
+            for check in astray:
+                sentence = next(
+                    unfit[fact.file_id].sentence for fact in check.facts if fact.file_id in unfit
+                )
+                doubts.append((
+                    check.element, "NOT_SHOWN", sentence,
+                    CONCERN_SPLIT.format(code=outcome.code, sentence=sentence),
+                ))  # fmt: skip
             # Stricter than "an attribute whose passages are all in such a file": an
             # element all of whose passages are in such files is not shown, and an
             # attribute with such an element is not supported.
-            hit = [
-                element
-                for element in outcome.elements
-                if element.result == "MET"
-                and element.passages
-                and all(passage.file_id in unfit for passage in element.passages)
-            ]
-            if hit:
-                sentence = unfit[hit[0].passages[0].file_id].sentence
-                keys = {element.key for element in hit}
+            for element in outcome.elements:
+                if (
+                    element.result == "MET"
+                    and element.passages
+                    and all(passage.file_id in unfit for passage in element.passages)
+                ):
+                    sentence = unfit[element.passages[0].file_id].sentence
+                    doubts.append((
+                        element.key, "NOT_SHOWN", sentence,
+                        CONCERN_SPLIT.format(code=outcome.code, sentence=sentence),
+                    ))  # fmt: skip
+            if doubts:
                 outcome = _unsupported(
-                    outcome, keys, CONCERN_SPLIT.format(code=outcome.code, sentence=sentence),
-                    first, second,
-                )  # fmt: skip
-                forced.update({(outcome.attribute_id, key): "NOT_SHOWN" for key in keys})
-                told[outcome.attribute_id] = sentence
+                    outcome, {key for key, *_rest in doubts}, doubts[0][3], first, second
+                )
+                for key, state, _clause, _summary in doubts:
+                    forced.setdefault((outcome.attribute_id, key), state)
+                told[outcome.attribute_id] = doubts[0][2]
         adjusted.append(
             replace(
                 outcome,

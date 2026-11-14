@@ -468,6 +468,10 @@ def test_a_comparison_that_fails_on_one_reading_takes_support_away_and_a_pass_gi
         "A check of the records fails on one reading of attribute A and not on the other: "
         f"{LATE} Your judgment is needed."
     )
+    assert result.review is not None and result.review["explanation"].startswith(
+        "1 of 2 requested attributes is supported. A could not be concluded: a check of the "
+        f"records fails on one reading ({LATE[:-1]})."
+    )
     assert first.passages == () and first.shows is None
     assert [(v.role, v.result) for v in first.views] == [("ASSESSOR", "MET"), ("REVIEWER", "MET")]
     assert first.elements[0].result is None and first.elements[0].passages == ()
@@ -594,6 +598,30 @@ def test_a_file_for_another_system_supports_nothing_and_a_date_outside_is_a_cons
     one_sided = run_chain(_two(answer, {**answer, "facts": []}), chain)
     assert one_sided.review is not None and one_sided.review["concerns"] == []
     assert [o.verdict for o in one_sided.outcomes] == ["SUPPORTED", "SUPPORTED"]
+
+    # A comparison that fails on a fact read from the other system's file is no exception
+    # shown for this control (never an issue), and it does take B's support away: B's own
+    # passage is in the right file, but the times compared are not this instance's.
+    granted = _fact("F3", "PERFORMED_AT", "2027-01-10 16:20", 1, GRANTED_LINE)
+    order = {"attribute": "B", "element": "wording", "test": "BEFORE", "left": "F3",
+             "right": "F2"}  # fmt: skip
+    astray = run_chain(
+        _both({**answer, "facts": [system, approved, granted], "checks": [order]}), chain
+    )
+    late = astray.outcomes[1]
+    assert [c.status for c in late.checks] == ["FAILED"]
+    assert (late.verdict, late.result, late.assessment) == ("UNSETTLED", None, "INDETERMINATE")
+    assert late.summary == (
+        f"Attribute B is not supported by these files: {wrong} Your judgment is needed."
+    )
+    assert astray.review is not None and astray.review["overall"] == "ADDITIONAL_EVIDENCE"
+    # With the control's system not known there is no such concern, and the comparison
+    # stands as any other.
+    unknown = run_chain(
+        _both({**answer, "facts": [system, approved, granted], "checks": [order]}),
+        replace(chain, context=replace(CONTEXT, system="")),
+    )
+    assert (unknown.outcomes[1].verdict, unknown.outcomes[1].result) == ("ISSUE", "NOT_MET")
 
 
 # --- The review (sections 10.6 and 10.7) ------------------------------------------------
