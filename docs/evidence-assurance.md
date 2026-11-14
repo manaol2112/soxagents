@@ -1039,6 +1039,47 @@ the thirty-four cases the product owner listed (services/api/tests/test_assuranc
 beside the modules' own tests. The evaluation set (section 8) is not re-run live without
 the owner's approval of its cost.
 
+### 10.10 Checking again with the current engine (14 November 2026)
+
+Asked for by the product owner after a request already checked by engine 1 had no way to
+reach engine 2 ("where do I rerun the analysis of evidence from this view?"); the owner
+chose the recommended route.
+
+Forward only (10.1) still holds: nothing is ever re-checked on its own, and an engine 1 run
+stays as it is until a person asks. A person who may decide evidence (TASK_UPDATE) can ask,
+for one request at a time, that its finished engine 1 check be replaced by an engine 2 check.
+
+- **Offered** on the request's row menu ("Check again with the current engine") and as the
+  row's action, only where the request's current run is REVIEWED, was made by an earlier
+  engine than the current one, and no file of the request is still being read. Never for a
+  run that is queued, working, held, failed or out of date (those have their own action),
+  and never for an engine 2 run.
+- **Confirmation** before anything happens: it says that the request's files are read again
+  by the model, as the first check did; that the earlier result is kept in the history and
+  no longer shown as current; that open findings from the earlier result are closed as out
+  of date and are raised again only if the new check finds them; and that nothing is sent
+  to the organization.
+- **What the server does**, in one transaction: the earlier run is marked out of date with
+  the reason "A person asked for the check again with the current engine." (`stale_reason`
+  is free text; no migration), its open findings are marked out of date with it
+  (`mark_stale_for_assessment`), and a new run is queued on the current engine through
+  `reconcile` for that requirement. One audit event, `evidence.assessment_engine_upgrade_requested`,
+  with the person as actor, the requirement, the earlier run and its engine, and the new run.
+  Asking twice queues one run (the second ask finds an engine 2 run and is refused with a
+  plain sentence).
+- **API**: `POST .../evidence-assurance/{requirement_id}/upgrade` (TASK_UPDATE, a person, 202
+  with the request's entry as `rerun` answers). 409 with a plain sentence when the request
+  has no run, is being read, is working, is not reviewed, or is already on the current
+  engine ("This request was already checked by the current engine.").
+- **What it never does**: no other request of the control or project is touched; no file is
+  read again for its text (only the check runs); no decision, approval or finding of a
+  person is changed (a finding a person already decided keeps its status); the earlier run's
+  records stay.
+- **Tests**: the guards above (each state and role), the earlier run kept and marked out of
+  date with its reason, its open findings out of date and a person's decided finding
+  untouched, one new queued engine 2 run, one audit event, a second ask refused, another
+  request of the control untouched, and a reviewer role refused.
+
 ## 9. Status
 
 | Increment | State |
@@ -1050,5 +1091,6 @@ the owner's approval of its cost.
 | Prompts /5: the quote rule, placeholders, a split shortfall, shortfall attribution, designation; the case `assigner_team_not_designated` | built 13 November 2026, the same live re-run to follow |
 | Engine 2 (section 10): the control's context and its hash, prompts /6 and the larger answer, facts and comparisons checked in code, concerns, follow-ups and considerations, the two dimensions and the proposed outcome, `review` saved and read through the API | built 14 November 2026 with scripted readings (test_assurance_engine2.py); the thirty-four scenarios and the screen to follow; not yet run live |
 | Prompts /7: what a quote shows and where a file comes from, for the evidence annotations (docs/evidence-annotations.md) | built 14 November 2026 with scripted readings (test_evidence_annotations.py); not yet run live |
+| Checking again with the current engine, for a request an earlier engine checked (10.10) | in progress, 14 November 2026 |
 | Prompt caching of the file text across the two readings (models.py) | planned, after the chain is measured |
 | Interim and roll-forward evidence | planned |
