@@ -4,15 +4,18 @@ import { describe, it } from "node:test";
 import { openAttributeQuestionsLine } from "../apps/web/src/control-context-model.ts";
 
 // Product owner, 14 November 2026: "I already accepted the attributes. Why a new question
-// showed up after I accepted the attributes??" The planner raised three questions when it
-// followed the walkthrough answers, three minutes before the attributes were accepted; the
-// guided setup asks them in Control Understanding, so the Attributes step never said so.
+// showed up after I accepted the attributes??" and "I don't want to have any follow-up
+// questions when the attributes are already approved and accepted." The planner raised three
+// questions when it followed the walkthrough answers, three minutes before the attributes were
+// accepted; the guided setup asks them in Control Understanding, so the Attributes step never
+// said so. Accepting now closes them on the server; this line says so before the decision.
 
 type Issue = Parameters<typeof openAttributeQuestionsLine>[0][number];
 
 const issue = (topic: string, over: Partial<Issue> = {}): Issue => ({
   origin: "ATTRIBUTES",
   status: "OPEN",
+  raisedBy: "AGENT",
   topic,
   ...over,
 });
@@ -32,14 +35,24 @@ describe("the agents' open questions, said where the attributes are accepted", (
     );
   });
 
-  it("leaves out the process understanding's questions, asked on their own step", () => {
+  it("counts only the questions accepting closes: the agents' own", () => {
     assert.equal(
-      openAttributeQuestionsLine([issue("Steps", { origin: "PROCESS" })], true),
+      openAttributeQuestionsLine(
+        [issue("A rule's finding", { raisedBy: "RULES" })],
+        true,
+      ),
       null,
+    );
+    assert.match(
+      openAttributeQuestionsLine(
+        [issue("Who raises the access request", { origin: "PROCESS" })],
+        true,
+      ) ?? "",
+      /Who raises the access request/,
     );
   });
 
-  it("names the open questions and asks for answers before accepting", () => {
+  it("names the open questions and says accepting closes them", () => {
     assert.equal(
       openAttributeQuestionsLine(
         [
@@ -50,18 +63,18 @@ describe("the agents' open questions, said where the attributes are accepted", (
         ],
         true,
       ),
-      "The agents raised 2 questions that can change these attributes (Record of access actually granted and who granted it; Completeness of the population of grants). Answer them in Control Understanding before accepting.",
+      "The agents raised 2 questions that can change these attributes (Record of access actually granted and who granted it; Completeness of the population of grants). Answer them in Control Understanding, or accept the attributes as they are: accepting closes them.",
     );
     assert.equal(
       openAttributeQuestionsLine([issue("Emergency access approval")], true),
-      "The agents raised a question that can change these attributes (Emergency access approval). Answer it in Control Understanding before accepting.",
+      "The agents raised a question that can change these attributes (Emergency access approval). Answer it in Control Understanding, or accept the attributes as they are: accepting closes it.",
     );
   });
 
-  it("once accepted, says a change comes back for a decision", () => {
+  it("with nothing to accept, only points to Control Understanding", () => {
     assert.equal(
       openAttributeQuestionsLine([issue("Emergency access approval")], false),
-      "The agents raised a question that can change these attributes (Emergency access approval). Answer it in Control Understanding; a change to an accepted attribute comes back here for a decision.",
+      "The agents raised a question that can change these attributes (Emergency access approval). Answer it in Control Understanding.",
     );
   });
 

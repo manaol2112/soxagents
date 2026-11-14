@@ -2783,6 +2783,9 @@ def accept_criteria(
             accept_one_criteria(
                 cursor, organization_id, project_id, control_id, actor, item.id, item.version
             )
+        from ai_workforce_api.control_attributes import close_questions_once_accepted
+
+        close_questions_once_accepted(cursor, organization_id, project_id, control_id, actor)
 
 
 def accept_one_criteria(

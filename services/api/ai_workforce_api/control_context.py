@@ -367,6 +367,68 @@ def raise_issues(
     return raised
 
 
+# No follow-up questions once the attributes are accepted (product owner, 14 November 2026:
+# "I don't want to have any follow-up questions when the attributes are already approved and
+# accepted. What's the point? All questions are already asked and answered in the control
+# understanding"). Accepted: approved attributes, no proposal waiting, and no agent criteria
+# waiting on a person (the test control_attributes.accept_many applies). Seen on ITGC-AC-01
+# that day: answering the attribute agent's three questions redrafted the narrative, whose
+# agent asked four more (two already answered), and the understanding reopened after every
+# attribute was accepted.
+_ACCEPTED_SQL = """
+    SELECT EXISTS (
+               SELECT 1 FROM control_attributes
+               WHERE engagement_control_id = %(control)s AND status = 'APPROVED')
+       AND NOT EXISTS (
+               SELECT 1 FROM control_attributes
+               WHERE engagement_control_id = %(control)s AND status = 'PROPOSED')
+       AND NOT EXISTS (
+               SELECT 1 FROM control_attributes a
+               WHERE a.engagement_control_id = %(control)s AND a.status = 'APPROVED'
+                 AND a.criteria_origin IN ('AGENT', 'SEEDED')
+                 AND a.criteria_accepted_at IS NULL
+                 AND (a.judgment_required IS TRUE
+                      OR (a.condition <> '' AND a.pass_criteria <> ''
+                          AND a.fail_criteria <> '')))
+"""
+
+# The agents' follow-up questions: on the attributes, their sources, and the process.
+FOLLOW_UP_ORIGINS: tuple[IssueOrigin, ...] = ("ATTRIBUTES", "SOURCES", "PROCESS")
+
+
+def attributes_accepted(cursor: psycopg.Cursor[Any], control_id: UUID) -> bool:
+    """Whether the control's attributes are accepted: nothing about them waits on a person.
+    From then on the agents ask no follow-up question about the control."""
+    row = cursor.execute(_ACCEPTED_SQL, {"control": control_id}).fetchone()
+    return bool(row is not None and row[0])
+
+
+def record_not_asked(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID | None,
+    by: str,
+    questions: list[dict[str, str]],
+) -> None:
+    """What an agent would have asked once the attributes were accepted, kept whole on the
+    record (nothing is lost) and asked of nobody. The actor is the person whose action
+    started the agent, as for the agents' other records; `by` names the agent."""
+    if not questions:
+        return
+    cursor.execute(
+        """
+        INSERT INTO audit_events (
+            organization_id, project_id, actor_user_id, action, target_type, target_id, payload
+        )
+        VALUES (%s, %s, %s, 'context.questions_not_asked', 'engagement_control', %s, %s)
+        """,
+        (organization_id, project_id, actor, control_id,
+         Json({"by": by, "reason": "ATTRIBUTES_ACCEPTED", "questions": questions[:12]})),
+    )  # fmt: skip
+
+
 def supersede_agent_issues(
     cursor: psycopg.Cursor[Any], control_id: UUID, origin: IssueOrigin
 ) -> None:

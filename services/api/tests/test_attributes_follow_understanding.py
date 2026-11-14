@@ -193,6 +193,8 @@ class _Agents:
         self.prompts: list[str] = []
         self.stages: list[tuple[str, tuple[str, str, str]]] = []
         self.proposals: list[dict[str, Any]] = []
+        # The attribute agent's questions (AnswerIssue), when a test needs it to ask any.
+        self.issues: list[dict[str, Any]] = []
         # The set reviewer's answer, from what it was given; None for a malformed answer.
         self.review: Any = lambda given: {"attributes": [], "findings": []}
         self.reviewed: list[dict[str, Any]] = []
@@ -212,7 +214,7 @@ class _Agents:
         self.prompts.append(request.prompt)
         if request.system == control_attributes.SYSTEM_PROMPT:
             self._note("attributes")
-            return ModelRaw({"attributes": self.proposals, "issues": []}, (), 100, 100)
+            return ModelRaw({"attributes": self.proposals, "issues": self.issues}, (), 100, 100)
         if request.system == control_attributes.REVIEW_PROMPT:
             self._note("draft-review")
             drafts = self.proposals if self.drafts is None else self.drafts
@@ -1640,3 +1642,174 @@ def test_a_failed_planner_run_reads_as_stopped_once_the_understanding_is_complet
     assert again.status_code == 200 and again.json()["attributes_run"] == "PENDING"
     assert scheduler.plans == [plan_id]
     assert _plan_run(migrated, control)[1:] == ("PENDING", "ATTRIBUTES")
+
+
+# No follow-up questions once the attributes are accepted (product owner, 14 November 2026:
+# "I don't want to have any follow-up questions when the attributes are already approved and
+# accepted. What's the point? All questions are already asked and answered in the control
+# understanding"). Seen on ITGC-AC-01 that day: the run that followed the walkthrough asked
+# three questions, and the attributes were accepted three minutes later with them open.
+_GRANT_RECORD = {
+    "kind": "MISSING",
+    "topic": "Record of access actually granted and who granted it",
+    "detail": "No confirmed record shows the role actually granted or who granted it.",
+    "why": "The grant is compared with the approved request.",
+}
+
+
+def _open_questions(migrated: Database, control: str) -> list[tuple[Any, ...]]:
+    return _rows(
+        migrated,
+        "SELECT topic, status, resolution_note, resolved_by FROM control_context_issues "
+        "WHERE engagement_control_id = %s AND origin = 'ATTRIBUTES' ORDER BY created_at",
+        UUID(control),
+    )
+
+
+def test_a_run_on_accepted_attributes_asks_no_follow_up_question(migrated: Database) -> None:
+    team, control, _scheduler, client = _ready(migrated, "afu-accepted-ask")
+    with connect(migrated.url) as connection:
+        assert control_attributes.attributes_accepted(connection.cursor(), UUID(control))
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    agents = _Agents(migrated, team, control)
+    agents.issues = [_GRANT_RECORD]
+    with connect(migrated.url) as connection:
+        assert run_plan(connection, agents, plan_id) == "DONE"
+    assert "attributes" in agents.calls
+    # Nothing asked, and nothing lost: the run's own record keeps what it would have asked.
+    assert _open_questions(migrated, control) == []
+    followed = _rows(
+        migrated,
+        "SELECT payload FROM audit_events WHERE target_id = %s "
+        "AND action = 'attributes.understanding_followed' ORDER BY created_at DESC LIMIT 1",
+        UUID(control),
+    )
+    assert followed and followed[0][0]["not_asked_once_accepted"] == [
+        {"kind": "MISSING", "topic": _GRANT_RECORD["topic"], "detail": _GRANT_RECORD["detail"]}
+    ]
+    body = team["owner"].get(f"{_path(team, control)}/context").json()
+    assert [i for i in body["issues"] if i["status"] == "OPEN"] == []
+
+
+def test_accepting_the_attributes_closes_the_questions_still_open(migrated: Database) -> None:
+    team, control, _scheduler, client = _ready(migrated, "afu-accept-closes")
+    # Criteria the agent tailored wait on a person: the attributes are not accepted yet.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE control_attributes SET criteria_origin = 'AGENT', "
+            "criteria_accepted_at = NULL, condition = 'The request names the role.', "
+            "pass_criteria = 'The request names the role granted.', "
+            "fail_criteria = 'The request names no role.' "
+            "WHERE engagement_control_id = %s AND status = 'APPROVED'",
+            (UUID(control),),
+        )
+        connection.commit()
+        assert not control_attributes.attributes_accepted(connection.cursor(), UUID(control))
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    agents = _Agents(migrated, team, control)
+    agents.issues = [_GRANT_RECORD]
+    with connect(migrated.url) as connection:
+        assert run_plan(connection, agents, plan_id) == "DONE"
+    # Asked while the attributes wait on a person.
+    assert [row[:2] for row in _open_questions(migrated, control)] == [
+        (_GRANT_RECORD["topic"], "OPEN")
+    ]
+    owner = team["owner"]
+    body = owner.get(f"{_path(team, control)}/context").json()["attributes"]
+    waiting = [item for item in body["approved"] if not item["criteria_owned"]]
+    items = [
+        {"attribute_id": item["id"], "version": item["version"]}
+        for item in [*body["proposed"], *waiting]
+    ]
+    assert waiting
+    accepted = owner.post(f"{_path(team, control)}/attributes/accept", json={"items": items})
+    assert accepted.status_code == 200, accepted.text
+    # Closed by the acceptance: superseded with the note, not answered by anyone.
+    assert _open_questions(migrated, control) == [
+        (_GRANT_RECORD["topic"], "SUPERSEDED", control_attributes.QUESTIONS_CLOSED_NOTE, None)
+    ]
+    closed = _rows(
+        migrated,
+        "SELECT actor_user_id, payload FROM audit_events WHERE target_id = %s "
+        "AND action = 'attributes.questions_closed'",
+        UUID(control),
+    )
+    assert len(closed) == 1 and closed[0][0] == team["owner_id"]
+    assert closed[0][1]["reason"] == "ATTRIBUTES_ACCEPTED"
+    assert [q["topic"] for q in closed[0][1]["questions"]] == [_GRANT_RECORD["topic"]]
+    context = owner.get(f"{_path(team, control)}/context").json()
+    assert [i for i in context["issues"] if i["status"] == "OPEN"] == []
+    with connect(migrated.url) as connection:
+        assert attribute_waits(connection, team["project"], UUID(control)) == {}
+
+
+def test_once_accepted_the_narrative_asks_nothing_and_accepting_closes_its_questions(
+    migrated: Database,
+) -> None:
+    # ITGC-AC-01, 14 November 2026: answering the attribute agent's questions redrafted the
+    # narrative, whose agent asked four more after every attribute was accepted.
+    team, control, _scheduler, _client_ = _ready(migrated, "afu-accepted-narrative")
+    point = process_narrative._Question(
+        topic="Who raises the access request",
+        question="Who raises the access request in ServiceNow?",
+        proposal="The user's manager raises the request in ServiceNow.",
+    )
+    with connect(migrated.url) as connection:
+        with connection.transaction():
+            cursor = connection.cursor()
+            assert control_attributes.attributes_accepted(cursor, UUID(control))
+            process_narrative._ask(
+                cursor, team["org"], team["project"], UUID(control), [point], 1, []
+            )
+    assert (
+        _rows(
+            migrated,
+            "SELECT topic FROM control_context_issues WHERE engagement_control_id = %s "
+            "AND origin = 'PROCESS' AND status = 'OPEN'",
+            UUID(control),
+        )
+        == []
+    )
+    kept = _rows(
+        migrated,
+        "SELECT payload FROM audit_events WHERE target_id = %s "
+        "AND action = 'context.questions_not_asked'",
+        UUID(control),
+    )
+    assert len(kept) == 1 and kept[0][0]["by"] == "process-narrative"
+    assert kept[0][0]["questions"] == [{"topic": point.topic, "question": point.question}]
+    # A process question still open when the attributes become accepted is closed with them.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE control_attributes SET criteria_origin = 'AGENT', "
+            "criteria_accepted_at = NULL, condition = 'c', pass_criteria = 'p', "
+            "fail_criteria = 'f' WHERE engagement_control_id = %s AND status = 'APPROVED'",
+            (UUID(control),),
+        )
+        connection.commit()
+        with connection.transaction():
+            process_narrative._ask(
+                connection.cursor(), team["org"], team["project"], UUID(control), [point], 1, []
+            )
+    assert [row[0] for row in _open_questions_any(migrated, control)] == [point.topic]
+    owner = team["owner"]
+    body = owner.get(f"{_path(team, control)}/context").json()["attributes"]
+    items = [
+        {"attribute_id": item["id"], "version": item["version"]}
+        for item in body["approved"]
+        if not item["criteria_owned"]
+    ]
+    accepted = owner.post(f"{_path(team, control)}/attributes/accept", json={"items": items})
+    assert accepted.status_code == 200, accepted.text
+    assert _open_questions_any(migrated, control) == []
+
+
+def _open_questions_any(migrated: Database, control: str) -> list[tuple[Any, ...]]:
+    return _rows(
+        migrated,
+        "SELECT topic FROM control_context_issues WHERE engagement_control_id = %s "
+        "AND status = 'OPEN' ORDER BY created_at",
+        UUID(control),
+    )

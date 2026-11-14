@@ -83,6 +83,15 @@ _TITLES: dict[str, tuple[Category, str]] = {
         "Attributes follow the confirmed understanding",
     ),
     "attribute.approved": ("design", "Test attribute approved"),
+    # Accepting the attributes closes the agents' open questions about them (14 November 2026).
+    "attributes.questions_closed": (
+        "design",
+        "Open questions closed: the attributes were accepted",
+    ),
+    "context.questions_not_asked": (
+        "design",
+        "No follow-up question asked: the attributes are accepted",
+    ),
     "attribute.rejected": ("design", "Test attribute rejected"),
     "attribute.added": ("design", "Test attribute added"),
     "attribute.edited": ("design", "Test attribute changed"),

@@ -40,6 +40,7 @@ from ai_workforce_api.attribute_review import (
 )
 from ai_workforce_api.control_context import (
     CONTROL_SOURCE,
+    FOLLOW_UP_ORIGINS,
     ISSUES_SCHEMA,
     NARRATIVE_SOURCE,
     AnswerIssue,
@@ -48,6 +49,7 @@ from ai_workforce_api.control_context import (
     ContextState,
     Issue,
     Source,
+    attributes_accepted,
     check_quote,
     checked_issues,
     line,
@@ -425,6 +427,49 @@ def retire_attribute(
         _audit(cursor, organization_id, project_id, actor, "attribute.retired", attribute_id, {})
 
 
+QUESTIONS_CLOSED_NOTE = "Closed when the attributes were accepted."
+
+
+def close_questions_once_accepted(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID,
+) -> list[str]:
+    """When a person's decision leaves the attributes accepted, the agents' open follow-up
+    questions (control_context.FOLLOW_UP_ORIGINS) are closed: superseded by that acceptance,
+    not answered or dismissed by anyone, with the note saying so and one audit record naming
+    each. Returns their ids."""
+    if not attributes_accepted(cursor, control_id):
+        return []
+    rows = cursor.execute(
+        """
+        UPDATE control_context_issues
+        SET status = 'SUPERSEDED', resolution_note = %s, version = version + 1,
+            updated_at = clock_timestamp()
+        WHERE engagement_control_id = %s AND status = 'OPEN' AND raised_by = 'AGENT'
+          AND origin = ANY(%s)
+        RETURNING id, topic
+        """,
+        (QUESTIONS_CLOSED_NOTE, control_id, list(FOLLOW_UP_ORIGINS)),
+    ).fetchall()
+    if rows:
+        cursor.execute(
+            """
+            INSERT INTO audit_events (
+                organization_id, project_id, actor_user_id, action, target_type, target_id,
+                payload
+            )
+            VALUES (%s, %s, %s, 'attributes.questions_closed', 'engagement_control', %s, %s)
+            """,
+            (organization_id, project_id, actor, control_id,
+             Json({"reason": "ATTRIBUTES_ACCEPTED",
+                   "questions": [{"id": str(r[0]), "topic": str(r[1])} for r in rows]})),
+        )  # fmt: skip
+    return [str(r[0]) for r in rows]
+
+
 def decide(
     connection: psycopg.Connection[Any],
     organization_id: UUID,
@@ -455,6 +500,7 @@ def decide(
             )
             _audit(cursor, organization_id, project_id, actor, "attribute.rejected",
                    attribute_id, {"proposal": proposal})  # fmt: skip
+            close_questions_once_accepted(cursor, organization_id, project_id, control_id, actor)
             return
         text = str(current[3]) if body.text is None else _checked_text(body.text)
         position = len(_approved(cursor, control_id))
@@ -498,6 +544,7 @@ def decide(
         _write_list(cursor, control_id)
         _audit(cursor, organization_id, project_id, actor, "attribute.approved", attribute_id,
                {"proposal": proposal, "reworded": body.text is not None})  # fmt: skip
+        close_questions_once_accepted(cursor, organization_id, project_id, control_id, actor)
 
 
 def decide_many(
@@ -646,6 +693,7 @@ def accept_many(
             """,
             (organization_id, project_id, actor, control_id, Json({"items": recorded})),
         )
+        close_questions_once_accepted(cursor, organization_id, project_id, control_id, actor)
 
 
 # The agent
@@ -946,6 +994,9 @@ def generate(
     followed: list[dict[str, Any]] = []
     older_followed: list[dict[str, Any]] = []
     with transaction(connection) as cursor:
+        # Read before this run writes its proposals: a run on accepted attributes asks no
+        # follow-up questions (see close_questions_once_accepted).
+        accepted_before = attributes_accepted(cursor, control_id)
         approved = _approved(cursor, control_id)
         approved_ids = {str(i): t for i, t in approved}
         # A new review replaces the agent's earlier pending proposals.
@@ -1139,6 +1190,17 @@ def generate(
             for item in raisable
             if narrated and item.kind in ("MISSING", "AMBIGUOUS") and line(item.proposal, 400)
         ]
+        # On accepted attributes nothing is asked: what the run would have asked is kept,
+        # whole, in its own record (not_asked_once_accepted), and nothing goes back to the
+        # narrative either.
+        not_asked: list[dict[str, str]] = []
+        if accepted_before:
+            not_asked = [
+                {"kind": item.kind, "topic": item.topic,
+                 "detail": item.question or item.detail}
+                for item in raisable
+            ]  # fmt: skip
+            raisable, late = [], []
         raised = _issues([item for item in raisable if item not in late], sources)
         raise_issues(cursor, organization_id, project_id, control_id, raised, "AGENT", call_id)
         closed = _close_settled(
@@ -1155,7 +1217,7 @@ def generate(
         _audit(cursor, organization_id, project_id, requester, "attribute.proposed", control_id,
                {"proposals": kept, "reviewed": review_note == "", "fixes": fixes[:12],
                 "duplicates_left_out": duplicates, "criteria_detailed": detailed})  # fmt: skip
-        if followed or not_raised or closed or older_followed or reviewer_left_out:
+        if followed or not_raised or closed or older_followed or reviewer_left_out or not_asked:
             # The agent's own record of applying the understanding: what it followed and
             # set aside, what it left out or did not raise (whole, so nothing is lost), and
             # which of its earlier conflicts it closed. The actor is the agent's instance;
@@ -1183,6 +1245,7 @@ def generate(
                         "written_by_model_call": None if writer[1] is None else str(writer[1]),
                         "followed": followed[:MAX_ATTRIBUTES],
                         "not_raised": not_raised,
+                        "not_asked_once_accepted": not_asked,
                         "closed": closed,
                         "older_answer_followed_left_out": older_followed[:MAX_ATTRIBUTES],
                         "left_out_by_reviewer": reviewer_left_out[:MAX_ATTRIBUTES],

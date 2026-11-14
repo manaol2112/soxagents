@@ -38,11 +38,13 @@ from ai_workforce_api.control_context import (
     AnswerIssue,
     ContextState,
     Source,
+    attributes_accepted,
     check_quote,
     checked_issues,
     clean,
     line,
     raise_issues,
+    record_not_asked,
     source_blocks,
     supersede_agent_issues,
 )
@@ -1001,9 +1003,18 @@ def build(
             built,
         )  # fmt: skip
         supersede_agent_issues(cursor, control_id, "PROCESS")
+        found = checked_issues(issues, sources, "PROCESS")
+        if built == "AGENT" and attributes_accepted(cursor, control_id):
+            # Once the attributes are accepted the agent asks nothing; kept on the record.
+            record_not_asked(
+                cursor, organization_id, project_id, control_id, requester,
+                "process-understanding",
+                [{"topic": item.topic, "question": item.question or item.detail}
+                 for item in found],
+            )  # fmt: skip
+            found = []
         raise_issues(
-            cursor, organization_id, project_id, control_id,
-            checked_issues(issues, sources, "PROCESS"),
+            cursor, organization_id, project_id, control_id, found,
             "AGENT" if built == "AGENT" else "RULES", call_id,
         )  # fmt: skip
         _audit(

@@ -32,9 +32,11 @@ from pydantic import BaseModel, Field, ValidationError
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.control_context import (
     Issue,
+    attributes_accepted,
     clean,
     line,
     raise_issues,
+    record_not_asked,
     source_blocks,
 )
 from ai_workforce_api.db import independent_steps, transaction
@@ -1287,7 +1289,15 @@ def _ask(
 ) -> None:
     """The points for the client become the control's open questions, in this round: one
     still asked stays as it is, the agents' other earlier open ones are replaced, and one
-    already answered is not asked again."""
+    already answered is not asked again. Once the attributes are accepted nothing is asked
+    (control_context.attributes_accepted): what would have been is kept on the record."""
+    if attributes_accepted(cursor, control_id):
+        record_not_asked(
+            cursor, organization_id, project_id, control_id, None, "process-narrative",
+            [{"topic": line(item.topic, 120), "question": line(item.question, 400)}
+             for item in questions],
+        )  # fmt: skip
+        return
     asked = [line(item.question, 400) for item in questions]
     cursor.execute(
         "UPDATE control_context_issues SET status = 'SUPERSEDED', updated_at = clock_timestamp() "
