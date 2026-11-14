@@ -155,8 +155,21 @@ _RESTS_ON_ABSENCE: frozenset[str] = frozenset({"NOT_MET", "NOT_ADDRESSED", "PART
 # an approved copy is among the files; an element comparing people is judged on the
 # people the records show, and a missing approval is its own attribute's shortfall; a
 # team or role is shown only by the record's own designation of the person.
-ASSESSOR_PROMPT_VERSION = "evidence-assurance-assessor/5"
-REVIEWER_PROMPT_VERSION = "evidence-assurance-reviewer/5"
+# 6 (14 November 2026, engine 2; docs/evidence-assurance.md, section 10): the readings are
+# given the control's context, and answer besides the elements what the files are, the
+# facts the records state, the comparisons an element calls for (made in code), what to
+# ask for where something is not shown, and what else a careful auditor would raise.
+ASSESSOR_PROMPT_VERSION = "evidence-assurance-assessor/6"
+REVIEWER_PROMPT_VERSION = "evidence-assurance-reviewer/6"
+# The engine a new run is recorded under, and the prompt versions each engine's runs carry.
+# Forward only (section 10.1): a run is compared with what is in force as its own engine
+# reads it (its gate, its hash inputs, its prompt versions), so a new engine marks no
+# earlier run out of date and queues nothing.
+ENGINE_VERSION = 2
+ENGINE_PROMPTS: dict[int, tuple[str, str]] = {
+    1: ("evidence-assurance-assessor/5", "evidence-assurance-reviewer/5"),
+    2: (ASSESSOR_PROMPT_VERSION, REVIEWER_PROMPT_VERSION),
+}
 PROMPT_VERSIONS: dict[Role, str] = {
     "ASSESSOR": ASSESSOR_PROMPT_VERSION,
     "REVIEWER": REVIEWER_PROMPT_VERSION,
@@ -1820,8 +1833,21 @@ HELD_REASONS: dict[HeldCode, str] = {
 CUSTODY_FAILED_NOTE = "The stored file no longer matches its custody record."
 
 
-def gate(facts: GateFacts) -> Held | None:
-    """Stage 1, for one file: why it is left out of the readings, or None when it is read."""
+def kind_unsure(facts: GateFacts) -> bool:
+    """Whether the file's kind is the reader's unsure guess: a low confidence, the rules'
+    classification or the demo's, with no person's confirmation."""
+    return not facts.kind_confirmed and (
+        facts.source != "MODEL" or facts.confidence not in ("high", "medium")
+    )
+
+
+def gate(facts: GateFacts, engine: int = 1) -> Held | None:
+    """Stage 1, for one file: why it is left out of the readings, or None when it is read.
+    From engine 2 a file whose kind is not sure is read, as the kind the reader took it
+    for, and listed for a person to confirm (section 10.3): how sure the reader is of a
+    file's kind says nothing about what the file shows. Custody, a reading that did not
+    finish and a file with nothing readable stay hard stops. A caller that names no engine
+    gets the first engine's gate."""
     code: HeldCode | None = None
     if facts.custody_failed:
         code = "CUSTODY"
@@ -1829,9 +1855,7 @@ def gate(facts: GateFacts) -> Held | None:
         code = "READ_FAILED"
     elif not facts.readable:
         code = "UNREADABLE"
-    elif not facts.kind_confirmed and (
-        facts.source != "MODEL" or facts.confidence not in ("high", "medium")
-    ):
+    elif engine < 2 and kind_unsure(facts):
         code = "KIND_UNSURE"
     elif facts.kind == "population":
         code = "POPULATION"
@@ -1984,21 +2008,32 @@ class _File:
         return self.analysis_status == "FAILED" and self.analysis_note == CUSTODY_FAILED_NOTE
 
     @property
-    def held(self) -> Held | None:
-        """The gate's result for the file. A reading that did not finish (for a passing
-        reason: a timeout, a provider error, a reader that gave up, a cancellation) is
-        READ_FAILED, distinct from a file with no readable text."""
-        return gate(
-            GateFacts(
-                custody_failed=self.custody_failed,
-                readable=self.readable,
-                kind=self.kind,
-                kind_confirmed=self.kind_confirmed,
-                confidence=self.confidence,
-                source=self.source,
-                read_failed=self.analysis_status == "FAILED" and not self.custody_failed,
-            )
+    def gate_facts(self) -> GateFacts:
+        return GateFacts(
+            custody_failed=self.custody_failed,
+            readable=self.readable,
+            kind=self.kind,
+            kind_confirmed=self.kind_confirmed,
+            confidence=self.confidence,
+            source=self.source,
+            read_failed=self.analysis_status == "FAILED" and not self.custody_failed,
         )
+
+    def held_for(self, engine: int) -> Held | None:
+        """The gate's result for the file as an engine's runs read it. A reading that did
+        not finish (for a passing reason: a timeout, a provider error, a reader that gave
+        up, a cancellation) is READ_FAILED, distinct from a file with no readable text."""
+        return gate(self.gate_facts, engine)
+
+    @property
+    def held(self) -> Held | None:
+        """The gate's result for the file, for a run recorded now."""
+        return self.held_for(ENGINE_VERSION)
+
+    @property
+    def kind_unsure(self) -> bool:
+        """Read all the same from engine 2, and listed for a person to confirm."""
+        return kind_unsure(self.gate_facts)
 
 
 @dataclass(frozen=True)
@@ -2014,9 +2049,13 @@ class _Request:
     def waiting(self) -> bool:
         return any(not file.landed for file in self.files)
 
+    def included_for(self, engine: int) -> tuple[_File, ...]:
+        """The files an engine's run reads: landed, and passed by that engine's gate."""
+        return tuple(file for file in self.files if file.landed and file.held_for(engine) is None)
+
     @property
     def included(self) -> tuple[_File, ...]:
-        return tuple(file for file in self.files if file.landed and file.held is None)
+        return self.included_for(ENGINE_VERSION)
 
 
 @dataclass(frozen=True)
@@ -2033,28 +2072,36 @@ class _Basis:
     read_in_part: bool
     # The model configuration the run would use (expected_models).
     models: dict[str, Any]
+    # The engine whose runs read this basis (its gate decided `files` and `file_ids`).
+    engine: int = ENGINE_VERSION
+    # The hash of the control's context the readings are given (engine 2; "" for engine 1).
+    context_sha256: str = ""
 
     @property
     def sha256(self) -> str:
-        return _sha(
-            [
-                sorted(
-                    [
-                        f["sha256"], f["file_id"], f["text_sha256"], f["kind"], f["truncated"],
-                        (f["held"] or {}).get("code", ""),
-                    ]
-                    for f in self.files
-                ),
-                self.control_sha256,
-                self.attributes_sha256,
-                [str(item) for item in self.linked_attribute_ids],
-                [str(item) for item in self.elsewhere_attribute_ids],
-                self.lens,
-                ASSESSOR_PROMPT_VERSION,
-                REVIEWER_PROMPT_VERSION,
-                self.models,
-            ]
-        )  # fmt: skip
+        assessor, reviewer = ENGINE_PROMPTS[self.engine]
+        parts: list[Any] = [
+            sorted(
+                [
+                    f["sha256"], f["file_id"], f["text_sha256"], f["kind"], f["truncated"],
+                    (f["held"] or {}).get("code", ""),
+                ]
+                for f in self.files
+            ),
+            self.control_sha256,
+            self.attributes_sha256,
+            [str(item) for item in self.linked_attribute_ids],
+            [str(item) for item in self.elsewhere_attribute_ids],
+            self.lens,
+            assessor,
+            reviewer,
+            self.models,
+        ]  # fmt: skip
+        # Engine 1's hash is exactly what it always was, so its runs still match it. A
+        # later engine adds itself and the context the readings are given.
+        if self.engine >= 2:
+            parts += [self.engine, self.context_sha256]
+        return _sha(parts)
 
 
 def _control(
@@ -2225,11 +2272,19 @@ def _linked(connection: psycopg.Connection[Any], control_id: UUID) -> _Links:
     return _Links(found, frozenset(expecting))
 
 
-def _basis(request: _Request, control: _Control, attributes: Attributes, links: _Links) -> _Basis:
-    """What a run of the requirement would read now: every file in force on it (a file
-    whose reading has not ended is named with nothing read yet), the control's facts, the
-    attributes, the links (this requirement's, and which attributes another DESIGN
-    requirement of the control asks for too) and the lens."""
+def _basis(
+    request: _Request,
+    control: _Control,
+    attributes: Attributes,
+    links: _Links,
+    engine: int = ENGINE_VERSION,
+    context_sha256: str = "",
+) -> _Basis:
+    """What a run of the requirement would read now, as `engine` reads it: every file in
+    force on it (a file whose reading has not ended is named with nothing read yet), the
+    control's facts, the attributes, the links (this requirement's, and which attributes
+    another DESIGN requirement of the control asks for too), the lens, and from engine 2
+    the hash of the control's context."""
     ids = tuple(a[0] for a in attributes)
     linked = links.get(request.requirement_id)
     elsewhere = {
@@ -2238,7 +2293,7 @@ def _basis(request: _Request, control: _Control, attributes: Attributes, links: 
         if requirement_id != request.requirement_id and requirement_id in links.expecting
         for attribute in linked_there
     }
-    included = request.included
+    included = request.included_for(engine)
     files = tuple(
         {
             "file_id": str(file.file_id),
@@ -2249,8 +2304,8 @@ def _basis(request: _Request, control: _Control, attributes: Attributes, links: 
             "truncated": file.truncated,
             "held": (
                 None
-                if not file.landed or file.held is None
-                else {"code": file.held.code, "reason": file.held.reason}
+                if not file.landed or (held := file.held_for(engine)) is None
+                else {"code": held.code, "reason": held.reason}
             ),
             "read": file.landed,
         }
@@ -2267,11 +2322,15 @@ def _basis(request: _Request, control: _Control, attributes: Attributes, links: 
         lens=lens_for(request.categories, [file.kind for file in included]),
         read_in_part=any(file.truncated for file in included),
         models=expected_models(control.domain),
+        engine=engine,
+        context_sha256=context_sha256 if engine >= 2 else "",
     )
 
 
-def _gate_of(request: _Request, attributes: int) -> Held | None:
-    return run_gate([(file.held, file.text_length) for file in request.files], attributes)
+def _gate_of(request: _Request, attributes: int, engine: int = ENGINE_VERSION) -> Held | None:
+    return run_gate(
+        [(file.held_for(engine), file.text_length) for file in request.files], attributes
+    )
 
 
 @dataclass(frozen=True)
@@ -2303,6 +2362,10 @@ class _Run:
     # it stopped before it finished.
     stopped: bool
     elsewhere_attribute_ids: tuple[UUID, ...] = ()
+    engine_version: int = 1
+    context_sha256: str = ""
+    # The run's result beyond the attributes (engine 2, section 10.7); None otherwise.
+    review: dict[str, Any] | None = None
 
 
 _RUN_COLUMNS = f"""
@@ -2312,7 +2375,7 @@ _RUN_COLUMNS = f"""
     stale_reason, finished_at, models,
     (status = 'WORKING' AND lease_until < clock_timestamp())
         OR (status = 'PENDING' AND attempts >= {MAX_ATTEMPTS}),
-    elsewhere_attribute_ids
+    elsewhere_attribute_ids, engine_version, context_sha256, review
 """
 
 
@@ -2343,6 +2406,9 @@ def _run(row: tuple[Any, ...]) -> _Run:
         models=row[22] if isinstance(row[22], dict) else {},
         stopped=bool(row[23]),
         elsewhere_attribute_ids=tuple(UUID(str(item)) for item in (row[24] or [])),
+        engine_version=int(row[25] or 1),
+        context_sha256=str(row[26] or ""),
+        review=row[27] if isinstance(row[27], dict) else None,
     )
 
 
@@ -2358,7 +2424,8 @@ def _gone_reason(connection: psycopg.Connection[Any], file_id: UUID) -> str:
 
 
 def _changed(connection: psycopg.Connection[Any], run: _Run, basis: _Basis) -> list[str]:
-    """Why a run no longer rests on what would be read now; empty when it does."""
+    """Why a run no longer rests on what would be read now; empty when it does. `basis` is
+    what is in force as the run's own engine reads it (_basis with run.engine_version)."""
     if run.basis_sha256 == basis.sha256:
         return []
     reasons: list[str] = []
@@ -2395,9 +2462,11 @@ def _changed(connection: psycopg.Connection[Any], run: _Run, basis: _Basis) -> l
         reasons.append("The control's description changed.")
     if run.models != basis.models:
         reasons.append("The model the check uses changed.")
-    if (run.assessor_prompt_version, run.reviewer_prompt_version) != (
-        ASSESSOR_PROMPT_VERSION,
-        REVIEWER_PROMPT_VERSION,
+    if run.context_sha256 != basis.context_sha256:
+        reasons.append("The control's understanding changed.")
+    # Against its own engine's instructions: a newer engine's are not a change to it.
+    if (run.assessor_prompt_version, run.reviewer_prompt_version) != ENGINE_PROMPTS.get(
+        run.engine_version, ENGINE_PROMPTS[ENGINE_VERSION]
     ):
         reasons.append("The check's instructions were updated.")
     return list(dict.fromkeys(reasons)) or ["What the check reads changed."]
@@ -2467,7 +2536,7 @@ def _insert(
         earlier = cursor.execute(
             """
             SELECT id, assessor_agent, assessor_opinion, assessor_call_id, reviewer_opinion,
-                   reviewer_call_id, outcome, ran_with
+                   reviewer_call_id, outcome, ran_with, review
             FROM evidence_assessments
             WHERE requirement_id = %s AND basis_sha256 = %s AND status = 'READY'
               AND ran_with = %s::jsonb
@@ -2485,7 +2554,8 @@ def _insert(
             reviewer_prompt_version,
             basis_sha256, status, stage, held_code, held_reason, read_in_part,
             assessor_agent, assessor_opinion, assessor_call_id, reviewer_opinion,
-            reviewer_call_id, outcome, reused_from_id, models, ran_with, finished_at
+            reviewer_call_id, outcome, reused_from_id, models, ran_with, finished_at,
+            engine_version, context_sha256, review
         )
         VALUES (
             %(organization)s, %(project)s, %(control)s, %(requirement)s, %(actor)s,
@@ -2495,7 +2565,8 @@ def _insert(
             %(reviewer_version)s, %(basis)s, %(status)s, %(stage)s, %(held_code)s,
             %(held_reason)s, %(read_in_part)s, %(agent)s, %(first)s, %(first_call)s,
             %(second)s, %(second_call)s, %(outcome)s, %(reused)s, %(models)s, %(ran_with)s,
-            CASE WHEN %(finished)s THEN clock_timestamp() END
+            CASE WHEN %(finished)s THEN clock_timestamp() END,
+            %(engine)s, %(context_sha)s, %(review)s
         )
         ON CONFLICT (requirement_id) WHERE stale_at IS NULL DO NOTHING
         RETURNING id
@@ -2514,8 +2585,11 @@ def _insert(
             "linked": list(basis.linked_attribute_ids),
             "elsewhere": list(basis.elsewhere_attribute_ids),
             "lens": basis.lens,
-            "assessor_version": ASSESSOR_PROMPT_VERSION,
-            "reviewer_version": REVIEWER_PROMPT_VERSION,
+            "assessor_version": ENGINE_PROMPTS[basis.engine][0],
+            "reviewer_version": ENGINE_PROMPTS[basis.engine][1],
+            "engine": basis.engine,
+            "context_sha": basis.context_sha256,
+            "review": None if earlier is None or earlier[8] is None else Json(earlier[8]),
             "basis": basis.sha256,
             "status": status,
             "stage": "DONE" if status == "READY" else "GATE",
@@ -2588,7 +2662,7 @@ def _refresh(cursor: psycopg.Cursor[Any], run_id: UUID, basis: _Basis, held: Hel
             elsewhere_attribute_ids = %s::uuid[], lens = %s,
             assessor_prompt_version = %s, reviewer_prompt_version = %s, basis_sha256 = %s,
             models = %s, read_in_part = %s, status = %s, held_code = %s, held_reason = %s,
-            attempts = 0,
+            attempts = 0, engine_version = %s, context_sha256 = %s,
             finished_at = CASE WHEN %s THEN clock_timestamp() END
         WHERE id = %s AND status = 'PENDING' AND stale_at IS NULL
         """,
@@ -2601,19 +2675,31 @@ def _refresh(cursor: psycopg.Cursor[Any], run_id: UUID, basis: _Basis, held: Hel
             list(basis.linked_attribute_ids),
             list(basis.elsewhere_attribute_ids),
             basis.lens,
-            ASSESSOR_PROMPT_VERSION,
-            REVIEWER_PROMPT_VERSION,
+            ENGINE_PROMPTS[basis.engine][0],
+            ENGINE_PROMPTS[basis.engine][1],
             basis.sha256,
             Json(basis.models),
             basis.read_in_part,
             status,
             None if held is None else held.code,
             "" if held is None else held.reason,
+            basis.engine,
+            basis.context_sha256,
             held is not None,
             run_id,
         ),
     )
     return status
+
+
+def _context_sha256(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, request: _Request
+) -> str:
+    """The hash of the control's context an engine 2 run is given (section 10.2): its
+    design, the confirmed understanding and what the request asked for. A change to it
+    puts the run out of date."""
+    del connection, project_id, control_id, request
+    return ""
 
 
 # --- Queueing: what starts a run, and what makes one out of date ----------------------
@@ -2683,31 +2769,51 @@ def reconcile(
     attributes = _approved(connection, control_id)
     linked = _linked(connection, control_id)
     for request in requests:
-        basis = _basis(request, control, attributes, linked)
+        # What a run recorded now would read (the current engine), and what the run on
+        # record rests on as its own engine reads it: an earlier engine's run is compared
+        # with that engine's gate, hash inputs and prompt versions, so a new engine alone
+        # never puts it out of date (forward only, section 10.1). A run still queued has
+        # read nothing yet and takes the current engine.
+        context = _context_sha256(connection, project_id, control_id, request)
+        basis = _basis(request, control, attributes, linked, context_sha256=context)
         held = _gate_of(request, len(attributes))
         on_record = current.get(request.requirement_id)
-        same = on_record is not None and on_record.basis_sha256 == basis.sha256
+        earlier = (
+            on_record is not None
+            and on_record.engine_version != ENGINE_VERSION
+            and on_record.status != "PENDING"
+        )
+        basis_then, held_then = basis, held
+        if earlier and on_record is not None:
+            basis_then = _basis(request, control, attributes, linked, on_record.engine_version)
+            held_then = _gate_of(request, len(attributes), on_record.engine_version)
+        same = on_record is not None and on_record.basis_sha256 == basis_then.sha256
         if request.waiting:
             # A file is still being read. What is on record no longer rests on the files
             # in force; the run that does is recorded when the reading lands. A run
             # still queued is left for that moment, which brings it up to date in place.
             if on_record is not None and not same and on_record.status != "PENDING":
-                _mark_stale(cursor, on_record.id, _changed(connection, on_record, basis))
+                _mark_stale(cursor, on_record.id, _changed(connection, on_record, basis_then))
             if attributes:
                 found.covered |= {file.file_id for file in request.included}
             continue
-        if held is None:
+        # The files the chain covers: the run on record's while it stands, else the new one's.
+        if same and held_then is None:
+            found.covered |= set(basis_then.file_ids)
+        elif not same and held is None:
             found.covered |= set(basis.file_ids)
         if on_record is not None:
-            if same and on_record.status == "HELD" and held is not None and (
-                held.code == on_record.held_code
+            if same and on_record.status == "HELD" and held_then is not None and (
+                held_then.code == on_record.held_code
             ):  # fmt: skip
                 continue
-            if same and held is None and on_record.status in ("PENDING", "WORKING", "READY"):
+            if same and held_then is None and on_record.status in (
+                "PENDING", "WORKING", "READY"
+            ):  # fmt: skip
                 if on_record.status == "PENDING":
                     found.queued.append(on_record.id)
                 continue
-            if same and held is None and on_record.status == "FAILED" and not rerun_failed:
+            if same and held_then is None and on_record.status == "FAILED" and not rerun_failed:
                 continue
             if (
                 not same
@@ -2722,13 +2828,13 @@ def reconcile(
                     _hold_reader(cursor, request)
                 continue
             if not same:
-                reasons = _changed(connection, on_record, basis)
+                reasons = _changed(connection, on_record, basis_then)
             elif on_record.status == "FAILED":
                 reasons = ["Run again by a person."]
-            elif on_record.status == "HELD" and held is None:
+            elif on_record.status == "HELD" and held_then is None:
                 reasons = ["What held the check was cleared."]
             else:
-                reasons = [held.reason if held is not None else "Run again."]
+                reasons = [held_then.reason if held_then is not None else "Run again."]
             _mark_stale(cursor, on_record.id, reasons)
         made = _insert(
             cursor, control, project_id, control_id, request, basis, held,
@@ -3011,7 +3117,10 @@ def backfill(connection: psycopg.Connection[Any], limit: int = 50) -> list[UUID]
                     continue
                 if request.requirement_id in current or tried >= limit:
                     continue
-                basis = _basis(request, control, attributes, links).sha256
+                basis = _basis(
+                    request, control, attributes, links,
+                    context_sha256=_context_sha256(connection, project, control_key, request),
+                ).sha256  # fmt: skip
                 if before.get(request.requirement_id) == basis:
                     continue
                 tried += 1
@@ -3312,7 +3421,7 @@ def run_assessment(
               AND (status = 'PENDING'
                    OR (status = 'WORKING' AND lease_until < clock_timestamp()))
             RETURNING project_id, engagement_control_id, requirement_id, requested_by,
-                      basis_sha256, attempts
+                      basis_sha256, attempts, engine_version
             """,
             (LEASE_MINUTES, token, run_id, MAX_ATTEMPTS),
         ).fetchone()
@@ -3362,6 +3471,7 @@ def _assess(
         else _basis(
             request, control, attributes,
             _linked(connection, control_id),
+            context_sha256=_context_sha256(connection, project_id, control_id, request),
         )
     )  # fmt: skip
     texts: dict[UUID, str] = {}
@@ -3398,6 +3508,13 @@ def _assess(
             ).fetchone()
             if left is not None and left[0]:
                 _mark_stale(cursor, run_id, ["What the check reads changed."])
+                # A run an earlier engine left working (the process stopped mid-run) is
+                # not run by this one: what stands now is recorded for the worker.
+                if int(claimed[6] or 1) != ENGINE_VERSION:
+                    reconcile(
+                        cursor, project_id, control_id, requester,
+                        only_requirement=requirement_id,
+                    )  # fmt: skip
         return "STALE"
     included = request.included
     chain = ChainInput(
@@ -3865,9 +3982,13 @@ def read_assurance(
             # A finished run is compared with what would be read now, so a change nothing
             # marked yet never shows as current. A run still queued or working is not:
             # its worker makes the same comparison before it reads anything.
+            # As the run's own engine reads it (section 10.1).
             reasons = _changed(
                 connection, run,
-                _basis(request, control, attributes, linked),
+                _basis(
+                    request, control, attributes, linked, run.engine_version,
+                    _context_sha256(connection, project_id, control_id, request),
+                ),
             )  # fmt: skip
         status: RequestStatus = (
             "OUT_OF_DATE" if reasons else "FAILED" if run.stopped else _STATUS[run.status]
