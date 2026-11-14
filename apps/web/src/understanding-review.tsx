@@ -55,6 +55,7 @@ import {
   nextAfterUnderstanding,
   nextOpen,
   notesChosen,
+  runFailureLine as notesFailureLine,
   notesSummary,
   OTHER_MAX,
   OTHER_RULE,
@@ -2505,7 +2506,7 @@ export function UnderstandingReview({
             ) : (
               <div className="ur-found">
                 <p className="ur-hint" role="status">
-                  {notesSummary(found)}
+                  {notesFailureLine(found) ?? notesSummary(found)}
                 </p>
                 {found.answers.length > 0 ? (
                   <ul className="ur-proposals">

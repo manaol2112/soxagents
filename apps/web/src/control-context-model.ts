@@ -7,6 +7,13 @@
  * None of it needs a process narrative.
  */
 
+import {
+  failureNoteOf,
+  failureSentence,
+  plainNote,
+  withNext,
+} from "./run-failure.ts";
+
 export const CLASSIFICATIONS = [
   ["ITGC", "IT general control"],
   ["AUTOMATED_APPLICATION", "Automated application control"],
@@ -533,6 +540,255 @@ export function attributesStopped(
   return note !== "" ? note : "The run stopped before it finished. Run again.";
 }
 
+/** The context's field for the attributes run's failure sentence: the run's record is
+ * flattened onto the context, as `attributes_run_note` is (run-failure.ts). */
+export const ATTRIBUTES_FAILURE_FIELD = "attributes_failure_note";
+
+/** The planner's answer was rejected and the plan kept as it was: the server's notes for
+ * it (UNUSABLE_NOTE and KEPT_NOTE in evidence_plans) both start so. */
+const PLANNER_UNUSABLE = /^The planner's answer could not be used\b/;
+
+/** What the Attributes step says when "Run again" finished and the planner's answer could
+ * not be used while an attribute still needs criteria (product owner, 13 November 2026). */
+export const CRITERIA_NOT_WRITTEN =
+  "The planner's answer could not be used, so the criteria were not written. The earlier plan is kept. Run again, or write the criteria yourself.";
+
+const STOPPED_LINE = "The run stopped before it finished. Run again.";
+const CRITERIA_NEXT = "Run again, or write the criteria yourself.";
+
+/** The approved attributes with no criteria a tester can apply, in their order, each with
+ * its letter: what "Write criteria" opens. */
+export function needingCriteria(context: {
+  approved: Attribute[];
+}): Array<{ item: Attribute; letter: string }> {
+  return context.approved
+    .map((item, index) => ({ item, letter: attributeLetter(index) }))
+    .filter(({ item }) => criteriaState(item.criteria) === "MISSING");
+}
+
+/** An attribute whose criteria the planner wrote into a change to a person-approved test
+ * plan (the plan's pending revision): written, and waiting for that change to be decided. */
+export type PendingCriteria = { attributeId: string; code: string };
+
+type PendingInput = {
+  approved: Attribute[];
+  attributesPendingCriteria?: readonly PendingCriteria[];
+  planRevisionPending?: boolean | null;
+};
+
+/** The attributes that need criteria because the planner's criteria wait in the plan's
+ * pending revision, in their order with their letters; empty where no revision waits. */
+export function pendingCriteria(
+  context: PendingInput,
+): Array<{ item: Attribute; letter: string }> {
+  const waiting = new Set(
+    (context.attributesPendingCriteria ?? []).map((item) => item.attributeId),
+  );
+  if (waiting.size === 0 || context.planRevisionPending === false) {
+    return [];
+  }
+  return needingCriteria(context).filter(({ item }) => waiting.has(item.id));
+}
+
+/** The attributes that need criteria a person writes, or a run writes again: those not
+ * waiting in the plan's pending revision. What "Write criteria" opens. */
+export function criteriaToWrite(
+  context: PendingInput,
+): Array<{ item: Attribute; letter: string }> {
+  const pending = new Set(pendingCriteria(context).map(({ item }) => item.id));
+  return needingCriteria(context).filter(({ item }) => !pending.has(item.id));
+}
+
+const lettersSaid = (letters: readonly string[]): string =>
+  letters.length === 1
+    ? (letters[0] ?? "")
+    : `${letters.slice(0, -1).join(", ")} and ${letters.at(-1)}`;
+
+/** What the Attributes step says when the planner's criteria wait in a change to the test
+ * plan (product owner's case, 13 November 2026: the criteria were written, but into the
+ * approved plan's pending revision), or null. The step links to where the change is
+ * decided. */
+export function pendingCriteriaLine(context: PendingInput): string | null {
+  const pending = pendingCriteria(context);
+  if (pending.length === 0) {
+    return null;
+  }
+  return `The planner proposed criteria for ${lettersSaid(pending.map(({ letter }) => letter))} in a change to the test plan. Review the change to apply them.`;
+}
+
+/** One agent's part in the latest attributes run (`attributes_agent_notes`). */
+export type AttributesAgentNote = {
+  agent: string;
+  step: string;
+  /** What failed, in a sentence; "" when the agent's part did not fail. */
+  failed: string;
+  /** What was kept, in a sentence; "" when nothing needed keeping. */
+  kept: string;
+  nextStep: string;
+  sentence: string;
+  at: string;
+};
+
+/** The failed agents' sentences of the latest run, each with what was kept, joined: what
+ * stands in where the run sent no failure sentence of its own; "" when no agent failed. */
+export function agentNotesSentence(
+  notes: readonly AttributesAgentNote[] | undefined,
+): string {
+  const parts: string[] = [];
+  for (const note of notes ?? []) {
+    if (note.failed.trim() === "") {
+      continue;
+    }
+    const what = plainNote(note.sentence) || plainNote(note.failed);
+    const kept = plainNote(note.kept);
+    for (const part of [what, kept]) {
+      if (part !== "" && !parts.some((each) => each.includes(part))) {
+        parts.push(part);
+      }
+    }
+  }
+  return plainNote(parts.join(" "));
+}
+
+/** What the Attributes step says, quietly, when the agents' last run could not be used and
+ * every attribute has its criteria (lead's decision, 13 November 2026): a run a person
+ * asked for never ends in silence, but settled work shows no error and no Run again (the
+ * 12 November rule). */
+export const SETTLED_RUN_LEAD =
+  "The agents' last run could not be used. Your attributes and criteria are unchanged.";
+
+/** The server's failure sentence for the attributes run: its own, else its agents'. */
+function attributesFailureOf(context: {
+  attributesFailureNote?: string;
+  attributesAgentNotes?: readonly AttributesAgentNote[];
+}): string {
+  return (
+    plainNote(context.attributesFailureNote) ||
+    agentNotesSentence(context.attributesAgentNotes)
+  );
+}
+
+/** The quiet line for a run that could not be used on attributes that all have their
+ * criteria, or null: SETTLED_RUN_LEAD, then the server's sentence. Never while the agents
+ * work, and never with an action. */
+export function settledRunLine(
+  context: {
+    attributesRun: AttributesRun;
+    attributesFailureNote?: string;
+    attributesAgentNotes?: readonly AttributesAgentNote[];
+    approved: Attribute[];
+  },
+  failureNote: string = attributesFailureOf(context),
+): string | null {
+  if (
+    context.attributesRun === "PENDING" ||
+    context.attributesRun === "WORKING"
+  ) {
+    return null;
+  }
+  const said = plainNote(failureNote);
+  if (said === "" || !allHaveCriteria(context)) {
+    return null;
+  }
+  // The line offers no Run again, so the server's own "Run again" is not repeated.
+  const why = withoutRunAgain(said);
+  return why === "" ? SETTLED_RUN_LEAD : `${SETTLED_RUN_LEAD} ${why}`;
+}
+
+/** Settled for the quiet line: the control has approved attributes and every one has its
+ * criteria. A control with none gets the failure line with its Run again. */
+function allHaveCriteria(context: { approved: Attribute[] }): boolean {
+  return context.approved.length > 0 && needingCriteria(context).length === 0;
+}
+
+/** A sentence without its closing call to run the agents again: a last sentence that
+ * starts "Run again" (or "Run them again"), or a last clause such as ", so run them
+ * again". What remains is plain; "" when nothing does. */
+export function withoutRunAgain(text: string): string {
+  const parts = plainNote(text).split(/(?<=[.!?])\s+/);
+  const last = parts.at(-1) ?? "";
+  if (/^(?:Please )?run (?:it |them |the agents )?again\b/i.test(last)) {
+    parts.pop();
+  } else if (parts.length > 0) {
+    parts[parts.length - 1] = last.replace(
+      /[,;:]?\s*(?:(?:so|and|or|then|please)\s+)?run (?:it |them |the agents )?again\b[^.!?]*([.!?])$/i,
+      "$1",
+    );
+  }
+  return plainNote(parts.join(" "));
+}
+
+/**
+ * The Attributes step's one sentence for an agents' run that ended without a usable
+ * answer, or null while they work or when nothing needs saying. The server's failure
+ * sentence (`failureNote`, else the context's own) leads, then the run's note. When an
+ * approved attribute still needs criteria, the sentence says so with both ways on: run
+ * again, or write the criteria (the step offers both beside it). A run that stopped on
+ * settled work is not shown (attributesStopped); one that left criteria missing always is,
+ * even where nothing the agents read has changed since.
+ */
+export function runFailureLine(
+  context: {
+    attributesRun: AttributesRun;
+    attributesRunNote: string;
+    attributesRerunUseful?: boolean | null;
+    attributesFailureNote?: string;
+    attributesAgentNotes?: readonly AttributesAgentNote[];
+    attributesPendingCriteria?: readonly PendingCriteria[];
+    planRevisionPending?: boolean | null;
+    approved: Attribute[];
+    proposed: Attribute[];
+    reviewSummary: AttributeReviewSummary | null;
+  },
+  failureNote: string = attributesFailureOf(context),
+): string | null {
+  const run = context.attributesRun;
+  if (run === "PENDING" || run === "WORKING") {
+    return null;
+  }
+  const said = plainNote(failureNote);
+  const note = plainNote(context.attributesRunNote);
+  // Criteria waiting in the plan's pending revision were written: said by
+  // pendingCriteriaLine, never as an answer that could not be used.
+  const missing = criteriaToWrite(context);
+  const waiting = pendingCriteria(context).length > 0;
+  const settled = context.attributesRerunUseful === false;
+  // Every attribute has its criteria and the server said why the run could not be used:
+  // the quiet settledRunLine, never an error.
+  if (said !== "" && allHaveCriteria(context)) {
+    return null;
+  }
+  if (run === "STOPPED" || said !== "") {
+    const unusable = PLANNER_UNUSABLE.test(said) || PLANNER_UNUSABLE.test(note);
+    // Settled work shows no error (12 November 2026); a control with no approved
+    // attribute is not settled, and gets this line with its Run again.
+    if (
+      missing.length === 0 &&
+      ((settled && context.approved.length > 0) || (waiting && unusable))
+    ) {
+      return null;
+    }
+    if (missing.length > 0) {
+      return unusable
+        ? CRITERIA_NOT_WRITTEN
+        : withNext(failureSentence(STOPPED_LINE, said, note), CRITERIA_NEXT);
+    }
+    return failureSentence(STOPPED_LINE, said, note);
+  }
+  // The run finished as far as the server says, nothing the agents read has changed since,
+  // and still an attribute has no criteria: their last run did not write them. Said, so
+  // the step never ends a run with "Needs criteria" and nothing else.
+  if (missing.length > 0 && settled && agentRan(context)) {
+    const letters = missing.map(({ letter }) => letter);
+    const which =
+      letters.length === 1
+        ? `attribute ${letters[0]}`
+        : `attributes ${letters.slice(0, -1).join(", ")} and ${letters.at(-1)}`;
+    return `The agents' last run did not write the criteria for ${which}, so ${letters.length === 1 ? "it still needs" : "they still need"} criteria. ${CRITERIA_NEXT}`;
+  }
+  return null;
+}
+
 /**
  * Whether the list offers the agents: always the first time ("Propose with the agent"), and
  * again ("Run again") only when it would do something. On settled work, with nothing the
@@ -946,6 +1202,9 @@ export type NarrativeRun = {
     | "EVIDENCE";
   round: number;
   note: string;
+  /** The server's sentence for a run that ended without a usable answer, or ""
+   * (run-failure.ts); absent from an older API. */
+  failureNote?: string;
   /** What the last update of the test plan from the narrative did, or null. */
   planOutcome: {
     attributes: number;
@@ -1000,6 +1259,34 @@ export function planOutcomeLine(
   return parts.length === 0
     ? "The test plan was checked against the approved narrative: it already matches how the control operates."
     : `The test plan was updated from the approved narrative: ${parts.join("; ")}.`;
+}
+
+const NARRATIVE_FAILED: Record<NarrativeRun["mode"], string> = {
+  DRAFT:
+    "The narrative could not be drafted, so the earlier narrative is kept. Draft it again, or edit it yourself.",
+  REVIEW:
+    "The review of the narrative did not finish, so it is not reviewed. The narrative is kept as it was. Draft it again.",
+  PLAN: "The test plan was not updated from the approved narrative, so the plan is kept as it was. Update the plan again.",
+};
+
+/** The Control Understanding narrative's one sentence for a run that ended without a
+ * usable answer (it failed), or null: the server's failure sentence, else the run's note,
+ * else this step's words for the run's mode. An evidence planner that did not finish an
+ * update of the plan is said by planOutcomeLine, with its own action. */
+export function narrativeFailureLine(
+  run: Pick<NarrativeRun, "status" | "mode" | "note" | "failureNote"> | null,
+  failureNote: string = run?.failureNote ?? "",
+): string | null {
+  if (run === null || run.status === "PENDING" || run.status === "WORKING") {
+    return null;
+  }
+  const said = plainNote(failureNote);
+  if (said !== "") {
+    return said;
+  }
+  return run.status === "FAILED"
+    ? failureSentence(NARRATIVE_FAILED[run.mode], run.note)
+    : null;
 }
 
 export type ProgressStep = {
@@ -1265,6 +1552,9 @@ function parseRun(value: unknown): NarrativeRun | null {
     stage: oneOf(value.stage, RUN_STAGES, ""),
     round: num(value.round),
     note: str(value.note),
+    ...(failureNoteOf(value) !== ""
+      ? { failureNote: failureNoteOf(value) }
+      : {}),
     startedAt: str(value.started_at),
     stageAt: str(value.stage_at),
     progress: {
@@ -1360,6 +1650,15 @@ export type ControlContext = {
    * their last finished run, or a run stopped before finishing work still needed. False on
    * settled work; null or absent when the API does not say (then asking stays offered). */
   attributesRerunUseful?: boolean | null;
+  /** The server's sentence for an attributes run that ended without a usable answer
+   * (ATTRIBUTES_FAILURE_FIELD), or "" (run-failure.ts). */
+  attributesFailureNote?: string;
+  /** Each agent's part in the latest attributes run, its failure said plainly. */
+  attributesAgentNotes?: AttributesAgentNote[];
+  /** The attributes whose criteria the planner wrote into the plan's pending revision. */
+  attributesPendingCriteria?: PendingCriteria[];
+  /** A change to the person-approved test plan waits to be decided. */
+  planRevisionPending?: boolean;
   note: string;
 };
 
@@ -1951,6 +2250,23 @@ export function parseContext(value: unknown): ControlContext | null {
       "",
     ),
     attributesRunNote: str(value.attributes_run_note),
+    attributesFailureNote: plainNote(str(value[ATTRIBUTES_FAILURE_FIELD])),
+    attributesAgentNotes: records(value.attributes_agent_notes).map((item) => ({
+      agent: str(item.agent),
+      step: str(item.step),
+      failed: str(item.failed),
+      kept: str(item.kept),
+      nextStep: plainNote(str(item.next_step)),
+      sentence: plainNote(str(item.sentence)),
+      at: str(item.at),
+    })),
+    attributesPendingCriteria: records(value.attributes_pending_criteria)
+      .filter((item) => UUID.test(str(item.attribute_id)))
+      .map((item) => ({
+        attributeId: str(item.attribute_id),
+        code: str(item.code),
+      })),
+    planRevisionPending: value.plan_revision_pending === true,
     attributesRerunUseful:
       typeof value.attributes_rerun_useful === "boolean"
         ? value.attributes_rerun_useful

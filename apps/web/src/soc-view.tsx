@@ -10,6 +10,7 @@ import {
   type SetupSystem,
   SOC_STATUS_LABELS,
   type SocReport,
+  runFailureLine as socFailureLine,
   wizardProblem,
 } from "./onboarding-model";
 import { UiIcon } from "./ui-icon";
@@ -188,7 +189,7 @@ export function SocReports({
               {report.status === "READING"
                 ? "Being read by the agent…"
                 : report.status === "FAILED"
-                  ? "Not read"
+                  ? socFailureLine(report, "soc")
                   : [
                       report.serviceOrganization,
                       report.reportType
@@ -228,7 +229,13 @@ export function SocReports({
               </button>
             ) : null}
           </div>
-          {report.note !== "" ? (
+          {report.status === "READ" &&
+          socFailureLine(report, "soc") !== null ? (
+            // The agent's reading could not be used: the server's sentence.
+            <p className="soc-gap" role="status">
+              {socFailureLine(report, "soc")}
+            </p>
+          ) : report.note !== "" ? (
             <p className="soc-meta">{report.note}</p>
           ) : null}
           {report.exceptions.length > 0 ? (

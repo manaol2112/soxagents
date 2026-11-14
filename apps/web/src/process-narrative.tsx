@@ -9,6 +9,7 @@ import {
   clock,
   type NarrativeRun,
   type NarrativeVersion,
+  narrativeFailureLine,
   narrativeProgress,
   type ProcessStep,
   parseVersions,
@@ -281,9 +282,9 @@ export function ProcessNarrative({
 
       {working && live !== null ? (
         <NarrativeProgress run={live} />
-      ) : live?.status === "FAILED" ? (
+      ) : narrativeFailureLine(live ?? null) !== null ? (
         <p className="form-error" role="alert">
-          {live.note || "The narrative could not be drafted. Try again."}
+          {narrativeFailureLine(live ?? null)}
         </p>
       ) : null}
 

@@ -1,5 +1,7 @@
 /** The agent console: the conversation, proposed steps, and what waits on the person. */
 
+import { failureNoteOf, plainNote } from "./run-failure.ts";
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type ConsoleAction = {
@@ -111,6 +113,9 @@ export type ConsoleMessage = {
   content: string;
   status: "PENDING" | "WORKING" | "DONE" | "FAILED";
   note: string;
+  /** The server's failure sentence for an answer that ended without a usable answer
+   * (run-failure.ts); absent otherwise. */
+  failureNote?: string;
   createdAt: string;
   actions: ConsoleAction[];
   /** The thread's latest settled answer, which the person can ask for again. */
@@ -118,6 +123,32 @@ export type ConsoleMessage = {
   /** Checked quotes from evidence files, shown where the answer says [^n]. */
   citations: Citation[];
 };
+
+/** The console's one sentence for an answer that ended without a usable answer (it
+ * failed), or null: the server's failure sentence, else the answer's own words and note,
+ * else that nothing was changed and the question can be asked again. "Retry" sits beside
+ * it where the thread allows. */
+export function runFailureLine(
+  message: Pick<ConsoleMessage, "status" | "content" | "note" | "failureNote">,
+  failureNote: string = message.failureNote ?? "",
+): string | null {
+  if (message.status === "PENDING" || message.status === "WORKING") {
+    return null;
+  }
+  const said = plainNote(failureNote);
+  if (said !== "") {
+    return said;
+  }
+  if (message.status !== "FAILED") {
+    return null;
+  }
+  const parts = [plainNote(message.content), plainNote(message.note)].filter(
+    (part, at, all) => part !== "" && all.indexOf(part) === at,
+  );
+  return parts.length > 0
+    ? parts.join(" ")
+    : "The agent could not answer, so nothing was changed. Retry, or ask in other words.";
+}
 
 export type ConsoleThread = {
   id: string | null;
@@ -302,6 +333,9 @@ export function parseThread(value: unknown): ConsoleThread | null {
         "DONE",
       ),
       note: str(item.note),
+      ...(failureNoteOf(item) !== ""
+        ? { failureNote: failureNoteOf(item) }
+        : {}),
       createdAt: str(item.created_at),
       actions,
       canRetry: item.can_retry === true,

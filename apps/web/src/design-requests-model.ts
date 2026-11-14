@@ -21,6 +21,7 @@ import { attributeLetter } from "./control-context-model.ts";
 import { itemKind } from "./design-release-model.ts";
 import type { PlanRequirement } from "./evidence-plan-model.ts";
 import type { IconName } from "./icon-name.ts";
+import { failureSentence, plainNote } from "./run-failure.ts";
 
 type Raw = Record<string, unknown>;
 const isRecord = (value: unknown): value is Raw =>
@@ -301,6 +302,9 @@ export type RequestsList = {
   settled: boolean;
   /** What an empty list says. */
   empty: string;
+  /** The planner's last run ended without a usable answer: its one sentence (what
+   * happened, what was kept, what to do), shown over the list; null otherwise. */
+  failure?: string | null;
 };
 
 export type RequestsView =
@@ -353,7 +357,56 @@ export type RequestsInput = {
   /** The time now, in milliseconds: how long ago the release was, where the plan's
    * summary does not say whether the requests are being drafted. */
   now: number;
+  /** The planner's run on the plan, as the plan reads (EvidencePlan): its kept note, its
+   * source, its status, and the server's failure sentence; null when not read. */
+  plan?: PlanRun | null;
 };
+
+/** What the plan says of the planner's latest run. */
+export type PlanRun = {
+  status?: string;
+  source?: string | null;
+  keptNote?: string;
+  failureNote?: string;
+};
+
+/** The planner's answer was rejected and the plan kept as it was (KEPT_NOTE). */
+const PLANNER_KEPT = /^The planner's answer could not be used\b/;
+
+export const PLAN_KEPT_LINE =
+  "The planner's answer could not be used, so the plan was kept as it was. Plan the evidence again, or change the requests yourself.";
+export const PLAN_FALLBACK_LINE =
+  "The planner did not answer, so the rules planned the evidence. Plan the evidence again, or change the requests yourself.";
+
+/**
+ * The one sentence for the planner's run on the plan that ended without a usable answer,
+ * or null while it works or when nothing needs saying: the server's failure sentence
+ * first; a kept plan (its answer could not be used); or a plan the rules made in its place
+ * while no person has approved it. Shown over the D&I requests list and the test plan.
+ */
+export function runFailureLine(
+  plan: PlanRun | null | undefined,
+  working: boolean,
+  failureNote: string = plan?.failureNote ?? "",
+): string | null {
+  if (plan === null || plan === undefined || working) {
+    return null;
+  }
+  const said = plainNote(failureNote);
+  if (said !== "") {
+    return said;
+  }
+  if (PLANNER_KEPT.test(plan.keptNote ?? "")) {
+    return PLAN_KEPT_LINE;
+  }
+  if (plainNote(plan.keptNote) !== "") {
+    return failureSentence(PLAN_KEPT_LINE, plan.keptNote);
+  }
+  if (plan.source === "FALLBACK" && plan.status !== "APPROVED") {
+    return PLAN_FALLBACK_LINE;
+  }
+  return null;
+}
 
 const GONE = ["CANCELLED", "REMOVED", "NOT_APPLICABLE"];
 const NOT_DRAFTED = ["NOT_GENERATED", "AWAITING_DEPENDENCY"];
@@ -769,6 +822,7 @@ export function requestsView(input: RequestsInput): RequestsView {
                   };
   return {
     mode: drafting ? "drafting" : "list",
+    failure: runFailureLine(input.plan, working),
     title:
       rows.length === 0 ? "No requests yet" : plural(rows.length, "request"),
     rows,

@@ -8,6 +8,7 @@
 
 import type { Draft, Prefill, Screen } from "./control-setup-model.ts";
 import { ONE_SCREEN } from "./control-setup-model.ts";
+import { failureNoteOf, plainNote } from "./run-failure.ts";
 
 export const AGENT_NAME = "Engagement planner";
 
@@ -1613,6 +1614,8 @@ export type NotesResult = {
   /** Walkthrough answers the planner proposed from the notes (11 November 2026): stored on
    * the server as proposals, shown pre-selected in their topic for a person to confirm. */
   walkthroughProposed?: number;
+  /** The server's sentence for a reading that ended without the planner's answer. */
+  failureNote?: string;
 };
 
 /** The planner's answers from the notes; null when the answer cannot be read. */
@@ -1656,6 +1659,8 @@ export function parseNotes(body: unknown): NotesResult | null {
       item.walkthrough_proposed > 0
         ? item.walkthrough_proposed
         : 0,
+    // The server's failure sentence, only where it sent one (run-failure.ts).
+    ...(failureNoteOf(item) !== "" ? { failureNote: failureNoteOf(item) } : {}),
   };
 }
 
@@ -1667,6 +1672,35 @@ export function notesChosen(
   return Object.fromEntries(
     answers.map((answer) => [answer.key, answer.current.trim() === ""]),
   );
+}
+
+/**
+ * The one sentence for a reading of the notes (or the policy) that ended without the
+ * planner's answer, or null when the planner read them: the server's failure sentence,
+ * else what the rules did in its place. Without the planner only an offered answer named
+ * word for word is found, so "no answer" from the rules is not the planner's finding; the
+ * step shows this instead of notesSummary, never "Nothing is changed" as if it read them.
+ */
+export function runFailureLine(
+  result: Pick<NotesResult, "answers" | "source" | "walkthroughProposed"> & {
+    failureNote?: string;
+  },
+  read: "notes" | "policy" = "notes",
+  failureNote: string = result.failureNote ?? "",
+): string | null {
+  const said = plainNote(failureNote);
+  if (said !== "") {
+    return said;
+  }
+  if (result.source !== "RULES") {
+    return null;
+  }
+  const them = read === "notes" ? "them" : "it";
+  const none =
+    result.answers.length === 0 && (result.walkthroughProposed ?? 0) === 0;
+  return none
+    ? `The planner did not read the ${read}, so only answers named word for word were looked for, and none was found. Nothing is changed. Read ${them} again, or answer the questions yourself.`
+    : `The planner did not read the ${read}, so only answers named word for word in ${them} are listed. Choose the ones to use, then read ${them} again or answer the rest yourself.`;
 }
 
 /** What the planner says about what it found. */

@@ -83,13 +83,8 @@ import {
   choosable,
   type PolicyEvidence,
   proposalsFor,
-  stillChecking,
 } from "./policy-evidence-model";
-import {
-  CheckingPolicies,
-  PolicyOnFile,
-  usePolicyEvidence,
-} from "./policy-on-file";
+import { PolicyCheck, PolicyOnFile, usePolicyEvidence } from "./policy-on-file";
 import { RowMenu, type RowMenuItem } from "./row-menu";
 import { tracesSample } from "./sample-trace-model";
 import { SampleTrace, useSampleTrace } from "./sample-trace-view";
@@ -1720,7 +1715,7 @@ function Row({
                   {row.note !== "" ? (
                     <p className="ep-note">{row.note}</p>
                   ) : null}
-                  {stillChecking(policies, item) ? <CheckingPolicies /> : null}
+                  <PolicyCheck evidence={policies} item={item} />
                   {onFile.map((proposal) => (
                     <PolicyOnFile
                       key={proposal.id}

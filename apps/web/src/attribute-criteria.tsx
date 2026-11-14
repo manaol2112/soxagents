@@ -31,6 +31,7 @@ export function TailoredCriteria({
   canAct,
   flat = false,
   extra = null,
+  startEditing: writing = false,
 }: {
   ids: Ids;
   item: Attribute;
@@ -40,12 +41,15 @@ export function TailoredCriteria({
   flat?: boolean;
   /** The row's other actions, after Accept and Edit (flat only). */
   extra?: ReactNode;
+  /** Opens with the criteria form showing: the step's "Write criteria", after a run that
+   * did not write them. */
+  startEditing?: boolean;
 }) {
   const action = useRelease(ids);
   const formId = useId();
   const criteria = item.criteria;
   const state = criteriaState(criteria);
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(writing && canAct);
   // A person tailoring from nothing starts from the standard's requirement, where there is
   // one, and makes it this control's.
   const start = {

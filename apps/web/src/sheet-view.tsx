@@ -13,6 +13,7 @@ import {
   type SheetNotice,
   sheetHeadline,
   type TestSheet,
+  runFailureLine as testerFailureLine,
 } from "./sheet-model";
 import { UiIcon } from "./ui-icon";
 
@@ -93,6 +94,7 @@ export function TestSheetCard({
     );
   }
   const headline = sheetHeadline(sheet, automation);
+  const stopped = testerFailureLine(sheet);
   const open = sheet.status === "OPEN" && canAct;
   const linkable = sheet.placements.filter(
     (entry) => entry.placement !== "EXCLUDED",
@@ -142,6 +144,14 @@ export function TestSheetCard({
           {headline.label}
         </span>
       </header>
+      {stopped !== null ? (
+        // The tester's run ended without finishing: why, what is kept, and "Test again"
+        // in the bar below. Never only the headline's few words.
+        <p className="banner banner-warning" role="status">
+          <UiIcon name="info" size={15} />
+          <span>{stopped}</span>
+        </p>
+      ) : null}
       {notice !== null ? (
         <p
           className={`banner ${notice === "sheet-blocked" || notice === "sheet-invalid" ? "banner-warning" : ""}`}

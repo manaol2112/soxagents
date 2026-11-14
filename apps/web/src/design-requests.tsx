@@ -627,6 +627,29 @@ function RequestsPanel({
         </p>
       ) : null}
       <Problem text={action.problem} />
+      {view.failure != null && !view.working ? (
+        // The planner's run ended without a usable answer: said over the list it would
+        // have changed, with the way to run it again; the rows stay as they were.
+        <div className="ta-run-note tone-warning has-acts" role="status">
+          <UiIcon name="info" size={13} />
+          <span>{view.failure}</span>
+          {canAct ? (
+            <span className="ta-run-acts">
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={locked}
+                onClick={() =>
+                  void action.run("replan", "plan", { intent: "generate" })
+                }
+              >
+                <UiIcon name="retry" size={13} />
+                {action.busy === "replan" ? "Planning…" : "Plan again"}
+              </button>
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       <ul className="tar-list" aria-label="D&I requests">
         {view.rows.map((each) => row(each))}
         {view.rows.length === 0 ? (

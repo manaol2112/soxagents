@@ -36,6 +36,7 @@ import {
 import { MAX_UPLOAD_BYTES } from "./evidence-model.ts";
 import { formatBytes } from "./format.ts";
 import type { IconName } from "./icon-name.ts";
+import { failureNoteOf, plainNote } from "./run-failure.ts";
 
 type Raw = Record<string, unknown>;
 const isRecord = (value: unknown): value is Raw =>
@@ -113,7 +114,24 @@ export type BatchRead = {
   finishedAt: number | null;
   /** The reader's note, in a plain sentence, once the reading ended. */
   note: string;
+  /** The server's failure sentence for a reading that failed, where it sent one
+   * (run-failure.ts); absent otherwise. */
+  failureNote?: string;
 };
+
+/** A reading's one sentence when it ended without a usable answer (it failed), or null:
+ * the server's failure sentence, else the reader's note, else how to go on. The file's
+ * own "Read it again" sits beside it where the reading needs a person (needsFix). */
+export function runFailureLine(
+  read: Pick<BatchRead, "status" | "note" | "failureNote">,
+  failureNote: string = read.failureNote ?? "",
+): string | null {
+  if (read.status !== "FAILED") {
+    return null;
+  }
+  const said = plainNote(failureNote) || plainNote(sentence(read.note));
+  return `Could not be read. ${said !== "" ? said : "Nothing from it is placed. Read it again, or add a clearer copy."}`;
+}
 
 export type Classification = {
   /** The server's word for the file's kind: shown in words (label), never as is. */
@@ -237,6 +255,9 @@ function parseRead(value: unknown): BatchRead {
     startedAt: timeOf(raw.started_at),
     finishedAt: ended ? timeOf(raw.finished_at) : null,
     note: ended ? str(raw.note).slice(0, 300) : "",
+    ...(status === "FAILED" && failureNoteOf(raw) !== ""
+      ? { failureNote: failureNoteOf(raw) }
+      : {}),
   };
 }
 
@@ -1282,7 +1303,7 @@ function activityOf(
   }
   if (read.status === "FAILED") {
     return {
-      text: `Could not be read.${read.note !== "" ? ` ${sentence(read.note)}` : ""}`,
+      text: runFailureLine(read) ?? "",
       on: false,
       tone: "danger",
     };

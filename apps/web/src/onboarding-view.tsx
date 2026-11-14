@@ -32,6 +32,7 @@ import {
   type SetupTemplate,
   SOC_STATUS_LABELS,
   scopeCounts,
+  runFailureLine as setupFailureLine,
   setupProblem,
   socOverview,
   TEMPLATE_KINDS,
@@ -1039,6 +1040,12 @@ function RcmImportView({
                 </p>
               </div>
             </div>
+          ) : setupFailureLine(upload.terms, "terms") !== null ? (
+            <div className="card-body">
+              <Banner tone="warning">
+                {setupFailureLine(upload.terms, "terms")}
+              </Banner>
+            </div>
           ) : null}
           <div className="rcm-values">
             {VALUE_FIELDS.map((field) => {
@@ -1438,6 +1445,15 @@ function RcmSystemsCard({
           ) : undefined
         }
       />
+      {!working &&
+      systems.status !== "FAILED" &&
+      setupFailureLine(systems, "systems") !== null ? (
+        // The agent's answer could not be used (the RCM's words stand in): said over the
+        // systems it would have identified.
+        <div className="card-body">
+          <Banner tone="warning">{setupFailureLine(systems, "systems")}</Banner>
+        </div>
+      ) : null}
       {working ? (
         <div className="card-body systems-working" aria-live="polite">
           <AutoRefresh />
@@ -1454,10 +1470,7 @@ function RcmSystemsCard({
         </div>
       ) : systems.status === "FAILED" ? (
         <div className="card-body stack">
-          <Banner tone="warning">
-            Identifying the systems did not finish. Scan again, or import using
-            the systems column only.
-          </Banner>
+          <Banner tone="warning">{setupFailureLine(systems, "systems")}</Banner>
           {rescan}
         </div>
       ) : systems.proposals.length === 0 ? (

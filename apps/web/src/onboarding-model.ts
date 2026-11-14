@@ -2,6 +2,7 @@ import type { Design } from "./control-context-model.ts";
 import type { EngagementPhase } from "./engagement-lifecycle.ts";
 import { formatDate } from "./format.ts";
 import type { Policy, PriorYearReference } from "./references-model.ts";
+import { failureNoteOf, plainNote } from "./run-failure.ts";
 import type { StandardMatches } from "./standard-matches-model.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -764,10 +765,42 @@ export type SystemProposal = {
   included: boolean;
 };
 
+/** The setup's agent runs that can end without a usable answer: the RCM's systems scan,
+ * its terms mapping, and a SOC report's reading. */
+export type SetupRun = "systems" | "terms" | "soc";
+
+const SETUP_FAILED: Record<SetupRun, string> = {
+  systems:
+    "Identifying the systems did not finish. Scan again, or import using the systems column only.",
+  terms:
+    "The agent's mapping did not finish, so the terms keep the suggestions shown. Map them again, or change any of them yourself.",
+  soc: "The report could not be read, so nothing from it is used. Remove it and upload it again, or upload a clearer copy.",
+};
+
+/** A setup run's one sentence when it ended without a usable answer (it failed), or null:
+ * the server's failure sentence, else this step's words, which say what stands and the
+ * next action. The run's own note is shown elsewhere only when it is not a failure. */
+export function runFailureLine(
+  run: { status: string; failureNote?: string },
+  kind: SetupRun,
+  failureNote: string = run.failureNote ?? "",
+): string | null {
+  // The server's sentence is shown whatever the status: it sends one only for a run
+  // that ended without a usable answer (lead's decision, 13 November 2026).
+  const said = plainNote(failureNote);
+  if (said !== "") {
+    return said;
+  }
+  return run.status === "FAILED" ? SETUP_FAILED[kind] : null;
+}
+
 export type RcmSystems = {
   status: "PENDING" | "SCANNING" | "READY" | "FAILED";
   source: "MODEL" | "RULES" | "FALLBACK" | null;
   note: string;
+  /** The server's failure sentence for a run that ended without a usable answer
+   * (run-failure.ts); absent otherwise. */
+  failureNote?: string;
   version: number;
   proposals: SystemProposal[];
 };
@@ -786,6 +819,7 @@ function parseSystems(value: unknown): RcmSystems {
         ? item.source
         : null,
     note: str(item.note),
+    ...(failureNoteOf(item) !== "" ? { failureNote: failureNoteOf(item) } : {}),
     version: Number(item.version ?? 1),
     proposals: records(item.proposals).map((entry) => ({
       key: str(entry.key),
@@ -843,6 +877,7 @@ export type RcmImport = {
     mode: "FILL" | "REMAP";
     source: "MODEL" | "RULES" | "FALLBACK" | null;
     note: string;
+    failureNote?: string;
     modelAvailable: boolean;
   };
   preview: {
@@ -1473,6 +1508,9 @@ export function parseImport(value: unknown): RcmImport | null {
           ? terms.source
           : null,
       note: str(terms.note),
+      ...(failureNoteOf(terms) !== ""
+        ? { failureNote: failureNoteOf(terms) }
+        : {}),
       modelAvailable: terms.model_available === true,
     },
     ready: value.ready === true,
@@ -2267,6 +2305,9 @@ export type SocReport = {
   fileName: string;
   status: "READING" | "READ" | "FAILED";
   note: string;
+  /** The server's failure sentence for a run that ended without a usable answer
+   * (run-failure.ts); absent otherwise. */
+  failureNote?: string;
   reportKind: string;
   serviceOrganization: string;
   reportType: string;
@@ -3083,6 +3124,7 @@ function parseSocReport(item: Record<string, unknown>): SocReport {
     fileName: str(item.file_name),
     status: pick(item.status, ["READ", "FAILED"] as const) ?? "READING",
     note: str(item.note),
+    ...(failureNoteOf(item) !== "" ? { failureNote: failureNoteOf(item) } : {}),
     reportKind: str(item.report_kind) || "SOC1",
     serviceOrganization: str(item.service_organization),
     reportType: str(item.report_type),

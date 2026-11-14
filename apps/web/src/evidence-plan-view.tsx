@@ -25,6 +25,7 @@ import {
   POPULATION_LABELS,
   PROPOSAL_LABELS,
   planProblem,
+  runFailureLine as planRunFailureLine,
   type RequirementFile,
   requirementStatus,
   shownRequirements,
@@ -1576,6 +1577,11 @@ export function PlanDetails({
       </p>
       {plan.summary ? <p className="cc-text">{plan.summary}</p> : null}
       {plan.note ? <p className="cc-note">{plan.note}</p> : null}
+      {planRunFailureLine(plan) !== null ? (
+        <p className="cc-note tone-warning" role="status">
+          {planRunFailureLine(plan)}
+        </p>
+      ) : null}
       <PlanList
         title="Missing information"
         items={plan.missingInformation}

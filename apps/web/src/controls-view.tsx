@@ -1889,6 +1889,7 @@ function ControlRecord({
         ?.requirements ?? [],
     summary: evidencePlan?.designRequests ?? null,
     working: masterHere?.state === "ANALYZING",
+    plan: evidencePlan,
     procedures:
       masterHere === null
         ? null

@@ -31,7 +31,6 @@ import {
   agentRan,
   attributeLetter,
   attributeSourceLine,
-  attributesStopped,
   attributesSummary,
   attributesWorking,
   BASIS_LABELS,
@@ -44,6 +43,7 @@ import {
   type ControlContext,
   contextProblem,
   criteriaToAccept,
+  criteriaToWrite,
   type Design,
   DOCUMENT_KINDS,
   type DocumentKind,
@@ -55,10 +55,13 @@ import {
   offersAgentRun,
   PROCEDURE_PHASES,
   type ProcessStep,
+  pendingCriteriaLine,
   reviewUnfinished,
+  runFailureLine,
   SECTION_HEADINGS,
   SOURCE_LABELS,
   selectionPlan,
+  settledRunLine,
   type Testing,
   TYPE_LABELS,
   UNIFIED_CHIPS,
@@ -68,6 +71,7 @@ import {
   unifiedRows,
   unifiedState,
 } from "./control-context-model";
+import { planningHref } from "./planning-model";
 import {
   type NarrativeAttribute,
   NarrativeSources,
@@ -1628,11 +1632,37 @@ function EmbeddedAttributes({
     context.attributesStage,
   );
   const running = working !== null;
-  const stopped = attributesStopped(
-    context.attributesRun,
-    context.attributesRunNote,
-    context.attributesRerunUseful ?? null,
-  );
+  // A run that ended without a usable answer: one sentence, with its ways on beside it
+  // (run again, or write the criteria the run did not write). Never "Needs criteria" on
+  // the rows and nothing else.
+  const failure = runFailureLine(context);
+  // The run could not be used, but every attribute has its criteria: a quiet line.
+  const settledRun = settledRunLine(context);
+  // The first attribute whose criteria a person writes: not one whose criteria wait in a
+  // change to the test plan, which the step links to instead.
+  const toWrite = criteriaToWrite(context)[0]?.item ?? null;
+  const pending = pendingCriteriaLine(context);
+  // The row whose criteria form "Write criteria" opened.
+  const [writing, setWriting] = useState<string | null>(null);
+  // Once the row's criteria are written (or nothing is missing), its form opens only on
+  // the person's own Edit again.
+  const toWriteId = toWrite?.id ?? null;
+  useEffect(() => {
+    if (writing !== null && toWriteId !== writing) {
+      setWriting(null);
+    }
+  }, [writing, toWriteId]);
+  function writeCriteria(item: Attribute) {
+    setWriting(item.id);
+    const next = new Set(opened);
+    next.add(item.id);
+    onOpen(next);
+    window.requestAnimationFrame(() =>
+      document
+        .getElementById(`${id}-${item.id}`)
+        ?.scrollIntoView({ block: "nearest" }),
+    );
+  }
   // While the agents work, the page reads the attributes again every few seconds, in
   // place; it stops by itself when the run ends.
   useEffect(() => {
@@ -1797,9 +1827,11 @@ function EmbeddedAttributes({
             ) : null}
             {kind === "APPROVED" ? (
               <TailoredCriteria
+                key={writing === item.id ? "writing" : "shown"}
                 ids={ids}
                 item={item}
                 canAct={canAct && !running}
+                startEditing={writing === item.id}
                 flat
                 extra={
                   standard !== null || more !== null ? (
@@ -1972,15 +2004,72 @@ function EmbeddedAttributes({
             </span>
           </small>
         </p>
-      ) : stopped !== null ? (
-        <p className="ta-run-note tone-warning" role="status">
+      ) : failure !== null ? (
+        <div className="ta-run-note tone-warning has-acts" role="status">
           <UiIcon name="info" size={13} />
-          {stopped}
+          <span>{failure}</span>
+          {canAct ? (
+            <span className="ta-run-acts">
+              {/* One "Run again" on the step: here only where the bar above does not
+                  offer it (nothing the agents read changed), and then on purpose all
+                  the same (force), since the run did not do its work. */}
+              {!offersAgentRun(
+                agentRan(context),
+                context.attributesRerunUseful,
+              ) ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={locked}
+                  onClick={() => onGenerate(true)}
+                >
+                  <UiIcon name="retry" size={13} />
+                  {busyKey === "generate" ? "Starting…" : "Run again"}
+                </button>
+              ) : null}
+              {toWrite !== null ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={locked}
+                  onClick={() => writeCriteria(toWrite)}
+                >
+                  <UiIcon name="compose" size={13} />
+                  Write criteria
+                </button>
+              ) : null}
+            </span>
+          ) : null}
+        </div>
+      ) : settledRun !== null ? (
+        <p className="ta-run-note" role="status">
+          <UiIcon name="info" size={13} />
+          <span>{settledRun}</span>
         </p>
       ) : unreviewed !== null ? (
         <p className="ta-run-note tone-warning" role="status">
           <UiIcon name="info" size={13} />
           {unreviewed}
+        </p>
+      ) : null}
+      {!running && pending !== null ? (
+        // The planner's criteria were written into a change to the approved test plan:
+        // said, with where that change is decided (the Test plans page's "Accept the
+        // planner's revision"), never as criteria nobody wrote.
+        <p className="ta-run-note tone-warning has-acts" role="status">
+          <UiIcon name="info" size={13} />
+          <span>{pending}</span>
+          <span className="ta-run-acts">
+            <a
+              className="btn btn-ghost btn-sm"
+              href={planningHref(ids.organizationId, ids.projectId, {
+                control: ids.controlId,
+                tab: "attributes",
+              })}
+            >
+              Review the change
+            </a>
+          </span>
         </p>
       ) : null}
       {status}

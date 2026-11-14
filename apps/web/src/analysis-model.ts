@@ -1,5 +1,7 @@
 /** Evidence reading: what the evidence coordinator read from each stored file. */
 
+import { failureNoteOf, failureSentence, plainNote } from "./run-failure.ts";
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CREDENTIAL =
   /(?:api[_-]?key|client[_-]?secret|refresh[_-]?token|access[_-]?token|private[_-]?key)\s*[:=]\s*\S{8,}|password\s*[:=]\s*(?=\S*[0-9])(?=\S*[A-Za-z])\S{6,}|(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}|BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY/i;
@@ -70,12 +72,42 @@ export type EvidenceAnalysis = {
    * after a model failure. FAILED: the model failed and nothing stands in. */
   source: "MODEL" | "RULES" | "FALLBACK" | "FAILED" | "SEEDED" | null;
   note: string;
+  /** The server's failure sentence for a reading that ended without a usable answer
+   * (run-failure.ts); absent otherwise. */
+  failureNote?: string;
   confirmedKind: EvidenceKind | null;
   confirmedNote: string;
   confirmedAt: string | null;
   confirmedBy: string | null;
   version: number;
 };
+
+/** A file's reading's one sentence when it ended without a usable answer (it failed, or
+ * nothing classified it), or null while it reads or once it is read: the server's failure
+ * sentence, else the reading's note, else that nothing from the file is classified. "Read
+ * again" sits beside it. */
+export function runFailureLine(
+  analysis: Pick<
+    EvidenceAnalysis,
+    "status" | "classification" | "note" | "failureNote"
+  >,
+  failureNote: string = analysis.failureNote ?? "",
+): string | null {
+  if (analysis.status === "PENDING" || analysis.status === "WORKING") {
+    return null;
+  }
+  const said = plainNote(failureNote);
+  if (said !== "") {
+    return said;
+  }
+  if (analysis.status !== "FAILED" && analysis.classification !== null) {
+    return null;
+  }
+  return failureSentence(
+    "Reading the file did not finish, so nothing from it is classified. Read it again.",
+    analysis.note,
+  );
+}
 
 export type EvidenceSettings = {
   ocrEngine: OcrEngine;
@@ -205,6 +237,9 @@ export function parseAnalyses(value: unknown): EvidenceAnalysis[] | null {
         "SEEDED",
       ] as const),
       note: str(item.note),
+      ...(failureNoteOf(item) !== ""
+        ? { failureNote: failureNoteOf(item) }
+        : {}),
       confirmedKind: oneOf(item.confirmed_kind, EVIDENCE_KINDS),
       confirmedNote: str(item.confirmed_note),
       confirmedAt: maybe(item.confirmed_at),
