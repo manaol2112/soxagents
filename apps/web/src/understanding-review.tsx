@@ -16,6 +16,7 @@ import { useAction } from "./control-context-view";
 import {
   agentQuestions,
   confirmPlan,
+  NO_DOCUMENT,
   type Prefill,
   type RowPicks,
   type SetupIssue,
@@ -414,6 +415,141 @@ export function UnderstandingReview({
     setChecking(true);
     await read();
     setChecking(false);
+  }
+
+  /**
+   * Which policy governs the control: optional, since many clients have none (product owner,
+   * 13 November 2026: "Policy should always be optional ... Just an option here that policy
+   * is not available instead of linking. ... if yes, ask it to add the name of the policy").
+   * No formal policy is an answer on the record (it reads as the client's established
+   * practice); a policy is recorded by its name, and the person adds it to the D&I evidence
+   * requests and uploads it there.
+   */
+  function policyPoint(
+    need: Need,
+    chips: ReactNode,
+    title: ReactNode,
+    why: ReactNode,
+  ) {
+    const current = need.value.trim();
+    const onRecord = need.status === "CONFIRMED" && current !== "";
+    const choice =
+      picked[need.key] ??
+      (current === NO_DOCUMENT ? "NONE" : current !== "" ? "NAMED" : "");
+    const name = typed[need.key] ?? (current !== NO_DOCUMENT ? current : "");
+    const answer =
+      choice === "NONE" ? NO_DOCUMENT : choice === "NAMED" ? name.trim() : "";
+    const unchanged = onRecord && answer === current;
+    const radio = `ur-${need.key}`;
+    return (
+      <form
+        className="ur-point"
+        autoComplete="off"
+        onSubmit={(event: FormEvent<HTMLFormElement>) => {
+          event.preventDefault();
+          if (unchanged) {
+            if (review !== null && interview !== null) {
+              go(nextOpen(review, interview, at));
+            }
+            return;
+          }
+          void save(need, answer, true);
+        }}
+      >
+        {chips}
+        {title}
+        <p className="ur-hint" id="ur-hint">
+          A formal policy is not required. Many clients have none: choose No
+          formal policy, and the control reads as the client&apos;s established
+          practice.
+          {need.source === "SYSTEM" || need.source === "OTHER_SYSTEM"
+            ? ` "${current}" is used for ${need.source === "SYSTEM" ? "this system's other controls" : "the same control on another system"}; confirm it or choose another answer.`
+            : ""}
+        </p>
+        <fieldset
+          className="ur-options"
+          aria-labelledby="ur-q"
+          aria-describedby="ur-hint"
+        >
+          <label className={`ur-option${choice === "NAMED" ? " is-on" : ""}`}>
+            <input
+              type="radio"
+              name={radio}
+              value="NAMED"
+              checked={choice === "NAMED"}
+              disabled={!canAct || busy}
+              onChange={() =>
+                setPicked((was) => ({ ...was, [need.key]: "NAMED" }))
+              }
+            />
+            <span className="ur-dot" aria-hidden="true" />
+            <span className="ur-option-text">The client has a policy</span>
+          </label>
+          <label className={`ur-option${choice === "NONE" ? " is-on" : ""}`}>
+            <input
+              type="radio"
+              name={radio}
+              value="NONE"
+              checked={choice === "NONE"}
+              disabled={!canAct || busy}
+              onChange={() =>
+                setPicked((was) => ({ ...was, [need.key]: "NONE" }))
+              }
+            />
+            <span className="ur-dot" aria-hidden="true" />
+            <span className="ur-option-text">No formal policy</span>
+          </label>
+        </fieldset>
+        {choice === "NAMED" ? (
+          <>
+            <input
+              className="ur-other"
+              type="text"
+              maxLength={300}
+              value={name}
+              disabled={!canAct || busy}
+              placeholder="The policy's name, as the client calls it"
+              aria-label="The policy's name"
+              onChange={(event) => {
+                const value = event.target.value;
+                setTyped((was) => ({ ...was, [need.key]: value }));
+              }}
+            />
+            <p className="ur-hint">
+              The control&apos;s wording names it. Add it to the D&amp;I
+              evidence requests and upload it there when you have it.
+              {documentsHref !== null ? (
+                <>
+                  {" "}
+                  <a className="text-link" href={documentsHref}>
+                    Open D&amp;I Evidence
+                  </a>
+                </>
+              ) : null}
+            </p>
+          </>
+        ) : null}
+        {why}
+        {foot(
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={!canAct || busy || answer === ""}
+          >
+            {saving === need.key ? (
+              <span className="spinner small" aria-hidden="true" />
+            ) : null}
+            {saving === need.key
+              ? "Saving…"
+              : unchanged
+                ? "Continue"
+                : "Save & continue"}
+            <UiIcon name="arrow" size={14} />
+          </button>,
+          true,
+        )}
+      </form>
+    );
   }
 
   /** Saves one answer; moves on to the next open point when `move` is set. */
@@ -1639,6 +1775,9 @@ export function UnderstandingReview({
         />
       );
     }
+    if (need.kind === "DOCUMENT") {
+      return policyPoint(need, chips, title, why);
+    }
     if (need.kind !== "ANSWER") {
       const lead =
         need.kind === "QUESTION"
@@ -1659,10 +1798,6 @@ export function UnderstandingReview({
           <button type="button" className="btn btn-primary" onClick={onProcess}>
             Confirm the process <UiIcon name="arrow" size={14} />
           </button>
-        ) : need.kind === "DOCUMENT" && documentsHref !== null ? (
-          <a className="btn btn-primary" href={documentsHref}>
-            Link it in D&amp;I Evidence <UiIcon name="arrow" size={14} />
-          </a>
         ) : null;
       return (
         <>
