@@ -35,6 +35,7 @@ from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError
 
 from ai_workforce_api.actions import contains_secret
+from ai_workforce_api.agent_answers import SHAPE, note_unusable, problem_of
 from ai_workforce_api.control_context import Source, line, source_blocks
 from ai_workforce_api.db import transaction
 from ai_workforce_api.models import ModelProvider, ModelRequest
@@ -577,7 +578,14 @@ def _ask_agent(
         return None
     try:
         return _Review.model_validate(call.raw.output)
-    except ValidationError:
+    except ValidationError as error:
+        # Rejected by this check: said on the call's record, as every agent's is.
+        note_unusable(
+            connection, call, problem_of(error),
+            f"The reviewer of the questions could not finish: {SHAPE}.",
+            "The questions stay as they were.",
+            "Run again, or review the questions yourself.",
+        )  # fmt: skip
         return None
 
 

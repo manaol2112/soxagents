@@ -165,6 +165,11 @@ class ModelRequest:
     # only); no caller turns it off, and test_agent_answers fails for one that does without
     # being listed there with its reason.
     unnest: bool = True
+    # Also lift properties a model wrote inside another top-level property's text (shape
+    # 2 of models.unnested). Only the planner and the evidence readings, which had it
+    # before 13 November 2026; for every other call that shape is corrected once
+    # (AgentCaller.generate).
+    lift: bool = False
 
 
 @dataclass(frozen=True)
@@ -409,7 +414,7 @@ def outcome(provider: ModelProvider, request: ModelRequest, config: ModelConfig)
             )
             return Outcome("MALFORMED", raw, reason, False)
         if request.unnest:
-            reread, names = unnested(request.output_schema, raw.output)
+            reread, names = unnested(request.output_schema, raw.output, request.lift)
             if names:
                 logger.info("model answer re-read: a nested property arrived as JSON text")
                 raw = replace(raw, output=reread, returned=raw.output, unnested=names)
@@ -938,7 +943,7 @@ def _json_text(text: str) -> Any:
 
 
 def unnested(
-    schema: dict[str, Any], value: dict[str, Any]
+    schema: dict[str, Any], value: dict[str, Any], lift: bool = True
 ) -> tuple[dict[str, Any], tuple[str, ...]]:
     """The answer read as the schema declares it, and where it was read so (none: the
     answer is returned as it came, the same object). The one reading every agent's answer
@@ -957,7 +962,10 @@ def unnested(
        schema declares (an object or a list), followed by nothing but properties the schema
        *requires* and the answer does not have (the text may close the answer's own brace).
        Never an optional property (a verdict or an approval the answer did not state must
-       not appear because some text carried it), never a property written twice.
+       not appear because some text carried it), never a property written twice. Only with
+       `lift` (ModelRequest.lift): the agents that had it before 13 November 2026, the
+       planner and the evidence readings. For every other agent the shape is left, fails,
+       and is corrected once (provenance.AgentCaller.generate, `misplaced`).
     3. A property the schema declares as an object or a list sent as the text of its JSON,
        at any depth, the rows of a list included (`attributes`, 13 November 2026; a row's
        `follows`): read when the text is exactly one JSON value of the declared kind. Named
@@ -974,13 +982,31 @@ def unnested(
     if schema.get("type") != "object" or not isinstance(schema.get("properties"), dict):
         return value, ()
     names: list[str] = []
-    found = _unwrapped(schema, value, names)
-    found = _carried(schema, found, names)
+    found = _unwrapped(schema, value, names, lift)
+    if lift:
+        found = _carried(schema, found, names)
     found = _read_deep(schema, found, "", names, 0)
     return (found, tuple(names)) if names else (value, ())
 
 
-def _unwrapped(schema: dict[str, Any], value: dict[str, Any], names: list[str]) -> dict[str, Any]:
+def misplaced(schema: dict[str, Any], value: Any) -> tuple[str, ...]:
+    """The properties an answer wrote inside another top-level property's text (shape 2 of
+    unnested), as "<carried> inside <host>"; none when it did not. For a call that does not
+    lift them: the call is corrected once instead."""
+    if (
+        schema.get("type") != "object"
+        or not isinstance(schema.get("properties"), dict)
+        or not isinstance(value, dict)
+    ):
+        return ()
+    carried: list[str] = []
+    _carried(schema, value, [], carried)
+    return tuple(carried)
+
+
+def _unwrapped(
+    schema: dict[str, Any], value: dict[str, Any], names: list[str], lift: bool
+) -> dict[str, Any]:
     """Shape 1: the answer inside a wrapper, when the schema says it is the answer."""
     properties = schema["properties"]
     if len(value) != 1:
@@ -993,16 +1019,22 @@ def _unwrapped(schema: dict[str, Any], value: dict[str, Any], names: list[str]) 
     if not isinstance(inner, dict) or not any(key in properties for key in inner):
         return value
     read: list[str] = []
-    candidate = _read_deep(schema, _carried(schema, inner, read), "", read, 0)
+    inner = _carried(schema, inner, read) if lift else inner
+    candidate = _read_deep(schema, inner, "", read, 0)
     if not isinstance(candidate, dict) or _mismatch(schema, candidate) is not None:
         return value
     names += [f"wrapper:{wrapper}", *read]
     return candidate
 
 
-def _carried(schema: dict[str, Any], value: dict[str, Any], names: list[str]) -> dict[str, Any]:
+def _carried(
+    schema: dict[str, Any],
+    value: dict[str, Any],
+    names: list[str],
+    carried_out: list[str] | None = None,
+) -> dict[str, Any]:
     """Shape 2, and shape 3 at the top level: a top-level property's text read with what
-    it carries (see unnested)."""
+    it carries (see unnested). `carried_out` collects "<carried> inside <host>"."""
     properties, required = schema["properties"], schema.get("required", [])
     found = dict(value)
     read_as_json: list[str] = []
@@ -1039,6 +1071,8 @@ def _carried(schema: dict[str, Any], value: dict[str, Any], names: list[str]) ->
             continue
         found.update(read)
         read_as_json += [name, *carried]
+        if carried_out is not None:
+            carried_out += [f"{key} inside {name}" for key in carried]
     if not read_as_json:
         return value
     names += read_as_json

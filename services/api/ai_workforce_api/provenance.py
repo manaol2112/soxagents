@@ -69,6 +69,7 @@ from ai_workforce_api.models import (
     StreamingChatProvider,
     cost_micros,
     estimate_tokens,
+    misplaced,
     outcome,
     record_call,
 )
@@ -116,10 +117,9 @@ class Call:
     raw: ModelRaw
     call_id: UUID | None
     attempts: int
-    # Why the last attempt gave no usable answer, as its record keeps it: the error class,
-    # or where a malformed answer broke the schema ("answer.phases: required, missing").
-    # Only the schema's names, never a word of the answer. Empty when it succeeded.
-    error: str = ""
+    # The call is the answer to a correction this caller already asked (a property written
+    # inside another's text): the agent has had its one correction.
+    corrected: bool = False
 
     @property
     def readable(self) -> bool:
@@ -254,6 +254,54 @@ class AgentCaller:
         prompt_version: str,
         inputs: dict[str, Any] | None = None,
     ) -> Call:
+        """One generation (_generate_once), corrected once when the answer wrote a
+        property inside another top-level property's text and the call does not lift such
+        properties (ModelRequest.lift: only the planner and the evidence readings do, as
+        before 13 November 2026). The first answer's outcome records the rejection; the
+        second answer is the call's, checked as any other, and says it was corrected."""
+        call = self._generate_once(request, prompt_version, inputs)
+        if (
+            call.status != "MALFORMED"
+            or request.operation != "generate"
+            or request.lift
+            or not request.unnest
+            or call.raw.output is None
+        ):
+            return call
+        carried = misplaced(
+            request.output_schema,
+            call.raw.returned if call.raw.returned is not None else call.raw.output,
+        )
+        if not carried:
+            return call
+        reason = (
+            "the answer wrote a property inside another property's text: " + ", ".join(carried)
+        )[:500]
+        record_outcome(
+            self._connection, call.call_id,
+            {"validation": "REJECTED", "reason": reason, "corrected": True},
+        )  # fmt: skip
+        again = self._generate_once(
+            replace(
+                request,
+                prompt=(
+                    f"{request.prompt}\n\nYour previous answer could not be used: {reason}. "
+                    "Give every property of the answer at its top level as structured data, "
+                    "never inside the text of another property, and return the whole answer "
+                    "again."
+                ),
+            ),
+            prompt_version,
+            {**(inputs or {}), "correction": 1, "rejected": reason[:300]},
+        )
+        return replace(again, corrected=True)
+
+    def _generate_once(
+        self,
+        request: ModelRequest,
+        prompt_version: str,
+        inputs: dict[str, Any] | None = None,
+    ) -> Call:
         """One generation, tried again after a transient failure (never after a malformed
         or rejected one), recorded each time. `inputs` says what the call was made from
         (evidence file ids and hashes, the sheet and its version, the approved plan
@@ -270,7 +318,7 @@ class AgentCaller:
                     "CANCELLED", nothing, request, prompt_version, attempt, None,
                     "cancelled before the call", inputs,
                 )  # fmt: skip
-                return Call("CANCELLED", nothing, call_id, attempt, "cancelled before the call")
+                return Call("CANCELLED", nothing, call_id, attempt)
             estimate = estimate_micros(self.config, request)
             refusal = self._over_budget(estimate)
             # A trial firm's call is also reserved against its allowance (Step 2): the
@@ -283,7 +331,7 @@ class AgentCaller:
                     "BUDGET_EXCEEDED", nothing, request, prompt_version, attempt, None, refusal,
                     inputs,
                 )  # fmt: skip
-                return Call("BUDGET_EXCEEDED", nothing, call_id, attempt, refusal)
+                return Call("BUDGET_EXCEEDED", nothing, call_id, attempt)
             started = time.perf_counter()
             found = outcome(cast(ModelProvider, self._provider), request, self.config)
             duration = int((time.perf_counter() - started) * 1000)
@@ -294,7 +342,7 @@ class AgentCaller:
                 found.error, inputs,
             )  # fmt: skip
             settle_call(self._connection, reservation, call_id, cost)
-            last = Call(found.status, found.raw, call_id, attempt, found.error)
+            last = Call(found.status, found.raw, call_id, attempt)
             if found.status == "SUCCEEDED" or not self._retry:
                 return last
             # Only a transient failure is tried again (the caller may still read a

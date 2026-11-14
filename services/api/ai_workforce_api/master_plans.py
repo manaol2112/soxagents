@@ -65,10 +65,12 @@ from ai_workforce_api.definition_registry import BY_LIBRARY_KEY, attribute_for
 from ai_workforce_api.evidence_planning import PHASE_LABELS, PHASES, Phase
 from ai_workforce_api.evidence_plans import (
     ATTRIBUTES_SETTLED_SQL,
+    LATEST_RUN_SQL,
     PlanState,
     _audit,
     accept_request,
     list_decided,
+    plan_failure_of,
     release,
 )
 from ai_workforce_api.implementations import CoverageBody, Scope, ScopeUnit, SplitBody, UnitCreate
@@ -211,6 +213,8 @@ class _Plan:
     submitted_by: str | None = None
     submitted_at: datetime | None = None
     submitted_note: str = ""
+    # MasterPlanBody.failure_note (evidence_plans.plan_failure_of).
+    failure_note: str = ""
     phases: list[dict[str, Any]] = field(default_factory=list)
     procedures: list[dict[str, Any]] = field(default_factory=list)
     procedure_attributes: dict[UUID, set[UUID]] = field(default_factory=dict)
@@ -290,7 +294,8 @@ def _load(
         f"""
         SELECT p.engagement_control_id, p.id, p.status, p.run_status, p.revision,
                p.approved_revision, p.version, p.understanding, p.provisional,
-               p.pending_revision, u.display_name, p.submitted_at, p.submitted_note
+               p.pending_revision, u.display_name, p.submitted_at, p.submitted_note,
+               p.run_note, {LATEST_RUN_SQL}
         FROM evidence_plans p LEFT JOIN users u ON u.id = p.submitted_by
         WHERE p.{scope}
         """,
@@ -308,6 +313,8 @@ def _load(
         found.pending_revision = row[9] if isinstance(row[9], dict) else None
         found.submitted_by = None if row[10] is None else str(row[10])
         found.submitted_at, found.submitted_note = row[11], str(row[12])
+        # The planner's last run, said for a person, read with the plan (no query a plan).
+        found.failure_note = plan_failure_of(found.run_status, str(row[13] or ""), row[14], row[15])
         by_plan[found.plan_id] = found
     for row in connection.execute(
         f"""
@@ -1287,12 +1294,10 @@ def body_of(
     def ordered(codes: list[str]) -> list[str]:
         return sorted(set(codes), key=lambda code: (code[0], int(code[1:] or 0)))
 
-    from ai_workforce_api.evidence_plans import plan_run_failure_note
-
     return MasterPlanBody(
         control_id=plan.control_id,
         plan_id=plan.plan_id,
-        failure_note=plan_run_failure_note(connection, plan.control_id),
+        failure_note=plan.failure_note,
         control=ControlSection(
             control_ref=plan.control_ref,
             title=plan.title,

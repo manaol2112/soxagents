@@ -301,9 +301,11 @@ class _Fixed:
 
 
 def _asked(schema: dict[str, Any], unnest: bool = True) -> ModelRequest:
+    # As the planner asks (evidence_plans.plan_for): the shape one level too deep is
+    # lifted for it, and since 13 November 2026 only for it and the evidence readings.
     return ModelRequest(
         operation="generate", prompt="Plan.", output_schema=schema, allowed_tool_ids=(),
-        timeout_seconds=5, cancelled=False, unnest=unnest,
+        timeout_seconds=5, cancelled=False, unnest=unnest, lift=True,
     )  # fmt: skip
 
 
@@ -393,7 +395,7 @@ def test_the_planner_plans_from_an_answer_written_one_level_too_deep(migrated: D
     assert body.understanding["summary"] == "The agent's reading of the control."
     assert [(row[0], row[1]) for row in _planner_calls(migrated, control)] == [("SUCCEEDED", "")]
     assert planner.requests[0].max_tokens == PLANNER_TOKENS == 16000
-    assert planner.requests[0].unnest is True
+    assert planner.requests[0].unnest is True and planner.requests[0].lift is True
     # Provenance stays truthful: the call's hash is of what the provider returned, and the
     # call says the answer was re-read and which properties were read from text.
     returned = _one_level_too_deep(good)

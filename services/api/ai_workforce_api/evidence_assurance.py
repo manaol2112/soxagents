@@ -797,6 +797,7 @@ def reading_request(system: str, prompt: str, *, retry: bool = False) -> ModelRe
         system=system,
         max_tokens=RETRY_TOKENS if retry else READING_TOKENS,
         unnest=True,
+        lift=True,
     )
 
 

@@ -40,7 +40,7 @@ from pydantic import BaseModel, Field
 
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.after_commit import committed
-from ai_workforce_api.agent_answers import note_unusable, note_used
+from ai_workforce_api.agent_answers import note_unusable, note_used, plain_problem
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -489,6 +489,7 @@ def plan_for(
         max_tokens=PLANNER_TOKENS,
         # A plan written one level too deep is read as written (models.unnested, B1h).
         unnest=True,
+        lift=True,
     )
     call = caller.generate(
         request,
@@ -517,11 +518,17 @@ def plan_for(
                 "evidence instead."
             )
             break
-        # A fact quoting words the records do not hold is left out of the answer before it
-        # is checked, never kept and never filled in (13 November 2026: a whole plan was
-        # rejected for one such quote). The plan's note and the call's outcome say so.
-        output, dropped = unheld_quotes_left_out(call.raw.output, facts)
+        # A fact quoting words the records do not hold is a rejection, corrected like any
+        # other, on every answer but the last. On the last it is left out (never kept,
+        # never filled in) only when nothing else in the answer repeats what it claims;
+        # otherwise the answer is rejected and the plan kept (unheld_quotes_left_out). The
+        # plan's note and the call's outcome say what was left out.
         try:
+            output, dropped = (
+                unheld_quotes_left_out(call.raw.output, facts)
+                if attempt == PLAN_CORRECTIONS
+                else (call.raw.output, ())
+            )
             return Planned(
                 check_plan(output, facts), "MODEL", _dropped_note(dropped), call.call_id,
                 call=call, dropped=dropped,
@@ -4346,7 +4353,7 @@ def _planner_outcome(connection: psycopg.Connection[Any], planned: Planned, kept
         connection,
         planned.call,
         planned.problem,
-        planned.problem or "The planner's answer could not be used.",
+        f"The planner could not finish: {plain_problem(planned.problem)}.",
         "The plan was kept as it was; no criteria were tailored and no evidence changed."
         if kept
         else "The reviewed rules planned the evidence instead; no criteria were tailored.",
@@ -4388,7 +4395,12 @@ def plan_failure_note(source: str, note: str) -> str:
     FALLBACK run's own note (kept, or the rules planned instead) and what to do next."""
     if source != "FALLBACK" or not note.strip():
         return ""
-    return f"{note.strip()} {PLAN_AGAIN}"
+    kept = (
+        "The plan was kept as it was."
+        if note.startswith(KEPT_NOTE)
+        else "The reviewed rules planned the evidence instead."
+    )
+    return f"The planner could not finish: {plain_problem(note)}. {kept} {PLAN_AGAIN}"
 
 
 def latest_plan_failure_note(connection: psycopg.Connection[Any], control_id: UUID) -> str:
@@ -4466,14 +4478,32 @@ def plan_run_failure_note(connection: psycopg.Connection[Any], control_id: UUID)
     """The `failure_note` of the control's evidence plan and master plan: a plan run that
     failed (its run note), or the latest run whose planner answer could not be used."""
     row = connection.execute(
-        "SELECT run_status, run_note FROM evidence_plans WHERE engagement_control_id = %s",
+        f"SELECT p.run_status, p.run_note, {LATEST_RUN_SQL} FROM evidence_plans p "
+        "WHERE p.engagement_control_id = %s",
         (control_id,),
     ).fetchone()
-    if row is None or str(row[0]) in ("PENDING", "WORKING"):
+    if row is None:
         return ""
-    if str(row[0]) == "FAILED" and str(row[1] or "").strip():
-        return f"{str(row[1]).strip()} {PLAN_AGAIN}"
-    return latest_plan_failure_note(connection, control_id)
+    return plan_failure_of(str(row[0]), str(row[1] or ""), row[2], row[3])
+
+
+# The plan's latest run's source and note, as two columns over evidence_plans `p`, for the
+# failure note of many plans in one query (master_plans).
+LATEST_RUN_SQL = """
+    (SELECT r.source FROM evidence_plan_runs r WHERE r.plan_id = p.id
+     ORDER BY r.created_at DESC, r.id DESC LIMIT 1),
+    (SELECT r.note FROM evidence_plan_runs r WHERE r.plan_id = p.id
+     ORDER BY r.created_at DESC, r.id DESC LIMIT 1)
+"""
+
+
+def plan_failure_of(run_status: str, run_note: str, source: Any, note: Any) -> str:
+    """plan_run_failure_note from what was read: the plan's run state and its latest run."""
+    if run_status in ("PENDING", "WORKING"):
+        return ""
+    if run_status == "FAILED" and run_note.strip():
+        return f"{run_note.strip()} {PLAN_AGAIN}"
+    return "" if source is None else plan_failure_note(str(source), str(note or ""))
 
 
 def _keep_standing_plan(

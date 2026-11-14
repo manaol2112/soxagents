@@ -914,7 +914,7 @@ def generate(
             connection,
             answered.call,
             answered.problem,
-            f"The attribute agent's answer could not be used ({answered.problem}).",
+            f"The attribute agent could not finish: {answered.plain}.",
             "The attributes, their criteria and the proposals already on the control were "
             "kept as they were; nothing was proposed.",
             "Run again. Or add the attributes and write their criteria on this step yourself.",
@@ -1552,8 +1552,7 @@ def _review(
             connection,
             answered.call,
             answered.problem,
-            f"The reviewer of the drafted attributes could not use its answer "
-            f"({answered.problem}).",
+            f"The reviewer of the drafted attributes could not finish: {answered.plain}.",
             "The attribute agent's drafts were kept as drafted, not reviewed.",
             "Run again. Or check each draft yourself before you accept it.",
         )

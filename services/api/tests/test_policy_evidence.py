@@ -443,3 +443,28 @@ def test_a_person_files_a_policy_on_file_themselves(migrated: Database) -> None:
         json={"document_id": access},
     )
     assert refused.status_code == 409
+
+
+def test_an_item_the_agent_could_not_read_is_said_over_the_whole_run(migrated: Database) -> None:
+    """B1i review, decision 5: an answer this module's check rejects is recorded as
+    rejected, and the policy reading's failure_note covers every item of the run, not only
+    its last call."""
+    team = _ready(migrated, "pe-rejected")
+    item = _item(migrated, team["project"])
+    _upload(team, "IT Access Management Standard v4.2", ACCESS, item["system"])
+    good = _verdicts([("D1", False, "It does not cover this item.", "")])
+    model = _Scripted([{"documents": "not a list"}, *([good] * 20)])
+    assert _run(migrated, team["project"], model) == "DONE"
+    body = _read(team, item["control"])
+    assert body["failure_note"].startswith(
+        "The agent could not finish 1 of its readings: the answer could not be used."
+    )
+    assert "Ask for the reading again, or file a policy by choice." in body["failure_note"]
+    with connect(migrated.url) as connection:
+        outcome = connection.execute(
+            "SELECT o.outcome FROM model_calls m JOIN model_call_outcomes o "
+            "ON o.model_call_id = m.id WHERE m.project_id = %s "
+            "AND m.prompt_version LIKE 'policy-evidence/%%' ORDER BY m.created_at LIMIT 1",
+            (team["project"],),
+        ).fetchone()
+    assert outcome is not None and outcome[0]["validation"] == "REJECTED"

@@ -374,3 +374,36 @@ def test_a_removed_reference_takes_off_what_is_undecided(migrated: Database) -> 
     # A removed reference is neither run nor decided again.
     assert _run(migrated, reference["id"]) == "SKIPPED"
     assert team["owner"].post(f"{base}/prior-year/{reference['id']}/run").status_code == 404
+
+
+def test_an_analysis_the_agent_could_not_give_is_said_on_the_reference(migrated: Database) -> None:
+    """B1i review, decision 5: an answer this module's own check rejects is recorded as
+    rejected, and the reference's failure_note counts every such reading of the run, not
+    only its last call."""
+    team = _launched(migrated, "py-rejected")
+    reference = _upload(team)
+    matching = {
+        "controls": [
+            {"prior_ref": "PY-CM-9", "prior_title": "Payroll interface changes",
+             "quote": "Changes to the payroll interface are approved", "control": None},
+        ]
+    }  # fmt: skip
+    provider = _Scripted([matching, {"answers": "not a list"}, _analysis()])
+    assert _run(migrated, reference["id"], provider) == "DONE"
+    found = _reference(team, reference["id"])
+    assert found["failure_note"] == (
+        "The agent could not finish 1 of its readings: the answer could not be used. The "
+        "matches and proposals found so far are kept. Run it again, or match the controls "
+        "and review the prior year yourself."
+    )
+    with connect(migrated.url) as connection:
+        rejected = connection.execute(
+            "SELECT o.outcome FROM model_calls m JOIN model_call_outcomes o "
+            "ON o.model_call_id = m.id WHERE m.prompt_version = 'prior-year-analysis/1' "
+            "AND m.target_id = %s",
+            (UUID(reference["id"]),),
+        ).fetchall()
+    assert [row[0]["validation"] for row in rejected] == ["REJECTED"]
+    assert rejected[0][0]["note"]["failed"] == (
+        "The prior-year agent could not finish: the answer did not have the required shape."
+    )

@@ -63,12 +63,14 @@ _WHO = {
 class Answered[T]:
     """The outcome of an agent's call after at most its corrections: the value the caller's
     check read (None when no answer could be used), the last call made, every call made,
-    and why the last answer could not be used, in the check's words (empty when used)."""
+    and why the last answer could not be used: in the check's words (`problem`, for the
+    record) and in fixed plain words (`plain`, for the person); both empty when used."""
 
     value: T | None
     call: Call
     calls: tuple[Call, ...]
     problem: str = ""
+    plain: str = ""
 
     @property
     def used(self) -> bool:
@@ -90,13 +92,43 @@ def problem_of(error: ValueError) -> str:
     return (str(error).strip() or "it could not be read")[:500]
 
 
+# What a person reads for why an answer could not be used: fixed plain words, never the
+# schema's paths or a validator's message (those are the record's: the outcome's reason).
+SHAPE = "the answer did not have the required shape"
+MISQUOTE = "the answer quoted the records for something they do not say"
+CUT_OFF = "the answer was cut off at the output limit"
+RULE = "the answer broke a rule its work is checked against"
+
+
+def plain_problem(problem: str) -> str:
+    """The fixed plain words for a recorded reason (a check's or a call's)."""
+    text = problem.lower()
+    if "cut off" in text:
+        return CUT_OFF
+    if "quote" in text and ("does not say" in text or "do not hold" in text):
+        return MISQUOTE
+    if (
+        "schema" in text
+        or "required format" in text
+        or "inside another property" in text
+        or "did not fit" in text
+    ):
+        return SHAPE
+    for status in ("TIMEOUT", "RATE_LIMITED", "MODEL_ERROR", "CANCELLED", "BUDGET_EXCEEDED"):
+        said = call_note(status).rstrip(".")
+        if said.lower() in text:
+            return said[0].lower() + said[1:]
+    return RULE
+
+
 def unanswered(call: Call) -> str:
     """Why a call left no answer to read, in words."""
     if call.raw.stopped == "max_tokens":
         return "the answer was cut off at the output limit"
     if call.status == "MALFORMED" and call.raw.output is None:
-        return "the answer did not match the schema"
-    return call_note(call.status).rstrip(".").lower()
+        return SHAPE
+    said = call_note(call.status).rstrip(".")
+    return said[0].lower() + said[1:]
 
 
 def correction_prompt(prompt: str, previous: Any, problem: str) -> str:
@@ -133,15 +165,18 @@ def generate_read[T](
     call's outcome is the caller's to record (note_used, note_unusable)."""
     call = caller.generate(request, prompt_version, inputs)
     calls = [call]
-    problem = ""
+    problem = plain = ""
     for attempt in range(corrections + 1):
         if call.status not in READABLE or call.raw.output is None:
-            return Answered(None, call, tuple(calls), unanswered(call))
+            why = unanswered(call)
+            return Answered(None, call, tuple(calls), why, why)
         try:
             return Answered(read(call.raw.output), call, tuple(calls))
         except ValueError as error:
             problem = problem_of(error)
-        if attempt == corrections:
+            plain = SHAPE if isinstance(error, ValidationError) else plain_problem(problem)
+        # One correction in all: a call AgentCaller already corrected has had it.
+        if attempt == corrections or call.corrected:
             break
         record_outcome(
             connection, call.call_id,
@@ -154,7 +189,7 @@ def generate_read[T](
             {**inputs, "correction": attempt + 1, "rejected": problem[:300]},
         )
         calls.append(call)
-    return Answered(None, call, tuple(calls), problem)
+    return Answered(None, call, tuple(calls), problem, plain)
 
 
 def note_used(
@@ -269,51 +304,48 @@ def notes_for(
 # The statuses whose call left no answer at all; a malformed call with an answer may still
 # have been read by its caller's own check, so only its recorded outcome says it was not.
 _NO_ANSWER = ("TIMEOUT", "RATE_LIMITED", "MODEL_ERROR", "BUDGET_EXCEEDED")
+# The sentence a run's note ends with when some of its readings gave no usable answer
+# (unusable_sentence), and the words failure_note finds it by.
+UNUSABLE_MARK = "The agent could not finish"
 
 
-def unusable_call_note(
-    connection: psycopg.Connection[Any],
-    target_type: str,
-    target_id: UUID,
-    families: tuple[str, ...],
-    kept: str,
-    next_step: str,
-    since: datetime | None = None,
-) -> str:
-    """`failure_note` for a run record whose agent writes no failure sentence of its own:
-    one plain sentence when the latest call of these prompt families on the target (since
-    `since`, when given) gave no usable answer, "" otherwise. A call's own outcome note
-    (note_unusable) is used as it is; otherwise a call that left no answer (the model did
-    not answer, the budget, an answer cut off or of no shape at all) is said in words with
-    what was kept and what to do. A malformed answer its caller may still have read is
-    not called a failure without an outcome saying so."""
+def unusable_in_run(connection: psycopg.Connection[Any], job_id: UUID) -> int:
+    """How many of a run's model calls (one job: AgentCaller.job.job_id) gave no usable
+    answer, in one query: an outcome that says it was rejected or not used (a corrected
+    call's rejection is not counted: its correction answers for it), or, with no outcome
+    recorded, a call that left no answer at all."""
     row = connection.execute(
         """
-        SELECT m.status, m.output_sha256 IS NULL, o.outcome
-        FROM model_calls m LEFT JOIN model_call_outcomes o ON o.model_call_id = m.id
-        WHERE m.target_type = %s AND m.target_id = %s
-          AND split_part(m.prompt_version, '/', 1) = ANY(%s)
-          AND (%s::timestamptz IS NULL OR m.created_at >= %s)
-        ORDER BY m.created_at DESC, m.id DESC LIMIT 1
+        SELECT count(*) FROM model_calls m
+        LEFT JOIN model_call_outcomes o ON o.model_call_id = m.id
+        WHERE m.job_id = %s AND m.operation = 'generate'
+          AND CASE WHEN o.model_call_id IS NOT NULL
+                   THEN o.outcome ->> 'validation' IN ('REJECTED', 'NOT_USED')
+                        AND coalesce(o.outcome ->> 'corrected', 'false') <> 'true'
+                   ELSE m.status = ANY(%s)
+                        OR (m.status = 'MALFORMED' AND m.output_sha256 IS NULL)
+              END
         """,
-        (target_type, target_id, list(families), since, since),
+        (job_id, list(_NO_ANSWER)),
     ).fetchone()
-    if row is None:
+    return 0 if row is None else int(row[0])
+
+
+def unusable_sentence(count: int) -> str:
+    """What a run's note says when `count` of its readings gave no usable answer; empty
+    when none did."""
+    if count <= 0:
         return ""
-    status, empty, outcome = str(row[0]), bool(row[1]), row[2]
-    if isinstance(outcome, dict):
-        note = outcome.get("note")
-        if isinstance(note, dict):
-            parts = [str(note.get(key) or "").strip() for key in ("failed", "kept", "next_step")]
-            return " ".join(part for part in parts if part)
-        if outcome.get("validation") in ("REJECTED", "NOT_USED"):
-            return f"The agent's last answer could not be used. {kept} {next_step}".strip()
+    return (
+        f"{UNUSABLE_MARK} {count} of its readings: "
+        f"{'the answer' if count == 1 else 'the answers'} could not be used."
+    )
+
+
+def run_failure_note(note: str, kept: str, next_step: str) -> str:
+    """`failure_note` of a run whose note carries unusable_sentence: that sentence, what was
+    kept and what to do; empty otherwise."""
+    at = note.find(UNUSABLE_MARK)
+    if at < 0:
         return ""
-    if status in _NO_ANSWER or (status == "MALFORMED" and empty):
-        why = (
-            "The model's answer was not in the required format."
-            if status == "MALFORMED"
-            else call_note(status)
-        )
-        return f"The agent's last answer could not be used: {why} {kept} {next_step}".strip()
-    return ""
+    return f"{note[at:].strip()} {kept} {next_step}".strip()

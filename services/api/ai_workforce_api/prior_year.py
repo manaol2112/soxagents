@@ -34,6 +34,14 @@ from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError
 
 from ai_workforce_api.actions import contains_secret
+from ai_workforce_api.agent_answers import (
+    SHAPE,
+    note_unusable,
+    problem_of,
+    run_failure_note,
+    unusable_in_run,
+    unusable_sentence,
+)
 from ai_workforce_api.console_citations import find_quote
 from ai_workforce_api.control_context import (
     Citation,
@@ -223,7 +231,7 @@ def references(connection: psycopg.Connection[Any], project_id: UUID) -> list[Re
             run_status=row[6],
             run_note=str(row[7]),
             matches=matches.get(UUID(str(row[0])), []),
-            failure_note=_failure_note(connection, UUID(str(row[0])), str(row[6]), str(row[7])),
+            failure_note=_failure_note(str(row[6]), str(row[7])),
         )  # fmt: skip
         for row in connection.execute(
             """
@@ -240,22 +248,19 @@ def references(connection: psycopg.Connection[Any], project_id: UUID) -> list[Re
     ]
 
 
-def _failure_note(
-    connection: psycopg.Connection[Any], document_id: UUID, status: str, note: str
-) -> str:
-    """ReferenceBody.failure_note: a run that could not finish says so in its note; a
-    finished run whose model call gave no usable answer, from that call's record."""
+PRIOR_KEPT = "The matches and proposals found so far are kept."
+PRIOR_NEXT = "Run it again, or match the controls and review the prior year yourself."
+
+
+def _failure_note(status: str, note: str) -> str:
+    """ReferenceBody.failure_note, from the run's own status and note: a run that could
+    not finish, or one some of whose readings gave no usable answer (the note's
+    unusable_sentence, counted over the whole run). No query."""
     if status in ("PENDING", "WORKING"):
         return ""
     if status == "FAILED":
-        return f"{note} The matches and proposals found so far are kept."
-    from ai_workforce_api.agent_answers import unusable_call_note
-
-    return unusable_call_note(
-        connection, "source_document", document_id, ("prior-year-match", "prior-year-analysis"),
-        "The matches and proposals found so far are kept.",
-        "Run it again, or match the controls and review the prior year yourself.",
-    )  # fmt: skip
+        return f"{note} {PRIOR_KEPT}"
+    return run_failure_note(note, PRIOR_KEPT, PRIOR_NEXT)
 
 
 def proposals_for(connection: psycopg.Connection[Any], control_id: UUID) -> list[ProposalBody]:
@@ -477,7 +482,13 @@ def described_matches(
         return []
     try:
         answer = _Matched.model_validate(call.raw.output)
-    except ValidationError:
+    except ValidationError as error:
+        # Rejected by this check: said on the call's record, so the run's note counts it
+        # (agent_answers.unusable_in_run) and the reference's failure_note says so.
+        note_unusable(
+            connection, call, problem_of(error),
+            f"The prior-year agent could not finish: {SHAPE}.", PRIOR_KEPT, PRIOR_NEXT,
+        )  # fmt: skip
         return []
     shown = controls[:MAX_CONTROLS_SHOWN]
     found: list[_Found] = []
@@ -683,7 +694,11 @@ def analyse(
         return 0
     try:
         answer = _Analysis.model_validate(call.raw.output)
-    except ValidationError:
+    except ValidationError as error:
+        note_unusable(
+            connection, call, problem_of(error),
+            f"The prior-year agent could not finish: {SHAPE}.", PRIOR_KEPT, PRIOR_NEXT,
+        )  # fmt: skip
         return 0
     rows: list[tuple[ProposalKind, str, str, str, str, str]] = []
 
@@ -839,6 +854,10 @@ def run_prior_year(
                 (status, match_id),
             )
     note = _note(connection, document_id, provider is not None, proposed)
+    if provider is not None:
+        # The readings whose answer could not be used, counted over the whole run (one
+        # query), so a later reading that worked does not hide them.
+        note = f"{note} {unusable_sentence(unusable_in_run(connection, job.job_id))}".strip()
     with transaction(connection) as cursor:
         cursor.execute(
             "UPDATE prior_year_runs SET run_status = 'IDLE', run_lease_until = NULL, "

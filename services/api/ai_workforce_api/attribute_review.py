@@ -791,7 +791,7 @@ def review_set(
             connection,
             call,
             answered.problem,
-            f"The reviewer of the attributes could not use its answer ({answered.problem}).",
+            f"The reviewer of the attributes could not finish: {answered.plain}.",
             "The attributes and their criteria were kept as they were, not reviewed.",
             "Run again. Or check each attribute and its criteria yourself before you accept them.",
         )

@@ -30,6 +30,14 @@ from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError
 
 from ai_workforce_api.actions import contains_secret
+from ai_workforce_api.agent_answers import (
+    SHAPE,
+    note_unusable,
+    problem_of,
+    run_failure_note,
+    unusable_in_run,
+    unusable_sentence,
+)
 from ai_workforce_api.authorization import Action, Principal, _call, _session_principal
 from ai_workforce_api.console_citations import find_quote
 from ai_workforce_api.context_routes import _project
@@ -312,7 +320,14 @@ def judge(
         return []
     try:
         answer = _Answer.model_validate(call.raw.output)
-    except ValidationError:
+    except ValidationError as error:
+        # Rejected by this check: said on the call's record, so the run's note counts it
+        # (agent_answers.unusable_in_run) and the policy reading's failure_note says so.
+        note_unusable(
+            connection, call, problem_of(error),
+            f"The agent could not read the policies for an item: {SHAPE}.", POLICY_KEPT,
+            POLICY_NEXT,
+        )  # fmt: skip
         return []
     keyed = {f"D{index}": document for index, document in enumerate(documents, start=1)}
     verdicts: dict[UUID, Judged] = {}
@@ -405,9 +420,12 @@ def run_policy_evidence(
         # Asked again meanwhile (a document added or scoped): read what is new.
         if again is None or len(pending) > MAX_ITEMS:
             break
+    # The readings whose answer could not be used, over every item of the run (one query),
+    # so the policy reading's failure_note covers them all, not only the last call.
+    unusable = unusable_sentence(unusable_in_run(connection, job.job_id))
     _finish(
         connection, project_id,
-        f"{proposed} polic{'ies' if proposed != 1 else 'y'} proposed as evidence.",
+        f"{proposed} polic{'ies' if proposed != 1 else 'y'} proposed as evidence. {unusable}",
     )  # fmt: skip
     return "DONE"
 
@@ -543,7 +561,7 @@ def proposals_for(
         (project_id,),
     ).fetchone()
     return PolicyEvidenceBody(
-        failure_note=_failure_note(connection, project_id, state),
+        failure_note=_failure_note(state),
         documents=[
             DocumentBody(
                 id=d[0],
@@ -573,24 +591,20 @@ def proposals_for(
     )
 
 
-def _failure_note(
-    connection: psycopg.Connection[Any], project_id: UUID, state: tuple[Any, ...] | None
-) -> str:
-    """PolicyEvidenceBody.failure_note: a reading that could not finish says so in its
-    note; a finished one whose last model call gave no usable answer, from that call."""
+POLICY_KEPT = "The policies already proposed are kept."
+POLICY_NEXT = "Ask for the reading again, or file a policy by choice."
+
+
+def _failure_note(state: tuple[Any, ...] | None) -> str:
+    """PolicyEvidenceBody.failure_note, from the run's own status and note: a reading
+    that could not finish, or one some of whose items gave no usable answer (the note's
+    unusable_sentence, counted over every item of the run). No query."""
     if state is None or bool(state[0]):
         return ""
+    note = str(state[2] or "")
     if str(state[1]) == "FAILED":
-        return (
-            f"{state[2]} The policies already proposed are kept; you can also file one by choice."
-        )
-    from ai_workforce_api.agent_answers import unusable_call_note
-
-    return unusable_call_note(
-        connection, "project", project_id, (PROMPT_VERSION.split("/", 1)[0],),
-        "The policies already proposed are kept.",
-        "Ask for the reading again, or file a policy by choice.",
-    )  # fmt: skip
+        return f"{note} {POLICY_KEPT} You can also file one by choice."
+    return run_failure_note(note, POLICY_KEPT, POLICY_NEXT)
 
 
 # A person's decision

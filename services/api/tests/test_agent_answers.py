@@ -49,6 +49,7 @@ from ai_workforce_api.evidence_planning import SYSTEM_PROMPT as PLANNER_SYSTEM
 from ai_workforce_api.evidence_planning import quote_held, quote_text, rules_plan
 from ai_workforce_api.evidence_plans import (
     KEPT_NOTE,
+    PLAN_AGAIN,
     generate,
     latest_plan_failure_note,
     load_facts,
@@ -463,34 +464,48 @@ def test_the_shapes_of_itgc_ac_01_are_read_and_a_quote_the_records_lack_is_never
     with connect(migrated.url) as connection:
         title = load_facts(connection, team["project"], UUID(control)).title
 
-    def planned(_prompt: str) -> dict[str, Any]:
-        # The planner, as on 12 and 13 November 2026: `phases` inside the text of
-        # `understanding`, a fact whose quote the records do not hold, and one they hold
-        # in other typography.
-        output = script.plan()
-        output["understanding"]["facts"] = [
-            {"field": "PERFORMER", "value": "The IT service desk", "basis": "SOURCE",
-             "quote": "The IT service desk grants all access."},
-            {"field": "DESCRIPTION", "value": "The control as named.", "basis": "SOURCE",
-             "quote": f"“{title.upper()}.”"},
-        ]  # fmt: skip
-        text = json.dumps(output["understanding"]) + ',"phases":' + json.dumps(output["phases"])
-        rest = {k: v for k, v in output.items() if k not in ("understanding", "phases")}
-        return {"understanding": text, **rest}
+    def planned(misquoted: bool) -> Callable[[str], dict[str, Any]]:
+        def answer(_prompt: str) -> dict[str, Any]:
+            # The planner, as on 12 and 13 November 2026: `phases` inside the text of
+            # `understanding`; a fact the records hold in other typography; and, the
+            # first time, a fact whose quote the records do not hold.
+            output = script.plan()
+            held = {
+                "field": "DESCRIPTION",
+                "value": "The control as named.",
+                "basis": "SOURCE",
+                "quote": f"\u201c{title.upper()}.\u201d",
+            }
+            unheld = {
+                "field": "PERFORMER",
+                "value": "The IT service desk",
+                "basis": "SOURCE",
+                "quote": "The IT service desk grants all access.",
+            }
+            output["understanding"]["facts"] = [unheld, held] if misquoted else [held]
+            text = json.dumps(output["understanding"]) + ',"phases":' + json.dumps(output["phases"])
+            rest = {k: v for k, v in output.items() if k not in ("understanding", "phases")}
+            return {"understanding": text, **rest}
 
-    script.answers["planner"] = [planned]
+        return answer
+
+    script.answers["planner"] = [planned(True), planned(False)]
     # The reviewer of the set, its answer inside a wrapper.
     script.answers["set-review"] = [{OUTPUT_TOOL: {"attributes": [], "findings": []}}]
     with connect(migrated.url) as connection:
         assert run_plan(connection, script, plan_id) == "DONE"
-    # Each agent answered once: every shape was read, nothing needed a correction.
+    # Every shape was read; only the planner's misquote needed a correction (a quote the
+    # records do not hold is corrected on every answer but the last: the reviewer's
+    # decision on B1i, 13 November 2026).
     assert [who for who in script.calls if who != "other"] == [
-        "attributes", "draft-review", "planner", "set-review",
+        "attributes", "draft-review", "planner", "planner", "set-review",
     ]  # fmt: skip
+    assert "understanding.facts[0].quote" in script.prompts["planner"][1]
     calls = _calls(migrated, control)
     assert [(row[0], row[1], row[2]) for row in calls] == [
         ("attributes", "SUCCEEDED", ""), ("attribute-review", "SUCCEEDED", ""),
-        ("engagement-planner", "SUCCEEDED", ""), ("attribute-set-review", "SUCCEEDED", ""),
+        ("engagement-planner", "SUCCEEDED", ""), ("engagement-planner", "SUCCEEDED", ""),
+        ("attribute-set-review", "SUCCEEDED", ""),
     ]  # fmt: skip
     read = {row[0]: row[3].get("unnested") for row in calls}
     assert read["attributes"] == ["attributes", "issues"]
@@ -499,7 +514,10 @@ def test_the_shapes_of_itgc_ac_01_are_read_and_a_quote_the_records_lack_is_never
     ]  # fmt: skip
     assert read["engagement-planner"] == ["understanding", "phases"]
     assert read["attribute-set-review"] == ["wrapper:record_output"]
-    assert all(row[4]["validation"] == "ACCEPTED" for row in calls)
+    first_plan = calls[2]
+    assert first_plan[4] is None  # the planner's own correction, recorded on the next call
+    assert "understanding.facts[0].quote" in calls[3][3]["rejected"]
+    assert all(row[4]["validation"] == "ACCEPTED" for row in calls if row is not first_plan)
     # The drafter's misquote: its quote is not kept, and the proposal says so.
     proposed = {
         str(row[0]): row[1:]
@@ -513,8 +531,7 @@ def test_the_shapes_of_itgc_ac_01_are_read_and_a_quote_the_records_lack_is_never
     assert set(proposed) == {ADDED, DOCUMENTED}
     assert proposed[DOCUMENTED][:2] == ("INFERRED", "")
     assert proposed[DOCUMENTED][2].startswith("The quoted words were not found in the source.")
-    # The planner's plan is used; the fact its quote does not hold up is left out, never
-    # replaced, and said: on the plan's note and on the call's outcome.
+    # The corrected plan is used: the misquoted fact is gone, nothing put in its place.
     plan = _rows(
         migrated,
         "SELECT source, understanding, note FROM evidence_plans WHERE id = %s",
@@ -523,9 +540,7 @@ def test_the_shapes_of_itgc_ac_01_are_read_and_a_quote_the_records_lack_is_never
     assert plan[0] == "MODEL"
     facts = plan[1].get("facts", [])
     assert [fact["field"] for fact in facts] == ["DESCRIPTION"]
-    assert "left out" in plan[2] and "do not hold" in plan[2]
-    planner = next(row for row in calls if row[0] == "engagement-planner")
-    assert planner[4]["dropped"] == ["understanding.facts[0]"]
+    assert plan[2] == "" and calls[3][4]["dropped"] == []
     # Nothing failed, so the step has nothing to say.
     context = _context(team, control)
     assert context["attributes_agent_notes"] == [] and context["attributes_failure_note"] == ""
@@ -545,7 +560,7 @@ def test_the_shapes_of_itgc_ac_01_are_read_and_a_quote_the_records_lack_is_never
             team["owner_id"],
         )
         connection.commit()
-        assert latest_plan_failure_note(connection, UUID(control)).startswith(KEPT_NOTE)
+        kept = latest_plan_failure_note(connection, UUID(control))
         said = attributes_failure_note(
             connection, UUID(control), notes_for(connection, UUID(control)), "", ""
         )
@@ -553,9 +568,14 @@ def test_the_shapes_of_itgc_ac_01_are_read_and_a_quote_the_records_lack_is_never
     assert [note["step"] for note in context["attributes_agent_notes"]] == ["engagement-planner"]
     assert context["attributes_failure_note"] == said
     assert "kept as it was" in said and "Run again" in said
+    # Fixed plain words for the person; the schema's paths stay on the call's record.
+    assert kept == (
+        "The planner could not finish: the answer did not have the required shape. The plan "
+        "was kept as it was. " + PLAN_AGAIN
+    )
     plan_body = team["owner"].get(f"{_path(team, control)}/evidence-plan").json()
-    assert plan_body["failure_note"].startswith(KEPT_NOTE)
-    assert "Plan the evidence again" in plan_body["failure_note"]
+    assert plan_body["failure_note"] == kept
+    assert "understanding" not in said and "schema" not in said
 
 
 def test_a_part_that_fails_is_corrected_once_then_said_in_plain_words_until_an_answer_is_used(
@@ -609,7 +629,15 @@ def test_a_part_that_fails_is_corrected_once_then_said_in_plain_words_until_an_a
         assert note["failed"] and note["kept"] and "Run again" in note["next_step"]
         assert note["sentence"] == f"{note['failed']} {note['kept']} {note['next_step']}"
         assert note["agent"].startswith("The ") and UUID(note["model_call_id"])
-    assert "attributes[0].action" in notes[0]["failed"]
+    # Rewritten on 13 November 2026 after the independent review of B1i. Old: the person's
+    # sentence carried the check's words ("attributes[0].action: Field required"). New:
+    # fixed plain words for the person, the place and the validator's message only on the
+    # call's outcome (`reason`). Why: a person reads what failed, not a schema path.
+    assert notes[0]["failed"] == (
+        "The attribute agent could not finish: the answer did not have the required shape."
+    )
+    assert "attributes[0].action: Field required" in drafter[1][4]["reason"]
+    assert all("[0]" not in note["sentence"] for note in notes)
     assert "write their criteria" in notes[0]["next_step"]
     assert "no criteria were tailored" in notes[1]["kept"]
     assert "not reviewed" in notes[2]["kept"]
@@ -754,3 +782,169 @@ def test_criteria_waiting_in_the_approved_plans_revision_are_named_on_the_attrib
     assert context["plan_revision_pending"] is False
     assert context["attributes_pending_criteria"] == []
     assert all(row[0] != "" for row in _rows(migrated, conditions, ids))
+
+
+# The independent review of B1i (13 November 2026)
+
+
+def test_a_misquote_is_corrected_and_dropped_on_the_last_answer_only_if_nothing_repeats_it(
+    migrated: Database,
+) -> None:
+    """Decision 1: a fact whose quote the records do not hold is a rejection with a
+    correction on every answer but the last. On the last it is left out only when nothing
+    else in the answer repeats what it claims; otherwise the answer is rejected and the plan
+    kept, with the reason recorded (the review's probe: the CFO in the summary)."""
+    from test_planner_reliability import AC01, _agent_plan, _Answers
+    from test_planning_gate import _control, _launched
+
+    team = _launched(migrated, "aa-cfo")
+    control = UUID(str(_control(team, AC01)["id"]))
+    org, project = UUID(str(team["org"])), UUID(str(team["project"]))
+    with connect(migrated.url) as connection:
+        good = _agent_plan(connection, project, control, "The agent's reading of the control.")
+    unheld = {"field": "PERFORMER", "value": "Somebody unnamed", "basis": "SOURCE",
+              "quote": "Somebody unnamed grants all access."}  # fmt: skip
+    misquoted = json.loads(json.dumps(good))
+    misquoted["understanding"]["facts"] = [unheld]
+    # Nothing else repeats the claim: corrected twice, then left out of the last answer.
+    planner = _Answers(misquoted)
+    with connect(migrated.url) as connection:
+        _changes, _drafts, note = generate(connection, planner, org, project, control,
+                                           team["owner_id"])  # fmt: skip
+        connection.commit()
+    assert len(planner.requests) == 3
+    assert all("understanding.facts[0].quote" in r.prompt for r in planner.requests[1:])
+    plan = _rows(
+        migrated,
+        "SELECT source, understanding FROM evidence_plans WHERE engagement_control_id = %s",
+        control,
+    )[0]
+    assert plan[0] == "MODEL" and plan[1].get("facts", []) == []
+    assert "left out" in note
+    last = _rows(
+        migrated,
+        "SELECT o.outcome FROM model_calls m JOIN model_call_outcomes o "
+        "ON o.model_call_id = m.id WHERE m.target_id = %s "
+        "AND m.prompt_version LIKE 'engagement-planner/%%' ORDER BY m.created_at DESC LIMIT 1",
+        control,
+    )[0][0]
+    assert last == {"validation": "ACCEPTED", "dropped": ["understanding.facts[0]"]}
+    # The probe's case: the summary repeats what the misquoted fact claims. Leaving the
+    # fact out would keep the claim, so the answer is rejected and the plan kept.
+    cfo = json.loads(json.dumps(good))
+    claim = "The CFO approves every access grant before it is provisioned"
+    cfo["understanding"]["summary"] = f"{claim}. {good['understanding']['summary']}"
+    cfo["understanding"]["facts"] = [
+        {"field": "REVIEWER", "value": "The CFO", "basis": "SOURCE", "quote": f"{claim}."}
+    ]
+    planner = _Answers(cfo)
+    with connect(migrated.url) as connection:
+        _changes, _drafts, note = generate(connection, planner, org, project, control,
+                                           team["owner_id"])  # fmt: skip
+        connection.commit()
+    assert len(planner.requests) == 3
+    summary = _rows(
+        migrated,
+        "SELECT understanding ->> 'summary' FROM evidence_plans WHERE engagement_control_id = %s",
+        control,
+    )[0][0]
+    assert "CFO" not in summary and note.startswith(KEPT_NOTE)
+    outcome_row = _rows(
+        migrated,
+        "SELECT o.outcome FROM model_calls m JOIN model_call_outcomes o "
+        "ON o.model_call_id = m.id WHERE m.target_id = %s "
+        "AND m.prompt_version LIKE 'engagement-planner/%%' ORDER BY m.created_at DESC LIMIT 1",
+        control,
+    )[0][0]
+    assert "repeats what that fact claims" in outcome_row["reason"]
+    assert outcome_row["note"]["failed"] == (
+        "The planner could not finish: the answer quoted the records for something they do not say."
+    )
+
+
+def test_a_property_inside_another_is_lifted_only_for_the_planner_and_the_readings() -> None:
+    """Decision 7: lifting a property out of another's text (shape 2) only for the agents
+    that had it before B1i. For every other agent the shape is a rejection (and one
+    correction, below); a wrapper, a property's own text and a null optional object stay
+    read for all."""
+    from ai_workforce_api.evidence_assurance import OPINION_SCHEMA
+    from ai_workforce_api.evidence_planning import PLAN_SCHEMA
+
+    lifting = {id(PLAN_SCHEMA), id(OPINION_SCHEMA)}
+    checked = 0
+    for where, schema in _schemas():
+        props, required = schema["properties"], schema.get("required", [])
+        example = _example(schema)
+        for host in [k for k in props if props[k].get("type") in ("object", "array")]:
+            for carried in required:
+                if carried == host or props[carried].get("type") in ("object", "array"):
+                    continue
+                answer = {k: v for k, v in example.items() if k not in (host, carried)}
+                answer[host] = (
+                    json.dumps(example[host]) + f',"{carried}":' + json.dumps(example[carried])
+                )
+                found = outcome(
+                    _Fixed(answer),
+                    ModelRequest(
+                        operation="generate", prompt="Answer.", output_schema=schema,
+                        allowed_tool_ids=(), timeout_seconds=5, cancelled=False,
+                        lift=id(schema) in lifting,
+                    ),
+                    CONFIG,
+                )  # fmt: skip
+                if id(schema) in lifting:
+                    assert found.status == "SUCCEEDED", where
+                else:
+                    assert found.status == "MALFORMED" and found.raw.output == answer, where
+                    assert models.misplaced(schema, answer) == (f"{carried} inside {host}",)
+                checked += 1
+    assert checked > 0
+
+
+def test_an_agent_that_does_not_lift_is_corrected_once_for_a_property_inside_another(
+    migrated: Database,
+) -> None:
+    team, control, _scheduler, client = _ready(migrated, "aa-lift")
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    script = _Script(migrated, team, control)
+    # The drafter writes `issues` inside the text of `attributes`, twice.
+    script.answers["attributes"] = [{"attributes": json.dumps([_proposal()]) + ',"issues":[]'}]
+    with connect(migrated.url) as connection:
+        assert run_plan(connection, script, plan_id) == "DONE"
+    # One correction in all (AgentCaller's), never a second from the caller's own check.
+    assert script.calls.count("attributes") == 2
+    assert "inside the text of another property" in script.prompts["attributes"][1]
+    drafter = [row for row in _calls(migrated, control) if row[0] == "attributes"]
+    assert drafter[0][4] == {
+        "validation": "REJECTED", "corrected": True,
+        "reason": "the answer wrote a property inside another property's text: "
+        "issues inside attributes",
+    }  # fmt: skip
+    assert drafter[1][3]["correction"] == 1
+    assert drafter[1][4]["note"]["failed"] == (
+        "The attribute agent could not finish: the answer did not have the required shape."
+    )
+    # Nothing was lifted into a proposal.
+    assert _rows(
+        migrated,
+        "SELECT count(*) FROM control_attributes WHERE engagement_control_id = %s "
+        "AND status = 'PROPOSED'",
+        UUID(control),
+    ) == [(0,)]
+    # The master plan reads the same note as the evidence plan, from its one query.
+    master = team["owner"].get(f"{_path(team, control)}/master-plan").json()
+    plan = team["owner"].get(f"{_path(team, control)}/evidence-plan").json()
+    assert master["failure_note"] == plan["failure_note"]
+
+
+def test_a_run_counts_every_reading_whose_answer_could_not_be_used() -> None:
+    from ai_workforce_api.agent_answers import run_failure_note, unusable_sentence
+
+    assert unusable_sentence(0) == ""
+    note = f"3 policies proposed as evidence. {unusable_sentence(2)}"
+    assert run_failure_note(note, "Kept.", "Run again.") == (
+        "The agent could not finish 2 of its readings: the answers could not be used. Kept. "
+        "Run again."
+    )
+    assert run_failure_note("3 policies proposed as evidence.", "Kept.", "Run again.") == ""
