@@ -289,7 +289,12 @@ def test_the_scorer_asks_as_the_database_run_does() -> None:
     first = score.request_for("system", "prompt")
     again = score.request_for("system", "prompt", retry=True)
     assert (first.max_tokens, first.timeout_seconds) == (score.MAX_TOKENS, score.TIMEOUT_SECONDS)
-    assert (first.max_tokens, first.timeout_seconds) == (8192, 240)
+    # Rewritten 14 November 2026 (engine 2, docs/evidence-assurance.md, section 10.4). Old
+    # expectation: a reading's allowance is 8,192 output tokens. New: 12,000, because the
+    # /6 answer also carries the files, facts, comparisons, follow-ups and considerations.
+    # Unchanged: the scorer asks exactly as the database run does, and a reading cut off
+    # is asked once more with 16,000.
+    assert (first.max_tokens, first.timeout_seconds) == (12000, 240)
     assert (
         (again.max_tokens, again.timeout_seconds)
         == (evidence_assurance.RETRY_TOKENS, 300)
@@ -420,7 +425,8 @@ def test_a_nested_answer_is_read_and_a_cut_off_reading_asked_again(tmp_path: Pat
         ("REVIEWER", "MALFORMED", False, True),
         ("REVIEWER", "SUCCEEDED", True, False),
     ]
-    assert [r.max_tokens for r in provider.requests] == [8192, 8192, 16000]
+    # 12,000 from engine 2 (8,192 before; see the note in the test of the request above).
+    assert [r.max_tokens for r in provider.requests] == [12000, 12000, 16000]
     assert all(r.unnest for r in provider.requests)
     # The cut-off call is counted in the case's cost, as the database run's budget is.
     assert record["cost_micros"] == sum(c["cost_micros"] for c in record["calls"])

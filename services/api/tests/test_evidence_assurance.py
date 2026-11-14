@@ -22,13 +22,20 @@ Audit integrity (critical tier):
   check, never a guess; an answer sent one level too deep is read as written, and a
   reading cut off at its allowance is asked once more with a larger one, as a model call
   of its own (cut off again, the check fails);
-- prompts /5: both readings are told the quote rule the strict match applies and the
+- prompts /5 (every rule kept under /6): both readings are told the quote rule the
+  strict match applies and the
   placeholder, shortfall-attribution and designation rules; a placeholder is an exception
   shown unless a reading relies on another document of the request, and never support;
   NOT_MET against PARTLY_MET on a linked attribute is an ISSUE met in part, rule 5 first,
   and on an unlinked one is shown for reference; a quote over two lines is read line by
   line for assertion markers;
 - another firm sees nothing, and a Reviewer reads and cannot rerun.
+
+Engine 2 (docs/evidence-assurance.md, section 10; 14 November 2026) is covered in
+test_assurance_engine2.py. Four tests here encoded the first engine's gate for new runs
+(a file whose kind is not sure was held until a person confirmed it) and were rewritten
+for the rule the product owner approved on 14 November 2026: such a file is read by the
+check and listed for a person to confirm. Each says what it expected before and now.
 """
 
 import json
@@ -54,6 +61,7 @@ from ai_workforce_api.evidence_assurance import (
     FILE_NOT_CHECKED,
     HELD_REASONS,
     MAX_READING_TEXT,
+    POPULATION_PURPOSE,
     READ_IN_PART,
     READING_SECONDS,
     READING_TOKENS,
@@ -1023,7 +1031,17 @@ def test_a_requests_files_are_checked_together_and_nothing_shows_until_it_finish
     assert (finding["attribute_code"], finding["requirement_id"]) == ("B", bench.item_id)
     assert finding["attribute_id"] == issue["attribute_id"]
     assert finding["title"].startswith("Attribute B not shown")
-    assert finding["question"].startswith("Please provide the record that shows")
+    # Rewritten 14 November 2026 (engine 2, section 10.5, item 5). Old expectation: the
+    # question was always "Please provide the record that shows the following: <the
+    # attribute's wording>". New: where the run's review holds a follow-up for the
+    # attribute, the question is that follow-up's request, so what a person accepts, edits
+    # and sends is exactly what the check found missing. Neither reading asked here, so
+    # code wrote it, from the element's own words: still the firm's wording, and still
+    # nothing of the model's (the marker is in neither).
+    asked = [f for f in done["review"]["follow_ups"] if "B" in f["codes"]]
+    assert asked and all(f["raised_by"] == ["CODE"] and f["kind"] == "EVIDENCE" for f in asked)
+    assert finding["question"] == " ".join(f["request"] for f in asked)
+    assert finding["question"].startswith("Provide the record that shows: ")
     assert MARKER not in finding["question"] and MARKER in finding["observation"]
     assert finding["events"][0]["event"] == "PROPOSED"
     assert finding["events"][0]["actor_kind"] == "AGENT"
@@ -1064,23 +1082,45 @@ def test_a_requests_files_are_checked_together_and_nothing_shows_until_it_finish
     assert payload["findings"] == 1 and len(payload["model_calls"]) == 2
 
 
-def test_a_held_file_is_left_out_and_named_and_a_confirmed_kind_starts_the_check(
+LISTING = "New users, March 2026\nUser,Start date\nDLEE,2026-03-02\nMCHEN,2026-03-09\n"
+
+
+def test_a_held_file_is_left_out_and_named_and_an_unsure_kind_is_read(
     migrated: Database,
 ) -> None:
+    """Rewritten 14 November 2026 for engine 2 (docs/evidence-assurance.md, section 10.3;
+    the rule approved by the product owner that day: a file whose kind is not sure is read
+    by the check, as the kind the reader took it for, and listed for a person to confirm).
+
+    Old expectation (the first engine's gate, for new runs): a file read by the rules was
+    held as KIND_UNSURE, alone it held the whole run, a person's confirmation of its kind
+    started the check, and a second unsure file was left out and named. (The old test read
+    the ticket first and the change log second; here the change log is the file first
+    taken for a population and the ticket the one read by the rules, so that the passage
+    both readings quote for attribute A sits in the file whose kind is not sure.)
+    New expectation: a file whose kind is not sure passes the gate and is read; it is
+    listed under the review's confirmations instead. Everything the old test asserted
+    about a held file still holds, and is asserted here on a hold engine 2 keeps (a
+    population on a single-instance item, with its reason said by purpose): the whole run
+    is held with the file named, nothing is paid for, asking again returns the hold, a
+    person's confirmation of the kind clears it, a file the gate leaves out is named and
+    not read, the two lists cover every file, an absence is never told while a file is
+    left out, and a confirmed population stays out with its own sentence."""
     bench = _Bench(migrated, "gate")
-    ticket = bench.add("ticket REQ-1041.txt", TICKET)
-    # Read by the rules (no model): the reader is not sure of the kind. No file passed,
-    # so the whole run is held, and the file responsible is named with its own action.
-    bench.read_next(None)
+    log = bench.add("sap change log.txt", LOG)
+    # The reader took the change log for a population. No file passed, so the whole run
+    # is held, and the file responsible is named with its own code and sentence.
+    bench.read_next(_reading("population"))
     [(first_run, status, _stale, held, _reused, _why)] = bench.runs()
-    assert (status, held) == ("HELD", "KIND_UNSURE")
+    assert (status, held) == ("HELD", "POPULATION")
     entry = bench.entry()
     assert entry["status"] == "HELD" and entry["stage"] == "GATE"
-    assert entry["held"] == {"code": "KIND_UNSURE", "reason": HELD_REASONS["KIND_UNSURE"]}
+    assert entry["held"] == {"code": "POPULATION", "reason": POPULATION_PURPOSE}
     assert entry["held_files"] == [
-        {"file_id": ticket, "code": "KIND_UNSURE", "reason": HELD_REASONS["KIND_UNSURE"]}
+        {"file_id": log, "code": "POPULATION", "reason": POPULATION_PURPOSE}
     ]
     assert entry["file_ids"] == [] and entry["attributes"] == []
+    assert entry["engine_version"] == 2 and entry["review"] is None
     assert bench.assurance()["summary"]["held"] == 1
     # Nothing was paid for, and running the worker changes nothing.
     assert bench.check(_Readings(None, None)) == [] and bench.calls() == []
@@ -1089,7 +1129,7 @@ def test_a_held_file_is_left_out_and_named_and_a_confirmed_kind_starts_the_check
     assert again.status_code == 202 and again.json()["run_id"] == str(first_run)
 
     # A person confirms the kind: the hold is cleared and the check is handed to the worker.
-    assert bench.confirm(ticket, "walkthrough").status_code == 200
+    assert bench.confirm(log, "change_history").status_code == 200
     runs = bench.runs()
     assert [(r[1], r[2]) for r in runs] == [("HELD", True), ("PENDING", False)]
     # Why the held run is out of date is said in a sentence.
@@ -1104,16 +1144,24 @@ def test_a_held_file_is_left_out_and_named_and_a_confirmed_kind_starts_the_check
     assert refused.status_code == 409
     assert refused.json()["detail"] == "The check is already running."
 
-    # A second file arrives before the worker took the run: the queued run takes it in
-    # (no second run), and the file the gate holds is left out and named.
-    log = bench.add("sap change log.txt", LOG)
+    # A second file arrives before the worker took the run, read by the rules (no model):
+    # the reader is not sure of its kind. The queued run takes it in (no second run) and,
+    # from engine 2, it is read, not left out.
+    ticket = bench.add("ticket REQ-1041.txt", TICKET)
     bench.read_next(None)
     runs = bench.runs()
     assert [(r[1], r[2]) for r in runs] == [("HELD", True), ("PENDING", False)]
     entry = bench.entry()
-    assert entry["file_ids"] == [ticket]
+    assert set(entry["file_ids"]) == {log, ticket} and entry["held_files"] == []
+    # A third file is a population: the gate leaves it out of this single-instance item,
+    # and names it with the reason.
+    listing = bench.add("new users march.csv", LISTING)
+    bench.read_next(_reading("population"))
+    assert [(r[1], r[2]) for r in bench.runs()] == [("HELD", True), ("PENDING", False)]
+    entry = bench.entry()
+    assert set(entry["file_ids"]) == {log, ticket}
     assert entry["held_files"] == [
-        {"file_id": log, "code": "KIND_UNSURE", "reason": HELD_REASONS["KIND_UNSURE"]}
+        {"file_id": listing, "code": "POPULATION", "reason": POPULATION_PURPOSE}
     ]
     # Together the two lists cover every file in force on the requirement.
     listed = {f["file_id"] for f in bench.item(bench.item_id)["files"]}
@@ -1123,11 +1171,14 @@ def test_a_held_file_is_left_out_and_named_and_a_confirmed_kind_starts_the_check
     # files do not show cannot be told, so nothing is an issue.
     readings = _Readings(_first_met_rest("NOT_MET"), _first_met_rest("NOT_MET"))
     assert bench.check(readings) == ["READY"]
-    assert LOG not in readings.requests[0].prompt and TICKET in readings.requests[0].prompt
+    # The population is not read. The ticket, whose kind is not sure, is read with the
+    # change log.
+    assert LISTING not in readings.requests[0].prompt and TICKET in readings.requests[0].prompt
+    assert LOG in readings.requests[0].prompt
     assert '"other_files_not_read": true' in readings.requests[0].prompt
     done = bench.entry()
     assert done["status"] == "REVIEWED" and done["held"] is None
-    assert [f["file_id"] for f in done["held_files"]] == [log]
+    assert [f["file_id"] for f in done["held_files"]] == [listing]
     by_code = {a["code"]: a for a in done["attributes"]}
     assert by_code["A"]["verdict"] == "SUPPORTED"
     for code, attribute in by_code.items():
@@ -1137,23 +1188,35 @@ def test_a_held_file_is_left_out_and_named_and_a_confirmed_kind_starts_the_check
         # Rewritten 14 November 2026: the reason names the file left out (was "A file on
         # this request has not been checked ...").
         assert all(
-            v["reason"].startswith("sap change log.txt has not been read yet")
+            v["reason"].startswith("new users march.csv has not been read yet")
             for v in attribute["views"]
         )
         assert attribute["pending"] == "FILE_NOT_READ"
         assert attribute["summary"].startswith(
-            "Not concluded yet. sap change log.txt has not been read"
+            "Not concluded yet. new users march.csv has not been read"
         )
     assert bench.findings() == []
     assert bench.assurance()["summary"]["issues"] == 0
+    # The file read with an unsure kind is listed for a person to confirm, by name; the
+    # one a person confirmed is not.
+    assert [c["file_id"] for c in done["review"]["confirmations"]] == [ticket]
+    assert done["review"]["confirmations"][0]["reason"].startswith(
+        "The reader is not sure what kind of evidence ticket REQ-1041.txt is; it was read as"
+    )
+    assert done["review"]["completeness"]["state"] == "INCOMPLETE"
 
     # The second file is a population: confirmed, it stays out, with its own sentence.
-    assert bench.confirm(log, "population").status_code == 200
+    assert bench.confirm(ticket, "population").status_code == 200
     entry = bench.entry()
     assert entry["status"] == "QUEUED"
-    assert entry["held_files"] == [
-        {"file_id": log, "code": "POPULATION", "reason": HELD_REASONS["POPULATION"]}
-    ]
+    assert entry["file_ids"] == [log]
+    assert sorted(entry["held_files"], key=lambda f: str(f["file_id"])) == sorted(
+        [
+            {"file_id": ticket, "code": "POPULATION", "reason": POPULATION_PURPOSE},
+            {"file_id": listing, "code": "POPULATION", "reason": POPULATION_PURPOSE},
+        ],
+        key=lambda f: str(f["file_id"]),
+    )
     assert bench.runs()[-2][5] in (
         "Which of the files can be checked changed.",
         "A file's kind changed, so it is read differently.",
@@ -1163,6 +1226,18 @@ def test_a_held_file_is_left_out_and_named_and_a_confirmed_kind_starts_the_check
 def test_reader_findings_are_held_for_a_covered_file_and_the_checks_stay(
     migrated: Database,
 ) -> None:
+    """Rewritten 14 November 2026 for engine 2 (section 10.3; approved by the product
+    owner that day: a file whose kind is not sure is read by the check).
+
+    Old expectation: a file read with low confidence was held by the gate (KIND_UNSURE),
+    so the chain did not cover it and the reader's own findings on it were proposed; once
+    a person confirmed its kind the chain covered it and those findings went stale.
+    New expectation: such a file is read by the two-reading check, so it is covered and
+    the single reader's own unchecked findings on it are not proposed. What the old test
+    asserted of a file the chain does not cover (the reader's findings are proposed, and
+    go stale with the reason once the chain covers the file, the deterministic checks
+    staying throughout) is asserted on a file the engine 2 gate still leaves out: a
+    population on a single-instance item."""
     bench = _Bench(migrated, "reader")
     gaps: dict[str, Any] = {
         "gaps": ["The emergency approval timeframe is not stated."],
@@ -1185,18 +1260,33 @@ def test_reader_findings_are_held_for_a_covered_file_and_the_checks_stay(
     )
     assert stored == [(gaps["gaps"],)]
 
-    # A file the gate holds is not covered: the reader's findings are proposed as before.
+    # A file whose kind the reader is not sure of is read by the check all the same
+    # (engine 2), so the chain covers it: the reader's own findings are not proposed.
     other = bench.item(str(bench.items[1]["id"]))
     unsure = bench.add("another policy.txt", POLICY, other)
     bench.read_next(_reading("policy", "low", **gaps))
-    assert bench.entry(other["id"])["held"]["code"] == "KIND_UNSURE"
+    entry = bench.entry(other["id"])
+    assert (entry["status"], entry["held"], entry["file_ids"]) == ("QUEUED", None, [unsure])
     theirs = [f for f in bench.findings(None) if f["file_id"] == unsure]
+    assert theirs and {f["source"] for f in theirs} == {"RULES"}
+    assert all(not f["stale"] for f in theirs)
+
+    # A file the gate holds is not covered: the reader's findings are proposed as before.
+    # Here the reader took a third policy for a population, which stays out of a
+    # single-instance item.
+    held = bench.add("a third policy.txt", POLICY, other)
+    bench.read_next(_reading("population", **gaps))
+    entry = bench.entry(other["id"])
+    assert [f["code"] for f in entry["held_files"]] == ["POPULATION"]
+    assert entry["file_ids"] == [unsure]
+    theirs = [f for f in bench.findings(None) if f["file_id"] == held]
     assert {"READER", "RULES"} == {f["source"] for f in theirs}
     assert all(not f["stale"] for f in theirs)
     # Once a person confirms its kind the chain covers it: the reader's undecided
     # findings are no longer proposed (stale, with the reason); the checks stay.
-    assert bench.confirm(unsure, "policy").status_code == 200
-    theirs = [f for f in bench.findings(None) if f["file_id"] == unsure]
+    assert bench.confirm(held, "policy").status_code == 200
+    assert set(bench.entry(other["id"])["file_ids"]) == {unsure, held}
+    theirs = [f for f in bench.findings(None) if f["file_id"] == held]
     for finding in theirs:
         if finding["source"] == "READER":
             assert finding["stale"] and finding["stale_reason"] == HELD_FOR_ASSURANCE
@@ -1357,8 +1447,9 @@ def test_a_budget_that_cannot_cover_both_readings_starts_neither(migrated: Datab
     bench.read_next(_reading("walkthrough"))
     readings = _Readings(_first_met_rest("MET"), _first_met_rest("MET"))
     priced = ModelConfig("balanced", "anthropic", "claude-sonnet-5-5", 2_000, 10_000)
-    # One reading's worst case fits the job's limit; the two together do not.
-    one = 8192 * 10_000 // 1_000
+    # One reading's worst case fits the job's limit; the two together do not. (The
+    # allowance is the reading's own: 12,000 output tokens from engine 2, 8,192 before.)
+    one = READING_TOKENS * 10_000 // 1_000
     assert bench.check(readings, config=priced, limits=Limits(0, one + 40_000, 0)) == ["FAILED"]
     assert readings.requests == [] and bench.calls() == []
     entry = bench.entry()
@@ -1418,12 +1509,19 @@ def test_a_model_failure_on_either_reading_is_a_failed_check_never_a_guess(
 def test_another_firm_sees_nothing_and_a_reviewer_reads_and_cannot_rerun(
     migrated: Database,
 ) -> None:
+    # Rewritten 14 November 2026 for engine 2 (section 10.3, approved by the product owner
+    # that day). Old expectation: the file, read by the rules, was held (KIND_UNSURE), so
+    # the request read as HELD for the owner and the reviewer and its one run stayed HELD.
+    # New: a file whose kind is not sure is read, so the request is QUEUED and its one run
+    # PENDING. What this test is about is unchanged and asserted as before: a Reviewer
+    # reads and cannot rerun (403), another firm gets 404 for the read and the rerun, and
+    # a requirement that is not this control's is not found.
     bench = _Bench(migrated, "roles")
     bench.add("ticket REQ-1041.txt", TICKET)
     bench.read_next(None)
-    assert bench.entry()["status"] == "HELD"
+    assert bench.entry()["status"] == "QUEUED"
     _reviewer_id, reviewer = bench.member("REVIEWER")
-    assert bench.assurance(reviewer)["requests"][0]["status"] == "HELD"
+    assert bench.assurance(reviewer)["requests"][0]["status"] == "QUEUED"
     assert bench.rerun(reviewer).status_code == 403
     # Another firm's person: not found, read or rerun.
     outsider = _Bench(migrated, "roles-b").client
@@ -1431,7 +1529,9 @@ def test_another_firm_sees_nothing_and_a_reviewer_reads_and_cannot_rerun(
     assert bench.rerun(outsider).status_code == 404
     # A requirement that is not this control's is not found either.
     assert bench.rerun(requirement_id=str(uuid4())).status_code == 404
-    assert bench.runs()[0][1:3] == ("HELD", False)
+    # Nothing any of them asked changed the run on record.
+    assert bench.runs()[0][1:3] == ("PENDING", False)
+    assert len(bench.runs()) == 1 and bench.calls() == []
 
 
 # --- After the independent review and the evaluation set (12 November 2026) -----------
@@ -2511,7 +2611,12 @@ def test_cut_off_is_the_stop_reason_or_json_text_that_ends_part_way() -> None:
     assert first.unnest and again.unnest and first.output_schema is chain_module.OPINION_SCHEMA
     assert (first.max_tokens, first.timeout_seconds) == (READING_TOKENS, READING_SECONDS)
     assert (again.max_tokens, again.timeout_seconds) == (RETRY_TOKENS, RETRY_SECONDS)
-    assert READING_TOKENS == 8192 and RETRY_TOKENS > READING_TOKENS
+    # Rewritten 14 November 2026 (engine 2). Old expectation: a reading's allowance was
+    # 8,192 output tokens. New: 12,000, because the /6 answer also carries the files, the
+    # facts with their quotes, the comparisons, the follow-ups and the considerations
+    # (docs/evidence-assurance.md, section 10.4). Unchanged: a reading cut off is asked
+    # once more, with the larger allowance.
+    assert READING_TOKENS == 12000 and RETRY_TOKENS == 16000 > READING_TOKENS
     assert again == replace(first, max_tokens=RETRY_TOKENS, timeout_seconds=RETRY_SECONDS)
 
 
@@ -2636,15 +2741,24 @@ def test_a_reading_cut_off_at_its_allowance_is_asked_once_more_with_more_room(
 def test_the_readings_are_told_the_rules_the_code_applies() -> None:
     """Both roles' instructions carry the quote rule exactly as the strict match applies
     it (item 1), the placeholder rule (item 2), the attribution of a shortfall (item 4)
-    and a team or role only by the record's own designation (item 5)."""
+    and a team or role only by the record's own designation (item 5).
+
+    Rewritten 14 November 2026 (engine 2, prompts /6). Old expectation: the prompt
+    versions were /5. New: they are /6, the version new runs are recorded under
+    (docs/evidence-assurance.md, section 10.4), and /5 is what an engine 1 run still
+    carries. Every /5 rule asserted here is still told, word for word; what /6 adds is
+    asserted in test_assurance_engine2.py."""
     from ai_workforce_api.console_citations import (
         MIN_PASSAGE_CHARS,
         MIN_PASSAGE_WORDS,
         find_passage,
     )
 
-    assert chain_module.ASSESSOR_PROMPT_VERSION == "evidence-assurance-assessor/5"
-    assert chain_module.REVIEWER_PROMPT_VERSION == "evidence-assurance-reviewer/5"
+    assert chain_module.ASSESSOR_PROMPT_VERSION == "evidence-assurance-assessor/6"
+    assert chain_module.REVIEWER_PROMPT_VERSION == "evidence-assurance-reviewer/6"
+    assert chain_module.ENGINE_PROMPTS[1] == (
+        "evidence-assurance-assessor/5", "evidence-assurance-reviewer/5",
+    )  # fmt: skip
     for role in ("ASSESSOR", "REVIEWER"):
         system, _prompt = prompt_for(_chain(), role)
         flat = " ".join(system.split())

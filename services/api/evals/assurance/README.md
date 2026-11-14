@@ -36,7 +36,8 @@ uv run --env-file ../../.env python -m evals.assurance.score --dry-run
 
 It prints each case's prompt size for both readings and the estimated cost from the
 configured tier prices: the input cost, and the worst case with the full output
-allowance (8,192 tokens a reading), which is what the budget checks use. A reading cut
+allowance (12,000 tokens a reading from engine 2; 8,192 before), which is what the budget
+checks use. A reading cut
 off at that allowance is asked once more with 16,000 (as the database run does): the last
 line says what that could add were every reading asked again. Nothing is called and
 nothing is written.
