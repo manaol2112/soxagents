@@ -31,7 +31,7 @@ describe("Home before the first engagement", () => {
     assert.deepEqual(
       FIRST_ENGAGEMENT_STEPS.map((step) => [step.number, step.title]),
       [
-        ["01", "Add a client"],
+        ["01", "Add an organization"],
         ["02", "Define engagement"],
         ["03", "Start working"],
       ],

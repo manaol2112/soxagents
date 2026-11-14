@@ -275,7 +275,7 @@ const NAV_GROUPS: ReadonlyArray<{ label: string; items: NavItem[] }> = [
       {
         id: "projects",
         label: "Engagements",
-        detail: "Every engagement and client",
+        detail: "Every engagement and organization",
         icon: "briefcase",
       },
       {
@@ -1683,7 +1683,7 @@ const NOTICES: Record<ProjectNotice, string> = {
   saved: "Engagement saved.",
   invalid: "Check the engagement fields and try again.",
   conflict: "This engagement changed. Refresh it and try again.",
-  slug: "This client already has an engagement with that name.",
+  slug: "This organization already has an engagement with that name.",
   status: "That status change is not available.",
   "completed-done":
     "Engagement completed. It is read-only now; an owner or admin can reopen it.",
@@ -1702,13 +1702,13 @@ const NOTICES: Record<ProjectNotice, string> = {
   reason: "Say why the engagement is reopened, in at least three characters.",
   "delete-name": "Type the engagement's name exactly to delete it.",
   locked:
-    "The client and the period end are part of the launched plan, so they no longer change.",
+    "The organization and the period end are part of the launched plan, so they no longer change.",
   rollforward:
-    "An engagement can start only from an earlier engagement of the same client.",
+    "An engagement can start only from an earlier engagement of the same organization.",
   "client-renamed":
-    "Client renamed. Every engagement for it shows the new name.",
-  "client-exists": "Another client already has that name.",
-  "client-changed": "This client changed. Refresh and try again.",
+    "Organization renamed. Every engagement for it shows the new name.",
+  "client-exists": "Another organization already has that name.",
+  "client-changed": "This organization changed. Refresh and try again.",
   launch:
     "A draft becomes active only by launching it. Finish setup and launch it from there.",
   archived: "This engagement is archived. It is closed and cannot change.",
@@ -2103,7 +2103,7 @@ function EvidenceMain({
       <PageHeader
         context={project.name}
         title="Evidence Management"
-        description="Manage evidence requests, client submissions, and AI-powered validation across the engagement."
+        description="Manage evidence requests, submissions from the organization, and AI-powered validation across the engagement."
         actions={
           <span className="ec-head-actions">
             {canCreate ? (
@@ -2128,7 +2128,7 @@ function EvidenceMain({
               <summary className="btn btn-sm btn-ghost">More actions</summary>
               <div className="ec-more-pop">
                 <a href={exportHref(ids, query)}>Export requests</a>
-                <a href={portalHref}>Client communication settings</a>
+                <a href={portalHref}>Organization communication settings</a>
                 <a href={tabHref("files")}>Evidence library</a>
               </div>
             </details>
@@ -2174,7 +2174,7 @@ function EvidenceMain({
           aria-current={view.tab === "mailbox" ? "page" : undefined}
           className={toReview > 0 ? "is-alert" : undefined}
         >
-          Client Portal <span className="view-count">{toReview}</span>
+          Organization Portal <span className="view-count">{toReview}</span>
         </a>
       </nav>
       {view.tab === "requests" &&
@@ -3252,7 +3252,7 @@ function ProjectsMain({
         <Banner>{NOTICES[model.notice]}</Banner>
       ) : null}
       {model.canManageProjects ? (
-        <nav className="eg-views" aria-label="Engagements or clients">
+        <nav className="eg-views" aria-label="Engagements or organizations">
           <a
             href={viewHref("engagements")}
             aria-current={clientsView ? undefined : "page"}
@@ -3263,7 +3263,7 @@ function ProjectsMain({
             href={viewHref("clients")}
             aria-current={clientsView ? "page" : undefined}
           >
-            Clients <span>{model.clients.length}</span>
+            Organizations <span>{model.clients.length}</span>
           </a>
         </nav>
       ) : null}
@@ -3272,8 +3272,8 @@ function ProjectsMain({
           <section className="card">
             <EmptyState
               icon="briefcase"
-              title="No clients yet"
-              detail="A client is added with its first engagement."
+              title="No organizations yet"
+              detail="An organization is added with its first engagement."
               action={
                 <a className="btn" href={createEngagementHref(model)}>
                   New engagement
@@ -3321,7 +3321,7 @@ function ProjectsMain({
           {managing && detail !== null ? (
             <RecordDialog
               eyebrow={
-                detail.clientName !== "" ? detail.clientName : "No client"
+                detail.clientName !== "" ? detail.clientName : "No organization"
               }
               title={detail.name}
               description={`Period end ${detail.periodEnd !== null ? formatDate(detail.periodEnd) : "not set"} · Lead ${detail.ownerName}`}
@@ -5305,17 +5305,17 @@ function ContactsCard({
             type="email"
             defaultValue={contacts.coordinatorEmail}
             disabled={!editable}
-            placeholder="pbc@client.example"
+            placeholder="pbc@organization.example"
           />
         </label>
         <label htmlFor="contacts-domains" className="field-wide">
-          Client email domains
+          Organization email domains
           <input
             id="contacts-domains"
             name="client_domains"
             defaultValue={contacts.clientDomains.join(", ")}
             disabled={!editable}
-            placeholder="client.example, client-it.example"
+            placeholder="organization.example, organization-it.example"
           />
         </label>
         {editable ? (
@@ -5329,7 +5329,7 @@ function ContactsCard({
   return (
     <section className="card" aria-labelledby="contacts-title">
       <CardHeader
-        title="Client PBC contact"
+        title="Organization PBC contact"
         titleId="contacts-title"
         description={
           settled
@@ -5342,7 +5342,7 @@ function ContactsCard({
               ]
                 .filter((part) => part !== "")
                 .join(" · ")
-            : "Receives the requests for controls without an owner, and any escalations. Requests only go to the client's email domains, when they are set."
+            : "Receives the requests for controls without an owner, and any escalations. Requests only go to the organization's email domains, when they are set."
         }
         aside={
           contacts.coordinatorEmail === "" ? (

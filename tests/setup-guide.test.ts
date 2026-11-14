@@ -97,7 +97,7 @@ describe("onboarding through guided setup", () => {
       cycle.map((stage) => `${stage.id}:${stage.state}`),
       ["profile:upcoming", "team:current", "launch:upcoming"],
     );
-    assert.equal(cycle[0]?.title, "Client and scope");
+    assert.equal(cycle[0]?.title, "Organization and scope");
     assert.equal(cycle[0]?.detail, "1 to do");
     const entered = onboarding({
       readiness: [

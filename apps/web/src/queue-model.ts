@@ -216,7 +216,7 @@ export const BUCKET_LABELS: Record<QueueBucket, string> = {
 export const BUCKET_NOTES: Record<QueueBucket, string> = {
   MINE: "Yours to act on now.",
   WAITING:
-    "With someone else: the client, the preparer, the independent reviewer or an approver.",
+    "With someone else: the organization, the preparer, the independent reviewer or an approver.",
   BLOCKED:
     "Held until something else happens; what holds each item is shown on it.",
   UPCOMING:
@@ -227,7 +227,7 @@ const ROLE_WORDS: Record<string, string> = {
   PREPARER: "the preparer",
   REVIEWER: "the independent reviewer",
   APPROVER: "an approver",
-  CLIENT: "the control owner (client)",
+  CLIENT: "the organization's control owner",
   OWNER: "the engagement owner",
   AGENT: "an agent",
   NONE: "no one",

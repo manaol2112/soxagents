@@ -1040,11 +1040,11 @@ describe("a plan that follows a standard pending review", () => {
     );
     assert.equal(
       basisWords({ ...control, testBasis: "CLIENT" }),
-      "Client's own procedures",
+      "Organization's own procedures",
     );
     assert.equal(
       basisWords({ ...control, testBasis: "CLIENT", source: "LIBRARY" }),
-      "Client's procedures",
+      "Organization's procedures",
     );
   });
 });
@@ -1611,7 +1611,7 @@ describe("a plan's next step in the queue", () => {
       }),
     );
     assert.equal(values.kind, "answer");
-    assert.equal(values.label, "Answer 2 client values");
+    assert.equal(values.label, "Answer 2 organization-specific values");
     assert.equal(nextStepOf(row({ decisions: 1 })).label, "Decide 1 proposal");
     assert.equal(
       nextStepOf(row({ otherQuestions: 1, findings: 2 })).label,
@@ -1714,7 +1714,7 @@ describe("client values filled into an approved plan", () => {
     assert.equal(plan.filledSinceApproval.length, 1);
     assert.equal(
       filledLine(plan.filledSinceApproval),
-      "Client value filled since approval: the deadline in the access review procedure: 30 days after quarter end (Robert John Manaol)",
+      "Organization-specific value filled since approval: the deadline in the access review procedure: 30 days after quarter end (Robert John Manaol)",
     );
     assert.equal(filledLine([]), "");
     assert.deepEqual(
@@ -1737,7 +1737,10 @@ describe("a plan approved before and changed since", () => {
       ]),
       "2 procedures, 1 evidence item, title, understanding of the control",
     );
-    assert.equal(changesSummary([]), "Only client values filled in");
+    assert.equal(
+      changesSummary([]),
+      "Only organization-specific values filled in",
+    );
   });
 
   it("names the revision approved, so it does not read as the current state", () => {
@@ -2559,7 +2562,7 @@ describe("adding and removing evidence", () => {
         409,
         "it has already been requested from the client; waive it instead",
       ),
-      "This item was already requested from the client, so it cannot be removed. Waive it on the Request step instead.",
+      "This item was already requested from the organization, so it cannot be removed. Waive it on the Request step instead.",
     );
     assert.equal(
       planningProblem(409, "E7 depends on it; remove that first"),

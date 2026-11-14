@@ -917,7 +917,7 @@ describe("a system scoped from the library and the client's controls", () => {
     assert.deepEqual(
       sections.map((part) => [part.origin, part.label, part.items.length]),
       [
-        ["RCM", "From the client's RCM", 1],
+        ["RCM", "From the organization's RCM", 1],
         ["LIBRARY", "Standard library", 2],
       ],
     );

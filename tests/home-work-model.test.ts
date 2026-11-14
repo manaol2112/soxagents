@@ -210,7 +210,7 @@ describe("Home's work (docs/home-plan.md)", () => {
   it("says whose turn the waiting work is, largest first", () => {
     assert.equal(
       whoseSummary(homeWork(work).waiting),
-      "2 with the client · 1 with the preparer",
+      "2 with the organization · 1 with the preparer",
     );
     assert.equal(whoseSummary([]), "");
   });

@@ -393,7 +393,7 @@ export function EngagementsBoard({
               autoComplete="off"
               type="search"
               value={query}
-              placeholder="Search engagement, client, or team"
+              placeholder="Search engagement, organization, or team"
               onChange={(event) => setQuery(event.target.value)}
             />
           </label>
@@ -466,7 +466,9 @@ export function EngagementsBoard({
               const next = project.nextMilestone;
               const late = next !== null && isPastDue(next.due, now);
               const client =
-                project.clientName !== "" ? project.clientName : "No client";
+                project.clientName !== ""
+                  ? project.clientName
+                  : "No organization";
               return (
                 <li key={project.id} className="eg-row-item">
                   <a
@@ -646,7 +648,7 @@ export function EngagementsBoard({
                     >
                       {project.clientName !== ""
                         ? project.clientName
-                        : "No client"}
+                        : "No organization"}
                     </span>
                     {project.demo ? (
                       <span className="eg-demo-tag">Demo</span>

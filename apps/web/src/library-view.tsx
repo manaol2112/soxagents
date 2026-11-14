@@ -513,7 +513,7 @@ function IndexView({
                           ? "attribute"
                           : "attributes"}
                         {entry.attributesProposed > 0
-                          ? ` · ${entry.attributesProposed} client-dependent`
+                          ? ` · ${entry.attributesProposed} organization-specific`
                           : ""}
                         {entry.usageEngagements > 0
                           ? ` · in ${entry.usageEngagements} ${entry.usageEngagements === 1 ? "engagement" : "engagements"}`
@@ -1154,13 +1154,13 @@ function AttributesTab({
       {proposed.length > 0 ? (
         <section className="lb-section">
           <h3>
-            Depends on the client <span>{proposed.length}</span>
+            Depends on the organization <span>{proposed.length}</span>
           </h3>
           <p className="lb-section-note">
             Each depends on something the sources do not establish and is
             decided here, with the standard. An engagement receives it approved,
-            with its question; testing waits for any client value it shows in
-            brackets.
+            with its question; testing waits for any organization-specific value
+            it shows in brackets.
           </p>
           <ul className="lb-rows">
             {proposed.map((item) => (
@@ -1213,10 +1213,10 @@ function EvidenceTab({
             Standard evidence suite <span>{entry.evidenceSuite.length}</span>
           </h3>
           <p className="lb-section-note">
-            What an engagement asks the client for, in the form that can show
-            what the test needs. The planner builds the evidence requests of a
-            control that follows this standard from these items; what does not
-            serve in their place is stated so it is not accepted.
+            What an engagement asks the organization for, in the form that can
+            show what the test needs. The planner builds the evidence requests
+            of a control that follows this standard from these items; what does
+            not serve in their place is stated so it is not accepted.
           </p>
           {suite.map((group) => (
             <div key={group.phase} className="lb-suite-phase">
@@ -1314,7 +1314,7 @@ function DesignTab({ entry }: { entry: LibraryEntry }) {
         <h3>The control as its documentation should state it</h3>
         <p className="lb-statement">{statement.text}</p>
         <p className="lb-section-note">
-          A value in brackets is the client's: an engagement records it at
+          A value in brackets is the organization's: an engagement records it at
           setup, and testing waits for the ones that define a population or a
           precision.
         </p>
@@ -1377,7 +1377,7 @@ function DesignTab({ entry }: { entry: LibraryEntry }) {
       {statement.slots.length > 0 ? (
         <section className="lb-section">
           <h3>
-            Client values <span>{statement.slots.length}</span>
+            Organization-specific values <span>{statement.slots.length}</span>
           </h3>
           <ul className="lb-rows">
             {statement.slots.map((slot) => (

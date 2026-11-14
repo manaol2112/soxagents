@@ -734,7 +734,7 @@ function OverviewStep({
         : `Lead: ${lead?.name ?? "not set"} · Reviewer: ${reviewer?.name ?? "not set"} · ${teamPeople(onboarding.team).length} on the team`,
     controls:
       included.length === 0
-        ? "No controls yet. Load the library or upload the client's RCM."
+        ? "No controls yet. Load the library or upload the organization's RCM."
         : `${included.length} controls across ${areas.size} area${areas.size === 1 ? "" : "s"}, ${inScopeSystems(onboarding).length} system${inScopeSystems(onboarding).length === 1 ? "" : "s"}.`,
     workpapers:
       included.length === 0
@@ -965,8 +965,8 @@ function ProfileStep({
           description={
             editable ? (
               <>
-                The client, the period the controls are tested through, how the
-                engagement is run, and what it covers.{" "}
+                The organization, the period the controls are tested through,
+                how the engagement is run, and what it covers.{" "}
                 <span className="field-key">
                   <span className="field-mark" aria-hidden="true">
                     *
@@ -975,7 +975,7 @@ function ProfileStep({
                 </span>
               </>
             ) : (
-              "The client, the period the controls are tested through, how the engagement is run, and what it covers."
+              "The organization, the period the controls are tested through, how the engagement is run, and what it covers."
             )
           }
         />
@@ -999,7 +999,7 @@ function ProfileStep({
               value={onboarding.clientName}
             />
             <div className="profile-client">
-              <span className="profile-client-label">Client</span>
+              <span className="profile-client-label">Organization</span>
               <strong>{onboarding.clientName || "Not chosen yet"}</strong>
               {editable ? (
                 <a
@@ -1007,7 +1007,7 @@ function ProfileStep({
                   href={editEngagementHref(model, onboarding.projectId)}
                 >
                   {onboarding.clientName === ""
-                    ? "Choose the client"
+                    ? "Choose the organization"
                     : "Change"}
                 </a>
               ) : null}
@@ -1097,7 +1097,7 @@ function ProfileStep({
                 maxLength={4000}
                 defaultValue={onboarding.scope}
                 disabled={!editable}
-                placeholder="SOX 404 testing of the client's IT general controls over financial reporting for fiscal year 2027: the in-scope systems, the control areas, and what the team does with each control."
+                placeholder="SOX 404 testing of the organization's IT general controls over financial reporting for fiscal year 2027: the in-scope systems, the control areas, and what the team does with each control."
               />
             </label>
             {/* Coverage comes from the controls in scope; the stored type is kept. */}
@@ -2193,7 +2193,7 @@ export function ScopePage({
                 <SetupHero
                   icon="layers"
                   title="Name the business processes"
-                  detail="Business process controls are scoped by process: the standard cycles, such as order to cash, and any process of the client's own. An engagement over IT general controls only can leave this tab empty."
+                  detail="Business process controls are scoped by process: the standard cycles, such as order to cash, and any process of the organization's own. An engagement over IT general controls only can leave this tab empty."
                 >
                   {editable ? (
                     <AddProcessButton
@@ -2407,8 +2407,8 @@ export function RegisterPage({
             title="Select the controls"
             detail={
               systems.length + onboarding.processes.length === 0
-                ? "Controls are selected for each system and process. Add them on Systems & Processes first, or upload the client's RCM, which finds the systems it names."
-                : "Choose controls from the firm's standard library for each system and process, or upload the client's RCM. No work starts until the scope is reviewed and finalized."
+                ? "Controls are selected for each system and process. Add them on Systems & Processes first, or upload the organization's RCM, which finds the systems it names."
+                : "Choose controls from the firm's standard library for each system and process, or upload the organization's RCM. No work starts until the scope is reviewed and finalized."
             }
           >
             {editable ? (
@@ -2426,7 +2426,7 @@ export function RegisterPage({
                 )}
                 <OpenScopeAction
                   event={RCM_UPLOAD_EVENT}
-                  label="Upload the client's RCM"
+                  label="Upload the organization's RCM"
                   icon="upload"
                   className="btn-secondary"
                 />
@@ -2516,7 +2516,7 @@ function LaunchStep({
         <div className="card-body">
           <p>
             It never launched, so no work went to the agents and nothing was
-            sent to the client. Archived engagements stay closed.
+            sent to the organization. Archived engagements stay closed.
           </p>
         </div>
       </section>
@@ -2778,7 +2778,7 @@ function LaunchedDialog({
         <p>
           <UiIcon name="info" size={15} />
           <span>
-            Nothing is sent to the client until an approver confirms it.
+            Nothing is sent to the organization until an approver confirms it.
           </span>
         </p>
         <span className="lc-actions">
@@ -2843,7 +2843,7 @@ function EngagementMemo({
         description="The setup as it will start. Each line opens its step."
       />
       <dl className="memo-body">
-        <Row label="Client" step="profile">
+        <Row label="Organization" step="profile">
           {onboarding.clientName || "Not named"}
         </Row>
         <Row label="Methodology" step="profile">
@@ -2993,7 +2993,7 @@ function LaunchedView({
                   ["Held for planning", launch.requestsHeld],
                   ["Drafted", launch.requestsDraft],
                   ["Awaiting approval", launch.requestsAwaitingApproval],
-                  ["With the client", launch.requestsWithClient],
+                  ["With the organization", launch.requestsWithClient],
                   ["Received", launch.requestsReceived],
                 ] as const
               ).map(([label, count]) => (
@@ -3027,7 +3027,7 @@ function LaunchedView({
           <CardHeader
             title="Next steps"
             titleId="launched-next-title"
-            description="Nothing is requested from the client before its evidence plan is approved, and nothing is sent before an approver confirms it."
+            description="Nothing is requested from the organization before its evidence plan is approved, and nothing is sent before an approver confirms it."
           />
           <ul className="launched-next">
             {openSetup.map((item) => (

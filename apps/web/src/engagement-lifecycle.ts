@@ -243,7 +243,7 @@ export const COMPLETE_CONSEQUENCE =
 
 /** What a delete confirmation says it does. */
 export function deleteConsequence(name: string): string {
-  return `Deleting removes ${name} and its setup: systems, controls, team, and uploaded files. It never launched, so no client work is lost. Only the audit record of its creation and deletion is kept. This cannot be undone.`;
+  return `Deleting removes ${name} and its setup: systems, controls, team, and uploaded files. It never launched, so no engagement work is lost. Only the audit record of its creation and deletion is kept. This cannot be undone.`;
 }
 
 /** Only owners and admins reopen a completed engagement or delete a draft. */

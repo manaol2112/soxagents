@@ -580,7 +580,7 @@ export function ConsoleChat({
             </fieldset>
             <p className="cv-footnote">
               Agents read the engagement and do routine work. Anything that
-              reaches a client or signs off waits for your approval.
+              reaches the organization or signs off waits for your approval.
             </p>
           </div>
         </div>
@@ -623,8 +623,8 @@ export function ConsoleChat({
               {failure}
               {composer}
               <p className="cv-footnote">
-                Anything that reaches a client or signs off waits for your
-                approval.
+                Anything that reaches the organization or signs off waits for
+                your approval.
               </p>
             </div>
           </div>

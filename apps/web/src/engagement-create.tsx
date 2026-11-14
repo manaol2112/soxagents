@@ -14,12 +14,12 @@ type Ready = Extract<ShellModel, { status: "ready" }>;
 
 const NOTICES: Record<string, string> = {
   invalid: "Check the fields and try again.",
-  slug: "This client already has an engagement with that name. Choose another name.",
+  slug: "This organization already has an engagement with that name. Choose another name.",
   conflict: "That could not be saved. Try again.",
   denied: "Your role cannot open engagements.",
   unavailable: "The engagement could not be opened. Try again.",
   rollforward:
-    "An engagement can start only from an earlier engagement of the same client. Choose the client again.",
+    "An engagement can start only from an earlier engagement of the same organization. Choose the organization again.",
 };
 
 // The same form saving an engagement that exists (Milestone 8.15).
@@ -28,7 +28,7 @@ const EDIT_NOTICES: Record<string, string> = {
   conflict:
     "This engagement changed while you were editing. The form shows it as it is now; make your change again.",
   locked:
-    "The client and the period end are part of the launched plan, so they no longer change.",
+    "The organization and the period end are part of the launched plan, so they no longer change.",
   completed: "This engagement is completed, so its details no longer change.",
   archived: "This engagement is archived, so its details no longer change.",
   denied: "Your role cannot change this engagement.",
@@ -126,10 +126,10 @@ export function EngagementCreatePage({
         title={creating ? "New engagement" : `Edit ${editing.name}`}
         description={
           creating
-            ? "Set up a new audit engagement: the client, the period, who leads it, and what it covers. Start fresh, or from an earlier engagement of the same client."
+            ? "Set up a new audit engagement: the organization, the period, who leads it, and what it covers. Start fresh, or from an earlier engagement of the same organization."
             : locked
-              ? "Change its name, its lead, or its fieldwork dates. The client and the period end are part of the launched plan and stay as they are."
-              : "Change the client, the name, the period, or who leads it. Systems, controls, and the team are set in guided setup."
+              ? "Change its name, its lead, or its fieldwork dates. The organization and the period end are part of the launched plan and stay as they are."
+              : "Change the organization, the name, the period, or who leads it. Systems, controls, and the team are set in guided setup."
         }
         actions={
           <>
@@ -213,18 +213,20 @@ export function EngagementCreatePage({
             <FormSection
               step={1}
               title={
-                creating ? "Client and scope" : "Client and basic information"
+                creating
+                  ? "Organization and scope"
+                  : "Organization and basic information"
               }
               detail={
                 creating
-                  ? "The client, the period, who leads the engagement, the methodology, and what it covers."
-                  : "Choose the client, name the engagement, and set the audit period."
+                  ? "The organization, the period, who leads the engagement, the methodology, and what it covers."
+                  : "Choose the organization, name the engagement, and set the audit period."
               }
             >
               <div className="create-grid">
                 {locked ? (
                   <label htmlFor="create-client">
-                    Client
+                    Organization
                     <input
                       id="create-client"
                       disabled

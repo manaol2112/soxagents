@@ -33,27 +33,27 @@ export function ClientsTable({
   return (
     <section className="eg-board" aria-labelledby="clients-title">
       <h2 id="clients-title" className="sr-only">
-        Clients
+        Organizations
       </h2>
       <div className="eg-toolbar">
         <label className="eg-search">
-          <span className="sr-only">Search clients</span>
+          <span className="sr-only">Search organizations</span>
           <UiIcon name="search" size={15} />
           <input
             autoComplete="off"
             type="search"
             value={query}
-            placeholder="Search clients or engagements"
+            placeholder="Search organizations or engagements"
             onChange={(event) => setQuery(event.target.value)}
           />
         </label>
       </div>
       {rows.length === 0 ? (
-        <p className="eg-empty">No clients match.</p>
+        <p className="eg-empty">No organizations match.</p>
       ) : (
         <div className="eg-list eg-clients">
           <div className="eg-list-head" aria-hidden="true">
-            <span>Client</span>
+            <span>Organization</span>
             <span>Latest engagement</span>
             <span>Status</span>
             <span>Period end</span>
@@ -126,11 +126,11 @@ export function ClientsTable({
                         className="btn-ghost btn-sm"
                         tone="neutral"
                         title={`Rename ${row.name}`}
-                        consequence="The new name shows on every engagement for this client, including launched and archived ones."
-                        confirmLabel="Rename client"
+                        consequence="The new name shows on every engagement for this organization, including launched and archived ones."
+                        confirmLabel="Rename organization"
                         field={{
                           name: "name",
-                          label: "Client name",
+                          label: "Organization name",
                           kind: "text",
                           initial: row.name,
                           maxLength: 200,

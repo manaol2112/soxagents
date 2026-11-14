@@ -94,7 +94,7 @@ export function SystemsScoping({
           detail={
             onboarding.rcmSource === "UPLOAD"
               ? "The uploaded RCM named no system. Add the systems the controls run on."
-              : "Add the systems the controls run on. Uploading the client's RCM finds them for you."
+              : "Add the systems the controls run on. Uploading the organization's RCM finds them for you."
           }
         />
       ) : (

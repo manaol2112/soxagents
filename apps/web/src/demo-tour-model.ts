@@ -207,7 +207,7 @@ export const STAGES: readonly TourStage[] = [
     points: [
       "The control's description, owner, frequency and system.",
       "The process understanding and narratives recorded for it.",
-      "The design assessment prepared from the client's configuration.",
+      "The design assessment prepared from the organization's configuration.",
     ],
     action: "Open the control's design",
     targets: ["#cw-hero", "#cw-work"],

@@ -111,7 +111,7 @@ function clientBody(facts: GuideFacts): string[] {
     const earlier = existing.engagements;
     if (earlier.length === 0) {
       return [
-        `${existing.name}: the first engagement for this client, so the setup starts fresh.`,
+        `${existing.name}: the first engagement for this organization, so the setup starts fresh.`,
       ];
     }
     const from = earlier.find((item) => item.id === facts.startFrom);
@@ -131,16 +131,18 @@ function clientBody(facts: GuideFacts): string[] {
   }
   if (choice?.kind === "new") {
     return choice.name.trim() === ""
-      ? ["Enter the new client's company name."]
+      ? ["Enter the new organization's name."]
       : [
-          `${choice.name.trim()} is added to the firm's clients when the engagement is created.`,
+          `${choice.name.trim()} is added to the firm's organizations when the engagement is created.`,
         ];
   }
   return facts.clients.length === 0
-    ? ["Enter the client's company name. It is added to the firm's clients."]
+    ? [
+        "Enter the organization's name. It is added to the firm's organizations.",
+      ]
     : [
-        `Choose one of the firm's ${plural(facts.clients.length, "client")}, or add a new one.`,
-        "For a client audited before, an earlier engagement can be the starting point.",
+        `Choose one of the firm's ${plural(facts.clients.length, "organization")}, or add a new one.`,
+        "For an organization audited before, an earlier engagement can be the starting point.",
       ];
 }
 
@@ -162,7 +164,7 @@ export function scopeDraft(input: {
   methodology: string;
 }): string {
   const client =
-    input.client.trim() === "" ? "the client" : input.client.trim();
+    input.client.trim() === "" ? "the organization" : input.client.trim();
   const end = /^\d{4}-\d{2}-\d{2}$/.test(input.periodEnd)
     ? new Date(`${input.periodEnd}T00:00:00Z`)
     : null;
@@ -185,7 +187,7 @@ export function scopeDraft(input: {
 export function missingForCreate(facts: GuideFacts): string[] {
   const missing: string[] = [];
   if (clientName(facts) === "") {
-    missing.push("the client");
+    missing.push("the organization");
   }
   if (facts.name.trim() === "") {
     missing.push("the engagement name");
@@ -213,14 +215,14 @@ export function guideSteps(facts: GuideFacts): GuideStep[] {
       id: "welcome",
       title: "Set up a new engagement",
       body: [
-        "This guide walks through what a new engagement needs: the client, the period, who leads it, the methodology, and the scope. It takes about two minutes.",
+        "This guide walks through what a new engagement needs: the organization, the period, who leads it, the methodology, and the scope. It takes about two minutes.",
         AFTER_CREATE,
       ],
       done: true,
     },
     {
       id: "client",
-      title: "Choose the client",
+      title: "Choose the organization",
       body: clientBody(facts),
       done: clientName(facts) !== "",
     },
@@ -276,7 +278,7 @@ export function guideSteps(facts: GuideFacts): GuideStep[] {
       id: "scope",
       title: "Confirm the scope",
       body: [
-        "What the engagement covers, in a sentence or two. A draft follows the client, the period, and the methodology until it is edited.",
+        "What the engagement covers, in a sentence or two. A draft follows the organization, the period, and the methodology until it is edited.",
       ],
       done: facts.scope.trim() !== "",
     },
@@ -330,8 +332,8 @@ export function onboardingCycle(
   return [
     {
       id: "scope",
-      title: "Client and scope",
-      detail: "Client, period, lead, methodology, and scope",
+      title: "Organization and scope",
+      detail: "Organization, period, lead, methodology, and scope",
       where: "here",
       state: done ? "done" : "current",
     },
@@ -380,7 +382,7 @@ export function agentBrief(facts: GuideFacts, firstName: string): AgentBrief {
   const missing = missingForCreate(facts);
   const lines =
     client === ""
-      ? ["Choose the client to begin."]
+      ? ["Choose the organization to begin."]
       : [
           `Setting up an engagement for ${client}${methodology !== "" ? `: ${methodology}` : ""}.`,
           from !== undefined
@@ -401,6 +403,6 @@ export function agentBrief(facts: GuideFacts, firstName: string): AgentBrief {
     tip:
       existing !== null && existing.engagements.length > 0
         ? `${existing.name} has been audited before. Starting from an earlier engagement reuses its scope, systems, controls, team, and templates; testing, evidence, and results are never copied.`
-        : "For a client audited before, an earlier engagement can be the starting point: its scope, systems, controls, team, and templates are copied in for review.",
+        : "For an organization audited before, an earlier engagement can be the starting point: its scope, systems, controls, team, and templates are copied in for review.",
   };
 }

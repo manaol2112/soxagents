@@ -53,7 +53,7 @@ export const SETUP_STEPS = [
   {
     id: "profile",
     title: "Engagement profile",
-    detail: "Client, period, and scope",
+    detail: "Organization, period, and scope",
     readiness: ["scope"],
   },
   {
@@ -668,7 +668,7 @@ export function launchNextSteps(launch: LaunchSummary): LaunchNext[] {
       key: "approve",
       title: `Approve ${plural(launch.requestsAwaitingApproval, "evidence request")}`,
       detail:
-        "Each request is sent to the client only after an approver confirms it.",
+        "Each request is sent to the organization only after an approver confirms it.",
       target: "evidence",
       tone: "ACTION",
     });
@@ -2208,8 +2208,8 @@ export function candidateSections(
     ["SYSTEM", `On ${system || "this system"}`, ""],
     [
       "RCM",
-      "From the client's RCM",
-      `The client's controls on its other systems. One with references naming their system is adapted to ${system || "this system"}: it takes this system's reference and the standard's wording, and the client confirms it.`,
+      "From the organization's RCM",
+      `The organization's controls on its other systems. One with references naming their system is adapted to ${system || "this system"}: it takes this system's reference and the standard's wording, and the organization confirms it.`,
     ],
     ["LIBRARY", "Standard library", ""],
   ];

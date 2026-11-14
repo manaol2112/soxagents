@@ -398,7 +398,7 @@ function AddProcessWizard({
                       value={draft.owner}
                       maxLength={200}
                       autoComplete="off"
-                      placeholder="The client's owner of the process"
+                      placeholder="The organization's owner of the process"
                       onChange={(event) => set("owner", event.target.value)}
                     />
                   </label>

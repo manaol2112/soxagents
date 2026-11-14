@@ -180,7 +180,7 @@ export function idleMessage(next: NextSteps): string {
       : "All work is concluded and reviewed. The engagement can be completed.";
   }
   if (next.current === "EVIDENCE") {
-    return "Nothing waits on the team. The client is preparing the requested evidence.";
+    return "Nothing waits on the team. The organization is preparing the requested evidence.";
   }
   return "Nothing waits on the team. The agents are working on the current stage.";
 }

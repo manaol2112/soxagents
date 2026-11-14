@@ -80,7 +80,7 @@ const VARIANTS: Record<"policies" | "descriptions", Variant> = {
     search: "Search policies and procedures",
     heroTitle: "Add the governing policies and procedures",
     heroText:
-      "Upload the client's policies and procedures once and choose the systems and processes each one governs. Every control under them can cite it, and the agents read it when they review the control.",
+      "Upload the organization's policies and procedures once and choose the systems and processes each one governs. Every control under them can cite it, and the agents read it when they review the control.",
     icon: "file",
     linkHeading: "What it governs",
     linkColumn: "Governs",

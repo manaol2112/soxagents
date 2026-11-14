@@ -14,8 +14,8 @@ export const FIRST_ENGAGEMENT_STEPS: readonly FirstEngagementStep[] = [
   {
     number: "01",
     icon: "userPlus",
-    title: "Add a client",
-    detail: "Keep engagements organized under your clients.",
+    title: "Add an organization",
+    detail: "Keep each organization's engagements together.",
   },
   {
     number: "02",
@@ -46,7 +46,7 @@ export function firstEngagementCopy(canCreate: boolean): FirstEngagementCopy {
   if (canCreate) {
     return {
       title: "Let’s create your first engagement",
-      lead: "Set up a client, define your scope, and bring your assurance work into one workspace.",
+      lead: "Set up an organization, define your scope, and bring your assurance work into one workspace.",
       action: {
         label: "Create first engagement",
         notes: ["About 3 minutes", "You can change details before launch"],

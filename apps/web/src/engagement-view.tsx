@@ -187,8 +187,8 @@ function SystemNotices({ queue }: { queue: Queue | null }) {
                 </strong>{" "}
                 This environment sends evidence requests only to approved
                 domains, so these requests cannot be approved until an
-                administrator allows the client's domain or the recipient is
-                changed.
+                administrator allows the organization's domain or the recipient
+                is changed.
                 <span className="notice-examples">
                   Held for{" "}
                   {heldRecipients(condition.texts).slice(0, 3).join(", ")}

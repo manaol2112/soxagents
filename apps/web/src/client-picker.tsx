@@ -92,7 +92,7 @@ export function ClientPicker({
     <div className="client-picker">
       {clients.length > 0 ? (
         <label htmlFor={`${id}-client`}>
-          Client
+          Organization
           <select
             id={`${id}-client`}
             required
@@ -103,7 +103,7 @@ export function ClientPicker({
             }}
           >
             <option value="" disabled>
-              Choose a client
+              Choose an organization
             </option>
             {clients.map((client) => (
               <option key={client.id} value={client.id}>
@@ -113,7 +113,7 @@ export function ClientPicker({
                   : ""}
               </option>
             ))}
-            <option value={NEW}>+ New client</option>
+            <option value={NEW}>+ New organization</option>
           </select>
         </label>
       ) : null}
@@ -126,20 +126,20 @@ export function ClientPicker({
       ) : null}
       {choice === NEW ? (
         <label htmlFor={`${id}-name`}>
-          {clients.length > 0 ? "New client's name" : "Client"}
+          {clients.length > 0 ? "New organization's name" : "Organization"}
           <input
             id={`${id}-name`}
             name="client_name"
             required
             maxLength={200}
             autoComplete="off"
-            placeholder="Client company name"
+            placeholder="Organization name"
             value={name}
             onChange={(event) => setName(event.target.value)}
           />
           {existing !== undefined ? (
             <span className="form-hint client-exists" role="status">
-              {existing.name} is already a client.{" "}
+              {existing.name} already exists.{" "}
               <button
                 type="button"
                 className="text-link"
@@ -159,7 +159,7 @@ export function ClientPicker({
           <legend>Start from</legend>
           <p className="client-start-intro">
             Start fresh, or copy the setup of an earlier engagement for this
-            client.
+            organization.
           </p>
           <label className="client-start-option" htmlFor={`${id}-fresh`}>
             <input
@@ -173,7 +173,7 @@ export function ClientPicker({
             <span>
               <strong>A fresh setup</strong>
               <small>
-                Only the client's details carry over: its email domains,
+                Only the organization's details carry over: its email domains,
                 evidence coordinator, and request cadence.
               </small>
             </span>

@@ -74,7 +74,7 @@ const AUDITORS = [
   {
     icon: "layers",
     title: "Large firms and SOX programmes",
-    text: "Standardise delivery across teams and clients, with segregation of duties enforced by the system and a full audit trail on every control.",
+    text: "Standardise delivery across teams and organizations, with segregation of duties enforced by the system and a full audit trail on every control.",
   },
 ] as const;
 
@@ -505,9 +505,9 @@ export function WelcomePage({
             </span>
             <h3>Bring your RCM. Keep your methodology.</h3>
             <p>
-              Upload the client's RCM in any layout and keep their terms beside
-              the standard ones. The agents adapt to your methodology, so you
-              standardise rather than start over.
+              Upload the organization's RCM in any layout and keep its terms
+              beside the standard ones. The agents adapt to your methodology, so
+              you standardise rather than start over.
             </p>
           </div>
         </div>
@@ -849,7 +849,7 @@ export function WelcomePage({
                 <UiIcon name="arrow" size={16} />
               </button>
               <p className="lp-form-fine">
-                No client data required to get started.
+                No organization data required to get started.
               </p>
             </form>
           </div>

@@ -104,7 +104,7 @@ export function ScopeField({ clients }: FactsBase) {
       <span className="form-hint">
         {edited
           ? "Written for this engagement."
-          : "Drafted from the client, the period, and the methodology. Edit it to describe the engagement in your own words."}
+          : "Drafted from the organization, the period, and the methodology. Edit it to describe the engagement in your own words."}
       </span>
     </label>
   );

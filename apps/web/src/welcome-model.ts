@@ -145,7 +145,7 @@ export const PRICING_QUESTIONS = [
   },
   {
     q: "Can I use my own audit evidence?",
-    a: "Yes. Load your client's RCM and the evidence it returns, as on any engagement. Evidence stays within your workspace and is visible only to its members.",
+    a: "Yes. Load the organization's RCM and the evidence it returns, as on any engagement. Evidence stays within your workspace and is visible only to its members.",
   },
   {
     q: "Will I need a credit card?",

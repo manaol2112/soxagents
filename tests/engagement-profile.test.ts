@@ -502,7 +502,13 @@ describe("the engagement memo (27 October 2026)", () => {
   );
 
   it("keeps the profile and the team", () => {
-    for (const label of ["Client", "Methodology", "Period", "Scope", "Team"]) {
+    for (const label of [
+      "Organization",
+      "Methodology",
+      "Period",
+      "Scope",
+      "Team",
+    ]) {
       assert.match(memo, new RegExp(`<Row label="${label}"`));
     }
   });

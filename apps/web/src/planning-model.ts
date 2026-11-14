@@ -499,7 +499,7 @@ export type ChangeItem = {
  * a plan whose only change is client values filled in says so. */
 export function changesSummary(changes: readonly string[]): string {
   if (changes.length === 0) {
-    return "Only client values filled in";
+    return "Only organization-specific values filled in";
   }
   if (changes.length === 1) {
     return changes[0] ?? "";
@@ -621,7 +621,7 @@ const IT_AREAS = new Set(["ACCESS", "CHANGE", "OPERATIONS", "ITAC", "IPE"]);
 // the planner proposed it (the proposal is filled in below the question).
 const DESCRIBE_QUESTIONS: Record<StateableFact, string> = {
   TYPE: "Does the control prevent the error, or detect it after the fact?",
-  PERFORMER: "Who performs the control at the client?",
+  PERFORMER: "Who performs the control at the organization?",
   REVIEWER: "Who reviews or approves the control's operation, if anyone?",
   ASSERTIONS:
     "Which financial statement assertions or IT risks does the control address?",
@@ -703,7 +703,7 @@ export function filledLine(values: readonly FilledValue[]): string {
       `${item.label}: ${item.value}` +
       (item.filledBy !== "" ? ` (${item.filledBy})` : ""),
   );
-  return `Client ${values.length === 1 ? "value" : "values"} filled since approval: ${parts.join("; ")}`;
+  return `Organization-specific ${values.length === 1 ? "value" : "values"} filled since approval: ${parts.join("; ")}`;
 }
 
 /** A client value the plan asks for (control_design.open_values): the slot, what it is,
@@ -729,7 +729,7 @@ export function answerPlaceholder(value: {
   example: string;
 }): string {
   if (value.options.length > 0) {
-    return "Type the client's answer";
+    return "Type the organization's answer";
   }
   return value.example !== "" ? `For example: ${value.example}` : "";
 }
@@ -1438,7 +1438,7 @@ export const NO_SYSTEM = "None";
 const BASIS_WORDS: Record<string, string> = {
   STANDARD: "Standard",
   CUSTOM: "Customized standard",
-  CLIENT: "Client's procedures",
+  CLIENT: "Organization's procedures",
 };
 
 /** A row's value for a filter: what the filter compares and what the option shows. */
@@ -2126,7 +2126,7 @@ export function planningProblem(status: number, detail = ""): string | null {
       "the requirement changed":
         "This evidence item changed since the page loaded. Refresh and try again.",
       "it has already been requested from the client; waive it instead":
-        "This item was already requested from the client, so it cannot be removed. Waive it on the Request step instead.",
+        "This item was already requested from the organization, so it cannot be removed. Waive it on the Request step instead.",
       "the requirement is not open": "This item is no longer open.",
       "sample evidence is requested with the samples the team selects":
         "Sample evidence is requested with the samples the team selects, on the Test step.",
@@ -2409,7 +2409,7 @@ const HOLD_WORDS: Record<BlockerResolve, { title: string; action: string }> = {
     action: "Describe the control",
   },
   VALUES: {
-    title: "Record the client's values",
+    title: "Record the organization-specific values",
     action: "Record the values",
   },
   PHASES: {
@@ -2520,8 +2520,8 @@ import { libraryHref } from "./library-model.ts";
 export function basisWords(control: MasterPlan["control"]): string {
   if (control.testBasis === "CLIENT") {
     return control.source === "LIBRARY"
-      ? "Client's procedures"
-      : "Client's own procedures";
+      ? "Organization's procedures"
+      : "Organization's own procedures";
   }
   const standard = control.libraryRef !== "" ? ` ${control.libraryRef}` : "";
   return control.testBasis === "CUSTOM"
@@ -2639,7 +2639,7 @@ export function nextStepOf(row: QueueRow): NextStep {
   if (values > 0) {
     return step(
       "answer",
-      `Answer ${counted(values, "client value", "client values")}`,
+      `Answer ${counted(values, "organization-specific value", "organization-specific values")}`,
     );
   }
   if (row.decisions > 0) {
@@ -2829,7 +2829,7 @@ const ATTRIBUTE_SOURCE: Record<string, string> = {
   AGENT: "Drafted by agent",
   MANUAL: "Added by a person",
   DOCUMENT: "From a document",
-  RCM: "Client RCM",
+  RCM: "Organization's RCM",
 };
 
 /** The attributes whose criteria the planner agent proposed and no one has confirmed yet:

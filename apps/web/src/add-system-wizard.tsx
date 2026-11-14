@@ -483,7 +483,7 @@ export function AddSystemWizard({
                       value={draft.owner}
                       maxLength={200}
                       autoComplete="off"
-                      placeholder="The client's owner of the system"
+                      placeholder="The organization's owner of the system"
                       className={
                         filled.includes("owner") ? "is-drafted" : undefined
                       }

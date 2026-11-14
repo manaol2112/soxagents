@@ -80,7 +80,7 @@ describe("the setup agent's guide on the New engagement page", () => {
   });
 
   it("speaks to the client chosen and its history", () => {
-    assert.match(step(blank, "client").body[0] ?? "", /firm's 2 clients/);
+    assert.match(step(blank, "client").body[0] ?? "", /firm's 2 organizations/);
     const earlier = step(
       { ...blank, client: { kind: "existing", id: "c1" } },
       "client",
@@ -111,14 +111,14 @@ describe("the setup agent's guide on the New engagement page", () => {
 
   it("says what is still needed before the engagement can be created", () => {
     assert.deepEqual(missingForCreate(blank), [
-      "the client",
+      "the organization",
       "the engagement name",
       "the methodology",
       "the scope",
     ]);
     assert.equal(
       step(blank, "create").body[0],
-      "Still needed: the client, the engagement name, the methodology, the scope.",
+      "Still needed: the organization, the engagement name, the methodology, the scope.",
     );
     assert.equal(step(complete, "create").done, true);
     assert.equal(
@@ -151,7 +151,7 @@ describe("the scope the page drafts", () => {
     );
     assert.match(
       scopeDraft({ client: "", periodEnd: "", methodology: "" }),
-      /^SOX testing of the client's IT general controls and business process controls\./,
+      /^SOX testing of the organization's IT general controls and business process controls\./,
     );
     assert.match(
       scopeDraft({
@@ -192,7 +192,10 @@ describe("the agent panel beside the form", () => {
   });
 
   it("speaks to the client and methodology, offers a start, and says what follows", () => {
-    assert.match(agentBrief(blank, "").lines[0] ?? "", /^Choose the client/);
+    assert.match(
+      agentBrief(blank, "").lines[0] ?? "",
+      /^Choose the organization/,
+    );
     const brief = agentBrief(
       {
         ...blank,

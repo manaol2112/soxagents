@@ -518,7 +518,7 @@ function Wizard({
               {candidates.length === 0 ? (
                 <p className="form-hint">
                   No IT controls are loaded yet. Load the library or upload the
-                  client's RCM first; you can still save the system now.
+                  organization's RCM first; you can still save the system now.
                 </p>
               ) : (
                 sections.map((section) => (
@@ -970,7 +970,7 @@ function DetailsStep({
             rows={rowsFor(details.description)}
             maxLength={500}
             value={details.description}
-            placeholder="What the system does for the client"
+            placeholder="What the system does for the organization"
             onChange={(event) => set("description")(event.target.value)}
           />
           {note("description")}
@@ -1031,8 +1031,8 @@ function DetailsStep({
             }
           />
           <span id={`${id}-code-hint`} className="form-hint">
-            The system's code in the client's control references. A control
-            adapted from another system takes it, for example ITGC-
+            The system's code in the organization's control references. A
+            control adapted from another system takes it, for example ITGC-
             {details.refCode || suggestedCode(details.name)}-02.
           </span>
         </label>

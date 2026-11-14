@@ -58,7 +58,7 @@ const WITH_WORDS: Record<string, string> = {
   PREPARER: "the preparer",
   REVIEWER: "the independent reviewer",
   APPROVER: "an approver",
-  CLIENT: "the client",
+  CLIENT: "the organization",
   OWNER: "the engagement owner",
   AGENT: "an agent",
   NONE: "no one",

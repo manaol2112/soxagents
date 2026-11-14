@@ -256,7 +256,8 @@ function SinceApproval({
         </dl>
       ) : (
         <p className="pl-since-lead">
-          Nothing in the plan changed but client values filled in.
+          Nothing in the plan changed but organization-specific values filled
+          in.
         </p>
       )}
       {plan.filledSinceApproval.length > 0 ? (
@@ -589,7 +590,7 @@ function PlanQueue({
               const answer = (done.body ?? {}) as { controls?: number };
               setAnswering(null);
               setOutcome(
-                `Saved. ${answer.controls ?? items.length} control${(answer.controls ?? items.length) === 1 ? "" : "s"} updated with the client's values.`,
+                `Saved. ${answer.controls ?? items.length} control${(answer.controls ?? items.length) === 1 ? "" : "s"} updated with the organization-specific values.`,
               );
             }
           }}
@@ -1020,7 +1021,7 @@ function AnswerValuesDialog({
           }
         }}
       >
-        <h2 id={`${id}-title`}>Open client values</h2>
+        <h2 id={`${id}-title`}>Open organization-specific values</h2>
         <p id={`${id}-body`}>
           {questions.length === 1
             ? "One value is"
@@ -1817,7 +1818,10 @@ function PlanSummary({
       icon: "help",
       tone: "is-orange",
       value: String(questions.total),
-      label: questions.total === 1 ? "Client question" : "Client questions",
+      label:
+        questions.total === 1
+          ? "Organization-specific question"
+          : "Organization-specific questions",
       note:
         questions.total === 0
           ? "None asked"
@@ -2202,9 +2206,12 @@ function ValuesDialog({
         <h2 id={`${id}-title`}>Before you approve</h2>
         <p id={`${id}-body`}>
           The plan asks for{" "}
-          {asked === 1 ? "one client value" : `${asked} client values`}. Each
-          answer fills the control's description and the attributes that refer
-          to it. Values left blank stay open; they do not prevent approval.
+          {asked === 1
+            ? "one organization-specific value"
+            : `${asked} organization-specific values`}
+          . Each answer fills the control's description and the attributes that
+          refer to it. Values left blank stay open; they do not prevent
+          approval.
         </p>
         <AnswerProgress answered={count} total={asked} />
         <div className="pl-values" key={session}>
@@ -2526,7 +2533,7 @@ function StandardSuggestion({ ids, plan }: { ids: Ids; plan: MasterPlan }) {
     <section className="pl-suggest" aria-label="A matching standard">
       <div className="pl-suggest-text">
         <strong>
-          The client's RCM gives no test attributes for this control
+          The organization's RCM gives no test attributes for this control
         </strong>
         {strong ? (
           <p>
@@ -2535,7 +2542,7 @@ function StandardSuggestion({ ids, plan }: { ids: Ids; plan: MasterPlan }) {
             {standard.title}{" "}
             <span className="pl-suggest-fit">Strong match</span>. Following it
             as a customized standard brings its attributes, proposed for you to
-            decide; the client's own description stays.
+            decide; the organization's own description stays.
           </p>
         ) : (
           <p>
@@ -4638,7 +4645,7 @@ export function AddEvidence({
         />
       </label>
       <label>
-        What the client provides
+        What the organization provides
         <textarea
           rows={3}
           maxLength={1500}

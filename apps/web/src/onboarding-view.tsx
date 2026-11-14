@@ -76,7 +76,7 @@ export const NOTICES: Record<SetupNotice, string> = {
   "setup-launched":
     "Engagement started. The agents have their tasks, and evidence requests are drafted for approval.",
   "setup-rcm-uploaded":
-    "RCM uploaded. Check the suggested column matches and the client's terms, then import.",
+    "RCM uploaded. Check the suggested column matches and the organization's terms, then import.",
   "setup-rcm-unreadable":
     "That file could not be read as an RCM. Upload an .xlsx workbook or a .csv file with a header row.",
   "setup-rcm-large":
@@ -306,7 +306,7 @@ export function RcmStep({
             detail={
               uploaded
                 ? `None of the uploaded controls is in ${tab?.detail.toLowerCase() ?? "this group"}. Upload a new version, or move a control here by changing its area.`
-                : `Add ${tab?.detail.toLowerCase() ?? "these areas"} from the library above, or upload the client's RCM.`
+                : `Add ${tab?.detail.toLowerCase() ?? "these areas"} from the library above, or upload the organization's RCM.`
             }
           />
         </section>
@@ -356,9 +356,9 @@ export function RcmStep({
           {design !== null && selected !== null ? (
             <section className="card" aria-label="Control statement">
               <CardHeader
-                title="Control statement and client values"
+                title="Control statement and organization-specific values"
                 titleId="control-statement-title"
-                description="How the library states this control, with the values only the client knows. Testing waits for the ones marked."
+                description="How the library states this control, with the values only the organization knows. Testing waits for the ones marked."
               />
               <div className="card-body">
                 <DesignPanel
@@ -448,11 +448,11 @@ export function ControlOptions({
             <UiIcon name="table" size={22} />
           </span>
           <div>
-            <h2>Upload the client's RCM</h2>
+            <h2>Upload the organization's RCM</h2>
             <p>
-              Use the client's own matrix, in their format and terms. Match
-              their columns to ours; every other column is kept under the
-              client's heading.
+              Use the organization's own matrix, in its format and terms. Match
+              its columns to ours; every other column is kept under the
+              organization's heading.
             </p>
             <ul className="chips">
               <li className="pill">Excel .xlsx</li>
@@ -516,7 +516,7 @@ export function SocReportsCard({ onboarding }: { onboarding: Onboarding }) {
       <CardHeader
         title="SOC 1 reports to address"
         titleId="soc-reports-title"
-        description="For each, consider the period the report covers and any gap to period end, the service auditor's opinion and exceptions, and the controls it expects the client to operate (KPMG ICFR Handbook (2025), chapter 8). Upload the report on the system to read its CUECs."
+        description="For each, consider the period the report covers and any gap to period end, the service auditor's opinion and exceptions, and the controls it expects the organization to operate (KPMG ICFR Handbook (2025), chapter 8). Upload the report on the system to read its CUECs."
         aside={<span className="pill num">{items.length}</span>}
       />
       <div className="card-body">
@@ -635,9 +635,9 @@ function RcmUploadForm({
       <FilePicker
         name="content"
         accept=".xlsx,.xlsm,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        label="Client RCM file"
+        label="Organization's RCM file"
         chooseLabel={
-          compact ? "Upload a new version" : "Choose the client's RCM"
+          compact ? "Upload a new version" : "Choose the organization's RCM"
         }
         submitLabel={compact ? "Replace the RCM" : "Upload RCM"}
         primary={!compact}
@@ -665,12 +665,12 @@ function RcmSource({
         <div className="row-text">
           <strong>
             {uploaded
-              ? `Client RCM${onboarding.rcmFileName === "" ? "" : `: ${onboarding.rcmFileName}`}`
+              ? `Organization's RCM${onboarding.rcmFileName === "" ? "" : `: ${onboarding.rcmFileName}`}`
               : "Standard library"}
           </strong>
           <small>
             {uploaded
-              ? "Imported in the client's terms. Area, frequency, and nature are mapped to standard values for testing."
+              ? "Imported in the organization's terms. Area, frequency, and nature are mapped to standard values for testing."
               : "Reviewed controls, tailored for this engagement."}
           </small>
         </div>
@@ -937,9 +937,9 @@ function RcmImportView({
         <input type="hidden" name="version" value={upload.version} />
         <section className="card" aria-labelledby="rcm-columns-title">
           <CardHeader
-            title="1. Match the client's columns"
+            title="1. Match the organization's columns"
             titleId="rcm-columns-title"
-            description="Suggested from the headings and the values in each column, and from how this engagement's earlier RCMs were mapped. The process or area can come from two columns read together: a category such as ITGC or Business Process, and the process itself. A column holding preventive or detective is the control's type, kept as a client column. Columns you keep as client columns appear on each control and its workpapers under the client's heading."
+            description="Suggested from the headings and the values in each column, and from how this engagement's earlier RCMs were mapped. The process or area can come from two columns read together: a category such as ITGC or Business Process, and the process itself. A column holding preventive or detective is the control's type, kept as an organization column. Columns you keep as organization columns appear on each control and its workpapers under the organization's heading."
             aside={<span className="num">{upload.columns.length} columns</span>}
           />
           {missingRequired.length > 0 ? (
@@ -959,7 +959,7 @@ function RcmImportView({
             <table className="table rcm-map">
               <thead>
                 <tr>
-                  <th scope="col">Client column</th>
+                  <th scope="col">Organization column</th>
                   <th scope="col">Sample values</th>
                   <th scope="col">Use as</th>
                 </tr>
@@ -998,7 +998,9 @@ function RcmImportView({
                           ))}
                         </optgroup>
                         <optgroup label="Other">
-                          <option value="custom">Keep as client column</option>
+                          <option value="custom">
+                            Keep as organization column
+                          </option>
                           <option value="ignore">Do not import</option>
                         </optgroup>
                       </select>
@@ -1018,9 +1020,9 @@ function RcmImportView({
 
         <section className="card" aria-labelledby="rcm-values-title">
           <CardHeader
-            title="2. Map the client's terms"
+            title="2. Map the organization's terms"
             titleId="rcm-values-title"
-            description="The client's terms are kept and shown on every control. The standard value beside each one decides how it is tested. Suggestions come from the controls that use each term; change any of them."
+            description="The organization's terms are kept and shown on every control. The standard value beside each one decides how it is tested. Suggestions come from the controls that use each term; change any of them."
             aside={<TermsStatus terms={upload.terms} />}
           />
           {upload.terms.status === "PENDING" ||
@@ -1066,7 +1068,7 @@ function RcmImportView({
                   <table className="table rcm-value-table">
                     <thead>
                       <tr>
-                        <th scope="col">Client term</th>
+                        <th scope="col">Organization term</th>
                         <th scope="col" className="cell-num">
                           Rows
                         </th>
@@ -1280,7 +1282,7 @@ function RcmImportView({
                           <small>
                             Row {control.row}
                             {control.customFields > 0
-                              ? ` · ${control.customFields} client column${control.customFields === 1 ? "" : "s"}`
+                              ? ` · ${control.customFields} organization column${control.customFields === 1 ? "" : "s"}`
                               : ""}
                           </small>
                         </div>
@@ -1348,7 +1350,7 @@ function RcmImportView({
         <div className="card-footer rcm-save">
           <span className="form-hint">
             {upload.ready
-              ? "Nothing is sent to the client. Owners, scope, and templates can be adjusted after import."
+              ? "Nothing is sent to the organization. Owners, scope, and templates can be adjusted after import."
               : "Resolve the items above, then save the mapping."}
           </span>
           <form autoComplete="off" method="post" action="/workspace/setup">
@@ -1691,7 +1693,7 @@ function ControlEditor({
           ) : null}
           {control.source === "UPLOAD" ? (
             <div>
-              <h3 className="card-subhead">In the client's terms</h3>
+              <h3 className="card-subhead">In the organization's terms</h3>
               <dl className="client-fields">
                 {[
                   [

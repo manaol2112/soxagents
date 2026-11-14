@@ -154,7 +154,7 @@ describe("the engagement's next steps", () => {
     assert.match(idleMessage(next), /agents are working/);
     assert.match(
       idleMessage({ ...next, current: "EVIDENCE" }),
-      /client is preparing/,
+      /organization is preparing/,
     );
     assert.match(
       idleMessage({ ...next, current: "CLOSE" }),

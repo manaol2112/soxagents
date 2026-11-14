@@ -35,10 +35,10 @@ export const STEP_OUTCOME: Record<Exclude<SetupStep, "overview">, string> = {
 
 const STEP_TIP: Record<Exclude<SetupStep, "overview">, string> = {
   profile:
-    "The client and scope were entered when the engagement was created; this step holds only what still needs attention.",
+    "The organization and scope were entered when the engagement was created; this step holds only what still needs attention.",
   team: "The independent reviewer cannot also prepare the engagement's work; the lead approves the kickoff plan.",
   controls:
-    "Add the in-scope systems first: controls that run on a system get one record per system. Load the standard library, or upload the client's RCM instead.",
+    "Add the in-scope systems first: controls that run on a system get one record per system. Load the standard library, or upload the organization's RCM instead.",
   workpapers:
     "Preview a template with one of the engagement's own controls before confirming it.",
   launch:
@@ -47,7 +47,7 @@ const STEP_TIP: Record<Exclude<SetupStep, "overview">, string> = {
 
 function title(step: SetupStep): string {
   return step === "profile"
-    ? "Client and scope"
+    ? "Organization and scope"
     : (SETUP_STEPS.find((item) => item.id === step)?.title ?? step);
 }
 
