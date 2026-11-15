@@ -2,10 +2,12 @@
 8 November 2026: "OE can't start if design is failing").
 
 An exception a person recorded on an attribute is never signed over as effective
-(docs/evidence-assurance.md, section 10.15, item 5): while one stands on a current check
-and no design deficiency does, the conclusion says so and the sign-off is refused with it;
-a design deficiency or a changed tickmark lifts it; and a tickmark, or a decision on a
-file's reliability, recorded or ended after the sign-off puts the sign-off out of date."""
+(docs/evidence-assurance.md, section 10.15, item 5): while one stands on a D&I request of
+the control, whatever the state of that request's check, and no design deficiency does,
+the conclusion says so and the sign-off is refused with it; a design deficiency or a
+changed or reopened tickmark lifts it; and a tickmark, or a decision on a file's
+reliability, recorded or ended after the sign-off puts the sign-off out of date, the
+reason naming the attributes and the files."""
 
 from typing import Any
 from uuid import UUID, uuid4
@@ -19,7 +21,7 @@ from test_attribute_dispositions import REASON, _ids
 from test_attribute_dispositions import _record as _tickmark
 from test_attribute_dispositions import _reopen as _reopen_tickmark
 from test_design_workpaper import _draft_design
-from test_evidence_assurance import _Bench
+from test_evidence_assurance import LOG, _Bench, _reading
 from test_evidence_flow import _project
 from test_file_reliability import _first_check as _first_check_with_a_report
 from test_file_reliability import _record as _decide_reliability
@@ -27,7 +29,14 @@ from test_outbound import _session, migrated
 from test_phase_release import _launched, _prepare_design
 
 from ai_workforce_api.db import connect
-from ai_workforce_api.design_conclusions import design_verdict
+from ai_workforce_api.design_conclusions import (
+    GATE_DESIGN,
+    GATE_NOT_EFFECTIVE,
+    decisions_changed,
+    design_verdict,
+    oe_gate_reason,
+    tickmarks_changed,
+)
 
 __all__ = ["migrated"]
 
@@ -35,7 +44,15 @@ EXCEPTION_ON = (
     "An exception is recorded on attribute {code}. Log a design deficiency for it, or "
     "change the tickmark with your reason."
 )
-TICKMARK_CHANGED = "a tickmark changed after the sign-off"
+# The same, where the request the exception is recorded on has no current check.
+EXCEPTION_WAITING = (
+    "An exception is recorded on attribute {code}, on a request waiting to be checked "
+    "again. Log a design deficiency for it, or reopen the tickmark with your reason."
+)
+TICKMARK_ON_B = "a tickmark on attribute B changed after the sign-off"
+EXCEPTION_UNANSWERED = (
+    "an exception is recorded on an attribute and no design deficiency is logged for it"
+)
 
 
 def _control(team: dict[str, Any]) -> str:
@@ -274,6 +291,11 @@ class _Signing:
                 connection, UUID(str(self.bench.team["project"])), UUID(self.bench.control)
             )
 
+    def gate(self) -> str | None:
+        """Why OE work on the control cannot start, as the OE gate reads it (None: open)."""
+        with connect(self.database.url) as connection:
+            return oe_gate_reason(connection, UUID(self.bench.control))
+
     def signed_rows(self) -> int:
         return int(self.bench.rows("SELECT count(*) FROM design_conclusions")[0][0])
 
@@ -282,6 +304,17 @@ class _Signing:
         attribute = next(a for a in self.bench.entry()["attributes"] if a["code"] == code)
         found: dict[str, Any] = attribute["disposition"]
         return found
+
+    def tickmark_id(self, code: str) -> str:
+        """The id of the tickmark standing on the attribute, as recorded (the D&I list
+        shows none of a request whose check is not current)."""
+        [row] = self.bench.rows(
+            "SELECT d.id FROM attribute_dispositions d WHERE d.requirement_id = %s "
+            "AND d.attribute_id = %s AND d.ended_at IS NULL",
+            UUID(self.bench.item_id),
+            UUID(self.ids[code]),
+        )
+        return str(row[0])
 
     def deficiency(self) -> None:
         bench = self.bench
@@ -325,8 +358,9 @@ def test_an_exception_a_person_recorded_is_never_signed_over_as_effective(
     assert body["blocking"] == [EXCEPTION_ON.format(code="B")]
     [exception] = body["exceptions"]
     assert exception | {"recorded_at": ""} == {
-        "attribute_id": ids["B"], "code": "B", "requirement_id": bench.item_id,
-        "recorded_by_name": owner_name, "recorded_at": "", "reason": REASON,
+        "disposition_id": case.tickmark("B")["id"], "attribute_id": ids["B"], "code": "B",
+        "requirement_id": bench.item_id, "recorded_by_name": owner_name, "recorded_at": "",
+        "reason": REASON, "check_current": True,
     }  # fmt: skip
     assert exception["recorded_at"] == case.tickmark("B")["recorded_at"]
     # The person who recorded it reads the same.
@@ -370,7 +404,15 @@ def test_a_tickmark_changed_after_the_sign_off_puts_it_out_of_date(migrated: Dat
     attributes afterwards. Now a tickmark, or a decision on a file's reliability, recorded
     or ended after the sign-off puts it out of date, and the OE gate no longer reads its
     verdict; an exception recorded then is lifted by a design deficiency, on which the
-    existing rule applies (not effective)."""
+    existing rule applies (not effective).
+
+    Rewritten after the independent review of 15 November 2026 (item 10a). Old
+    expectation: the one reason "a tickmark changed after the sign-off", also where what
+    changed was a decision on a file's reliability, and never saying which. New: the
+    reason names the attribute ("a tickmark on attribute B changed after the sign-off")
+    or the file ("the reliability decision on ticket REQ-1041.txt changed after the
+    sign-off"), one reason for each kind. Every other assertion is kept: what puts the
+    sign-off out of date, and that the OE gate then reads no verdict."""
     case = _Signing(migrated, "dc-changed")
     bench, ids = case.bench, case.ids
 
@@ -390,24 +432,35 @@ def test_a_tickmark_changed_after_the_sign_off_puts_it_out_of_date(migrated: Dat
     resign()
     assert case.body()["status"] == "SIGNED_OFF"
 
-    # Recorded after the sign-off.
+    # Recorded after the sign-off: the reason names the attribute.
     assert _tickmark(bench, ids["B"], "NOT_APPLICABLE").status_code == 200
-    assert out_of_date()["out_of_date"] == [TICKMARK_CHANGED]
+    assert out_of_date()["out_of_date"] == [TICKMARK_ON_B]
     resign()
     # Ended after the sign-off (a person reopened it).
     assert _reopen_tickmark(bench, ids["B"], case.tickmark("B")["id"]).status_code == 200
-    assert out_of_date()["out_of_date"] == [TICKMARK_CHANGED]
+    assert out_of_date()["out_of_date"] == [TICKMARK_ON_B]
     resign()
-    # A decision on a file's reliability recorded after the sign-off.
+    # A decision on a file's reliability recorded after the sign-off: the reason names
+    # the file, and says it is a reliability decision, not a tickmark.
     assert _decide_reliability(bench, case.ticket, "NOT_RELIED_ON").status_code == 200
-    assert out_of_date()["out_of_date"] == [TICKMARK_CHANGED]
+    assert out_of_date()["out_of_date"] == [
+        "the reliability decision on ticket REQ-1041.txt changed after the sign-off"
+    ]
+    # Tickmarks on two attributes as well: each kind has its own reason, the attributes
+    # in their order.
+    assert _tickmark(bench, ids["C"], "NOT_APPLICABLE").status_code == 200
+    assert _tickmark(bench, ids["A"], "NOT_AVAILABLE").status_code == 200
+    assert out_of_date()["out_of_date"] == [
+        "tickmarks on attributes A and C changed after the sign-off",
+        "the reliability decision on ticket REQ-1041.txt changed after the sign-off",
+    ]
     resign()
 
     # An exception recorded after the sign-off: out of date, and it cannot be signed again
     # as it is.
     assert _tickmark(bench, ids["B"], "EXCEPTION").status_code == 200
     body = out_of_date()
-    assert (body["out_of_date"], body["proposed"]) == ([TICKMARK_CHANGED], "EFFECTIVE")
+    assert (body["out_of_date"], body["proposed"]) == ([TICKMARK_ON_B], "EFFECTIVE")
     assert (body["blocking"], body["can_sign"]) == ([EXCEPTION_ON.format(code="B")], False)
     refused = case.sign()
     assert refused.status_code == 409
@@ -420,7 +473,7 @@ def test_a_tickmark_changed_after_the_sign_off_puts_it_out_of_date(migrated: Dat
     case.deficiency()
     body = out_of_date()
     assert body["out_of_date"] == [
-        "a design deficiency was logged after the sign-off", TICKMARK_CHANGED,
+        "a design deficiency was logged after the sign-off", TICKMARK_ON_B,
     ]  # fmt: skip
     assert (body["proposed"], body["blocking"], body["can_sign"]) == ("NOT_EFFECTIVE", [], True)
     assert [e["code"] for e in body["exceptions"]] == ["B"]
@@ -432,37 +485,92 @@ def test_a_tickmark_changed_after_the_sign_off_puts_it_out_of_date(migrated: Dat
     assert body["signed"]["deficiencies"] == ["D-901"]
 
 
-def test_an_exception_that_applies_again_under_a_sign_off_puts_it_out_of_date(
+def test_what_changed_after_the_sign_off_is_named_and_bounded() -> None:
+    """Item 10a (pure). The reason names the attributes, or the files, at most three and
+    then how many more; a tickmark on an attribute that is no longer approved has no
+    letter and is counted."""
+    after = "changed after the sign-off"
+    assert tickmarks_changed(["B"]) == f"a tickmark on attribute B {after}"
+    assert tickmarks_changed(["A", "C"]) == f"tickmarks on attributes A and C {after}"
+    assert tickmarks_changed(["A", "B", "D"]) == f"tickmarks on attributes A, B and D {after}"
+    assert tickmarks_changed(list("ABCDE")) == (
+        f"tickmarks on attributes A, B, C and 2 more {after}"
+    )
+    assert tickmarks_changed(["B"], 1) == f"tickmarks on attribute B and 1 more {after}"
+    assert tickmarks_changed(list("ABC"), 2) == (
+        f"tickmarks on attributes A, B, C and 2 more {after}"
+    )
+    assert tickmarks_changed([], 1) == f"a tickmark on an attribute no longer approved {after}"
+    assert tickmarks_changed([], 3) == f"tickmarks on 3 attributes no longer approved {after}"
+    assert decisions_changed(["report.csv"]) == f"the reliability decision on report.csv {after}"
+    assert decisions_changed(["a.csv", "b.csv"]) == (
+        f"the reliability decisions on a.csv and b.csv {after}"
+    )
+    assert decisions_changed(["a.csv", "b.csv", "c.csv", "d.csv", "e.csv"]) == (
+        f"the reliability decisions on a.csv, b.csv, c.csv and 2 more {after}"
+    )
+    # A file's name is untrusted text: one cleaned line, bounded.
+    hostile = decisions_changed(["first line\nsecond line " + "x" * 400])
+    assert "\n" not in hostile and len(hostile) < 200 and hostile.endswith(after)
+
+
+def test_an_exception_is_never_signed_over_whatever_the_state_of_its_requests_check(
     migrated: Database,
 ) -> None:
-    """An exception is read only on a request whose check is current. One recorded while
-    the check was current, kept while it was not (and so not in the way of a sign-off
-    then), applies again once the check is current: nothing was recorded or ended after
-    the sign-off, and still the sign-off as effective no longer holds, so the OE gate
-    never rests on a verdict signed over a standing exception."""
+    """Independent review of 15 November 2026 (item 1), rewritten from
+    `test_an_exception_that_applies_again_under_a_sign_off_puts_it_out_of_date`.
+
+    Old expectation (it encoded the defect): once the request's check was out of date the
+    conclusion gave `(blocking, exceptions, can_sign) == ([], [], True)`, the sign-off as
+    effective answered 200 and `design_verdict` read EFFECTIVE, with the exception still
+    standing; only when the check was current again did the sign-off go out of date. So a
+    reviewer could sign "Effective" over a standing exception simply because a file had
+    been added to its request, and the OE gate opened on it.
+
+    New expectation: an exception a person recorded stands until a person reopens or
+    replaces it (10.13), so it keeps the conclusion from being signed whatever the state
+    of its request's check and whether or not the request is set aside; `exceptions`
+    lists it with `check_current`, and the sentence says the request waits to be checked
+    again. The OE gate never reads EFFECTIVE while it stands. Kept from the old test: an
+    exception that comes to stand under a sign-off as effective with nothing recorded
+    since (here: on a request restored after it was removed) puts that sign-off out of
+    date, and a design deficiency lifts it by the existing rule."""
     case = _Signing(migrated, "dc-again")
     bench, ids = case.bench, case.ids
+    requirement = UUID(bench.item_id)
+
+    def blocked(sentence: str, current: bool) -> dict[str, Any]:
+        """The conclusion cannot be signed, for the one reason, and nothing is signed."""
+        body = case.body()
+        assert (body["status"], body["proposed"], body["can_sign"]) == (
+            "TO_SIGN", "EFFECTIVE", False,
+        )  # fmt: skip
+        assert body["blocking"] == [sentence.format(code="B")]
+        assert [(e["code"], e["check_current"]) for e in body["exceptions"]] == [("B", current)]
+        for verdict in ("EFFECTIVE", "NOT_EFFECTIVE"):
+            refused = case.sign(verdict)
+            assert refused.status_code == 409, refused.text
+            assert refused.json()["detail"] == sentence.format(code="B")
+        assert case.signed_rows() == 0 and case.verdict() is None
+        assert case.gate() == GATE_DESIGN
+        return body
+
     assert _tickmark(bench, ids["B"], "EXCEPTION").status_code == 200
-    assert case.body()["blocking"] == [EXCEPTION_ON.format(code="B")]
+    blocked(EXCEPTION_ON, True)
 
     # What the check read changes (the request no longer asks for A): the check is out of
-    # date, nothing of it is read, and the tickmark is kept, not applied.
+    # date and the tickmark is kept, not shown on the request. It still stands.
     with connect(migrated.url) as connection:
         [(link,)] = connection.execute(
             "DELETE FROM evidence_requirement_attributes WHERE requirement_id = %s "
             "AND attribute_id = %s RETURNING to_jsonb(evidence_requirement_attributes)",
-            (UUID(bench.item_id), UUID(ids["A"])),
+            (requirement, UUID(ids["A"])),
         ).fetchall()
     entry = bench.entry()
     assert (entry["status"], entry["tickmarks_kept"]) == ("OUT_OF_DATE", 1)
-    body = case.body()
-    assert (body["blocking"], body["exceptions"], body["can_sign"]) == ([], [], True)
-    signed = case.sign()
-    assert signed.status_code == 200, signed.text
-    assert case.verdict() == "EFFECTIVE"
-
-    # The request reads as it did when it was checked: its check is current again, and the
-    # exception with it. No tickmark changed since the sign-off.
+    waiting = blocked(EXCEPTION_WAITING, False)
+    assert waiting["exceptions"][0]["disposition_id"] == case.tickmark_id("B")
+    # The request reads as it did when it was checked: current again, the sentence too.
     with connect(migrated.url) as connection:
         connection.execute(
             "INSERT INTO evidence_requirement_attributes "
@@ -470,12 +578,51 @@ def test_an_exception_that_applies_again_under_a_sign_off_puts_it_out_of_date(
             (Jsonb(link),),
         )
     assert bench.entry()["status"] == "REVIEWED"
+    blocked(EXCEPTION_ON, True)
+
+    # The request set aside as not applicable: the tickmark stands, so it still blocks.
+    waived = bench.owner.post(
+        f"{bench.base}/controls/{bench.control}/evidence-requirements/{bench.item_id}/waive",
+        json={"reason": "Covered by the walkthrough of the other system.",
+              "version": bench.item(bench.item_id)["version"]},
+    )  # fmt: skip
+    assert waived.status_code == 200, waived.text
+    assert bench.item(bench.item_id)["status"] == "WAIVED"
+    # Setting a request aside changes nothing its check read (its files stay in force
+    # on it), so the check stays current, and the sentence is the one for a current check.
+    assert bench.entry()["status"] == "REVIEWED"
+    set_aside = case.body()
+    assert set_aside["can_sign"] is False
+    assert [(e["code"], e["check_current"]) for e in set_aside["exceptions"]] == [("B", True)]
+    assert set_aside["blocking"] == [EXCEPTION_ON.format(code="B")]
+    assert case.sign().status_code == 409 and case.verdict() is None
+
+    # A request that is removed is no longer part of the control's evidence: its
+    # exception is not read, and the conclusion can be signed.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE evidence_requirements SET status = 'REMOVED', waive_reason = '', "
+            "waived_by = NULL, waived_at = NULL WHERE id = %s",
+            (requirement,),
+        )
+    body = case.body()
+    assert (body["blocking"], body["exceptions"], body["can_sign"]) == ([], [], True)
+    signed = case.sign()
+    assert signed.status_code == 200, signed.text
+    assert case.verdict() == "EFFECTIVE" and case.gate() is None
+
+    # The request is in the list again, and its exception with it. Nothing was recorded
+    # since the sign-off, and still it no longer holds: the OE gate never reads a verdict
+    # signed over a standing exception.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE evidence_requirements SET status = 'REQUESTED' WHERE id = %s", (requirement,)
+        )
     body = case.body()
     assert body["status"] == "OUT_OF_DATE" and case.verdict() is None
-    assert body["out_of_date"] == [
-        "an exception is recorded on an attribute and no design deficiency is logged for it"
-    ]
-    assert body["blocking"] == [EXCEPTION_ON.format(code="B")]
+    assert case.gate() == GATE_DESIGN
+    assert body["out_of_date"] == [EXCEPTION_UNANSWERED]
+    assert [e["code"] for e in body["exceptions"]] == ["B"] and body["can_sign"] is False
     assert case.sign().status_code == 409
     # With a design deficiency logged the existing rule applies.
     case.deficiency()
@@ -483,4 +630,65 @@ def test_an_exception_that_applies_again_under_a_sign_off_puts_it_out_of_date(
     assert body["out_of_date"] == ["a design deficiency was logged after the sign-off"]
     assert (body["proposed"], body["blocking"]) == ("NOT_EFFECTIVE", [])
     assert case.sign("NOT_EFFECTIVE").status_code == 200
-    assert case.verdict() == "NOT_EFFECTIVE"
+    assert case.verdict() == "NOT_EFFECTIVE" and case.gate() == GATE_NOT_EFFECTIVE
+
+
+def test_a_file_added_to_the_request_does_not_take_its_exception_out_of_the_way(
+    migrated: Database,
+) -> None:
+    """Independent review of 15 November 2026 (item 1), the scenario found: an exception on
+    B, then a file is added to the request. The new check is queued (or being read, held
+    or failed), the D&I list shows no attribute of the request, and before, the conclusion
+    listed no exception and could be signed as effective. Now it says the exception is on
+    a request waiting to be checked again, and is lifted only by a design deficiency or by
+    reopening the tickmark, which the conclusion names by its id. An exception on an
+    attribute that is no longer approved is left out, and counts again with the
+    attribute."""
+    case = _Signing(migrated, "dc-added")
+    bench, ids = case.bench, case.ids
+    assert _tickmark(bench, ids["B"], "EXCEPTION").status_code == 200
+    assert case.body()["blocking"] == [EXCEPTION_ON.format(code="B")]
+    recorded = case.tickmark_id("B")
+
+    bench.add("sap change log.txt", LOG)
+    bench.read_next(_reading("change_history"))
+    entry = bench.entry()
+    assert (entry["status"], entry["attributes"], entry["tickmarks_kept"]) == ("QUEUED", [], 1)
+    body = case.body()
+    assert (body["proposed"], body["can_sign"]) == ("EFFECTIVE", False)
+    assert body["blocking"] == [EXCEPTION_WAITING.format(code="B")]
+    [exception] = body["exceptions"]
+    assert (exception["disposition_id"], exception["check_current"]) == (recorded, False)
+    for verdict in ("EFFECTIVE", "NOT_EFFECTIVE"):
+        refused = case.sign(verdict)
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["detail"] == EXCEPTION_WAITING.format(code="B")
+    assert case.signed_rows() == 0 and case.verdict() is None and case.gate() == GATE_DESIGN
+    # The design workpaper's own view of the conclusion says the same.
+    paper = bench.owner.get(f"{bench.base}/controls/{bench.control}/design-workpaper")
+    assert paper.status_code == 200, paper.text
+    assert paper.json()["conclusion"]["signed"] is False
+
+    # An attribute that is no longer approved is not concluded on: its exception is left
+    # out while it is not, and counts again as soon as it is approved again.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE control_attributes SET status = 'SUPERSEDED' WHERE id = %s", (UUID(ids["B"]),)
+        )
+    body = case.body()
+    assert (body["blocking"], body["exceptions"]) == ([], [])
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE control_attributes SET status = 'APPROVED' WHERE id = %s", (UUID(ids["B"]),)
+        )
+    assert case.body()["blocking"] == [EXCEPTION_WAITING.format(code="B")]
+
+    # Reopened with a reason, by the id the conclusion gives (the D&I list shows no
+    # tickmark of a request that waits to be checked): nothing stands, and it is signed.
+    reopened = _reopen_tickmark(bench, ids["B"], recorded)
+    assert reopened.status_code == 200, reopened.text
+    body = case.body()
+    assert (body["blocking"], body["exceptions"], body["can_sign"]) == ([], [], True)
+    signed = case.sign()
+    assert signed.status_code == 200, signed.text
+    assert case.verdict() == "EFFECTIVE" and case.gate() is None

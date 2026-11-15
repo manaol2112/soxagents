@@ -19,7 +19,11 @@ Approval boundary and evidence traceability (critical tier):
   of its own is linked to it (docs/evidence-assurance.md, section 10.15, item 3): a person
   accepts it or finds it short, and while it is in hand and not accepted the design
   workpaper is not drafted again, as for a requested item. Without a file it still waits
-  and nothing of it is judged.
+  and nothing of it is judged. Only in the D&I phase: an interim or roll-forward item that
+  waits for its sample is never judged on a linked file (independent review of 10.15);
+- the file an item in hand was accepted with is not withdrawn or replaced, as for a
+  requested item, and an item that loses its last own file loses its judgment on record,
+  so it never reads accepted again on a different file.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -37,7 +41,7 @@ from test_outbound import _session, migrated
 
 from ai_workforce_api.db import connect
 from ai_workforce_api.evidence_analysis import run_analysis
-from ai_workforce_api.evidence_plans import requirement_state
+from ai_workforce_api.evidence_plans import JUDGEABLE_SQL, requirement_state
 from ai_workforce_api.outbound import IN_HAND_ALL, IN_HAND_CHANGED
 
 __all__ = ["migrated"]
@@ -86,7 +90,9 @@ class _Case:
         body: dict[str, Any] = found.json()
         return body
 
-    def upload(self, item: dict[str, Any], name: str, client: TestClient | None = None) -> Any:
+    def upload(
+        self, item: dict[str, Any], name: str, client: TestClient | None = None, more: str = ""
+    ) -> Any:
         return (client or self.client).post(
             f"{self.base}/evidence-uploads",
             params={
@@ -95,12 +101,12 @@ class _Case:
                 "request_id": item["request_id"],
                 "requirement_id": item["id"],
             },
-            content=f"Evidence for {item['title']}: managers approve access.".encode(),
+            content=f"Evidence for {item['title']}: managers approve access.{more}".encode(),
             headers={"content-type": "text/plain"},
         )
 
-    def add_for(self, item: dict[str, Any], name: str, read: bool = True) -> str:
-        added = self.upload(item, name)
+    def add_for(self, item: dict[str, Any], name: str, read: bool = True, more: str = "") -> str:
+        added = self.upload(item, name, more=more)
         assert added.status_code == 200, added.text
         if read:
             self.read_files()
@@ -309,31 +315,42 @@ def test_an_item_waiting_for_an_earlier_one_is_in_hand_once_its_evidence_is(
 def test_a_waiting_item_with_a_linked_file_reads_as_a_planned_item_with_one() -> None:
     """Section 10.15, item 3 (pure). Before: an item that waits for an earlier one read
     "Waits for an earlier item" whatever was linked to it. Now, with a file of its own
-    linked, it has the state a planned item with one has, for every judgment a person
-    made; without one it still waits."""
-    for judged in (
-        "NOT_REVIEWED",
-        "UNDER_REVIEW",
-        "ACCEPTED",
-        "INSUFFICIENT",
-        "FOLLOW_UP_REQUIRED",
-    ):
-        planned = requirement_state("PLANNED", None, None, judged, True, True)
-        assert requirement_state("AWAITING_DEPENDENCY", None, None, judged, True, True) == planned
-    assert requirement_state("AWAITING_DEPENDENCY", None, None, "NOT_REVIEWED", True, True) == (
-        "RECEIVED"
-    )
-    assert requirement_state("AWAITING_DEPENDENCY", None, None, "ACCEPTED", False, True) == (
-        "ACCEPTED"
-    )
+    linked, a D&I item has the state a planned item with one has, for every judgment a
+    person made; without one it still waits.
+
+    Rewritten after the independent review of 10.15 (15 November 2026). The old calls gave
+    no phase and expected the planned item's state: that encoded the defect, the rule
+    applying to every phase, so an interim or roll-forward sample item that waits for its
+    sample read "Received" and could be accepted on any linked file before a sample
+    existed. The new expectation: the state of a planned item only where the phase is
+    DESIGN; in any other phase, and where no phase is given, it waits (AS 2315: a sample
+    item is evidenced by the item selected, which does not exist before the selection)."""
+    judgments = ("NOT_REVIEWED", "UNDER_REVIEW", "ACCEPTED", "INSUFFICIENT", "FOLLOW_UP_REQUIRED")
+
+    def waiting(judged: str, has: bool, linked: bool, phase: str | None) -> str:
+        return requirement_state("AWAITING_DEPENDENCY", None, None, judged, has, linked, phase)
+
+    for judged in judgments:
+        planned = requirement_state("PLANNED", None, None, judged, True, True, "DESIGN")
+        assert waiting(judged, True, True, "DESIGN") == planned
+    assert waiting("NOT_REVIEWED", True, True, "DESIGN") == "RECEIVED"
+    assert waiting("ACCEPTED", False, True, "DESIGN") == "ACCEPTED"
+    # Only in the D&I phase: an interim or roll-forward item that waits, and one whose
+    # phase is not said, waits whatever is linked to it and whatever is on record.
+    for phase in ("INTERIM", "ROLLFORWARD", None):
+        for judged in judgments:
+            assert waiting(judged, True, True, phase) == "AWAITING_DEPENDENCY", (phase, judged)
+    # A planned item with a linked file is judged in every phase, as before.
+    for phase in ("DESIGN", "INTERIM", "ROLLFORWARD", None):
+        assert requirement_state("PLANNED", None, None, "NOT_REVIEWED", True, True, phase) == (
+            "RECEIVED"
+        )
     # Without a linked file nothing changed: it waits, whatever else is on record.
     for judged in ("NOT_REVIEWED", "ACCEPTED", "INSUFFICIENT"):
         assert requirement_state("AWAITING_DEPENDENCY", None, None, judged) == (
             "AWAITING_DEPENDENCY"
         )
-        assert requirement_state("AWAITING_DEPENDENCY", None, None, judged, True, False) == (
-            "AWAITING_DEPENDENCY"
-        )
+        assert waiting(judged, True, False, "DESIGN") == "AWAITING_DEPENDENCY"
 
 
 def _design_draft(case: _Case) -> str | None:
@@ -462,6 +479,270 @@ def test_a_waiting_item_with_its_own_evidence_is_judged_and_counted_as_a_request
         "AWAITING_DEPENDENCY", "NOT_REVIEWED", False,
     )  # fmt: skip
     assert decide(waiting["id"], "ACCEPTED").status_code == 409
+
+
+def test_an_interim_item_that_waits_for_its_sample_is_never_judged_on_a_linked_file(
+    migrated: Database,
+) -> None:
+    """Independent review of 10.15, item 3. The rule that an item waiting for an earlier
+    one is judged once a file of its own is linked is the D&I phase's. Before: the phase
+    was not read, so an interim sample item that waits for its sample read "Received" as
+    soon as any file the control holds was linked to it, and a person could accept it
+    before a sample existed. Now it waits, and nothing of it is judged, as before 10.15."""
+    team, client, _scheduler = _engagement(migrated, f"de-wait-{uuid4().hex[:4]}")
+    base = f"/organizations/{team['org']}/projects/{team['project']}"
+    control = _control(migrated, team, AC01)
+    judge = f"{base}/controls/{control}/evidence-requirements"
+
+    def interim() -> dict[str, Any]:
+        return _phase(_plan(client, team, control), "INTERIM")
+
+    def item(requirement_id: str) -> dict[str, Any]:
+        return next(r for r in interim()["requirements"] if r["id"] == requirement_id)
+
+    requested = [r for r in interim()["requirements"] if r["status"] == "REQUESTED"]
+    waits = [r for r in interim()["requirements"] if r["status"] == "AWAITING_DEPENDENCY"]
+    # As the planner leaves a sample item: it waits for the population, with no request.
+    assert requested and waits, [(r["key"], r["status"]) for r in interim()["requirements"]]
+    waiting = waits[0]
+    assert waiting["depends_on"] is not None and waiting["request_id"] is None
+
+    # A file the control holds, linked to the item that waits.
+    added = client.post(
+        f"{base}/evidence-uploads",
+        params={"batch_id": str(uuid4()), "name": "population.txt",
+                "request_id": requested[0]["request_id"], "requirement_id": requested[0]["id"]},
+        content=b"User ID, name, date granted.",
+        headers={"content-type": "text/plain"},
+    )  # fmt: skip
+    assert added.status_code == 200, added.text
+    with connect(migrated.url) as connection:
+        for (analysis_id,) in connection.execute(
+            "SELECT id FROM evidence_analyses WHERE status = 'PENDING' ORDER BY created_at"
+        ).fetchall():
+            run_analysis(connection, _settings(migrated), None, analysis_id, _no_ocr)
+    linked = client.post(
+        f"{judge}/{waiting['id']}/files",
+        json={"file_id": added.json()["file_id"], "reason": "The listing names the items.",
+              "version": item(waiting["id"])["version"]},
+    )  # fmt: skip
+    assert linked.status_code == 200, linked.text
+    held = item(waiting["id"])
+    assert [f["name"] for f in held["files"]] == ["population.txt"]
+
+    # It still waits for its sample: not received, and nothing of it is judged.
+    assert (held["status"], held["state"], held["sufficiency"]) == (
+        "AWAITING_DEPENDENCY", "AWAITING_DEPENDENCY", "NOT_REVIEWED",
+    )  # fmt: skip
+    for sufficiency in ("ACCEPTED", "INSUFFICIENT", "FOLLOW_UP_REQUIRED"):
+        refused = client.post(
+            f"{judge}/{waiting['id']}/sufficiency",
+            json={"sufficiency": sufficiency, "note": "The approval is missing.",
+                  "version": item(waiting["id"])["version"]},
+        )  # fmt: skip
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["detail"] == "nothing has been received for this requirement yet"
+    after = item(waiting["id"])
+    assert (after["state"], after["sufficiency"]) == ("AWAITING_DEPENDENCY", "NOT_REVIEWED")
+    # The one rule says the same: it is not an item a person can judge, in either phase
+    # but the D&I one (the same item read as a D&I item would be).
+    with connect(migrated.url) as connection:
+        [(judgeable, as_design)] = connection.execute(
+            f"SELECT {JUDGEABLE_SQL}, "  # noqa: S608
+            f"{JUDGEABLE_SQL.replace('q.phase', chr(39) + 'DESIGN' + chr(39))} "
+            "FROM evidence_requirements q WHERE q.id = %s",
+            (UUID(waiting["id"]),),
+        ).fetchall()
+    assert (judgeable, as_design) == (False, True)
+
+
+class _InHand:
+    """A D&I item in hand without a request (planned, or waiting for an earlier item),
+    and the files the control holds for another item, each with its own content."""
+
+    def __init__(self, migrated: Database, slug: str, status: str) -> None:
+        self.case = case = _Case(migrated, slug)
+        self.other, self.item_id = case.items[0], str(case.items[1]["id"])
+        self.title = str(case.items[1]["title"])
+        with connect(migrated.url) as connection:
+            connection.execute(
+                "UPDATE evidence_requirements SET status = %s, depends_on = %s, "
+                "pbc_request_id = NULL WHERE id = %s",
+                (status, self.other["key"] if status == "AWAITING_DEPENDENCY" else None,
+                 UUID(self.item_id)),
+            )  # fmt: skip
+        self.judge = f"{case.base}/controls/{case.control}/evidence-requirements"
+        self.files = f"{case.base}/evidence-files"
+        self.added = 0
+
+    def item(self) -> dict[str, Any]:
+        return self.case.item(self.item_id)
+
+    def file(self) -> str:
+        """Another file the control holds, added for the other item."""
+        self.added += 1
+        return self.case.add_for(
+            self.case.item(self.other["id"]), f"file {self.added}.txt", more=f" Copy {self.added}."
+        )
+
+    def link(self, file_id: str) -> None:
+        linked = self.case.client.post(
+            f"{self.judge}/{self.item_id}/files",
+            json={"file_id": file_id, "reason": "It also shows this item.",
+                  "version": self.item()["version"]},
+        )  # fmt: skip
+        assert linked.status_code == 200, linked.text
+
+    def unlink(self, file_id: str) -> None:
+        link = next(f for f in self.item()["files"] if f["file_id"] == file_id)
+        removed = self.case.client.post(
+            f"{self.judge}/{self.item_id}/files/{link['link_id']}/remove",
+            json={"reason": "Linked to the wrong item.", "version": link["link_version"]},
+        )
+        assert removed.status_code == 200, removed.text
+
+    def decide(self, sufficiency: str, note: str = "") -> Any:
+        return self.case.client.post(
+            f"{self.judge}/{self.item_id}/sufficiency",
+            json={"sufficiency": sufficiency, "note": note, "version": self.item()["version"]},
+        )
+
+    def withdraw(self, file_id: str) -> Any:
+        return self.case.client.post(
+            f"{self.files}/{file_id}/withdraw", json={"reason": "Uploaded the wrong document."}
+        )
+
+    def replace(self, file_id: str) -> Any:
+        return self.case.client.post(
+            f"{self.files}/{file_id}/replace",
+            params={"name": "corrected.txt", "reason": "Corrected export"},
+            content=f"A corrected copy of {file_id}.".encode(),
+            headers={"content-type": "text/plain"},
+        )
+
+    def on_record(self) -> tuple[str, Any]:
+        """The item's judgment as stored, whatever its state reads."""
+        [row] = self.case.rows(
+            "SELECT sufficiency, sufficiency_by FROM evidence_requirements WHERE id = %s",
+            UUID(self.item_id),
+        )
+        return str(row[0]), row[1]
+
+
+@pytest.mark.parametrize("status", ["PLANNED", "AWAITING_DEPENDENCY"])
+def test_the_file_an_item_in_hand_was_accepted_with_is_not_withdrawn_or_replaced(
+    migrated: Database, status: str
+) -> None:
+    """Independent review of 10.15, item 4. A file an item was accepted with is relied on
+    and cannot be withdrawn or replaced until that decision is changed (product owner, 31
+    October 2026). Before: only requested items were read, so the file an item in hand
+    without a request was accepted with (planned, or a D&I item that waits for an earlier
+    one: 10.15, item 3) left with no refusal, and the acceptance stayed on record with
+    nothing under it."""
+    hand = _InHand(migrated, f"kept-{status[:4].lower()}", status)
+    file_id = hand.file()
+    hand.link(file_id)
+    assert hand.decide("ACCEPTED").status_code == 200
+    assert (hand.item()["status"], hand.item()["state"]) == (status, "ACCEPTED")
+
+    for refused, verb in (
+        (hand.withdraw(file_id), "withdrawn"),
+        (hand.replace(file_id), "replaced"),
+    ):
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["detail"] == (
+            f'the file cannot be {verb}: the evidence item "{hand.title}" was accepted with '
+            "it; change that decision first"
+        )
+    # Nothing moved: the file is in force on the item and the acceptance stands.
+    kept = hand.item()
+    assert (kept["state"], [f["file_id"] for f in kept["files"]]) == ("ACCEPTED", [file_id])
+    assert hand.case.rows(
+        "SELECT count(*) FROM evidence_withdrawals WHERE evidence_file_id = %s", UUID(file_id)
+    ) == [(0,)]
+
+    # The decision changed first, as the refusal says: the file can then leave.
+    assert hand.decide("NOT_REVIEWED").status_code == 200
+    assert hand.withdraw(file_id).status_code == 200
+    assert hand.item()["files"] == []
+
+
+def test_an_item_that_loses_its_last_file_never_reads_accepted_on_a_different_one(
+    migrated: Database,
+) -> None:
+    """Independent review of 10.15, item 4. Before: an item in hand whose only file went
+    kept its acceptance on record, hidden (it read as waiting again), and read "Accepted"
+    again as soon as a different file was linked: a file nobody had judged. Now the
+    judgment goes when the last file of its own does, on record and with an audit event,
+    and a judgment that rests on no file is never carried onto a file linked later."""
+    hand = _InHand(migrated, "relink", "AWAITING_DEPENDENCY")
+    case, owner = hand.case, hand.case.team["owner_id"]
+    first, later = hand.file(), hand.file()
+
+    def resets() -> list[tuple[Any, ...]]:
+        return [
+            (row[0], row[2])
+            for row in case.audit("evidence_requirement.sufficiency_reset", hand.item_id)
+        ]
+
+    # Accepted with the first file; a second is linked afterwards, and the first unlinked
+    # (the judgment stays while another file is on the item, the existing rule).
+    hand.link(first)
+    assert hand.decide("ACCEPTED").status_code == 200
+    hand.link(later)
+    hand.unlink(first)
+    assert (hand.item()["state"], hand.on_record()) == ("ACCEPTED", ("ACCEPTED", owner))
+
+    # The file left came after the acceptance, so it can be withdrawn. The item then has
+    # no file of its own: the acceptance is gone from the record, and why is recorded.
+    assert hand.withdraw(later).status_code == 200
+    gone = hand.item()
+    assert (gone["state"], gone["sufficiency"], gone["files"]) == (
+        "AWAITING_DEPENDENCY", "NOT_REVIEWED", [],
+    )  # fmt: skip
+    assert hand.on_record() == ("NOT_REVIEWED", None)
+    assert resets() == [
+        (owner, {"sufficiency": "NOT_REVIEWED", "was": "ACCEPTED", "by": "FILE_WITHDRAWN",
+                 "evidence_file_id": later}),
+    ]  # fmt: skip
+    [withdrawn] = case.audit("evidence.withdrawn", later)
+    assert withdrawn[2]["judgments_reset"] == [hand.item_id]
+    # A different file linked: received, for a person to judge. Never accepted.
+    third = hand.file()
+    hand.link(third)
+    assert (hand.item()["state"], hand.on_record()) == ("RECEIVED", ("NOT_REVIEWED", None))
+
+    # The same when the last file is replaced: a person's link is the old file's own.
+    assert hand.decide("INSUFFICIENT", "The approval date is missing.").status_code == 200
+    fourth = hand.file()
+    hand.link(fourth)
+    hand.unlink(third)
+    assert hand.replace(fourth).status_code == 200
+    assert (hand.item()["files"], hand.on_record()) == ([], ("NOT_REVIEWED", None))
+    assert resets()[1:] == [
+        (owner, {"sufficiency": "NOT_REVIEWED", "was": "INSUFFICIENT", "by": "FILE_REPLACED",
+                 "evidence_file_id": fourth}),
+    ]  # fmt: skip
+
+    # A record left by the earlier behaviour: an acceptance with no file under it. It is
+    # hidden while the item has none, and it is taken off as a file is linked.
+    with connect(case.database.url) as connection:
+        connection.execute(
+            "UPDATE evidence_requirements SET sufficiency = 'ACCEPTED', sufficiency_by = %s, "
+            "sufficiency_at = clock_timestamp() WHERE id = %s",
+            (owner, UUID(hand.item_id)),
+        )
+    assert hand.item()["state"] == "AWAITING_DEPENDENCY"
+    fifth = hand.file()
+    hand.link(fifth)
+    assert (hand.item()["state"], hand.on_record()) == ("RECEIVED", ("NOT_REVIEWED", None))
+    links = [row[2] for row in case.audit("evidence_requirement.file_linked", hand.item_id)]
+    assert [(link["judgment_reset"], link["judgment_was"]) for link in links] == [
+        (False, None), (False, None), (False, None), (False, None), (True, "ACCEPTED"),
+    ]  # fmt: skip
+    # Judged on the file now linked, it is accepted, and that file is then kept.
+    assert hand.decide("ACCEPTED").status_code == 200
+    assert hand.withdraw(fifth).status_code == 409
 
 
 def test_a_file_that_serves_no_item_leaves_the_request_to_go_out(migrated: Database) -> None:

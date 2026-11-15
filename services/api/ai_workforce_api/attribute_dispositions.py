@@ -614,31 +614,64 @@ def load(
 
 def signoff_facts(
     connection: psycopg.Connection[Any], control_id: UUID, since: datetime | None
-) -> tuple[bool, bool]:
+) -> tuple[tuple[UUID, ...], bool]:
     """What the D&I conclusion reads of a control's dispositions (design_conclusions;
     section 10.15, item 5), in one query, whatever the state of its requests' checks:
 
-    - whether one was recorded or ended after `since`, the time of the sign-off that
-      stands (never, where none stands): that puts the sign-off out of date;
+    - the attributes on which one was recorded or ended after `since`, the time of the
+      sign-off that stands (none, where none stands): that puts the sign-off out of date,
+      and the conclusion names them;
     - whether a person's EXCEPTION stands on any request, so that only a control with one
-      pays for reading which of its checks are current (design_workpaper.load_exceptions).
+      pays for reading them and their checks (design_workpaper.load_exceptions).
     """
 
-    def read() -> tuple[bool, bool]:
+    def read() -> tuple[tuple[UUID, ...], bool]:
         row = connection.execute(
             """
-            SELECT EXISTS (SELECT 1 FROM attribute_dispositions
-                           WHERE engagement_control_id = %s
-                             AND (recorded_at > %s OR ended_at > %s)),
+            SELECT (SELECT coalesce(array_agg(DISTINCT attribute_id), '{}'::uuid[])
+                    FROM attribute_dispositions
+                    WHERE engagement_control_id = %s
+                      AND (recorded_at > %s OR ended_at > %s)),
                    EXISTS (SELECT 1 FROM attribute_dispositions
                            WHERE engagement_control_id = %s
                              AND ended_at IS NULL AND kind = 'EXCEPTION')
             """,
             (control_id, since, since, control_id),
         ).fetchone()
-        return (False, False) if row is None else (bool(row[0]), bool(row[1]))
+        if row is None:
+            return (), False
+        return tuple(UUID(str(item)) for item in (row[0] or [])), bool(row[1])
 
-    return _where_recorded(connection, read, (False, False))
+    nothing: tuple[tuple[UUID, ...], bool] = ((), False)
+    return _where_recorded(connection, read, nothing)
+
+
+def exceptions_on_record(
+    connection: psycopg.Connection[Any], control_id: UUID
+) -> list[Disposition]:
+    """Every EXCEPTION a person recorded that stands on a D&I request of the control that
+    is not removed, as recorded, whatever the state of the request's check and whatever
+    the request's own state (waiting, requested, set aside as not applicable): what the
+    D&I conclusion is never signed over (design_conclusions; independent review of
+    section 10.15, 15 November 2026). An exception stands until a person reopens or
+    replaces it: no check ends it, and neither does its request's check going out of date,
+    failing or being held. One on a removed request is not read: the request is no longer
+    part of the control's evidence."""
+
+    def read() -> list[Disposition]:
+        rows = connection.execute(
+            f"""
+            SELECT {_COLUMNS} {_JOINS}
+            JOIN evidence_requirements q ON q.id = d.requirement_id
+            WHERE d.engagement_control_id = %s AND d.ended_at IS NULL
+              AND d.kind = 'EXCEPTION' AND q.phase = 'DESIGN' AND q.status <> 'REMOVED'
+            ORDER BY d.recorded_at, d.id
+            """,  # noqa: S608
+            (control_id,),
+        ).fetchall()
+        return [_disposition(row) for row in rows]
+
+    return _where_recorded(connection, read, [])
 
 
 # --- A person's acts ---------------------------------------------------------------------
@@ -1188,6 +1221,7 @@ __all__ = [
     "end_by_check",
     "end_for_annotation",
     "ending_by_check",
+    "exceptions_on_record",
     "history_for",
     "load",
     "not_current",

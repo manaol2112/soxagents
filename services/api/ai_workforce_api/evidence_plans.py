@@ -2104,18 +2104,33 @@ def queue_drafts(
 # proposal); a waived or removed request does not.
 LISTED_STATUSES: tuple[str, ...] = ("PLANNED", "AWAITING_DEPENDENCY", "REQUESTED")
 
-# An item whose evidence can be in hand without a request for it: planned, or waiting for
-# an earlier item (docs/evidence-assurance.md, section 10.15, item 3: an item that waits
-# with a file of its own is read and judged as a planned item with one).
-IN_HAND_STATUSES: tuple[str, ...] = ("PLANNED", "AWAITING_DEPENDENCY")
+# The phase in which an item that waits for an earlier one is judged once its own evidence
+# is in hand (docs/evidence-assurance.md, section 10.15, item 3). Only D&I: an interim or
+# roll-forward item that waits for its sample is never judged before the sample exists,
+# whatever file is linked to it (independent review of 10.15, 15 November 2026).
+WAITING_JUDGED_PHASE = "DESIGN"
+
+
+def in_hand_without_request(status: str, phase: str | None) -> bool:
+    """Whether an item of this status and phase can have its evidence in hand without a
+    request for it, and so be judged on a file of its own linked to it: a planned item of
+    any phase (a design file for an interim item, say), and an item that waits for an
+    earlier one in the D&I phase only (WAITING_JUDGED_PHASE). JUDGEABLE_SQL says the same
+    of `q`."""
+    return status == "PLANNED" or (
+        status == "AWAITING_DEPENDENCY" and phase == WAITING_JUDGED_PHASE
+    )
+
 
 # An item a person can judge (evidence_requirements as `q`): requested, or in hand without
-# a request, a file of its own linked to it. The one rule for set_sufficiency, for the
-# redraft of the design workpaper and a request's move to received once every such item
-# is accepted (_design_redraft, _received_when_accepted, evidence_receipts).
+# a request (in_hand_without_request), a file of its own linked to it. The one rule for
+# set_sufficiency, for the redraft of the design workpaper, a request's move to received
+# once every such item is accepted (_design_redraft, _received_when_accepted,
+# evidence_receipts), and for the file an item was accepted with, which is not withdrawn
+# or replaced (evidence_versions._accepted_with).
 JUDGEABLE_SQL = """
     (q.status = 'REQUESTED'
-     OR (q.status IN ('PLANNED', 'AWAITING_DEPENDENCY')
+     OR ((q.status = 'PLANNED' OR (q.status = 'AWAITING_DEPENDENCY' AND q.phase = 'DESIGN'))
          AND EXISTS (SELECT 1 FROM evidence_requirement_files jf
                      JOIN evidence_file_links jl
                        ON jl.evidence_file_id = jf.evidence_file_id
@@ -3614,23 +3629,29 @@ def requirement_state(
     sufficiency: str,
     has_evidence: bool = False,
     linked: bool = False,
+    phase: str | None = None,
 ) -> RequirementState:
     """Where one requirement stands. Receipt and sufficiency are separate: a file arriving
     makes it received, and only a person makes it accepted.
 
     A file filed to the request, or attached to a reply matched to it, counts as arrived
-    even before a person marks the request received (6.5: a reply never moves a request)."""
+    even before a person marks the request received (6.5: a reply never moves a request).
+
+    `phase` is the item's phase: an item that waits for an earlier one reads as a planned
+    item with a file only in the D&I phase (in_hand_without_request). In any other phase,
+    and where the phase is not given, it waits whatever is linked to it."""
     if status == "WAIVED":
         return "NOT_APPLICABLE"
     if status == "REMOVED":
         return "REMOVED"
-    if status == "AWAITING_DEPENDENCY" and not linked:
+    if status == "AWAITING_DEPENDENCY" and not (linked and in_hand_without_request(status, phase)):
         return "AWAITING_DEPENDENCY"
     if status in ("PLANNED", "AWAITING_DEPENDENCY") or request_status is None:
         # Not requested, but a file the control already holds was linked to it (a design
-        # file for an interim item, say): it has arrived, and a person judges it. An item
-        # that waits for an earlier one reads the same once a file of its own is linked
-        # (docs/evidence-assurance.md, section 10.15, item 3: it could never be accepted).
+        # file for an interim item, say): it has arrived, and a person judges it. A D&I
+        # item that waits for an earlier one reads the same once a file of its own is
+        # linked (docs/evidence-assurance.md, section 10.15, item 3: it could never be
+        # accepted); an interim or roll-forward item that waits for its sample does not.
         if linked:
             judged = ("ACCEPTED", "INSUFFICIENT", "FOLLOW_UP_REQUIRED", "UNDER_REVIEW")
             return sufficiency if sufficiency in judged else "RECEIVED"  # type: ignore[return-value]
@@ -4010,8 +4031,9 @@ def _requirements(connection: psycopg.Connection[Any], plan_id: UUID) -> list[Re
         # addition (`add`): the request is then not part of the plan until a person accepts.
         pending = {**r[26], "add": addition} if isinstance(r[26], dict) else None
         state = requirement_state(
-            str(r[15]), r[17], r[19], str(r[20]), bool(r[31]) or bool(r[32]), bool(r[32])
-        )
+            str(r[15]), r[17], r[19], str(r[20]), bool(r[31]) or bool(r[32]), bool(r[32]),
+            str(r[1]),
+        )  # fmt: skip
         mine = files.get(UUID(str(r[0])), [])
         # The planner's order: the first category is the primary one.
         categories = [c for c in r[5] if c in CATEGORIES]
@@ -5167,9 +5189,11 @@ def set_sufficiency(
             ).fetchone()
             is not None
         )
-        # Requested, or in hand without a request: planned, or waiting for an earlier
-        # item, with a file of its own linked (JUDGEABLE_SQL says the same of `q`).
-        judgeable = row[1] == "REQUESTED" or (row[1] in IN_HAND_STATUSES and linked)
+        # Requested, or in hand without a request: planned, or (D&I only) waiting for an
+        # earlier item, with a file of its own linked (JUDGEABLE_SQL says the same of `q`).
+        judgeable = row[1] == "REQUESTED" or (
+            linked and in_hand_without_request(str(row[1]), str(row[8]))
+        )
         if body.sufficiency != "NOT_REVIEWED" and (not judgeable or not arrived):
             raise PlanState("nothing has been received for this requirement yet")
         if body.sufficiency == "ACCEPTED" and not _has_own_evidence(cursor, requirement_id):
@@ -5319,6 +5343,87 @@ def _linked(cursor: psycopg.Cursor[Any], requirement_id: UUID) -> bool:
     )
 
 
+def unsupported_judgment(cursor: psycopg.Cursor[Any], requirement_id: UUID) -> str | None:
+    """The judgment on record for an item that no file of its own supports (the file it
+    was judged on went: withdrawn, replaced, or filed elsewhere), or None. Such a judgment
+    is hidden while the item has no file, and would read again, on a file nobody judged,
+    once another is linked (independent review of 10.15, 15 November 2026): an acceptance
+    of any item, and any judgment of an item in hand without a request (a requested item
+    found short with nothing of its own is a judgment of that, and stays). To be read
+    before a file is linked to the item; `reset_judgment` then takes it off the record."""
+    row = cursor.execute(
+        "SELECT status, phase, sufficiency FROM evidence_requirements WHERE id = %s",
+        (requirement_id,),
+    ).fetchone()
+    if row is None or row[2] == "NOT_REVIEWED":
+        return None
+    if row[2] != "ACCEPTED" and not in_hand_without_request(str(row[0]), str(row[1])):
+        return None
+    return None if _has_own_evidence(cursor, requirement_id) else str(row[2])
+
+
+def reset_judgment(cursor: psycopg.Cursor[Any], requirement_id: UUID) -> None:
+    """The item's judgment goes back to not reviewed (as unlinking its only file does);
+    the caller records why in its own audit event."""
+    cursor.execute(
+        """
+        UPDATE evidence_requirements
+        SET sufficiency = 'NOT_REVIEWED', sufficiency_note = '', sufficiency_by = NULL,
+            sufficiency_at = NULL, version = version + 1
+        WHERE id = %s
+        """,
+        (requirement_id,),
+    )
+
+
+JUDGMENT_RESET = "evidence_requirement.sufficiency_reset"
+
+
+def reset_judgments_left_without_file(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    file_id: UUID,
+    actor: UUID,
+    by: Literal["FILE_WITHDRAWN", "FILE_REPLACED"],
+) -> list[UUID]:
+    """After a file left (withdrawn or replaced, so it is no longer in force): each item it
+    was linked to that now has no file of its own loses the judgment on record
+    (`unsupported_judgment`), in the same transaction, with one audit event per item and
+    the person who moved the file as its actor. Before, the judgment stayed on record,
+    hidden, and read again as soon as a different file was linked. The file an item was
+    accepted with cannot leave at all (evidence_versions._accepted_with); this is for a
+    file that came after the acceptance. Returns the items reset."""
+    found: list[UUID] = []
+    for requirement_id, plan_id in cursor.execute(
+        """
+        SELECT q.id, q.plan_id FROM evidence_requirement_files ef
+        JOIN evidence_requirements q ON q.id = ef.requirement_id
+        WHERE ef.evidence_file_id = %s AND ef.project_id = %s AND ef.status = 'LINKED'
+          AND q.sufficiency <> 'NOT_REVIEWED'
+        ORDER BY q.plan_id, q.created_at, q.id
+        """,
+        (file_id, project_id),
+    ).fetchall():
+        # The plan's row, then the requirement, as every other writer takes them.
+        cursor.execute("SELECT 1 FROM evidence_plans WHERE id = %s FOR UPDATE", (plan_id,))
+        cursor.execute(
+            "SELECT 1 FROM evidence_requirements WHERE id = %s FOR UPDATE", (requirement_id,)
+        )
+        was = unsupported_judgment(cursor, UUID(str(requirement_id)))
+        if was is None:
+            continue
+        reset_judgment(cursor, UUID(str(requirement_id)))
+        _audit(
+            cursor, organization_id, project_id, actor, JUDGMENT_RESET,
+            "evidence_requirement", UUID(str(requirement_id)),
+            {"sufficiency": "NOT_REVIEWED", "was": was, "by": by,
+             "evidence_file_id": str(file_id)},
+        )  # fmt: skip
+        found.append(UUID(str(requirement_id)))
+    return found
+
+
 class LinkBody(BaseModel):
     file_id: UUID
     reason: str = Field(min_length=3, max_length=500)
@@ -5378,6 +5483,9 @@ def link_file(
             ).fetchone()
             if serves is None or serves[0]:
                 raise PlanState("the file already serves it through its request")
+        # Before the file is linked: a judgment on record that rests on no file of the
+        # item's own (its file went) is never carried onto this one.
+        reset = unsupported_judgment(cursor, requirement_id)
         saved = cursor.execute(
             """
             INSERT INTO evidence_requirement_files (
@@ -5398,6 +5506,8 @@ def link_file(
         ).fetchone()  # fmt: skip
         if saved is None:
             raise PlanState("the file already serves it")
+        if reset is not None:
+            reset_judgment(cursor, requirement_id)
         cursor.execute(
             "UPDATE evidence_requirements SET version = version + 1 WHERE id = %s",
             (requirement_id,),
@@ -5405,7 +5515,8 @@ def link_file(
         _audit(
             cursor, organization_id, project_id, actor, "evidence_requirement.file_linked",
             "evidence_requirement", requirement_id,
-            {"evidence_file_id": str(body.file_id), "link_id": str(saved[0])},
+            {"evidence_file_id": str(body.file_id), "link_id": str(saved[0]),
+             "judgment_reset": reset is not None, "judgment_was": reset},
         )  # fmt: skip
         if wizard is not None:
             # The wizard's placement follows the file (superseding, kept).

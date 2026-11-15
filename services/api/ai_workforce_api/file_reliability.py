@@ -522,21 +522,30 @@ def load(
     )
 
 
-def changed_since(connection: psycopg.Connection[Any], control_id: UUID, when: datetime) -> bool:
-    """Whether a decision on a file's reliability of the control was recorded or ended
-    after `when`: what puts a D&I sign-off made at that time out of date
-    (design_conclusions; docs/evidence-assurance.md, section 10.15, item 5)."""
+def changed_since(
+    connection: psycopg.Connection[Any], control_id: UUID, when: datetime
+) -> list[str]:
+    """The names of the files on which a decision on the file's reliability of the control
+    was recorded or ended after `when`, each once, in name order: what puts a D&I sign-off
+    made at that time out of date, and what the conclusion then names
+    (design_conclusions; docs/evidence-assurance.md, section 10.15, item 5). Empty where
+    none was."""
     return _where_recorded(
         connection,
-        lambda: (
-            connection.execute(
-                "SELECT 1 FROM file_reliability_decisions WHERE engagement_control_id = %s "
-                "AND (recorded_at > %s OR ended_at > %s) LIMIT 1",
+        lambda: [
+            str(row[0] or "")
+            for row in connection.execute(
+                """
+                SELECT DISTINCT f.file_name FROM evidence_files f
+                WHERE f.id IN (SELECT d.evidence_file_id FROM file_reliability_decisions d
+                               WHERE d.engagement_control_id = %s
+                                 AND (d.recorded_at > %s OR d.ended_at > %s))
+                ORDER BY f.file_name
+                """,
                 (control_id, when, when),
-            ).fetchone()
-            is not None
-        ),
-        False,
+            ).fetchall()
+        ],
+        [],
     )
 
 

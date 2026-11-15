@@ -46,8 +46,10 @@ Rules held here, whatever the records hold:
 - What a person's tickmarks settle is carried on (docs/evidence-assurance.md, section
   10.15): a check's follow-up whose attributes all carry a closing tickmark on that
   request is no longer a matter; a matter for a tickmark or a decision is never dropped
-  for room (considerations go first); the exceptions a person recorded that are read
-  here are what the D&I conclusion refuses to sign over (`exceptions_standing`); and the
+  for room (considerations go first); every exception a person recorded that stands on
+  a request of the control, whatever its check, is what the D&I conclusion refuses to
+  sign over (`exceptions_standing`, which says of each whether its check is current: one
+  on a check that is not current is not read into the attributes here); and the
   agent that drafts the workpaper is given the attributes as assembled here with the
   tickmarks and decisions (`drafter_record`), as bounded data.
 
@@ -78,7 +80,12 @@ from ai_workforce_api import (
 from ai_workforce_api import evidence_assurance as assurance
 from ai_workforce_api.assurance_facts import OutcomeStatus
 from ai_workforce_api.assurance_review import Assessment, _reliability, assessment_of
-from ai_workforce_api.attribute_dispositions import CLOSING, Disposition, standing_for
+from ai_workforce_api.attribute_dispositions import (
+    CLOSING,
+    Disposition,
+    exceptions_on_record,
+    standing_for,
+)
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -1059,24 +1066,43 @@ def disposition_matters(
 
 
 def exceptions_standing(
-    attributes: Sequence[AttributeRecord], applying: Mapping[UUID, Sequence[Disposition]]
+    attributes: Sequence[AttributeRecord],
+    exceptions: Sequence[Disposition],
+    checks: Mapping[UUID, CheckRecord],
 ) -> list[design_conclusions.ExceptionRef]:
-    """The exceptions a person recorded that are read (`dispositions_applying`: each on a
-    request whose check is current), in the attributes' order and, of one attribute, as
-    recorded. What the D&I conclusion refuses to sign over while no design deficiency
-    stands (design_conclusions; docs/evidence-assurance.md, section 10.15, item 5)."""
+    """What the D&I conclusion refuses to sign over while no design deficiency stands
+    (design_conclusions; docs/evidence-assurance.md, section 10.15, item 5): every
+    exception a person recorded that stands on a request of the control that is not
+    removed (`exceptions`: attribute_dispositions.exceptions_on_record), on an attribute
+    that is approved, in the attributes' order and, of one attribute, as recorded.
+
+    Whatever the state of the request's check: `check_current` says whether it has a
+    finished, current one (`checks`; a request with no file in force has none). Unlike
+    `dispositions_applying`, which reads a tickmark into the workpaper only on a current
+    check, nothing here waits for the check: an exception on a request that is out of
+    date, held, failed, queued, being read or set aside still keeps the conclusion from
+    being signed (independent review, 15 November 2026). One on an attribute that is no
+    longer approved is left out: the attribute is not part of what is concluded on, and
+    the exception counts again if the attribute is approved again."""
     found: list[design_conclusions.ExceptionRef] = []
     for attribute in attributes:
-        mine = [d for d in applying.get(attribute.id, ()) if d.kind == "EXCEPTION"]
+        mine = [
+            d
+            for d in exceptions
+            if d.attribute_id == attribute.id and d.kind == "EXCEPTION" and d.ended_at is None
+        ]
         for disposition in sorted(mine, key=lambda d: (d.recorded_at, str(d.id))):
+            check = checks.get(disposition.requirement_id)
             found.append(
                 design_conclusions.ExceptionRef(
+                    disposition_id=disposition.id,
                     attribute_id=attribute.id,
                     code=attribute.code,
                     requirement_id=disposition.requirement_id,
                     recorded_by_name=clean_line(disposition.recorded_by_name, DRAFTER_NAME),
                     recorded_at=disposition.recorded_at,
                     reason=disposition.reason,
+                    check_current=check is not None and check.current,
                 )
             )
     return found
@@ -2383,12 +2409,15 @@ def _records(
 def load_exceptions(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
 ) -> list[design_conclusions.ExceptionRef]:
-    """The exceptions a person recorded that stand on a current check of the control's D&I
-    requests (`exceptions_standing`), read for the D&I conclusion where the view itself is
-    not: only the requests, their checks and the dispositions are read. None for a control
-    that is not found."""
+    """The exceptions a person recorded that stand on the control's D&I requests, whatever
+    the state of each request's check (`exceptions_standing`), read for the D&I conclusion
+    where the view itself is not: only the exceptions, the requests and their checks are
+    read. None for a control that is not found, or with no exception standing."""
     control = assurance._control(connection, project_id, control_id)
     if control is None:
+        return []
+    excepted = exceptions_on_record(connection, control_id)
+    if not excepted:
         return []
     requests = assurance._requests(connection, project_id, control_id)
     approved = assurance._approved(connection, control_id)
@@ -2396,10 +2425,8 @@ def load_exceptions(
         connection, project_id, control_id, control, requests, approved,
         assurance._linked(connection, control_id),
     )  # fmt: skip
-    excepted = [d for d in standing_for(connection, control_id).values() if d.kind == "EXCEPTION"]
     return exceptions_standing(
-        [AttributeRecord(a[0], a[1], a[2]) for a in approved],
-        dispositions_applying(excepted, checks, ()),
+        [AttributeRecord(a[0], a[1], a[2]) for a in approved], excepted, checks
     )
 
 
@@ -2473,10 +2500,17 @@ def read_design_workpaper(
     stand = annotations_standing(annotations, requests, checks)
     applying = dispositions_applying(dispositions, checks, stand)
     recorded = disposition_matters(attributes, applying, stand, evidence)
-    # The D&I conclusion reads the exceptions a person recorded as this view reads them.
-    conclusion = design_conclusions._body(
-        connection, project_id, control_id, principal.id, exceptions_standing(attributes, applying)
+    # The D&I conclusion reads every exception a person recorded that stands on a request
+    # of the control, whatever its check: read only where one stands at all.
+    excepted = (
+        exceptions_on_record(connection, control_id)
+        if any(d.kind == "EXCEPTION" for d in dispositions)
+        else []
     )
+    conclusion = design_conclusions._body(
+        connection, project_id, control_id, principal.id,
+        exceptions_standing(attributes, excepted, checks),
+    )  # fmt: skip
     header = _section(content, "control")
     understanding = _text_section(content, _ACTIVITY_ROLES)
     signed = conclusion.signed

@@ -293,14 +293,23 @@ def _accepted_with(cursor: psycopg.Cursor[Any], file_id: UUID) -> str | None:
     it, filed for its request and not read as missing it, linked to it by a person, or
     shared to it from a sibling control, as the evidence plan counts an item's files) and
     already served when the person accepted it. A file that arrived after the acceptance
-    was not part of that decision."""
-    from ai_workforce_api.evidence_plans import request_file_serves, shared_from_sibling
+    was not part of that decision. The items are those a person can judge
+    (evidence_plans.JUDGEABLE_SQL): the requested ones, and an item in hand without a
+    request (planned, or a D&I item that waits for an earlier one) accepted on a file
+    linked to it. Before, only requested items were read, so the file such an item was
+    accepted with could be withdrawn or replaced with no refusal (independent review of
+    docs/evidence-assurance.md section 10.15, 15 November 2026)."""
+    from ai_workforce_api.evidence_plans import (
+        JUDGEABLE_SQL,
+        request_file_serves,
+        shared_from_sibling,
+    )
 
     row = cursor.execute(
         """
         SELECT q.title FROM evidence_requirements q
         JOIN evidence_files arrived ON arrived.id = %(file)s
-        WHERE q.status = 'REQUESTED' AND q.sufficiency = 'ACCEPTED'
+        WHERE {JUDGEABLE} AND q.sufficiency = 'ACCEPTED'
           -- An acceptance with no time (older records) is read as covering the file.
           AND (q.sufficiency_at IS NULL OR arrived.created_at <= q.sufficiency_at)
           AND (
@@ -316,9 +325,9 @@ def _accepted_with(cursor: psycopg.Cursor[Any], file_id: UUID) -> str | None:
                   AND (q.sufficiency_at IS NULL OR ef.linked_at <= q.sufficiency_at))
             OR EXISTS ({SHARED} AND f.id = %(file)s))
         ORDER BY q.created_at LIMIT 1
-        """.replace("{SERVES}", request_file_serves("l.evidence_file_id")).replace(
-            "{SHARED}", shared_from_sibling("1")
-        ),
+        """.replace("{SERVES}", request_file_serves("l.evidence_file_id"))
+        .replace("{SHARED}", shared_from_sibling("1"))
+        .replace("{JUDGEABLE}", JUDGEABLE_SQL),
         {"file": file_id},
     ).fetchone()
     return None if row is None else str(row[0])
@@ -416,6 +425,8 @@ def withdraw(
     file_id: UUID,
     reason: str,
 ) -> tuple[RegisterBody, list[UUID]]:
+    from ai_workforce_api.evidence_plans import reset_judgments_left_without_file
+
     _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
     _require_active(connection, organization_id, project_id)
     with transaction(connection) as cursor:
@@ -436,6 +447,12 @@ def withdraw(
             (organization_id, project_id, file_id, reason, principal.id),
         )
         mark_stale_for_file(cursor, file_id, "The file was withdrawn.", {})
+        # An item it was linked to that now has no file of its own loses its judgment on
+        # record: it never reads accepted again on a different file. Before the requests
+        # follow the evidence left, so they follow the judgments as they now stand.
+        reset = reset_judgments_left_without_file(
+            cursor, organization_id, project_id, file_id, principal.id, "FILE_WITHDRAWN"
+        )
         # The assurance chain's run of a request it was on is out of date, and the
         # request's other files are checked again without it.
         queue_safely(cursor, project_id, file_id, principal.id)
@@ -455,7 +472,7 @@ def withdraw(
         runs = _off_testing(cursor, project_id, control_id, file_id)
         _audit(
             cursor, organization_id, project_id, principal.id, "evidence.withdrawn", file_id,
-            {"reason": reason},
+            {"reason": reason, "judgments_reset": [str(item) for item in reset]},
         )  # fmt: skip
     return _register(connection, principal, organization_id, project_id, file_id), runs
 
@@ -520,6 +537,8 @@ def replace(
     content: bytes,
     reason: str,
 ) -> tuple[ReplacedBody, UUID | None, list[UUID]]:
+    from ai_workforce_api.evidence_plans import reset_judgments_left_without_file
+
     _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
     _require_active(connection, organization_id, project_id)
     digest = digest_of(content)
@@ -650,6 +669,11 @@ def replace(
         # The assurance chain's run of a request it was on is out of date; the new run
         # is queued when the new version has been read.
         queue_safely(cursor, project_id, file_id, principal.id)
+        # A person's link is the old file's own and is not carried to the new version: an
+        # item left with no file of its own loses its judgment on record.
+        reset = reset_judgments_left_without_file(
+            cursor, organization_id, project_id, file_id, principal.id, "FILE_REPLACED"
+        )
         runs = _off_testing(cursor, project_id, control_id, file_id)
         _audit(
             cursor, organization_id, project_id, principal.id, "evidence.uploaded", new_id,
@@ -657,7 +681,8 @@ def replace(
         )  # fmt: skip
         _audit(
             cursor, organization_id, project_id, principal.id, "evidence.replaced", file_id,
-            {"reason": reason, "replaced_by": str(new_id)},
+            {"reason": reason, "replaced_by": str(new_id),
+             "judgments_reset": [str(item) for item in reset]},
         )  # fmt: skip
         queued = queue_analysis(cursor, organization_id, project_id, new_id, principal.id)
     evidence = _register(connection, principal, organization_id, project_id, new_id)

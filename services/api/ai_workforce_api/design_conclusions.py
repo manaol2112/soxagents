@@ -13,15 +13,22 @@ It is now a sign-off of its own.
 - The sign-off stands while the records it rests on stand. Reopening the design workpaper
   opens the conclusion again. A newly logged or remediated design deficiency makes it out of
   date, and the reviewer signs again. A reviewer can open it again with a reason.
-- An exception a person recorded on an attribute (a tickmark of kind EXCEPTION, on a D&I
-  request whose check is current; docs/evidence-assurance.md, sections 10.13 and 10.15)
-  is never signed over as effective: while one stands and no design deficiency does, the
-  conclusion says so (`blocking`, one sentence per attribute) and the sign-off is refused
-  with it. With a design deficiency standing the rule above applies (not effective). A
-  tickmark, or a decision on a file's reliability, recorded or ended after the sign-off
-  puts it out of date; so does an exception that stands unanswered under a sign-off as
-  effective, however it came to (one kept while its request's check was not current,
-  which applies again once the request is checked again).
+- An exception a person recorded on an attribute (a tickmark of kind EXCEPTION;
+  docs/evidence-assurance.md, sections 10.13 and 10.15) is never signed over as
+  effective: while one stands and no design deficiency does, the conclusion says so
+  (`blocking`, one sentence per attribute) and the sign-off is refused with it. Every
+  exception standing on a D&I request of the control that is not removed, on an attribute
+  that is approved, counts, whatever the state of the request's check (current, out of
+  date, held, failed, queued, working, or the request set aside): a person's exception
+  stands until a person reopens or replaces it, and a file added to the request does not
+  take it out of the reviewer's way (independent review, 15 November 2026: one on a
+  request waiting to be checked again was signed over as effective). `exceptions` says of
+  each whether its request's check is current (`check_current`). With a design deficiency
+  standing the rule above applies (not effective). A tickmark, or a decision on a file's
+  reliability, recorded or ended after the sign-off puts it out of date, and the reason
+  names the attributes and the files; so does an exception that stands unanswered under
+  a sign-off as effective, however it came to (on a request restored after it was
+  removed, on an attribute approved again).
 
 `design_verdict` is what the OE gate reads: the verdict signed off and still current, or None.
 """
@@ -49,6 +56,7 @@ from ai_workforce_api.authorization import (
 )
 from ai_workforce_api.control_reviews import _is_reviewer, reopen_review_for
 from ai_workforce_api.db import transaction
+from ai_workforce_api.evidence_assurance import attribute_letter
 from ai_workforce_api.inbound import clean_line, clean_text
 from ai_workforce_api.settings import Settings
 
@@ -59,18 +67,70 @@ Status = Literal["NOT_READY", "TO_SIGN", "SIGNED_OFF", "OUT_OF_DATE"]
 _STANDING_DEFICIENCY = ("OPEN", "REMEDIATION_IN_PROGRESS", "READY_FOR_RETEST")
 
 # Why a standing sign-off no longer holds, of a person's tickmarks (section 10.15, item 5).
-TICKMARK_CHANGED = "a tickmark changed after the sign-off"
 EXCEPTION_UNANSWERED = (
     "an exception is recorded on an attribute and no design deficiency is logged for it"
 )
+# How many attributes or files a reason names before it says "and N more".
+NAMED_MOST = 3
+# A file's name in a reason: one cleaned line, bounded.
+FILE_NAME_LIMIT = 120
 
 
-def exception_sentence(code: str) -> str:
-    """What keeps a reviewer from signing while an exception a person recorded on the
-    attribute stands and no design deficiency does."""
+def _listed(names: Sequence[str], total: int) -> str:
+    """The first names (at most NAMED_MOST) of `total` things: "B", "A and B",
+    "A, B and C", "A, B, C and 2 more"."""
+    shown = list(names[:NAMED_MOST])
+    more = total - len(shown)
+    if more > 0:
+        return f"{', '.join(shown)} and {more} more"
+    return shown[0] if len(shown) == 1 else f"{', '.join(shown[:-1])} and {shown[-1]}"
+
+
+def tickmarks_changed(codes: Sequence[str], unlisted: int = 0) -> str:
+    """Why a sign-off no longer holds, where a tickmark was recorded, changed, reopened or
+    ended after it: the reason names the attributes, in their order, at most NAMED_MOST
+    and then how many more. `unlisted` counts those on an attribute that is no longer
+    approved (it has no letter)."""
+    total = len(codes) + unlisted
+    if not codes:
+        return (
+            "a tickmark on an attribute no longer approved changed after the sign-off"
+            if total == 1
+            else f"tickmarks on {total} attributes no longer approved changed after the sign-off"
+        )
+    shown = min(len(codes), NAMED_MOST)
     return (
-        f"An exception is recorded on attribute {code}. Log a design deficiency for it, "
-        "or change the tickmark with your reason."
+        f"{'a tickmark' if total == 1 else 'tickmarks'} on "
+        f"{'attribute' if shown == 1 else 'attributes'} {_listed(codes, total)} "
+        "changed after the sign-off"
+    )
+
+
+def decisions_changed(file_names: Sequence[str]) -> str:
+    """Why a sign-off no longer holds, where a decision on a file's reliability was
+    recorded, changed, reopened or ended after it: the reason names the files, at most
+    NAMED_MOST and then how many more."""
+    names = [clean_line(name, FILE_NAME_LIMIT).strip() or "a file" for name in file_names]
+    return (
+        f"the reliability {'decision' if len(names) == 1 else 'decisions'} on "
+        f"{_listed(names, len(names))} changed after the sign-off"
+    )
+
+
+def exception_sentence(code: str, check_current: bool = True) -> str:
+    """What keeps a reviewer from signing while an exception a person recorded on the
+    attribute stands and no design deficiency does. Where the request it is recorded on
+    has no current check (out of date, held, failed, queued, working, never checked), the
+    sentence says so: the tickmark is then not shown on the request until it is checked
+    again, and it is reopened, with a reason, rather than changed."""
+    if check_current:
+        return (
+            f"An exception is recorded on attribute {code}. Log a design deficiency for it, "
+            "or change the tickmark with your reason."
+        )
+    return (
+        f"An exception is recorded on attribute {code}, on a request waiting to be checked "
+        "again. Log a design deficiency for it, or reopen the tickmark with your reason."
     )
 
 
@@ -88,14 +148,20 @@ class DeficiencyRef(BaseModel):
 
 class ExceptionRef(BaseModel):
     """An exception a person recorded on an attribute (a tickmark of kind EXCEPTION) that
-    stands on a D&I request whose check is current. `reason` is the person's own text."""
+    stands on a D&I request of the control that is not removed. `reason` is the person's
+    own text. `disposition_id` is the tickmark's id, which reopening it names.
+    `check_current` is whether the request has a finished, current check: where it has
+    not, the tickmark is kept and not shown on the request until it is checked again, and
+    it still keeps the conclusion from being signed."""
 
+    disposition_id: UUID
     attribute_id: UUID
     code: str
     requirement_id: UUID
     recorded_by_name: str
     recorded_at: datetime
     reason: str
+    check_current: bool
 
 
 class DesignWorkpaperRef(BaseModel):
@@ -133,9 +199,10 @@ class DesignConclusionBody(BaseModel):
     out_of_date: list[str]
     # What keeps a reviewer from signing now.
     blocking: list[str]
-    # The exceptions a person recorded that stand on a current check of the control's D&I
-    # requests, in the attributes' order. While any stands and no design deficiency does,
-    # `blocking` carries one sentence per attribute and the sign-off is refused.
+    # The exceptions a person recorded that stand on the control's D&I requests (those not
+    # removed, on an approved attribute), in the attributes' order, whatever the state of
+    # each request's check (`check_current`). While any stands and no design deficiency
+    # does, `blocking` carries one sentence per attribute and the sign-off is refused.
     exceptions: list[ExceptionRef] = Field(default_factory=list)
     viewer_is_reviewer: bool
     viewer_prepared: bool
@@ -160,10 +227,10 @@ class _Facts:
     workpaper: tuple[Any, ...] | None
     deficiencies: list[DeficiencyRef]
     standing: tuple[Any, ...] | None
-    # A tickmark or a decision on a file's reliability of the control was recorded or
-    # ended after the standing sign-off.
-    tickmark_changed: bool = False
-    # The exceptions a person recorded that stand on a current check.
+    # What a person recorded or ended after the standing sign-off, each as the reason it
+    # gives: the tickmarks (by attribute), the decisions on files' reliability (by file).
+    changed: tuple[str, ...] = ()
+    # The exceptions a person recorded that stand, whatever their request's check.
     exceptions: tuple[ExceptionRef, ...] = ()
 
     @property
@@ -175,10 +242,15 @@ class _Facts:
     def unanswered(self) -> list[str]:
         """One sentence per attribute with an exception a person recorded, while no design
         deficiency stands: what keeps the conclusion from being signed. With a design
-        deficiency standing the records propose not effective, and nothing is said here."""
+        deficiency standing the records propose not effective, and nothing is said here.
+        An attribute's sentence says the request waits to be checked again only where none
+        of its exceptions is on a current check."""
         if self.deficiencies:
             return []
-        return [exception_sentence(code) for code in dict.fromkeys(e.code for e in self.exceptions)]
+        current: dict[str, bool] = {}
+        for exception in self.exceptions:
+            current[exception.code] = current.get(exception.code, False) or exception.check_current
+        return [exception_sentence(code, on_check) for code, on_check in current.items()]
 
     def out_of_date(self) -> list[str]:
         """Why the standing sign-off no longer holds (empty when it holds or none stands)."""
@@ -195,11 +267,13 @@ class _Facts:
             reasons.append("a design deficiency was logged after the sign-off")
         if signed - now:
             reasons.append("a design deficiency was remediated or closed after the sign-off")
-        if self.tickmark_changed:
-            reasons.append(TICKMARK_CHANGED)
+        if self.changed:
+            reasons.extend(self.changed)
         elif self.standing[2] == "EFFECTIVE" and self.unanswered():
-            # Nothing changed since, and still an exception stands unanswered: one kept
-            # while its request's check was not current, which applies again now.
+            # Nothing changed since, and still an exception stands unanswered under a
+            # sign-off as effective (its request was restored, its attribute approved
+            # again, or it was signed before every standing exception counted): the OE
+            # gate never reads a verdict signed over a standing exception.
             reasons.append(EXCEPTION_UNANSWERED)
         return reasons
 
@@ -207,12 +281,42 @@ class _Facts:
 def _exceptions(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
 ) -> list[ExceptionRef]:
-    """The exceptions a person recorded that stand on a current check of the control's D&I
-    requests, as the design workpaper reads them (design_workpaper imports this module, so
-    it is imported here)."""
+    """The exceptions a person recorded that stand on the control's D&I requests, each
+    with whether its request's check is current, as the design workpaper's view gives them
+    (design_workpaper imports this module, so it is imported here)."""
     from ai_workforce_api.design_workpaper import load_exceptions
 
     return load_exceptions(connection, project_id, control_id)
+
+
+def _changed(
+    connection: psycopg.Connection[Any],
+    control_id: UUID,
+    attribute_ids: Sequence[UUID],
+    signed_at: datetime | None,
+) -> tuple[str, ...]:
+    """What a person recorded or ended after the sign-off, as the reasons the conclusion
+    gives: the tickmarks, naming the attributes by their letters in the attributes' order
+    (the letters of the D&I list: evidence_assurance._approved), and the decisions on
+    files' reliability, naming the files."""
+    reasons: list[str] = []
+    if attribute_ids:
+        approved = [
+            UUID(str(row[0]))
+            for row in connection.execute(
+                "SELECT id FROM control_attributes WHERE engagement_control_id = %s "
+                "AND status = 'APPROVED' ORDER BY position, created_at",
+                (control_id,),
+            ).fetchall()
+        ]
+        changed = set(attribute_ids)
+        codes = [attribute_letter(at) for at, item in enumerate(approved) if item in changed]
+        reasons.append(tickmarks_changed(codes, len(changed) - len(codes)))
+    if signed_at is not None:
+        names = file_reliability.changed_since(connection, control_id, signed_at)
+        if names:
+            reasons.append(decisions_changed(names))
+    return tuple(reasons)
 
 
 def _facts(
@@ -222,10 +326,9 @@ def _facts(
     lock: bool = False,
     exceptions: Sequence[ExceptionRef] | None = None,
 ) -> _Facts:
-    """What the conclusion rests on. `exceptions` are the exceptions standing on a current
-    check where the caller has read them already (the design workpaper's view); otherwise
-    they are read here, and only for a control on which a person's exception stands at
-    all."""
+    """What the conclusion rests on. `exceptions` are the exceptions that stand where the
+    caller has read them already (the design workpaper's view); otherwise they are read
+    here, and only for a control on which a person's exception stands at all."""
     control = connection.execute(
         "SELECT organization_id FROM engagement_controls WHERE project_id = %s AND id = %s",
         (project_id, control_id),
@@ -263,9 +366,8 @@ def _facts(
         (project_id, control_id),
     ).fetchone()
     signed_at: datetime | None = None if standing is None else standing[4]
-    changed, excepted = attribute_dispositions.signoff_facts(connection, control_id, signed_at)
-    if signed_at is not None and not changed:
-        changed = file_reliability.changed_since(connection, control_id, signed_at)
+    marked, excepted = attribute_dispositions.signoff_facts(connection, control_id, signed_at)
+    changed = _changed(connection, control_id, marked, signed_at)
     if exceptions is None:
         exceptions = _exceptions(connection, project_id, control_id) if excepted else ()
     return _Facts(
