@@ -5511,8 +5511,10 @@ class AttributeBody(BaseModel):
     checks: list[CheckBody] = Field(default_factory=list)
     # A person's disposition of the attribute on this request (section 10.13): the one
     # that stands, or null; and the ended ones, newest first, at most 10. It changes
-    # nothing above: what the check found stays as it is beside it.
-    disposition: attribute_dispositions.DispositionBody | None = None
+    # nothing above: what the check found stays as it is beside it. The standing one says
+    # whether it was recorded on this run (`on_current_check`, section 10.15, item 9):
+    # false where it stands through a later check.
+    disposition: attribute_dispositions.StandingDispositionBody | None = None
     disposition_history: list[attribute_dispositions.EndedDispositionBody] = Field(
         default_factory=list
     )
@@ -5645,6 +5647,10 @@ class RequestBody(BaseModel):
     # carries a decision or a history. Empty unless the run is REVIEWED. It changes
     # nothing of the review: what the check found stays as it is beside it.
     file_reliability: list[FileReliabilityBody] = Field(default_factory=list)
+    # How many of a person's dispositions stand on the request, whatever the state of its
+    # check (section 10.15, item 8): 0 when none. A request whose check is not current
+    # shows no attribute, so this is how it says its tickmarks are kept.
+    tickmarks_kept: int = 0
 
 
 def check_failure_note(note: str) -> str:
@@ -5758,6 +5764,7 @@ def read_assurance(
                         request, control, attributes, linked
                     ).lens,
                     read_in_part=False, engine_version=ENGINE_VERSION,
+                    tickmarks_kept=dispositions.kept(request.requirement_id),
                 )
             )  # fmt: skip
             continue
@@ -5880,7 +5887,9 @@ def read_assurance(
                             for check in item.get("checks") or []
                             if isinstance(check, dict)
                         ],
-                        disposition=dispositions.standing(request.requirement_id, attribute_id),
+                        disposition=dispositions.standing(
+                            request.requirement_id, attribute_id, run.id
+                        ),
                         disposition_history=dispositions.history(
                             request.requirement_id, attribute_id
                         ),
@@ -5938,6 +5947,7 @@ def read_assurance(
                     file_reliability.review_order(review, run.file_ids),
                     names,
                 ),
+                tickmarks_kept=dispositions.kept(request.requirement_id),
             )
         )
     return AssuranceBody(requests=entries, summary=summary)

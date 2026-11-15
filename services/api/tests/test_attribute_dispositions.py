@@ -31,7 +31,10 @@ Audit integrity (critical tier):
   annotation or takes the attribute off it, and, for a file no longer in force, when the
   next check of the request finishes (a copied run included);
 - only a person who may decide evidence records or reopens: a Reviewer is refused, another
-  firm finds nothing, an agent is refused, and an archived engagement is read-only.
+  firm finds nothing, an agent is refused, and an archived engagement is read-only;
+- a request says how many tickmarks stand on it whatever the state of its check
+  (`tickmarks_kept`), and each standing one whether it was recorded on the request's
+  current check (`on_current_check`; section 10.15, items 8 and 9).
 """
 
 from collections.abc import Callable
@@ -82,6 +85,9 @@ DISPOSITION_KEYS = {
     "id", "kind", "reason", "relied_on", "annotation_id", "recorded_by_name", "recorded_at",
     "version",
 }  # fmt: skip
+# The standing one also says whether it was recorded on the request's current check
+# (section 10.15, item 9); an ended one does not.
+STANDING_KEYS = DISPOSITION_KEYS | {"on_current_check"}
 ENDED_KEYS = DISPOSITION_KEYS | {"ended_at", "ended_by_name", "ended_as", "ended_reason"}
 
 Plan = Callable[[str, dict[str, Any]], dict[str, Any]]
@@ -270,14 +276,19 @@ def test_each_kind_is_recorded_read_back_replaced_and_reopened_and_the_check_sta
     assert len(before["evidence_findings"]) == 3 and len(before["evidence_annotations"]) >= 2
 
     def stripped(entry: dict[str, Any]) -> dict[str, Any]:
-        """The entry without the two fields a disposition adds."""
-        return entry | {
+        """The entry without what a disposition adds: the two fields on each attribute
+        and the request's count of the tickmarks kept. Rewritten for section 10.15, item
+        8. Old: the two attribute fields only (the entry had no count). New: the count is
+        left out too, and asserted beside it. Why: the count is the dispositions' own; that
+        everything the check found is unchanged is asserted exactly as before."""
+        return {k: v for k, v in entry.items() if k != "tickmarks_kept"} | {
             "attributes": [
                 {k: v for k, v in a.items() if k not in ("disposition", "disposition_history")}
                 for a in entry["attributes"]
             ]
         }
 
+    assert bench.entry()["tickmarks_kept"] == 0
     as_checked = stripped(bench.entry())
 
     # Not applicable to this instance, on B.
@@ -287,15 +298,21 @@ def test_each_kind_is_recorded_read_back_replaced_and_reopened_and_the_check_sta
     # there unchanged, and the disposition is beside it.
     entry = done.json()
     assert entry == bench.entry() and stripped(entry) == as_checked
+    assert entry["tickmarks_kept"] == 1
     assert (entry["requirement_id"], entry["run_id"], entry["status"]) == (
         bench.item_id, run_id, "REVIEWED",
     )  # fmt: skip
     b = _by_code(entry)["B"]
     standing = b["disposition"]
-    assert set(standing) == DISPOSITION_KEYS and b["disposition_history"] == []
+    # Rewritten for section 10.15, item 9 (the shape grew). Old expectation: the standing
+    # disposition has exactly DISPOSITION_KEYS. New: those and `on_current_check`, true for
+    # one recorded on the request's current check. Why: a tickmark that stands through a
+    # later check must say so; every other field is asserted as before.
+    assert set(standing) == STANDING_KEYS and b["disposition_history"] == []
     assert standing | {"id": "", "recorded_at": ""} == {
         "id": "", "kind": "NOT_APPLICABLE", "reason": REASON, "relied_on": "",
         "annotation_id": None, "recorded_by_name": owner_name, "recorded_at": "", "version": 1,
+        "on_current_check": True,
     }  # fmt: skip
     assert (b["verdict"], b["finding_status"]) == ("ISSUE", "PROPOSED")
     for code, attribute in _by_code(entry).items():
@@ -1110,6 +1127,83 @@ def test_a_later_check_ends_each_kind_as_the_rule_says(migrated: Database, kind:
             outcome=outcome, in_force=[UUID(ticket)],
         ) == 0  # fmt: skip
     assert len(_events(bench, dispositions.ENDED_BY_CHECK)) == 2
+
+
+def test_a_request_says_how_many_tickmarks_are_kept_and_which_check_each_was_recorded_on(
+    migrated: Database,
+) -> None:
+    """Section 10.15, items 8 and 9. Before: a request whose check was not current gave no
+    attribute, so every tickmark on it was hidden and nothing said they were kept; and a
+    tickmark that stood through a later check read exactly as one recorded on it. Now each
+    request gives `tickmarks_kept` whatever the state of its check, and each standing
+    disposition says whether it was recorded on the request's current check."""
+    bench = _Bench(migrated, "ad-kept")
+    _ticket, first = _first_check(bench, B="ABSENT", C="ABSENT", D="ABSENT")
+    ids = _ids(first)
+    # None recorded yet: 0, never null or left out.
+    assert first["tickmarks_kept"] == 0
+    for code, kind in (("B", "NOT_APPLICABLE"), ("D", "EXCEPTION")):
+        assert _record(bench, ids[code], kind).status_code == 200
+    entry = bench.entry()
+    assert entry["tickmarks_kept"] == 2
+    recorded = _by_code(entry)
+    assert {code: recorded[code]["disposition"]["on_current_check"] for code in "BD"} == {
+        "B": True, "D": True,
+    }  # fmt: skip
+
+    # New evidence arrives. The check is not current, so no attribute is shown: the
+    # request still says both tickmarks are kept, and nothing was ended.
+    bench.add("sap change log.txt", LOG)
+    bench.read_next(_reading("change_history"))
+    waiting = bench.entry()
+    assert (waiting["status"], waiting["attributes"], waiting["tickmarks_kept"]) == (
+        "QUEUED", [], 2,
+    )  # fmt: skip
+    assert [r["ended_at"] for r in _rows(bench)] == [None, None]
+
+    # The later check finds B and D as before, so both stand through it: each says it was
+    # recorded on an earlier check.
+    second = _check(bench, B="ABSENT", C="ABSENT", D="ABSENT")
+    assert second["run_id"] != first["run_id"] and second["tickmarks_kept"] == 2
+    after = _by_code(second)
+    for code in "BD":
+        standing = after[code]["disposition"]
+        assert set(standing) == STANDING_KEYS
+        assert (standing["id"], standing["on_current_check"]) == (
+            recorded[code]["disposition"]["id"], False,
+        )  # fmt: skip
+    assert {r["assessment_id"] for r in _rows(bench)} == {first["run_id"]}
+
+    # Changed on the current check: the one that takes its place is recorded on it.
+    changed = _record(bench, ids["B"], "NOT_AVAILABLE", replaces=after["B"]["disposition"]["id"])
+    assert changed.status_code == 200, changed.text
+    now = _by_code(changed.json())
+    assert now["B"]["disposition"]["on_current_check"] is True
+    assert now["D"]["disposition"]["on_current_check"] is False
+    # One stands per attribute: the replaced one is history, not kept twice.
+    assert changed.json()["tickmarks_kept"] == 2
+    assert set(now["B"]["disposition_history"][0]) == ENDED_KEYS
+
+    # Reopened: one fewer is kept.
+    reopened = _reopen(bench, ids["D"], now["D"]["disposition"]["id"])
+    assert reopened.status_code == 200, reopened.text
+    assert reopened.json()["tickmarks_kept"] == 1
+
+    # What the check read changes: the request is out of date and shows no attribute, and
+    # the tickmark that stands is still counted as kept, on its row as it was.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "DELETE FROM evidence_requirement_attributes WHERE requirement_id = %s "
+            "AND attribute_id = %s",
+            (UUID(bench.item_id), UUID(ids["A"])),
+        )
+    stale = bench.entry()
+    assert (stale["status"], stale["attributes"], stale["tickmarks_kept"]) == (
+        "OUT_OF_DATE", [], 1,
+    )  # fmt: skip
+    assert [(r["kind"], r["ended_as"]) for r in _rows(bench)] == [
+        ("NOT_APPLICABLE", "REPLACED"), ("EXCEPTION", "REOPENED"), ("NOT_AVAILABLE", None),
+    ]  # fmt: skip
 
 
 def test_shown_on_my_review_ends_with_its_annotation(migrated: Database) -> None:

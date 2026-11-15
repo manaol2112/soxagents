@@ -838,11 +838,14 @@ def _evidence_left(cursor: psycopg.Cursor[Any], request_id: UUID) -> bool:
 
 
 def _every_item_accepted(cursor: psycopg.Cursor[Any], request_id: UUID) -> bool:
-    """Whether a person accepted every requested item: such a request stays received
-    (evidence_plans._received_when_accepted)."""
+    """Whether a person accepted every item of the request they can judge (the requested
+    ones, and one in hand without being requested: evidence_plans.JUDGEABLE_SQL): such a
+    request stays received (evidence_plans._received_when_accepted, the same count)."""
+    from ai_workforce_api.evidence_plans import JUDGEABLE_SQL
+
     row = cursor.execute(
-        "SELECT count(*), count(*) FILTER (WHERE sufficiency = 'ACCEPTED') "
-        "FROM evidence_requirements WHERE pbc_request_id = %s AND status = 'REQUESTED'",
+        "SELECT count(*), count(*) FILTER (WHERE q.sufficiency = 'ACCEPTED') "
+        f"FROM evidence_requirements q WHERE q.pbc_request_id = %s AND {JUDGEABLE_SQL}",
         (request_id,),
     ).fetchone()
     return row is not None and int(row[0]) > 0 and int(row[0]) == int(row[1])

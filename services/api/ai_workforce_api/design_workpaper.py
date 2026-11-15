@@ -43,6 +43,13 @@ Rules held here, whatever the records hold:
   relied on reads as the check found it, never with an agreed or compared mark, and is an
   open matter. Each decision is a noted matter, and the check's own sentence about a
   decided file's reliability no longer waits on a person.
+- What a person's tickmarks settle is carried on (docs/evidence-assurance.md, section
+  10.15): a check's follow-up whose attributes all carry a closing tickmark on that
+  request is no longer a matter; a matter for a tickmark or a decision is never dropped
+  for room (considerations go first); the exceptions a person recorded that are read
+  here are what the D&I conclusion refuses to sign over (`exceptions_standing`); and the
+  agent that drafts the workpaper is given the attributes as assembled here with the
+  tickmarks and decisions (`drafter_record`), as bounded data.
 
 The first part is pure (no database): the records as plain values in, the response's
 parts out. The loader then reads each kind of record once for the control.
@@ -137,6 +144,16 @@ SENTENCE_LIMIT = 600
 DISPOSITION_LIMIT = 2000
 NAME_LIMIT = 200
 CELL_LIMIT = 1000
+# What the agent that drafts the workpaper is given of the assembled results (section
+# 10.15, item 6): how many of each, and how much of each text.
+DRAFTER_ATTRIBUTES = 26
+DRAFTER_TICKMARKS = 30
+DRAFTER_DECISIONS = 20
+DRAFTER_WORDING = 200
+DRAFTER_BASIS = 400
+DRAFTER_REASON = 400
+DRAFTER_RELIED_ON = 200
+DRAFTER_NAME = 120
 
 # Across requests the most cautious reading stands (section 2): an exception the records
 # show on any check; then what any current check of a request that asks for the attribute
@@ -1041,6 +1058,109 @@ def disposition_matters(
     return found
 
 
+def exceptions_standing(
+    attributes: Sequence[AttributeRecord], applying: Mapping[UUID, Sequence[Disposition]]
+) -> list[design_conclusions.ExceptionRef]:
+    """The exceptions a person recorded that are read (`dispositions_applying`: each on a
+    request whose check is current), in the attributes' order and, of one attribute, as
+    recorded. What the D&I conclusion refuses to sign over while no design deficiency
+    stands (design_conclusions; docs/evidence-assurance.md, section 10.15, item 5)."""
+    found: list[design_conclusions.ExceptionRef] = []
+    for attribute in attributes:
+        mine = [d for d in applying.get(attribute.id, ()) if d.kind == "EXCEPTION"]
+        for disposition in sorted(mine, key=lambda d: (d.recorded_at, str(d.id))):
+            found.append(
+                design_conclusions.ExceptionRef(
+                    attribute_id=attribute.id,
+                    code=attribute.code,
+                    requirement_id=disposition.requirement_id,
+                    recorded_by_name=clean_line(disposition.recorded_by_name, DRAFTER_NAME),
+                    recorded_at=disposition.recorded_at,
+                    reason=disposition.reason,
+                )
+            )
+    return found
+
+
+def closed_by_tickmark(
+    applying: Mapping[UUID, Sequence[Disposition]],
+) -> dict[UUID, frozenset[UUID]]:
+    """Per request, the attributes that carry a closing tickmark on it (of
+    `dispositions_applying`): what a follow-up of that request's check no longer waits
+    for (`matters_of`)."""
+    found: dict[UUID, set[UUID]] = {}
+    for attribute_id, dispositions in applying.items():
+        for disposition in dispositions:
+            if disposition.kind in CLOSING:
+                found.setdefault(disposition.requirement_id, set()).add(attribute_id)
+    return {requirement_id: frozenset(closed) for requirement_id, closed in found.items()}
+
+
+def _quoted(text: str, limit: int) -> str:
+    """A person's or a check's text as the drafter is given it: one cleaned line, bounded."""
+    return clean_line(text, limit).strip()
+
+
+def drafter_record_of(
+    shown: Sequence[AttributeBody],
+    applying: Mapping[UUID, Sequence[Disposition]],
+    decisions: Sequence[FileDecision],
+    requests: Sequence[RequestRecord],
+) -> dict[str, Any] | None:
+    """What the agent that drafts the design workpaper is given so that its text does not
+    contradict the records (section 10.15, item 6): each attribute as assembled here (its
+    state in words and its sentence), the tickmarks that are read (`dispositions_applying`)
+    and the decisions on files' reliability that are read (`decisions_applying`). Every
+    text is one cleaned line, bounded, and every list is bounded: the person's reason is
+    untrusted text, given as data. None where there is nothing to give."""
+    names = {file.file_id: file.file_name for request in requests for file in request.files}
+    attributes = [
+        {
+            "attribute": attribute.code,
+            "wording": _quoted(attribute.text, DRAFTER_WORDING),
+            "result": attribute.state_words,
+            "basis": _quoted(attribute.basis, DRAFTER_BASIS),
+        }
+        for attribute in shown[:DRAFTER_ATTRIBUTES]
+    ]
+    tickmarks: list[dict[str, Any]] = []
+    for attribute in shown:
+        for disposition in sorted(
+            applying.get(attribute.id, ()), key=lambda d: (d.recorded_at, str(d.id))
+        ):
+            tickmarks.append(
+                {
+                    "attribute": attribute.code,
+                    "tickmark": EXCEPTION_RECORDED_WORDS
+                    if disposition.kind == "EXCEPTION"
+                    else DISPOSITION_WORDS[disposition.kind],
+                    "closes_the_attribute": disposition.kind in CLOSING,
+                    "recorded_by": _quoted(disposition.recorded_by_name, DRAFTER_NAME),
+                    "recorded_on": _day(disposition.recorded_at),
+                    "reason": _quoted(disposition.reason, DRAFTER_REASON),
+                    "relied_on": _quoted(disposition.relied_on, DRAFTER_RELIED_ON),
+                }
+            )
+    file_decisions = [
+        {
+            "file": _quoted(names.get(decision.file_id, "A file"), DRAFTER_NAME),
+            "decision": RELIABILITY_WORDS[decision.kind],
+            "recorded_by": _quoted(decision.recorded_by_name, DRAFTER_NAME),
+            "recorded_on": _day(decision.recorded_at),
+            "reason": _quoted(decision.reason, DRAFTER_REASON),
+            "relied_on": _quoted(decision.relied_on, DRAFTER_RELIED_ON),
+        }
+        for decision in sorted(decisions, key=lambda d: (d.recorded_at, str(d.id)))
+    ]
+    if not attributes and not tickmarks and not file_decisions:
+        return None
+    return {
+        "attributes": attributes,
+        "tickmarks": tickmarks[:DRAFTER_TICKMARKS],
+        "file_reliability_decisions": file_decisions[:DRAFTER_DECISIONS],
+    }
+
+
 # --- A person's decisions on a file's reliability (evidence-assurance.md, 10.14) --------
 
 # The decision's words in the workpaper: the person's "on my review" said of the auditor.
@@ -1611,6 +1731,7 @@ def matters_of(
     more_files: int = 0,
     dispositions: Sequence[MatterBody] = (),
     decisions: Sequence[FileDecision] = (),
+    closed: Mapping[UUID, frozenset[UUID]] | None = None,
 ) -> list[MatterBody]:
     """What a reviewer should see first, from the records. First, a check that is out of
     date. Then what waits on a person: open findings, an exception a person recorded,
@@ -1619,7 +1740,12 @@ def matters_of(
     incomplete or not yet reliable, and the checks' follow-ups. Then what is noted (each
     disposition a person recorded, files left out by purpose, considerations), and one
     note that operating effectiveness is tested separately. At most MAX_MATTERS: where
-    there are more, the last line before the note counts them. `readings` are the checks'
+    there are more, the last line before the note counts them; a matter for a tickmark or
+    a decision (`dispositions`) is never one of those left out, considerations are left
+    out first, then the last of the rest (so the list is longer than MAX_MATTERS only
+    where the tickmarks and decisions alone are). A check's follow-up whose attributes all
+    carry a closing tickmark on that request (`closed`, of `closed_by_tickmark`) is not a
+    matter: the person's tickmark answered it. `readings` are the checks'
     words left to the checks (`attributes_of`), and `dispositions` the matters of the
     dispositions that are read (`disposition_matters`, and `decision_matters`). A person's
     decision on a file's reliability (`decisions`, of `decisions_applying`) settles the
@@ -1769,9 +1895,14 @@ def matters_of(
                     state="OPEN", kind="COMPLETENESS", text=text, refs=_refs(about, evidence)
                 )
             )
-    for _request, check in current:
+    for request, check in current:
         assert check.review is not None
+        answered = (closed or {}).get(request.requirement_id, frozenset())
         for follow_up in check.review.follow_ups:
+            # Every attribute it asks about carries a closing tickmark on this request:
+            # the tickmark's own matter says so, and nothing more waits for it.
+            if follow_up.attribute_ids and all(a in answered for a in follow_up.attribute_ids):
+                continue
             waiting.append(
                 MatterBody(
                     state="OPEN",
@@ -1803,7 +1934,19 @@ def matters_of(
     kept = [matter for matter in (*waiting, *noted) if matter.text]
     room = MAX_MATTERS - 1
     if len(kept) > room:
-        kept = [*kept[: room - 1], _not_listed(kept[room - 1 :])]
+        # One line counts what is left out. Never a tickmark's or a decision's own matter:
+        # the considerations go first, from the last, then the last of the rest.
+        considerations = [
+            at for at, m in enumerate(kept) if m.kind == "CONSIDERATION" and m.state == "NOTED"
+        ]
+        others = [
+            at for at, m in enumerate(kept) if m.kind != "DISPOSITION" and at not in considerations
+        ]
+        leaving = set([*reversed(considerations), *reversed(others)][: len(kept) - (room - 1)])
+        dropped = [matter for at, matter in enumerate(kept) if at in leaving]
+        kept = [matter for at, matter in enumerate(kept) if at not in leaving]
+        if dropped:
+            kept.append(_not_listed(dropped))
     return [*kept, MatterBody(state="NOTED", kind="NOTE", text=SEPARATE_NOTE)]
 
 
@@ -2173,19 +2316,30 @@ def _area(row: _ControlRow, content: Content | None) -> str:
     return KIND_LABELS.get(kind, "")
 
 
-def read_design_workpaper(
+@dataclass(frozen=True)
+class _Records:
+    """What the view assembles from, each kind of record read once for the control."""
+
+    order: list[UUID]
+    file_ids: list[UUID]
+    requests: list[RequestRecord]
+    checks: dict[UUID, CheckRecord]
+    attributes: list[AttributeRecord]
+    annotations: list[AnnotationRecord]
+    # A person's decisions on the files' reliability (docs/evidence-assurance.md, section
+    # 10.14): those standing on the control, of which those that apply.
+    decisions: list[FileDecision]
+    # A person's dispositions of the attributes (section 10.13): those standing on the
+    # control.
+    dispositions: list[Disposition]
+
+
+def _records(
     connection: psycopg.Connection[Any],
-    principal: Principal,
-    organization_id: UUID,
     project_id: UUID,
     control_id: UUID,
-) -> DesignWorkpaperBody:
-    """The D&I workpaper of a control as its views read it. The caller has authorized the
-    read; a control of another engagement or organization is not found."""
-    row = _control_row(connection, organization_id, project_id, control_id)
-    control = assurance._Control(
-        row.organization_id, row.control_ref, row.title, row.activity, row.domain
-    )
+    control: assurance._Control,
+) -> _Records:
     order = _list_order(connection, project_id, control_id)
     place = {requirement_id: index for index, requirement_id in enumerate(order)}
     loaded = sorted(
@@ -2210,11 +2364,92 @@ def read_design_workpaper(
         )
         for request in loaded
     ]
-    annotations = load_annotations(connection, project_id, control_id)
-    findings = load_findings(connection, project_id, control_id, order, file_ids)
+    return _Records(
+        order=order,
+        file_ids=file_ids,
+        requests=requests,
+        checks=checks,
+        attributes=[AttributeRecord(a[0], a[1], a[2]) for a in approved],
+        annotations=load_annotations(connection, project_id, control_id),
+        decisions=decisions_applying(
+            list(file_reliability.standing_for(connection, control_id).values()),
+            checks,
+            requests,
+        ),
+        dispositions=list(standing_for(connection, control_id).values()),
+    )
+
+
+def load_exceptions(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> list[design_conclusions.ExceptionRef]:
+    """The exceptions a person recorded that stand on a current check of the control's D&I
+    requests (`exceptions_standing`), read for the D&I conclusion where the view itself is
+    not: only the requests, their checks and the dispositions are read. None for a control
+    that is not found."""
+    control = assurance._control(connection, project_id, control_id)
+    if control is None:
+        return []
+    requests = assurance._requests(connection, project_id, control_id)
+    approved = assurance._approved(connection, control_id)
+    checks = load_checks(
+        connection, project_id, control_id, control, requests, approved,
+        assurance._linked(connection, control_id),
+    )  # fmt: skip
+    excepted = [d for d in standing_for(connection, control_id).values() if d.kind == "EXCEPTION"]
+    return exceptions_standing(
+        [AttributeRecord(a[0], a[1], a[2]) for a in approved],
+        dispositions_applying(excepted, checks, ()),
+    )
+
+
+def drafter_record(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> dict[str, Any] | None:
+    """What the agent that drafts the control's design workpaper is given of the assembled
+    results (`drafter_record_of`), from the same records and by the same rules as the
+    view. None for a control that is not found, or with nothing to give."""
+    control = assurance._control(connection, project_id, control_id)
+    if control is None:
+        return None
+    records = _records(connection, project_id, control_id, control)
+    evidence, _more = evidence_index(
+        records.requests, records.checks, records.annotations, records.decisions
+    )
+    shown, _readings = attributes_of(
+        records.attributes, records.requests, records.checks, records.annotations, evidence,
+        None, records.dispositions, records.decisions,
+    )  # fmt: skip
+    stand = annotations_standing(records.annotations, records.requests, records.checks)
+    return drafter_record_of(
+        shown,
+        dispositions_applying(records.dispositions, records.checks, stand),
+        records.decisions,
+        records.requests,
+    )
+
+
+def read_design_workpaper(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+) -> DesignWorkpaperBody:
+    """The D&I workpaper of a control as its views read it. The caller has authorized the
+    read; a control of another engagement or organization is not found."""
+    row = _control_row(connection, organization_id, project_id, control_id)
+    control = assurance._Control(
+        row.organization_id, row.control_ref, row.title, row.activity, row.domain
+    )
+    records = _records(connection, project_id, control_id, control)
+    requests, checks, attributes = records.requests, records.checks, records.attributes
+    annotations, decisions, dispositions = (
+        records.annotations, records.decisions, records.dispositions,
+    )  # fmt: skip
+    findings = load_findings(connection, project_id, control_id, records.order, records.file_ids)
     paper = _design_workpaper(connection, project_id, control_id)
     content = None if paper is None else paper.content
-    conclusion = design_conclusions._body(connection, project_id, control_id, principal.id)
     may_update = principal.kind is PrincipalKind.USER and permits(
         connection,
         principal=principal,
@@ -2223,17 +2458,8 @@ def read_design_workpaper(
         project_id=project_id,
     )
 
-    attributes = [AttributeRecord(a[0], a[1], a[2]) for a in approved]
-    # A person's decisions on the files' reliability (docs/evidence-assurance.md, section
-    # 10.14): those standing on the control, read once, of which those that apply.
-    decisions = decisions_applying(
-        list(file_reliability.standing_for(connection, control_id).values()), checks, requests
-    )
     evidence, more = evidence_index(requests, checks, annotations, decisions)
     walkthrough = walkthrough_of(_section(content, "walkthrough-of-one-instance"), evidence)
-    # A person's dispositions of the attributes (docs/evidence-assurance.md, section
-    # 10.13): those standing on the control, read once.
-    dispositions = list(standing_for(connection, control_id).values())
     shown, readings = attributes_of(
         attributes,
         requests,
@@ -2245,8 +2471,11 @@ def read_design_workpaper(
         decisions,
     )
     stand = annotations_standing(annotations, requests, checks)
-    recorded = disposition_matters(
-        attributes, dispositions_applying(dispositions, checks, stand), stand, evidence
+    applying = dispositions_applying(dispositions, checks, stand)
+    recorded = disposition_matters(attributes, applying, stand, evidence)
+    # The D&I conclusion reads the exceptions a person recorded as this view reads them.
+    conclusion = design_conclusions._body(
+        connection, project_id, control_id, principal.id, exceptions_standing(attributes, applying)
     )
     header = _section(content, "control")
     understanding = _text_section(content, _ACTIVITY_ROLES)
@@ -2313,6 +2542,7 @@ def read_design_workpaper(
             more,
             [*recorded, *decision_matters(decisions, requests, evidence)],
             decisions,
+            closed_by_tickmark(applying),
         ),  # fmt: skip
         conclusion=conclusion_of(
             _text_section(content, ("design-conclusion",), "conclusion"), conclusion
@@ -2370,16 +2600,21 @@ __all__ = [
     "attribute_notes",
     "attributes_of",
     "can_edit_sections",
+    "closed_by_tickmark",
     "conclusion_of",
     "decision_matters",
     "decisions_applying",
     "disposition_basis",
     "disposition_matters",
     "dispositions_applying",
+    "drafter_record",
+    "drafter_record_of",
     "established_sentence",
     "evidence_index",
+    "exceptions_standing",
     "first_date",
     "legend",
+    "load_exceptions",
     "marks_of",
     "matters_of",
     "named_files",

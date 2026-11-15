@@ -13,11 +13,20 @@ It is now a sign-off of its own.
 - The sign-off stands while the records it rests on stand. Reopening the design workpaper
   opens the conclusion again. A newly logged or remediated design deficiency makes it out of
   date, and the reviewer signs again. A reviewer can open it again with a reason.
+- An exception a person recorded on an attribute (a tickmark of kind EXCEPTION, on a D&I
+  request whose check is current; docs/evidence-assurance.md, sections 10.13 and 10.15)
+  is never signed over as effective: while one stands and no design deficiency does, the
+  conclusion says so (`blocking`, one sentence per attribute) and the sign-off is refused
+  with it. With a design deficiency standing the rule above applies (not effective). A
+  tickmark, or a decision on a file's reliability, recorded or ended after the sign-off
+  puts it out of date; so does an exception that stands unanswered under a sign-off as
+  effective, however it came to (one kept while its request's check was not current,
+  which applies again once the request is checked again).
 
 `design_verdict` is what the OE gate reads: the verdict signed off and still current, or None.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
@@ -28,7 +37,7 @@ from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field
 
-from ai_workforce_api import independence
+from ai_workforce_api import attribute_dispositions, file_reliability, independence
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -49,6 +58,21 @@ Status = Literal["NOT_READY", "TO_SIGN", "SIGNED_OFF", "OUT_OF_DATE"]
 # A design deficiency counts against the design until it is remediated or closed.
 _STANDING_DEFICIENCY = ("OPEN", "REMEDIATION_IN_PROGRESS", "READY_FOR_RETEST")
 
+# Why a standing sign-off no longer holds, of a person's tickmarks (section 10.15, item 5).
+TICKMARK_CHANGED = "a tickmark changed after the sign-off"
+EXCEPTION_UNANSWERED = (
+    "an exception is recorded on an attribute and no design deficiency is logged for it"
+)
+
+
+def exception_sentence(code: str) -> str:
+    """What keeps a reviewer from signing while an exception a person recorded on the
+    attribute stands and no design deficiency does."""
+    return (
+        f"An exception is recorded on attribute {code}. Log a design deficiency for it, "
+        "or change the tickmark with your reason."
+    )
+
 
 class DesignConclusionState(Exception):
     def __init__(self, detail: str) -> None:
@@ -60,6 +84,18 @@ class DeficiencyRef(BaseModel):
     reference: str
     title: str
     status: str
+
+
+class ExceptionRef(BaseModel):
+    """An exception a person recorded on an attribute (a tickmark of kind EXCEPTION) that
+    stands on a D&I request whose check is current. `reason` is the person's own text."""
+
+    attribute_id: UUID
+    code: str
+    requirement_id: UUID
+    recorded_by_name: str
+    recorded_at: datetime
+    reason: str
 
 
 class DesignWorkpaperRef(BaseModel):
@@ -97,6 +133,10 @@ class DesignConclusionBody(BaseModel):
     out_of_date: list[str]
     # What keeps a reviewer from signing now.
     blocking: list[str]
+    # The exceptions a person recorded that stand on a current check of the control's D&I
+    # requests, in the attributes' order. While any stands and no design deficiency does,
+    # `blocking` carries one sentence per attribute and the sign-off is refused.
+    exceptions: list[ExceptionRef] = Field(default_factory=list)
     viewer_is_reviewer: bool
     viewer_prepared: bool
     independence_required: bool
@@ -120,12 +160,25 @@ class _Facts:
     workpaper: tuple[Any, ...] | None
     deficiencies: list[DeficiencyRef]
     standing: tuple[Any, ...] | None
+    # A tickmark or a decision on a file's reliability of the control was recorded or
+    # ended after the standing sign-off.
+    tickmark_changed: bool = False
+    # The exceptions a person recorded that stand on a current check.
+    exceptions: tuple[ExceptionRef, ...] = ()
 
     @property
     def proposed(self) -> Verdict | None:
         if self.workpaper is None or self.workpaper[1] != "PREPARED":
             return None
         return "NOT_EFFECTIVE" if self.deficiencies else "EFFECTIVE"
+
+    def unanswered(self) -> list[str]:
+        """One sentence per attribute with an exception a person recorded, while no design
+        deficiency stands: what keeps the conclusion from being signed. With a design
+        deficiency standing the records propose not effective, and nothing is said here."""
+        if self.deficiencies:
+            return []
+        return [exception_sentence(code) for code in dict.fromkeys(e.code for e in self.exceptions)]
 
     def out_of_date(self) -> list[str]:
         """Why the standing sign-off no longer holds (empty when it holds or none stands)."""
@@ -142,12 +195,37 @@ class _Facts:
             reasons.append("a design deficiency was logged after the sign-off")
         if signed - now:
             reasons.append("a design deficiency was remediated or closed after the sign-off")
+        if self.tickmark_changed:
+            reasons.append(TICKMARK_CHANGED)
+        elif self.standing[2] == "EFFECTIVE" and self.unanswered():
+            # Nothing changed since, and still an exception stands unanswered: one kept
+            # while its request's check was not current, which applies again now.
+            reasons.append(EXCEPTION_UNANSWERED)
         return reasons
 
 
+def _exceptions(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> list[ExceptionRef]:
+    """The exceptions a person recorded that stand on a current check of the control's D&I
+    requests, as the design workpaper reads them (design_workpaper imports this module, so
+    it is imported here)."""
+    from ai_workforce_api.design_workpaper import load_exceptions
+
+    return load_exceptions(connection, project_id, control_id)
+
+
 def _facts(
-    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, lock: bool = False
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    control_id: UUID,
+    lock: bool = False,
+    exceptions: Sequence[ExceptionRef] | None = None,
 ) -> _Facts:
+    """What the conclusion rests on. `exceptions` are the exceptions standing on a current
+    check where the caller has read them already (the design workpaper's view); otherwise
+    they are read here, and only for a control on which a person's exception stands at
+    all."""
     control = connection.execute(
         "SELECT organization_id FROM engagement_controls WHERE project_id = %s AND id = %s",
         (project_id, control_id),
@@ -177,14 +255,22 @@ def _facts(
     ]
     standing = connection.execute(
         """
-        SELECT id, workpaper_version, verdict, deficiencies
+        SELECT id, workpaper_version, verdict, deficiencies, signed_at
         FROM design_conclusions
         WHERE project_id = %s AND engagement_control_id = %s AND reopened_at IS NULL
         """
         + (" FOR UPDATE" if lock else ""),
         (project_id, control_id),
     ).fetchone()
-    return _Facts(UUID(str(control[0])), workpaper, deficiencies, standing)
+    signed_at: datetime | None = None if standing is None else standing[4]
+    changed, excepted = attribute_dispositions.signoff_facts(connection, control_id, signed_at)
+    if signed_at is not None and not changed:
+        changed = file_reliability.changed_since(connection, control_id, signed_at)
+    if exceptions is None:
+        exceptions = _exceptions(connection, project_id, control_id) if excepted else ()
+    return _Facts(
+        UUID(str(control[0])), workpaper, deficiencies, standing, changed, tuple(exceptions)
+    )
 
 
 def design_verdict(
@@ -275,9 +361,13 @@ def _history(
 
 
 def _body(
-    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, viewer: UUID
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    control_id: UUID,
+    viewer: UUID,
+    exceptions: Sequence[ExceptionRef] | None = None,
 ) -> DesignConclusionBody:
-    facts = _facts(connection, project_id, control_id)
+    facts = _facts(connection, project_id, control_id, exceptions=exceptions)
     history = _history(connection, project_id, control_id)
     paper = facts.workpaper
     reasons = facts.out_of_date()
@@ -296,6 +386,7 @@ def _body(
     blocking: list[str] = []
     if paper is None or paper[1] != "PREPARED":
         blocking.append("the design workpaper is not prepared")
+    blocking.extend(facts.unanswered())
     if status == "SIGNED_OFF":
         blocking.append("the D&I conclusion is signed off")
     reviewer = _is_reviewer(connection, project_id, viewer)
@@ -318,6 +409,7 @@ def _body(
         signed=signed,
         out_of_date=reasons,
         blocking=blocking,
+        exceptions=list(facts.exceptions),
         viewer_is_reviewer=reviewer,
         viewer_prepared=prepared,
         independence_required=required,
@@ -417,6 +509,11 @@ def sign_off(
             raise DesignConclusionState("prepare the design workpaper first")
         if int(paper[4]) != body.workpaper_version:
             raise DesignConclusionState("the design workpaper changed; review it again")
+        unanswered = facts.unanswered()
+        if unanswered:
+            # An exception a person recorded is never signed over: whatever verdict is
+            # asked for, it is a design deficiency to log or a tickmark to change first.
+            raise DesignConclusionState(" ".join(unanswered))
         if facts.proposed != body.verdict:
             raise DesignConclusionState(
                 "the records support a different verdict; log a design deficiency or "

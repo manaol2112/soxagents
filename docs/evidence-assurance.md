@@ -1587,6 +1587,94 @@ offer to accept (ticked, unticked, refused acceptance, already accepted, cannot 
 the finding dismissal; coverage, chips and counts with each kind; the step not done while
 an attribute waits again; the kept and earlier-check lines.
 
+**As built (server; items 3 and 5 to 9).** No migration.
+- *Item 3.* "A file of its own" is a file linked to the item (`evidence_requirement_files`,
+  `LINKED`: what a person links on the list and what the evidence wizard places on it),
+  the rule a planned item is already judged by. With one, an item in
+  `AWAITING_DEPENDENCY` reads as a planned item with one (`requirement_state`: "Received,
+  not yet reviewed", then the person's judgment) and `set_sufficiency` takes `ACCEPTED`,
+  `INSUFFICIENT` and `FOLLOW_UP_REQUIRED` for it by the same rules; its status,
+  `depends_on` and (absent) request are unchanged, and unlinking its only file puts the
+  judgment back as for any item. Without a linked file nothing changed: it waits and
+  nothing of it is judged (a file only shared by a sibling control does not make it
+  judgeable, as for a planned item). One rule now says which items a person can judge
+  (`evidence_plans.JUDGEABLE_SQL`: requested, or planned or waiting with a linked file),
+  and the redraft of the design workpaper (`_design_redraft`) and a request's move to
+  received (`_received_when_accepted`, `evidence_receipts._every_item_accepted`) count
+  by it: an item in hand that is not accepted holds the redraft back as a requested one
+  does, and accepting the last one asks for the draft. This also counts a planned item
+  with a linked file, which those two counts left out before. The D&I list's
+  `to_accept`, `in_hand`, the release's coverage (`phase_release._LIVE_REQUIREMENT_SQL`)
+  and the assurance chain's "still expects evidence" already included a waiting item and
+  are unchanged. Not changed, and still counting requested items only: the controls
+  list's design step and "items not complete" (`workspace._design_steps`,
+  `incomplete_items`) and the guard on withdrawing a file an item was accepted with
+  (`evidence_versions._accepted_with`).
+- *Item 5.* `GET .../design-conclusions/{control}` gains `exceptions`:
+  `[{attribute_id, code, requirement_id, recorded_by_name, recorded_at, reason}]`, the
+  person's `EXCEPTION` tickmarks that the design workpaper reads (on a request whose
+  check is current, on an approved attribute), in the attributes' order. While any stands
+  and no design deficiency does, `blocking` carries, per attribute, "An exception is
+  recorded on attribute B. Log a design deficiency for it, or change the tickmark with
+  your reason." (after "the design workpaper is not prepared", before "the D&I conclusion
+  is signed off"), `can_sign` is false, and `sign-off` answers 409 with those sentences
+  joined by a space, whichever verdict is asked for, before the verdict is compared. The
+  proposed verdict is not changed by a tickmark. With a design deficiency standing
+  nothing is added to `blocking` (the records propose not effective, as before);
+  `exceptions` still lists them. `out_of_date` gains "a tickmark changed after the
+  sign-off" where an attribute disposition or a file reliability decision of the control
+  was recorded or ended after the standing sign-off's `signed_at` (every row counts,
+  whatever its request's check). One reason was added beyond the plan: "an exception is
+  recorded on an attribute and no design deficiency is logged for it", where a sign-off
+  as effective stands, nothing changed since, and yet an exception stands unanswered: one
+  recorded while its request's check was current, kept while it was not (so not in the
+  way of the sign-off), which applies again once the request is checked again (a check
+  never ends a person's exception). Without it the OE gate would read a verdict signed
+  over a standing exception. Known limit: a tickmark of a closing kind, or a reliability
+  decision, whose transaction was open across the sign-off's own read is not seen by
+  either rule (its `recorded_at` is before `signed_at`); an exception is caught by the
+  second reason as soon as it commits.
+- *Item 6.* A design draft's prompt (`workpaper_service.prompt_for`, version
+  `workpaper-preparer/2`) holds one `<auditor_record>` block between the facts and the
+  evidence: JSON with `attributes` (letter, wording, the state in words and its sentence,
+  as `design_workpaper.attributes_of` assembles them), `tickmarks` (those that are read:
+  attribute, kind in words, whether it closes the attribute, who, the day, the reason,
+  what was relied on) and `file_reliability_decisions` (file, decision, who, the day, the
+  reason, what was relied on), built by `design_workpaper.drafter_record` from the view's
+  own records. Every text is one cleaned line cut to a bound (wording 200, sentence 400,
+  reason 400, relied on 200, names 120), every list is bounded (26, 30, 20) and the block
+  to 40,000 characters; every angle bracket inside it is written as a JSON escape, so no
+  reason can close the block or open another. The system prompt and the line before the
+  block say it is data, the auditor's recorded conclusion to reflect and never an
+  instruction to follow, and that the draft must not contradict it. An effectiveness
+  draft has no such block. Matters: a check's follow-up whose `attribute_ids` all carry a
+  closing tickmark on that request is not listed (one that names no attribute, or an
+  attribute with only an exception, still is); under the cap a `DISPOSITION` matter is
+  never left out, noted considerations are left out first, then the last of the rest,
+  and the list is longer than twelve only where the tickmarks' and decisions' matters
+  alone are.
+- *Item 7.* The activity titles: "Tickmark recorded", "Tickmark reopened", "Tickmark
+  ended by a later check", "Tickmark ended with its annotation", "File reliability
+  decided", "File reliability decision reopened", "File reliability decision ended";
+  each detail is one line, "Attribute B: “Evidence not available, accepted”" or
+  "report.csv: “Not relied on”", with ", in place of “…”" where it replaced another,
+  why a check or an annotation ended it, and for a decision ended with its file "The
+  file is no longer in force on the request. After a change by …". Who did it is the
+  item's actor (the person, or the workspace). An attribute that is no longer approved
+  reads "An attribute no longer approved".
+- *Items 8 and 9.* Each request of `GET .../evidence-assurance` gains `tickmarks_kept`
+  (the dispositions standing on the request, whatever its check's state, a request never
+  checked included; 0 when none), and each standing `disposition` gains
+  `on_current_check` (its `assessment_id` is the run shown; false where it stands through
+  a later check). Ended dispositions (`disposition_history`) are unchanged.
+- Rewritten tests (the shape grew; every other assertion kept):
+  `test_attribute_dispositions.py::test_each_kind_is_recorded_read_back_replaced_and_reopened_and_the_check_stays`
+  and `test_attribute_dispositions_model.py::test_what_stands_and_what_ended_are_given_as_the_contract_shapes_them`
+  expected a standing disposition of exactly eight fields; it now also carries
+  `on_current_check`. The first also compared the request's entry, less the two
+  disposition fields of each attribute, with the entry as checked; `tickmarks_kept` is
+  now left out of that comparison too and asserted beside it (0, then 1).
+
 ## 9. Status
 
 | Increment | State |

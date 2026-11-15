@@ -522,6 +522,24 @@ def load(
     )
 
 
+def changed_since(connection: psycopg.Connection[Any], control_id: UUID, when: datetime) -> bool:
+    """Whether a decision on a file's reliability of the control was recorded or ended
+    after `when`: what puts a D&I sign-off made at that time out of date
+    (design_conclusions; docs/evidence-assurance.md, section 10.15, item 5)."""
+    return _where_recorded(
+        connection,
+        lambda: (
+            connection.execute(
+                "SELECT 1 FROM file_reliability_decisions WHERE engagement_control_id = %s "
+                "AND (recorded_at > %s OR ended_at > %s) LIMIT 1",
+                (control_id, when, when),
+            ).fetchone()
+            is not None
+        ),
+        False,
+    )
+
+
 def review_order(review: ReviewBody | None, read: Sequence[UUID]) -> list[UUID]:
     """The files of a check's review in its order, then the other files it read."""
     if review is None:
@@ -828,6 +846,7 @@ __all__ = [
     "RecordBody",
     "ReliabilityState",
     "ReopenBody",
+    "changed_since",
     "clean_reason",
     "clean_relied_on",
     "end_with_files",

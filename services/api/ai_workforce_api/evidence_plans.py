@@ -2104,6 +2104,25 @@ def queue_drafts(
 # proposal); a waived or removed request does not.
 LISTED_STATUSES: tuple[str, ...] = ("PLANNED", "AWAITING_DEPENDENCY", "REQUESTED")
 
+# An item whose evidence can be in hand without a request for it: planned, or waiting for
+# an earlier item (docs/evidence-assurance.md, section 10.15, item 3: an item that waits
+# with a file of its own is read and judged as a planned item with one).
+IN_HAND_STATUSES: tuple[str, ...] = ("PLANNED", "AWAITING_DEPENDENCY")
+
+# An item a person can judge (evidence_requirements as `q`): requested, or in hand without
+# a request, a file of its own linked to it. The one rule for set_sufficiency, for the
+# redraft of the design workpaper and a request's move to received once every such item
+# is accepted (_design_redraft, _received_when_accepted, evidence_receipts).
+JUDGEABLE_SQL = """
+    (q.status = 'REQUESTED'
+     OR (q.status IN ('PLANNED', 'AWAITING_DEPENDENCY')
+         AND EXISTS (SELECT 1 FROM evidence_requirement_files jf
+                     JOIN evidence_file_links jl
+                       ON jl.evidence_file_id = jf.evidence_file_id
+                      AND jl.engagement_control_id = jf.engagement_control_id
+                     WHERE jf.requirement_id = q.id AND jf.status = 'LINKED')))
+"""
+
 GATE_PLAN = "approve the test plan first"
 # A control change was recorded and the planner's answer for it could not be used, so the
 # plan was kept as it was (generate, B1h): its phases and periods may not fit the change.
@@ -3605,11 +3624,13 @@ def requirement_state(
         return "NOT_APPLICABLE"
     if status == "REMOVED":
         return "REMOVED"
-    if status == "AWAITING_DEPENDENCY":
+    if status == "AWAITING_DEPENDENCY" and not linked:
         return "AWAITING_DEPENDENCY"
-    if status == "PLANNED" or request_status is None:
+    if status in ("PLANNED", "AWAITING_DEPENDENCY") or request_status is None:
         # Not requested, but a file the control already holds was linked to it (a design
-        # file for an interim item, say): it has arrived, and a person judges it.
+        # file for an interim item, say): it has arrived, and a person judges it. An item
+        # that waits for an earlier one reads the same once a file of its own is linked
+        # (docs/evidence-assurance.md, section 10.15, item 3: it could never be accepted).
         if linked:
             judged = ("ACCEPTED", "INSUFFICIENT", "FOLLOW_UP_REQUIRED", "UNDER_REVIEW")
             return sufficiency if sufficiency in judged else "RECEIVED"  # type: ignore[return-value]
@@ -5146,7 +5167,9 @@ def set_sufficiency(
             ).fetchone()
             is not None
         )
-        judgeable = row[1] == "REQUESTED" or (row[1] == "PLANNED" and linked)
+        # Requested, or in hand without a request: planned, or waiting for an earlier
+        # item, with a file of its own linked (JUDGEABLE_SQL says the same of `q`).
+        judgeable = row[1] == "REQUESTED" or (row[1] in IN_HAND_STATUSES and linked)
         if body.sufficiency != "NOT_REVIEWED" and (not judgeable or not arrived):
             raise PlanState("nothing has been received for this requirement yet")
         if body.sufficiency == "ACCEPTED" and not _has_own_evidence(cursor, requirement_id):
@@ -5189,13 +5212,16 @@ def _design_redraft(
     """Every design item a person accepted: the agent drafts the design workpaper again
     from the accepted evidence (22 Oct 2026; it was drafted once, from the first file
     read, and only a person asked for it again). A person's sections stay, and a prepared
-    workpaper is not touched (workpaper_service.ensure)."""
+    workpaper is not touched (workpaper_service.ensure). The items counted are those a
+    person can judge (JUDGEABLE_SQL): the requested ones and those in hand without a
+    request, so an item in hand that is not accepted holds the draft back as a requested
+    one does (docs/evidence-assurance.md, section 10.15, item 3)."""
     from ai_workforce_api.workpaper_service import ensure
 
     counts = cursor.execute(
-        "SELECT count(*), count(*) FILTER (WHERE sufficiency = 'ACCEPTED') "
-        "FROM evidence_requirements "
-        "WHERE engagement_control_id = %s AND phase = 'DESIGN' AND status = 'REQUESTED'",
+        "SELECT count(*), count(*) FILTER (WHERE q.sufficiency = 'ACCEPTED') "
+        "FROM evidence_requirements q "
+        f"WHERE q.engagement_control_id = %s AND q.phase = 'DESIGN' AND {JUDGEABLE_SQL}",
         (control_id,),
     ).fetchone()
     if counts is None or counts[0] == 0 or counts[0] != counts[1]:
@@ -5217,12 +5243,13 @@ def _received_when_accepted(
     """A request whose every requested item a person accepted is received: nothing more is
     asked of the owner, so its open reminders are cancelled (22 Oct 2026; a request stayed
     partly received when the reader had not found every item covered). Migration 0103
-    applies this to requests settled before."""
+    applies this to requests settled before. An item the request carries that is in hand
+    without being requested counts as a requested one does (JUDGEABLE_SQL)."""
     from ai_workforce_api.followups import cancel_open
 
     counts = cursor.execute(
-        "SELECT count(*), count(*) FILTER (WHERE sufficiency = 'ACCEPTED') "
-        "FROM evidence_requirements WHERE pbc_request_id = %s AND status = 'REQUESTED'",
+        "SELECT count(*), count(*) FILTER (WHERE q.sufficiency = 'ACCEPTED') "
+        f"FROM evidence_requirements q WHERE q.pbc_request_id = %s AND {JUDGEABLE_SQL}",
         (request_id,),
     ).fetchone()
     if counts is None or counts[0] == 0 or counts[0] != counts[1]:

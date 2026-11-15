@@ -96,6 +96,9 @@ def test_a_signed_off_test_becomes_a_drafted_effectiveness_workpaper(migrated: D
     with connect(migrated.url) as connection:
         assert run_draft(connection, provider, UUID(workpaper["id"])) == "DONE"
     assert "Draft these workpaper sections." in provider.requests[0].prompt
+    # The auditor's record of the D&I attributes is given to a design draft only
+    # (docs/evidence-assurance.md, section 10.15, item 6).
+    assert "<auditor_record>" not in provider.requests[0].prompt
     body = next(
         w
         for w in client.get(base, params={"control_id": sheet["control_id"]}).json()

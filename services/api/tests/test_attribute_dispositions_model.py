@@ -351,8 +351,13 @@ def test_what_stands_and_what_ended_are_given_as_the_contract_shapes_them() -> N
         ended_as="SUPERSEDED_BY_CHECK", ended_reason=dispositions.SUPERSEDED_REASON,
     )  # fmt: skip
     found = Dispositions({(R1, A): standing}, {(R1, A): [by_check, ended]})
-    body = found.standing(R1, A)
+    body = found.standing(R1, A, RUN)
     assert body is not None
+    # Rewritten for section 10.15, item 9 (the shape grew). Old expectation: the standing
+    # disposition is exactly the eight fields below, and an ended one is those and its
+    # four ending fields. New: the standing one also says `on_current_check`; an ended one
+    # is unchanged (it never carries it). Why: a tickmark that stands through a later
+    # check says so.
     assert body.model_dump(mode="json") == {
         "id": str(standing.id),
         "kind": "NOT_AVAILABLE",
@@ -362,11 +367,12 @@ def test_what_stands_and_what_ended_are_given_as_the_contract_shapes_them() -> N
         "recorded_by_name": "Dana Lee",
         "recorded_at": "2026-11-14T09:30:00Z",
         "version": 1,
+        "on_current_check": True,
     }
     assert found.standing(R1, UUID(int=2)) is None and found.history(R1, UUID(int=2)) == []
     history = [item.model_dump(mode="json") for item in found.history(R1, A)]
     assert [item["id"] for item in history] == [str(by_check.id), str(ended.id)]
-    assert set(history[0]) == set(body.model_dump()) | {
+    assert set(history[0]) == (set(body.model_dump()) - {"on_current_check"}) | {
         "ended_at", "ended_by_name", "ended_as", "ended_reason",
     }  # fmt: skip
     # Nobody is named where a check ended it.
@@ -375,3 +381,32 @@ def test_what_stands_and_what_ended_are_given_as_the_contract_shapes_them() -> N
     assert history[1]["ended_reason"] == "Recorded on the wrong attribute."
     # What stands is never given as ended.
     assert standing.ended_body() is None
+
+
+def test_a_standing_tickmark_says_which_check_it_is_on_and_a_request_how_many_it_keeps() -> None:
+    """Section 10.15, items 8 and 9: `on_current_check` is true only where the disposition
+    was recorded on the run given as the request's current one (never where no run is
+    given), and `kept` counts what stands on a request, whatever its check's state."""
+    later = UUID(int=77)
+    other = _disposition(id=UUID(int=903), attribute_id=UUID(int=3), kind="EXCEPTION")
+    elsewhere = _disposition(id=UUID(int=904), requirement_id=UUID(int=55))
+    ended = _disposition(
+        id=UUID(int=905), version=2, ended_at=datetime(2026, 11, 14, 10, 0, tzinfo=UTC),
+        ended_as="REOPENED", ended_by_name="Dana Lee", ended_reason="Recorded in error.",
+    )  # fmt: skip
+    found = Dispositions(
+        {(R1, A): _disposition(), (R1, UUID(int=3)): other, (UUID(int=55), A): elsewhere},
+        {(R1, A): [ended]},
+    )
+    on_it, earlier, unknown = (found.standing(R1, A, run) for run in (RUN, later, None))
+    assert on_it is not None and earlier is not None and unknown is not None
+    assert (on_it.on_current_check, earlier.on_current_check, unknown.on_current_check) == (
+        True, False, False,
+    )  # fmt: skip
+    # Nothing else of the disposition differs by the run it is read against.
+    assert on_it.model_dump(exclude={"on_current_check"}) == earlier.model_dump(
+        exclude={"on_current_check"}
+    )
+    # What stands on the request, never what ended and never another request's.
+    assert (found.kept(R1), found.kept(UUID(int=55)), found.kept(UUID(int=56))) == (2, 1, 0)
+    assert Dispositions({}, {(R1, A): [ended]}).kept(R1) == 0

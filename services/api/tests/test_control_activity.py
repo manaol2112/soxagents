@@ -1,12 +1,22 @@
 """A control's activity (the control record's Activity view), and its conclusion coming
-only from a signed-off review."""
+only from a signed-off review. A person's tickmarks and their decisions on a file's
+reliability read in plain words (docs/evidence-assurance.md, section 10.15, item 7)."""
 
 from typing import Any
+from uuid import uuid4
 
+from psycopg.types.json import Jsonb
 from support import Database
+from test_attribute_dispositions import _ids
+from test_attribute_dispositions import _record as _tickmark
+from test_attribute_dispositions import _reopen as _reopen_tickmark
 from test_control_progress import _controls
 from test_engagement_data import _engagement, _requests
+from test_evidence_assurance import _Bench
 from test_evidence_review import _base
+from test_file_reliability import _first_check as _first_check_with_a_report
+from test_file_reliability import _record as _decide_reliability
+from test_file_reliability import _reopen as _reopen_reliability
 from test_outbound import migrated
 
 from ai_workforce_api.db import connect
@@ -120,3 +130,129 @@ def test_only_a_signed_off_review_concludes_a_control(migrated: Database) -> Non
         "Roll-forward testing outstanding",
     ]
     assert row["next_step"] == "Interim testing outstanding"
+
+
+def test_tickmarks_and_reliability_decisions_read_in_plain_words(migrated: Database) -> None:
+    """docs/evidence-assurance.md, section 10.15, item 7. Before: the activity had no
+    words for a tickmark or a decision on a file's reliability, so each read as its raw
+    action ("Evidence: attribute disposition recorded") with the person's reason, or a
+    code, as its detail. Now each has a plain title, and one line that says the kind in
+    words and the attribute's letter or the file's name; who did it is the item's actor."""
+    bench = _Bench(migrated, "act-tick")
+    ticket, first = _first_check_with_a_report(bench, B="ABSENT", C="ABSENT")
+    ids = _ids(first)
+    owner_name = bench.name(bench.team["owner_id"])
+
+    # A person's acts, through their routes: a tickmark recorded, changed and reopened; a
+    # decision on the ticket's reliability recorded, changed and reopened.
+    recorded = _tickmark(bench, ids["B"], "NOT_APPLICABLE")
+    assert recorded.status_code == 200, recorded.text
+    seen = next(a for a in recorded.json()["attributes"] if a["code"] == "B")["disposition"]["id"]
+    changed = _tickmark(bench, ids["B"], "NOT_AVAILABLE", replaces=seen)
+    assert changed.status_code == 200, changed.text
+    seen = next(a for a in changed.json()["attributes"] if a["code"] == "B")["disposition"]["id"]
+    assert _reopen_tickmark(bench, ids["B"], seen).status_code == 200
+    assert _tickmark(bench, ids["C"], "EXCEPTION").status_code == 200
+    decided = _decide_reliability(bench, ticket, "NOT_RELIED_ON")
+    assert decided.status_code == 200, decided.text
+    decision = decided.json()["file_reliability"][0]["decision"]["id"]
+    again = _decide_reliability(bench, ticket, "ESTABLISHED_ON_REVIEW", replaces=decision)
+    assert again.status_code == 200, again.text
+    decision = again.json()["file_reliability"][0]["decision"]["id"]
+    assert _reopen_reliability(bench, ticket, decision).status_code == 200
+
+    # What ends one without the person asking, as the modules record it: a later check,
+    # the annotation it rested on, the file leaving the request.
+    def event(action: str, actor: Any, payload: dict[str, Any]) -> None:
+        with connect(migrated.url) as connection:
+            connection.execute(
+                "INSERT INTO audit_events (organization_id, project_id, actor_user_id, action, "
+                "target_type, target_id, payload) "
+                "VALUES (%s, %s, %s, %s, 'evidence_requirement', %s, %s)",
+                (
+                    bench.team["org"], bench.team["project"], actor, action, bench.item_id,
+                    Jsonb({"control_id": bench.control} | payload),
+                ),
+            )  # fmt: skip
+
+    for attribute, kind, ended_as in (
+        (ids["B"], "NOT_AVAILABLE", "SUPERSEDED_BY_CHECK"),
+        (ids["D"], "NOT_APPLICABLE", "OVERTAKEN_BY_CHECK"),
+        (ids["E"], "SHOWN_ON_REVIEW", "ANNOTATION_GONE"),
+    ):
+        event(
+            "evidence.attribute_disposition_ended_by_check", None,
+            {"attribute_id": attribute, "kind": kind, "ended_as": ended_as},
+        )  # fmt: skip
+    event(
+        "evidence.attribute_disposition_annotation_gone", bench.team["owner_id"],
+        {"attribute_id": ids["A"], "kind": "SHOWN_ON_REVIEW", "ended_as": "ANNOTATION_GONE",
+         "reason": "The annotation it rests on was removed."},
+    )  # fmt: skip
+    # On an attribute that is no longer approved: said so, never by its id.
+    event(
+        "evidence.attribute_disposition_reopened",
+        bench.team["owner_id"],
+        {"attribute_id": str(uuid4()), "kind": "EXCEPTION", "reason": "Recorded in error."},
+    )
+    event(
+        "evidence.file_reliability_ended_with_file", None,
+        {"file_id": ticket, "kind": "ESTABLISHED_ON_REVIEW", "ended_as": "FILE_GONE",
+         "changed_by": str(bench.team["owner_id"])},
+    )  # fmt: skip
+    event(
+        "evidence.file_reliability_ended_with_file",
+        None,
+        {"file_id": ticket, "kind": "NOT_RELIED_ON", "ended_as": "FILE_GONE", "changed_by": None},
+    )
+
+    found = bench.owner.get(f"{bench.base}/controls/{bench.control}/activity")
+    assert found.status_code == 200, found.text
+    items = [item for item in found.json() if ".attribute_disposition" in item["action"]
+             or ".file_reliability" in item["action"]]  # fmt: skip
+    # Oldest first, each as (title, detail, by, actor).
+    said = [(i["title"], i["detail"], i["by"], i["actor"]) for i in reversed(items)]
+    assert said == [
+        ("Tickmark recorded", "Attribute B: “Not applicable to this instance”",
+         "person", owner_name),
+        ("Tickmark recorded",
+         "Attribute B: “Evidence not available, accepted”, in place of "
+         "“Not applicable to this instance”", "person", owner_name),
+        ("Tickmark reopened", "Attribute B: “Evidence not available, accepted”",
+         "person", owner_name),
+        ("Tickmark recorded", "Attribute C: “Exception”", "person", owner_name),
+        ("File reliability decided", "ticket REQ-1041.txt: “Not relied on”",
+         "person", owner_name),
+        ("File reliability decided",
+         "ticket REQ-1041.txt: “Reliability established on my review”, in place of "
+         "“Not relied on”", "person", owner_name),
+        ("File reliability decision reopened",
+         "ticket REQ-1041.txt: “Reliability established on my review”", "person", owner_name),
+        ("Tickmark ended by a later check",
+         "Attribute B: “Evidence not available, accepted”. The later check found the "
+         "attribute supported.", "workspace", "Workspace"),
+        ("Tickmark ended by a later check",
+         "Attribute D: “Not applicable to this instance”. The later check found the records "
+         "contradict the attribute.", "workspace", "Workspace"),
+        ("Tickmark ended by a later check",
+         "Attribute E: “Shown, on my review”. The file its annotation is on is no longer in "
+         "force on the request.", "workspace", "Workspace"),
+        ("Tickmark ended with its annotation",
+         "Attribute A: “Shown, on my review”. The annotation it rests on was removed.",
+         "person", owner_name),
+        ("Tickmark reopened", "An attribute no longer approved: “Exception”",
+         "person", owner_name),
+        ("File reliability decision ended",
+         "ticket REQ-1041.txt: “Reliability established on my review”. The file is no longer "
+         f"in force on the request. After a change by {owner_name}.", "workspace", "Workspace"),
+        ("File reliability decision ended",
+         "ticket REQ-1041.txt: “Not relied on”. The file is no longer in force on the request.",
+         "workspace", "Workspace"),
+    ]  # fmt: skip
+    # All of them are evidence events, and none reads as its raw action or a code.
+    assert {item["category"] for item in items} == {"evidence"}
+    for item in items:
+        words = f"{item['title']} {item['detail']}"
+        assert "disposition" not in words.lower() and "_" not in words
+        assert not any(code in words for code in ("NOT_", "SHOWN_ON", "EXCEPTION", "FILE_GONE"))
+        assert not any(value in words for value in ids.values()) and ticket not in words

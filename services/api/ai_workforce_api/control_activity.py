@@ -9,6 +9,7 @@ from uuid import UUID
 import psycopg
 from pydantic import BaseModel
 
+from ai_workforce_api import attribute_dispositions, file_reliability
 from ai_workforce_api.authorization import Action, NotVisible, Principal, authorize
 
 Category = Literal[
@@ -76,6 +77,19 @@ _TITLES: dict[str, tuple[Category, str]] = {
     "evidence.withdrawn": ("evidence", "Evidence withdrawn"),
     "evidence.restored": ("evidence", "Evidence restored"),
     "evidence.custody_check_failed": ("error", "Evidence custody check failed"),
+    # A person's tickmarks on the attributes of a D&I request, and their decisions on a
+    # file's reliability (docs/evidence-assurance.md, sections 10.13 to 10.15): the detail
+    # says the kind in words and the attribute's letter or the file's name (_recorded).
+    attribute_dispositions.RECORDED: ("evidence", "Tickmark recorded"),
+    attribute_dispositions.REOPENED: ("evidence", "Tickmark reopened"),
+    attribute_dispositions.ENDED_BY_CHECK: ("evidence", "Tickmark ended by a later check"),
+    attribute_dispositions.ANNOTATION_GONE_EVENT: (
+        "evidence",
+        "Tickmark ended with its annotation",
+    ),
+    file_reliability.RECORDED: ("evidence", "File reliability decided"),
+    file_reliability.REOPENED: ("evidence", "File reliability decision reopened"),
+    file_reliability.ENDED_WITH_FILE: ("evidence", "File reliability decision ended"),
     "attribute.proposed": ("design", "Test attribute proposed"),
     # The attribute agent's own record (B1e): its actor is the agent instance.
     "attributes.understanding_followed": (
@@ -155,6 +169,69 @@ _TITLES: dict[str, tuple[Category, str]] = {
 # Payload fields worth a line under the title, in order of preference.
 _DETAIL_KEYS = ("title", "reference", "name", "file_name", "reason", "note", "decision",
                 "status", "severity")  # fmt: skip
+
+
+# The events of a person's tickmarks and of their decisions on a file's reliability.
+_TICKMARK_EVENTS = frozenset({
+    attribute_dispositions.RECORDED, attribute_dispositions.REOPENED,
+    attribute_dispositions.ENDED_BY_CHECK, attribute_dispositions.ANNOTATION_GONE_EVENT,
+})  # fmt: skip
+_RELIABILITY_EVENTS = frozenset(
+    {file_reliability.RECORDED, file_reliability.REOPENED, file_reliability.ENDED_WITH_FILE}
+)
+# How a check ended a tickmark, in words.
+_ENDED_BY_CHECK = {
+    "SUPERSEDED_BY_CHECK": "The later check found the attribute supported.",
+    "OVERTAKEN_BY_CHECK": "The later check found the records contradict the attribute.",
+    "ANNOTATION_GONE": "The file its annotation is on is no longer in force on the request.",
+}
+
+
+def _words(kinds: dict[Any, str], kind: Any) -> str:
+    """A recorded kind in the product's own words; a kind not known reads as words too,
+    never as its code."""
+    known = kinds.get(kind)
+    if known is not None:
+        return known
+    return str(kind or "").replace("_", " ").capitalize()
+
+
+def _recorded(
+    action: str,
+    payload: dict[str, Any],
+    letters: dict[str, str],
+    files: dict[str, str],
+    people: dict[str, str],
+) -> str:
+    """One line for a tickmark's or a reliability decision's event: the kind in words and
+    the attribute's letter (`letters`, by attribute id) or the file's name (`files`, by
+    file id), and for what ended without the person asking, why. Who did it is the item's
+    actor; where a decision ended with its file, the person whose change it followed
+    (`people`, by user id)."""
+    if action in _TICKMARK_EVENTS:
+        letter = letters.get(str(payload.get("attribute_id") or ""))
+        about = f"Attribute {letter}" if letter else "An attribute no longer approved"
+        said = f"{about}: “{_words(attribute_dispositions.KIND_WORDS, payload.get('kind'))}”"
+        if action == attribute_dispositions.RECORDED and payload.get("replaced_kind"):
+            before = _words(attribute_dispositions.KIND_WORDS, payload.get("replaced_kind"))
+            return f"{said}, in place of “{before}”"
+        if action == attribute_dispositions.ENDED_BY_CHECK:
+            how = _ENDED_BY_CHECK.get(str(payload.get("ended_as") or ""), "")
+            return f"{said}. {how}".rstrip(". ") + "."
+        if action == attribute_dispositions.ANNOTATION_GONE_EVENT:
+            why = " ".join(str(payload.get("reason") or "").split())[:160]
+            return f"{said}. {why}".rstrip(". ") + "."
+        return said
+    name = " ".join(files.get(str(payload.get("file_id") or ""), "").split())[:120]
+    said = f"{name or 'A file'}: “{_words(file_reliability.KIND_WORDS, payload.get('kind'))}”"
+    if action == file_reliability.RECORDED and payload.get("replaced_kind"):
+        before = _words(file_reliability.KIND_WORDS, payload.get("replaced_kind"))
+        return f"{said}, in place of “{before}”"
+    if action == file_reliability.ENDED_WITH_FILE:
+        who = people.get(str(payload.get("changed_by") or ""))
+        followed = f" After a change by {who}." if who else ""
+        return f"{said}. The file is no longer in force on the request.{followed}"
+    return said
 
 
 def _title(action: str) -> tuple[Category, str]:
@@ -273,12 +350,59 @@ def control_activity(
     items: list[ActivityItem] = []
     from ai_workforce_api.console import _AGENT_NAMES
 
+    # What the tickmarks' and the reliability decisions' events name by id, read only
+    # where the trail holds such an event: the attributes' letters, the files' names and
+    # the people whose change ended a decision.
+    recorded = [
+        row[3]
+        for row in rows
+        if str(row[2]) in _TICKMARK_EVENTS | _RELIABILITY_EVENTS and isinstance(row[3], dict)
+    ]
+    letters: dict[str, str] = {}
+    files: dict[str, str] = {}
+    people: dict[str, str] = {}
+    if recorded:
+        from ai_workforce_api.evidence_assurance import attribute_letter
+
+        letters = {
+            str(row[0]): attribute_letter(index)
+            for index, row in enumerate(
+                connection.execute(
+                    "SELECT id FROM control_attributes WHERE engagement_control_id = %s "
+                    "AND status = 'APPROVED' ORDER BY position, created_at",
+                    (control_id,),
+                ).fetchall()
+            )
+        }
+        wanted = {str(p["file_id"]) for p in recorded if p.get("file_id")}
+        if wanted:
+            files = {
+                str(row[0]): str(row[1])
+                for row in connection.execute(
+                    "SELECT id, file_name FROM evidence_files WHERE project_id = %s "
+                    "AND id::text = ANY(%s)",
+                    (project_id, sorted(wanted)),
+                ).fetchall()
+            }
+        changers = {str(p["changed_by"]) for p in recorded if p.get("changed_by")}
+        if changers:
+            people = {
+                str(row[0]): str(row[1])
+                for row in connection.execute(
+                    "SELECT id, display_name FROM users WHERE id::text = ANY(%s)",
+                    (sorted(changers),),
+                ).fetchall()
+            }
+
     for event_id, at, action, payload, person, agent_name in rows:
         category, title = _title(str(action))
         body = payload if isinstance(payload, dict) else {}
         named = body.get("agent")
         by: By
-        detail = _detail(str(action), body)
+        if str(action) in _TICKMARK_EVENTS | _RELIABILITY_EVENTS:
+            detail = _recorded(str(action), body, letters, files, people)
+        else:
+            detail = _detail(str(action), body)
         if agent_name is not None or isinstance(named, str) or str(action) in AGENT_OUTPUT:
             by = "agent"
             actor = str(

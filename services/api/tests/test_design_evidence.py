@@ -14,7 +14,12 @@ Approval boundary and evidence traceability (critical tier):
   with a mailbox on, the delivery is EMAIL;
 - a request a person adds after the release is drafted into an outgoing request that
   needs approval; a request is not reworded once it went for approval or was sent;
-- a reviewer reads and is refused, and another firm sees nothing.
+- a reviewer reads and is refused, and another firm sees nothing;
+- an item that waits for an earlier one is read and judged as a planned item once a file
+  of its own is linked to it (docs/evidence-assurance.md, section 10.15, item 3): a person
+  accepts it or finds it short, and while it is in hand and not accepted the design
+  workpaper is not drafted again, as for a requested item. Without a file it still waits
+  and nothing of it is judged.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -32,6 +37,7 @@ from test_outbound import _session, migrated
 
 from ai_workforce_api.db import connect
 from ai_workforce_api.evidence_analysis import run_analysis
+from ai_workforce_api.evidence_plans import requirement_state
 from ai_workforce_api.outbound import IN_HAND_ALL, IN_HAND_CHANGED
 
 __all__ = ["migrated"]
@@ -298,6 +304,164 @@ def test_an_item_waiting_for_an_earlier_one_is_in_hand_once_its_evidence_is(
     assert after["in_hand"] is True
     assert after["status"] == "AWAITING_DEPENDENCY" and after["request_id"] is None
     assert [f["name"] for f in after["files"]] == ["access policy.txt"]
+
+
+def test_a_waiting_item_with_a_linked_file_reads_as_a_planned_item_with_one() -> None:
+    """Section 10.15, item 3 (pure). Before: an item that waits for an earlier one read
+    "Waits for an earlier item" whatever was linked to it. Now, with a file of its own
+    linked, it has the state a planned item with one has, for every judgment a person
+    made; without one it still waits."""
+    for judged in (
+        "NOT_REVIEWED",
+        "UNDER_REVIEW",
+        "ACCEPTED",
+        "INSUFFICIENT",
+        "FOLLOW_UP_REQUIRED",
+    ):
+        planned = requirement_state("PLANNED", None, None, judged, True, True)
+        assert requirement_state("AWAITING_DEPENDENCY", None, None, judged, True, True) == planned
+    assert requirement_state("AWAITING_DEPENDENCY", None, None, "NOT_REVIEWED", True, True) == (
+        "RECEIVED"
+    )
+    assert requirement_state("AWAITING_DEPENDENCY", None, None, "ACCEPTED", False, True) == (
+        "ACCEPTED"
+    )
+    # Without a linked file nothing changed: it waits, whatever else is on record.
+    for judged in ("NOT_REVIEWED", "ACCEPTED", "INSUFFICIENT"):
+        assert requirement_state("AWAITING_DEPENDENCY", None, None, judged) == (
+            "AWAITING_DEPENDENCY"
+        )
+        assert requirement_state("AWAITING_DEPENDENCY", None, None, judged, True, False) == (
+            "AWAITING_DEPENDENCY"
+        )
+
+
+def _design_draft(case: _Case) -> str | None:
+    """Whether the agent was asked to draft the control's design workpaper: its draft
+    status, or None where no design workpaper is open."""
+    rows = case.rows(
+        "SELECT draft_status FROM workpapers WHERE engagement_control_id = %s AND stage = 'DESIGN'",
+        UUID(case.control),
+    )
+    return None if not rows else str(rows[0][0])
+
+
+def test_a_waiting_item_with_its_own_evidence_is_judged_and_counted_as_a_requested_one(
+    migrated: Database,
+) -> None:
+    """Section 10.15, item 3. Before (the end-to-end trace of 15 November 2026): an item
+    that waits for an earlier one could never be accepted ("nothing has been received for
+    this requirement yet", though its file was linked and it read "in hand"), nothing ever
+    released it, and the design workpaper was drafted again without it. Now, with a file
+    of its own, a person judges it as a planned item with one, and while it is in hand
+    and not accepted it holds the draft back exactly as a requested item does."""
+    case = _Case(migrated, "judged")
+    earlier, waiting = case.items[0], case.items[1]
+    requested = [item for item in case.items if item["id"] != waiting["id"]]
+    with connect(migrated.url) as connection:
+        # As the planner leaves an item that waits for an earlier step: no request yet.
+        connection.execute(
+            "UPDATE evidence_requirements SET status = 'AWAITING_DEPENDENCY', "
+            "depends_on = %s, pbc_request_id = NULL WHERE id = %s",
+            (earlier["key"], UUID(waiting["id"])),
+        )
+    judge = f"{case.base}/controls/{case.control}/evidence-requirements"
+
+    def decide(item_id: str, sufficiency: str, note: str = "") -> Any:
+        return case.client.post(
+            f"{judge}/{item_id}/sufficiency",
+            json={"sufficiency": sufficiency, "note": note,
+                  "version": case.item(item_id)["version"]},
+        )  # fmt: skip
+
+    # Without a file of its own nothing changed: it waits, and nothing of it is judged.
+    before = case.item(waiting["id"])
+    assert (before["status"], before["state"], before["in_hand"]) == (
+        "AWAITING_DEPENDENCY", "AWAITING_DEPENDENCY", False,
+    )  # fmt: skip
+    for sufficiency in ("ACCEPTED", "INSUFFICIENT", "FOLLOW_UP_REQUIRED"):
+        refused = decide(waiting["id"], sufficiency, "The approval is missing.")
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["detail"] == "nothing has been received for this requirement yet"
+    assert case.item(waiting["id"])["sufficiency"] == "NOT_REVIEWED"
+
+    # Each requested item's own evidence comes in, and the policy is linked to the item
+    # that waits.
+    files = {
+        item["id"]: case.add_for(case.item(item["id"]), f"evidence {number}.txt")
+        for number, item in enumerate(requested)
+    }
+    linked = case.client.post(
+        f"{judge}/{waiting['id']}/files",
+        json={"file_id": files[earlier["id"]], "reason": "The policy also shows this item.",
+              "version": case.item(waiting["id"])["version"]},
+    )  # fmt: skip
+    assert linked.status_code == 200, linked.text
+    held = case.item(waiting["id"])
+    # Read as a planned item with a file: received, to be judged. The item is unchanged.
+    assert (held["status"], held["request_id"], held["in_hand"]) == (
+        "AWAITING_DEPENDENCY", None, True,
+    )  # fmt: skip
+    assert (held["state"], held["state_label"]) == ("RECEIVED", "Received, not yet reviewed")
+    assert (held["depends_on"], held["sufficiency"]) == (earlier["key"], "NOT_REVIEWED")
+
+    # A person finds it short, with what is missing, as for any item in hand.
+    unsaid = decide(waiting["id"], "INSUFFICIENT")
+    assert unsaid.status_code != 200, unsaid.text
+    for sufficiency in ("INSUFFICIENT", "FOLLOW_UP_REQUIRED"):
+        short = decide(waiting["id"], sufficiency, "The approval date is missing.")
+        assert short.status_code == 200, short.text
+        found = case.item(waiting["id"])
+        assert (found["state"], found["sufficiency"]) == (sufficiency, sufficiency)
+        assert found["sufficiency_note"] == "The approval date is missing."
+    back = decide(waiting["id"], "NOT_REVIEWED")
+    assert back.status_code == 200, back.text
+    assert case.item(waiting["id"])["state"] == "RECEIVED"
+
+    # Every requested item accepted while the item in hand is not: the design workpaper
+    # is not drafted again (before, it was: only requested items were counted).
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE workpapers SET draft_status = 'IDLE' WHERE engagement_control_id = %s "
+            "AND stage = 'DESIGN'",
+            (UUID(case.control),),
+        )
+    for item in requested:
+        accepted = decide(item["id"], "ACCEPTED")
+        assert accepted.status_code == 200, accepted.text
+    assert all(case.item(item["id"])["state"] == "ACCEPTED" for item in requested)
+    assert _design_draft(case) in (None, "IDLE")
+
+    # The item in hand accepted: on the record with the person, and the agent is asked
+    # for the design workpaper from the accepted evidence.
+    accepted = decide(waiting["id"], "ACCEPTED")
+    assert accepted.status_code == 200, accepted.text
+    done = case.item(waiting["id"])
+    assert (done["state"], done["sufficiency"], done["status"], done["request_id"]) == (
+        "ACCEPTED", "ACCEPTED", "AWAITING_DEPENDENCY", None,
+    )  # fmt: skip
+    assert done["sufficiency_by"] == case.name(case.team["owner_id"])
+    judged = case.audit("evidence_requirement.sufficiency", waiting["id"])
+    assert [(row[0], row[1], row[2]["sufficiency"]) for row in judged] == [
+        (case.team["owner_id"], None, "INSUFFICIENT"),
+        (case.team["owner_id"], None, "FOLLOW_UP_REQUIRED"),
+        (case.team["owner_id"], None, "NOT_REVIEWED"),
+        (case.team["owner_id"], None, "ACCEPTED"),
+    ]
+    assert _design_draft(case) == "PENDING"
+
+    # Its file unlinked: the judgment that rested on it alone is gone, and it waits again.
+    link = next(f for f in done["files"] if f["link_id"] is not None)
+    removed = case.client.post(
+        f"{judge}/{waiting['id']}/files/{link['link_id']}/remove",
+        json={"reason": "Linked to the wrong item.", "version": link["link_version"]},
+    )
+    assert removed.status_code == 200, removed.text
+    again = case.item(waiting["id"])
+    assert (again["state"], again["sufficiency"], again["in_hand"]) == (
+        "AWAITING_DEPENDENCY", "NOT_REVIEWED", False,
+    )  # fmt: skip
+    assert decide(waiting["id"], "ACCEPTED").status_code == 409
 
 
 def test_a_file_that_serves_no_item_leaves_the_request_to_go_out(migrated: Database) -> None:

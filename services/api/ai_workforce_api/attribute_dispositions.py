@@ -223,7 +223,7 @@ class ReopenBody(BaseModel):
 
 
 class DispositionBody(BaseModel):
-    """The disposition that stands for an attribute of a request."""
+    """A disposition of an attribute of a request, as recorded."""
 
     id: UUID
     kind: Kind
@@ -233,6 +233,15 @@ class DispositionBody(BaseModel):
     recorded_by_name: str
     recorded_at: datetime
     version: int
+
+
+class StandingDispositionBody(DispositionBody):
+    """The disposition that stands for an attribute of a request. `on_current_check` is
+    whether it was recorded on the request's current check (section 10.15, item 9): false
+    where it stands through a later check, so the screen asks the person to confirm it
+    still holds."""
+
+    on_current_check: bool
 
 
 class EndedDispositionBody(DispositionBody):
@@ -560,9 +569,24 @@ class Dispositions:
     standing_by: Mapping[Key, Disposition]
     history_by: Mapping[Key, Sequence[Disposition]]
 
-    def standing(self, requirement_id: UUID, attribute_id: UUID) -> DispositionBody | None:
+    def standing(
+        self, requirement_id: UUID, attribute_id: UUID, run_id: UUID | None = None
+    ) -> StandingDispositionBody | None:
+        """The disposition that stands on the attribute for the request, saying whether it
+        was recorded on `run_id`, the request's current check (never on no check)."""
         found = self.standing_by.get((requirement_id, attribute_id))
-        return None if found is None else found.body()
+        if found is None:
+            return None
+        return StandingDispositionBody(
+            **found.body().model_dump(),
+            on_current_check=run_id is not None and found.assessment_id == run_id,
+        )
+
+    def kept(self, requirement_id: UUID) -> int:
+        """How many dispositions stand on the request, whatever the state of its check
+        (section 10.15, item 8): a request whose check is not current shows none of them,
+        and says how many are kept."""
+        return sum(1 for request, _attribute in self.standing_by if request == requirement_id)
 
     def history(self, requirement_id: UUID, attribute_id: UUID) -> list[EndedDispositionBody]:
         return [
@@ -586,6 +610,35 @@ def load(
         ),
         Dispositions({}, {}),
     )
+
+
+def signoff_facts(
+    connection: psycopg.Connection[Any], control_id: UUID, since: datetime | None
+) -> tuple[bool, bool]:
+    """What the D&I conclusion reads of a control's dispositions (design_conclusions;
+    section 10.15, item 5), in one query, whatever the state of its requests' checks:
+
+    - whether one was recorded or ended after `since`, the time of the sign-off that
+      stands (never, where none stands): that puts the sign-off out of date;
+    - whether a person's EXCEPTION stands on any request, so that only a control with one
+      pays for reading which of its checks are current (design_workpaper.load_exceptions).
+    """
+
+    def read() -> tuple[bool, bool]:
+        row = connection.execute(
+            """
+            SELECT EXISTS (SELECT 1 FROM attribute_dispositions
+                           WHERE engagement_control_id = %s
+                             AND (recorded_at > %s OR ended_at > %s)),
+                   EXISTS (SELECT 1 FROM attribute_dispositions
+                           WHERE engagement_control_id = %s
+                             AND ended_at IS NULL AND kind = 'EXCEPTION')
+            """,
+            (control_id, since, since, control_id),
+        ).fetchone()
+        return (False, False) if row is None else (bool(row[0]), bool(row[1]))
+
+    return _where_recorded(connection, read, (False, False))
 
 
 # --- A person's acts ---------------------------------------------------------------------
@@ -1125,6 +1178,7 @@ __all__ = [
     "NotCurrent",
     "RecordBody",
     "ReopenBody",
+    "StandingDispositionBody",
     "annotation_refusal",
     "check_finds",
     "clean_reason",
@@ -1140,6 +1194,7 @@ __all__ = [
     "record",
     "register_attribute_dispositions",
     "reopen",
+    "signoff_facts",
     "stale_refusal",
     "standing_for",
 ]
