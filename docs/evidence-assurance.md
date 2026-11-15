@@ -1268,11 +1268,13 @@ and attribute. Every act is an audit event with the person as actor
 without a person (`.ended_by_check`).
 
 **API.** Under `/organizations/{o}/projects/{p}/controls/{c}/evidence-assurance/{requirement_id}/attributes/{attribute_id}`:
-`POST /disposition` `{kind, reason, relied_on?, annotation_id?}` and
-`POST /disposition/reopen` `{version, reason}`; both answer the request's entry as `rerun`
+`POST /disposition` `{kind, reason, relied_on?, annotation_id?, replaces?}` and
+`POST /disposition/reopen` `{id, version?, reason}` (as built below: both name the
+disposition the person saw by its id); both answer the request's entry as `rerun`
 does. `GET .../evidence-assurance` gives each attribute of a request `disposition` (null,
-or `{id, kind, reason, relied_on, annotation_id, recorded_by_name, recorded_at, version}`)
-and `disposition_history` (ended ones, newest first, at most 10). 409 with one plain
+or `{id, kind, reason, relied_on, annotation_id, recorded_by_name, recorded_at, version}`),
+`disposition_history` (ended ones, newest first, at most 10) and `contradicted` (whether
+only `EXCEPTION` is taken there). 409 with one plain
 sentence for each refusal. Archived and completed engagements are read-only as for every
 write.
 
@@ -1301,7 +1303,37 @@ and the reason), and an `EXCEPTION` disposition is an open matter.
 **As built (server, 14 November 2026).**
 - A person's `EXCEPTION` is never ended by a check: only a person reopens or replaces it
   (a check closing a person's exception would decide for them). The three closing kinds
-  end as the rules say.
+  end as the rules say. A person who may decide evidence may Change (record another kind
+  in its place) or Reopen an `EXCEPTION`, their own or another's, with a reason, as for
+  any disposition: no second approval, and the ended exception is kept in the history
+  with who ended it, when and why; where the records contradict the attribute, only
+  another `EXCEPTION` can take its place.
+- Reopening and replacing name what the person saw (independent review, 14 November
+  2026). A standing disposition changes only by ending, so every one that stands has
+  version 1 and the version cannot tell it from the one that replaced it: a reopening
+  sent from a stale page reopened a disposition the person never saw. Now `reopen` takes
+  `{id, version?, reason}`: the disposition standing on the attribute must be `id` (the
+  `version`, still accepted, must then be its version), otherwise 409 "This tickmark
+  changed since the page loaded, so refresh and try again." (or "No tickmark stands on
+  this attribute for this request." where none stands). Recording takes `replaces`: the
+  id of the disposition the person saw standing, or null (or left out) where they saw
+  none. Where what stands is not that, nothing is recorded: 409 "A tickmark was recorded
+  on this attribute since the page loaded, so refresh and try again." where another
+  stands, and the stale sentence above where the one seen has ended and none stands. A
+  disposition the list leaves out (its annotation no longer stands) counts as none seen.
+  The standing row is locked until the act commits, so two people's acts take turns.
+- Each attribute of the D&I list gives `contradicted` (boolean): whether the current
+  check finds the records contradict the attribute, by the same rule recording refuses
+  the three closing kinds by (`attribute_dispositions.contradicted`, from `check_finds`),
+  for a run of either engine. The screen offers only "Exception" where it is true; it
+  cannot work this out itself, since a run of the first engine records no assessment and
+  the list's elements carry no deviation.
+- "Shown, on my review" rests only on an annotation of kind `SHOWS` (a person's own, or
+  the agent's that a person confirmed or edited). One of kind `EXCEPTION`, `IDENTIFIES` or
+  `SOURCE` is refused: 409 "“Shown, on my review” needs an annotation that shows the
+  attribute, not one that marks an exception, a person or source." An annotation's kind
+  never changes once made. Dispositions recorded before this rule on another kind of
+  annotation are not ended by it.
 - "Contradiction" is the run's assessment `CONTRADICTED`, the same rule the workpaper reads
   as "Exception shown".
 - A removed annotation, or an edit that takes the attribute off it, ends a "Shown, on my
@@ -1315,6 +1347,16 @@ and the reason), and an `EXCEPTION` disposition is an open matter.
   dispositions). Tickmark `REVIEWED` (†, "On the auditor's review, with the reason
   recorded."); a person's `EXCEPTION` is an open matter and takes an agreed or compared
   tickmark away.
+- In the workpaper, a person's `EXCEPTION` is never counted as shown (independent review,
+  14 November 2026: the attributes tile said "Every attribute is shown" beside an open
+  exception a person recorded on an attribute a check showed). Where the attribute would
+  otherwise read as shown, by a check (`SHOWN`) or by a person's closing disposition on
+  another request (`SHOWN_ON_REVIEW`, `NOT_APPLICABLE`, `NOT_AVAILABLE`), it reads
+  `EXCEPTION_RECORDED` ("Exception recorded by the auditor"), tickmark `NONE`, its
+  sentence the person's (who, when, the reason) with what the check found; the files keep
+  the check's own marks. An exception a check shows still stands above it (`EXCEPTION`),
+  and where a check leaves the attribute open, shows it in part or does not show it, it
+  reads as the check left it, as before. It stays an open `DISPOSITION` matter.
 
 **Tests.** Server: each kind recorded and read back; each refusal; replace and reopen;
 what a later check does to each kind (supported, contradiction, neither); the annotation

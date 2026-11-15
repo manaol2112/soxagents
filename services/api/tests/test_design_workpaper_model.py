@@ -1554,10 +1554,15 @@ def test_each_disposition_is_a_matter_and_an_exception_recorded_is_open() -> Non
         ("FINDING", "OPEN"), ("UNSETTLED", "OPEN"), ("NOTE", "NOTED"),
     ]  # fmt: skip
     assert before[1].text == f"Attribute C is not concluded. {OPEN_C}"
-    # The attribute a person marked as an exception keeps what the check found, with no
-    # mark of agreement beside it.
+    # The attribute a person marked as an exception, which the check shows, is never
+    # "Shown": it reads as an exception recorded, with no mark of agreement beside it.
+    # Rewritten for review fix 4. Old expectation: ("SHOWN", "NONE"), so the workpaper's
+    # tile counted it as shown ("Every attribute is shown") beside the open exception. New:
+    # ("EXCEPTION_RECORDED", "NONE"). Why: a person's exception says the control did not
+    # work, and an exception found is evaluated, never set aside because a check shows
+    # the attribute: it cannot be counted as shown while it is open.
     by_code = {attribute.code: attribute for attribute in shown}
-    assert (by_code["A"].state, by_code["A"].tickmark) == ("SHOWN", "NONE")
+    assert (by_code["A"].state, by_code["A"].tickmark) == ("EXCEPTION_RECORDED", "NONE")
     assert (by_code["B"].state, by_code["C"].state) == ("NOT_AVAILABLE", "SHOWN_ON_REVIEW")
     # Where a check of another request still leaves it open, that still waits.
     two = {**checks, R2: _check(_open(), requirement=R2, run=RUN2, files=(F3, F1))}
@@ -1567,6 +1572,80 @@ def test_each_disposition_is_a_matter_and_an_exception_recorded_is_open() -> Non
         ("DISPOSITION", "OPEN"), ("UNSETTLED", "OPEN"),
     ]  # fmt: skip
     assert still[1].text == f"Attribute C is not concluded. {OPEN_C}"
+
+
+def test_an_exception_a_person_recorded_is_never_counted_as_shown() -> None:
+    """Review fix 4: with a person's EXCEPTION on an attribute a check shows, the state
+    was "SHOWN", and the attributes tile said "Every attribute is shown" beside the open
+    exception. It now reads EXCEPTION_RECORDED, above shown and above what a person's
+    other dispositions close; an exception a check shows still stands above it."""
+    shows = "Both readings find this instance shows attribute C."
+    reason = "The approval is dated after the grant."
+    excepted = _disposed("EXCEPTION", C, reason=reason)
+    own = {R1: _check(_item(C, summary=shows))}
+    assert (_read("C", own, []).state, _read("C", own, []).tickmark) == ("SHOWN", "AGREED")
+    found = _read("C", own, [excepted])
+    assert (found.state, found.state_words, found.tickmark) == (
+        "EXCEPTION_RECORDED", "Exception recorded by the auditor", "NONE",
+    )  # fmt: skip
+    assert view.EXCEPTION_RECORDED_WORDS == "Exception recorded by the auditor"
+    # Who, when and the person's reason; and, beside it, what the check found.
+    assert found.basis == (
+        f"Recorded by Dana Lee on 14 November 2026: {reason} The check found: {shows}"
+    )
+    # The files are marked by the check's own passages, as before: nothing is hidden.
+    assert found.marks == _read("C", own, []).marks and found.refs == _read("C", own, []).refs
+    # Shown by another request's check, beside a person's closing disposition: the same.
+    other = {
+        R1: _check(_gap(C)),
+        R2: _check(_item(C, summary=shows, files=(F3,)), requirement=R2, run=RUN2, files=(F3, F1)),
+    }
+    on_r2 = _disposed("EXCEPTION", C, R2, reason=reason)
+    assert _read("C", other, [_disposed("NOT_AVAILABLE", C)]).state == "SHOWN"
+    apart = _read("C", other, [on_r2, _disposed("NOT_AVAILABLE", C)])
+    assert (apart.state, apart.tickmark) == ("EXCEPTION_RECORDED", "NONE")
+    # Above a person's own closing disposition on another request.
+    gap = {
+        R1: _check(_gap(C)),
+        R2: _check(_gap(C), requirement=R2, run=RUN2, files=(F3, F1)),
+    }
+    mine = _annotation(
+        3, "SHOWS", C, file=F3, requirement=R2, status="CONFIRMED", origin="PERSON", run=None
+    )
+    for kind in ("SHOWN_ON_REVIEW", "NOT_APPLICABLE", "NOT_AVAILABLE"):
+        closing = _disposed(kind, C, R2, annotation=mine.id if kind == "SHOWN_ON_REVIEW" else None)
+        assert _read("C", gap, [closing], [mine]).state == kind
+        above = _read("C", gap, [excepted, closing], [mine])
+        assert (above.state, above.tickmark) == ("EXCEPTION_RECORDED", "NONE"), kind
+    # An exception a check shows still stands above it.
+    exception = _item(
+        C, verdict="ISSUE", assessment="CONTRADICTED", result="NOT_MET", files=(F3,),
+        element="NOT_MET", deviation=True, summary="The records show attribute C is not met.",
+    )  # fmt: skip
+    shown_by_check = {
+        R1: _check(_item(C, summary=shows)),
+        R2: _check(exception, requirement=R2, run=RUN2, files=(F3, F1)),
+    }
+    held = _read("C", shown_by_check, [excepted])
+    assert (held.state, held.state_words, held.tickmark) == (
+        "EXCEPTION", "Exception shown", "EXCEPTION",
+    )  # fmt: skip
+    # Elsewhere it still reads as the checks leave it (the rule of section 10.13): not
+    # shown, not concluded, as before.
+    assert _read("C", {R1: _check(_gap(C))}, [excepted]).state == "NOT_SHOWN"
+    assert _read("C", {R1: _check(_open())}, [excepted]).state == "NOT_CONCLUDED"
+    # It stays an open matter for the reviewer.
+    checks = {R1: _check(_item(A), _gap(), _item(C, summary=shows))}
+    evidence = _index(checks=checks)
+    [matter] = view.disposition_matters(
+        ATTRIBUTES, view.dispositions_applying([excepted], checks, []), [], evidence
+    )
+    assert (matter.kind, matter.state) == ("DISPOSITION", "OPEN")
+    # Never inside the precedence of the checks' own states, nor among the dispositions
+    # that close an attribute.
+    assert "EXCEPTION_RECORDED" not in STATE_WORDS
+    assert "EXCEPTION_RECORDED" not in view.DISPOSITION_WORDS
+    assert "client" not in view.EXCEPTION_RECORDED_WORDS.lower()
 
 
 def test_the_words_written_for_a_disposition_never_say_the_client() -> None:

@@ -5506,6 +5506,12 @@ class AttributeBody(BaseModel):
     disposition_history: list[attribute_dispositions.EndedDispositionBody] = Field(
         default_factory=list
     )
+    # Whether the check finds the records contradict the attribute, so that only
+    # "Exception" can be recorded on it: the rule recording refuses by
+    # (attribute_dispositions.contradicted), for a run of either engine. The screen
+    # cannot work it out itself: a run of the first engine records no assessment and the
+    # elements here carry no deviation.
+    contradicted: bool = False
 
 
 class CompletenessBody(BaseModel):
@@ -5861,6 +5867,7 @@ def read_assurance(
                         disposition_history=dispositions.history(
                             request.requirement_id, attribute_id
                         ),
+                        contradicted=attribute_dispositions.contradicted(item),
                     )
                 )
             summary.supported += sum(1 for a in shown if a.verdict == "SUPPORTED")

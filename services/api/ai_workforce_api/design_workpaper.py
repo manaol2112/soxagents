@@ -31,7 +31,9 @@ Rules held here, whatever the records hold:
   another request's check leaves open still waits, and an attribute a check shows stays
   "Shown". An attribute that reads by a disposition is never marked as agreed or compared,
   never counted as shown by the records, and every disposition is a matter for the
-  reviewer with the person, the date and the reason.
+  reviewer with the person, the date and the reason. A person's exception is never
+  counted as shown: where the attribute would read as shown (by a check or by a closing
+  disposition) it reads "Exception recorded by the auditor", an open matter.
 
 The first part is pure (no database): the records as plain values in, the response's
 parts out. The loader then reads each kind of record once for the control.
@@ -85,11 +87,13 @@ logger = logging.getLogger(__name__)
 
 # --- The vocabulary of the response (docs/design-workpaper.md, section 2) --------------
 
-# The last three are a person's disposition of the attribute (docs/evidence-assurance.md,
-# section 10.13), read only where the checks do not show the attribute themselves.
+# The last four are a person's disposition of the attribute (docs/evidence-assurance.md,
+# section 10.13): the three that close it, read only where the checks do not show the
+# attribute themselves, and EXCEPTION_RECORDED, a person's exception where the attribute
+# would otherwise read as shown.
 AttributeState = Literal[
     "EXCEPTION", "SHOWN", "SHOWN_IN_PART", "NOT_SHOWN", "NOT_CONCLUDED", "NOT_TESTED",
-    "SHOWN_ON_REVIEW", "NOT_APPLICABLE", "NOT_AVAILABLE",
+    "SHOWN_ON_REVIEW", "NOT_APPLICABLE", "NOT_AVAILABLE", "EXCEPTION_RECORDED",
 ]  # fmt: skip
 # REVIEWED: the file holds the person's annotation a "Shown, auditor's judgment" rests on.
 Mark = Literal["EXCEPTION", "SHOWS", "REVIEWED", "IDENTIFIES", "SOURCE"]
@@ -163,6 +167,11 @@ _DISPOSITION_PRECEDENCE: tuple[str, ...] = ("NOT_AVAILABLE", "NOT_APPLICABLE", "
 # The checks' states a disposition never stands against: an exception a check shows, what
 # a check of another request leaves open, and an attribute the checks show themselves.
 _OVER_A_DISPOSITION: frozenset[str] = frozenset({"EXCEPTION", "NOT_CONCLUDED", "SHOWN"})
+# An attribute with an exception a person recorded (review fix 4): never counted as shown.
+# Where it would read as shown, by a check or by a person's closing disposition, it reads
+# as the exception recorded; an exception a check shows still stands above it.
+EXCEPTION_RECORDED_WORDS = "Exception recorded by the auditor"
+_UNDER_AN_EXCEPTION_RECORDED: frozenset[str] = frozenset({"SHOWN", *CLOSING})
 _MARK_RANK: dict[Mark, int] = {
     "EXCEPTION": 0, "SHOWS": 1, "REVIEWED": 2, "IDENTIFIES": 3, "SOURCE": 4,
 }  # fmt: skip
@@ -1031,6 +1040,8 @@ def attributes_of(
         if state == "NOT_TESTED" and attribute.id in stale:
             basis = ONLY_OUT_OF_DATE
         words = STATE_WORDS[state]
+        # What the checks found, for a sentence that reads by a person's act.
+        found_by_checks = basis
         tickmark: Tickmark
         if closing and state not in _OVER_A_DISPOSITION:
             by = read_by(closing)
@@ -1045,6 +1056,7 @@ def attributes_of(
             state = cast(AttributeState, by.kind)
             words = DISPOSITION_WORDS[by.kind]
             basis = disposition_basis(by, stood_in)
+            found_by_checks = stood_in
             # Never agreed or compared: the person's reading is not the system's record.
             tickmark = "REVIEWED" if by.kind == "SHOWN_ON_REVIEW" else "NONE"
         else:
@@ -1054,6 +1066,18 @@ def attributes_of(
             tickmark = tickmark_of(state, readings)
             if tickmark in ("AGREED", "COMPARED") and any(d.kind == "EXCEPTION" for d in mine):
                 tickmark = "NONE"
+        # An exception a person recorded is never counted as shown: where the attribute
+        # would read as shown, by a check or by a person's closing disposition, it reads
+        # as the exception recorded, with no mark. An exception a check shows, and what a
+        # check leaves open or does not show, still read as they are.
+        excepted = sorted(
+            (d for d in mine if d.kind == "EXCEPTION"), key=lambda d: (d.recorded_at, str(d.id))
+        )
+        if excepted and state in _UNDER_AN_EXCEPTION_RECORDED:
+            state = "EXCEPTION_RECORDED"
+            words = EXCEPTION_RECORDED_WORDS
+            basis = disposition_basis(excepted[0], found_by_checks)
+            tickmark = "NONE"
         # The sentence of a comparison that failed is never listed under "shown".
         said = _distinct(
             sentence

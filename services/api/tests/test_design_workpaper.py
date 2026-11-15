@@ -844,10 +844,20 @@ def test_a_persons_dispositions_are_read_where_the_checks_do_not_show_the_attrib
     assert found["C"]["marks"] == {"E1": "REVIEWED"}
     [ref] = found["C"]["refs"]
     assert ref["ref"] == "E1" and mine in ref["annotation_ids"] and len(ref["numbers"]) >= 1
-    # An exception a person recorded closes nothing: D reads as the check left it, and E,
-    # which the check shows, keeps its state with no mark of agreement beside it.
+    # An exception a person recorded closes nothing: D reads as the check left it. E,
+    # which the check shows, is never "Shown" beside the open exception: it reads as an
+    # exception recorded by the auditor, with no mark of agreement. Rewritten for review
+    # fix 4. Old expectation: ("SHOWN", "NONE"), so the attributes tile counted E as shown
+    # ("Every attribute is shown") beside an open exception. New: ("EXCEPTION_RECORDED",
+    # "NONE"). Why: an exception a person found is evaluated, never set aside because a
+    # check shows the attribute.
     assert (found["D"]["state"], found["D"]["basis"]) == ("NOT_SHOWN", checked["D"]["basis"])
-    assert (found["E"]["state"], found["E"]["tickmark"]) == ("SHOWN", "NONE")
+    assert (found["E"]["state"], found["E"]["state_words"], found["E"]["tickmark"]) == (
+        "EXCEPTION_RECORDED", "Exception recorded by the auditor", "NONE",
+    )  # fmt: skip
+    found_e = checked["E"]["basis"]
+    assert found["E"]["basis"] == f"Recorded {by}: {REASON} The check found: {found_e}"
+    assert found["E"]["marks"] == checked["E"]["marks"]
     # The legend names the auditor's review only now that an attribute carries it.
     assert [t["mark"] for t in body["tickmarks"]] == [
         "AGREED", "COMPARED", "REVIEWED", "EXCEPTION",
@@ -871,10 +881,8 @@ def test_a_persons_dispositions_are_read_where_the_checks_do_not_show_the_attrib
     assert len([m for m in body["matters"] if m["kind"] == "FINDING"]) == 3
 
     # Reopened: the attribute reads as the check left it again.
-    version = next(
-        a["disposition"]["version"] for a in bench.entry()["attributes"] if a["code"] == "C"
-    )
-    assert _reopen(bench, ids["C"], version).status_code == 200
+    seen = next(a["disposition"] for a in bench.entry()["attributes"] if a["code"] == "C")
+    assert _reopen(bench, ids["C"], seen["id"], version=seen["version"]).status_code == 200
     again = _view(bench)
     assert _by_code(again)["C"] == checked["C"]
     assert [t["mark"] for t in again["tickmarks"]] == ["AGREED", "COMPARED", "EXCEPTION"]

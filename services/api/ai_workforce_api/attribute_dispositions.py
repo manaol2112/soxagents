@@ -12,7 +12,12 @@ Rules held here, whatever is asked:
 
 - One disposition stands per request and attribute. Recording another ends the earlier one
   as REPLACED; a person reopens one with a reason. Nothing is deleted or rewritten: a row
-  takes one change, its ending (the guard of migration 0162 refuses any other).
+  takes one change, its ending (the guard of migration 0162 refuses any other). So every
+  standing row has version 1, and an act names the disposition the person saw by its id
+  (reopen: `id`; record: `replaces`, null for none): where what stands is not that, the
+  page is stale and the act is refused. Nothing is reopened or replaced unseen.
+- "Shown, on my review" rests only on an annotation of kind SHOWS: never one that marks
+  an exception, identifies a person or names a source.
 - A disposition never changes what the check found. Nothing here writes a run, a finding,
   a follow-up, an annotation, a request's acceptance or a conclusion.
 - It is refused where the request has no finished, current check, where the attribute is
@@ -142,6 +147,10 @@ ANNOTATION_UNREVIEWED = (
     "The annotation chosen is the agent's proposal and no person has reviewed it yet."
 )
 ANNOTATION_OTHER_ATTRIBUTE = "The annotation chosen does not name this attribute."
+ANNOTATION_NOT_SHOWS = (
+    "“Shown, on my review” needs an annotation that shows the attribute, not one that marks "
+    "an exception, a person or source."
+)
 ANNOTATION_FILE_GONE = (
     "The annotation chosen is on a file that is no longer in force on this request."
 )
@@ -151,6 +160,9 @@ ONLY_EXCEPTION = (
 )
 STALE = "This tickmark changed since the page loaded, so refresh and try again."
 NOTHING_STANDS = "No tickmark stands on this attribute for this request."
+RECORDED_SINCE = (
+    "A tickmark was recorded on this attribute since the page loaded, so refresh and try again."
+)
 
 _NOT_CURRENT: dict[str, str] = {
     "NOT_CHECKED": NOT_CHECKED,
@@ -182,7 +194,12 @@ class DispositionState(Exception):
 
 class RecordBody(BaseModel):
     """A person's disposition of one attribute. The texts are read and bounded in code
-    (`clean_reason`, `clean_relied_on`), so that each refusal is one plain sentence."""
+    (`clean_reason`, `clean_relied_on`), so that each refusal is one plain sentence.
+
+    `replaces` is the id of the disposition the person saw standing on the attribute, or
+    null (or left out) where they saw none: where what stands now is not that, the page
+    is stale and nothing is recorded (`stale_refusal`). A standing disposition changes
+    only by ending, so its version cannot tell it from the one that replaced it."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -190,12 +207,18 @@ class RecordBody(BaseModel):
     reason: str = Field(max_length=_RAW_MAX)
     relied_on: str | None = Field(default=None, max_length=_RAW_MAX)
     annotation_id: UUID | None = None
+    replaces: UUID | None = None
 
 
 class ReopenBody(BaseModel):
+    """A person reopens the disposition they saw standing, named by its `id`. `version`
+    is accepted as the first contract sent it, and checked where given; it never tells
+    one standing disposition from another (each that stands has version 1)."""
+
     model_config = ConfigDict(extra="forbid")
 
-    version: int = Field(ge=1)
+    id: UUID
+    version: int | None = Field(default=None, ge=1)
     reason: str = Field(max_length=_RAW_MAX)
 
 
@@ -276,6 +299,23 @@ def check_finds(item: Mapping[str, Any] | None) -> Finds:
     return "SUPPORTED" if verdict == "SUPPORTED" else "OTHER"
 
 
+def contradicted(item: Mapping[str, Any] | None) -> bool:
+    """Whether the current check finds the records contradict the attribute, so that
+    only EXCEPTION is taken there: the rule `record` refuses by, given to the screen on
+    each attribute of the D&I list (which sends no element's deviation, so the screen
+    could not work it out for a run of the first engine)."""
+    return check_finds(item) == "CONTRADICTED"
+
+
+def stale_refusal(standing: UUID | None, seen: UUID | None) -> str | None:
+    """Why an act is refused because the page is stale; None where what stands on the
+    attribute (`standing`) is what the person saw (`seen`; None for nothing). Another
+    recorded since: RECORDED_SINCE. The one seen ended since, and none stands: STALE."""
+    if standing == seen:
+        return None
+    return STALE if standing is None else RECORDED_SINCE
+
+
 def ending_by_check(kind: str, finds: Finds, annotation_in_force: bool = True) -> EndedAs | None:
     """How a later finished check of the request ends a standing disposition; None where
     it stands. A kind that closes an attribute is superseded where the check finds the
@@ -298,19 +338,23 @@ def annotation_refusal(
     *,
     found: bool,
     status: str,
+    kind: str,
     names_attribute: bool,
     file_in_force: bool,
 ) -> str | None:
     """Why an annotation cannot carry "Shown, on my review", in one sentence; None where
     it can: an annotation of this request (`found`), still in the list of its file, that a
-    person made, confirmed or edited, naming the attribute, on a file in force on the
-    request."""
+    person made, confirmed or edited, that shows the attribute (kind SHOWS: never one that
+    marks an exception, identifies a person or names a source), naming the attribute, on
+    a file in force on the request. An annotation's kind never changes once made."""
     if not found:
         return ANNOTATION_ELSEWHERE
     if status in ("REMOVED", "SUPERSEDED"):
         return ANNOTATION_REMOVED
     if status not in ("CONFIRMED", "EDITED"):
         return ANNOTATION_UNREVIEWED
+    if kind != "SHOWS":
+        return ANNOTATION_NOT_SHOWS
     if not names_attribute:
         return ANNOTATION_OTHER_ATTRIBUTE
     if not file_in_force:
@@ -683,7 +727,7 @@ def _annotation_refusal(
     is locked against a removal until the act commits."""
     row = cursor.execute(
         """
-        SELECT evidence_file_id, status, attribute_ids FROM evidence_annotations
+        SELECT evidence_file_id, status, attribute_ids, kind FROM evidence_annotations
         WHERE id = %s AND project_id = %s AND engagement_control_id = %s
           AND requirement_id = %s
         FOR SHARE
@@ -692,11 +736,12 @@ def _annotation_refusal(
     ).fetchone()
     if row is None:
         return annotation_refusal(
-            found=False, status="", names_attribute=False, file_in_force=False
+            found=False, status="", kind="", names_attribute=False, file_in_force=False
         )
     return annotation_refusal(
         found=True,
         status=str(row[1]),
+        kind=str(row[3]),
         names_attribute=str(attribute_id) in {str(item) for item in (row[2] or [])},
         file_in_force=UUID(str(row[0])) in in_force,
     )
@@ -712,8 +757,9 @@ def record(
     actor: UUID,
 ) -> UUID:
     """A person records a disposition of one attribute on one request. The one that stood
-    there, if any, is kept and ended as REPLACED. Refused, with nothing changed, by each
-    rule of section 10.13."""
+    there, if any, is kept and ended as REPLACED, but only where it is the one the person
+    saw (`body.replaces`; none where they saw none). Refused, with nothing changed, by
+    each rule of section 10.13."""
     organization_id = _scope(connection, project_id, control_id, requirement_id)
     reason = clean_reason(body.reason)
     relied_on = clean_relied_on(body.kind, body.relied_on)
@@ -725,7 +771,7 @@ def record(
         current = _current_check(cursor, project_id, control_id, requirement_id)
         if attribute_id not in current.approved:
             raise DispositionState(NOT_AN_ATTRIBUTE)
-        if body.kind in CLOSING and check_finds(current.item(attribute_id)) == "CONTRADICTED":
+        if body.kind in CLOSING and contradicted(current.item(attribute_id)):
             raise DispositionState(ONLY_EXCEPTION)
         if body.annotation_id is not None:
             refusal = _annotation_refusal(
@@ -734,16 +780,37 @@ def record(
             )  # fmt: skip
             if refusal is not None:
                 raise DispositionState(refusal)
-        replaced = cursor.execute(
+        # What stands now, locked until the act commits, against what the person saw: one
+        # the list leaves out (its annotation no longer stands) was never seen.
+        standing = cursor.execute(
             """
-            UPDATE attribute_dispositions
-            SET ended_at = clock_timestamp(), ended_by = %s, ended_as = 'REPLACED',
-                version = version + 1
-            WHERE requirement_id = %s AND attribute_id = %s AND ended_at IS NULL
-            RETURNING id, kind
+            SELECT d.id,
+                   d.annotation_id IS NULL
+                   OR (a.status IN ('CONFIRMED', 'EDITED')
+                       AND d.attribute_id = ANY(a.attribute_ids))
+            FROM attribute_dispositions d
+            LEFT JOIN evidence_annotations a ON a.id = d.annotation_id
+            WHERE d.requirement_id = %s AND d.attribute_id = %s AND d.ended_at IS NULL
+            FOR UPDATE OF d
             """,
-            (actor, requirement_id, attribute_id),
+            (requirement_id, attribute_id),
         ).fetchone()
+        shown = None if standing is None or not standing[1] else UUID(str(standing[0]))
+        refusal = stale_refusal(shown, body.replaces)
+        if refusal is not None:
+            raise DispositionState(refusal)
+        replaced = None
+        if standing is not None:
+            replaced = cursor.execute(
+                """
+                UPDATE attribute_dispositions
+                SET ended_at = clock_timestamp(), ended_by = %s, ended_as = 'REPLACED',
+                    version = version + 1
+                WHERE id = %s AND ended_at IS NULL
+                RETURNING id, kind
+                """,
+                (actor, standing[0]),
+            ).fetchone()
         row = cursor.execute(
             """
             INSERT INTO attribute_dispositions (
@@ -788,9 +855,10 @@ def reopen(
     body: ReopenBody,
     actor: UUID,
 ) -> UUID:
-    """A person reopens the disposition that stands on an attribute of a request, with a
-    reason: it is kept, ended as REOPENED, and no longer stands. Refused where none
-    stands, and where it changed since the person saw it."""
+    """A person reopens the disposition they saw standing on an attribute of a request
+    (`body.id`), with a reason: it is kept, ended as REOPENED, and no longer stands.
+    Refused where none stands, and where the one that stands is not the one the person
+    saw (another replaced it since the page loaded: never reopened unseen)."""
     organization_id = _scope(connection, project_id, control_id, requirement_id)
     reason = clean_reason(body.reason)
     with transaction(connection) as cursor:
@@ -805,15 +873,15 @@ def reopen(
         ).fetchone()
         if row is None:
             raise DispositionState(NOTHING_STANDS)
-        if int(row[1]) != body.version:
-            raise DispositionState(STALE)
         found = UUID(str(row[0]))
+        if found != body.id or (body.version is not None and int(row[1]) != body.version):
+            raise DispositionState(STALE)
         cursor.execute(
             """
             UPDATE attribute_dispositions
             SET ended_at = clock_timestamp(), ended_by = %s, ended_as = 'REOPENED',
                 ended_reason = %s, version = version + 1
-            WHERE id = %s
+            WHERE id = %s AND ended_at IS NULL
             """,
             (actor, reason, found),
         )
@@ -1038,6 +1106,7 @@ __all__ = [
     "check_finds",
     "clean_reason",
     "clean_relied_on",
+    "contradicted",
     "end_by_check",
     "end_for_annotation",
     "ending_by_check",
@@ -1047,5 +1116,6 @@ __all__ = [
     "record",
     "register_attribute_dispositions",
     "reopen",
+    "stale_refusal",
     "standing_for",
 ]

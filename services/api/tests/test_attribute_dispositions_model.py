@@ -110,16 +110,36 @@ def test_the_bodies_are_strict() -> None:
     ):
         with pytest.raises(ValidationError):
             RecordBody.model_validate(refused)
-    assert ReopenBody.model_validate({"version": 1, "reason": "Recorded in error."}).version == 1
+    # What the person saw standing: nothing, unless they say which one (review fix 1).
+    assert body.replaces is None
+    seen = RecordBody.model_validate(
+        {"kind": "EXCEPTION", "reason": "No leaver here.", "replaces": str(UUID(int=900))}
+    )
+    assert seen.replaces == UUID(int=900)
+    with pytest.raises(ValidationError):
+        RecordBody.model_validate({"kind": "EXCEPTION", "reason": "x" * 12, "replaces": "no"})
+    # A reopening names the disposition the person saw (review fix 1). Rewritten: the
+    # first contract took `{version, reason}` alone, and every standing row has version 1,
+    # so the version could never tell one disposition from the one that replaced it. The
+    # version is still accepted, and never needed.
+    reopening = ReopenBody.model_validate({"id": str(UUID(int=900)), "reason": "In error here."})
+    assert (reopening.id, reopening.version) == (UUID(int=900), None)
+    assert ReopenBody.model_validate(
+        {"id": str(UUID(int=900)), "version": 1, "reason": "Recorded in error."}
+    ).version == 1  # fmt: skip
     unreadable: list[dict[str, Any]] = [
         {"reason": "Recorded in error."},
         {"version": 0, "reason": "Recorded in error."},
         {"version": 1},
-        {"version": 1, "reason": "Recorded in error.", "kind": "EXCEPTION"},
+        {"version": 1, "reason": "Recorded in error."},
+        {"id": "not-an-id", "reason": "Recorded in error."},
+        {"id": str(UUID(int=900)), "version": 0, "reason": "Recorded in error."},
+        {"id": str(UUID(int=900))},
+        {"id": str(UUID(int=900)), "reason": "Recorded in error.", "kind": "EXCEPTION"},
     ]
-    for reopening in unreadable:
+    for unread in unreadable:
         with pytest.raises(ValidationError):
-            ReopenBody.model_validate(reopening)
+            ReopenBody.model_validate(unread)
 
 
 def _item(verdict: str, **over: Any) -> dict[str, Any]:
@@ -181,11 +201,23 @@ def test_a_persons_exception_is_never_ended_by_a_check() -> None:
 def test_shown_on_my_review_rests_only_on_a_reviewed_annotation_of_the_request() -> None:
     def refusal(**over: Any) -> str | None:
         facts: dict[str, Any] = {
-            "found": True, "status": "CONFIRMED", "names_attribute": True, "file_in_force": True,
+            "found": True, "status": "CONFIRMED", "kind": "SHOWS", "names_attribute": True,
+            "file_in_force": True,
         }  # fmt: skip
         return annotation_refusal(**(facts | over))
 
     assert refusal() is None and refusal(status="EDITED") is None
+    # Only an annotation that shows the attribute carries it (review fix 3): never one
+    # that marks an exception, identifies a person or names a source, reviewed or not.
+    for kind in ("EXCEPTION", "IDENTIFIES", "SOURCE"):
+        for status in ("CONFIRMED", "EDITED"):
+            assert refusal(kind=kind, status=status) == dispositions.ANNOTATION_NOT_SHOWS
+    assert dispositions.ANNOTATION_NOT_SHOWS == (
+        "“Shown, on my review” needs an annotation that shows the attribute, not one that "
+        "marks an exception, a person or source."
+    )
+    # An agent's proposal nobody reviewed is said so first.
+    assert refusal(kind="EXCEPTION", status="PROPOSED") == dispositions.ANNOTATION_UNREVIEWED
     assert refusal(found=False) == dispositions.ANNOTATION_ELSEWHERE
     assert refusal(status="PROPOSED") == dispositions.ANNOTATION_UNREVIEWED
     assert refusal(status="REMOVED") == dispositions.ANNOTATION_REMOVED
@@ -224,7 +256,8 @@ def test_each_refusal_is_one_plain_sentence_that_never_says_the_client() -> None
         dispositions.ANNOTATION_ELSEWHERE, dispositions.ANNOTATION_REMOVED,
         dispositions.ANNOTATION_UNREVIEWED, dispositions.ANNOTATION_OTHER_ATTRIBUTE,
         dispositions.ANNOTATION_FILE_GONE, dispositions.ONLY_EXCEPTION, dispositions.STALE,
-        dispositions.NOTHING_STANDS,
+        dispositions.NOTHING_STANDS, dispositions.RECORDED_SINCE,
+        dispositions.ANNOTATION_NOT_SHOWS,
     ]  # fmt: skip
     written = [
         *sentences, *KIND_WORDS.values(), dispositions.SUPERSEDED_REASON,
@@ -242,6 +275,51 @@ def test_each_refusal_is_one_plain_sentence_that_never_says_the_client() -> None
         "The check finds the records contradict this attribute, so only “Exception” can be "
         "recorded here."
     )
+
+
+def test_an_act_is_refused_where_what_stands_is_not_what_the_person_saw() -> None:
+    """Review fix 1: a standing disposition changes only by ending, so its version is
+    always 1 and cannot tell it from the one that replaced it. What the person saw is
+    named by its id: nothing (None), or the disposition they saw standing."""
+    seen, other = UUID(int=900), UUID(int=901)
+    assert dispositions.stale_refusal(None, None) is None
+    assert dispositions.stale_refusal(seen, seen) is None
+    # Another was recorded since the page loaded: in place of the one seen, or where the
+    # person saw none.
+    assert dispositions.stale_refusal(other, seen) == dispositions.RECORDED_SINCE
+    assert dispositions.stale_refusal(other, None) == dispositions.RECORDED_SINCE
+    # The one seen has ended since, and none stands now.
+    assert dispositions.stale_refusal(None, seen) == dispositions.STALE
+    assert dispositions.RECORDED_SINCE == (
+        "A tickmark was recorded on this attribute since the page loaded, so refresh and try again."
+    )
+
+
+def test_what_the_list_says_is_contradicted_is_what_recording_refuses() -> None:
+    """Review fix 2: the D&I list gives `contradicted` by the same rule recording refuses
+    a closing kind by, for either engine. A run of the first engine names no assessment
+    and the list sends no deviation, so the screen cannot work it out for itself."""
+    deviation = [{"key": "wording", "result": "NOT_MET", "deviation": True}]
+    absent = [{"key": "wording", "result": "NOT_MET", "deviation": False}]
+    items: list[dict[str, Any] | None] = [
+        _item("SUPPORTED", assessment="SATISFIED", result="MET"),
+        _item("PARTLY_SUPPORTED", assessment="PARTIALLY_SUPPORTED"),
+        _item("ISSUE", assessment="NOT_DEMONSTRATED", result="NOT_MET"),
+        _item("ISSUE", assessment="CONTRADICTED", result="NOT_MET"),
+        _item("UNSETTLED", assessment="INDETERMINATE"),
+        _item("UNSETTLED", assessment="CONTRADICTED"),
+        _item("ISSUE", result="NOT_MET", elements=deviation),
+        _item("ISSUE", result="NOT_MET", elements=absent),
+        _item("ISSUE", result="CONTRADICTED", elements=absent),
+        _item("UNSETTLED", elements=deviation),
+        _item("SUPPORTED", result="MET"),
+        _item("ISSUE", expected=False, result="NOT_MET", elements=deviation),
+        None,
+    ]
+    for item in items:
+        assert dispositions.contradicted(item) == (check_finds(item) == "CONTRADICTED"), item
+    assert dispositions.contradicted(_item("ISSUE", result="NOT_MET", elements=deviation))
+    assert not dispositions.contradicted(_item("ISSUE", result="NOT_MET", elements=absent))
 
 
 def _disposition(**over: Any) -> Disposition:

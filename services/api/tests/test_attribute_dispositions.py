@@ -18,7 +18,11 @@ Audit integrity (critical tier):
   annotation or with one that is another request's, removed, the agent's unreviewed
   proposal, not naming the attribute or on a file no longer in force, a contradiction on
   the current check for the three kinds that close an attribute (only EXCEPTION is taken),
-  a reason too short or too long, a stale version;
+  a reason too short or too long, an annotation of another kind than SHOWS, a stale page
+  (what stands is not the disposition the person saw, named by its id: never reopened or
+  replaced unseen, as two people's acts show);
+- each attribute of the list says `contradicted` exactly where only EXCEPTION is taken,
+  for a run of either engine;
 - a later check of the request ends what closed an attribute where it finds the attribute
   supported (superseded) or contradicted (overtaken, with the check's own sentence), each
   with one audit event that names nobody, and leaves it standing otherwise; a person's
@@ -31,12 +35,14 @@ Audit integrity (critical tier):
 """
 
 from collections.abc import Callable
+from functools import partial
 from typing import Any
 from uuid import UUID, uuid4
 
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from psycopg.types.json import Json
 from support import Database
 from test_assurance_engine2 import _engine_2, _said
 from test_evidence_assurance import (
@@ -54,7 +60,7 @@ from test_outbound import migrated
 from ai_workforce_api import attribute_dispositions as dispositions
 from ai_workforce_api import evidence_assurance as chain
 from ai_workforce_api.authorization import Principal, PrincipalKind
-from ai_workforce_api.db import connect
+from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.engagement_close import closed_detail
 
 __all__ = ["migrated"]
@@ -163,16 +169,26 @@ def _record(
 def _reopen(
     bench: _Bench,
     attribute_id: str,
-    version: int,
+    disposition_id: str,
     client: TestClient | None = None,
     reason: str = "Recorded on the wrong attribute.",
+    version: int | None = None,
 ) -> Any:
-    return (client or bench.owner).post(
-        _url(bench, attribute_id, "/reopen"), json={"version": version, "reason": reason}
-    )
+    """A person reopens the disposition they saw standing, named by its id (and, as the
+    first contract sent it, its version where given)."""
+    body: dict[str, Any] = {"id": disposition_id, "reason": reason}
+    if version is not None:
+        body["version"] = version
+    return (client or bench.owner).post(_url(bench, attribute_id, "/reopen"), json=body)
 
 
-def _annotate(bench: _Bench, file_id: str, *attribute_ids: str, item: str | None = None) -> str:
+def _annotate(
+    bench: _Bench,
+    file_id: str,
+    *attribute_ids: str,
+    item: str | None = None,
+    kind: str = "SHOWS",
+) -> str:
     """A person's own annotation on a file of the request, naming the attributes."""
     added = bench.owner.post(
         f"{bench.base}/controls/{bench.control}/evidence-annotations",
@@ -180,7 +196,7 @@ def _annotate(bench: _Bench, file_id: str, *attribute_ids: str, item: str | None
             "requirement_id": item or bench.item_id, "file_id": file_id, "page": 1,
             "rects": [[0.05, 0.6, 0.4, 0.05]],
             "statement": "The line shows it, on my reading of the record.",
-            "attribute_ids": list(attribute_ids), "kind": "SHOWS",
+            "attribute_ids": list(attribute_ids), "kind": kind,
         },
     )  # fmt: skip
     assert added.status_code == 200, added.text
@@ -305,8 +321,9 @@ def test_each_kind_is_recorded_read_back_replaced_and_reopened_and_the_check_sta
     # Evidence not available, accepted, with what was relied on instead: it replaces the
     # first, which is kept.
     replaced = _record(
-        bench, ids["B"], "NOT_AVAILABLE", reason=f"  {REASON}\n ", relied_on=f" {RELIED_ON} "
-    )
+        bench, ids["B"], "NOT_AVAILABLE", reason=f"  {REASON}\n ", relied_on=f" {RELIED_ON} ",
+        replaces=standing["id"],
+    )  # fmt: skip
     assert replaced.status_code == 200, replaced.text
     b = _by_code(replaced.json())["B"]
     assert b["disposition"]["id"] != standing["id"]
@@ -362,18 +379,24 @@ def test_each_kind_is_recorded_read_back_replaced_and_reopened_and_the_check_sta
     assert bench.item(bench.item_id)["sufficiency"] == "NOT_REVIEWED"
     assert bench.worker.assessments == [] and len(bench.runs()) == 1
 
-    # Reopen, with a reason and the version the person saw.
+    # Reopen, with a reason and the id of the disposition the person saw (review fix 1;
+    # the race itself is test_a_stale_page_never_reopens_a_tickmark_its_person_did_not_see).
     version = _by_code(bench.entry())["B"]["disposition"]["version"]
     current = _by_code(bench.entry())["B"]["disposition"]["id"]
-    _refused(bench, dispositions.STALE, lambda: _reopen(bench, ids["B"], version + 1))
+    assert version == 1
+    # The one it replaced, or one that never was: not what stands.
+    for seen in (standing["id"], str(uuid4())):
+        _refused(bench, dispositions.STALE, partial(_reopen, bench, ids["B"], seen))
+    # The version is still accepted beside the id, and still checked.
+    _refused(bench, dispositions.STALE, lambda: _reopen(bench, ids["B"], current, version=2))
     assert dispositions.STALE == (
         "This tickmark changed since the page loaded, so refresh and try again."
     )
     _refused(
         bench, dispositions.REASON_TOO_SHORT,
-        lambda: _reopen(bench, ids["B"], version, reason="No."),
+        lambda: _reopen(bench, ids["B"], current, reason="No."),
     )  # fmt: skip
-    opened = _reopen(bench, ids["B"], version)
+    opened = _reopen(bench, ids["B"], current, version=version)
     assert opened.status_code == 200, opened.text
     b = _by_code(opened.json())["B"]
     assert b["disposition"] is None
@@ -392,16 +415,21 @@ def test_each_kind_is_recorded_read_back_replaced_and_reopened_and_the_check_sta
     }  # fmt: skip
     # Nothing stands there now: a second reopening is refused, and so is one where none
     # was ever recorded.
-    _refused(bench, dispositions.NOTHING_STANDS, lambda: _reopen(bench, ids["B"], version + 1))
-    _refused(bench, dispositions.NOTHING_STANDS, lambda: _reopen(bench, ids["A"], 1))
+    _refused(bench, dispositions.NOTHING_STANDS, lambda: _reopen(bench, ids["B"], current))
+    _refused(bench, dispositions.NOTHING_STANDS, lambda: _reopen(bench, ids["A"], str(uuid4())))
     assert dispositions.NOTHING_STANDS == "No tickmark stands on this attribute for this request."
     # The other attributes' dispositions are as they were.
     assert _by_code(bench.entry())["C"]["disposition"]["id"] == c["disposition"]["id"]
 
     # The history is the newest first, at most ten; every row is kept on record.
+    seen_on_e: str | None = None
     for number in range(12):
-        again = _record(bench, ids["E"], "NOT_APPLICABLE", reason=f"Reason number {number:02d}.")
+        again = _record(
+            bench, ids["E"], "NOT_APPLICABLE", reason=f"Reason number {number:02d}.",
+            replaces=seen_on_e,
+        )  # fmt: skip
         assert again.status_code == 200, again.text
+        seen_on_e = _by_code(again.json())["E"]["disposition"]["id"]
     e = _by_code(bench.entry())["E"]
     assert e["disposition"]["reason"] == "Reason number 11."
     assert [h["reason"] for h in e["disposition_history"]] == [
@@ -460,6 +488,210 @@ def test_each_kind_is_recorded_read_back_replaced_and_reopened_and_the_check_sta
                 (UUID(ids["A"]), open_e),
             )
     assert len(_rows(bench)) == 16 and _untouched(bench) == before
+
+
+def test_a_stale_page_never_reopens_a_tickmark_its_person_did_not_see(migrated: Database) -> None:
+    """Review fix 1 (high). A standing disposition changes only by ending, so every one
+    that stands has version 1, and a reopening matched on the request, the attribute and
+    the version reopened whatever stood there: one recorded by someone else after the
+    person's page loaded. A reopening now names the disposition the person saw."""
+    bench = _Bench(migrated, "ad-stale-reopen")
+    _ticket, first = _first_check(bench, B="ABSENT")
+    ids = _ids(first)
+    _contributor, other = bench.member("CONTRIBUTOR")
+    done = _record(bench, ids["B"], "NOT_AVAILABLE", other, relied_on=RELIED_ON)
+    assert done.status_code == 200, done.text
+    seen = _by_code(done.json())["B"]["disposition"]
+    # Both people's pages now show the other's "Evidence not available" on B. The other
+    # changes it to "Not applicable"; the owner's page still shows the first.
+    changed = _record(bench, ids["B"], "NOT_APPLICABLE", other, replaces=seen["id"])
+    assert changed.status_code == 200, changed.text
+    newer = _by_code(changed.json())["B"]["disposition"]
+    assert newer["id"] != seen["id"] and newer["version"] == seen["version"] == 1
+    # The owner reopens from the stale page. As the first contract sent it (the version
+    # alone) it is not read at all; by the id the page shows, it is refused as stale. The
+    # "Not applicable" the owner never saw still stands.
+    state = _state(bench)
+    old_contract = bench.owner.post(
+        _url(bench, ids["B"], "/reopen"),
+        json={"version": seen["version"], "reason": "Recorded on the wrong attribute."},
+    )
+    assert old_contract.status_code == 422, old_contract.text
+    assert _state(bench) == state
+    _refused(bench, dispositions.STALE, lambda: _reopen(bench, ids["B"], seen["id"]))
+    _refused(
+        bench, dispositions.STALE,
+        lambda: _reopen(bench, ids["B"], seen["id"], version=seen["version"]),
+    )  # fmt: skip
+    assert _by_code(bench.entry())["B"]["disposition"] == newer
+    # Refreshed, the owner reopens the one now shown.
+    opened = _reopen(bench, ids["B"], newer["id"])
+    assert opened.status_code == 200, opened.text
+    assert [(r["id"], r["ended_as"]) for r in _rows(bench)] == [
+        (seen["id"], "REPLACED"), (newer["id"], "REOPENED"),
+    ]  # fmt: skip
+    # The other's page still shows "Not applicable": nothing stands to reopen.
+    _refused(
+        bench, dispositions.NOTHING_STANDS, lambda: _reopen(bench, ids["B"], newer["id"], other)
+    )
+    [(_actor, _agent, event)] = _events(bench, dispositions.REOPENED)
+    assert event["disposition_id"] == newer["id"]
+
+
+def test_a_stale_page_never_replaces_a_tickmark_its_person_did_not_see(migrated: Database) -> None:
+    """Review fix 1 (high). Recording replaced whatever stood on the attribute, though
+    the person's page showed nothing there, or showed another. Recording now says what
+    the person saw standing (`replaces`: its id, or null for none), and is refused where
+    what stands is not that."""
+    bench = _Bench(migrated, "ad-stale-record")
+    _ticket, first = _first_check(bench, B="ABSENT")
+    ids = _ids(first)
+    _contributor, other = bench.member("CONTRIBUTOR")
+    # Both pages show nothing on B. The other records an exception first (`replaces` left
+    # out: they saw none).
+    done = _record(bench, ids["B"], "EXCEPTION", other)
+    assert done.status_code == 200, done.text
+    theirs = _by_code(done.json())["B"]["disposition"]
+    # The owner, from the page that shows nothing, records "Not applicable": refused, so
+    # the other's exception is never set aside unseen; with `replaces` null the same.
+    _refused(bench, dispositions.RECORDED_SINCE, lambda: _record(bench, ids["B"], "NOT_APPLICABLE"))
+    _refused(
+        bench, dispositions.RECORDED_SINCE,
+        lambda: _record(bench, ids["B"], "NOT_APPLICABLE", replaces=None),
+    )  # fmt: skip
+    assert _by_code(bench.entry())["B"]["disposition"] == theirs
+    # Refreshed, both see the exception. The other changes it; the owner, still showing
+    # the exception, is refused again.
+    changed = _record(bench, ids["B"], "NOT_AVAILABLE", other, replaces=theirs["id"])
+    assert changed.status_code == 200, changed.text
+    newer = _by_code(changed.json())["B"]["disposition"]
+    _refused(
+        bench, dispositions.RECORDED_SINCE,
+        lambda: _record(bench, ids["B"], "NOT_APPLICABLE", replaces=theirs["id"]),
+    )  # fmt: skip
+    # The other reopens it; a page that still shows it is refused: it has ended since.
+    assert _reopen(bench, ids["B"], newer["id"], other).status_code == 200
+    _refused(
+        bench, dispositions.STALE,
+        lambda: _record(bench, ids["B"], "NOT_APPLICABLE", replaces=newer["id"]),
+    )  # fmt: skip
+    # With what the page shows now (nothing), it is recorded.
+    recorded = _record(bench, ids["B"], "NOT_APPLICABLE", replaces=None)
+    assert recorded.status_code == 200, recorded.text
+    assert [(r["kind"], r["ended_as"]) for r in _rows(bench)] == [
+        ("EXCEPTION", "REPLACED"), ("NOT_AVAILABLE", "REOPENED"), ("NOT_APPLICABLE", None),
+    ]  # fmt: skip
+
+
+def _engine_1_reviewed(bench: _Bench, outcome: list[dict[str, Any]]) -> UUID:
+    """The request's current check as a finished run of the first engine left it, with
+    this outcome on record (that engine recorded no assessment). As
+    test_assurance_forward_only._as_engine_1 does, with the outcome."""
+    project, control_id = UUID(str(bench.team["project"])), UUID(bench.control)
+    with connect(bench.database.url) as connection:
+        control = chain._control(connection, project, control_id)
+        assert control is not None
+        request = next(
+            item
+            for item in chain._requests(connection, project, control_id)
+            if item.requirement_id == UUID(bench.item_id)
+        )
+        attributes = chain._approved(connection, control_id)
+        basis = chain._basis(
+            request, control, attributes, chain._linked(connection, control_id), engine=1
+        )
+        assert chain._gate_of(request, len(attributes), 1) is None
+        with transaction(connection) as cursor:
+            for (run_id,) in cursor.execute(
+                "SELECT id FROM evidence_assessments WHERE requirement_id = %s "
+                "AND stale_at IS NULL",
+                (UUID(bench.item_id),),
+            ).fetchall():
+                chain._mark_stale(cursor, run_id, ["Replaced by the test's engine 1 run."])
+            made = chain._insert(
+                cursor, control, project, control_id, request, basis, None,
+                bench.team["owner_id"],
+            )  # fmt: skip
+            assert made is not None
+            cursor.execute(
+                "UPDATE evidence_assessments SET status = 'READY', stage = 'DONE', "
+                "finished_at = clock_timestamp(), ran_with = %s::jsonb, "
+                "assessor_opinion = '{}'::jsonb, reviewer_opinion = '{}'::jsonb, "
+                "outcome = %s::jsonb WHERE id = %s",
+                (Json(basis.models), Json(outcome), made[0]),
+            )
+    bench.worker.assessments.clear()
+    return made[0]
+
+
+def test_the_list_says_where_only_an_exception_is_taken_for_a_run_of_either_engine(
+    migrated: Database,
+) -> None:
+    """Review fix 2 (medium). The list sends no element's deviation, so for a run of the
+    first engine (no assessment recorded) the screen could not tell an issue resting on
+    a deviation from one resting on absence, and offered kinds recording refuses. Each
+    attribute now says `contradicted`, by the rule recording refuses by."""
+    bench = _Bench(migrated, "ad-contradicted")
+    bench.add("ticket REQ-1041.txt", TICKET)
+    bench.read_next(_reading("walkthrough"))
+    approved = [
+        str(row[0])
+        for row in bench.rows(
+            "SELECT id FROM control_attributes WHERE engagement_control_id = %s "
+            "AND status = 'APPROVED' ORDER BY position, created_at",
+            UUID(bench.control),
+        )
+    ]
+    assert len(approved) == 5
+
+    def element(result: str, deviation: bool) -> dict[str, Any]:
+        return {"key": "wording", "text": "The approval is recorded.", "result": result,
+                "deviation": deviation, "passages": [], "absent": []}  # fmt: skip
+
+    # A shown; B an issue resting on a deviation; C an issue resting on absence; D left to
+    # a person beside a deviation; E shown in part.
+    how = {
+        "A": ("SUPPORTED", "MET", element("MET", False)),
+        "B": ("ISSUE", "NOT_MET", element("NOT_MET", True)),
+        "C": ("ISSUE", "NOT_MET", element("NOT_MET", False)),
+        "D": ("UNSETTLED", None, element("NOT_MET", True)),
+        "E": ("PARTLY_SUPPORTED", "PARTLY_MET", element("PARTLY_MET", False)),
+    }
+    outcome = [
+        {
+            "attribute_id": attribute_id, "code": code, "expected": True, "verdict": verdict,
+            "result": result, "summary": f"Attribute {code} as the first engine found it.",
+            "passages": [], "absent": [], "views": [], "elements": [one],
+        }
+        for (code, (verdict, result, one)), attribute_id in zip(how.items(), approved, strict=True)
+    ]  # fmt: skip
+    run_id = _engine_1_reviewed(bench, outcome)
+    entry = bench.entry()
+    assert (entry["run_id"], entry["status"], entry["engine_version"]) == (
+        str(run_id), "REVIEWED", 1,
+    )  # fmt: skip
+    found = _by_code(entry)
+    # No assessment, and no element's deviation, reach the screen.
+    assert {a["assessment"] for a in found.values()} == {None}
+    assert not any("deviation" in e for a in found.values() for e in a["elements"])
+    assert {code: a["contradicted"] for code, a in found.items()} == {
+        "A": False, "B": True, "C": False, "D": True, "E": False,
+    }  # fmt: skip
+    # Exactly where the list says so, a closing kind is refused and only an exception is
+    # taken; elsewhere a closing kind is taken.
+    for code, attribute in found.items():
+        attribute_id = str(attribute["attribute_id"])
+        if attribute["contradicted"]:
+            for kind in ("NOT_APPLICABLE", "NOT_AVAILABLE"):
+                _refused(
+                    bench, dispositions.ONLY_EXCEPTION, partial(_record, bench, attribute_id, kind)
+                )
+            taken = _record(bench, attribute_id, "EXCEPTION")
+        else:
+            taken = _record(bench, attribute_id, "NOT_APPLICABLE")
+        assert taken.status_code == 200, (code, taken.text)
+    # The engine 2 states are held to the same rule in
+    # test_each_refusal_on_a_finished_check_is_one_sentence_and_changes_nothing.
 
 
 def test_every_state_without_a_finished_current_check_is_refused_and_changes_nothing(
@@ -601,6 +833,11 @@ def test_each_refusal_on_a_finished_check_is_one_sentence_and_changes_nothing(
         "C": ("ISSUE", "CONTRADICTED"), "D": ("ISSUE", "NOT_DEMONSTRATED"),
         "E": ("UNSETTLED", "INDETERMINATE"),
     }  # fmt: skip
+    # The list says where only an exception is taken (review fix 2), by the rule the
+    # refusals below hold to.
+    assert {code: a["contradicted"] for code, a in found.items()} == {
+        "A": False, "B": False, "C": True, "D": False, "E": False,
+    }  # fmt: skip
     mine = _annotate(bench, ticket, ids["B"], ids["D"])
 
     def asking(attribute_id: str, kind: str, **body: Any) -> Callable[[], Any]:
@@ -697,6 +934,16 @@ def test_each_refusal_on_a_finished_check_is_one_sentence_and_changes_nothing(
     assert dispositions.ANNOTATION_REMOVED == (
         "The annotation chosen is no longer in the list of its file."
     )
+    # Only an annotation that shows the attribute carries it (review fix 3): a person's
+    # own that marks an exception, identifies a person or names a source does not, though
+    # the person made it, it is listed and it names the attribute.
+    for kind in ("EXCEPTION", "IDENTIFIES", "SOURCE"):
+        other_kind = _annotate(bench, ticket, ids["B"], kind=kind)
+        [(stored,)] = bench.rows(
+            "SELECT kind FROM evidence_annotations WHERE id = %s", UUID(other_kind)
+        )
+        assert stored == kind
+        _refused(bench, dispositions.ANNOTATION_NOT_SHOWS, on_review(ids["B"], other_kind))
 
     # The records contradict C on the current check: nothing that would close it is
     # taken, whatever the reason or the annotation; only an exception.
@@ -712,6 +959,10 @@ def test_each_refusal_on_a_finished_check_is_one_sentence_and_changes_nothing(
     assert _by_code(bench.entry())["C"]["disposition"]["kind"] == "EXCEPTION"
     # Where the two readings differ, the person's judgment is exactly what is asked for.
     assert _record(bench, ids["E"], "NOT_APPLICABLE").status_code == 200
+    # Every attribute the list does not mark contradicted takes a closing kind.
+    for code in ("A", "B", "D"):
+        assert found[code]["contradicted"] is False
+        assert _record(bench, ids[code], "NOT_APPLICABLE").status_code == 200, code
 
     # A body that is not of the contract's shape is not read at all.
     unreadable: list[dict[str, Any]] = [
@@ -720,13 +971,21 @@ def test_each_refusal_on_a_finished_check_is_one_sentence_and_changes_nothing(
         {"kind": "NOT_APPLICABLE", "reason": REASON, "status": "CLOSED"},
         {"kind": "NOT_APPLICABLE", "reason": "x" * 4001},
         {"kind": "SHOWN_ON_REVIEW", "reason": REASON, "annotation_id": "not-an-id"},
+        {"kind": "EXCEPTION", "reason": REASON, "replaces": "not-an-id"},
     ]
     for body in unreadable:
         state = _state(bench)
         assert bench.owner.post(_url(bench, ids["B"]), json=body).status_code == 422, body
         assert _state(bench) == state
-    for body in ({"reason": REASON}, {"version": 0, "reason": REASON}, {"version": 1}):
+    # A reopening names the disposition by its id: the first contract's version alone is
+    # not read (review fix 1).
+    for body in (
+        {"reason": REASON}, {"version": 0, "reason": REASON}, {"version": 1},
+        {"version": 1, "reason": REASON}, {"id": "not-an-id", "reason": REASON},
+    ):  # fmt: skip
+        state = _state(bench)
         assert bench.owner.post(_url(bench, ids["C"], "/reopen"), json=body).status_code == 422
+        assert _state(bench) == state
 
     # A request, a control or an attribute path that is not this engagement's is not found.
     state = _state(bench)
@@ -740,7 +999,7 @@ def test_each_refusal_on_a_finished_check_is_one_sentence_and_changes_nothing(
         assert _record(bench, ids["B"], "NOT_APPLICABLE", None, **where).status_code == 404, where
     assert bench.owner.post(
         _url(bench, ids["C"], "/reopen", requirement_id=str(uuid4())),
-        json={"version": 1, "reason": "Recorded in error."},
+        json={"id": str(uuid4()), "version": 1, "reason": "Recorded in error."},
     ).status_code == 404  # fmt: skip
     assert _state(bench) == state
 
@@ -968,11 +1227,17 @@ def test_only_a_person_who_may_decide_evidence_records_or_reopens(
     bench = _Bench(migrated, "ad-roles")
     _ticket, first = _first_check(bench, B="ABSENT")
     ids = _ids(first)
-    assert _record(bench, ids["B"], "NOT_APPLICABLE").status_code == 200
+    done = _record(bench, ids["B"], "NOT_APPLICABLE")
+    assert done.status_code == 200, done.text
+    shown = str(_by_code(done.json())["B"]["disposition"]["id"])
     before = _state(bench)
 
     def asks(client: TestClient | None) -> list[Any]:
-        return [_record(bench, ids["B"], "EXCEPTION", client), _reopen(bench, ids["B"], 1, client)]
+        # Each as the page that shows the standing disposition sends it.
+        return [
+            _record(bench, ids["B"], "EXCEPTION", client, replaces=shown),
+            _reopen(bench, ids["B"], shown, client),
+        ]
 
     # A Reviewer reads the dispositions and records nothing.
     _reviewer_id, reviewer = bench.member("REVIEWER")
