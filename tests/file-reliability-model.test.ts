@@ -459,10 +459,10 @@ describe("the first screen of the owner's case (section 10.14)", () => {
       ),
       false,
     );
-    assert.equal(
-      made.status,
-      `Your tickmarks settle B and D. ${STATUS_OPEN} reliability of ${LOG_NAME}.`,
-    );
+    // Rewritten 2026-11-15 (product owner): the line no longer names tickmarks; it was
+    // "Your tickmarks settle B and D. …" and is now what is left alone. A tickmark is the
+    // auditor's note; what it settles is still kept off the open list.
+    assert.equal(made.status, `${STATUS_OPEN} reliability of ${LOG_NAME}.`);
     // The check's own outcome is kept, as its words.
     assert.equal(made.outcome?.label, "Unable to conclude yet");
     assert.equal(CHECK_PROPOSED, "The check proposed:");
@@ -499,7 +499,8 @@ describe("the first screen of the owner's case (section 10.14)", () => {
       assert.equal(reliabilityQuiet("E3", LOG_NAME, kind), words);
       assert.equal(
         made.status,
-        `Your tickmarks settle B and D, and your decision settles the reliability of E3. ${STATUS_NOTHING}`,
+        // Was "Your tickmarks settle B and D, and your decision …" (rewritten 2026-11-15).
+        `Your decision settles the reliability of E3. ${STATUS_NOTHING}`,
         kind,
       );
       // Never counted as more shown: the verdict's count of shown is the check's.
@@ -567,10 +568,8 @@ describe("the first screen of the owner's case (section 10.14)", () => {
       ),
       true,
     );
-    assert.equal(
-      made.status,
-      `Your tickmarks settle B and D. ${STATUS_OPEN} reliability to resolve.`,
-    );
+    // Was "Your tickmarks settle B and D. …" (rewritten 2026-11-15: tickmarks not named).
+    assert.equal(made.status, `${STATUS_OPEN} reliability to resolve.`);
     assert.notEqual(made.status.includes(STATUS_NOTHING), true);
     // Another completeness caveat is never replaced by the files.
     const other = digest({
@@ -669,14 +668,14 @@ describe("the status line (section 10.14, A)", () => {
     );
   });
 
-  it("says what a person's work settled first, in one short clause", () => {
-    assert.equal(
-      statusLine(facts({ settled: ["B", "D"] })),
-      `Your tickmarks settle B and D. ${STATUS_NOTHING}`,
-    );
+  it("says what a person's reliability decisions settled first, never a tickmark", () => {
+    // Rewritten 2026-11-15 (product owner): the line no longer names tickmarks; it was
+    // "Your tickmarks settle B and D. …" and is now what is left alone. A tickmark is the
+    // auditor's note; what it settles is still kept off the open list.
+    assert.equal(statusLine(facts({ settled: ["B", "D"] })), STATUS_NOTHING);
     assert.equal(
       statusLine(facts({ settled: ["B"], attributes: ["C"] })),
-      "Your tickmark settles B. Still open: attribute C.",
+      "Still open: attribute C.",
     );
     assert.equal(
       statusLine(facts({ decided: ["E3"] })),
@@ -684,7 +683,7 @@ describe("the status line (section 10.14, A)", () => {
     );
     assert.equal(
       statusLine(facts({ decided: ["E3", "E5"], settled: ["A", "B", "D"] })),
-      `Your tickmarks settle A, B and D, and your decisions settle the reliability of E3 and E5. ${STATUS_NOTHING}`,
+      `Your decisions settle the reliability of E3 and E5. ${STATUS_NOTHING}`,
     );
     assert.equal(statusLine(none), STATUS_NOTHING);
   });
@@ -714,11 +713,8 @@ describe("the status line (section 10.14, A)", () => {
         assert.equal(said.includes(STATUS_NOTHING), chosen.length === 0, said);
         assert.equal(said.includes(STATUS_OPEN), chosen.length > 0, said);
         assert.equal(/sufficien/i.test(said), false, said);
-        assert.equal(
-          said.startsWith("Your tickmark"),
-          settled.length > 0,
-          said,
-        );
+        // Was: starts with "Your tickmark" where one settles (rewritten 2026-11-15).
+        assert.equal(/tickmark/i.test(said), false, said);
         // The order of what is left is the contract's.
         const at = chosen.map(([key, [value]]) =>
           said.indexOf(
@@ -815,16 +811,9 @@ describe("every combination on the first screen (section 10.14, Tests: web)", ()
               );
               assert.equal(made.status.includes(STATUS_OPEN), !nothing, label);
               assert.equal(/sufficien/i.test(made.status), false, label);
-              // What a person's tickmark settled is said first, and only that.
-              const settles = [
-                ["B", b],
-                ["D", d],
-              ].filter(([, state]) => state === "closed");
-              assert.equal(
-                made.status.startsWith("Your tickmark"),
-                settles.length > 0,
-                label,
-              );
+              // A tickmark is never named in the line (rewritten 2026-11-15: it was
+              // said first, "Your tickmark settles …", where one settled).
+              assert.equal(/tickmark/i.test(made.status), false, label);
               // Each attribute item, each open file and each caveat is in the line.
               for (const item of made.attention) {
                 if (item.kind === "ATTRIBUTE") {

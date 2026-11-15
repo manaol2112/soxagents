@@ -778,7 +778,7 @@ describe("what recording a tickmark may also do (items 1 and 2)", () => {
     assert.equal(digestModel.ACCEPT_NOW, "Accept this request's evidence now");
     assert.equal(
       digestModel.ACCEPT_NOW_HINT,
-      "Every attribute will then be shown or carry a tickmark.",
+      "Every attribute will then be addressed.",
     );
     assert.equal(
       digestModel.DISMISS_FINDING,
@@ -794,16 +794,19 @@ describe("the first line of a settled request (item 1)", () => {
       gap(B, "B", { disposition: tickmark("NOT_AVAILABLE") }),
     ]);
 
-  it("says every attribute is shown or carries a tickmark, and to accept to close", () => {
+  it("says every attribute is addressed, and to accept to close", () => {
+    // Rewritten 2026-11-15 (product owner): was "Every attribute is shown or carries
+    // your tickmark."; a tickmark is the auditor's note and is no longer named. It still
+    // never says "shown" of an attribute a tickmark settles.
     const made = settled();
     assert.equal(made.settled, true);
     assert.equal(
       digestModel.closingStatus(made, TO_ACCEPT),
-      "Every attribute is shown or carries your tickmark. Accept the evidence to close this request.",
+      "Every attribute is addressed. Accept the evidence to close this request.",
     );
     assert.equal(
       digestModel.withClosing(made, TO_ACCEPT).status,
-      "Every attribute is shown or carries your tickmark. Accept the evidence to close this request.",
+      "Every attribute is addressed. Accept the evidence to close this request.",
     );
     // Everything else of the digest is the check's, untouched.
     assert.deepEqual(
@@ -816,15 +819,15 @@ describe("the first line of a settled request (item 1)", () => {
     const made = settled();
     assert.equal(
       digestModel.closingStatus(made, { accepted: false, canAccept: false }),
-      "Every attribute is shown or carries your tickmark.",
+      "Every attribute is addressed.",
     );
     assert.equal(
       digestModel.closingStatus(made, ACCEPTED),
-      "Evidence accepted. Every attribute is shown or carries your tickmark.",
+      "Evidence accepted. Every attribute is addressed.",
     );
     // Where the row does not say where the request stands: the status of 10.14.
     assert.equal(digestModel.closingStatus(made, null), made.status);
-    assert.equal(made.status, "Your tickmark settles B. Nothing waits on you.");
+    assert.equal(made.status, "Nothing waits on you.");
   });
 
   it("carries a person's exception to the workpaper, and still offers to accept", () => {
@@ -835,11 +838,11 @@ describe("the first line of a settled request (item 1)", () => {
     assert.equal(one.settled, true);
     assert.equal(
       digestModel.closingStatus(one, TO_ACCEPT),
-      "Every attribute is shown or carries your tickmark. 1 exception is carried to the workpaper. Accept the evidence to close this request.",
+      "Every attribute is addressed. 1 exception is carried to the workpaper. Accept the evidence to close this request.",
     );
     assert.equal(
       digestModel.closingStatus(one, ACCEPTED),
-      "Evidence accepted. Every attribute is shown or carries your tickmark. 1 exception is carried to the workpaper.",
+      "Evidence accepted. Every attribute is addressed. 1 exception is carried to the workpaper.",
     );
     const two = digest([
       gap(A, "A", { disposition: tickmark("EXCEPTION") }),
@@ -856,6 +859,39 @@ describe("the first line of a settled request (item 1)", () => {
     // The exception keeps its item, marked: it is never ticked away.
     assert.equal(one.attention.length, 1);
     assert.equal(one.attention[0]?.tickmark?.label, "Exception recorded");
+  });
+
+  it("says a file's reliability left open in the product owner's words, never naming the tickmark", () => {
+    // The line of the product owner's screenshot (2026-11-15): was "Every attribute is
+    // shown or carries your tickmark. Still open: reliability of ….csv. …".
+    const facts = {
+      settled: ["B"],
+      decided: [],
+      exceptions: [],
+      findings: [],
+      attributes: [],
+      files: ["06_Workday_Security_Activity_Export.csv"],
+      others: [],
+      caveats: [],
+    };
+    const line = digestModel.closingStatus(
+      {
+        status: digestModel.statusLine(facts),
+        settled: true,
+        facts,
+        tickmarked: true,
+        supportedOnly: false,
+      },
+      TO_ACCEPT,
+    );
+    assert.equal(
+      line,
+      "Every attribute is addressed. Still open: reliability of 06_Workday_Security_Activity_Export.csv. Accept the evidence to close this request.",
+    );
+    assert.equal(/tickmark/i.test(line), false, line);
+    assert.equal(/tickmark/i.test(digestModel.statusLine(facts)), false);
+    assert.equal(/tickmark/i.test(digestModel.ACCEPT_NOW_HINT), false);
+    assert.equal(/tickmark/i.test(digestModel.DIGEST_TICKMARKED), false);
   });
 
   it("never says more than the records: what is not settled keeps the status of 10.14", () => {
@@ -886,7 +922,7 @@ describe("the first line of a settled request (item 1)", () => {
     );
     assert.equal(
       digestModel.closingStatus(waits, TO_ACCEPT),
-      "Every attribute is shown or carries your tickmark. Still open: finding to decide on B. Accept the evidence to close this request.",
+      "Every attribute is addressed. Still open: finding to decide on B. Accept the evidence to close this request.",
     );
     const part = digest(
       [shown(A, "A"), gap(B, "B", { disposition: tickmark("NOT_APPLICABLE") })],
@@ -895,7 +931,7 @@ describe("the first line of a settled request (item 1)", () => {
     );
     assert.equal(
       digestModel.closingStatus(part, ACCEPTED),
-      "Evidence accepted. Every attribute is shown or carries your tickmark. Still open: read in part.",
+      "Evidence accepted. Every attribute is addressed. Still open: read in part.",
     );
   });
 

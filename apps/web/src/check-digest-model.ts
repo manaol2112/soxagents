@@ -157,8 +157,8 @@ export type CheckDigest = {
   outcome: DigestPill | null;
   /** The completeness caveat; null where the evidence is complete. */
   caveat: DigestPill | null;
-  /** What is left after the person's work, first (section 10.14, A): "Your tickmarks
-   * settle B and D. Still open: reliability of E6.csv.", or "Nothing waits on you." only
+  /** What is left after the person's work, first (section 10.14, A): "Still open:
+   * reliability of E6.csv.", or "Nothing waits on you." only
    * where nothing is left. Never says the evidence is sufficient. */
   status: string;
   /** "1 of 4 attributes is shown. 3 need your attention." */
@@ -189,7 +189,7 @@ export type CheckDigest = {
    * (closingStatus). */
   facts: StatusFacts;
   /** Some attribute the request asks for is settled by a person's tickmark, not by the
-   * check alone: the settled status says "or carries your tickmark" only then. */
+   * check alone: the settled status says "addressed", not "shown", only then. */
   tickmarked: boolean;
   /** Some attribute the request asks for is supported by the check in a way accepting
    * does not mark as evidenced (the documented design alone, or not whole), and carries
@@ -390,9 +390,9 @@ export const verdictNotApplicable = (count: number) =>
 export const verdictExceptions = (count: number) =>
   `${count} exception${count === 1 ? "" : "s"} recorded.`;
 /** The first screen where nothing waits and what the check did not show carries a
- * person's tickmark: never "Nothing needs your attention." */
+ * person's tickmark: never "Nothing needs your attention.", and the tickmark not named. */
 export const DIGEST_TICKMARKED =
-  "Nothing else waits on you here: each attribute not shown carries a tickmark.";
+  "Every attribute is addressed. Nothing else waits on you here.";
 
 /** How a disposition that no longer stands ended, as a neutral label: why it ended is
  * the server's own `ended_reason`, said after it for every ending (a later check names
@@ -1480,7 +1480,8 @@ const part = (text: string) => {
 };
 
 /**
- * The first line of a finished check (section 10.14, A): what a person's work settled, in
+ * The first line of a finished check (section 10.14, A): what a person's reliability
+ * decisions settled (never what a tickmark settles: a tickmark is a note), in
  * one short clause, then what is left, each in a few words, in the contract's order
  * (exceptions recorded, findings to decide, attributes that need attention, files whose
  * reliability is unresolved, anything else waiting, other caveats); "Nothing waits on
@@ -1488,22 +1489,14 @@ const part = (text: string) => {
  * claims more than the check and the person's records show.
  */
 export function statusLine(facts: StatusFacts): string {
-  const settled = named(facts.settled);
+  // What a tickmark settles is not said: a tickmark is the auditor's note, and the line
+  // says only what is left (product owner, 2026-11-15). `facts.settled` stays for the
+  // callers that read it.
   const decided = [...new Set(facts.decided.filter((item) => item !== ""))];
-  const tickmarks =
-    settled.length === 0
-      ? ""
-      : `${many(settled.length, "tickmark")} ${many(settled.length, "settles", "settle")} ${andList(settled)}`;
-  const decisions =
+  const lead =
     decided.length === 0
       ? ""
-      : `${many(decided.length, "decision")} ${many(decided.length, "settles", "settle")} the reliability of ${andList(decided)}`;
-  const lead =
-    tickmarks !== "" && decisions !== ""
-      ? `Your ${tickmarks}, and your ${decisions}.`
-      : tickmarks !== "" || decisions !== ""
-        ? `Your ${tickmarks || decisions}.`
-        : "";
+      : `Your ${many(decided.length, "decision")} ${many(decided.length, "settles", "settle")} the reliability of ${andList(decided)}.`;
   const left = leftOf(facts);
   return [
     lead,
@@ -1546,9 +1539,10 @@ function leftOf(
 // Closing a request with tickmarks (docs/evidence-assurance.md, section 10.15)
 
 /** The first line where every attribute the request asks for is shown by the check or
- * carries a tickmark, and where the check alone shows every one. Never "sufficient". */
-export const SETTLED_TICKMARKED =
-  "Every attribute is shown or carries your tickmark.";
+ * carries a tickmark, and where the check alone shows every one. Never "sufficient".
+ * A tickmark is the auditor's note, so the line does not name it (product owner,
+ * 2026-11-15): "addressed", never "shown", where one settles an attribute. */
+export const SETTLED_TICKMARKED = "Every attribute is addressed.";
 export const SETTLED_SHOWN = "Every attribute is shown.";
 /** Where the check supports every one and no tickmark is needed, yet accepting marks
  * some as less than evidenced (supported by the documented design alone, or not whole):
@@ -1574,7 +1568,7 @@ export type Closing = {
 
 /**
  * The first line of a finished check whose attributes are settled (section 10.15, item
- * 1): "Every attribute is shown or carries your tickmark. Accept the evidence to close
+ * 1): "Every attribute is addressed. Accept the evidence to close
  * this request." The exceptions a person recorded are said as carried to the workpaper;
  * anything else that is left (a finding to decide, a file's reliability, a caveat) is
  * still said, and the call to accept only where the row offers Accept. Where the
@@ -1702,8 +1696,7 @@ export const dismissOffered = (
 /** The form's two boxes, and the line under the acceptance where nothing else waits
  * (where something does, that is said there instead: TickmarkAfter.left). */
 export const ACCEPT_NOW = "Accept this request's evidence now";
-export const ACCEPT_NOW_HINT =
-  "Every attribute will then be shown or carry a tickmark.";
+export const ACCEPT_NOW_HINT = "Every attribute will then be addressed.";
 export const DISMISS_FINDING =
   "Dismiss the check's proposed finding with this reason";
 

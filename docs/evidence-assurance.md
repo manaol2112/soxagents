@@ -1383,8 +1383,10 @@ The owner chose both remedies ("Okay build both").
   - otherwise "Still open: " and what is left, each in a few words, in this order:
     exceptions recorded, findings to decide, attributes that need attention, files whose
     reliability is unresolved (by name), other caveats (read in part, files left out);
-  - where a person's work settled something, it says so first in one short clause:
-    "Your tickmarks settle B and D."
+  - where a person's reliability decision settled something, it says so first in one
+    short clause: "Your decision settles the reliability of E3." What a tickmark settles
+    is not named: a tickmark is the auditor's note, so the line says only what is left
+    (product owner, 2026-11-15; it was "Your tickmarks settle B and D.").
 - It never says the evidence is sufficient and never claims more than the check and the
   person's records show. The accept note (beside Accept) is unchanged.
 
@@ -1532,9 +1534,10 @@ change are marked (default).
    ticked to start; one press records the tickmark and then accepts through the existing
    Accept (its handler, rules and audit event), each shown as done only after the server
    confirms it; if the acceptance is refused the tickmark stays and the refusal is said.
-   Unticked, or where settled already, the first screen says "Every attribute is shown or
-   carries your tickmark. Accept the evidence to close this request." with Accept as the
-   primary action. Nothing is accepted without that press.
+   Unticked, or where settled already, the first screen says "Every attribute is
+   addressed. Accept the evidence to close this request." with Accept as the primary
+   action ("Every attribute is shown." where the check alone shows each one; a tickmark is
+   never named in the line, product owner 2026-11-15). Nothing is accepted without that press.
 2. *A tickmark may settle the check's proposed finding in the same act* (default): for a
    closing kind on an attribute whose finding is still proposed, the form carries "Dismiss
    the check's proposed finding with this reason", ticked to start, which uses the
