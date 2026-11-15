@@ -34,6 +34,15 @@ Rules held here, whatever the records hold:
   reviewer with the person, the date and the reason. A person's exception is never
   counted as shown: where the attribute would read as shown (by a check or by a closing
   disposition) it reads "Exception recorded by the auditor", an open matter.
+- A person's decision on a file's reliability (docs/evidence-assurance.md, section 10.14)
+  is read only on a request whose check is current, for a file in force on it. A file
+  whose reliability was established on review counts as reliable for the tickmark rule;
+  its report row carries the inspected mark with the person, the date and what was relied
+  on, and a procedure says how many reports were established so. A file not relied on is
+  said so in the evidence index; an attribute whose support rests only on files not
+  relied on reads as the check found it, never with an agreed or compared mark, and is an
+  open matter. Each decision is a noted matter, and the check's own sentence about a
+  decided file's reliability no longer waits on a person.
 
 The first part is pure (no database): the records as plain values in, the response's
 parts out. The loader then reads each kind of record once for the control.
@@ -53,7 +62,12 @@ import psycopg
 from fastapi import FastAPI, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from ai_workforce_api import assurance_facts, design_conclusions, workpaper_service
+from ai_workforce_api import (
+    assurance_facts,
+    design_conclusions,
+    file_reliability,
+    workpaper_service,
+)
 from ai_workforce_api import evidence_assurance as assurance
 from ai_workforce_api.assurance_facts import OutcomeStatus
 from ai_workforce_api.assurance_review import Assessment, _reliability, assessment_of
@@ -72,6 +86,7 @@ from ai_workforce_api.engagement_close import CLOSED
 from ai_workforce_api.evidence_annotations import _order as annotation_order
 from ai_workforce_api.evidence_classify import KIND_LABELS as FILE_KIND_WORDS
 from ai_workforce_api.evidence_findings import OPEN as FINDING_OPEN
+from ai_workforce_api.file_reliability import Decision as FileDecision
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.workpaper_fill import _ACTIVITY_ROLES, Content, Section
@@ -240,6 +255,9 @@ class EvidenceBody(BaseModel):
     # The gate's sentence where the request's current check left the file out.
     left_out: str | None
     image: bool
+    # Where a person decided the file is not relied on for the request its entry is
+    # under (section 10.14): "Not relied on", who, when and the reason; null otherwise.
+    not_relied_on: str | None = None
 
 
 class StepBody(BaseModel):
@@ -284,6 +302,10 @@ class ReportBody(BaseModel):
     report: str
     source: str
     procedure: str
+    # INSPECTED where a person established the reliability of the file the row names on
+    # their review (section 10.14), with who, when and what was relied on; else null, "".
+    mark: Literal["INSPECTED"] | None = None
+    established: str = ""
 
 
 class MatterBody(BaseModel):
@@ -506,6 +528,8 @@ class Reading:
     implementation: bool = False
     # The check's review leaves a reliability question open on the files it rests on.
     unreliable: bool = False
+    # What is shown rests only on files a person decided are not relied on (section 10.14).
+    not_relied: bool = False
 
 
 def _distinct[T](items: Iterable[T]) -> tuple[T, ...]:
@@ -532,33 +556,54 @@ def _stored_assessment(item: StoredOutcome) -> Assessment | None:
     )
 
 
-def reliability_open(check: CheckRecord, files: Iterable[UUID]) -> bool:
+def reliability_open(
+    check: CheckRecord, files: Iterable[UUID], decisions: Sequence[FileDecision] = ()
+) -> bool:
     """Whether a check's review leaves a reliability question open on the files a showing
     rests on: its completeness says reliability is unresolved, or one of the files is
     described as prepared by a person, of a source not shown, or a report that does not
     show its basis (assurance_review._reliability), or is not described at all. An engine
     1 check made no such review, so the question was never answered and stays open (it
-    earns no tickmark); so does an engine 2 check whose review cannot be read."""
-    if check.engine < 2:
+    earns no tickmark); so does an engine 2 check whose review cannot be read.
+
+    A person's decisions on the files of this check's request (`decisions`, of
+    `decisions_applying`; section 10.14): a file whose reliability was established on
+    review counts as reliable, and one not relied on raises no question for the showing
+    (what rests only on such files earns no mark all the same: `Reading.not_relied`); the
+    review's unresolved reliability no longer stands open once every file it questions is
+    decided, either way."""
+    if check.engine < 2 or check.review is None:
         return True
-    if check.review is None or check.review.completeness.state == "RELIABILITY_UNRESOLVED":
-        return True
+    decided = {d.file_id for d in decisions if d.requirement_id == check.requirement_id}
+    if check.review.completeness.state == "RELIABILITY_UNRESOLVED":
+        questioned = set(file_reliability.question_sentences(check.review, check.file_ids, {}))
+        if not questioned or questioned - decided:
+            return True
     said = {file.file_id: file for file in check.review.files}
     for file_id in files:
+        if file_id in decided:
+            continue
         found = said.get(file_id)
         if found is None or _reliability("", found.source, found.report_basis):
             return True
     return False
 
 
-def readings_of(check: CheckRecord) -> dict[UUID, Reading]:
+def readings_of(check: CheckRecord, decisions: Sequence[FileDecision] = ()) -> dict[UUID, Reading]:
     """Each attribute a current check has a word on. A check that is not current gives
     nothing, whatever it holds. An attribute the request does not ask for is given only
     where the records contradict it; a comparison that failed for it is kept all the
     same, with no state, so that nothing is marked as agreed beside it. An engine 1 check
-    has no comparisons."""
+    has no comparisons. `decisions` are a person's on the files' reliability
+    (`decisions_applying`): they bear on the reliability question and on whether what is
+    shown rests only on files not relied on, never on the state."""
     if not check.current:
         return {}
+    not_relied = {
+        d.file_id
+        for d in decisions
+        if d.requirement_id == check.requirement_id and d.kind == "NOT_RELIED_ON"
+    }
     found: dict[UUID, Reading] = {}
     for item in check.outcome:
         made = [c for c in item.checks if c.status != "NOT_RUN"] if check.engine >= 2 else []
@@ -611,7 +656,8 @@ def readings_of(check: CheckRecord) -> dict[UUID, Reading]:
             checks=_distinct(s for c in passed if (s := _sentence(c.sentence, 400))),
             failed_checks=fell,
             implementation=item.shows == "IMPLEMENTATION",
-            unreliable=reliability_open(check, shows),
+            unreliable=reliability_open(check, shows, decisions),
+            not_relied=bool(shows) and all(file_id in not_relied for file_id in shows),
         )
     return found
 
@@ -634,7 +680,8 @@ def tickmark_of(state: AttributeState, readings: Sequence[Reading]) -> Tickmark:
     implementation (not only what a document requires), that check's review leaves no
     reliability question open on the files it rests on, and no current check of the
     attribute is open or holds a comparison that failed: COMPARED where a comparison made
-    in code passed on that check, AGREED otherwise. NONE in every other case."""
+    in code passed on that check, AGREED otherwise. A check whose showing rests only on
+    files a person decided are not relied on earns none. NONE in every other case."""
     if state == "EXCEPTION":
         return "EXCEPTION"
     if state != "SHOWN" or any(reading.open or reading.failed for reading in readings):
@@ -642,7 +689,10 @@ def tickmark_of(state: AttributeState, readings: Sequence[Reading]) -> Tickmark:
     resting = [
         reading
         for reading in readings
-        if reading.state == "SHOWN" and reading.implementation and not reading.unreliable
+        if reading.state == "SHOWN"
+        and reading.implementation
+        and not reading.unreliable
+        and not reading.not_relied
     ]
     if not resting:
         return "NONE"
@@ -664,9 +714,13 @@ def evidence_index(
     requests: Sequence[RequestRecord],
     checks: Mapping[UUID, CheckRecord],
     annotations: Sequence[AnnotationRecord],
+    decisions: Sequence[FileDecision] = (),
 ) -> tuple[list[EvidenceBody], int]:
     """Every file in force on a D&I request, once each under its first request, in the
-    order of the list, numbered E1 on; and how many more there are than are listed."""
+    order of the list, numbered E1 on; and how many more there are than are listed. A
+    file a person decided is not relied on for that request (`decisions`, of
+    `decisions_applying`) is said so, with who, when and the reason."""
+    not_relied = {(d.requirement_id, d.file_id): d for d in decisions if d.kind == "NOT_RELIED_ON"}
     counted: dict[tuple[UUID, UUID], list[AnnotationRecord]] = {}
     for annotation in annotations:
         if _listed(annotation):
@@ -688,6 +742,7 @@ def evidence_index(
                 continue
             mine = counted.get((request.requirement_id, file.file_id), [])
             reason = held.get(file.file_id)
+            decided = not_relied.get((request.requirement_id, file.file_id))
             found.append(
                 EvidenceBody(
                     ref=f"E{len(found) + 1}",
@@ -701,6 +756,7 @@ def evidence_index(
                     reviewed=sum(1 for a in mine if a.status in ("CONFIRMED", "EDITED")),
                     left_out=None if reason is None else _sentence(reason),
                     image=_is_image(file.content_type),
+                    not_relied_on=None if decided is None else not_relied_sentence(decided),
                 )
             )
     return found, more
@@ -927,7 +983,7 @@ def _closed(text: str) -> str:
     return text if not text or text[-1] in ".!?" else f"{text}."
 
 
-def _recorded(disposition: Disposition) -> str:
+def _recorded(disposition: Disposition | FileDecision) -> str:
     """Who recorded a disposition and when: "by Dana Lee on 14 November 2026"."""
     name = clean_line(disposition.recorded_by_name, 120).strip() or "a person"
     return f"by {name} on {_day(disposition.recorded_at)}"
@@ -985,6 +1041,79 @@ def disposition_matters(
     return found
 
 
+# --- A person's decisions on a file's reliability (evidence-assurance.md, 10.14) --------
+
+# The decision's words in the workpaper: the person's "on my review" said of the auditor.
+RELIABILITY_WORDS: dict[str, str] = {
+    "ESTABLISHED_ON_REVIEW": "Reliability established on the auditor's review",
+    "NOT_RELIED_ON": "Not relied on",
+}
+
+
+def decisions_applying(
+    decisions: Sequence[FileDecision],
+    checks: Mapping[UUID, CheckRecord],
+    requests: Sequence[RequestRecord],
+) -> list[FileDecision]:
+    """The standing decisions that are read: only one on a request whose check is current
+    (a check that is out of date, failed, queued, running, held or never made gives
+    nothing), for a file in force on that request."""
+    in_force = {
+        request.requirement_id: {file.file_id for file in request.files} for request in requests
+    }
+    return [
+        decision
+        for decision in decisions
+        if decision.ended_at is None
+        and (check := checks.get(decision.requirement_id)) is not None
+        and check.current
+        and decision.file_id in in_force.get(decision.requirement_id, set())
+    ]
+
+
+def not_relied_sentence(decision: FileDecision) -> str:
+    """A file's entry in the evidence index where a person decided it is not relied on."""
+    return _sentence(
+        f"Not relied on, recorded {_recorded(decision)}. Reason: {_closed(decision.reason)}",
+        DISPOSITION_LIMIT,
+    )
+
+
+def established_sentence(decision: FileDecision) -> str:
+    """A report row whose file's reliability a person established on review."""
+    return _sentence(
+        f"Reliability established on review {_recorded(decision)}. "
+        f"Relied on: {_closed(decision.relied_on)}",
+        DISPOSITION_LIMIT,
+    )
+
+
+def decision_matters(
+    decisions: Sequence[FileDecision],
+    requests: Sequence[RequestRecord],
+    evidence: Sequence[EvidenceBody],
+) -> list[MatterBody]:
+    """Each decision that is read, as a noted matter for the reviewer, with the file, the
+    person, the date, what was relied on and the reason."""
+    names = {file.file_id: file.file_name for request in requests for file in request.files}
+    found: list[MatterBody] = []
+    for decision in sorted(decisions, key=lambda d: (d.recorded_at, str(d.id))):
+        name = clean_line(names.get(decision.file_id, "A file"), NAME_LIMIT)
+        text = f"{name}: “{RELIABILITY_WORDS[decision.kind]}”, recorded {_recorded(decision)}."
+        if decision.relied_on:
+            text += f" Relied on: {_closed(decision.relied_on)}"
+        text += f" Reason: {_closed(decision.reason)}"
+        found.append(
+            MatterBody(
+                state="NOTED",
+                kind="DISPOSITION",
+                text=_sentence(text, DISPOSITION_LIMIT),
+                refs=_refs([decision.file_id], evidence),
+            )
+        )
+    return found
+
+
 def attributes_of(
     attributes: Sequence[AttributeRecord],
     requests: Sequence[RequestRecord],
@@ -993,6 +1122,7 @@ def attributes_of(
     evidence: Sequence[EvidenceBody],
     section: Section | None,
     dispositions: Sequence[Disposition] = (),
+    decisions: Sequence[FileDecision] = (),
 ) -> tuple[list[AttributeBody], dict[UUID, list[Reading]]]:
     """Each approved attribute with what the current checks find across the control's D&I
     requests, in the list's order; and the checks' words on each, for the matters.
@@ -1003,13 +1133,15 @@ def attributes_of(
     then what a check of another request leaves open, then shown by a check; only then
     does the attribute read by the disposition, in its own state and words, with the mark
     REVIEWED for "Shown, auditor's judgment" and none for the others. The checks' words
-    given back for the matters leave out what a disposition stands in for."""
+    given back for the matters leave out what a disposition stands in for. A person's
+    decisions on the files' reliability (`decisions`, of `decisions_applying`) bear on
+    the tickmark only (`readings_of`, `tickmark_of`)."""
     by_attribute: dict[UUID, list[Reading]] = {}
     for request in requests:
         check = checks.get(request.requirement_id)
         if check is None:
             continue
-        for attribute_id, reading in readings_of(check).items():
+        for attribute_id, reading in readings_of(check, decisions).items():
             by_attribute.setdefault(attribute_id, []).append(reading)
     stale = {
         attribute_id
@@ -1275,9 +1407,20 @@ def walkthrough_of(section: Section | None, evidence: Sequence[EvidenceBody]) ->
     return WalkthroughBody(columns=columns, steps=steps, source=section.source)
 
 
-def reports_of(section: Section | None, evidence: Sequence[EvidenceBody]) -> list[ReportBody]:
+def reports_of(
+    section: Section | None,
+    evidence: Sequence[EvidenceBody],
+    decisions: Sequence[FileDecision] = (),
+) -> list[ReportBody]:
     """The reports relied on: the rows of the workpaper's "Information produced by the
-    entity" section, as stored, each with the evidence entry its report cell names."""
+    entity" section, as stored, each with the evidence entry its report cell names. A row
+    whose file's reliability a person established on review (`decisions`, of
+    `decisions_applying`; the earliest where there are several) carries the inspected
+    mark with who, when and what was relied on."""
+    established: dict[UUID, FileDecision] = {}
+    for decision in sorted(decisions, key=lambda d: (d.recorded_at, str(d.id))):
+        if decision.kind == "ESTABLISHED_ON_REVIEW":
+            established.setdefault(decision.file_id, decision)
     if section is None or section.kind != "table":
         return []
     columns = list(section.columns)
@@ -1293,12 +1436,15 @@ def reports_of(section: Section | None, evidence: Sequence[EvidenceBody]) -> lis
         if not any(cell.strip() for cell in row):
             continue
         named = named_files(_cell(row, report), names)
+        decided = established.get(evidence[named[0]].file_id) if named else None
         found.append(
             ReportBody(
                 ref=evidence[named[0]].ref if named else "",
                 report=_cell(row, report),
                 source=_cell(row, source),
                 procedure=_cell(row, procedure),
+                mark=None if decided is None else "INSPECTED",
+                established="" if decided is None else established_sentence(decided),
             )
         )
     return found
@@ -1364,14 +1510,16 @@ def procedures_of(
     checks: Mapping[UUID, CheckRecord],
     attributes: Sequence[AttributeRecord],
     walkthrough: WalkthroughBody,
+    decisions: Sequence[FileDecision] = (),
 ) -> list[str]:
     """What was done and is on record, each a sentence written here from a count: the
     files the current checks read in full and for which requests, the files they read
     only in part (said so, never counted as inspected), the instance walked through where
     a person or the agent recorded its steps (a template's starter rows are not a
     walkthrough), the comparisons code made, and the reports whose source, run date and
-    parameters a check's review says are shown. Never a procedure the records do not
-    show."""
+    parameters a check's review says are shown, and the reports whose reliability a person
+    established on review (`decisions`, of `decisions_applying`). Never a procedure the
+    records do not show."""
     found: list[str] = []
     current = _current(requests, checks)
     names = {file.file_id: file.file_name for request in requests for file in request.files}
@@ -1428,6 +1576,12 @@ def procedures_of(
             f"Inspected the source, run date and parameters shown on "
             f"{_count(len(reports), 'report')}: {_listed_names(reports)}."
         )
+    established = _distinct(d.file_id for d in decisions if d.kind == "ESTABLISHED_ON_REVIEW")
+    if established:
+        found.append(
+            f"Established the reliability of {_count(len(established), 'report')} on review, "
+            "as recorded."
+        )
     return found[:MAX_PROCEDURES]
 
 
@@ -1456,6 +1610,7 @@ def matters_of(
     evidence: Sequence[EvidenceBody],
     more_files: int = 0,
     dispositions: Sequence[MatterBody] = (),
+    decisions: Sequence[FileDecision] = (),
 ) -> list[MatterBody]:
     """What a reviewer should see first, from the records. First, a check that is out of
     date. Then what waits on a person: open findings, an exception a person recorded,
@@ -1466,7 +1621,10 @@ def matters_of(
     note that operating effectiveness is tested separately. At most MAX_MATTERS: where
     there are more, the last line before the note counts them. `readings` are the checks'
     words left to the checks (`attributes_of`), and `dispositions` the matters of the
-    dispositions that are read (`disposition_matters`)."""
+    dispositions that are read (`disposition_matters`, and `decision_matters`). A person's
+    decision on a file's reliability (`decisions`, of `decisions_applying`) settles the
+    check's own sentence about that file's reliability, which then no longer waits; an
+    attribute whose support rests only on files not relied on waits on a person."""
     waiting: list[MatterBody] = []
     noted: list[MatterBody] = [matter for matter in dispositions if matter.state == "NOTED"]
     names = {file.file_id: file.file_name for request in requests for file in request.files}
@@ -1519,6 +1677,24 @@ def matters_of(
                 )
             )
     for attribute in attributes:
+        supporting = [
+            r for r in readings.get(attribute.id, []) if r.state in ("SHOWN", "SHOWN_IN_PART")
+        ]
+        if supporting and all(r.not_relied for r in supporting):
+            resting_on = _distinct(file_id for r in supporting for file_id in r.shows)
+            waiting.append(
+                MatterBody(
+                    state="OPEN",
+                    kind="UNSETTLED",
+                    text=_sentence(
+                        f"Attribute {attribute.code} is shown only on "
+                        f"{'files' if len(resting_on) > 1 else 'a file'} not relied on: "
+                        f"{_listed_names([names.get(f, 'a file') for f in resting_on])}."
+                    ),
+                    refs=_refs(resting_on, evidence),
+                )
+            )
+    for attribute in attributes:
         mine = readings.get(attribute.id, [])
         if standing(mine)[0] != "SHOWN":
             continue
@@ -1565,11 +1741,27 @@ def matters_of(
     for request, check in current:
         assert check.review is not None
         mine_names = [file.file_name for file in request.files]
+        decided = {d.file_id for d in decisions if d.requirement_id == request.requirement_id}
+        asked = file_reliability.question_sentences(
+            check.review, check.file_ids, {file.file_id: file.file_name for file in request.files}
+        )
+        settled = {
+            _sentence(sentence)
+            for file_id, sentences in asked.items()
+            if file_id in decided
+            for sentence in sentences
+        }
         for reason in check.review.completeness.reasons:
             text = _sentence(reason)
             about = [request.files[i].file_id for i in named_files(text, mine_names)]
-            # A file left out is already said, with the gate's own sentence.
-            if not text or text in said or (about and all(f in told for f in about)):
+            # A file left out is already said, with the gate's own sentence; a person's
+            # decision on a file's reliability settles what the check says of it.
+            if (
+                not text
+                or text in said
+                or text in settled
+                or (about and all(f in told for f in about))
+            ):
                 continue
             said.add(text)
             waiting.append(
@@ -2032,7 +2224,12 @@ def read_design_workpaper(
     )
 
     attributes = [AttributeRecord(a[0], a[1], a[2]) for a in approved]
-    evidence, more = evidence_index(requests, checks, annotations)
+    # A person's decisions on the files' reliability (docs/evidence-assurance.md, section
+    # 10.14): those standing on the control, read once, of which those that apply.
+    decisions = decisions_applying(
+        list(file_reliability.standing_for(connection, control_id).values()), checks, requests
+    )
+    evidence, more = evidence_index(requests, checks, annotations, decisions)
     walkthrough = walkthrough_of(_section(content, "walkthrough-of-one-instance"), evidence)
     # A person's dispositions of the attributes (docs/evidence-assurance.md, section
     # 10.13): those standing on the control, read once.
@@ -2045,6 +2242,7 @@ def read_design_workpaper(
         evidence,
         _section(content, "design-attributes"),
         dispositions,
+        decisions,
     )
     stand = annotations_standing(annotations, requests, checks)
     recorded = disposition_matters(
@@ -2098,19 +2296,30 @@ def read_design_workpaper(
             if field.label.strip().casefold() not in _HEADER_LABELS
         ][:MAX_FACTS],
         understanding="" if understanding is None else understanding.text,
-        procedures=procedures_of(requests, checks, attributes, walkthrough),
+        procedures=procedures_of(requests, checks, attributes, walkthrough, decisions),
         evidence=evidence,
         walkthrough=walkthrough,
         attributes=shown,
-        reports=reports_of(_section(content, "information-produced-by-the-entity"), evidence),
-        matters=matters_of(
-            requests, checks, attributes, readings, findings, evidence, more, recorded
+        reports=reports_of(
+            _section(content, "information-produced-by-the-entity"), evidence, decisions
         ),
+        matters=matters_of(
+            requests,
+            checks,
+            attributes,
+            readings,
+            findings,
+            evidence,
+            more,
+            [*recorded, *decision_matters(decisions, requests, evidence)],
+            decisions,
+        ),  # fmt: skip
         conclusion=conclusion_of(
             _text_section(content, ("design-conclusion",), "conclusion"), conclusion
         ),
         tickmarks=legend(
-            bool(reports_inspected(requests, checks)),
+            bool(reports_inspected(requests, checks))
+            or any(d.kind == "ESTABLISHED_ON_REVIEW" for d in decisions),
             any(attribute.tickmark == "REVIEWED" for attribute in shown),
         ),
         can_edit=can_edit_sections(
@@ -2162,15 +2371,19 @@ __all__ = [
     "attributes_of",
     "can_edit_sections",
     "conclusion_of",
+    "decision_matters",
+    "decisions_applying",
     "disposition_basis",
     "disposition_matters",
     "dispositions_applying",
+    "established_sentence",
     "evidence_index",
     "first_date",
     "legend",
     "marks_of",
     "matters_of",
     "named_files",
+    "not_relied_sentence",
     "procedures_of",
     "read_design_workpaper",
     "readings_of",

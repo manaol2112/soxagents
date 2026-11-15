@@ -1459,6 +1459,57 @@ Web: the status line (A) over every combination of attention, findings, exceptio
 tickmarks, decisions and caveats, never "Nothing waits on you." while anything is left;
 the item, the form, the quiet line.
 
+**As built (server, part B, 14 November 2026).** Migration 0163, `file_reliability.py`,
+`test_file_reliability.py` (critical tier) and `test_file_reliability_model.py` (fast
+tier).
+- The bodies are strict (`extra` forbidden). `replaces` is always sent (the id the person
+  saw standing, or null); reopen is `{id, reason}` with no version (a standing decision
+  changes only by ending, as 10.13 found). "What was relied on" is required with
+  `ESTABLISHED_ON_REVIEW` (10-600 characters, also held by the table) and refused with
+  `NOT_RELIED_ON`, which keeps "".
+- Refusals, each 409 with one sentence, in this order: the request's check (never
+  checked, queued or working, held, failed, out of date: the request's run is read and
+  locked by the same rule as a tickmark, `attribute_dispositions.current_run`); "This
+  file is not in force on this request, so its reliability is not decided here."; "The
+  check raises no question about this file's reliability, so there is nothing to
+  decide."; then the page seen (`replaces`, `id`) as 10.13. The reason and what was relied
+  on are read before any of these. The run is locked, then the standing decision.
+- Which files carry a question (`question_sentences`): each file of the current run's
+  review whose source and report basis `assurance_review._reliability` writes a sentence
+  for, then any file the run read that the review does not describe; never for a run of
+  the first engine (it made no review). `question` is those of the file's sentences that
+  the review's completeness reasons give, joined, else "" (the review leaves the file's
+  reliability open but no supported attribute rests on it). `file_reliability` is empty
+  unless the request is `REVIEWED`; its entries follow the review's file order; a decision
+  is given as standing only while its file is in force; ended ones are given for a file
+  of the current review.
+- The file's going: `evidence_assurance.reconcile`, which every change to what is in force
+  on a control's requests runs, ends each standing decision whose file is no longer in
+  force on its request (`FILE_GONE`, `ended_by` null, event
+  `evidence.file_reliability_ended_with_file` with the changing person as `changed_by`).
+  Withdraw, replace and restore reconcile in their own transaction, so the decision ends
+  in that act; a link removed or a plan reshaped reconciles right after it commits, and
+  until then the request has no current check, so nothing of it is read as standing.
+  Restoring the file does not bring the decision back. A check that finishes ends nothing.
+- In the workpaper (decisions read only on a current check, for a file in force on that
+  request): `EvidenceBody.not_relied_on` (null, or "Not relied on, recorded by … on …
+  Reason: …") for a decision on the entry's own request; `ReportBody.mark` (`INSPECTED` or
+  null) and `ReportBody.established` ("Reliability established on review by … on …
+  Relied on: …") where the workpaper's own report section names the file (no row is made
+  up for a file it does not name); the legend's ◊ entry is given where a report was so
+  established; the procedure "Established the reliability of N report(s) on review, as
+  recorded."; one `DISPOSITION` matter, noted, per decision.
+- A file not relied on raises no reliability question for a showing that also rests on
+  another file; a showing that rests only on files not relied on reads as the check found
+  it, with tickmark `NONE`, and an open `UNSETTLED` matter: "Attribute A is shown only on a
+  file not relied on: “…”." A review whose reliability is unresolved no longer keeps the
+  marks away once every file it questions is decided, either way; and the check's own
+  sentence about a decided file is no longer listed as an open `COMPLETENESS` matter.
+- Rewritten test: `test_design_workpaper_model.py::test_reports_come_from_the_workpapers_own_section`
+  expected each report row as `{ref, report, source, procedure}`; a row now also carries
+  `mark: null, established: ""` where no decision is on record (the shape grew; the
+  assertion is otherwise unchanged).
+
 ### 10.15 Closing a request with tickmarks; exceptions carried to the workpaper (15 November 2026)
 
 The product owner, on what tickmarks are for: "if I add tickmark to these attributes that
@@ -1551,7 +1602,7 @@ an attribute waits again; the kept and earlier-check lines.
 | The check's result, simplified (10.11) | first build shown and refused as too heavy, 14 November 2026; never committed; replaced by 10.12 |
 | The check's result as "Needs attention", one attribute at a time (10.12) | built 14 November 2026 (`check-digest-model.ts`, `check-digest.tsx`, `check-digest.css`; the row of a finished check in `design-evidence.tsx`; "View" from a row to the annotated evidence; a result whose elements are each half shown now stands as shown in part); independently reviewed once and corrected (what waits on a person or shows an exception is always on the first screen); checked in a headless browser against scripted answers, used by the product owner on the development data; a second review of the corrections to follow |
 | Tickmarks: a person's disposition of an attribute; adding evidence from the attribute view (10.13) | server built 14 November 2026 (migration 0162 applied to development; `attribute_dispositions.py`; `test_attribute_dispositions.py` in the critical tier); the screen built the same day (`attribute-tickmark.tsx`; Tickmark and Add evidence on the attribute view; the first screen, verdict and workpaper word each disposition apart from shown), checked against scripted answers, not yet against the running server |
-| What is left after a person's work; a person's decision on a file's reliability (10.14) | in progress, 14 November 2026 |
+| What is left after a person's work; a person's decision on a file's reliability (10.14) | in progress, 14 November 2026; part B server built (migration 0163, `file_reliability.py`, `test_file_reliability.py` in the critical tier), not yet applied to development |
 | Closing a request with tickmarks; exceptions carried to the workpaper (10.15) | planned for 15 November 2026, after 10.14 lands |
 | Prompt caching of the file text across the two readings (models.py) | planned, after the chain is measured |
 | Interim and roll-forward evidence | planned |

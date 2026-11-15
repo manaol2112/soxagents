@@ -646,14 +646,25 @@ class _Current:
         )
 
 
-def _current_check(
+class NotCurrent(Exception):
+    """The request has no finished, current check: `status` is its state as the D&I list
+    reads it (NOT_CHECKED, QUEUED, CHECKING, HELD, FAILED, OUT_OF_DATE)."""
+
+    def __init__(self, status: str) -> None:
+        super().__init__(status)
+        self.status = status
+
+
+def current_run(
     cursor: psycopg.Cursor[Any], project_id: UUID, control_id: UUID, requirement_id: UUID
-) -> _Current:
-    """The request's finished, current check, as the D&I list reads it
-    (evidence_assurance.read_assurance): refused, with the sentence for its state, where
-    the request was never checked, its check is queued, working, held or failed, or what
-    it read has changed since. The run's row is locked until the act commits, so the run
-    cannot go out of date under it and two acts on one request take their turn."""
+) -> tuple[Any, Any, Any]:
+    """The request (evidence_assurance._Request), its finished, current run (_Run) and the
+    control's approved attributes, as the D&I list reads them
+    (evidence_assurance.read_assurance); NotCurrent, with its state, where the request was
+    never checked, its check is queued, working, held or failed, or what it read has
+    changed since. The run's row is locked until the act commits, so the run cannot go out
+    of date under it and two acts on one request take their turn. Shared with a person's
+    decision on a file's reliability (file_reliability, section 10.14)."""
     from ai_workforce_api import evidence_assurance as assurance
 
     connection = cursor.connection
@@ -669,7 +680,7 @@ def _current_check(
         None,
     )
     if request is None:
-        raise DispositionState(NOT_CHECKED)
+        raise NotCurrent("NOT_CHECKED")
     row = cursor.execute(
         f"SELECT {assurance._RUN_COLUMNS} FROM evidence_assessments "  # noqa: S608
         "WHERE requirement_id = %s AND stale_at IS NULL FOR UPDATE",
@@ -680,7 +691,7 @@ def _current_check(
             "SELECT 1 FROM evidence_assessments WHERE requirement_id = %s LIMIT 1",
             (requirement_id,),
         ).fetchone()
-        raise DispositionState(NOT_CHECKED if on_record is None else CHECK_OUT_OF_DATE)
+        raise NotCurrent("NOT_CHECKED" if on_record is None else "OUT_OF_DATE")
     run = assurance._run(row)
     attributes = assurance._approved(connection, control_id)
     status: str
@@ -703,9 +714,20 @@ def _current_check(
         status = "FAILED"
     else:
         status = assurance._STATUS.get(run.status, "FAILED")
-    refusal = not_current(status)
-    if refusal is not None:
-        raise DispositionState(refusal)
+    if status != "REVIEWED":
+        raise NotCurrent(status)
+    return request, run, attributes
+
+
+def _current_check(
+    cursor: psycopg.Cursor[Any], project_id: UUID, control_id: UUID, requirement_id: UUID
+) -> _Current:
+    """The request's finished, current check (`current_run`): refused, with the sentence
+    for its state, where it has none."""
+    try:
+        request, run, attributes = current_run(cursor, project_id, control_id, requirement_id)
+    except NotCurrent as state:
+        raise DispositionState(not_current(state.status) or CHECK_FAILED) from None
     return _Current(
         run_id=run.id,
         outcome=run.outcome,
@@ -1100,6 +1122,7 @@ __all__ = [
     "DispositionState",
     "Dispositions",
     "EndedDispositionBody",
+    "NotCurrent",
     "RecordBody",
     "ReopenBody",
     "annotation_refusal",
@@ -1107,6 +1130,7 @@ __all__ = [
     "clean_reason",
     "clean_relied_on",
     "contradicted",
+    "current_run",
     "end_by_check",
     "end_for_annotation",
     "ending_by_check",

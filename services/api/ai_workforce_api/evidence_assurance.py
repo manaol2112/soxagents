@@ -70,7 +70,7 @@ from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError
 
-from ai_workforce_api import assurance_facts, attribute_dispositions
+from ai_workforce_api import assurance_facts, attribute_dispositions, file_reliability
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.after_commit import after_commit, committed
 from ai_workforce_api.assurance_context import ControlContext, ControlSide, load_control_side
@@ -142,6 +142,7 @@ from ai_workforce_api.evidence_findings import (
     record_assurance_findings,
 )
 from ai_workforce_api.evidence_mapping import locate
+from ai_workforce_api.file_reliability import FileReliabilityBody
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.model_providers import call_note, live_model, provider_for
 from ai_workforce_api.models import ModelConfig, ModelProvider, ModelRaw, ModelRequest
@@ -4226,6 +4227,15 @@ def reconcile(
         if only_requirement is None or request.requirement_id == only_requirement
     ]
     served = {request.requirement_id for request in requests}
+    # A person's decision on a file's reliability stands only while the file is in force
+    # on its request (section 10.14): one whose file is no longer ends here.
+    file_reliability.end_with_files(
+        cursor,
+        control_id,
+        {request.requirement_id: [file.file_id for file in request.files] for request in requests},
+        only_requirement=only_requirement,
+        changed_by=actor,
+    )
     for requirement_id, gone in current.items():
         if requirement_id not in served:
             reasons = [
@@ -5630,6 +5640,11 @@ class RequestBody(BaseModel):
     # the first engine, and unless the run is REVIEWED (nothing of a run is shown before
     # it finishes, and nothing of one that is out of date).
     review: ReviewBody | None = None
+    # A person's decision on a file's reliability (section 10.14): one entry per file of
+    # the current check's review whose reliability it leaves not established, or that
+    # carries a decision or a history. Empty unless the run is REVIEWED. It changes
+    # nothing of the review: what the check found stays as it is beside it.
+    file_reliability: list[FileReliabilityBody] = Field(default_factory=list)
 
 
 def check_failure_note(note: str) -> str:
@@ -5728,6 +5743,8 @@ def read_assurance(
     contexts = _Contexts(connection, project_id, control_id)
     # A person's dispositions of the attributes (section 10.13), read once for the control.
     dispositions = attribute_dispositions.load(connection, control_id, only_requirement)
+    # A person's decisions on the files' reliability (section 10.14), read once too.
+    decisions = file_reliability.load(connection, control_id, only_requirement)
     entries: list[RequestBody] = []
     summary = SummaryBody()
     for request in requests:
@@ -5887,6 +5904,8 @@ def read_assurance(
             summary.failed += 1
         else:
             summary.out_of_date += 1
+        review = _review_body(run, request) if status == "REVIEWED" else None
+        names = {file.file_id: file.file_name for file in request.files}
         entries.append(
             RequestBody(
                 requirement_id=request.requirement_id,
@@ -5912,7 +5931,13 @@ def read_assurance(
                     else ""
                 ),
                 engine_version=run.engine_version,
-                review=_review_body(run, request) if status == "REVIEWED" else None,
+                review=review,
+                file_reliability=decisions.entries(
+                    request.requirement_id,
+                    file_reliability.questions(review, run.file_ids, names),
+                    file_reliability.review_order(review, run.file_ids),
+                    names,
+                ),
             )
         )
     return AssuranceBody(requests=entries, summary=summary)

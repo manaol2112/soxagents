@@ -70,6 +70,7 @@ from ai_workforce_api.evidence_versions import register_evidence_versions
 from ai_workforce_api.evidence_wizard import register_evidence_wizard
 from ai_workforce_api.execution import register_execution
 from ai_workforce_api.exports import register_exports
+from ai_workforce_api.file_reliability import register_file_reliability
 from ai_workforce_api.followups import FollowUpTimer, register_followups
 from ai_workforce_api.google import build_google_provider
 from ai_workforce_api.governing_documents import register_governing_documents
@@ -236,6 +237,7 @@ def create_app(
     register_evidence_findings(app, resolved)
     register_evidence_assurance(app, resolved, drafts)
     register_attribute_dispositions(app, resolved)
+    register_file_reliability(app, resolved)
     register_evidence_annotations(app, resolved)
     register_evidence_wizard(app, resolved, drafts)
     register_walkthrough_instances(app, resolved)

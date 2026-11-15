@@ -935,10 +935,14 @@ def test_reports_come_from_the_workpapers_own_section() -> None:
         rows=[["sap change log.txt", "SAP ERP", "Agreed the row count to the system."],
               ["", "", ""], ["User listing", "Workday", ""]],
     )  # fmt: skip
+    # Rewritten for section 10.14 (a person's decision on a file's reliability): a row now
+    # also says whether a person established its file's reliability on review (`mark`,
+    # `established`); with no decision on record it carries neither.
     assert [r.model_dump() for r in reports_of(reports, evidence)] == [
         {"ref": "E2", "report": "sap change log.txt", "source": "SAP ERP",
-         "procedure": "Agreed the row count to the system."},
-        {"ref": "", "report": "User listing", "source": "Workday", "procedure": ""},
+         "procedure": "Agreed the row count to the system.", "mark": None, "established": ""},
+        {"ref": "", "report": "User listing", "source": "Workday", "procedure": "",
+         "mark": None, "established": ""},
     ]  # fmt: skip
     assert reports_of(None, evidence) == []
 
