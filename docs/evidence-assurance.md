@@ -1298,6 +1298,24 @@ and the reason), and an `EXCEPTION` disposition is an open matter.
 - The attribute view shows the standing disposition with who, when, the reason and
   "Reopen", above what the check found; ended ones under "History".
 
+**As built (server, 14 November 2026).**
+- A person's `EXCEPTION` is never ended by a check: only a person reopens or replaces it
+  (a check closing a person's exception would decide for them). The three closing kinds
+  end as the rules say.
+- "Contradiction" is the run's assessment `CONTRADICTED`, the same rule the workpaper reads
+  as "Exception shown".
+- A removed annotation, or an edit that takes the attribute off it, ends a "Shown, on my
+  review" in the same transaction (`ANNOTATION_GONE`, the person who changed the
+  annotation as actor, audit event `evidence.attribute_disposition_annotation_gone`); a
+  file no longer in force ends it when the next check of the request finishes.
+- Both POSTs answer 200 with the request's entry (nothing is queued).
+- In the workpaper, a closing disposition stands in for its own request's check unless
+  that check shows the attribute or an exception; across requests the most cautious
+  stands (exception, then a judgment another request leaves open, then shown, then the
+  dispositions). Tickmark `REVIEWED` (†, "On the auditor's review, with the reason
+  recorded."); a person's `EXCEPTION` is an open matter and takes an agreed or compared
+  tickmark away.
+
 **Tests.** Server: each kind recorded and read back; each refusal; replace and reopen;
 what a later check does to each kind (supported, contradiction, neither); the annotation
 rule; authorization and the audit events; the workpaper's states, tickmark and matters;
@@ -1318,6 +1336,6 @@ quiet line, verdict counts, what is offered for each state) and the forms.
 | Checking again with the current engine, for a request an earlier engine checked (10.10) | built 14 November 2026 (`upgrade_engine`, route `/upgrade`, no migration; the row's action and menu item with a confirmation; `test_assurance_upgrade.py` in the fast and critical tiers, `tests/evidence-upgrade-model.test.ts`); independently reviewed and tightened the same day; used once by the product owner on the development data |
 | The check's result, simplified (10.11) | first build shown and refused as too heavy, 14 November 2026; never committed; replaced by 10.12 |
 | The check's result as "Needs attention", one attribute at a time (10.12) | built 14 November 2026 (`check-digest-model.ts`, `check-digest.tsx`, `check-digest.css`; the row of a finished check in `design-evidence.tsx`; "View" from a row to the annotated evidence; a result whose elements are each half shown now stands as shown in part); independently reviewed once and corrected (what waits on a person or shows an exception is always on the first screen); checked in a headless browser against scripted answers, used by the product owner on the development data; a second review of the corrections to follow |
-| Tickmarks: a person's disposition of an attribute; adding evidence from the attribute view (10.13) | in progress, 14 November 2026 |
+| Tickmarks: a person's disposition of an attribute; adding evidence from the attribute view (10.13) | server built 14 November 2026 (migration 0162 applied to development; `attribute_dispositions.py`; `test_attribute_dispositions.py` in the critical tier); the screen to follow |
 | Prompt caching of the file text across the two readings (models.py) | planned, after the chain is measured |
 | Interim and roll-forward evidence | planned |
