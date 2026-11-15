@@ -1229,30 +1229,68 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
     input.exceptions.map((item) => [item.attributeId, item]),
   );
   const excepted = new Set(reasonOf.keys());
-  // A person's tickmarks that stand on a current check of a request that addresses the
-  // attribute (section 10.15, item 4), the most cautious kind first. Not where the
-  // checks could not be read: nothing of them is known then.
+  // A person's tickmarks in the coverage (section 10.15, item 4), read from the current
+  // check of a request that addresses the attribute. Not where the checks could not be
+  // read: nothing of them is known then.
+  // - An exception stands wherever it is recorded, on an accepted request or not, and
+  //   over everything else.
+  // - A closing kind is taken only from a request a person accepted (a tickmark alone
+  //   closes nothing: "accepted without evidence" is never said before an acceptance),
+  //   and only where no other live request's current check has the attribute
+  //   contradicted or left to a person. One request's tickmark never outranks what
+  //   another request's check found: the coverage then says what the checks say, as it
+  //   did before tickmarks. A judgment the person has themselves settled with a tickmark
+  //   on that other request is no longer left to them.
+  const current = live.filter((row) => row.assurance?.standing === "REVIEWED");
+  const lineOn = (row: EvidenceRow, attributeId: string) => {
+    const check = row.assurance?.check;
+    return check === undefined
+      ? null
+      : ([...check.attributes, ...check.notAddressed, ...check.notAsked].find(
+          (line) => line.attributeId === attributeId,
+        ) ?? null);
+  };
+  const kindOn = (row: EvidenceRow, attributeId: string) =>
+    row.assurance?.tickmarks.find((each) => each.attributeId === attributeId)
+      ?.kind ?? null;
+  const disputedBy = (row: EvidenceRow, attributeId: string) => {
+    const line = lineOn(row, attributeId);
+    return (
+      line !== null &&
+      (line.contradicted ||
+        (line.state === "JUDGMENT" && line.disposition === null))
+    );
+  };
   const tickmarkOn = (attributeId: string): DispositionKind | null => {
-    const kinds = unread
-      ? []
-      : live
-          .filter(
-            (row) =>
-              row.attributeIds.includes(attributeId) &&
-              row.assurance?.standing === "REVIEWED",
-          )
-          .flatMap((row) =>
-            (row.assurance?.tickmarks ?? [])
-              .filter((each) => each.attributeId === attributeId)
-              .map((each) => each.kind),
-          );
+    if (unread) {
+      return null;
+    }
+    const addressing = current.filter((row) =>
+      row.attributeIds.includes(attributeId),
+    );
+    if (addressing.some((row) => kindOn(row, attributeId) === "EXCEPTION")) {
+      return "EXCEPTION";
+    }
+    const kinds = addressing
+      .filter(
+        (row) =>
+          row.state === "ACCEPTED" &&
+          !current.some(
+            (other) => other.id !== row.id && disputedBy(other, attributeId),
+          ),
+      )
+      .flatMap((row) => {
+        const kind = kindOn(row, attributeId);
+        return kind === null ? [] : [kind];
+      });
     return TICKMARK_ORDER.find((kind) => kinds.includes(kind)) ?? null;
   };
   const coverage: CoverageChip[] = attributes.map((item) => {
     const addressing = live.filter((row) => row.attributeIds.includes(item.id));
     const found = attributeCoverage(item.id, settled);
     // A person's exception stands over everything, the check's own evidence included;
-    // a closing tickmark only where the accepted requests do not evidence the attribute.
+    // a closing tickmark (of an accepted request, undisputed by another request's
+    // check) only where the accepted requests do not evidence the attribute.
     const marked = tickmarkOn(item.id);
     const tickmark =
       marked === "EXCEPTION" || found.state !== "EVIDENCED" ? marked : null;
@@ -1815,7 +1853,7 @@ function headerOf(facts: {
       need: {
         kind: "act",
         title: `${lookAgainStatus(again.length)}.`,
-        detail: `${first.title}: attribute${one ? "" : "s"} ${lettersSpan(first.again, facts.allLetters)} ${one ? "waits" : "wait"} on you again. A tickmark on ${one ? "it" : "them"} no longer stands, or a later check does not show ${one ? "it" : "them"}. Open the request to record a tickmark or add evidence.${
+        detail: `${first.title}: attribute${one ? "" : "s"} ${lettersSpan(first.again, facts.allLetters)} ${one ? "waits" : "wait"} on you again. A tickmark on ${one ? "it" : "them"} no longer stands. Open the request to record a tickmark or add evidence.${
           again.length > 1
             ? ` ${plural(again.length - 1, "more request")} ${again.length === 2 ? "has" : "have"} the same.`
             : ""

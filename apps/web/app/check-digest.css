@@ -1566,8 +1566,16 @@ button.ei-brief-more[aria-expanded="true"] > svg {
 }
 
 .cdg-tm-step.is-refused,
-.cdg-tm-step.is-refused > svg {
+.cdg-tm-step.is-refused > svg,
+.cdg-tm-step.is-held,
+.cdg-tm-step.is-held > svg {
   color: var(--danger);
+}
+
+/* An answer that did not arrive: not a failure and not a success, so neither's tone. */
+.cdg-tm-step.is-unknown,
+.cdg-tm-step.is-unknown > svg {
+  color: var(--warning);
 }
 
 /* A tickmark recorded on an earlier check (item 9): said quietly beside Change and

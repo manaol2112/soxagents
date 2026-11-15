@@ -1587,6 +1587,55 @@ offer to accept (ticked, unticked, refused acceptance, already accepted, cannot 
 the finding dismissal; coverage, chips and counts with each kind; the step not done while
 an attribute waits again; the kept and earlier-check lines.
 
+**After the independent review of the screen (web, 15 November 2026).** The review of the
+first build found the screen at odds with the goal and with the server in six places. What
+changed, and where this replaces the wording above:
+- *The settled rule (item 1).* An attribute the request asks for is settled when the check
+  supports it (its verdict is supported: by the documented design or by an instance's
+  records), or it carries a standing tickmark of any kind. This replaces "evidenced by the
+  check (10.12's rule)": the server ends a tickmark as no longer needed on any supported
+  verdict, so under the narrower rule a policy request never settled, and an attribute the
+  design supports waited for a tickmark the next check ended, without end. Shown in part,
+  not met, an issue decided through its finding, a judgment, not addressed and waiting on a
+  file are not settled without a tickmark. What kind of support it is stays said by the
+  coverage, the accept note and the verdict's counts ("evidenced" is unchanged). A request
+  the check supports whole without any tickmark, where some support is the design's or not
+  whole, reads "The check supports every attribute.", never "Every attribute is shown."
+- *To look at again (item 4).* An attribute waits again only where its own most recent
+  tickmark ended as reopened, overtaken by a later check or with its annotation, no
+  tickmark stands on it now, and the check does not support it. A tickmark a check ended as
+  no longer needed, one another tickmark replaced, and a tickmark that stands from an
+  earlier check on another attribute make nothing wait.
+- *The offer to accept (item 1).* "Accept this request's evidence now" starts ticked only
+  where nothing else waits on the request. Where something does (another attribute's
+  finding to decide, an attribute the request does not ask for that needs attention, a
+  file's reliability not decided, a file's type to confirm, a file left out that has an
+  action, a follow-up to consider) it starts unticked, with one line under it ("Still open
+  on this request: finding to decide on A, reliability of report.csv."); the person may
+  still tick it. A caveat nobody can act on and a person's exception on another attribute
+  are not such things.
+- *One press, three calls.* The order and the stops are one function
+  (`apps/web/src/tickmark-chain.ts`, run with scripted answers in
+  `tests/tickmark-chain.test.ts`): the tickmark; only once confirmed, the dismissal; only
+  once that is confirmed, the acceptance. An answer that did not arrive (no status from
+  the route, or a gateway's 502, 503 or 504) is neither a refusal nor a success: "The
+  answer did not arrive, so it is not known whether the finding was dismissed. The list is
+  read again.", the list is read again, and nothing that depends on it is sent.
+- *Coverage (item 4).* A closing kind is taken into Coverage only from a request a person
+  accepted, and only where no other live request's current check has the attribute
+  contradicted or left to a person (a judgment the person has settled with a tickmark on
+  that request is no longer left to them); otherwise Coverage says what the checks say. A
+  person's exception is said wherever it stands.
+- *The D&I conclusion (item 5).* While `blocking` holds an exception's sentence the card
+  reads "Exception recorded: not ready to sign", with the server's sentence(s) and what
+  the preparer does next, never "Awaiting reviewer sign-off" and never in the tone of an
+  effective verdict; the workflow's D&I Assessment and D&I Conclusion read "Exception to
+  resolve"; the exceptions the server lists are shown with who recorded each and why; and
+  every out-of-date reason is shown whole on its own line.
+- *Item 3 on the workflow.* Where the list is not read, the workflow reads an item's state
+  as the server gives it (received, for a waiting item with its own file) and no longer
+  counts files itself.
+
 **As built (server; items 3 and 5 to 9).** No migration.
 - *Item 3.* "A file of its own" is a file linked to the item (`evidence_requirement_files`,
   `LINKED`: what a person links on the list and what the evidence wizard places on it),

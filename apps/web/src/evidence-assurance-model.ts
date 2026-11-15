@@ -2236,12 +2236,21 @@ export function askedLines(
   );
 }
 
-/** An attribute is settled where the check evidences it (AttributeLine.evidenced, the
- * rule accepting marks by) or a person's tickmark of any kind stands on it: an exception
- * included, which is carried to the workpaper. Nothing else settles it. */
+/**
+ * The settled rule for closing a request (section 10.15, item 1): an attribute the
+ * request asks for is settled where the check supports it (its verdict is SUPPORTED:
+ * shown by the documented design or by the records of an instance), or a person's
+ * tickmark of any kind stands on it, an exception included, which is carried to the
+ * workpaper. It is the rule the server ends a tickmark by ("no longer needed" on any
+ * supported verdict), so a request never waits here for a tickmark the server would end.
+ * What kind of support it is (design only, an instance, whole or not) is said by the
+ * coverage and the accept note and does not hold the request open: `evidenced` stays the
+ * narrower rule accepting marks by. Shown in part, not met, a decided issue, a judgment,
+ * not addressed and waiting on a file are not settled without a tickmark.
+ */
 export const attributeSettled = (
-  line: Pick<AttributeLine, "evidenced" | "disposition">,
-): boolean => line.evidenced || line.disposition !== null;
+  line: Pick<AttributeLine, "state" | "disposition">,
+): boolean => line.state === "SUPPORTED" || line.disposition !== null;
 
 /** A request's attributes are settled when its check is finished and current and every
  * attribute it asks for is settled. A request whose check lists none it asks for is not
@@ -2272,38 +2281,46 @@ export function settlesLast(
   );
 }
 
-/** The endings a later check of the request makes. */
-const ENDED_BY_CHECK: readonly Ending[] = [
-  "SUPERSEDED_BY_CHECK",
+/** How a tickmark ended where its attribute then waits on the person again: the person
+ * reopened it, a later check found the records contradict it, or the annotation it
+ * rested on is gone. Not one a check ended as no longer needed (the check supports the
+ * attribute), nor one another tickmark replaced. */
+const WAITS_AGAIN: readonly Ending[] = [
+  "REOPENED",
   "OVERTAKEN_BY_CHECK",
+  "ANNOTATION_GONE",
 ];
 
 /**
  * The attributes a request asks for that wait on a person again (section 10.15, item 4):
- * not settled now, and either a tickmark on it no longer stands (reopened, ended by a
- * later check, its annotation gone), or the request was checked again since its
- * tickmarks were recorded (one of them is from an earlier check, or a check ended one)
- * and the new check does not evidence the attribute. An attribute that was never settled
- * on a request no tickmark was ever recorded on is not one of them: the page has no
- * record that it was looked at before. Empty for a check that is not finished and current.
+ * the attribute's own most recent tickmark ended as reopened, overtaken by a later check
+ * or with its annotation, no tickmark stands on it now, and the check does not support
+ * it. Only an attribute a person had settled and that no longer is: one that never
+ * carried a tickmark is not "again" (the accept note said what accepting did not
+ * settle), whatever happened to another attribute's tickmark, and one whose tickmark a
+ * check ended as no longer needed never waited at all. Empty for a check that is not
+ * finished and current.
  */
 export function waitingAgain(check: Settling): AttributeLine[] {
   if (check.standing !== "REVIEWED") {
     return [];
   }
-  const checkedAgain = [
-    ...check.attributes,
-    ...check.notAddressed,
-    ...check.notAsked,
-  ].some(
-    (line) =>
-      line.disposition?.onCurrentCheck === false ||
-      line.history.some((item) => ENDED_BY_CHECK.includes(item.endedAs)),
-  );
-  return askedLines(check).filter(
-    (line) =>
-      !attributeSettled(line) && (line.history.length > 0 || checkedAgain),
-  );
+  return askedLines(check).filter((line) => {
+    // The last tickmark that ended: the latest by when it ended, and where the server
+    // gives no time to tell them apart, the first as sent (newest first).
+    const last = line.history.reduce<EndedDisposition | null>(
+      (latest, item) =>
+        latest === null || Date.parse(item.endedAt) > Date.parse(latest.endedAt)
+          ? item
+          : latest,
+      null,
+    );
+    return (
+      last !== null &&
+      WAITS_AGAIN.includes(last.endedAs) &&
+      !attributeSettled(line)
+    );
+  });
 }
 
 // The review of a request's evidence, as its row shows it (section 10)
@@ -2801,7 +2818,7 @@ export type AssuranceRow = {
   acceptNote: string;
   /** The check is queued or at work: the list is read again until it ends. */
   working: boolean;
-  /** Every attribute the request asks for is evidenced by the check or carries a
+  /** Every attribute the request asks for is supported by the check or carries a
    * standing tickmark (requestSettled, section 10.15). */
   settled: boolean;
   /** The letters of the attributes that wait on a person again (waitingAgain). */

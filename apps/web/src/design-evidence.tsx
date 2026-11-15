@@ -137,6 +137,12 @@ import { PolicyCheck, PolicyOnFile, usePolicyEvidence } from "./policy-on-file";
 import { RowMenu, type RowMenuItem } from "./row-menu";
 import { type Trace, traceHeading, tracesSample } from "./sample-trace-model";
 import { SampleTrace, useSampleTrace } from "./sample-trace-view";
+import {
+  answerOf,
+  CONFIRMED,
+  outcomeUnknown,
+  refusedWith,
+} from "./tickmark-chain";
 import { type IconName, UiIcon } from "./ui-icon";
 
 type Ids = {
@@ -378,9 +384,14 @@ function useTickmarkAction(ids: Ids) {
   const [, startTransition] = useTransition();
   // A second press while the first is on its way sends nothing.
   const sending = useRef(false);
+  // Whether the last call's outcome is not known: its answer did not arrive, so the
+  // tickmark may or may not have been recorded.
+  const lost = useRef(false);
   const [refused, setRefused] = useState<string | null>(null);
   async function send(fields: Record<string, unknown>): Promise<string | null> {
     if (sending.current) {
+      // Nothing was sent: a refusal that is known.
+      lost.current = false;
       return "The last tickmark is still being recorded. Wait for it, then try again.";
     }
     sending.current = true;
@@ -408,6 +419,7 @@ function useTickmarkAction(ids: Ids) {
       status = 0;
     }
     sending.current = false;
+    lost.current = outcomeUnknown(status);
     const problem = dispositionProblem(status, detail);
     if (problem === null || status === 409) {
       startTransition(() => router.refresh());
@@ -418,19 +430,24 @@ function useTickmarkAction(ids: Ids) {
     return problem;
   }
   return {
-    record: (
+    /** A recording, as the chain reads its answer (tickmark-chain.ts): confirmed,
+     * refused in the server's sentence, or not known where the answer did not arrive. */
+    record: async (
       requirementId: string,
       attributeId: string,
       fields: Record<string, string>,
       replaces: string | null,
     ) =>
-      send({
-        intent: "disposition",
-        requirement_id: requirementId,
-        attribute_id: attributeId,
-        ...fields,
-        replaces,
-      }),
+      answerOf(
+        await send({
+          intent: "disposition",
+          requirement_id: requirementId,
+          attribute_id: attributeId,
+          ...fields,
+          replaces,
+        }),
+        lost.current,
+      ),
     reopen: (
       requirementId: string,
       attributeId: string,
@@ -447,6 +464,9 @@ function useTickmarkAction(ids: Ids) {
     /** The last 409 refusal, until the next act. */
     refused,
     clearRefused: () => setRefused(null),
+    /** Reads the list again in place: where a call's answer did not arrive, what the
+     * server holds is what the list then shows. */
+    reread: () => startTransition(() => router.refresh()),
   };
 }
 
@@ -2495,27 +2515,29 @@ function Row({
           // What recording a tickmark may also do (section 10.15), as the model offers
           // it: the row's own Accept where it settles the last attribute, and the
           // dismissal of the check's proposed finding.
-          after: (line) =>
+          after: (line, open) =>
             tickmarkAfter(assured.check, line, {
               canAccept: canAct && row.canAccept,
               findingStatus: findingOf(line)?.status ?? null,
+              open,
             }),
           // The row's one Accept, the handler its button presses, with why it cannot
-          // be pressed now where it cannot; the server's refusal in its own sentence.
+          // be pressed now where it cannot (nothing is sent then); the server's refusal
+          // in its own sentence; not known where its answer did not arrive.
           accept: async () => {
             const off = acceptOff.current;
             if (off !== null) {
-              return off;
+              return refusedWith(off);
             }
             return (await accept())
-              ? null
-              : (action.refusal() ?? ACCEPT_REFUSED);
+              ? CONFIRMED
+              : answerOf(action.refusal() ?? ACCEPT_REFUSED, action.lost());
           },
           // The finding's own dismissal, with the tickmark's reason as its note.
           dismiss: async (line, note) => {
             const finding = findingOf(line);
             if (finding === null) {
-              return FINDING_NOT_SHOWN;
+              return refusedWith(FINDING_NOT_SHOWN);
             }
             return (await decideFinding(
               findingsAction,
@@ -2523,9 +2545,13 @@ function Row({
               "DISMISS",
               note,
             ))
-              ? null
-              : (findingsAction.refusal() ?? DISMISS_REFUSED);
+              ? CONFIRMED
+              : answerOf(
+                  findingsAction.refusal() ?? DISMISS_REFUSED,
+                  findingsAction.lost(),
+                );
           },
+          reread: tickmarks.reread,
         }
       : null;
   // A tickmark refused because the request changed (409): where the list read again no

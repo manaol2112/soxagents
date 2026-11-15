@@ -12,7 +12,11 @@ import {
   type WorkflowStep,
   workflowLayout,
 } from "./control-workflow-model.ts";
-import type { DesignVerdict } from "./design-conclusion-model.ts";
+import {
+  type DesignVerdict,
+  EXCEPTION_TO_RESOLVE,
+  exceptionHolds,
+} from "./design-conclusion-model.ts";
 import { requestsNeed } from "./design-requests-model.ts";
 
 export type PanelNeed = {
@@ -205,6 +209,26 @@ function needOf(step: WorkflowStep, steps: readonly WorkflowStep[]): PanelNeed {
         "The agent is preparing this step. Its work shows here for a decision when it is done.",
     };
   }
+  // An exception a person recorded holds the D&I sign-off (docs/evidence-assurance.md,
+  // section 10.15, item 5): the conclusion waits on it, and never calls for a sign-off
+  // the server refuses; the assessment says what resolves it.
+  if (step.status === EXCEPTION_TO_RESOLVE) {
+    return step.key === "designconclusion"
+      ? {
+          kind: "wait",
+          title: EXCEPTION_TO_RESOLVE,
+          detail:
+            "An exception recorded on an attribute holds the sign-off, whichever verdict. It can be signed off once a design deficiency is logged for the attribute, or its tickmark is changed in D&I Evidence.",
+          action: { label: "Open D&I Assessment", step: "designassessment" },
+        }
+      : {
+          kind: "act",
+          title: "Resolve the recorded exception",
+          detail:
+            "An exception is recorded on an attribute, and the D&I conclusion cannot be signed off over it. Log a design deficiency for the attribute, or change its tickmark in D&I Evidence with a reason.",
+          action: { label: "Open D&I Evidence", step: "designevidence" },
+        };
+  }
   if (step.tone === "done") {
     return { kind: "done", title: step.status, detail: "" };
   }
@@ -392,12 +416,23 @@ export function agentNote(
           item.status !== "CLOSED",
       );
       const proposed = input.designConclusion?.proposed ?? null;
+      // An exception a person recorded holds the sign-off: said in place of a verdict
+      // "proposed" that the server would refuse to sign.
+      const held =
+        input.designConclusion == null
+          ? 0
+          : exceptionHolds({
+              status: input.designConclusion.status,
+              blocking: input.designConclusion.blocking ?? [],
+            }).length;
       return {
         did: "Proposed the D&I verdict from the prepared design workpaper and the design deficiencies.",
         found: [
-          proposed === null
-            ? "No verdict yet: the design workpaper is not prepared."
-            : `Proposed: ${proposed === "EFFECTIVE" ? "effective" : "not effective"}.`,
+          held > 0
+            ? `Not ready to sign: ${held === 1 ? "an exception is" : `${held} exceptions are`} recorded with no design deficiency logged.`
+            : proposed === null
+              ? "No verdict yet: the design workpaper is not prepared."
+              : `Proposed: ${proposed === "EFFECTIVE" ? "effective" : "not effective"}.`,
           ...(design.length > 0
             ? [
                 `Design deficiencies: ${design.map((item) => item.reference).join(", ")}.`,

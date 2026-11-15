@@ -1186,6 +1186,8 @@
 
 .dc-verdict.is-effective { border-left-color: var(--success); }
 .dc-verdict.is-not_effective { border-left-color: var(--danger); }
+/* An exception a person recorded holds the sign-off: never the green of effective. */
+.dc-verdict.is-excepted { border-left-color: var(--warning); }
 
 .dc-verdict-head {
   display: flex;
@@ -1217,7 +1219,17 @@
 
 .dc-status.is-signed_off { color: var(--success); background: var(--success-soft); border-color: var(--success-border); }
 .dc-status.is-to_sign,
-.dc-status.is-out_of_date { color: var(--warning); background: var(--warning-soft); border-color: var(--warning-border); }
+.dc-status.is-out_of_date,
+.dc-status.is-excepted { color: var(--warning); background: var(--warning-soft); border-color: var(--warning-border); }
+
+.dc-status.is-excepted {
+  gap: 0.3rem;
+  height: auto;
+  min-height: 22px;
+  text-align: left;
+}
+
+.dc-status.is-excepted > svg { flex: none; }
 
 .dc-verdict-word {
   margin: 0;
@@ -1232,6 +1244,44 @@
   color: var(--text-secondary);
   font-size: var(--fs-sm);
 }
+
+/* Why the conclusion cannot be signed while an exception stands, in the server's own
+   sentence(s), whole, and what the preparer does next: each wraps, none is cut. */
+.dc-excepted {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.6rem 0.8rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+  border-radius: 8px;
+}
+
+.dc-excepted > p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.dc-excepted-next { color: var(--text-secondary); }
+
+/* Why a sign-off no longer holds: every reason whole, on its own line. */
+.dc-outdated {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.dc-outdated > p { margin: 0; }
+
+.dc-outdated > ul {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.dc-outdated li { overflow-wrap: anywhere; }
 
 .dc-basis {
   display: grid;

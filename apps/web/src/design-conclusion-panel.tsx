@@ -3,12 +3,14 @@
 import { useRouter } from "next/navigation";
 import { type FormEvent, useState, useTransition } from "react";
 import {
+  conclusionHead,
   DESIGN_CONCLUSION_NOTICES,
   type DesignConclusion,
   type DesignConclusionNotice,
   type DesignSignoff,
+  exceptionLine,
+  holdsBelow,
   parseDesignConclusionNotice,
-  signHolds,
   VERDICT_LABELS,
 } from "./design-conclusion-model";
 import { formatDate } from "./format";
@@ -36,17 +38,27 @@ const REOPENED_FROM: Record<
  * support, what it rests on, and the reviewer's sign-off that clears OE (or ends it). The
  * sign-off saves in the background and shows as signed only once the server confirms it;
  * without scripts the form posts and redirects back to this step.
+ *
+ * While an exception a person recorded holds the sign-off (section 10.15, item 5 of
+ * docs/evidence-assurance.md) the card says so in place of the verdict: "Exception
+ * recorded: not ready to sign", the server's own sentence(s) as the reason and what the
+ * preparer does next; never that a verdict awaits the reviewer, and never the green of
+ * an effective verdict. Every word of the card is the model's
+ * (design-conclusion-model.conclusionHead).
  */
 export function DesignConclusionPanel({
   ids,
   conclusion,
   notice,
   assessmentHref,
+  evidenceHref = null,
 }: {
   ids: { organizationId: string; projectId: string; controlId: string };
   conclusion: DesignConclusion | null;
   notice: DesignConclusionNotice | null;
   assessmentHref: string;
+  /** D&I Evidence, where a tickmark is changed; null where the step is not linked. */
+  evidenceHref?: string | null;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -97,13 +109,12 @@ export function DesignConclusionPanel({
     </>
   );
   const paper = conclusion.workpaper;
-  const verdict =
-    conclusion.status === "SIGNED_OFF"
-      ? (conclusion.signed?.verdict ?? null)
-      : conclusion.proposed;
-  // What holds the sign-off, every sentence whole: the viewer's own reason, then each
-  // the server gives (an exception a person recorded, with what to do about it).
-  const holds = signHolds(conclusion);
+  // The card's head, as the model words it: the verdict, or the exception that holds
+  // the sign-off with the server's sentence(s) and what the preparer does next.
+  const head = conclusionHead(conclusion);
+  // What else holds the sign-off, every sentence whole: the viewer's own reason, then
+  // each the server gives that the card does not already say.
+  const holds = holdsBelow(conclusion);
   const earlier = conclusion.history.filter((item) => item.reopenedAt !== null);
   const signs =
     conclusion.canSign &&
@@ -122,37 +133,38 @@ export function DesignConclusionPanel({
         </p>
       ) : null}
 
-      <div className={`dc-verdict is-${(verdict ?? "none").toLowerCase()}`}>
+      <div className={`dc-verdict is-${head.tone}`}>
         <div className="dc-verdict-head">
-          <h3 id="dc-heading">
-            {conclusion.status === "SIGNED_OFF"
-              ? "D&I conclusion"
-              : conclusion.status === "NOT_READY"
-                ? "D&I conclusion"
-                : "Proposed D&I conclusion"}
-          </h3>
-          <span className={`dc-status is-${conclusion.status.toLowerCase()}`}>
-            {conclusion.status === "SIGNED_OFF"
-              ? "Signed off"
-              : conclusion.status === "OUT_OF_DATE"
-                ? "Out of date"
-                : conclusion.status === "TO_SIGN"
-                  ? "Awaiting reviewer sign-off"
-                  : "Not ready"}
+          <h3 id="dc-heading">{head.heading}</h3>
+          <span className={`dc-status is-${head.statusTone}`}>
+            {head.statusTone === "excepted" ? (
+              <UiIcon name="risk" size={12} />
+            ) : null}
+            {head.status}
           </span>
         </div>
-        <p className="dc-verdict-word">
-          {verdict === null ? "Not concluded" : VERDICT_LABELS[verdict]}
-        </p>
-        <p className="dc-effect">
-          {verdict === "NOT_EFFECTIVE"
-            ? "OE is not performed. The control concludes not effective on the design deficiency, which goes to remediation; D&I is assessed again before OE."
-            : verdict === "EFFECTIVE"
-              ? conclusion.status === "SIGNED_OFF"
-                ? "OE evidence and testing are cleared to proceed."
-                : "Once signed off, OE evidence and testing are cleared to proceed."
-              : "OE evidence and testing wait for a signed-off effective D&I conclusion."}
-        </p>
+        <p className="dc-verdict-word">{head.word}</p>
+        {head.reasons.length > 0 ? (
+          // An exception a person recorded holds the sign-off: the server's sentence(s),
+          // whole, then what the preparer does next. Nothing here says a verdict waits
+          // to be signed.
+          <div className="dc-excepted" role="note">
+            {head.reasons.map((text) => (
+              <p key={text}>{text}</p>
+            ))}
+            <p className="dc-excepted-next">
+              {head.next}
+              {evidenceHref !== null ? (
+                <>
+                  {" "}
+                  <a href={evidenceHref}>Open D&amp;I Evidence</a>
+                </>
+              ) : null}
+            </p>
+          </div>
+        ) : (
+          <p className="dc-effect">{head.effect}</p>
+        )}
         <dl className="dc-basis">
           <div>
             <dt>Design workpaper</dt>
@@ -188,6 +200,23 @@ export function DesignConclusionPanel({
               )}
             </dd>
           </div>
+          {conclusion.exceptions.length > 0 ? (
+            <div>
+              <dt>Exceptions recorded</dt>
+              <dd>
+                <ul className="dc-list">
+                  {conclusion.exceptions.map((item) => (
+                    <li key={`${item.requirementId}:${item.attributeId}`}>
+                      <strong>{exceptionLine(item, formatDate)}</strong>
+                      {item.reason !== "" ? (
+                        <span className="dc-note">{item.reason}</span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </dd>
+            </div>
+          ) : null}
           {conclusion.signed !== null ? (
             <div>
               <dt>Signed off</dt>
@@ -208,10 +237,17 @@ export function DesignConclusionPanel({
       {conclusion.status === "OUT_OF_DATE" ? (
         <div className="banner banner-warning" role="note">
           <UiIcon name="risk" size={16} />
-          <span>
-            The sign-off no longer holds: {conclusion.outOfDate.join("; ")}. OE
-            waits until a reviewer signs off again.
-          </span>
+          {/* Every reason the server gives, each whole on its own line: it names what
+              changed, and none is joined into or cut by another. */}
+          <div className="dc-outdated">
+            <p>The sign-off no longer holds:</p>
+            <ul>
+              {conclusion.outOfDate.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+            <p>OE waits until a reviewer signs off again.</p>
+          </div>
         </div>
       ) : null}
 

@@ -182,7 +182,7 @@ export type CheckDigest = {
   /** The check's files whose reliability is open or decided (section 10.14), as the row
    * reads them: what a file's decision opens on. */
   reliability: ReliabilityLine[];
-  /** Every attribute the request asks for is evidenced by the check or carries a
+  /** Every attribute the request asks for is supported by the check or carries a
    * standing tickmark (requestSettled, section 10.15). */
   settled: boolean;
   /** What the status line is made of, kept for the status of a settled request
@@ -191,6 +191,10 @@ export type CheckDigest = {
   /** Some attribute the request asks for is settled by a person's tickmark, not by the
    * check alone: the settled status says "or carries your tickmark" only then. */
   tickmarked: boolean;
+  /** Some attribute the request asks for is supported by the check in a way accepting
+   * does not mark as evidenced (the documented design alone, or not whole), and carries
+   * no tickmark: the settled status then says the check supports it, never "shown". */
+  supportedOnly: boolean;
 };
 
 /** A finding as the digest needs it: whether a person has still to decide it. */
@@ -1546,6 +1550,10 @@ function leftOf(
 export const SETTLED_TICKMARKED =
   "Every attribute is shown or carries your tickmark.";
 export const SETTLED_SHOWN = "Every attribute is shown.";
+/** Where the check supports every one and no tickmark is needed, yet accepting marks
+ * some as less than evidenced (supported by the documented design alone, or not whole):
+ * the request can close, and "shown" is not said of what the verdict says apart. */
+export const SETTLED_SUPPORTED = "The check supports every attribute.";
 /** After it, where the request can be accepted and is not: nothing is accepted without
  * that press. */
 export const ACCEPT_TO_CLOSE = "Accept the evidence to close this request.";
@@ -1574,7 +1582,10 @@ export type Closing = {
  * status of section 10.14 as it is.
  */
 export function closingStatus(
-  digest: Pick<CheckDigest, "status" | "settled" | "facts" | "tickmarked">,
+  digest: Pick<
+    CheckDigest,
+    "status" | "settled" | "facts" | "tickmarked" | "supportedOnly"
+  >,
   closing: Closing | null,
 ): string {
   if (closing === null || !digest.settled) {
@@ -1584,7 +1595,11 @@ export function closingStatus(
   const left = leftOf(digest.facts, true);
   return [
     closing.accepted ? STATUS_ACCEPTED : "",
-    digest.tickmarked || exceptions > 0 ? SETTLED_TICKMARKED : SETTLED_SHOWN,
+    digest.tickmarked || exceptions > 0
+      ? SETTLED_TICKMARKED
+      : digest.supportedOnly
+        ? SETTLED_SUPPORTED
+        : SETTLED_SHOWN,
     exceptions > 0 ? exceptionsCarried(exceptions) : "",
     left.length > 0 ? `${STATUS_OPEN} ${left.join(", ")}.` : "",
     !closing.accepted && closing.canAccept ? ACCEPT_TO_CLOSE : "",
@@ -1604,8 +1619,8 @@ export function withClosing(
 }
 
 /** What recording a tickmark on an attribute may also do, in the same act (section
- * 10.15, items 1 and 2). Each is offered as a ticked box and done only through the
- * row's own handler, after the server has confirmed the tickmark. */
+ * 10.15, items 1 and 2). Each is offered as a box and done only through the row's own
+ * handler, after the server has confirmed the tickmark. */
 export type TickmarkAfter = {
   /** Recording it settles the last attribute of a request that can be accepted and is
    * not: "Accept this request's evidence now". For every kind, an exception included. */
@@ -1613,24 +1628,67 @@ export type TickmarkAfter = {
   /** The check's finding on the attribute is still proposed: "Dismiss the check's
    * proposed finding with this reason". Offered for a closing kind only (dismissOffered). */
   dismiss: boolean;
+  /** What else still waits on the request beside this attribute, in one line ("Still
+   * open on this request: findings to decide on A and B, reliability of report.csv.");
+   * "" where nothing does, or where the acceptance is not offered. The acceptance box
+   * starts ticked only where this is "": the person may still tick it. */
+  left: string;
 };
+
+/** Before what else waits on the request, under the acceptance box. */
+export const STILL_OPEN_HERE = "Still open on this request:";
+
+/**
+ * What else still waits on a person on the request, beside the attribute a tickmark is
+ * being recorded on: another attribute's finding to decide, another attribute under
+ * "Needs attention" (one the request does not ask for, on which the records may show an
+ * exception), a file's reliability not decided, a file's type to confirm, a file left
+ * out that has an action, a follow-up to consider. The first line's own facts and words
+ * (statusLine), so the form and the first screen never disagree. Not the attribute's own
+ * finding (the form's other box is for it), not a person's exception on another
+ * attribute (carried to the workpaper), and not a caveat nobody can act on. "" where
+ * nothing else waits.
+ */
+export function stillOpenBeside(
+  facts: StatusFacts,
+  line: Pick<AttributeLine, "letter">,
+): string {
+  const others = (letters: readonly string[]) =>
+    letters.filter((letter) => letter !== line.letter);
+  const left = leftOf(
+    {
+      ...facts,
+      exceptions: others(facts.exceptions),
+      findings: others(facts.findings),
+      attributes: others(facts.attributes),
+      caveats: [],
+    },
+    true,
+  );
+  return left.length === 0 ? "" : `${STILL_OPEN_HERE} ${left.join(", ")}.`;
+}
 
 export function tickmarkAfter(
   check: Pick<
     RequestCheck,
     "standing" | "attributes" | "notAddressed" | "notAsked"
   >,
-  line: Pick<AttributeLine, "key" | "findingId">,
+  line: Pick<AttributeLine, "key" | "findingId" | "letter">,
   facts: {
     /** The row offers Accept to this person (`canAct && row.canAccept`). */
     canAccept: boolean;
     /** The status of the finding on the attribute; null where there is none. */
     findingStatus: string | null;
+    /** What the first screen's status line is made of (CheckDigest.facts): what else
+     * waits on the request is read from it. */
+    open: StatusFacts;
   },
 ): TickmarkAfter {
+  const accept = facts.canAccept && settlesLast(check, line);
   return {
-    accept: facts.canAccept && settlesLast(check, line),
+    accept,
     dismiss: line.findingId !== null && facts.findingStatus === "PROPOSED",
+    left: accept ? stillOpenBeside(facts.open, line) : "",
   };
 }
 
@@ -1641,7 +1699,8 @@ export const dismissOffered = (
   kind: DispositionKind | null,
 ): boolean => after.dismiss && kind !== null && CLOSING_KINDS.includes(kind);
 
-/** The form's two boxes, and the line under the first. */
+/** The form's two boxes, and the line under the acceptance where nothing else waits
+ * (where something does, that is said there instead: TickmarkAfter.left). */
 export const ACCEPT_NOW = "Accept this request's evidence now";
 export const ACCEPT_NOW_HINT =
   "Every attribute will then be shown or carry a tickmark.";
@@ -1955,6 +2014,12 @@ export function checkDigest(
     facts,
     tickmarked: askedLines(check).some(
       (line) => line.disposition !== null && !line.evidenced,
+    ),
+    supportedOnly: askedLines(check).some(
+      (line) =>
+        line.state === "SUPPORTED" &&
+        !line.evidenced &&
+        line.disposition === null,
     ),
   };
 }

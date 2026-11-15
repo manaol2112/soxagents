@@ -36,6 +36,7 @@ import { formatDate } from "./format";
 import { RowMenu, type RowMenuItem } from "./row-menu";
 import { traceFileNote, tracesSample } from "./sample-trace-model";
 import { SampleTrace, useSampleTrace } from "./sample-trace-view";
+import { ANSWER_LOST, outcomeUnknown } from "./tickmark-chain";
 import { UiIcon } from "./ui-icon";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
@@ -50,6 +51,9 @@ export function usePlanAction(ids: Ids) {
   // The last call's refusal in one sentence (null once the server confirmed it), for a
   // caller that says it where the action was taken: read once `run` has answered.
   const last = useRef<string | null>(null);
+  // Whether the last call's outcome is not known: its answer did not arrive, so the act
+  // may or may not have been done. Never said as a failure, never as a success.
+  const lost = useRef(false);
   async function run(
     label: string,
     fields: Record<string, unknown>,
@@ -82,7 +86,8 @@ export function usePlanAction(ids: Ids) {
       status = 0;
     }
     setBusy("");
-    const message = planProblem(status, detail);
+    lost.current = outcomeUnknown(status);
+    const message = lost.current ? ANSWER_LOST : planProblem(status, detail);
     last.current = message;
     setProblem(message);
     setNote(answer);
@@ -99,6 +104,8 @@ export function usePlanAction(ids: Ids) {
     note,
     ids,
     refusal: () => last.current,
+    /** Whether the last call's answer did not arrive (its outcome is not known). */
+    lost: () => lost.current,
   };
 }
 

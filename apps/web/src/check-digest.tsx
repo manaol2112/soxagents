@@ -855,6 +855,7 @@ function Attribute({
         line={line}
         letter={row.letter}
         files={files}
+        open={digest.facts}
         tickmark={tickmark}
         addEvidence={addEvidence}
         read={read}

@@ -62,10 +62,13 @@ describe("what the tickmark's view sends", () => {
     // `tickmark.reopen(line.attributeId, standing.version, ...)`. New: each names the
     // disposition the person saw standing when the form opened (`seen`): what a
     // recording replaces (null for none), and the one a reopening reopens.
-    has(
-      view,
-      "const refused = await tickmark.record( line.attributeId, tickmarkFields({ ...draft, kind: draft.kind }), seen, );",
-    );
+    // Changed again 15 November 2026 (independent review of 408f4ce, item 10c). Old:
+    // `const refused = await tickmark.record( line.attributeId, tickmarkFields({
+    // ...draft, kind: draft.kind }), seen, );` written inline in the form. New: the
+    // same call with the same three arguments, made by the one chain the form runs
+    // (tickmark-chain.ts, run in tests/tickmark-chain.test.ts).
+    has(view, "const fields = tickmarkFields({ ...draft, kind: draft.kind });");
+    has(view, "record: () => tickmark.record(line.attributeId, fields, seen),");
     has(view, "const refused = await tickmark.reopen( line.attributeId, seen,");
     has(view, "setSeen(standing?.id ?? null);");
     assert.equal(/standing\.version/.test(view), false);
@@ -81,13 +84,21 @@ describe("what the tickmark's view sends", () => {
       assert.ok(found >= 0, text);
       return found;
     };
+    // Changed 15 November 2026 (item 10c). Old: `if (refused === null) {
+    // confirmed(TICKMARK_RECORDED); } else { setProblem(refused); setFollow(true); }`
+    // after the inline call. New: the chain says the tickmark's line once its call was
+    // answered: done only where the server confirmed it; otherwise its sentence (the
+    // server's refusal, or that the outcome is not known) stays on the form.
     assert.ok(
-      at("await tickmark.record(") < at("confirmed(TICKMARK_RECORDED)"),
+      at("tickmark.record(line.attributeId, fields, seen)") <
+        at("confirmed(TICKMARK_RECORDED)"),
     );
     has(
       submit,
-      "if (refused === null) { confirmed(TICKMARK_RECORDED); } else { setProblem(refused); setFollow(true); }",
+      'if (step.state === "done") { confirmed(TICKMARK_RECORDED); setFollowing(also.dismiss || also.accept); } else { // Refused, or not known: the form stays, and follows what stands once the // list is read again. setProblem(step.text); setFollow(true); }',
     );
+    // "Tickmark recorded." is said nowhere else in the form.
+    assert.equal((submit.match(/confirmed\(/g) ?? []).length, 1);
     const reopen = view.slice(
       view.indexOf("const reopen = async"),
       view.indexOf("const set = (change"),

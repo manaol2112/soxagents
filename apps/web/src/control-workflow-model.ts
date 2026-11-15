@@ -7,9 +7,11 @@
  * records the page already holds, and laid out here so the canvas only draws it.
  */
 
-import type {
-  DesignConclusionStatus,
-  DesignVerdict,
+import {
+  type DesignConclusionStatus,
+  type DesignVerdict,
+  EXCEPTION_TO_RESOLVE,
+  exceptionHolds,
 } from "./design-conclusion-model.ts";
 import {
   type EvidenceWorkflowHeader,
@@ -203,15 +205,15 @@ export type WorkflowInput = {
     untailored?: number;
   };
   plan: { exists: boolean; approved: boolean; pendingReview: boolean };
-  /** The evidence items, each in its phase (DESIGN, INTERIM, ROLLFORWARD). `files`: how
-   * many files serve it, where that is known (an item not requested yet with a file of
-   * its own is in hand to accept). `again`: an accepted D&I item whose current check has
-   * an attribute that waits on a person again (docs/evidence-assurance.md, section
-   * 10.15, item 4). Both absent where they were not read. */
+  /** The evidence items, each in its phase (DESIGN, INTERIM, ROLLFORWARD), in the state
+   * the server gives: an item that waited for an earlier one and has a file of its own
+   * comes as RECEIVED (section 10.15, item 3), so nothing is worked out here from its
+   * files. `again`: an accepted D&I item whose current check has an attribute that waits
+   * on a person again (docs/evidence-assurance.md, section 10.15, item 4); absent where
+   * it was not read. */
   requirements: ReadonlyArray<{
     phase: string;
     state: RequirementState;
-    files?: number;
     again?: boolean;
   }>;
   /** The D&I evidence's own release (phase_release, B1): where it stands for the control.
@@ -277,6 +279,9 @@ export type WorkflowInput = {
     proposed: DesignVerdict | null;
     /** The verdict signed off, current or out of date. */
     signed: DesignVerdict | null;
+    /** What holds the sign-off, as the server sends it (`blocking`): an exception a
+     * person recorded is read from it. Absent where it was not read. */
+    blocking?: readonly string[];
   } | null;
   effectivenessPaper: Paper | null;
   /** Steps an agent is working on now. */
@@ -386,7 +391,6 @@ function understandingState(input: WorkflowInput): State {
 function evidenceState(
   items: ReadonlyArray<{
     state: RequirementState;
-    files?: number;
     again?: boolean;
   }>,
   before: StepKey,
@@ -400,16 +404,15 @@ function evidenceState(
   }
   const accepted = current.filter((item) => item.state === "ACCEPTED").length;
   const stalled = current.filter((item) => STALLED.includes(item.state)).length;
-  // An item not requested yet with a file of its own is in hand to accept (section
-  // 10.15, item 3): it is to review, never "later".
-  const inHand = current.filter(
-    (item) => NOT_YET.includes(item.state) && (item.files ?? 0) > 0,
+  // Only what the server says is to review: an item that waits for an earlier one with a
+  // file of its own comes as RECEIVED, and one that only shares a sibling's file (which
+  // nobody can accept) stays "later". A count of files here said "1 item to review" of
+  // items no one could accept.
+  const review = current.filter((item) =>
+    TO_REVIEW.includes(item.state),
   ).length;
-  const review =
-    current.filter((item) => TO_REVIEW.includes(item.state)).length + inHand;
   const sent = current.filter((item) => item.state === "SENT").length;
-  const later =
-    current.filter((item) => NOT_YET.includes(item.state)).length - inHand;
+  const later = current.filter((item) => NOT_YET.includes(item.state)).length;
   // Accepted, with an attribute that waits on a person again: never done while one does.
   const again = current.filter(
     (item) => item.state === "ACCEPTED" && item.again === true,
@@ -459,9 +462,27 @@ function assessmentState(input: WorkflowInput, evidence: State): State {
   if (paper.drafting) {
     return { tone: "active", status: "Being drafted" };
   }
-  return paper.status === "PREPARED"
-    ? { tone: "done", status: "Assessed" }
-    : { tone: "attention", status: "Draft to review" };
+  if (paper.status !== "PREPARED") {
+    return { tone: "attention", status: "Draft to review" };
+  }
+  // An exception a person recorded holds the sign-off until a design deficiency is
+  // logged for it, or its tickmark is changed: the assessment is not finished.
+  return excepted(input)
+    ? { tone: "attention", status: EXCEPTION_TO_RESOLVE }
+    : { tone: "done", status: "Assessed" };
+}
+
+/** Whether an exception a person recorded holds the D&I sign-off, as the server's
+ * `blocking` says it (design-conclusion-model.exceptionHolds). */
+function excepted(input: WorkflowInput): boolean {
+  const conclusion = input.designConclusion;
+  return (
+    conclusion !== null &&
+    exceptionHolds({
+      status: conclusion.status,
+      blocking: conclusion.blocking ?? [],
+    }).length > 0
+  );
 }
 
 /** The D&I verdict that clears or stops OE: the one a reviewer signed off, while it holds.
@@ -507,6 +528,11 @@ function designConclusionState(input: WorkflowInput): State {
       tone: "done",
       status: `${VERDICT_WORDS[conclusion.signed]} · signed off`,
     };
+  }
+  // The server refuses every sign-off while an exception a person recorded stands
+  // unanswered: never "Effective · to sign off", nor "to sign again", over one.
+  if (excepted(input)) {
+    return { tone: "blocked", status: EXCEPTION_TO_RESOLVE };
   }
   if (conclusion.status === "OUT_OF_DATE") {
     return { tone: "attention", status: "Out of date · to sign again" };

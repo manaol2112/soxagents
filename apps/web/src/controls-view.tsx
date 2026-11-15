@@ -2050,9 +2050,8 @@ function ControlRecord({
     requirements: requirements.map((item) => ({
       phase: item.phase,
       state: item.state,
-      // Where the evidence list's own header is not read, the items still say what is
-      // in hand to accept and which accepted request has an attribute to look at again.
-      files: item.files.length,
+      // Where the evidence list's own header is not read, the items still say which
+      // accepted request has an attribute to look at again.
       again: lookAgain.has(item.id),
     })),
     designRelease: designPhase,
@@ -2100,6 +2099,8 @@ function ControlRecord({
             status: engagement.designConclusion.status,
             proposed: engagement.designConclusion.proposed,
             signed: engagement.designConclusion.signed?.verdict ?? null,
+            // What holds the sign-off: an exception a person recorded is read from it.
+            blocking: engagement.designConclusion.blocking,
           },
     effectivenessPaper: paperOf("EFFECTIVENESS"),
     busy,
@@ -2600,6 +2601,7 @@ function ControlRecord({
           conclusion={engagement.designConclusion}
           notice={engagement.designConclusionNotice}
           assessmentHref={stepHrefsWf.designassessment}
+          evidenceHref={stepHrefsWf.designevidence ?? null}
         />
       ) : null}
       {openStep !== null && NOT_YET_BUILT[openStep.key] !== undefined ? (

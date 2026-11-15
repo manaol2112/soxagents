@@ -22,6 +22,7 @@ import {
 } from "./evidence-findings-model";
 import type { EvidenceCitation } from "./evidence-preview-model";
 import { formatDate } from "./format";
+import { ANSWER_LOST, outcomeUnknown } from "./tickmark-chain";
 import { type IconName, UiIcon } from "./ui-icon";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
@@ -35,6 +36,9 @@ export function useFindingsAction(ids: Ids) {
   // The last call's refusal in one sentence (null once the server confirmed it), for a
   // caller that says it where the action was taken: read once `run` has answered.
   const last = useRef<string | null>(null);
+  // Whether the last call's outcome is not known: its answer did not arrive, so the act
+  // may or may not have been done. Never said as a failure, never as a success.
+  const lost = useRef(false);
   async function run(
     label: string,
     fields: Record<string, unknown>,
@@ -64,7 +68,10 @@ export function useFindingsAction(ids: Ids) {
       status = 0;
     }
     setBusy("");
-    const message = findingsProblem(status, detail);
+    lost.current = outcomeUnknown(status);
+    const message = lost.current
+      ? ANSWER_LOST
+      : findingsProblem(status, detail);
     last.current = message;
     setProblem(message);
     if (message === null) {
@@ -78,6 +85,8 @@ export function useFindingsAction(ids: Ids) {
     pending: pending || busy !== "",
     problem,
     refusal: () => last.current,
+    /** Whether the last call's answer did not arrive (its outcome is not known). */
+    lost: () => lost.current,
   };
 }
 

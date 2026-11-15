@@ -16,6 +16,7 @@ import {
   fileRef,
   fromEarlierCheck,
   recordedLine,
+  type StatusFacts,
   TICKMARK_WORDS,
   type TickmarkAfter,
   type TickmarkDraft,
@@ -31,6 +32,13 @@ import {
   type RowFile,
 } from "./evidence-assurance-model";
 import { RowMenu, type RowMenuItem } from "./row-menu";
+import {
+  type ChainAlso,
+  type ChainAnswer,
+  type ChainStep,
+  TICKMARK_RECORDED,
+  tickmarkChain,
+} from "./tickmark-chain";
 import { UiIcon } from "./ui-icon";
 
 /**
@@ -42,12 +50,15 @@ import { UiIcon } from "./ui-icon";
  * said only once the server has answered, and a refusal is the server's own sentence.
  *
  * Closing a request (section 10.15): where recording the tickmark settles the last
- * attribute, the form carries a ticked "Accept this request's evidence now", and for a
- * closing kind on an attribute whose finding is still proposed, a ticked "Dismiss the
- * check's proposed finding with this reason". One press records the tickmark; only once
- * the server has confirmed it are the finding's own dismissal and then the row's own
- * Accept called, each said as done only after its own answer. A refusal of either leaves
- * the tickmark, is said in the server's sentence, and nothing is tried again unasked.
+ * attribute, the form carries "Accept this request's evidence now" (ticked to start only
+ * where nothing else waits on the request; otherwise unticked, with what is left said
+ * under it), and for a closing kind on an attribute whose finding is still proposed, a
+ * ticked "Dismiss the check's proposed finding with this reason". One press runs the
+ * chain (tickmark-chain.ts): the tickmark; only once the server has confirmed it, the
+ * finding's own dismissal and then the row's own Accept, each said as done only after
+ * its own answer. A refusal of either leaves the tickmark, is said in the server's
+ * sentence, and nothing is tried again unasked; an answer that did not arrive is said
+ * as not known, never as a failure or a success, and the list is read again.
  */
 
 export const TICKMARK = "Tickmark";
@@ -58,7 +69,6 @@ export const TICKMARK_RECORD = "Record";
 export const TICKMARK_CHANGE = "Change";
 export const TICKMARK_REOPEN = "Reopen";
 export const TICKMARK_HISTORY = "History";
-export const TICKMARK_RECORDED = "Tickmark recorded.";
 export const TICKMARK_REOPENED =
   "Tickmark reopened. The attribute waits on you again.";
 export const ADD_AN_ANNOTATION = "Add an annotation";
@@ -71,26 +81,6 @@ export const AN_ANNOTATION = "An annotation on the evidence.";
 export const ANNOTATIONS_UNREAD = "The annotations could not be read.";
 export const TRY_AGAIN = "Try again";
 export const ALSO_LABEL = "With this tickmark";
-export const FINDING_DISMISSING = "Dismissing the check's proposed finding…";
-export const FINDING_DISMISSED =
-  "Proposed finding dismissed, with this reason.";
-export const EVIDENCE_ACCEPTING = "Accepting the evidence…";
-export const EVIDENCE_ACCEPTED = "Evidence accepted.";
-/** The acceptance is not tried once the dismissal was refused: the finding still waits. */
-export const ACCEPT_HELD =
-  "The evidence was not accepted, because the finding was not dismissed. Decide the finding, then accept from the summary.";
-
-/** A refusal as a sentence of its own. */
-const closed = (text: string) => {
-  const said = text.replace(/\s+/g, " ").trim();
-  return said === "" || /[.!?…]$/.test(said) ? said : `${said}.`;
-};
-/** A dismissal the server refused: its sentence, and that the tickmark stands. */
-export const findingKept = (refusal: string) =>
-  `The proposed finding was not dismissed. ${closed(refusal)} The tickmark stays.`;
-/** An acceptance the server refused: its sentence, and that the tickmark stands. */
-export const evidenceNotAccepted = (refusal: string) =>
-  `The evidence was not accepted. ${closed(refusal)} The tickmark stays.`;
 
 /** The row's own ways to add evidence to the request. */
 export type DigestAddEvidence = {
@@ -113,10 +103,14 @@ export type DigestTickmarkRead = {
   openAnnotation: (fileId: string, annotationId: string) => void;
 };
 
-/** The row's own calls for a tickmark: each answers the server's refusal in one sentence,
- * or null once the server has confirmed it. Each names the disposition the person saw
- * standing (section 10.13, "As built (server)"): a recording what it replaces (null for
- * none), a reopening the one it reopens, so a stale page never changes one unseen. */
+/** The row's own calls for a tickmark. The three a press of "Record" may chain (the
+ * recording, the finding's dismissal, the acceptance) each answer as the chain reads it
+ * (tickmark-chain.ts): confirmed by the server, refused in the server's one sentence, or
+ * not known where the answer did not arrive. A reopening answers the server's refusal in
+ * one sentence, or null once the server has confirmed it. Each names the disposition the
+ * person saw standing (section 10.13, "As built (server)"): a recording what it replaces
+ * (null for none), a reopening the one it reopens, so a stale page never changes one
+ * unseen. */
 export type DigestTickmarkAction = DigestTickmarkRead & {
   /** What may be recorded on the attribute; null where nothing may. */
   offer: (line: AttributeLine) => TickmarkOffer | null;
@@ -124,7 +118,7 @@ export type DigestTickmarkAction = DigestTickmarkRead & {
     attributeId: string,
     fields: Record<string, string>,
     replaces: string | null,
-  ) => Promise<string | null>;
+  ) => Promise<ChainAnswer>;
   reopen: (
     attributeId: string,
     id: string,
@@ -138,24 +132,27 @@ export type DigestTickmarkAction = DigestTickmarkRead & {
     back: () => void,
   ) => void;
   /** What recording a tickmark on the attribute may also do (section 10.15): accept the
-   * request where it settles the last attribute, and dismiss the check's proposed
-   * finding. The model's answer for the row; this view decides neither. */
-  after: (line: AttributeLine) => TickmarkAfter;
-  /** The row's own Accept, the one its button presses: the server's refusal in one
-   * sentence, or null once the server has confirmed it. */
-  accept: () => Promise<string | null>;
-  /** The finding's own dismissal, with the note: the server's refusal in one sentence,
-   * or null once the server has confirmed it. */
-  dismiss: (line: AttributeLine, note: string) => Promise<string | null>;
+   * request where it settles the last attribute (and what else still waits on it), and
+   * dismiss the check's proposed finding. The model's answer for the row, from what the
+   * first screen's status line is made of; this view decides none of it. */
+  after: (line: AttributeLine, open: StatusFacts) => TickmarkAfter;
+  /** The row's own Accept, the one its button presses. */
+  accept: () => Promise<ChainAnswer>;
+  /** The finding's own dismissal, with the note. */
+  dismiss: (line: AttributeLine, note: string) => Promise<ChainAnswer>;
+  /** Reads the list again in place: called where a call's answer did not arrive, so the
+   * list shows what the server holds. */
+  reread: () => void;
 };
 
-/** What follows a recorded tickmark, as it is said: at work, done only once the server
- * has answered, or refused in the server's sentence. */
-type AfterStep = {
-  key: "dismiss" | "accept";
-  state: "working" | "done" | "refused";
-  text: string;
-};
+/** A step's mark, by how it ended. */
+const STEP_ICON = {
+  working: "clock",
+  done: "check",
+  refused: "risk",
+  held: "risk",
+  unknown: "help",
+} as const;
 
 type Choices = {
   status: "idle" | "loading" | "failed" | "ready";
@@ -320,6 +317,7 @@ export function AttributeTickmark({
   line,
   letter,
   files,
+  open: facts,
   tickmark,
   addEvidence,
   read = null,
@@ -327,6 +325,9 @@ export function AttributeTickmark({
   line: AttributeLine;
   letter: string;
   files: RowFile[];
+  /** What the first screen's status line is made of (CheckDigest.facts): the row's
+   * model reads from it what else still waits on the request. */
+  open: StatusFacts;
   /** Null for a person who may not act: nothing is offered. */
   tickmark: DigestTickmarkAction | null;
   /** Null for a person who may not act. */
@@ -352,11 +353,12 @@ export function AttributeTickmark({
   const [problem, setProblem] = useState<string | null>(null);
   const [done, setDone] = useState("");
   const [reopenReason, setReopenReason] = useState("");
-  // The two boxes of section 10.15, ticked to start each time the form opens, and what
+  // The two boxes of section 10.15, set each time the form opens (the dismissal ticked;
+  // the acceptance ticked only where nothing else waits on the request), and what
   // followed the last recorded tickmark.
-  const [acceptNow, setAcceptNow] = useState(true);
+  const [acceptNow, setAcceptNow] = useState(false);
   const [dismissToo, setDismissToo] = useState(true);
-  const [steps, setSteps] = useState<AfterStep[]>([]);
+  const [steps, setSteps] = useState<ChainStep[]>([]);
   const [following, setFollowing] = useState(false);
   const [onFile, setOnFile] = useState(files[0]?.id ?? "");
   const [choices, setChoices] = useState<Choices>({
@@ -437,12 +439,23 @@ export function AttributeTickmark({
     return <History line={line} />;
   }
 
+  // What recording this tickmark may also do, as the row's model answers it: accepting
+  // the request where this is the last attribute to settle (with what else still waits
+  // on it), and (for a closing kind) dismissing the check's proposed finding. Offered
+  // only while the form records one.
+  const after: TickmarkAfter =
+    tickmark !== null && offer !== null
+      ? tickmark.after(line, facts)
+      : { accept: false, dismiss: false, left: "" };
+
   const open = (next: "form" | "reopen", from: HTMLElement) => {
     opener.current = from;
     setProblem(null);
     setDone("");
     setSteps([]);
-    setAcceptNow(true);
+    // Ticked to start only where nothing else waits on the request: accepting is never
+    // the default over a finding to decide, a file's reliability or a type to confirm.
+    setAcceptNow(after.accept && after.left === "");
     setDismissToo(true);
     setTried(false);
     setSeen(standing?.id ?? null);
@@ -486,13 +499,6 @@ export function AttributeTickmark({
   };
 
   const problems = tickmarkProblems(draft);
-  // What recording this tickmark may also do, as the row's model answers it: accepting
-  // the request where this is the last attribute to settle, and (for a closing kind)
-  // dismissing the check's proposed finding. Offered only while the form records one.
-  const after: TickmarkAfter =
-    tickmark !== null && offer !== null
-      ? tickmark.after(line)
-      : { accept: false, dismiss: false };
   const dismissing = dismissOffered(after, draft.kind);
   const submit = async () => {
     setTried(true);
@@ -506,73 +512,53 @@ export function AttributeTickmark({
       return;
     }
     // What the person ticked, as the form stood at this press.
-    const also = {
+    const also: ChainAlso = {
       dismiss: dismissing && dismissToo,
       accept: after.accept && acceptNow,
     };
     // The tickmark's reason, as it is sent: the note of the finding's dismissal.
     const note = draft.reason.replace(/\s+/g, " ").trim();
+    const fields = tickmarkFields({ ...draft, kind: draft.kind });
     setBusy(true);
     setProblem(null);
     setFollow(false);
     setSteps([]);
-    const refused = await tickmark.record(
-      line.attributeId,
-      tickmarkFields({ ...draft, kind: draft.kind }),
-      seen,
+    // The chain decides the order and every stop (tickmark-chain.ts): the tickmark;
+    // only once the server confirmed it, the finding's own dismissal with the tickmark's
+    // reason, then the row's own Accept. This form only draws what it says: each line as
+    // done only after its own answer, a refusal in the server's sentence, and an answer
+    // that did not arrive as not known.
+    await tickmarkChain(
+      {
+        record: () => tickmark.record(line.attributeId, fields, seen),
+        dismiss: () => tickmark.dismiss(line, note),
+        accept: () => tickmark.accept(),
+      },
+      also,
+      {
+        say: (step) => {
+          if (step.key !== "record") {
+            setSteps((was) =>
+              was.some((each) => each.key === step.key)
+                ? was.map((each) => (each.key === step.key ? step : each))
+                : [...was, step],
+            );
+            return;
+          }
+          setBusy(false);
+          if (step.state === "done") {
+            confirmed(TICKMARK_RECORDED);
+            setFollowing(also.dismiss || also.accept);
+          } else {
+            // Refused, or not known: the form stays, and follows what stands once the
+            // list is read again.
+            setProblem(step.text);
+            setFollow(true);
+          }
+        },
+        reread: tickmark.reread,
+      },
     );
-    setBusy(false);
-    if (refused === null) {
-      confirmed(TICKMARK_RECORDED);
-    } else {
-      setProblem(refused);
-      setFollow(true);
-    }
-    if (refused !== null || !(also.dismiss || also.accept)) {
-      // Refused: the tickmark was not recorded, so nothing follows it.
-      return;
-    }
-    // Only now that the server has confirmed the tickmark: the finding's own dismissal
-    // with the tickmark's reason, then the row's own Accept. Each is said as done only
-    // after its own answer; a refusal is said and nothing is tried again.
-    setFollowing(true);
-    const said: AfterStep[] = [];
-    const say = (step: AfterStep) => {
-      const at = said.findIndex((each) => each.key === step.key);
-      if (at < 0) {
-        said.push(step);
-      } else {
-        said[at] = step;
-      }
-      setSteps([...said]);
-    };
-    let held = false;
-    if (also.dismiss) {
-      say({ key: "dismiss", state: "working", text: FINDING_DISMISSING });
-      const kept = await tickmark.dismiss(line, note);
-      held = kept !== null;
-      say(
-        kept === null
-          ? { key: "dismiss", state: "done", text: FINDING_DISMISSED }
-          : { key: "dismiss", state: "refused", text: findingKept(kept) },
-      );
-    }
-    if (also.accept && held) {
-      // The finding still waits on the person: the request is not accepted over it.
-      say({ key: "accept", state: "refused", text: ACCEPT_HELD });
-    } else if (also.accept) {
-      say({ key: "accept", state: "working", text: EVIDENCE_ACCEPTING });
-      const kept = await tickmark.accept();
-      say(
-        kept === null
-          ? { key: "accept", state: "done", text: EVIDENCE_ACCEPTED }
-          : {
-              key: "accept",
-              state: "refused",
-              text: evidenceNotAccepted(kept),
-            },
-      );
-    }
     setFollowing(false);
   };
   const reopenProblem =
@@ -795,24 +781,22 @@ export function AttributeTickmark({
           ) : null}
           {steps.length > 0 ? (
             // What followed the tickmark, in the order it was done: each line is said as
-            // done only once its own answer came, and a refusal in the server's sentence.
+            // done only once its own answer came, a refusal in the server's sentence, and
+            // an answer that did not arrive as not known.
             <ul className="cdg-tm-steps" aria-live="polite">
               {steps.map((step) => (
                 <li
                   key={step.key}
                   className={`cdg-tm-step is-${step.state}`}
-                  role={step.state === "refused" ? "alert" : undefined}
+                  role={
+                    step.state === "refused" ||
+                    step.state === "held" ||
+                    step.state === "unknown"
+                      ? "alert"
+                      : undefined
+                  }
                 >
-                  <UiIcon
-                    name={
-                      step.state === "done"
-                        ? "check"
-                        : step.state === "refused"
-                          ? "risk"
-                          : "clock"
-                    }
-                    size={13}
-                  />
+                  <UiIcon name={STEP_ICON[step.state]} size={13} />
                   <span>{step.text}</span>
                 </li>
               ))}
@@ -1026,8 +1010,10 @@ export function AttributeTickmark({
             </div>
           ) : null}
           {dismissing || after.accept ? (
-            // Real boxes, ticked to start: nothing is dismissed or accepted that the
-            // person did not leave ticked, and neither is sent before the tickmark.
+            // Real boxes: nothing is dismissed or accepted that the person did not leave
+            // ticked, and neither is sent before the tickmark. The acceptance starts
+            // ticked only where nothing else waits on the request; what is left is said
+            // under it, and the person may still tick it.
             <fieldset className="cdg-tmf-also">
               <legend>{ALSO_LABEL}</legend>
               {dismissing ? (
@@ -1051,7 +1037,7 @@ export function AttributeTickmark({
                   <span>
                     {ACCEPT_NOW}
                     <span id={`${id}-accept-hint`} className="cdg-tmf-hint">
-                      {ACCEPT_NOW_HINT}
+                      {after.left !== "" ? after.left : ACCEPT_NOW_HINT}
                     </span>
                   </span>
                 </label>
