@@ -171,6 +171,35 @@ and text views in evidence-preview.tsx) is removed once nothing uses it.
   use, and focus returning to what opened it.
 - Opening a file never writes anything; only the existing review actions do.
 
+## 5b. Opening a file opens the viewer, not the reviewer (14 November 2026)
+
+After 5a the product owner opened a file and wrote: "I still see the old reviewer when
+opening the file. It's just that you incorporated the annotations." 5a changed the viewer
+inside the evidence reviewer (`EvidenceDialog`, `mode: "review"`: the file list, the
+Preview / Data / Details tabs and the "AI classification" side panel), but opening a file
+still opened that reviewer. From here, opening an existing file anywhere opens the
+annotation viewer itself, full size, and the reviewer's review mode is retired.
+
+- **What opens.** The annotation viewer as a dialog (`AnnotatedDialog`), on the file, with
+  the request's annotations where one is known, the start annotation or citation where one
+  was asked for, and the other files of the same list in its switcher. Every place that
+  called `onDialog({ mode: "review", ... })` (the D&I list's file names, View, Evidence:
+  E3, passages, the file menu's Annotations, a check's "Confirm the file's type", the
+  findings' "open the file", the OE evidence requests list) opens it instead.
+- **What the reviewer held moves into the viewer**, as a second tab of its side panel,
+  "About this file", beside "Annotations" (the legend): the reader's classification (the
+  detected type, its confidence, why it was classified so, the item it was routed to,
+  with the existing "Confirm the type" and "Change" actions), its reading state and a
+  failed read's "Read again", the data tab's table for a spreadsheet or population (with
+  picking the walkthrough instance where the reviewer offered it), population checks,
+  samples and the instance, the file's findings with their existing actions, "Remove from
+  this request" (the existing withdrawal), and the file's history. Each keeps its existing
+  server call; nothing new is written. A tab with nothing to say is not shown.
+- **Uploading** keeps its own flow (the evidence wizard on D&I; the upload mode of the
+  existing dialog where a screen still uses it); only viewing changes.
+- **Removed**: the reviewer's review mode (its file list, its tabs and its side panel as a
+  separate window) once nothing opens it, and its CSS that nothing else uses.
+
 ## 6. Tests
 
 Synthetic files only. Server: positions from a generated image (where local OCR is
@@ -188,4 +217,5 @@ placement, and source-level checks of the viewer.
 | Server: positions, proposals, records, API | built 14 November 2026 with scripted readings and synthetic files (migration 0161, evidence_annotations.py, prompts /7; test_evidence_annotations.py); not yet run live |
 | The preview: boxes, legend, callout, review, edit, add, annotated copy | built 14 November 2026 (`evidence-annotations.tsx`, `evidence-annotations-model.ts`, `evidence-annotations.css`, route `/workspace/evidence-annotations`); opened from a D&I file's menu ("Annotations") and from its preview; checked in a headless browser against scripted answers, not yet against the running app or by eye in both themes |
 | One evidence viewer: the annotation viewer everywhere, the old viewer removed (5a) | built 14 November 2026: `evidence-preview.tsx` deleted; every caller opens files through `evidence-opener.tsx` (`PreviewButton`, `AnnotatedDialog`, `AnnotatedFile`) into `AnnotatedEvidence`, which draws each kind of file through `evidence-stages.tsx`; cited passages are the kind "Cited" (dashed box, square tickmark, `--mark-cited`) in the same legend; `tests/one-evidence-viewer.test.ts`; checked in a headless browser for each former caller with synthetic files, not yet against the running app |
+| Opening a file opens the viewer, with the reviewer's content under "About this file" (5b) | in progress, 14 November 2026 |
 | Scanned PDFs boxed; the annotated copy in the workpaper | planned |
