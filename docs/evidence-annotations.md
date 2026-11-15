@@ -142,6 +142,35 @@ Each returns the list as GET does. Decisions need the same permission as decidin
 version is stale ("This annotation changed since the page loaded. Refresh and try again.").
 The web calls them through `/workspace/evidence-annotations`.
 
+## 5a. One evidence viewer (14 November 2026)
+
+Asked for by the product owner: "I want the evidence reviewer to be the one that has
+annotations, not the old viewer", then "I want the old evidence viewer to be retired. I want
+the one you created today." The annotation viewer of section 1 becomes the only way a file
+is shown in the app; the old viewer (`EvidenceViewer`, `PreviewDialog` and its image, PDF
+and text views in evidence-preview.tsx) is removed once nothing uses it.
+
+- **One component.** Every place that shows a file (the evidence reviewer's Preview and
+  its full-size view, the evidence wizard, the Evidence center and workspace, the controls
+  screen, the D&I workpaper views, the spreadsheet view, the console's citations, and the
+  D&I list) shows it through the annotation viewer, inline or as a dialog.
+- **Annotations** are shown and reviewed wherever the file is opened for a D&I request
+  (the request is known): boxes, the legend, the basis of the selected one, and the review
+  actions of section 1, as the person's role allows.
+- **Citations.** Where a screen opens a file on passages it cites (the console, a
+  workpaper, a finding, a check's passage), the viewer shows them as numbered boxes of a
+  kind of their own, "Cited", in the same legend, beside any annotations; selecting one
+  shows its quote and what cited it. A citation is never stored, never reviewed and never
+  an annotation; it decides nothing.
+- **Files it cannot box** (spreadsheets, Word documents, text, a scanned PDF without
+  positions) are shown in the same layout: the content as today's views show it (the
+  sheet's table, the document's text, the page), with the annotations and citations
+  listed beside it without boxes. Nothing that could be seen in a file before is lost.
+- **Behaviour kept from the old viewer**: paging, zoom, download of the original file,
+  several files with a switcher, a file that cannot be shown saying so plainly, keyboard
+  use, and focus returning to what opened it.
+- Opening a file never writes anything; only the existing review actions do.
+
 ## 6. Tests
 
 Synthetic files only. Server: positions from a generated image (where local OCR is
@@ -158,4 +187,5 @@ placement, and source-level checks of the viewer.
 | Mockups on a sample file, the compact one approved | done, 14 November 2026 |
 | Server: positions, proposals, records, API | built 14 November 2026 with scripted readings and synthetic files (migration 0161, evidence_annotations.py, prompts /7; test_evidence_annotations.py); not yet run live |
 | The preview: boxes, legend, callout, review, edit, add, annotated copy | built 14 November 2026 (`evidence-annotations.tsx`, `evidence-annotations-model.ts`, `evidence-annotations.css`, route `/workspace/evidence-annotations`); opened from a D&I file's menu ("Annotations") and from its preview; checked in a headless browser against scripted answers, not yet against the running app or by eye in both themes |
+| One evidence viewer: the annotation viewer everywhere, the old viewer removed (5a) | in progress, 14 November 2026 |
 | Scanned PDFs boxed; the annotated copy in the workpaper | planned |
