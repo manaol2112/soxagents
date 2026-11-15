@@ -1811,7 +1811,13 @@ button.wz-q-clear {
 .wz-look-row > .wz-choose {
   flex-wrap: nowrap;
   align-self: center;
-  width: min(27rem, 100%);
+  width: min(32rem, 100%);
+}
+
+/* "Remove": quiet beside Place file, so placing stays the row's main action. */
+.wz-choose-remove {
+  flex: none;
+  color: var(--text-secondary);
 }
 
 .wz-look-row > .wz-move-wrap,

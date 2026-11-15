@@ -2594,6 +2594,10 @@ function FixReading({
   );
 }
 
+/** Removing a file from the upload, wherever the window offers it: one label. */
+const REMOVE_LABEL = "Remove from this upload";
+const STILL_READING_FILE = "The agent is still reading this file.";
+
 /** Where a file a person must place goes: the agent's suggestion selected first, and
  * Place file. Keyed by the placement's version, so a file moved meanwhile (here or
  * elsewhere) starts its choice again. */
@@ -2603,12 +2607,17 @@ function Choose({
   preselect,
   busy,
   onPlace,
+  remove,
 }: {
   name: string;
   choices: readonly Choice[];
   preselect: string;
   busy: boolean;
   onPlace: (choice: string) => void;
+  /** "Remove": the file is not needed for this control. It opens the existing
+   * withdrawal (its reason, its custody record kept); nothing is removed by the press
+   * itself. Absent where the file cannot be removed here. */
+  remove?: { onRemove: () => void; unavailable: string | null } | undefined;
 }) {
   const id = useId();
   const [value, setValue] = useState(preselect);
@@ -2654,6 +2663,19 @@ function Choose({
           "Place file"
         )}
       </button>
+      {remove !== undefined ? (
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm wz-choose-remove"
+          disabled={busy || remove.unavailable !== null}
+          title={remove.unavailable ?? REMOVE_LABEL}
+          aria-label={`${REMOVE_LABEL}: ${name}`}
+          onClick={remove.onRemove}
+        >
+          <UiIcon name="trash" size={13} />
+          Remove
+        </button>
+      ) : null}
     </span>
   );
 }
@@ -2863,7 +2885,8 @@ function Results({
                 {apartTitle(view.apart.length)}
               </h3>
               <span className="wz-q-meta">
-                Choose where a file goes, or leave it in the control’s files.
+                Choose where a file goes, leave it in the control’s files, or
+                remove it.
               </span>
             </div>
             {view.apart.map((line) => (
@@ -2975,6 +2998,14 @@ function ApartRow({
           preselect={needs.preselect}
           busy={busy}
           onPlace={(choice) => wizard.place(line, choice)}
+          remove={
+            line.fileId === null
+              ? undefined
+              : {
+                  onRemove: () => wizard.remove(line.fileId),
+                  unavailable: line.movable ? null : STILL_READING_FILE,
+                }
+          }
         />
       ) : line.dest?.kind === "out" ? (
         <MoveMenu line={line} view={view} wizard={wizard} busy={busy} />
@@ -3012,7 +3043,7 @@ function MoveMenu({
   )
     ? "This item’s evidence is accepted. Reopen the decision on the list to move its files."
     : !line.movable
-      ? "The agent is still reading this file."
+      ? STILL_READING_FILE
       : null;
   const entries: RowMenuItem[] = [
     ...view.items
@@ -3034,7 +3065,7 @@ function MoveMenu({
           },
         ]),
     {
-      label: "Remove from this upload",
+      label: REMOVE_LABEL,
       icon: "trash" as const,
       danger: true,
       section: "This upload",
