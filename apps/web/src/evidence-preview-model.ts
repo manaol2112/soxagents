@@ -214,25 +214,32 @@ export function readingBlocks(text: string): TextBlock[] {
 export function markParts(
   text: string,
   quotes: readonly string[],
-): Array<{ text: string; mark: boolean }> {
+): Array<{ text: string; mark: boolean; at: number }> {
   const spans = quotes
-    .map((quote) => findSpan(text, quote))
-    .filter((span): span is [number, number] => span !== null)
-    .sort((a, b) => a[0] - b[0]);
-  const parts: Array<{ text: string; mark: boolean }> = [];
+    .map((quote, at) => ({ span: findSpan(text, quote), at }))
+    .filter(
+      (found): found is { span: [number, number]; at: number } =>
+        found.span !== null,
+    )
+    .sort((a, b) => a.span[0] - b.span[0]);
+  // `at`: the place in `quotes` of the passage a part marks; -1 for a part unmarked.
+  const parts: Array<{ text: string; mark: boolean; at: number }> = [];
   let at = 0;
-  for (const [start, end] of spans) {
+  for (const {
+    span: [start, end],
+    at: quote,
+  } of spans) {
     if (start < at) {
       continue;
     }
     if (start > at) {
-      parts.push({ text: text.slice(at, start), mark: false });
+      parts.push({ text: text.slice(at, start), mark: false, at: -1 });
     }
-    parts.push({ text: text.slice(start, end), mark: true });
+    parts.push({ text: text.slice(start, end), mark: true, at: quote });
     at = end;
   }
   if (at < text.length) {
-    parts.push({ text: text.slice(at), mark: false });
+    parts.push({ text: text.slice(at), mark: false, at: -1 });
   }
   return parts;
 }

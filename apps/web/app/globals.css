@@ -10034,13 +10034,6 @@ body.has-dialog {
   font-size: 13px;
 }
 
-.preview-note {
-  margin: 0.75rem 0 0;
-  color: var(--text-secondary);
-  font-size: 12.5px;
-  text-align: center;
-}
-
 .image-stage {
   display: grid;
   justify-items: center;
@@ -10133,14 +10126,21 @@ body.has-dialog {
   background: var(--surface-muted);
 }
 
-.text-table tr.is-cited td {
+/* A row an annotation's words are in: the highlight, edged above and below. */
+.text-table tr.is-annotated td {
   background: var(--highlight);
   box-shadow:
     inset 0 2px 0 var(--warning),
     inset 0 -2px 0 var(--warning);
 }
 
-/* A marked passage: the highlight, and an outline so it is not colour alone. */
+/* A row only a cited passage is in: the cited mark's dashed edge, no fill (section 5a). */
+.text-table tr.is-cited {
+  outline: 2px dashed var(--mark-cited);
+  outline-offset: -2px;
+}
+
+/* An annotated passage: the highlight, and an outline so it is not colour alone. */
 .text-stage mark {
   padding: 0 0.125rem;
   color: inherit;
@@ -10149,9 +10149,21 @@ body.has-dialog {
   outline: 2px solid var(--warning);
 }
 
+/* A cited passage: the dashed edge of the cited box, unfilled, so it reads apart from an
+   annotated one by its edge as well as its colour. */
+.text-stage mark.is-cited {
+  background: transparent;
+  outline: 2px dashed var(--mark-cited);
+}
+
 .text-stage mark.is-focused {
   background: var(--accent-soft);
   outline: 3px solid var(--accent);
+}
+
+/* The cited passage in view keeps its dashed edge: its kind is never lost to the focus. */
+.text-stage mark.is-cited.is-focused {
+  outline-style: dashed;
 }
 
 button.chip-link {

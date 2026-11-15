@@ -45,6 +45,13 @@ import {
 } from "./design-requests";
 import type { RequestRow as RequestsRow } from "./design-requests-model";
 import {
+  type AboutContext,
+  type FileOpen,
+  FileViewer,
+  fileOpenFor,
+  filesOf,
+} from "./evidence-about";
+import {
   type AnnotationAsk,
   type AnnotationSet,
   annotationsQuery,
@@ -626,14 +633,42 @@ export function DesignEvidence({
     title: string;
     version: number;
   } | null>(null);
-  // Evidence is added and reviewed in the evidence dialog, opened on a file a link names.
+  // Evidence is added in the evidence dialog; a file already added opens in the one
+  // viewer (docs/evidence-annotations.md, section 5b), on a file a link names too.
   const [evidence, setEvidence] = useState<DialogOpen | null>(() =>
-    intelligence.focusFile != null
-      ? { mode: "review", fileId: intelligence.focusFile }
-      : intelligence.openAdd === true
-        ? { mode: "add", itemId: null }
-        : null,
+    intelligence.focusFile == null && intelligence.openAdd === true
+      ? { mode: "add", itemId: null }
+      : null,
   );
+  const [viewing, setViewing] = useState<FileOpen | null>(() =>
+    intelligence.focusFile != null
+      ? fileOpenFor(plan, intelligence.focusFile)
+      : null,
+  );
+  // What "About this file" is drawn from: the page's own records, nothing read again.
+  const aboutContext: AboutContext = {
+    ids,
+    plan,
+    register: intelligence.register,
+    mapping: intelligence.mapping,
+    attributes: intelligence.attributes,
+    controlRef,
+    canAct,
+    findings: intelligence.findings,
+    tests: intelligence.tests ?? null,
+    instances: intelligence.instances ?? null,
+    // The walkthrough instance's evidence is uploaded where evidence is added.
+    onUpload: (itemId) => {
+      setViewing(null);
+      setEvidence({ mode: "add", itemId });
+    },
+    // A withdrawal the server confirmed: said on the list, which is read again in place.
+    onWithdrawn: (message) => {
+      setViewing(null);
+      setRemoved(null);
+      setDone(message);
+    },
+  };
   const opened = chosen ?? new Set(view.open !== null ? [view.open] : []);
   const flip = (each: string) => {
     const next = new Set(opened);
@@ -931,7 +966,7 @@ export function DesignEvidence({
                       onPolicyDecided={policies.reload}
                       wording={wording}
                       attributeCount={view.attributes.length}
-                      onDialog={setEvidence}
+                      onView={setViewing}
                       findings={intelligence.findings ?? null}
                       analyses={intelligence.register?.analyses ?? []}
                       controlRef={controlRef}
@@ -1237,21 +1272,24 @@ export function DesignEvidence({
           }}
         />
       )}
-      {evidence !== null ? (
-        <EvidenceDialog
-          key={
-            evidence.mode === "review"
-              ? evidence.fileId
-              : `add-${evidence.itemId ?? ""}`
-          }
-          open={evidence}
+      {viewing !== null ? (
+        <FileViewer
+          key={`${viewing.fileId}-${viewing.tab ?? ""}-${viewing.annotationId ?? ""}`}
+          open={viewing}
+          context={aboutContext}
           onClose={() => {
             // What opened it carries on (a tickmark's form reads its annotations again).
-            const after =
-              evidence.mode === "review" ? evidence.onClosed : undefined;
-            setEvidence(null);
+            const after = viewing.onClosed;
+            setViewing(null);
             after?.();
           }}
+        />
+      ) : null}
+      {evidence !== null ? (
+        <EvidenceDialog
+          key={`add-${evidence.itemId ?? ""}`}
+          open={evidence}
+          onClose={() => setEvidence(null)}
           ids={ids}
           plan={plan}
           register={intelligence.register}
@@ -1287,7 +1325,7 @@ function Row({
   onPolicyDecided,
   wording,
   attributeCount,
-  onDialog,
+  onView,
   findings,
   analyses,
   controlRef,
@@ -1317,7 +1355,8 @@ function Row({
   onPolicyDecided: () => void;
   wording: ReadonlyMap<string, { letter: string; text: string }>;
   attributeCount: number;
-  onDialog: (open: DialogOpen) => void;
+  /** Opens a file of the request in the one viewer (section 5b). */
+  onView: (open: FileOpen) => void;
   /** The control's evidence findings: an issue the check found is one of them. */
   findings: EvidenceFinding[] | null;
   /** The control's readings of its files: a failed one is read again by its id. */
@@ -1350,19 +1389,25 @@ function Row({
   } | null>(null);
   // A change to one of its files, confirmed by the server.
   const [fileDone, setFileDone] = useState<string | null>(null);
-  /** A file of the request, in the evidence reviewer (product owner, 14 November 2026:
-   * "I want the evidence reviewer to be the one that has annotations"): on a D&I request
-   * with its annotations and their review, on the annotation asked for where one is. */
-  const openFile = (fileId: string, annotation?: AnnotationAsk) =>
-    onDialog({
-      mode: "review",
+  /** A file of the request, in the one viewer (section 5b; product owner, 14 November
+   * 2026: "I still see the old reviewer when opening the file"): full size, the
+   * request's other files in its switcher, on a D&I request with its annotations and
+   * their review, on the annotation asked for where one is, and "About this file". */
+  const openFile = (
+    fileId: string,
+    annotation?: AnnotationAsk,
+    more: Omit<FileOpen, "fileId" | "files"> = {},
+  ) =>
+    onView({
       fileId,
+      files: filesOf(item),
       ...(item.phase === "DESIGN"
         ? {
             requirementId: item.id,
             ...(annotation === undefined ? {} : { annotation }),
           }
         : {}),
+      ...more,
     });
   // The assurance chain's check of the request, and the findings its issues are.
   const assured = row.assurance;
@@ -1504,9 +1549,12 @@ function Row({
       // The file's own form is in the files list.
       setFilesOpen(true);
     } else {
-      // The file's type is confirmed, and a walkthrough instance picked, in the
-      // evidence dialog.
-      onDialog({ mode: "review", fileId: act.fileId });
+      // The file's type is confirmed, and a walkthrough instance picked, under the
+      // viewer's "About this file", which it opens on.
+      openFile(act.fileId, undefined, {
+        tab: "about",
+        ...(act.kind === "PICK_INSTANCE" ? { pick: true } : {}),
+      });
     }
   };
   const analysisOf = (fileId: string) =>
@@ -1862,17 +1910,9 @@ function Row({
                     <button
                       type="button"
                       className="ep-file-name ep-file-open"
-                      onClick={() =>
-                        onDialog({
-                          mode: "review",
-                          fileId: file.fileId,
-                          // The request it is opened from: the dialog's
-                          // full preview shows its annotations.
-                          ...(item.phase === "DESIGN"
-                            ? { requirementId: item.id }
-                            : {}),
-                        })
-                      }
+                      // The file in the one viewer, full size, on the request it
+                      // is opened from (its annotations on a D&I request).
+                      onClick={() => openFile(file.fileId)}
                     >
                       {file.name}
                     </button>
@@ -2251,17 +2291,17 @@ function Row({
               rowFiles.map((file) => file.id),
             ),
           addAnnotation: (fileId, attributeId, back) =>
-            onDialog({
-              mode: "review",
+            onView({
               fileId,
+              files: filesOf(item),
               requirementId: item.id,
               add: { attributeId },
               onClosed: back,
             }),
           openAnnotation: (fileId, annotationId) =>
-            onDialog({
-              mode: "review",
+            onView({
               fileId,
+              files: filesOf(item),
               requirementId: item.id,
               annotationId,
             }),

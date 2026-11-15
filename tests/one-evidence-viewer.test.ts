@@ -9,7 +9,6 @@ import {
   citedName,
   citedPageMarks,
   citedUnboxedLine,
-  isCitedId,
   KIND_WORDS,
   MARK_TOKEN,
   noAnnotations,
@@ -68,7 +67,11 @@ describe("the cited kind", () => {
       ],
     );
     // Beside three annotations: 4, 5, so no two marks in view share a number.
-    const three = [{ quote: "a b c" }, { quote: "d e f" }, { quote: "g h i" }];
+    const three = ["a b c", "d e f", "g h i"].map((quote) => ({
+      quote,
+      page: 1,
+      rects: [],
+    }));
     assert.deepEqual(
       citedMarks(citations, FILE, three).map((mark) => mark.number),
       [4, 5],
@@ -78,8 +81,10 @@ describe("the cited kind", () => {
     assert.equal(first?.label, "A1");
     assert.equal(first?.location, "Page 1");
     assert.equal(first?.fileId, FILE);
-    assert.ok(isCitedId(first?.id ?? ""));
-    assert.ok(!isCitedId("00000000-0000-4000-8000-000000000201"));
+    // Changed 14 November 2026 (review of the one viewer, item 4f). Old: isCitedId was
+    // exported and asserted here, though only this test used it. New: a cited mark's id
+    // is still `cited-<its place>`, never an annotation's, as the ids above show.
+    assert.match(first?.id ?? "", /^cited-\d+$/);
   });
 
   it("does not box twice the words an annotation of the shown file already marks", () => {
@@ -89,8 +94,11 @@ describe("the cited kind", () => {
       // The same words in another file are that file's, and kept.
       cite({ fileId: OTHER, quote: "Account Disabled Yes" }),
     ];
+    // Changed 14 November 2026 (review of the one viewer, item 4a). Old: an annotation was
+    // named by its words alone. New: by its words, page and boxes (marksSame); this one
+    // is on the citations' page, so the rule here is as it was.
     const marks = citedMarks(citations, FILE, [
-      { quote: "Account Disabled Yes" },
+      { quote: "Account Disabled Yes", page: 1, rects: [] },
     ]);
     assert.deepEqual(
       marks.map((mark) => [mark.id, mark.number]),
@@ -212,13 +220,17 @@ describe("each kind of file", () => {
     ]) {
       assert.equal(previewKind(name), "text", name);
     }
+    // Changed 14 November 2026 (section 5b). Old: the stage was always the file. New: it is
+    // the file unless "About this file" shows the file's rows there (`dataShown`, a
+    // population's rows to pick the walkthrough instance from), and a file shown as its
+    // text is told each passage's kind (`kinds`).
     assert.match(
       view,
-      /\{kind === "image" \? \(\s*<ImageStage url=\{url\} download=\{download\} name=\{file\.fileName\}>\s*\{layer\(null, \[\], true\)\}\s*<\/ImageStage>\s*\) : kind === "pdf" \? \(\s*<PdfStage/,
+      /\{dataShown \? null : kind === "image" \? \(\s*<ImageStage url=\{url\} download=\{download\} name=\{file\.fileName\}>\s*\{layer\(null, \[\], true\)\}\s*<\/ImageStage>\s*\) : kind === "pdf" \? \(\s*<PdfStage/,
     );
     assert.match(
       view,
-      /<TextStage\s+url=\{reading\}\s+download=\{download\}\s+citations=\{stageCitations\}/,
+      /<TextStage\s+url=\{reading\}\s+download=\{download\}\s+citations=\{stageCitations\}\s+kinds=\{stageKinds\}/,
     );
     // The file's own routes: the preview for an image or a PDF, the read text for the
     // rest, and the original to download.
@@ -250,9 +262,13 @@ describe("each kind of file", () => {
     // Forms and scripts in a PDF are never run.
     assert.match(stages, /pdfjs\.getDocument\(\{ data, enableXfa: false \}\)/);
     assert.match(stages, /<table className="table data-grid text-table">/);
+    // Changed 14 November 2026 (review of the one viewer, item 4b). Old: a row holding
+    // any passage was "is-cited", whether an annotation's or a citation's. New: a row
+    // holding an annotation's words is "is-annotated", one holding only a cited
+    // passage's is "is-cited" (rowMark).
     assert.match(
       stages,
-      /quotes\.some\(\s*\(quote\) => findSpan\(row\.join\(" \| "\), quote\) !== null,\s*\)\s*\? "is-cited"/,
+      /return held\.some\(\(\{ at \}\) => kindAt\(at\) === "annotated"\)\s*\? "is-annotated"\s*: "is-cited";/,
     );
   });
 
@@ -379,6 +395,8 @@ describe("the old viewer is retired", () => {
       ["apps/web/src/evidence-dialog.tsx", "PreviewButton"],
       ["apps/web/src/evidence-dialog.tsx", "AnnotatedFile"],
       ["apps/web/src/console-chat.tsx", "AnnotatedDialog"],
+      // Section 5b: an existing file of a screen's list opens the viewer itself.
+      ["apps/web/src/evidence-about.tsx", "AnnotatedDialog"],
       ["apps/web/src/design-workpaper-view.tsx", "AnnotatedDialog"],
     ] as const) {
       const source = read(path);

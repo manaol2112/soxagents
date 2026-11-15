@@ -653,12 +653,6 @@ export function previewUrl(scope: WorkpaperScope, fileId: string): string {
   return `/workspace/evidence-files/${fileId}/preview?${fileQuery(scope.organizationId, scope.projectId)}`;
 }
 
-/** The text read from a file that is neither a PDF nor an image, by the same route the
- * preview reads it with. */
-export function readingUrl(scope: WorkpaperScope, fileId: string): string {
-  return `/workspace/evidence-files/${fileId}/reading?${fileQuery(scope.organizationId, scope.projectId)}`;
-}
-
 /* Words -------------------------------------------------------------------------------- */
 
 const STATE_WORDS: Record<AttributeState, { words: string; tone: Tone }> = {

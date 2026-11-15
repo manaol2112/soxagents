@@ -593,15 +593,24 @@ describe("the review's fixes, in the screen's own files", () => {
       viewer,
       /function select\(id: string \| null\) \{\s*setAsked\(false\);/,
     );
-    assert.match(viewer, /quiet=\{inline && asked\}/);
+    // Changed 14 November 2026 (section 5b). Old: quiet={inline && asked}. New: also quiet
+    // for a passage "About this file" asked to see (`fromAbout`): it is put in view on the
+    // file while the focus stays in the tab the person is working in.
+    assert.match(viewer, /quiet=\{\(inline \|\| fromAbout\) && asked\}/);
     const hook = component(viewer, "useCalloutFocus");
     assert.match(hook, /if \(quiet\) \{\s*return;\s*\}/);
-    assert.match(hook, /\}, \[key, quiet\]\);/);
+    // Changed 14 November 2026 (review of the one viewer, item 4a). Old: the hook took
+    // `key` and `quiet`, and in the dialog put the focus on the callout's first action,
+    // which for a proposed annotation is "Confirm & next". New: it also takes `asked`, and
+    // a callout the viewer was opened on (a reference, a citation) puts the focus on its
+    // heading, never on a review action; `quiet` still keeps it out of a page.
+    assert.match(hook, /\}, \[key, quiet, asked\]\);/);
     // In the dialog nothing changes: `quiet` is off unless `inline` is on.
     assert.match(
       viewer,
-      /function useCalloutFocus<T extends HTMLElement>\(key: string, quiet = false\)/,
+      /function useCalloutFocus<T extends HTMLElement>\(\s*key: string,\s*quiet = false,\s*asked = false,\s*\)/,
     );
+    assert.match(hook, /asked \? "\[data-heading\]" : "\[data-first\]"/);
     // The views never focus the pane either, and it is not a focus stop.
     assert.ok(!/node\.focus\(/.test(body));
     assert.ok(!/pane\.current\?\.focus|paneRef\.current\?\.focus/.test(view));

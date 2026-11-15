@@ -17,7 +17,12 @@ const view = read("apps/web/src/attribute-tickmark.tsx");
 const digest = read("apps/web/src/check-digest.tsx");
 const list = read("apps/web/src/design-evidence.tsx");
 const route = read("apps/web/app/workspace/evidence-assurance/route.ts");
-const dialog = read("apps/web/src/evidence-dialog.tsx");
+// Changed 14 November 2026 (docs/evidence-annotations.md, section 5b). Old: an annotation
+// was added in the evidence reviewer (evidence-dialog.tsx, review mode). New: the
+// reviewer's review mode is retired; the file opens in the one viewer (FileViewer in
+// evidence-about.tsx, AnnotatedDialog in evidence-opener.tsx).
+const about = read("apps/web/src/evidence-about.tsx");
+const opener = read("apps/web/src/evidence-opener.tsx");
 const viewer = read("apps/web/src/evidence-annotations.tsx");
 const css = read("apps/web/app/check-digest.css");
 const makefile = read("Makefile");
@@ -135,20 +140,22 @@ describe("the row's tickmark calls", () => {
     has(list, 'heldOff: locked ? lockedWhy : unavailable("held"),');
   });
 
-  it("read a request's annotations only, and add one in the existing reviewer, coming back to the form", () => {
+  it("read a request's annotations only, and add one in the one viewer, coming back to the form", () => {
     const annotations = component(list, "readRequestAnnotations");
     has(annotations, "`/workspace/evidence-annotations?${annotationsQuery({");
     assert.equal(/method:/.test(annotations), false);
+    // Old: onDialog({ mode: "review", fileId, requirementId: item.id, add: { attributeId },
+    // onClosed: back }), and the reviewer's onClose ran `evidence.onClosed`. New: the
+    // same request, attribute and return, handed to the one viewer, with the request's
+    // other files in its switcher.
     has(
       list,
-      'onDialog({ mode: "review", fileId, requirementId: item.id, add: { attributeId }, onClosed: back, }),',
+      "onView({ fileId, files: filesOf(item), requirementId: item.id, add: { attributeId }, onClosed: back, }),",
     );
-    has(
-      list,
-      'const after = evidence.mode === "review" ? evidence.onClosed : undefined; setEvidence(null); after?.();',
-    );
-    has(dialog, "add?: { attributeId: string };");
-    has(dialog, "open.add?.attributeId");
+    has(list, "const after = viewing.onClosed; setViewing(null); after?.();");
+    has(about, "add?: { attributeId: string } | undefined;");
+    has(about, "startAdding={open.add?.attributeId}");
+    has(opener, "startAdding={file.id === first ? startAdding : undefined}");
     // The viewer starts drawing once, and the box names the attribute.
     has(viewer, "addingStarted.current = true; startDrawing();");
     has(viewer, "? [startAdding]");

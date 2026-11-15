@@ -1705,11 +1705,6 @@
   }
 }
 
-/* Reviewing a file opens on the file: the adding steps are not shown. */
-.ed-steps[hidden] {
-  display: none;
-}
-
 /* "Upload for" over the item's name, close together, as the reference sets it. */
 .ed-doc .ed-upload-for {
   row-gap: 0.25rem;

@@ -25,7 +25,6 @@ import {
   paragraphs,
   parseDesignWorkpaper,
   previewUrl,
-  readingUrl,
   recordKey,
   refChip,
   refChips,
@@ -598,10 +597,9 @@ describe("the request", () => {
       previewUrl(scope, uuid(23)),
       `/workspace/evidence-files/${uuid(23)}/preview?organization=${ORG}&project=${PROJECT}`,
     );
-    assert.equal(
-      readingUrl(scope, uuid(23)),
-      `/workspace/evidence-files/${uuid(23)}/reading?organization=${ORG}&project=${PROJECT}`,
-    );
+    // Changed 14 November 2026 (review of the one viewer, item 4f). Old: readingUrl, the
+    // read text's route, was asserted here, though nothing but this test used it. New: it
+    // is removed; the viewer builds that route itself (tests/one-evidence-viewer.test.ts).
   });
 });
 

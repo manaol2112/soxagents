@@ -1899,7 +1899,13 @@ describe("the screen's own files", () => {
       view,
       /const withPanel = loading \|\| annotated \|\| cited\.length > 0;/,
     );
-    assert.match(view, /ea-body\$\{withPanel \? "" : " is-plain"\}/);
+    // Changed 14 November 2026 (section 5b). Old: a file with nothing in its legend was
+    // shown by itself (`is-plain`). New: also only where no "About this file" is beside
+    // it, the panel's second tab.
+    assert.match(
+      view,
+      /ea-body\$\{withPanel \|\| about !== null \? "" : " is-plain"\}/,
+    );
     // Both openers draw that viewer, and nothing else.
     assert.equal(preview.match(/<AnnotatedEvidence\b/g)?.length, 2);
     assert.equal(
@@ -1958,14 +1964,15 @@ describe("the screen's own files", () => {
       list,
       /item\.phase === "DESIGN"\s*\? \[\s*\{\s*label: "Annotations",\s*onSelect: \(\) => openFile\(file\.fileId\),/,
     );
-    assert.match(
-      list,
-      /item\.phase === "DESIGN"\s*\? \{ requirementId: item\.id \}/,
-    );
-    assert.match(
-      dialog,
-      /open\.mode === "review" &&\s*open\.requirementId !== undefined &&\s*\(shownId === open\.fileId \|\|\s*insight\?\.file\.requirementId === open\.requirementId\)/,
-    );
+    // Changed 14 November 2026 (docs/evidence-annotations.md, section 5b). Old: the file's
+    // name opened the reviewer with `{ requirementId: item.id }` on a D&I request, and the
+    // reviewer read that request's annotations for its file (`open.mode === "review"`).
+    // New: the reviewer's review mode is gone; the file's name opens the one viewer
+    // through `openFile`, which hands the request on in the same way (above), and the
+    // dialog only adds evidence, its file shown without a request's annotations.
+    assert.match(list, /onClick=\{\(\) => openFile\(file\.fileId\)\}/);
+    assert.ok(!/open\.mode === "review"|mode: "review"/.test(dialog));
+    assert.ok(!/annotations=\{/.test(dialog));
     // The reviewer's head holds the annotated view's actions before the expand icon, on
     // one line: a fourth column only while the slot holds something.
     assert.match(
@@ -2003,9 +2010,16 @@ describe("the screen's own files", () => {
       body,
       /here === null \|\|\s*\(event\.defaultPrevented && event\.key !== "Escape"\)/,
     );
+    // Changed 14 November 2026 (section 5b). Old: the selector was written in the key
+    // handler, for fields and a box's handles. New: it is KEYS_OF_THEIR_OWN, which adds
+    // the side panel's tabs (their arrows move between them) and "About this file".
     assert.match(
       body,
-      /"input, textarea, select, \[contenteditable\], \[data-handle\]"/,
+      /if \(target\?\.closest\(KEYS_OF_THEIR_OWN\)\) \{\s*return;/,
+    );
+    assert.match(
+      view,
+      /const KEYS_OF_THEIR_OWN =\s*'input, textarea, select, \[contenteditable\], \[data-handle\], \[role="tablist"\], \.ea-about, \.ea-data';/,
     );
     // Enter on a button or a link is that control's own.
     assert.match(
@@ -2016,7 +2030,12 @@ describe("the screen's own files", () => {
       body,
       // Changed 14 November 2026 (section 5a): the selection may be a cited passage, which
       // has nothing to confirm, so Enter confirms only an annotation proposed.
-      /selected !== null &&\s*set\.canEdit &&\s*selected\.status === "PROPOSED"\s*\) \{\s*stop\(\);\s*confirm\(selected\)/,
+      // Changed again 14 November 2026 (review of the one viewer, item 4a). Old: Enter
+      // confirmed any proposed annotation selected, so one Enter after the viewer opened
+      // on a citation merged into an annotation confirmed an audit record nobody chose.
+      // New: not one the viewer was opened on (`asked`): the person selects it, or presses
+      // Confirm, first.
+      /selected !== null &&\s*!asked &&\s*set\.canEdit &&\s*selected\.status === "PROPOSED"\s*\) \{\s*stop\(\);\s*confirm\(selected\)/,
     );
   });
 

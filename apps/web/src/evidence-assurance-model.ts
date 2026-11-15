@@ -1703,13 +1703,13 @@ export type CheckAction = {
 const FILE_ACTIONS: Partial<
   Record<HeldCode, { kind: CheckActionKind; label: string }>
 > = {
-  // Cleared in the evidence dialog, where the file's type is confirmed.
+  // Cleared under the viewer's "About this file", where the file's type is confirmed.
   KIND_UNSURE: { kind: "CONFIRM_TYPE", label: "Confirm the file's type" },
   UNREADABLE: { kind: "REPLACE", label: "Replace the file" },
   CUSTODY: { kind: "REPLACE", label: "Replace the file" },
   // The reading itself failed: the file is read again (the reader's own re-read).
   READ_FAILED: { kind: "REREAD", label: "Read the file again" },
-  // Picked in the evidence dialog, on the population's own rows.
+  // Picked under the viewer's "About this file", on the population's own rows.
   POPULATION: { kind: "PICK_INSTANCE", label: "Pick the walkthrough instance" },
 };
 

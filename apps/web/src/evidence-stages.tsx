@@ -29,6 +29,11 @@ import { UiIcon } from "./ui-icon";
 
 export type Found = ReadonlyArray<{ box: Box; index: number }>;
 
+/** What a passage marked in a file's read text is: an annotation, or a passage a screen
+ * cites (docs/evidence-annotations.md, section 5a). Each is marked its own way, in words
+ * beside it in the legend, never by colour alone. */
+export type PassageKind = "annotated" | "cited";
+
 /** The layer the viewer draws over a PDF page: given the boxes of the passages found on
  * the page in view (by their place in the list the PDF was asked to find). */
 export type PdfMarks = (
@@ -309,7 +314,7 @@ export function PdfStage({
     setZoom(next ?? 1);
   };
   return (
-    <div className="pdf-stage has-tools" ref={holder}>
+    <div className="pdf-stage" ref={holder}>
       {state.status === "ready" ? (
         <div className="pdf-bar">
           <button
@@ -396,17 +401,21 @@ export function PdfStage({
 
 /**
  * Any other file, as the text read from it: a spreadsheet's sheets as tables, a document's
- * headings and paragraphs, each passage it is asked to mark marked where its words are.
+ * headings and paragraphs, each passage it is asked to mark marked where its words are,
+ * an annotation as one and a cited passage as another (`kinds`, by its place).
  */
 export function TextStage({
   url,
   download,
   citations,
+  kinds = [],
   focused,
 }: {
   url: string;
   download: string;
   citations: EvidenceCitation[];
+  /** Each passage's kind, by its place in `citations`; one not given is annotated. */
+  kinds?: readonly PassageKind[];
   focused: EvidenceCitation | null;
 }) {
   const [text, setText] = useState<string | null>(null);
@@ -465,6 +474,7 @@ export function TextStage({
     );
   }
   const quotes = citations.map((item) => item.quote);
+  const kindAt = (at: number): PassageKind => kinds[at] ?? "annotated";
   const isFocused = (part: string) =>
     focused !== null &&
     part.toLowerCase().includes(focused.quote.slice(0, 20).toLowerCase());
@@ -474,7 +484,14 @@ export function TextStage({
         <mark
           // biome-ignore lint/suspicious/noArrayIndexKey: parts keep their order.
           key={index}
-          className={isFocused(part.text) ? "is-focused" : undefined}
+          className={
+            [
+              kindAt(part.at) === "cited" ? "is-cited" : "",
+              isFocused(part.text) ? "is-focused" : "",
+            ]
+              .filter(Boolean)
+              .join(" ") || undefined
+          }
           ref={isFocused(part.text) ? focusRef : undefined}
         >
           {part.text}
@@ -484,6 +501,20 @@ export function TextStage({
         <span key={index}>{part.text}</span>
       ),
     );
+  /** A table row's mark: annotated where an annotation's words are in it, else cited
+   * where a cited passage's are, else none. */
+  const rowMark = (row: readonly string[]): string => {
+    const line = row.join(" | ");
+    const held = quotes
+      .map((quote, at) => ({ quote, at }))
+      .filter(({ quote }) => findSpan(line, quote) !== null);
+    if (held.length === 0) {
+      return "";
+    }
+    return held.some(({ at }) => kindAt(at) === "annotated")
+      ? "is-annotated"
+      : "is-cited";
+  };
   return (
     <div className="text-stage">
       {readingBlocks(text).map((block, index) =>
@@ -502,14 +533,7 @@ export function TextStage({
                     // biome-ignore lint/suspicious/noArrayIndexKey: rows keep their order.
                     key={rowIndex}
                     className={
-                      [
-                        rowIndex === 0 ? "is-header" : "",
-                        quotes.some(
-                          (quote) => findSpan(row.join(" | "), quote) !== null,
-                        )
-                          ? "is-cited"
-                          : "",
-                      ]
+                      [rowIndex === 0 ? "is-header" : "", rowMark(row)]
                         .filter(Boolean)
                         .join(" ") || undefined
                     }

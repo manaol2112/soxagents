@@ -317,7 +317,9 @@ describe("the first screen of a finished check", () => {
       "...(line?.actions ?? [])",
       'label: "Unlink from this request"',
       "<RowMenu label={file.name} items={fileMenu} />",
-      'mode: "review"',
+      // Changed 14 November 2026 (section 5b). Old: the file's name opened the reviewer
+      // ('mode: "review"'). New: it opens the one viewer, by the row's own openFile.
+      "onClick={() => openFile(file.fileId)}",
       "{line?.form ?? null}",
       "{fileDone}",
     ]) {
@@ -1389,20 +1391,27 @@ describe("one attribute at a time", () => {
     assert.equal(count(attribute, /view\(evidence, /g), 2);
   });
 
-  it("opens every file of a D&I request in the evidence reviewer, never in the standalone preview", () => {
+  it("opens every file of a D&I request in the one viewer, full size, never in the reviewer", () => {
     // Item 9 (product owner, 14 November 2026). In design-evidence.tsx and
     // check-digest.tsx no opener is the standalone preview any more: the file's name,
     // its menu's "Annotations", a row's "View", "Evidence: E3" and a passage's "Open in
-    // the file" each open the reviewer (`onDialog`, the dialog's own open state).
+    // the file" each open the file the one way.
+    // Changed 14 November 2026 (docs/evidence-annotations.md, section 5b; product owner:
+    // "I still see the old reviewer when opening the file"). Old: that one way was the
+    // evidence reviewer (`onDialog({ mode: "review", ... })`), its Preview the annotation
+    // viewer inline. New: it is the annotation viewer itself, full size (`onView`, the
+    // list's FileViewer, AnnotatedDialog), with the request's other files in its switcher
+    // and the reviewer's content under "About this file"; review mode is gone.
     for (const source of [list, digest]) {
       assert.equal(
         /EvidencePreview|PreviewButton|PassageOpen|setAnnotating/.test(source),
         false,
       );
+      assert.equal(/mode: "review"/.test(source), false);
     }
     has(
       row,
-      'const openFile = (fileId: string, annotation?: AnnotationAsk) => onDialog({ mode: "review", fileId, ...(item.phase === "DESIGN" ? { requirementId: item.id, ...(annotation === undefined ? {} : { annotation }), } : {}), });',
+      'const openFile = ( fileId: string, annotation?: AnnotationAsk, more: Omit<FileOpen, "fileId" | "files"> = {}, ) => onView({ fileId, files: filesOf(item), ...(item.phase === "DESIGN" ? { requirementId: item.id, ...(annotation === undefined ? {} : { annotation }), } : {}), ...more, });',
     );
     // The file menu's "Annotations", and the check's openers, are that one way.
     has(row, 'label: "Annotations", onSelect: () => openFile(file.fileId),');
@@ -1417,37 +1426,45 @@ describe("one attribute at a time", () => {
       line,
       '<button type="button" className="de-link" onClick={() => onOpen(fileId, { attributeId, quote: passage.quote }) } > Open in the file </button>',
     );
-    // The file's name is the reviewer as it always was, with the request it serves.
-    has(row, 'onDialog({ mode: "review", fileId: file.fileId,');
-    // The reviewer's open state carries the annotation to select; nothing else.
-    const dialog = read("apps/web/src/evidence-dialog.tsx");
-    has(dialog, "annotation?: AnnotationAsk;");
-    // Its Preview, for a file of that D&I request, is the annotation viewer with its
-    // review; a spreadsheet's table stays. Changed 14 November 2026 (section 5a). Old: any
-    // other file, or a file of no D&I request, in the old viewer (EvidenceViewer). New:
-    // every file in the one viewer (AnnotatedFile), its annotations only where the
-    // request is known (`notes`).
+    // The file's name is that one way too, with the request it serves.
+    has(row, "onClick={() => openFile(file.fileId)}");
+    // "Confirm the file's type" and "Pick the walkthrough instance" open on the file's
+    // details, the second on its rows to pick from.
     has(
-      dialog,
-      ") : ( // The one evidence viewer (docs/evidence-annotations.md, section // 5a): a file of the D&I request with its annotations and their // review, any file with the passages cited in it. <AnnotatedFile",
+      row,
+      'openFile(act.fileId, undefined, { tab: "about", ...(act.kind === "PICK_INSTANCE" ? { pick: true } : {}), });',
     );
-    has(dialog, "annotations={notes} citations={citations} focused={focused}");
+    // The list draws the viewer, with "About this file" from the page's own records.
+    has(list, "<FileViewer");
+    has(list, "open={viewing} context={aboutContext}");
+    const about = read("apps/web/src/evidence-about.tsx");
+    has(about, "annotation?: AnnotationAsk | undefined;");
+    has(about, "startAnnotationFor={open.annotation}");
+    has(about, "startAnnotationId={open.annotationId}");
+    has(
+      about,
+      "annotations={ open.requirementId === undefined ? undefined : { controlId: context.ids.controlId, requirementId: open.requirementId, } }",
+    );
+    // The reviewer is only the upload dialog now: no review mode, no request's
+    // annotations, and its Preview is the one viewer as before.
+    const dialog = read("apps/web/src/evidence-dialog.tsx");
     has(
       dialog,
-      'const notesOf = (shownId: string) => open.mode === "review" && open.requirementId !== undefined && (shownId === open.fileId || insight?.file.requirementId === open.requirementId) ? { controlId: ids.controlId, requirementId: open.requirementId } : undefined;',
+      'export type DialogOpen = { mode: "add"; itemId: string | null };',
+    );
+    assert.equal(
+      /mode: "review"|mode === "review"|annotations=\{|notesOf|askOf/.test(
+        dialog,
+      ),
+      false,
     );
     inOrder(dialog, [
       '{tab === "preview" ? (',
       "table ? (",
-      "<DataTable",
+      "<FileData",
       "<AnnotatedFile",
     ]);
     assert.equal(/<AnnotatedPreview\b|<EvidenceViewer\b/.test(dialog), false);
-    // The expand icon keeps the full-size view of the same thing.
-    has(
-      dialog,
-      "annotations={notesOf(insight.file.id)} startAnnotationFor={askOf(insight.file.id)}",
-    );
     // The inline viewer: the existing one, with its review, and the same pick.
     // Changed 14 November 2026 (docs/evidence-assurance.md, section 10.13, tickmarks).
     // Old: the inline viewer passed `undefined` for the annotation asked for by its id.
@@ -1458,8 +1475,8 @@ describe("one attribute at a time", () => {
       preview,
       "const annotationPick = useAnnotationPick( notes.set, file.id, startAnnotationId, startAnnotationFor, );",
     );
-    has(dialog, "annotationId?: string;");
-    has(dialog, "add?: { attributeId: string };");
+    has(about, "annotationId?: string | undefined;");
+    has(about, "add?: { attributeId: string } | undefined;");
     has(preview, "act={notes.act}");
     has(preview, "inline");
     // The matcher runs once each file's annotations are here; `startAnnotationId` keeps

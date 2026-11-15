@@ -4,16 +4,23 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import {
+  type AboutTab,
   AnnotatedEvidence,
+  type PanelTab,
   useEvidenceAnnotations,
 } from "./evidence-annotations";
 import {
   type AnnotationAsk,
   type AnnotationSet,
   annotationFor,
+  citedMarks,
   type ViewerPick,
 } from "./evidence-annotations-model";
-import { type EvidenceCitation, fileQuery } from "./evidence-preview-model";
+import {
+  type EvidenceCitation,
+  fileQuery,
+  previewKind,
+} from "./evidence-preview-model";
 import { UiIcon } from "./ui-icon";
 import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
 
@@ -23,6 +30,11 @@ import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
  * screen that decides when it is open (`AnnotatedDialog`), and the viewer inline in a page
  * (`AnnotatedFile`). Each reads the file's annotations only where its D&I request is
  * known; opening a file writes nothing.
+ *
+ * Opening an existing file opens the dialog itself, full size (section 5b): the reviewer
+ * that held a file's classification, data and findings is retired, and what it held is
+ * the dialog's second tab, "About this file" (evidence-about.tsx), handed in by the
+ * screen (`about`).
  */
 
 type ShownFile = { id: string; fileName: string };
@@ -55,6 +67,14 @@ type DialogProps = {
    * "Shown" row of a finished check): once the file's annotations are here, the one that
    * marks the passage for the attribute is selected (annotationFor). */
   startAnnotationFor?: AnnotationAsk | undefined;
+  /** "About this file" for the file shown, or null where nothing about it applies (a file
+   * with no reading, outside any request): the tab is then not shown (section 5b). */
+  about?: ((fileId: string) => AboutTab | null) | undefined;
+  /** The tab the side panel opens on: "about" where the file's details were asked for (a
+   * check's "Confirm the file's type"). */
+  startTab?: PanelTab | undefined;
+  /** Opened to add an annotation for this attribute (a tickmark's "Add an annotation"). */
+  startAdding?: string | undefined;
 };
 
 /**
@@ -150,6 +170,9 @@ export function AnnotatedDialog({
   annotations,
   startAnnotationId,
   startAnnotationFor,
+  about,
+  startTab = "annotations",
+  startAdding,
   onClose,
 }: DialogProps & { onClose: () => void }) {
   const first = startFileId ?? citations[0]?.fileId ?? files[0]?.id ?? "";
@@ -157,6 +180,12 @@ export function AnnotatedDialog({
   const [citedPick, setCitedPick] = useState<ViewerPick | null>(() =>
     firstCited(citations, first),
   );
+  // The side panel's tab, kept as the person moves between files.
+  const [tab, setTab] = useState<PanelTab>(startTab);
+  // A passage "About this file" asked to see: marked, where the screen does not cite it
+  // already, and selected (`shownPick`, over any other pick).
+  const [shown, setShown] = useState<EvidenceCitation | null>(null);
+  const [shownPick, setShownPick] = useState<ViewerPick | null>(null);
   const dialog = useRef<HTMLDivElement>(null);
   useFocusTrap(dialog);
   const file = files.find((item) => item.id === fileId) ?? files[0];
@@ -190,8 +219,48 @@ export function AnnotatedDialog({
     startAnnotationId,
     startAnnotationFor,
   );
-  // An annotation asked for, once it is found; else the first passage cited in the file.
-  const pick = annotationPick ?? citedPick;
+  // The passage the file was opened to see (a "Shown" row), marked as cited where no
+  // annotation of the file marks it once they are read, so it still opens on it.
+  const askedQuote =
+    startAnnotationFor !== undefined &&
+    startAnnotationFor.quote !== "" &&
+    file !== undefined &&
+    file.id === first &&
+    notes.status !== "loading" &&
+    (notes.set === null ||
+      annotationFor(notes.set, startAnnotationFor) === null)
+      ? startAnnotationFor.quote
+      : "";
+  const marked = useMemo(() => {
+    const list = [...citations];
+    if (shown !== null && !list.some((item) => item.quote === shown.quote)) {
+      list.push(shown);
+    }
+    if (
+      askedQuote !== "" &&
+      shownId !== undefined &&
+      !list.some((item) => item.fileId === shownId && item.quote === askedQuote)
+    ) {
+      list.push({
+        fileId: shownId,
+        fileName: file?.fileName ?? "",
+        quote: askedQuote,
+        found: true,
+        location: "",
+        page: null,
+        box: null,
+        label: "",
+      });
+    }
+    return list;
+  }, [citations, shown, askedQuote, shownId, file?.fileName]);
+  // A passage asked to see, once; an annotation asked for, once it is found; else the
+  // first passage cited in the file.
+  const askedPick = useMemo(
+    () => (askedQuote === "" ? null : { quote: askedQuote }),
+    [askedQuote],
+  );
+  const pick = shownPick ?? annotationPick ?? askedPick ?? citedPick;
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -217,13 +286,24 @@ export function AnnotatedDialog({
   const show = (next: string, at: ViewerPick | null) => {
     setFileId(next);
     setCitedPick(at);
+    setShownPick(null);
   };
 
   if (file === undefined) {
     return null;
   }
+  // How many passages are cited in each file, as its legend lists them: in the file shown,
+  // after a citation that is one of its annotations is folded into it (citedMarks).
   const citedIn = (id: string) =>
-    citations.filter((item) => item.fileId === id).length;
+    id === file.id
+      ? citedMarks(
+          marked,
+          file.id,
+          notes.set?.annotations ?? [],
+          previewKind(file.fileName) === "image",
+        ).filter((mark) => mark.fileId === id).length
+      : marked.filter((item) => item.fileId === id).length;
+  const aboutTab = about?.(file.id) ?? null;
   // On the page itself, so no scrolling panel or transformed parent can clip it.
   return createPortal(
     // biome-ignore lint/a11y/noStaticElementInteractions: a click on the backdrop closes; Escape and the close button do too.
@@ -294,14 +374,23 @@ export function AnnotatedDialog({
           busy={notes.busy}
           act={notes.act}
           headSlot={headSlot}
-          citations={citations}
+          citations={marked}
           citedBy={sourcesTitle}
           onOpenFile={(next, at) => {
             if (files.some((item) => item.id === next)) {
               show(next, at);
             }
           }}
+          openable={files.map((item) => item.id)}
           pick={pick}
+          about={aboutTab}
+          startTab={tab}
+          onTab={setTab}
+          onShowPassage={(citation) => {
+            setShown(citation);
+            setShownPick({ quote: citation.quote });
+          }}
+          startAdding={file.id === first ? startAdding : undefined}
         />
       </div>
     </div>,

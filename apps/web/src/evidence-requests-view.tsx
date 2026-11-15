@@ -12,6 +12,13 @@ import {
 import { AddEvidenceMenu } from "./add-evidence-menu";
 import { ControlSend } from "./control-send";
 import type { ActivityItem } from "./control-workspace-model";
+import {
+  type AboutContext,
+  type FileOpen,
+  FileViewer,
+  fileOpenFor,
+  filesOf,
+} from "./evidence-about";
 import { centerHref, DEFAULT_QUERY } from "./evidence-center-model";
 import { type DialogOpen, EvidenceDialog } from "./evidence-dialog";
 import { RequestUpload } from "./evidence-intake";
@@ -116,15 +123,44 @@ export function EvidenceRequests({
     [plan, rows, master],
   );
   // The list of requests comes first (product owner, 31 October 2026); evidence is
-  // added and reviewed in the evidence dialog, opened on a file a link names.
+  // added in the evidence dialog, and a file already added opens in the one viewer
+  // (docs/evidence-annotations.md, section 5b), on a file a link names too.
   const [view, setView] = useState<View>("list");
   const [dialog, setDialog] = useState<DialogOpen | null>(() =>
-    intelligence?.focusFile != null
-      ? { mode: "review", fileId: intelligence.focusFile }
-      : intelligence?.openAdd === true
-        ? { mode: "add", itemId: null }
-        : null,
+    intelligence?.focusFile == null && intelligence?.openAdd === true
+      ? { mode: "add", itemId: null }
+      : null,
   );
+  const [viewing, setViewing] = useState<FileOpen | null>(() =>
+    intelligence?.focusFile != null
+      ? fileOpenFor(plan, intelligence.focusFile)
+      : null,
+  );
+  // A withdrawal from the viewer, once the server confirmed it.
+  const [withdrawn, setWithdrawn] = useState<string | null>(null);
+  const aboutContext: AboutContext | null =
+    intelligence === null
+      ? null
+      : {
+          ids,
+          plan,
+          register: intelligence.register,
+          mapping: intelligence.mapping,
+          attributes: intelligence.attributes,
+          controlRef,
+          canAct,
+          findings: intelligence.findings,
+          tests: intelligence.tests ?? null,
+          instances: intelligence.instances ?? null,
+          onUpload: (itemId) => {
+            setViewing(null);
+            setDialog({ mode: "add", itemId });
+          },
+          onWithdrawn: (message) => {
+            setViewing(null);
+            setWithdrawn(message);
+          },
+        };
   // Policies on file the agent proposes for the items (28 October 2026).
   const policies = usePolicyEvidence(ids);
   const [filter, setFilter] = useState<RequestFilter>(NO_FILTER);
@@ -331,13 +367,23 @@ export function EvidenceRequests({
           />
         </div>
       ) : null}
+      {withdrawn !== null ? (
+        <p className="ep-done" role="status">
+          <UiIcon name="check" size={14} />
+          <span>{withdrawn}</span>
+        </p>
+      ) : null}
+      {viewing !== null && aboutContext !== null ? (
+        <FileViewer
+          key={`${viewing.fileId}-${viewing.tab ?? ""}`}
+          open={viewing}
+          context={aboutContext}
+          onClose={() => setViewing(null)}
+        />
+      ) : null}
       {dialog !== null && intelligence !== null ? (
         <EvidenceDialog
-          key={
-            dialog.mode === "review"
-              ? dialog.fileId
-              : `add-${dialog.itemId ?? ""}`
-          }
+          key={`add-${dialog.itemId ?? ""}`}
           open={dialog}
           onClose={() => setDialog(null)}
           ids={ids}
@@ -464,6 +510,7 @@ export function EvidenceRequests({
                   onClose={() => setSelected(null)}
                   onMapping={() => setView("attributes")}
                   onDialog={intelligence === null ? null : setDialog}
+                  onView={intelligence === null ? null : setViewing}
                 />
               </div>
             ) : null}
@@ -636,6 +683,7 @@ function RequestPanel({
   onClose,
   onMapping,
   onDialog,
+  onView,
 }: {
   ids: Ids;
   request: EvidenceRequest;
@@ -649,8 +697,10 @@ function RequestPanel({
   onPolicyDecided: () => void;
   onClose: () => void;
   onMapping: () => void;
-  /** Opens the evidence dialog, to add evidence or review a file. */
+  /** Opens the evidence dialog, to add evidence. */
   onDialog: ((open: DialogOpen) => void) | null;
+  /** Opens a file in the one viewer (section 5b). */
+  onView: ((open: FileOpen) => void) | null;
 }) {
   const id = useId();
   const [tab, setTab] = useState<PanelTab>("items");
@@ -769,6 +819,7 @@ function RequestPanel({
                   onPolicyDecided={onPolicyDecided}
                   onMapping={onMapping}
                   onDialog={onDialog}
+                  onView={onView}
                 />
               ))}
             </ol>
@@ -867,6 +918,7 @@ function ItemCard({
   onPolicyDecided,
   onMapping,
   onDialog,
+  onView,
 }: {
   ids: Ids;
   number: number;
@@ -881,6 +933,7 @@ function ItemCard({
   onPolicyDecided: () => void;
   onMapping: () => void;
   onDialog: ((open: DialogOpen) => void) | null;
+  onView: ((open: FileOpen) => void) | null;
 }) {
   const { item } = entry;
   const onFile = proposalsFor(policies, item.id);
@@ -1028,9 +1081,10 @@ function ItemCard({
               form,
               setForm,
             );
-            // A file opens in the evidence dialog: its preview, what the agent found,
-            // and what to do with it (31 October 2026).
-            return onDialog === null
+            // A file opens in the one viewer, full size, with what the agent found
+            // and what to do with it under "About this file" (section 5b), the
+            // item's other files in its switcher.
+            return onView === null
               ? line
               : {
                   ...line,
@@ -1039,7 +1093,13 @@ function ItemCard({
                       type="button"
                       className="ep-file-name ep-file-open"
                       onClick={() =>
-                        onDialog({ mode: "review", fileId: file.fileId })
+                        onView({
+                          fileId: file.fileId,
+                          files: filesOf(item),
+                          ...(item.phase === "DESIGN"
+                            ? { requirementId: item.id }
+                            : {}),
+                        })
                       }
                     >
                       {file.name}

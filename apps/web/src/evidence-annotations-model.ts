@@ -930,35 +930,64 @@ export type CitedMark = {
   found: boolean;
 };
 
-export const CITED_PREFIX = "cited-";
+const CITED_PREFIX = "cited-";
 
-/** Whether a selection names a cited passage rather than an annotation. */
-export function isCitedId(id: string): boolean {
-  return id.startsWith(CITED_PREFIX);
+/** Whether two boxes on a page share some of it. */
+function overlaps(a: Box, b: Box): boolean {
+  return (
+    Math.min(a.x + a.w, b.x + b.w) > Math.max(a.x, b.x) &&
+    Math.min(a.y + a.h, b.y + b.h) > Math.max(a.y, b.y)
+  );
+}
+
+/**
+ * Whether a citation of the shown file is the passage an annotation already marks: the
+ * same words, on the same page (a citation that names no page is on every one), and, on
+ * an image, a box of its own that overlaps one of the annotation's. Anything less is a
+ * passage of its own, kept as a cited mark: the same words elsewhere in the file are not
+ * the annotated ones, and a citation is never taken for an audit record it only resembles.
+ */
+function marksSame(
+  citation: EvidenceCitation,
+  annotation: Pick<Annotation, "quote" | "page" | "rects">,
+  image: boolean,
+): boolean {
+  const key = quoteKey(annotation.quote);
+  if (key === "" || key !== quoteKey(citation.quote)) {
+    return false;
+  }
+  if (citation.page !== null && citation.page !== annotation.page) {
+    return false;
+  }
+  if (!image) {
+    return true;
+  }
+  const box = citation.box;
+  return box !== null && annotation.rects.some((rect) => overlaps(rect, box));
 }
 
 /**
  * The passages a screen cites, in its order, numbered after the shown file's annotations
  * so no two marks in view share a number (with none, 1, 2, 3 as before). A citation of
- * the shown file whose words an annotation already marks is that annotation's box, not a
- * second box on the same words. Nothing here is stored or sent.
+ * the shown file that is the very passage an annotation marks (marksSame: its words, its
+ * page, and on an image its box) is that annotation's box, not a second box on the same
+ * words; any other stays a cited mark. Nothing here is stored or sent.
  */
 export function citedMarks(
   citations: readonly EvidenceCitation[],
   fileId: string,
-  annotations: readonly Pick<Annotation, "quote">[],
+  annotations: readonly Pick<Annotation, "quote" | "page" | "rects">[],
+  image = false,
 ): CitedMark[] {
-  const annotated = new Set(
-    annotations
-      .map((annotation) => quoteKey(annotation.quote))
-      .filter((key) => key !== ""),
-  );
   return citations
     .map((citation, index) => ({ citation, index }))
     .filter(
       ({ citation }) =>
         !(
-          citation.fileId === fileId && annotated.has(quoteKey(citation.quote))
+          citation.fileId === fileId &&
+          annotations.some((annotation) =>
+            marksSame(citation, annotation, image),
+          )
         ),
     )
     .map(({ citation, index }, at) => ({
@@ -1019,11 +1048,40 @@ export function citedPageMarks(
   });
 }
 
-/** The one quiet line for cited passages listed without a box on the page in view. */
+/** How a file is shown, as the viewer tells the kinds apart (previewKind). */
+export type ShownKind = "image" | "pdf" | "text";
+
+/** Why a cited passage has no box, in the words for the file it is in. */
+function unboxedWhy(kind: ShownKind, found: boolean, many: boolean): string {
+  if (kind === "image") {
+    return found
+      ? many
+        ? "they were found in the file's text and could not be boxed on the image"
+        : "it was found in the file's text and could not be boxed on the image"
+      : many
+        ? "their words were not found in the file's text"
+        : "its words were not found in the file's text";
+  }
+  if (kind === "pdf") {
+    return many
+      ? "their words were not found on this page"
+      : "its words were not found on this page";
+  }
+  return many
+    ? "their words were not found in the file's text"
+    : "its words were not found in the file's text";
+}
+
+/**
+ * The quiet line for cited passages listed without a box on the page in view, or null
+ * when each has one: why, in the file's own terms (an image's passage read in its text
+ * but not placed on it is not one whose words are missing), one sentence per reason.
+ */
 export function citedUnboxedLine(
   cited: readonly CitedMark[],
   page: number | null,
   marks: readonly PageMark[],
+  kind: ShownKind = "pdf",
 ): string | null {
   const here = cited.filter(
     (mark) => page === null || mark.page === null || mark.page === page,
@@ -1031,13 +1089,26 @@ export function citedUnboxedLine(
   const without = here.filter(
     (mark) =>
       (marks.find((each) => each.id === mark.id)?.rects.length ?? 0) === 0,
-  ).length;
-  if (without === 0) {
+  );
+  if (without.length === 0) {
     return null;
   }
-  return without === 1
-    ? "1 cited passage is listed beside the file without a box: its words were not found on this page."
-    : `${without} cited passages are listed beside the file without a box: their words were not found on this page.`;
+  // On a PDF or in text the reason is one; on an image it is whether the words were read.
+  const groups =
+    kind === "image"
+      ? [true, false].map((found) => ({
+          found,
+          count: without.filter((mark) => mark.found === found).length,
+        }))
+      : [{ found: true, count: without.length }];
+  return groups
+    .filter((group) => group.count > 0)
+    .map((group) =>
+      group.count === 1
+        ? `1 cited passage is listed beside the file without a box: ${unboxedWhy(kind, group.found, false)}.`
+        : `${group.count} cited passages are listed beside the file without a box: ${unboxedWhy(kind, group.found, true)}.`,
+    )
+    .join(" ");
 }
 
 /** A cited box or line's name for a screen reader. */
