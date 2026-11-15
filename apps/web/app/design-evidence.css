@@ -189,6 +189,152 @@ button.tar-head.dq-head.de-head {
   border-radius: 0;
 }
 
+/* The head of a finished check (docs/evidence-assurance.md, section 10.12): the same
+   line as every other row's, but its title is the button that opens the row and
+   "7 files" beside it is a button of its own, so neither sits inside the other. The
+   title's box is the whole head, under the files' button. */
+.de-head-split {
+  position: relative;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  width: 100%;
+  min-height: 52px;
+  padding: 0.6rem 0.4rem 0.6rem 0.9rem;
+  color: var(--text);
+  font-size: var(--fs-base);
+  line-height: 1.35;
+  transition: background-color 120ms ease;
+}
+
+.de-head-split:hover {
+  background: var(--surface-hover);
+}
+
+button.de-head-toggle {
+  display: block;
+  width: 100%;
+  height: auto;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+  font-weight: 400;
+  line-height: inherit;
+  text-align: left;
+  white-space: normal;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+button.de-head-toggle:hover {
+  color: inherit;
+  background: transparent;
+  border: 0;
+}
+
+button.de-head-toggle::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+}
+
+/* The attributes it addresses and where it stands are the head's own parts (and
+   describe the title's button). Each letter keeps its own words for the pointer: it sits
+   over the title's box. */
+.de-head-meta {
+  display: contents;
+}
+
+.de-head-split .dq-letters {
+  position: relative;
+  z-index: 1;
+}
+
+button.de-head-toggle:focus-visible:not(:disabled) {
+  box-shadow: none;
+}
+
+button.de-head-toggle:focus-visible::after {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* Open, the row's line reads in full: "7 files" in it is never cut off. */
+.tar-source.de-subline {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+button.de-link.de-files-toggle {
+  position: relative;
+  z-index: 1;
+  display: inline;
+  font-size: inherit;
+  line-height: inherit;
+  border-radius: 4px;
+}
+
+/* A finished check, open: its result takes the row's width, part under part, and what
+   else opens in the row stays under the title. The files open on request (200 ms). */
+.de-grid > .tar-body.de-reviewed {
+  gap: 0;
+  padding: 0;
+}
+
+.de-reviewed > :not(.de-check) {
+  margin: 0 0.9rem 0.9rem calc(0.9rem + 34px + 0.75rem);
+}
+
+.de-reviewed > .de-check.is-reviewed {
+  display: block;
+  padding: 0;
+  border-top: 0;
+}
+
+.de-reviewed > .de-check.is-reviewed + * {
+  margin-top: 0.2rem;
+}
+
+.de-files-panel {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+  animation: tar-open 200ms ease;
+}
+
+.de-files-panel[hidden] {
+  display: none;
+}
+
+/* What a file still needs from a person, beside its name: a quiet flag in the warning's
+   words and tone, not a filled button (the control workspace's own flag). */
+.de-files-panel button.ep-file-flag {
+  height: auto;
+  min-height: 22px;
+  padding: 0 0.5rem;
+  color: var(--warning);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+  border-radius: 999px;
+  box-shadow: none;
+}
+
+.de-files-panel button.ep-file-flag:hover {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: var(--warning);
+}
+
+.de-files-panel > p {
+  margin: 0;
+}
+
 .de-acts {
   gap: 0.25rem;
   padding-right: 0;
@@ -427,8 +573,9 @@ button.ep-file-open:focus-visible {
 /* The assurance chain's check of a file (docs/evidence-assurance.md, section 7): a state
    is always its words with a mark; the colour repeats them and never replaces them.
    On the row's own line, each letter under its state; in the file, one line while the
-   check works, is held or must run again, then each attribute, opening (200 ms) to what
-   the two readings rest on. */
+   check works, is held or must run again. A finished check is its simplified result
+   (check-digest.css); what is here of it are the pieces that one shares: a state's pill,
+   a caret, a passage, the two readings, and what its details hold. */
 .de-states {
   display: flex;
   flex-wrap: wrap;
@@ -486,13 +633,6 @@ button.ep-file-open:focus-visible {
   overflow-wrap: anywhere;
 }
 
-/* The upload zone a row is draws every button in it as a small one on one line: an
-   issue's finding keeps its own shape, and its words wrap. */
-.de-row .de-check button.ei-finding-main {
-  display: grid;
-  white-space: normal;
-}
-
 /* A check at work is the agent's: its mark in the agent's colour, the words beside it. */
 .de-check.is-checking .de-check-line > svg {
   color: var(--ai);
@@ -531,48 +671,6 @@ button.ep-file-open:focus-visible {
   font-weight: 600;
 }
 
-.de-attrs {
-  display: grid;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.de-attr {
-  min-width: 0;
-  border-top: 1px solid var(--border-subtle);
-}
-
-.de-attr > details > summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 0.2rem 0.55rem;
-  padding: 0.4rem 0;
-  font-size: var(--fs-sm);
-  line-height: 20px;
-  cursor: pointer;
-  list-style: none;
-}
-
-.de-attr > details > summary::-webkit-details-marker {
-  display: none;
-}
-
-.de-attr > details > summary:focus-visible {
-  border-radius: 4px;
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.de-attr-summary {
-  flex: 1 1 14rem;
-  min-width: 0;
-  color: var(--text);
-  overflow-wrap: anywhere;
-}
-
 .de-attr-caret {
   display: inline-grid;
   flex: none;
@@ -585,34 +683,6 @@ button.ep-file-open:focus-visible {
 
 .de-attr-caret > svg {
   transition: transform 180ms ease;
-}
-
-.de-attr > details[open] .de-attr-caret > svg {
-  transform: rotate(90deg);
-}
-
-.de-attr-body {
-  display: grid;
-  gap: 0.45rem;
-  min-width: 0;
-  padding: 0 0 0.6rem calc(20px + 0.55rem);
-  font-size: var(--fs-sm);
-  line-height: 1.5;
-  animation: tar-open 200ms ease;
-}
-
-.de-attr-body p {
-  margin: 0;
-}
-
-.de-attr-text {
-  color: var(--text-secondary);
-}
-
-.de-attr-text > span {
-  color: var(--text-tertiary);
-  font-size: var(--fs-xs);
-  font-weight: 600;
 }
 
 .de-judgment {
@@ -700,18 +770,6 @@ button.ep-file-open:focus-visible {
   color: var(--text-secondary);
 }
 
-.de-absent > span {
-  color: var(--text-tertiary);
-  font-size: var(--fs-xs);
-  font-weight: 600;
-}
-
-.de-absent > ul {
-  margin: 0.1rem 0 0;
-  padding-left: 1.1rem;
-  color: var(--text);
-}
-
 .de-unaddressed {
   display: flex;
   flex-wrap: wrap;
@@ -725,57 +783,6 @@ button.ep-file-open:focus-visible {
 .de-unaddressed .dr-code {
   color: var(--text-secondary);
   background: var(--surface-muted);
-}
-
-/* An attribute's elements, each with its result in words; and, for one shown in part,
-   what this request shows and what it leaves to other requests. */
-.de-elements {
-  display: grid;
-  gap: 0.3rem;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.de-elements > li {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.15rem 0.55rem;
-  min-width: 0;
-}
-
-.de-element-result {
-  flex: none;
-  padding: 0 0.45rem;
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  line-height: 20px;
-  white-space: nowrap;
-  border-radius: 999px;
-}
-
-.de-element-text {
-  flex: 1 1 12rem;
-  min-width: 0;
-  color: var(--text);
-  overflow-wrap: anywhere;
-}
-
-.de-element-text small {
-  color: var(--text-secondary);
-}
-
-.de-in-part {
-  display: grid;
-  gap: 0.2rem;
-}
-
-.de-in-part span {
-  color: var(--text-tertiary);
-  font-size: var(--fs-xs);
-  font-weight: 600;
 }
 
 /* Under the coverage: which elements are still not shown, by their text. */
@@ -846,9 +853,9 @@ button.ep-file-open:focus-visible {
 }
 
 /* The review of a request's evidence (docs/evidence-assurance.md, section 10): the
-   check's proposal, read before the attributes. Its lead carries the agent's edge and
-   its title the agent's colour, as everything proposed and not yet decided does; the
-   outcome is its words with a mark, and nothing here is styled as approved. */
+   check's proposal, as "Details of the check" holds it (section 10.11). Its lead carries
+   the agent's edge and its title the agent's colour, as everything proposed and not yet
+   decided does, and nothing here is styled as approved. */
 .de-review {
   display: grid;
   gap: 0.55rem;
@@ -930,52 +937,8 @@ button.ep-file-open:focus-visible {
   min-width: 0;
 }
 
-.de-review-part {
-  display: grid;
-  gap: 0.3rem;
-  min-width: 0;
-}
-
-.de-review-label {
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
-  font-weight: 600;
-}
-
-/* What to ask for next: the request is the line, Copy beside what kind of ask it is. */
-.de-follow {
-  display: grid;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.de-follow-item {
-  display: grid;
-  gap: 0.15rem;
-  min-width: 0;
-  padding: 0.4rem 0;
-  border-top: 1px solid var(--border-subtle);
-  font-size: var(--fs-sm);
-  line-height: 1.5;
-}
-
-.de-follow-ask {
-  color: var(--text-strong);
-  overflow-wrap: anywhere;
-}
-
-.de-follow-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.2rem 0.6rem;
-  min-width: 0;
-}
-
+/* What kind of ask a follow-up is, and for which attributes: under its opened line. */
 .de-follow-facts {
-  flex: 1 1 10rem;
   min-width: 0;
   color: var(--text-secondary);
   font-size: var(--fs-xs);
@@ -994,8 +957,8 @@ button.de-copy {
   font-size: var(--fs-xs);
 }
 
-/* A part of the review that opens on request (200 ms): a follow-up's details, the
-   resolved follow-ups, the considerations, what there is to say of the files. */
+/* A part of the review that opens on request (200 ms): the considerations, what there
+   is to say of the files, the resolved follow-ups. */
 .de-fold {
   min-width: 0;
 }
@@ -1081,10 +1044,6 @@ button.de-copy {
   gap: 0.25rem;
 }
 
-.de-follow-more > summary {
-  font-size: var(--fs-xs);
-}
-
 .de-follow-why > div {
   display: grid;
   grid-template-columns: 8.5rem minmax(0, 1fr);
@@ -1104,19 +1063,6 @@ button.de-copy {
   margin: 0;
   color: var(--text);
   overflow-wrap: anywhere;
-}
-
-/* Under an opened attribute: the comparisons of the records' values, made in code. */
-.de-code-checks {
-  display: grid;
-  gap: 0.25rem;
-  min-width: 0;
-}
-
-.de-code-checks > span {
-  color: var(--text-tertiary);
-  font-size: var(--fs-xs);
-  font-weight: 600;
 }
 
 /* Accept, with what accepting marks as evidenced said first. */
@@ -1164,8 +1110,13 @@ button.de-copy {
     width: 100%;
   }
 
-  button.tar-head.dq-head.de-head {
+  button.tar-head.dq-head.de-head,
+  .de-head-split {
     grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .de-reviewed > :not(.de-check) {
+    margin-left: 0.9rem;
   }
 
   .de-grid > .tar-body {
@@ -1185,20 +1136,9 @@ button.de-copy {
     padding: 0 0.45rem;
   }
 
-  /* The two readings go one under the other, and an attribute's detail takes the
-     row's width. */
+  /* The two readings go one under the other. */
   .de-views {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .de-attr-body {
-    padding-left: 0;
-  }
-
-  /* The letter, its state and the caret keep one line; the summary reads under it. */
-  .de-attr-summary {
-    flex-basis: 100%;
-    order: 1;
   }
 
   /* The review's folds take the row's width, and a follow-up's details stack. */
@@ -1211,7 +1151,15 @@ button.de-copy {
   }
 }
 
+/* A phone: the head's edge is the shared row's (attribute-list.css). */
+@media (max-width: 640px) {
+  .de-head-split {
+    padding-left: 0.75rem;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .de-head-split,
   button.de-caret > svg,
   .de-must > summary > svg,
   .de-attr-caret > svg,
@@ -1219,8 +1167,11 @@ button.de-copy {
     transition: none;
   }
 
-  .de-attr-body,
   .de-unasked-list {
+    animation: none;
+  }
+
+  .de-files-panel {
     animation: none;
   }
 

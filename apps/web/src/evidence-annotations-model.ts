@@ -879,6 +879,73 @@ export function annotationCitations(
   }));
 }
 
+/** What a reference from outside the preview asks to see: the annotation that marks a
+ * passage for an attribute (a "Shown" row of a finished check, docs/evidence-assurance.md,
+ * section 10.12). */
+export type AnnotationAsk = { attributeId: string; quote: string };
+
+/** A quote as it is compared: its letters and digits only, in lower case, so case,
+ * spacing and punctuation are set aside. */
+export function quoteKey(quote: string): string {
+  return (quote.toLowerCase().match(WORDS) ?? []).join(" ");
+}
+
+/** The kinds a reference prefers: what shows the attribute, or an exception to it,
+ * before what only identifies or sources it. */
+const ASK_FIRST: readonly AnnotationKind[] = ["SHOWS", "EXCEPTION"];
+
+/**
+ * The annotation a reference opens on, or null where the file has none for it. First the
+ * annotation whose quote is the passage's (one naming the attribute before one that does
+ * not, then the first listed); else one whose quote holds the passage or is held by it,
+ * chosen the same way; else the first listed annotation naming the attribute that shows
+ * it or an exception to it, and without one, the first listed that names it at all. It
+ * only chooses what is put in view: it confirms, edits and sends nothing.
+ */
+export function annotationFor(
+  set: AnnotationSet,
+  ask: AnnotationAsk,
+): Annotation | null {
+  const names = (annotation: Annotation) =>
+    ask.attributeId !== "" && annotation.attributeIds.includes(ask.attributeId);
+  const firstOf = (found: Annotation[]) =>
+    found.find(names) ?? found[0] ?? null;
+  const wanted = quoteKey(ask.quote);
+  if (wanted !== "") {
+    const keyed = set.annotations.map((annotation) => ({
+      annotation,
+      key: quoteKey(annotation.quote),
+    }));
+    const same = firstOf(
+      keyed
+        .filter((each) => each.key === wanted)
+        .map((each) => each.annotation),
+    );
+    if (same !== null) {
+      return same;
+    }
+    const within = firstOf(
+      keyed
+        .filter(
+          (each) =>
+            each.key !== "" &&
+            (` ${each.key} `.includes(` ${wanted} `) ||
+              ` ${wanted} `.includes(` ${each.key} `)),
+        )
+        .map((each) => each.annotation),
+    );
+    if (within !== null) {
+      return within;
+    }
+  }
+  const naming = set.annotations.filter(names);
+  return (
+    naming.find((annotation) => ASK_FIRST.includes(annotation.kind)) ??
+    naming[0] ??
+    null
+  );
+}
+
 /* What each action sends --------------------------------------------------------------- */
 
 export type AnnotationScope = {

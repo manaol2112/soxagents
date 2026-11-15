@@ -571,7 +571,13 @@ function parseAttribute(
     elements.some((item) => item.result === wanted);
   // What stands as sent. Support needs the agreed result, a passage it rests on, and
   // (where the elements are sent) every element shown (rules 2 and 6 and the comparison
-  // of section 3). Support in part needs some element shown and the rest not borne on.
+  // of section 3). Support in part needs something shown (an element shown, or half
+  // shown) and something left to another request (an element these files do not bear
+  // on, or the half of one they do not show), as the server decides it
+  // (evidence_assurance.py, _defers: shown, half shown resting on absence, or not borne
+  // on; never an element the files bear on and do not show). Before 14 November 2026
+  // only whole elements counted (shown beside not borne on), so a check whose elements
+  // were each half shown read as "could not be read as it was sent".
   // An issue or "not addressed" that carries the result "met" contradicts itself.
   // Anything else is left for the person.
   const stands =
@@ -581,9 +587,9 @@ function parseAttribute(
         ? (result === null || result === "SHOWN_IN_PART") &&
           passages.length > 0 &&
           (elements.length === 0 ||
-            (each(["MET", "NOT_ADDRESSED"]) &&
-              some("MET") &&
-              some("NOT_ADDRESSED")))
+            (each(["MET", "PARTLY_MET", "NOT_ADDRESSED"]) &&
+              (some("MET") || some("PARTLY_MET")) &&
+              (some("NOT_ADDRESSED") || some("PARTLY_MET"))))
         : said === "ISSUE"
           ? result === null || ISSUE_RESULTS.includes(result)
           : said === "NOT_ADDRESSED"
@@ -2669,6 +2675,27 @@ export function acceptNote(facts: {
   ]
     .filter((part) => part !== "")
     .join(" ");
+}
+
+/**
+ * The note beside Accept, apart: the one sentence in its favour ("Accepting marks
+ * attributes A and B as evidenced."), and everything that cautions (what is shown only in
+ * design or in part, issues, judgments, what waits on a file, files left out). A screen
+ * that shows less than the whole note shows the caution, never the favour alone. Where
+ * the note does not open with that sentence, or holds nothing else, all of it is the
+ * caution: it is then shown whole.
+ */
+export function acceptNoteParts(note: string): {
+  favour: string;
+  caution: string;
+} {
+  const said = note.replace(/\s+/g, " ").trim();
+  const lead =
+    /^Accepting marks attributes? [^.:;]+ as evidenced\.(?= |$)/.exec(said);
+  const rest = lead === null ? "" : said.slice(lead[0].length).trim();
+  return lead === null || rest === ""
+    ? { favour: "", caution: said }
+    : { favour: lead[0], caution: rest };
 }
 
 // Polling while a check works

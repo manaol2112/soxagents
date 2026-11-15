@@ -12,6 +12,13 @@ import {
 } from "react";
 import { HeldPicker, PolicyPicker } from "./add-evidence-menu";
 import { AutoRefresh } from "./auto-refresh";
+import {
+  CheckDigestView,
+  type DigestAcceptAction,
+  type DigestAskAction,
+  type DigestEvidence,
+} from "./check-digest";
+import { checkDigest, type DigestExtra, fileRef } from "./check-digest-model";
 import { ControlSend } from "./control-send";
 import type { ActivityItem } from "./control-workspace-model";
 import {
@@ -30,15 +37,11 @@ import {
 } from "./design-requests";
 import type { RequestRow as RequestsRow } from "./design-requests-model";
 import {
-  type AttributeLine,
   assuranceProblem,
-  CHECKED_IN_CODE,
   type CheckAction,
   CONSIDERATIONS_TITLE,
   checkPollDelay,
   FILES_TITLE,
-  FOLLOW_UP_TITLE,
-  type FollowUpLine,
   offeredAction,
   RESOLVED_TITLE,
   REVIEW_FOR,
@@ -102,7 +105,7 @@ import {
 } from "./policy-evidence-model";
 import { PolicyCheck, PolicyOnFile, usePolicyEvidence } from "./policy-on-file";
 import { RowMenu, type RowMenuItem } from "./row-menu";
-import { tracesSample } from "./sample-trace-model";
+import { traceHeading, tracesSample } from "./sample-trace-model";
 import { SampleTrace, useSampleTrace } from "./sample-trace-view";
 import { type IconName, UiIcon } from "./ui-icon";
 
@@ -117,6 +120,31 @@ type Ids = {
 /** Why nothing is offered right after an upload: rows may have moved to another
  * request, so the plan is read again first. */
 const LOCKED = "The list is being read again after the upload. One moment.";
+
+/** Why Accept is off while the row's own form is open (a follow-up, a reason): one
+ * decision at a time. */
+const ASKING_FIRST = "Record or cancel the form under the result first.";
+
+/** What of the row waits on the person beside a finished check, as its first screen
+ * says it (docs/evidence-assurance.md, section 10.12): the sample the trace proposes or
+ * asks for, and what a file hides behind "N files". The check's own model places each
+ * (check-digest-model, DigestExtra): an item under "Needs attention", or a caveat. */
+const EXTRA_TRACE = "TRACE";
+const EXTRA_FILE = "FILE:";
+const TRACE_WORDS = {
+  PROPOSED: "Confirm the sample the agent proposed.",
+  CHOOSE: "Pick the sample this request walks through.",
+  view: "Review the sample",
+} as const;
+const FILE_WORDS = {
+  application: "Set the application this file comes from.",
+  applicationOf: (name: string) => `${name} names no application yet.`,
+  view: "Show the file",
+  unread: (count: number) =>
+    `${count} file${count === 1 ? "" : "s"} could not be read`,
+  reading: (count: number) =>
+    `${count} file${count === 1 ? " is" : "s are"} still being read`,
+} as const;
 
 type ListDialog =
   | { mode: "add" }
@@ -1145,14 +1173,28 @@ function Row({
   // A change to one of its files, confirmed by the server.
   const [fileDone, setFileDone] = useState<string | null>(null);
   // The file whose annotations are open in the preview (its menu's "Annotations").
+  // From a row of a finished check's attribute ("View"), it opens on the annotation
+  // that marks the row's passage (`evidence`).
   const [annotating, setAnnotating] = useState<{
     id: string;
     fileName: string;
+    evidence?: DigestEvidence;
   } | null>(null);
   // The assurance chain's check of the request, and the findings its issues are.
   const assured = row.assurance;
   const findingsAction = useFindingsAction(ids);
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
+  // A finished check is the row's first screen (section 10.12): the request's wording
+  // and its files open on request.
+  const reviewed =
+    assured !== null &&
+    row.reading === 0 &&
+    assured.check.standing === "REVIEWED";
+  // Null until the person opens or closes them: until then they are open only while a
+  // file has something to settle.
+  const [filesOpen, setFilesOpen] = useState<boolean | null>(null);
+  // The sample trace, revealed under what needs attention by its item.
+  const [traceShown, setTraceShown] = useState(false);
   const issueIds = new Set(
     (assured?.check.attributes ?? []).flatMap((line) =>
       line.findingId === null ? [] : [line.findingId],
@@ -1199,6 +1241,29 @@ function Row({
         : item.assessment.followUps.join("; ").slice(0, 1000),
     );
 
+  /** "Ask owner for N items" on a finished check: the row's own follow-up form (`ask`),
+   * started with the ticked requests. A form already open with words keeps them: the
+   * requests are added after a blank line where they are not there yet and fit, and
+   * the focus goes to the form either way. */
+  const askOwner = (text: string) => {
+    const typed = asking !== null ? words.trim() : "";
+    if (asking === null || typed === "") {
+      ask({ kind: "FOLLOW_UP_REQUIRED" }, text);
+    } else if (
+      asking.kind === "FOLLOW_UP_REQUIRED" &&
+      !typed.includes(text) &&
+      typed.length + 2 + text.length <= ASK_WORDS.FOLLOW_UP_REQUIRED.max
+    ) {
+      ask({ kind: "FOLLOW_UP_REQUIRED" }, `${typed}\n\n${text}`);
+    }
+    window.requestAnimationFrame(() => {
+      const field =
+        rowRef.current?.querySelector<HTMLTextAreaElement>(".de-ask textarea");
+      field?.focus();
+      field?.scrollIntoView({ block: "nearest" });
+    });
+  };
+
   async function checkAgain() {
     if (await checks.run(item.id)) {
       onDone("The check was started again.");
@@ -1239,6 +1304,8 @@ function Row({
     } else if (act.kind === "REPLACE") {
       setFileForm({ fileId: act.fileId, form: "replace" });
       setFileDone(null);
+      // The file's own form is in the files list.
+      setFilesOpen(true);
     } else {
       // The file's type is confirmed, and a walkthrough instance picked, in the
       // evidence dialog.
@@ -1329,6 +1396,17 @@ function Row({
     }
   }
 
+  const menuEntries = rowMenu(row, {
+    policies: documents.length,
+    held: held.length,
+    attributes: attributeCount,
+  });
+  /** Why "Ask a follow-up" cannot be used on this row now, in its menu's own words;
+   * null when it can. */
+  const followUpOff = locked
+    ? LOCKED
+    : (menuEntries.find((each) => each.key === "follow-up")?.unavailable ??
+      null);
   const menuFor = (): RowMenuItem[] => {
     const run: Record<MenuKey, () => void> = {
       edit: onEdit,
@@ -1356,11 +1434,7 @@ function Row({
       delete: onRemove,
     };
     return (
-      rowMenu(row, {
-        policies: documents.length,
-        held: held.length,
-        attributes: attributeCount,
-      })
+      menuEntries
         // Nor a check again while another check call of the list is on its way.
         .map((entry) =>
           entry.key === "upgrade" && checks.pending
@@ -1399,64 +1473,768 @@ function Row({
   const hasGuide =
     guide !== null || item.objective !== "" || item.rationale !== "";
 
+  // The row's parts, said once: a finished check arranges them as its first screen
+  // (section 10.12), and every other row as the list always has.
+  const meta = (
+    <span className="dq-meta">
+      <span className="dq-letters">
+        <span className="sr-only">{`, ${row.addresses}, `}</span>
+        {row.letters.length > 0 ? (
+          row.attributeIds.map((attributeId) => {
+            const attribute = wording.get(attributeId);
+            return (
+              <span
+                key={attributeId}
+                className="dr-code"
+                aria-hidden="true"
+                title={
+                  attribute !== undefined
+                    ? `Addresses attribute ${attribute.letter}: ${attribute.text}`
+                    : undefined
+                }
+              >
+                {attribute?.letter ?? ""}
+              </span>
+            );
+          })
+        ) : (
+          <span className="dq-none" aria-hidden="true">
+            No attribute
+          </span>
+        )}
+      </span>
+      <span className={`tar-chip tone-${row.chip.tone}`}>{row.chip.label}</span>
+    </span>
+  );
+  /** The request's wording, the attributes it addresses in full, and its format and
+   * period: the rows of the open request, and of "All details" on a finished check. */
+  const request = (
+    <>
+      <div>
+        <dt>Request</dt>
+        <dd>
+          {guide !== null ? `${guide.lead}.` : item.description || "Not stated"}
+          <span className="de-request-acts">
+            {hasGuide ? (
+              <details className="de-must">
+                <summary>
+                  What it must show
+                  <UiIcon name="chevron" size={12} />
+                </summary>
+                <div className="er-guide de-guide">
+                  {guide !== null ? (
+                    <>
+                      <ul>
+                        {guide.include.map((line) => (
+                          <li key={line}>{line}</li>
+                        ))}
+                      </ul>
+                      {guide.completeness ? (
+                        <p>
+                          <b>Complete when</b> {guide.completeness}
+                        </p>
+                      ) : null}
+                      {guide.notSufficient ? (
+                        <p>
+                          <b>Not sufficient</b> {guide.notSufficient}
+                        </p>
+                      ) : null}
+                      {guide.alternatives.length > 0 ? (
+                        <p>
+                          <b>If not available</b>{" "}
+                          {guide.alternatives.join("; ")}
+                        </p>
+                      ) : null}
+                    </>
+                  ) : item.objective !== "" ? (
+                    <p>{item.objective}</p>
+                  ) : null}
+                  {item.sampleSelection ? (
+                    <p>
+                      <b>Samples</b> {item.sampleSelection}
+                    </p>
+                  ) : null}
+                  {item.rationale !== "" ? (
+                    <p className="er-sub">
+                      <b>Why</b> {item.rationale}
+                    </p>
+                  ) : null}
+                </div>
+              </details>
+            ) : null}
+            {canAct && !row.sent && row.change === null ? (
+              <button
+                type="button"
+                className="de-link"
+                disabled={locked}
+                onClick={onEdit}
+              >
+                Edit
+              </button>
+            ) : null}
+          </span>
+        </dd>
+      </div>
+      <div>
+        <dt>Addresses</dt>
+        <dd>
+          {row.attributeIds.length === 0 ? (
+            "No attribute yet"
+          ) : (
+            <ul className="dq-addressed">
+              {row.attributeIds.map((attributeId) => {
+                const attribute = wording.get(attributeId);
+                return attribute === undefined ? null : (
+                  <li key={attributeId}>
+                    <span className="dr-code">{attribute.letter}</span>
+                    <span>{attribute.text}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </dd>
+      </div>
+      <div>
+        <dt>Format · period</dt>
+        <dd>
+          {[formatOf(row.categories), row.period]
+            .filter((part) => part !== "")
+            .join(" · ")}
+        </dd>
+      </div>
+    </>
+  );
+  /** The request's files, each with its own menu. */
+  const fileList = (
+    <>
+      {fileDone !== null ? (
+        <p className="ep-done" role="status">
+          <UiIcon name="check" size={14} />
+          <span>{fileDone}</span>
+        </p>
+      ) : null}
+      {item.files.length === 0 ? (
+        <p className="de-none">
+          {row.state === "NO_FILE"
+            ? "Its request is marked received, but no file serves this request. Upload the file, or use one the control already holds."
+            : row.uploadBlocked === null
+              ? "No file yet. Upload what you receive, or drop it on the row."
+              : "No file yet."}
+        </p>
+      ) : (
+        <ul className="de-files">
+          {item.files.map((file) => {
+            const line = lines.get(file.fileId);
+            const reading =
+              file.readStatus === "PENDING" || file.readStatus === "WORKING";
+            const meta = fileMeta(
+              files.find((each) => each.id === file.fileId),
+              file,
+            );
+            const fileMenu: RowMenuItem[] = [
+              // The file with the basis the agent proposed for it, to
+              // review (docs/evidence-annotations.md): a file on a D&I
+              // request only.
+              ...(item.phase === "DESIGN"
+                ? [
+                    {
+                      label: "Annotations",
+                      onSelect: () =>
+                        setAnnotating({
+                          id: file.fileId,
+                          fileName: file.name,
+                        }),
+                    },
+                  ]
+                : []),
+              ...(line?.actions ?? []),
+              ...(canAct && file.via === "LINK" && file.linkId !== null
+                ? [
+                    {
+                      label: "Unlink from this request",
+                      onSelect: () => ask({ kind: "UNLINK", file }),
+                    },
+                  ]
+                : []),
+            ];
+            return (
+              <li
+                key={file.fileId}
+                className={`de-file${reading ? " is-reading" : ""}`}
+              >
+                <div className="de-file-main">
+                  <UiIcon name="file" size={15} />
+                  <span className="de-file-text">
+                    <button
+                      type="button"
+                      className="ep-file-name ep-file-open"
+                      onClick={() =>
+                        onDialog({
+                          mode: "review",
+                          fileId: file.fileId,
+                          // The request it is opened from: the dialog's
+                          // full preview shows its annotations.
+                          ...(item.phase === "DESIGN"
+                            ? { requirementId: item.id }
+                            : {}),
+                        })
+                      }
+                    >
+                      {file.name}
+                    </button>
+                    {meta !== "" ? <small>{meta}</small> : null}
+                    {reading ? (
+                      <small className="ep-reading" role="status">
+                        Reading
+                        <span className="ep-dots" aria-hidden="true">
+                          <i />
+                          <i />
+                          <i />
+                        </span>
+                      </small>
+                    ) : file.readStatus === "FAILED" ? (
+                      <small>Could not be read</small>
+                    ) : null}
+                    {line?.flag ?? null}
+                  </span>
+                  {fileMenu.length > 0 ? (
+                    <RowMenu label={file.name} items={fileMenu} />
+                  ) : null}
+                </div>
+                {line?.form ?? null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </>
+  );
+  const preview = (
+    <>
+      {annotating !== null ? (
+        <EvidencePreview
+          organizationId={ids.organizationId}
+          projectId={ids.projectId}
+          title={item.title}
+          annotations={{
+            controlId: ids.controlId,
+            requirementId: item.id,
+          }}
+          // From the file's menu: that file, with its annotations. From a row of an
+          // attribute ("View"): the row's files, opened on that one, on the annotation
+          // that marks the row's passage; a file without annotations shows the passage
+          // marked, as "Open in the file" does.
+          {...(annotating.evidence === undefined
+            ? { files: [{ id: annotating.id, fileName: annotating.fileName }] }
+            : {
+                files: rowFiles.map((file) => ({
+                  id: file.id,
+                  fileName: file.name,
+                })),
+                startFileId: annotating.id,
+                citations: [
+                  passageCitation(
+                    annotating.evidence.passage,
+                    rowFiles,
+                    annotating.evidence.letter,
+                  ),
+                ],
+                sourcesTitle: PASSAGE_SOURCES,
+                startAnnotationFor: {
+                  attributeId: annotating.evidence.attributeId,
+                  quote: annotating.evidence.quote,
+                },
+              })}
+          onClose={() => setAnnotating(null)}
+        />
+      ) : null}
+    </>
+  );
+  // What of the row waits on the person beside the check, for its first screen.
+  const tracePending =
+    traced &&
+    !traceFailed &&
+    trace !== null &&
+    (trace.status === "PROPOSED" || trace.status === "CHOOSE");
+  const flagged = item.files.filter(
+    (file) => (lines.get(file.fileId)?.flag ?? null) !== null,
+  );
+  const unread = item.files.filter((file) => file.readStatus === "FAILED");
+  const beingRead = item.files.filter(
+    (file) => file.readStatus === "PENDING" || file.readStatus === "WORKING",
+  );
+  const extras: DigestExtra[] = !reviewed
+    ? []
+    : [
+        // The sample to confirm or pick: its item reveals the trace under the list.
+        ...(tracePending && trace !== null
+          ? [
+              {
+                key: EXTRA_TRACE,
+                mark: "",
+                headline:
+                  trace.status === "CHOOSE"
+                    ? TRACE_WORDS.CHOOSE
+                    : TRACE_WORDS.PROPOSED,
+                context: [
+                  traceHeading(trace),
+                  trace.observations.length > 0
+                    ? `${trace.observations.length} point${trace.observations.length === 1 ? "" : "s"} to settle`
+                    : "",
+                ]
+                  .filter((part) => part !== "")
+                  .join(" · "),
+                label: TRACE_WORDS.view,
+                caveat: false,
+              },
+            ]
+          : []),
+        // A file whose application a person has still to set: its item shows the file.
+        ...flagged.map((file) => ({
+          key: `${EXTRA_FILE}${file.fileId}`,
+          mark: fileRef(rowFiles, file.fileId),
+          headline: FILE_WORDS.application,
+          context: FILE_WORDS.applicationOf(file.name),
+          label: FILE_WORDS.view,
+          caveat: false,
+        })),
+        // What is only to be known of the files, on the quiet line.
+        ...(unread.length > 0
+          ? [
+              {
+                key: "FILES:UNREAD",
+                mark: "",
+                headline: FILE_WORDS.unread(unread.length),
+                context: unread.map((file) => file.name).join(", "),
+                label: "",
+                caveat: true,
+              },
+            ]
+          : []),
+        ...(beingRead.length > 0
+          ? [
+              {
+                key: "FILES:READING",
+                mark: "",
+                headline: FILE_WORDS.reading(beingRead.length),
+                context: beingRead.map((file) => file.name).join(", "),
+                label: "",
+                caveat: true,
+              },
+            ]
+          : []),
+      ];
+  // The files are listed without being asked for only while one has something to
+  // settle or could not be read.
+  const filesShown =
+    filesOpen ??
+    (flagged.length > 0 || unread.length > 0 || beingRead.length > 0);
+  /** An item's "Review the sample" or "Show the file": what it is about is put in view,
+   * in place, with the focus on it. */
+  const viewExtra = (key: string) => {
+    const fileAt = key.startsWith(EXTRA_FILE)
+      ? item.files.findIndex(
+          (file) => file.fileId === key.slice(EXTRA_FILE.length),
+        )
+      : -1;
+    if (key === EXTRA_TRACE) {
+      setTraceShown(true);
+    } else if (fileAt >= 0) {
+      setFilesOpen(true);
+    } else {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      const root = rowRef.current;
+      const file = root?.querySelectorAll<HTMLElement>(
+        ".de-files-panel .de-file",
+      )[fileAt];
+      // The trace's card; or the file, on what it still needs where it says so.
+      const target =
+        key === EXTRA_TRACE
+          ? root?.querySelector<HTMLElement>(".de-under")
+          : (file?.querySelector<HTMLElement>(".ep-file-flag") ??
+            file?.querySelector<HTMLElement>(".ep-file-open"));
+      target?.scrollIntoView({ block: "nearest" });
+      target?.focus();
+    });
+  };
+  const traceView = (
+    <>
+      {traced ? (
+        <SampleTrace
+          ids={action.ids}
+          requirementId={item.id}
+          trace={trace}
+          failed={traceFailed}
+          canAct={canAct}
+          onTrace={setTrace}
+        />
+      ) : null}
+    </>
+  );
+  const agentSaid = (
+    <>
+      {row.agent !== null && row.reading === 0 ? (
+        <div className="de-agent">
+          <UiIcon name="sparkles" size={14} />
+          <div>
+            <p>
+              <strong>{row.agent.lead}</strong> {row.agent.text}
+            </p>
+            {row.agent.followUps.length > 0 ? (
+              <ul className="ep-follow">
+                {row.agent.followUps.map((point) => (
+                  <li key={point}>{point}</li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+  const passedOver = (
+    <>
+      {item.passedOver.length > 0 ? (
+        <p className="ep-passed">
+          {item.passedOver.join(", ")} came in on its request, but the reader
+          found {item.passedOver.length === 1 ? "it does" : "they do"} not cover
+          this request.
+          {canAct && held.length > 0 ? " Use it from the menu if it does." : ""}
+        </p>
+      ) : null}
+    </>
+  );
+  const policyCheck = <PolicyCheck evidence={policies} item={item} />;
+  const decided = (
+    <>{row.note !== "" ? <p className="ep-note">{row.note}</p> : null}</>
+  );
+  /** What opens on the person's own choice, or waits on their decision: a policy on
+   * file, the pickers, the few words a judgment needs, the findings' follow-up. */
+  const forms = (
+    <>
+      {onFile.map((proposal) => (
+        <PolicyOnFile
+          key={proposal.id}
+          ids={ids}
+          proposal={proposal}
+          canAct={canAct}
+          onDecided={onPolicyDecided}
+          onMapping={onCoverage}
+        />
+      ))}
+      {picker === "policy" ? (
+        <PolicyPicker
+          ids={ids}
+          itemId={item.id}
+          documents={documents}
+          onCancel={() => setPicker(null)}
+          onFiled={() => {
+            setPicker(null);
+            onPolicyDecided();
+          }}
+        />
+      ) : null}
+      {picker === "held" ? (
+        <HeldPicker
+          held={held}
+          onCancel={() => setPicker(null)}
+          onLink={async (fileId, reason) => {
+            if (
+              await action.run(`link-${item.id}`, {
+                intent: "link",
+                requirement_id: item.id,
+                file_id: fileId,
+                reason,
+                version: item.version,
+              })
+            ) {
+              setPicker(null);
+              onDone("File added to the request.");
+            }
+          }}
+        />
+      ) : null}
+      {canAct && asking !== null ? (
+        <AskForm
+          asking={asking}
+          words={words}
+          busy={locked}
+          onWords={setWords}
+          onCancel={() => setAsking(null)}
+          onSubmit={() => void submitAsk()}
+        />
+      ) : null}
+      {/* The follow-up a person sends from the issues' findings they
+                      ticked: the findings' own, as in the evidence dialog. */}
+      {canAct && item.requestId !== null ? (
+        <FollowUpComposer
+          findings={toSend}
+          requestId={item.requestId}
+          controlRef={controlRef}
+          controlTitle=""
+          action={findingsAction}
+          onSent={() => setPicked(new Set())}
+        />
+      ) : null}
+    </>
+  );
+  const change = (
+    <>
+      {row.change !== null ? (
+        <div className="dq-change">
+          <p className="ta-why">
+            <span className="tar-origin">
+              {row.change.remove
+                ? "The agent proposes removing this request."
+                : "The agent proposes a change to this request."}
+            </span>{" "}
+            It stays as it is until you accept the change.
+          </p>
+          {!row.change.remove && row.change.title !== "" ? (
+            <p className="ta-replaces">
+              <span>Proposed title</span> {row.change.title}
+            </p>
+          ) : null}
+          {!row.change.remove && row.change.description !== "" ? (
+            <p className="ta-replaces">
+              <span>Proposed request</span> {row.change.description}
+            </p>
+          ) : null}
+          {canAct ? (
+            <div className="tc-row-acts">
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={locked}
+                onClick={async () => {
+                  if (
+                    await action.run(`change-${item.id}`, {
+                      intent: "change",
+                      requirement_id: item.id,
+                      decision: "ACCEPT",
+                      version: item.version,
+                    })
+                  ) {
+                    onDone("Change accepted.");
+                  }
+                }}
+              >
+                Accept the change
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={locked}
+                onClick={async () => {
+                  if (
+                    await action.run(`change-${item.id}`, {
+                      intent: "change",
+                      requirement_id: item.id,
+                      decision: "DISMISS",
+                      version: item.version,
+                    })
+                  ) {
+                    onDone("Kept as it was.");
+                  }
+                }}
+              >
+                Keep as it is
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  );
+  const check =
+    assured !== null && row.reading === 0 ? (
+      <CheckOfRequest
+        ids={ids}
+        check={assured.check}
+        files={rowFiles}
+        offer={offer}
+        busy={checks.busy}
+        requirementId={item.id}
+        disabled={locked || checks.pending}
+        onAct={actOn}
+        findings={findings}
+        findingsAction={findingsAction}
+        canAct={canAct}
+        title={row.title}
+        about={
+          reviewed ? (
+            <div className="tc is-flat">
+              <dl className="tc-rules">{request}</dl>
+            </div>
+          ) : null
+        }
+        more={
+          reviewed ? (
+            <>
+              {/* A trace that waits on the person is on the first screen (its item
+                  reveals it under the list); any other is here. */}
+              {traceShown || tracePending ? null : traceView}
+              {agentSaid}
+              {passedOver}
+              {policyCheck}
+            </>
+          ) : null
+        }
+        extras={extras}
+        onView={viewExtra}
+        under={
+          reviewed && traceShown && traced ? (
+            <div className="de-under" tabIndex={-1}>
+              {traceView}
+            </div>
+          ) : null
+        }
+        onEvidence={(evidence) => {
+          const file = rowFiles.find((each) => each.id === evidence.fileId);
+          if (file !== undefined) {
+            setAnnotating({ id: file.id, fileName: file.name, evidence });
+          }
+        }}
+        ask={
+          canAct
+            ? {
+                // The path the menu's "Ask a follow-up" takes: the row's own form.
+                onAsk: askOwner,
+                unavailable: followUpOff,
+              }
+            : null
+        }
+        accept={
+          canAct && row.canAccept
+            ? {
+                onAccept: () => void accept(),
+                // Only the accept itself: a follow-up, an insufficient or a reopen
+                // being recorded runs under the same key, with its form open.
+                busy: asking === null && action.busy === `judge-${item.id}`,
+                off: locked ? LOCKED : asking !== null ? ASKING_FIRST : null,
+              }
+            : null
+        }
+        acceptNote={assured.acceptNote}
+        picked={picked}
+        onPick={(findingId, on) =>
+          setPicked((current) => {
+            const next = new Set(current);
+            if (on) {
+              next.add(findingId);
+            } else {
+              next.delete(findingId);
+            }
+            return next;
+          })
+        }
+      />
+    ) : null;
+  // "7 files" in the row's own line: on a finished check it opens the files in place.
+  const filesWord = `${item.files.length} file${item.files.length === 1 ? "" : "s"}`;
+  const filesAt = row.sub.indexOf(` · ${filesWord}`);
+  const filesId = `${id}-files`;
+
   const content = (
     <div className="de-grid">
-      <button
-        type="button"
-        className="tar-head dq-head de-head"
-        aria-expanded={open}
-        aria-controls={bodyId}
-        onClick={onToggle}
-      >
-        <span className="dr-tile" aria-hidden="true">
-          <UiIcon name={row.icon} size={16} />
-        </span>
-        <span className="tar-name">
-          <span className="tar-text">{row.title}</span>
-          <span className="tar-source">{row.sub}</span>
-          {assured !== null && assured.states.length > 0 ? (
-            <span className="de-states">
-              {assured.states.map((group) => (
-                <span key={group.key} className={`de-state tone-${group.tone}`}>
-                  <UiIcon name={group.icon} size={12} />
-                  {group.label}
-                </span>
-              ))}
-            </span>
-          ) : null}
-        </span>
-        <span className="dq-meta">
-          <span className="dq-letters">
-            <span className="sr-only">{`, ${row.addresses}, `}</span>
-            {row.letters.length > 0 ? (
-              row.attributeIds.map((attributeId) => {
-                const attribute = wording.get(attributeId);
-                return (
-                  <span
-                    key={attributeId}
-                    className="dr-code"
-                    aria-hidden="true"
-                    title={
-                      attribute !== undefined
-                        ? `Addresses attribute ${attribute.letter}: ${attribute.text}`
-                        : undefined
-                    }
-                  >
-                    {attribute?.letter ?? ""}
-                  </span>
-                );
-              })
+      {reviewed ? (
+        // The head of a finished check: the title opens and closes the row, as the
+        // whole head does everywhere else, and "7 files" beside it is its own button.
+        <div className="tar-head dq-head de-head de-head-split">
+          <span className="dr-tile" aria-hidden="true">
+            <UiIcon name={row.icon} size={16} />
+          </span>
+          <span className="tar-name">
+            <button
+              type="button"
+              className="de-head-toggle"
+              aria-expanded={open}
+              aria-controls={bodyId}
+              // Its name is the title; the row's line, where each attribute stands,
+              // the attributes it addresses and its state describe it, as when the
+              // whole head was the one button.
+              aria-describedby={`${id}-sub${!open && assured !== null && assured.states.length > 0 ? ` ${id}-states` : ""} ${id}-meta`}
+              onClick={onToggle}
+            >
+              <span className="tar-text">{row.title}</span>
+            </button>
+            {open && item.files.length > 0 ? (
+              <span className="tar-source de-subline" id={`${id}-sub`}>
+                {filesAt < 0
+                  ? `${row.sub} · `
+                  : `${row.sub.slice(0, filesAt)} · `}
+                <button
+                  type="button"
+                  className="de-link de-files-toggle"
+                  aria-expanded={filesShown}
+                  aria-controls={filesId}
+                  onClick={() => setFilesOpen(!filesShown)}
+                >
+                  {filesWord}
+                </button>
+                {filesAt < 0
+                  ? ""
+                  : row.sub.slice(filesAt + 3 + filesWord.length)}
+              </span>
             ) : (
-              <span className="dq-none" aria-hidden="true">
-                No attribute
+              <span className="tar-source" id={`${id}-sub`}>
+                {row.sub}
               </span>
             )}
+            {/* Closed, the row says where each attribute stands; open, the verdict
+                under it does. */}
+            {!open && assured !== null && assured.states.length > 0 ? (
+              <span className="de-states" id={`${id}-states`}>
+                {assured.states.map((group) => (
+                  <span
+                    key={group.key}
+                    className={`de-state tone-${group.tone}`}
+                  >
+                    <UiIcon name={group.icon} size={12} />
+                    {group.label}
+                  </span>
+                ))}
+              </span>
+            ) : null}
           </span>
-          <span className={`tar-chip tone-${row.chip.tone}`}>
-            {row.chip.label}
+          <span className="de-head-meta" id={`${id}-meta`}>
+            {meta}
           </span>
-        </span>
-      </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="tar-head dq-head de-head"
+          aria-expanded={open}
+          aria-controls={bodyId}
+          onClick={onToggle}
+        >
+          <span className="dr-tile" aria-hidden="true">
+            <UiIcon name={row.icon} size={16} />
+          </span>
+          <span className="tar-name">
+            <span className="tar-text">{row.title}</span>
+            <span className="tar-source">{row.sub}</span>
+            {assured !== null && assured.states.length > 0 ? (
+              <span className="de-states">
+                {assured.states.map((group) => (
+                  <span
+                    key={group.key}
+                    className={`de-state tone-${group.tone}`}
+                  >
+                    <UiIcon name={group.icon} size={12} />
+                    {group.label}
+                  </span>
+                ))}
+              </span>
+            ) : null}
+          </span>
+          {meta}
+        </button>
+      )}
       <span className="dq-menu de-acts">
         {uploads ? (
           <button
@@ -1482,424 +2260,39 @@ function Row({
       >
         <UiIcon name="chevron" size={14} />
       </button>
-      {open ? (
+      {open && reviewed ? (
+        <div className="tar-body de-body de-reviewed" id={bodyId}>
+          {change}
+          <div
+            id={filesId}
+            className="de-files-panel"
+            hidden={!filesShown && item.files.length > 0}
+          >
+            {filesShown || item.files.length === 0 ? fileList : null}
+          </div>
+          {preview}
+          {check}
+          {decided}
+          {forms}
+        </div>
+      ) : open ? (
         <div className="tar-body de-body" id={bodyId}>
-          {row.change !== null ? (
-            <div className="dq-change">
-              <p className="ta-why">
-                <span className="tar-origin">
-                  {row.change.remove
-                    ? "The agent proposes removing this request."
-                    : "The agent proposes a change to this request."}
-                </span>{" "}
-                It stays as it is until you accept the change.
-              </p>
-              {!row.change.remove && row.change.title !== "" ? (
-                <p className="ta-replaces">
-                  <span>Proposed title</span> {row.change.title}
-                </p>
-              ) : null}
-              {!row.change.remove && row.change.description !== "" ? (
-                <p className="ta-replaces">
-                  <span>Proposed request</span> {row.change.description}
-                </p>
-              ) : null}
-              {canAct ? (
-                <div className="tc-row-acts">
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    disabled={locked}
-                    onClick={async () => {
-                      if (
-                        await action.run(`change-${item.id}`, {
-                          intent: "change",
-                          requirement_id: item.id,
-                          decision: "ACCEPT",
-                          version: item.version,
-                        })
-                      ) {
-                        onDone("Change accepted.");
-                      }
-                    }}
-                  >
-                    Accept the change
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    disabled={locked}
-                    onClick={async () => {
-                      if (
-                        await action.run(`change-${item.id}`, {
-                          intent: "change",
-                          requirement_id: item.id,
-                          decision: "DISMISS",
-                          version: item.version,
-                        })
-                      ) {
-                        onDone("Kept as it was.");
-                      }
-                    }}
-                  >
-                    Keep as it is
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
+          {change}
           <div className="tc is-flat">
             <dl className="tc-rules">
-              <div>
-                <dt>Request</dt>
-                <dd>
-                  {guide !== null
-                    ? `${guide.lead}.`
-                    : item.description || "Not stated"}
-                  <span className="de-request-acts">
-                    {hasGuide ? (
-                      <details className="de-must">
-                        <summary>
-                          What it must show
-                          <UiIcon name="chevron" size={12} />
-                        </summary>
-                        <div className="er-guide de-guide">
-                          {guide !== null ? (
-                            <>
-                              <ul>
-                                {guide.include.map((line) => (
-                                  <li key={line}>{line}</li>
-                                ))}
-                              </ul>
-                              {guide.completeness ? (
-                                <p>
-                                  <b>Complete when</b> {guide.completeness}
-                                </p>
-                              ) : null}
-                              {guide.notSufficient ? (
-                                <p>
-                                  <b>Not sufficient</b> {guide.notSufficient}
-                                </p>
-                              ) : null}
-                              {guide.alternatives.length > 0 ? (
-                                <p>
-                                  <b>If not available</b>{" "}
-                                  {guide.alternatives.join("; ")}
-                                </p>
-                              ) : null}
-                            </>
-                          ) : item.objective !== "" ? (
-                            <p>{item.objective}</p>
-                          ) : null}
-                          {item.sampleSelection ? (
-                            <p>
-                              <b>Samples</b> {item.sampleSelection}
-                            </p>
-                          ) : null}
-                          {item.rationale !== "" ? (
-                            <p className="er-sub">
-                              <b>Why</b> {item.rationale}
-                            </p>
-                          ) : null}
-                        </div>
-                      </details>
-                    ) : null}
-                    {canAct && !row.sent && row.change === null ? (
-                      <button
-                        type="button"
-                        className="de-link"
-                        disabled={locked}
-                        onClick={onEdit}
-                      >
-                        Edit
-                      </button>
-                    ) : null}
-                  </span>
-                </dd>
-              </div>
-              <div>
-                <dt>Addresses</dt>
-                <dd>
-                  {row.attributeIds.length === 0 ? (
-                    "No attribute yet"
-                  ) : (
-                    <ul className="dq-addressed">
-                      {row.attributeIds.map((attributeId) => {
-                        const attribute = wording.get(attributeId);
-                        return attribute === undefined ? null : (
-                          <li key={attributeId}>
-                            <span className="dr-code">{attribute.letter}</span>
-                            <span>{attribute.text}</span>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Format · period</dt>
-                <dd>
-                  {[formatOf(row.categories), row.period]
-                    .filter((part) => part !== "")
-                    .join(" · ")}
-                </dd>
-              </div>
+              {request}
               <div>
                 <dt>Evidence</dt>
                 <dd className="de-evidence">
-                  {fileDone !== null ? (
-                    <p className="ep-done" role="status">
-                      <UiIcon name="check" size={14} />
-                      <span>{fileDone}</span>
-                    </p>
-                  ) : null}
-                  {item.files.length === 0 ? (
-                    <p className="de-none">
-                      {row.state === "NO_FILE"
-                        ? "Its request is marked received, but no file serves this request. Upload the file, or use one the control already holds."
-                        : row.uploadBlocked === null
-                          ? "No file yet. Upload what you receive, or drop it on the row."
-                          : "No file yet."}
-                    </p>
-                  ) : (
-                    <ul className="de-files">
-                      {item.files.map((file) => {
-                        const line = lines.get(file.fileId);
-                        const reading =
-                          file.readStatus === "PENDING" ||
-                          file.readStatus === "WORKING";
-                        const meta = fileMeta(
-                          files.find((each) => each.id === file.fileId),
-                          file,
-                        );
-                        const fileMenu: RowMenuItem[] = [
-                          // The file with the basis the agent proposed for it, to
-                          // review (docs/evidence-annotations.md): a file on a D&I
-                          // request only.
-                          ...(item.phase === "DESIGN"
-                            ? [
-                                {
-                                  label: "Annotations",
-                                  onSelect: () =>
-                                    setAnnotating({
-                                      id: file.fileId,
-                                      fileName: file.name,
-                                    }),
-                                },
-                              ]
-                            : []),
-                          ...(line?.actions ?? []),
-                          ...(canAct &&
-                          file.via === "LINK" &&
-                          file.linkId !== null
-                            ? [
-                                {
-                                  label: "Unlink from this request",
-                                  onSelect: () => ask({ kind: "UNLINK", file }),
-                                },
-                              ]
-                            : []),
-                        ];
-                        return (
-                          <li
-                            key={file.fileId}
-                            className={`de-file${reading ? " is-reading" : ""}`}
-                          >
-                            <div className="de-file-main">
-                              <UiIcon name="file" size={15} />
-                              <span className="de-file-text">
-                                <button
-                                  type="button"
-                                  className="ep-file-name ep-file-open"
-                                  onClick={() =>
-                                    onDialog({
-                                      mode: "review",
-                                      fileId: file.fileId,
-                                      // The request it is opened from: the dialog's
-                                      // full preview shows its annotations.
-                                      ...(item.phase === "DESIGN"
-                                        ? { requirementId: item.id }
-                                        : {}),
-                                    })
-                                  }
-                                >
-                                  {file.name}
-                                </button>
-                                {meta !== "" ? <small>{meta}</small> : null}
-                                {reading ? (
-                                  <small className="ep-reading" role="status">
-                                    Reading
-                                    <span
-                                      className="ep-dots"
-                                      aria-hidden="true"
-                                    >
-                                      <i />
-                                      <i />
-                                      <i />
-                                    </span>
-                                  </small>
-                                ) : file.readStatus === "FAILED" ? (
-                                  <small>Could not be read</small>
-                                ) : null}
-                                {line?.flag ?? null}
-                              </span>
-                              {fileMenu.length > 0 ? (
-                                <RowMenu label={file.name} items={fileMenu} />
-                              ) : null}
-                            </div>
-                            {line?.form ?? null}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                  {annotating !== null ? (
-                    <EvidencePreview
-                      organizationId={ids.organizationId}
-                      projectId={ids.projectId}
-                      files={[annotating]}
-                      title={item.title}
-                      annotations={{
-                        controlId: ids.controlId,
-                        requirementId: item.id,
-                      }}
-                      onClose={() => setAnnotating(null)}
-                    />
-                  ) : null}
-                  {assured !== null && row.reading === 0 ? (
-                    <CheckOfRequest
-                      ids={ids}
-                      check={assured.check}
-                      files={rowFiles}
-                      offer={offer}
-                      busy={checks.busy}
-                      requirementId={item.id}
-                      disabled={locked || checks.pending}
-                      onAct={actOn}
-                      findings={findings}
-                      findingsAction={findingsAction}
-                      canAct={canAct}
-                      picked={picked}
-                      onPick={(findingId, on) =>
-                        setPicked((current) => {
-                          const next = new Set(current);
-                          if (on) {
-                            next.add(findingId);
-                          } else {
-                            next.delete(findingId);
-                          }
-                          return next;
-                        })
-                      }
-                    />
-                  ) : null}
-                  {traced ? (
-                    <SampleTrace
-                      ids={action.ids}
-                      requirementId={item.id}
-                      trace={trace}
-                      failed={traceFailed}
-                      canAct={canAct}
-                      onTrace={setTrace}
-                    />
-                  ) : null}
-                  {row.agent !== null && row.reading === 0 ? (
-                    <div className="de-agent">
-                      <UiIcon name="sparkles" size={14} />
-                      <div>
-                        <p>
-                          <strong>{row.agent.lead}</strong> {row.agent.text}
-                        </p>
-                        {row.agent.followUps.length > 0 ? (
-                          <ul className="ep-follow">
-                            {row.agent.followUps.map((point) => (
-                              <li key={point}>{point}</li>
-                            ))}
-                          </ul>
-                        ) : null}
-                      </div>
-                    </div>
-                  ) : null}
-                  {item.passedOver.length > 0 ? (
-                    <p className="ep-passed">
-                      {item.passedOver.join(", ")} came in on its request, but
-                      the reader found{" "}
-                      {item.passedOver.length === 1 ? "it does" : "they do"} not
-                      cover this request.
-                      {canAct && held.length > 0
-                        ? " Use it from the menu if it does."
-                        : ""}
-                    </p>
-                  ) : null}
-                  {row.note !== "" ? (
-                    <p className="ep-note">{row.note}</p>
-                  ) : null}
-                  <PolicyCheck evidence={policies} item={item} />
-                  {onFile.map((proposal) => (
-                    <PolicyOnFile
-                      key={proposal.id}
-                      ids={ids}
-                      proposal={proposal}
-                      canAct={canAct}
-                      onDecided={onPolicyDecided}
-                      onMapping={onCoverage}
-                    />
-                  ))}
-                  {picker === "policy" ? (
-                    <PolicyPicker
-                      ids={ids}
-                      itemId={item.id}
-                      documents={documents}
-                      onCancel={() => setPicker(null)}
-                      onFiled={() => {
-                        setPicker(null);
-                        onPolicyDecided();
-                      }}
-                    />
-                  ) : null}
-                  {picker === "held" ? (
-                    <HeldPicker
-                      held={held}
-                      onCancel={() => setPicker(null)}
-                      onLink={async (fileId, reason) => {
-                        if (
-                          await action.run(`link-${item.id}`, {
-                            intent: "link",
-                            requirement_id: item.id,
-                            file_id: fileId,
-                            reason,
-                            version: item.version,
-                          })
-                        ) {
-                          setPicker(null);
-                          onDone("File added to the request.");
-                        }
-                      }}
-                    />
-                  ) : null}
-                  {canAct && asking !== null ? (
-                    <AskForm
-                      asking={asking}
-                      words={words}
-                      busy={locked}
-                      onWords={setWords}
-                      onCancel={() => setAsking(null)}
-                      onSubmit={() => void submitAsk()}
-                    />
-                  ) : null}
-                  {/* The follow-up a person sends from the issues' findings they
-                      ticked: the findings' own, as in the evidence dialog. */}
-                  {canAct && item.requestId !== null ? (
-                    <FollowUpComposer
-                      findings={toSend}
-                      requestId={item.requestId}
-                      controlRef={controlRef}
-                      controlTitle=""
-                      action={findingsAction}
-                      onSent={() => setPicked(new Set())}
-                    />
-                  ) : null}
+                  {fileList}
+                  {preview}
+                  {check}
+                  {traceView}
+                  {agentSaid}
+                  {passedOver}
+                  {decided}
+                  {policyCheck}
+                  {forms}
                   {canAct && asking === null && row.canAccept ? (
                     <div className="de-accept">
                       {/* What accepting marks as evidenced, and what it leaves
@@ -2005,7 +2398,11 @@ function Row({
               )?.focus();
               if (root !== null && root !== undefined) {
                 if (!root.contains(document.activeElement)) {
-                  root.querySelector<HTMLElement>(".de-head")?.focus();
+                  root
+                    .querySelector<HTMLElement>(
+                      "button.de-head-toggle, button.de-head",
+                    )
+                    ?.focus();
                 }
               }
             });
@@ -2126,10 +2523,12 @@ function UpgradeDialog({
  * A request's check by the assurance chain (docs/evidence-assurance.md, section 7): its
  * files are read together, as one walkthrough. One quiet line while it works; held,
  * failed or out of date, one line with the single action that clears it; a file left out
- * of the readings, named with why and its own action; finished, each attribute with its
- * state in words and a mark, opening to what the two readings rest on, what is absent,
- * and both readings side by side where they do not agree. An issue is its evidence
- * finding, with the finding's own actions. Nothing of a check is shown before it ends.
+ * of the readings, named with why and its own action. Finished, it is the row's first
+ * screen (section 10.12, check-digest.tsx): the verdict, only what needs the person's
+ * attention, what is fine with every caveat, and the footer with the row's own Accept and
+ * follow-up; an item opens its attribute alone, and "All details" the request and the
+ * rest of the check. An issue is its evidence finding, with the finding's own actions.
+ * Nothing of a check is shown before it ends.
  */
 function CheckOfRequest({
   ids,
@@ -2145,6 +2544,16 @@ function CheckOfRequest({
   canAct,
   picked,
   onPick,
+  title,
+  about,
+  more,
+  extras,
+  onView,
+  under,
+  onEvidence,
+  ask,
+  accept,
+  acceptNote,
 }: {
   ids: Ids;
   check: RequestCheck;
@@ -2162,8 +2571,33 @@ function CheckOfRequest({
   canAct: boolean;
   picked: Set<string>;
   onPick: (findingId: string, on: boolean) => void;
+  /** The request's title, said over an attribute shown alone. */
+  title: string;
+  /** The request's wording, the attributes it addresses and its format and period, as
+   * the row draws them: the head of "All details" on a finished check. */
+  about: ReactNode;
+  /** What else the row says of the request's evidence, at the end of "All details". */
+  more: ReactNode;
+  /** What of the row itself waits on the person or must be known beside the check: the
+   * check's model places each on the first screen. */
+  extras: DigestExtra[];
+  /** Puts in view what an item of the row's own is about, by the item's key. */
+  onView: (key: string) => void;
+  /** What the row has put in view for such an item, under the list. */
+  under: ReactNode;
+  /** Opens a row's evidence in the row's preview, on the annotation that marks it. */
+  onEvidence: (evidence: DigestEvidence) => void;
+  /** The row's follow-up form, the path its menu's "Ask a follow-up" takes, and why it
+   * cannot be used now; null for a person who may not act. */
+  ask: DigestAskAction | null;
+  /** The row's Accept; null where the row does not offer it to this person. */
+  accept: DigestAcceptAction | null;
+  /** The row's warning about accepting. */
+  acceptNote: string;
 }) {
   const action = offer(check.action);
+  // The finished check as its first screen; null while it is anything else.
+  const digest = checkDigest(check, findings ?? [], files, extras);
   const actButton = (act: CheckAction, about: string) => (
     <button
       type="button"
@@ -2181,11 +2615,11 @@ function CheckOfRequest({
   );
   // A file named on its own line, with the one action that clears it: a file left out
   // of the readings, or one read with its type still to confirm.
-  const fileLines = (items: RequestCheck["leftOut"]) =>
+  const fileLines = (items: RequestCheck["leftOut"], acts = true) =>
     items.length === 0 ? null : (
       <ul className="de-left-out">
         {items.map((item) => {
-          const act = offer(item.action);
+          const act = acts ? offer(item.action) : null;
           const name =
             files.find((file) => file.id === item.fileId)?.name ?? "the file";
           return (
@@ -2218,7 +2652,7 @@ function CheckOfRequest({
       </div>
     );
   }
-  if (check.standing !== "REVIEWED") {
+  if (check.standing !== "REVIEWED" || digest === null) {
     return (
       <div className={`de-check is-${check.standing.toLowerCase()}`}>
         <div className="de-check-line">
@@ -2243,60 +2677,29 @@ function CheckOfRequest({
       </div>
     );
   }
-  return (
-    <div className="de-check is-reviewed">
-      {/* The review of the evidence (a check of the second engine only), read first.
-          A check without one reads exactly as it did. */}
+  // A check an earlier engine made: checked again by the current one, asked once more
+  // first (section 10.10). Quiet, under the verdict: the result is what is read.
+  const upgrade =
+    action !== null && action.kind === "UPGRADE" ? (
+      <button
+        type="button"
+        className="btn btn-secondary btn-sm de-check-upgrade"
+        disabled={disabled}
+        aria-haspopup="dialog"
+        aria-label={`${action.label}: this request`}
+        onClick={() => onAct(action)}
+      >
+        {busy === requirementId ? "Starting…" : action.label}
+      </button>
+    ) : null;
+  // Behind "All details": the request, then what the check said before, moved, not
+  // rewritten. Every file's line is here in full; one with an action has it on its item
+  // under "Needs attention", once.
+  const details = (
+    <>
+      {about}
       {check.review !== null ? (
         <CheckReview ids={ids} review={check.review} files={files} />
-      ) : null}
-      <p className="de-check-line">
-        <UiIcon name="shield" size={13} />
-        <span>
-          {check.line}
-          {check.readInPart !== null ? (
-            <strong className="de-check-part"> {check.readInPart}</strong>
-          ) : null}
-        </span>
-        {/* A check an earlier engine made: checked again by the current one, asked
-            once more first (section 10.10). Quiet: the result is what is read. */}
-        {action !== null && action.kind === "UPGRADE" ? (
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm de-check-upgrade"
-            disabled={disabled}
-            aria-haspopup="dialog"
-            aria-label={`${action.label}: this request`}
-            onClick={() => onAct(action)}
-          >
-            {busy === requirementId ? "Starting…" : action.label}
-          </button>
-        ) : null}
-      </p>
-      {leftOut}
-      {fileLines(check.confirm)}
-      {check.attributes.length > 0 ? (
-        <ul className="de-attrs">
-          {check.attributes.map((line) => (
-            <AttributeCheck
-              key={line.key}
-              ids={ids}
-              line={line}
-              files={files}
-              finding={
-                line.findingId === null
-                  ? null
-                  : ((findings ?? []).find(
-                      (finding) => finding.id === line.findingId,
-                    ) ?? null)
-              }
-              findingsAction={findingsAction}
-              canAct={canAct}
-              picked={picked}
-              onPick={onPick}
-            />
-          ))}
-        </ul>
       ) : null}
       {check.notAsked.length > 0 ? (
         // Attributes the request does not ask for and the evidence does not bear on:
@@ -2339,155 +2742,44 @@ function CheckOfRequest({
           </ul>
         </details>
       ) : null}
-      {check.notAddressed.length > 0 ? (
-        <p className="de-unaddressed">
-          <span className="de-state tone-neutral">
-            <UiIcon name="minus" size={12} />
-            Not addressed by this evidence
-          </span>
-          {check.notAddressed.map((line) => (
-            <span
-              key={line.key}
-              className="dr-code"
-              title={[line.text, line.summary]
-                .filter((part) => part !== "")
-                .join(" ")}
-            >
-              {line.letter}
-            </span>
-          ))}
-        </p>
-      ) : null}
-    </div>
+      {fileLines(check.leftOut, false)}
+      {fileLines(check.confirm, false)}
+      <p className="de-check-line">
+        <UiIcon name="shield" size={13} />
+        <span>
+          {check.line}
+          {check.readInPart !== null ? (
+            <strong className="de-check-part"> {check.readInPart}</strong>
+          ) : null}
+        </span>
+      </p>
+      {more}
+    </>
   );
-}
-
-/** One attribute of a finished check: its letter, its state in words with a mark, and
- * one line on it; open, what the readings rest on. */
-function AttributeCheck({
-  ids,
-  line,
-  files,
-  finding,
-  findingsAction,
-  canAct,
-  picked,
-  onPick,
-}: {
-  ids: Ids;
-  line: AttributeLine;
-  /** The row's in-force files: a passage opens in its own. */
-  files: RowFile[];
-  /** The evidence finding an issue is; null when it has none, or it was not read. */
-  finding: EvidenceFinding | null;
-  findingsAction: ReturnType<typeof useFindingsAction>;
-  canAct: boolean;
-  picked: Set<string>;
-  onPick: (findingId: string, on: boolean) => void;
-}) {
   return (
-    <li className={`de-attr is-${line.state.toLowerCase()}`}>
-      <details open={line.open || undefined}>
-        <summary>
-          <span className="dr-code" aria-hidden="true">
-            {line.letter}
-          </span>
-          <span className="sr-only">{`Attribute ${line.letter}: `}</span>
-          <span className={`de-state tone-${line.tone}`}>
-            <UiIcon name={line.icon} size={12} />
-            {line.label}
-          </span>
-          <span className="de-attr-summary">
-            {line.summary !== "" ? line.summary : line.text}
-          </span>
-          <span className="de-attr-caret" aria-hidden="true">
-            <UiIcon name="chevron" size={12} />
-          </span>
-        </summary>
-        <div className="de-attr-body">
-          {line.text !== "" && line.summary !== "" ? (
-            <p className="de-attr-text">
-              <span>Attribute {line.letter}</span> {line.text}
-            </p>
-          ) : null}
-          {line.judgment !== null ? (
-            <p className="de-judgment">{line.judgment}</p>
-          ) : null}
-          {line.inPart !== null ? (
-            <div className="de-in-part">
-              {line.inPart.shows.length > 0 ? (
-                <p>
-                  <span>This request shows</span> {line.inPart.shows.join("; ")}
-                </p>
-              ) : null}
-              {line.inPart.leaves.length > 0 ? (
-                <p>
-                  <span>Left to other requests</span>{" "}
-                  {line.inPart.leaves.join("; ")}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-          {line.elements.length > 0 ? (
-            <ul
-              className="de-elements"
-              aria-label={`Attribute ${line.letter}: its elements`}
-            >
-              {line.elements.map((element) => (
-                <li key={element.key}>
-                  <span className={`de-element-result tone-${element.tone}`}>
-                    {element.result}
-                  </span>
-                  <span className="de-element-text">
-                    {element.text}
-                    {element.absent.length > 0 ? (
-                      <small>
-                        {" "}
-                        Not in the evidence: {element.absent.join("; ")}
-                      </small>
-                    ) : null}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {line.checks.length > 0 ? (
-            // Comparisons of the records' own values: each sentence states the values,
-            // with whether it passed in words and a mark.
-            <div className="de-code-checks">
-              <span>{CHECKED_IN_CODE}</span>
-              <ul
-                className="de-elements"
-                aria-label={`Attribute ${line.letter}: checked in code`}
-              >
-                {line.checks.map((item) => (
-                  <li key={item.key}>
-                    <span className={`de-state tone-${item.tone}`}>
-                      <UiIcon name={item.icon} size={12} />
-                      {item.result}
-                    </span>
-                    <span className="de-element-text">{item.sentence}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-          {line.readings.length > 0 ? (
-            <div className="de-views">
-              {line.readings.map((reading) => (
-                <div key={reading.who} className="de-view">
-                  <strong>{reading.who}</strong>
-                  <span className="de-view-result">{reading.result}</span>
-                  <p>
-                    {reading.reason !== ""
-                      ? reading.reason
-                      : "It gave no reason."}
-                  </p>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          {finding !== null ? (
+    <div className="de-check is-reviewed">
+      <CheckDigestView
+        digest={digest}
+        title={title}
+        files={files}
+        upgrade={upgrade}
+        passage={(passage, letter) => (
+          <PassageLine
+            key={`${passage.fileId ?? ""}-${passage.location}-${passage.quote}`}
+            ids={ids}
+            passage={passage}
+            files={files}
+            label={letter}
+          />
+        )}
+        onEvidence={onEvidence}
+        finding={(line) => {
+          if (line.findingId === null) {
+            return null;
+          }
+          const finding =
+            (findings ?? []).find((each) => each.id === line.findingId) ?? null;
+          return finding !== null ? (
             // The issue is this finding: shown once, with the finding's own actions.
             <FindingRecords
               findings={[finding]}
@@ -2497,44 +2789,93 @@ function AttributeCheck({
               onPick={onPick}
               onShow={() => {}}
               focused={null}
+              compact
             />
           ) : (
-            <>
-              {line.passages.length > 0 ? (
-                <ul className="de-passages">
-                  {line.passages.map((passage) => (
-                    <PassageLine
-                      key={`${passage.fileId ?? ""}-${passage.location}-${passage.quote}`}
-                      ids={ids}
-                      passage={passage}
-                      files={files}
-                      label={line.letter}
-                    />
-                  ))}
-                </ul>
-              ) : null}
-              {line.absent.length > 0 ? (
-                <div className="de-absent">
-                  <span>Not in the evidence</span>
-                  <ul>
-                    {line.absent.map((point) => (
-                      <li key={point}>{point}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-              {line.findingId !== null ? (
-                <p className="de-absent">
-                  The finding that records this issue could not be shown here.
-                  Open its file to act on it.
-                </p>
-              ) : null}
-            </>
-          )}
-        </div>
-      </details>
-    </li>
+            <p className="de-absent">
+              The finding that records this issue could not be shown here. Open
+              its file to act on it.
+            </p>
+          );
+        }}
+        // An item's own action is the check's (a file's type, a file left out), offered
+        // as every other: only to a person who may act, and only where it can be done.
+        act={(own) => {
+          const act = offer(own);
+          return act === null
+            ? null
+            : actButton(
+                act,
+                files.find((file) => file.id === act.fileId)?.name ??
+                  "the file",
+              );
+        }}
+        onView={onView}
+        under={under}
+        ask={ask}
+        accept={accept}
+        acceptNote={acceptNote}
+        details={details}
+      />
+    </div>
   );
+}
+
+/** Over the passages the preview marks in a file. */
+const PASSAGE_SOURCES = "What the readings rest on";
+
+/** A passage as the preview marks it in its file. */
+function passageCitation(
+  passage: ShownPassage,
+  files: RowFile[],
+  /** What the passage is cited for in the viewer: an attribute's letter, or "". */
+  cited: string,
+) {
+  return {
+    fileId: passage.fileId ?? "",
+    fileName: files.find((file) => file.id === passage.fileId)?.name ?? "",
+    quote: passage.quote,
+    found: true,
+    location: passage.location,
+    page: passage.page,
+    box: null,
+    label: cited,
+  };
+}
+
+/** The link that opens a passage in its file, with the passage marked; null where the
+ * viewer cannot open it there. */
+function PassageOpen({
+  ids,
+  passage,
+  files,
+  cited,
+  label,
+}: {
+  ids: Ids;
+  passage: ShownPassage;
+  /** The row's in-force files: a passage opens in its own. */
+  files: RowFile[];
+  /** What the passage is cited for in the viewer: an attribute's letter, or "". */
+  cited: string;
+  /** The link's words. */
+  label: ReactNode;
+}) {
+  return passage.opens && passage.fileId !== null ? (
+    <PreviewButton
+      organizationId={ids.organizationId}
+      projectId={ids.projectId}
+      files={files.map((file) => ({
+        id: file.id,
+        fileName: file.name,
+      }))}
+      startFileId={passage.fileId}
+      citations={[passageCitation(passage, files, cited)]}
+      sourcesTitle={PASSAGE_SOURCES}
+      label={label}
+      className="de-link"
+    />
+  ) : null;
 }
 
 /** A file's own words with where they sit, opening in the file where the viewer can:
@@ -2562,45 +2903,27 @@ function PassageLine({
         <span>
           {passage.location !== "" ? passage.location : "In the file"}
         </span>
-        {passage.opens && passage.fileId !== null ? (
-          <PreviewButton
-            organizationId={ids.organizationId}
-            projectId={ids.projectId}
-            files={files.map((file) => ({
-              id: file.id,
-              fileName: file.name,
-            }))}
-            startFileId={passage.fileId}
-            citations={[
-              {
-                fileId: passage.fileId,
-                fileName:
-                  files.find((file) => file.id === passage.fileId)?.name ?? "",
-                quote: passage.quote,
-                found: true,
-                location: passage.location,
-                page: passage.page,
-                box: null,
-                label,
-              },
-            ]}
-            sourcesTitle="What the readings rest on"
-            label="Open in the file"
-            className="de-link"
-          />
-        ) : null}
+        <PassageOpen
+          ids={ids}
+          passage={passage}
+          files={files}
+          cited={label}
+          label="Open in the file"
+        />
       </span>
     </li>
   );
 }
 
 /**
- * The review of a request's evidence (docs/evidence-assurance.md, section 10), read
- * before the attributes: the proposed outcome in words with its mark and why, the
- * attributes the request asks for in three groups, what to ask for next, and, folded,
- * what else a careful reader would raise and what there is to say of the files. It is
- * the check's proposal: it approves and decides nothing, and holds no action but Copy
- * and opening a passage in its file. Accept and the findings' decisions stay on the row.
+ * The review of a request's evidence (docs/evidence-assurance.md, section 10) as
+ * "Details of the check" holds it (section 10.11): why the evidence is or is not
+ * sufficient, the completeness reasons, the attributes the request asks for in three
+ * groups, and, folded, what else a careful reader would raise, what there is to say of
+ * the files, and the follow-ups the new evidence resolved. The outcome and the caveat
+ * are said on the answer line, and what to ask for under "Ask the owner". It is the
+ * check's proposal: it approves and decides nothing, and holds no action but opening a
+ * passage in its file. Accept and the findings' decisions stay on the row.
  */
 function CheckReview({
   ids,
@@ -2622,20 +2945,11 @@ function CheckReview({
             {REVIEW_TITLE}
           </span>
           <span className="de-review-for">{REVIEW_FOR}</span>
-          <span className={`de-state tone-${review.tone}`}>
-            <UiIcon name={review.icon} size={12} />
-            {review.label}
-          </span>
-          {review.completeness !== null ? (
-            <span className="de-state tone-warning">
-              <UiIcon name="info" size={12} />
-              {review.completeness.label}
-            </span>
-          ) : null}
         </p>
         <p className="de-review-why">{review.explanation}</p>
         {review.completeness !== null ? (
           <p className="de-review-quiet">
+            <strong>{review.completeness.label}:</strong>{" "}
             {review.completeness.reasons.join(" ")}
           </p>
         ) : null}
@@ -2662,46 +2976,6 @@ function CheckReview({
           </>
         ) : null}
       </div>
-      {review.followUps.length > 0 || review.more !== "" ? (
-        <div className="de-review-part">
-          <p className="de-review-label" id={`${id}-asks`}>
-            {FOLLOW_UP_TITLE}
-          </p>
-          {review.followUps.length > 0 ? (
-            <ol className="de-follow" aria-labelledby={`${id}-asks`}>
-              {review.followUps.map((item, at) => (
-                <FollowUpItem key={item.key} item={item} place={at + 1} />
-              ))}
-            </ol>
-          ) : null}
-          {review.more !== "" ? (
-            <p className="de-review-quiet">{review.more}</p>
-          ) : null}
-        </div>
-      ) : null}
-      {review.resolved.length > 0 ? (
-        <details className="de-fold">
-          <summary>
-            <span className="de-attr-caret" aria-hidden="true">
-              <UiIcon name="chevron" size={12} />
-            </span>
-            {RESOLVED_TITLE}
-            <span className="de-fold-count">{review.resolved.length}</span>
-          </summary>
-          <ul className="de-fold-body de-fold-list">
-            {review.resolved.map((item) => (
-              <li key={item.key}>
-                {item.letters.map((letter) => (
-                  <span key={letter} className="dr-code">
-                    {letter}
-                  </span>
-                ))}
-                <span>{item.request}</span>
-              </li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
       {review.considerations.length > 0 ? (
         <details className="de-fold">
           <summary>
@@ -2775,99 +3049,30 @@ function CheckReview({
           </div>
         </details>
       ) : null}
-    </section>
-  );
-}
-
-/** One thing to ask for: the request as the main line with Copy, what kind of ask it
- * is and for which attributes, and what is missing, why and what else would do on
- * request. Copy puts the request's text on the clipboard and says so; it sends
- * nothing (a follow-up is sent from the row's own follow-up step). */
-function FollowUpItem({ item, place }: { item: FollowUpLine; place: number }) {
-  const [copied, setCopied] = useState<"" | "done" | "failed">("");
-  useEffect(() => {
-    if (copied === "") {
-      return;
-    }
-    const timer = window.setTimeout(
-      () => setCopied(""),
-      copied === "done" ? 2000 : 6000,
-    );
-    return () => window.clearTimeout(timer);
-  }, [copied]);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(item.request);
-      setCopied("done");
-    } catch {
-      setCopied("failed");
-    }
-  };
-  const details =
-    item.missing !== "" || item.why !== "" || item.alternatives !== "";
-  return (
-    <li className="de-follow-item">
-      <p className="de-follow-ask">{item.request}</p>
-      <div className="de-follow-meta">
-        <span className="de-follow-facts">
-          {[item.kind, item.priority, item.serves]
-            .filter((part) => part !== "")
-            .join(" · ")}
-        </span>
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm de-copy"
-          onClick={() => void copy()}
-        >
-          <UiIcon name={copied === "done" ? "check" : "copy"} size={13} />
-          {copied === "done" ? "Copied" : "Copy"}
-          {copied === "done" ? null : (
-            <span className="sr-only"> request {place}</span>
-          )}
-        </button>
-        {/* Said politely to a screen reader; seen only where copying did not work. */}
-        <span
-          className={copied === "failed" ? "de-copy-note" : "sr-only"}
-          role="status"
-        >
-          {copied === "done"
-            ? "Copied"
-            : copied === "failed"
-              ? "Could not copy. Select the request's text and copy it."
-              : ""}
-        </span>
-      </div>
-      {details ? (
-        <details className="de-fold de-follow-more">
+      {review.resolved.length > 0 ? (
+        <details className="de-fold">
           <summary>
             <span className="de-attr-caret" aria-hidden="true">
               <UiIcon name="chevron" size={12} />
             </span>
-            Details<span className="sr-only"> of request {place}</span>
+            {RESOLVED_TITLE}
+            <span className="de-fold-count">{review.resolved.length}</span>
           </summary>
-          <dl className="de-fold-body de-follow-why">
-            {item.missing !== "" ? (
-              <div>
-                <dt>What is missing</dt>
-                <dd>{item.missing}</dd>
-              </div>
-            ) : null}
-            {item.why !== "" ? (
-              <div>
-                <dt>Why it matters</dt>
-                <dd>{item.why}</dd>
-              </div>
-            ) : null}
-            {item.alternatives !== "" ? (
-              <div>
-                <dt>An alternative</dt>
-                <dd>{item.alternatives}</dd>
-              </div>
-            ) : null}
-          </dl>
+          <ul className="de-fold-body de-fold-list">
+            {review.resolved.map((item) => (
+              <li key={item.key}>
+                {item.letters.map((letter) => (
+                  <span key={letter} className="dr-code">
+                    {letter}
+                  </span>
+                ))}
+                <span>{item.request}</span>
+              </li>
+            ))}
+          </ul>
         </details>
       ) : null}
-    </li>
+    </section>
   );
 }
 

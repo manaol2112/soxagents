@@ -12,6 +12,7 @@ import {
 import {
   type AssuredRequest,
   acceptNote,
+  acceptNoteParts,
   assuranceCounts,
   assurancePill,
   assuranceProblem,
@@ -1636,6 +1637,82 @@ describe("beside Accept", () => {
       );
     }
   });
+
+  it("tells the one sentence in favour of accepting from everything that cautions", () => {
+    // The first screen of a finished check shows less than the whole note only by
+    // holding back the sentence in favour (docs/evidence-assurance.md, section 10.12,
+    // item 4): never the cautions.
+    const parts = (over: Partial<typeof facts>) =>
+      acceptNoteParts(acceptNote({ ...facts, ...over }));
+    assert.deepEqual(parts({ implemented: ["A"], issues: ["B", "D"] }), {
+      favour: "Accepting marks attribute A as evidenced.",
+      caution:
+        "Both readings found an issue on B and D. You can still accept; accepting does not settle these.",
+    });
+    assert.deepEqual(
+      parts({
+        implemented: ["A", "B", "C"],
+        design: ["D"],
+        judged: ["E"],
+        leftOut: 1,
+      }),
+      {
+        favour: "Accepting marks attributes A to C as evidenced.",
+        caution: `D: ${DESIGN_ONLY}. Your judgment is needed on E. You can still accept; accepting does not settle these. 1 file was not part of the check.`,
+      },
+    );
+    // Every caution of the note is in the caution, in the note's order: nothing of it
+    // is lost between the two.
+    for (const over of [
+      { implemented: ["A"], unstated: ["B"] },
+      { implemented: ["A"], partly: ["B"] },
+      { implemented: ["A"], waiting: ["B"] },
+      { implemented: ["A"], decided: ["B"] },
+      { implemented: ["A"], leftOut: 2 },
+    ] as const) {
+      const note = acceptNote({ ...facts, ...over });
+      const { favour, caution } = acceptNoteParts(note);
+      assert.equal(favour, "Accepting marks attribute A as evidenced.");
+      assert.ok(caution.length > 20, note);
+      assert.equal(`${favour} ${caution}`, note);
+    }
+  });
+
+  it("holds nothing back where the note does not open in favour, or says nothing else", () => {
+    // "No attribute" is a caution, not a favour.
+    const none = acceptNote({ ...facts, judged: ["C"] });
+    assert.deepEqual(acceptNoteParts(none), { favour: "", caution: none });
+    const design = acceptNote({ ...facts, design: ["A", "B"] });
+    assert.deepEqual(acceptNoteParts(design), { favour: "", caution: design });
+    // The favourable sentence alone is the whole note: there is nothing to hold back.
+    assert.deepEqual(
+      acceptNoteParts("Accepting marks attribute A as evidenced."),
+      {
+        favour: "",
+        caution: "Accepting marks attribute A as evidenced.",
+      },
+    );
+    // Any other standing's sentence is shown whole.
+    for (const standing of ["CHECKING", "HELD", "NOT_CHECKED"] as const) {
+      const note = acceptNote({ ...facts, standing, implemented: ["A"] });
+      assert.deepEqual(acceptNoteParts(note), { favour: "", caution: note });
+    }
+    // A sentence it does not know is never split; spacing is tidied, nothing else.
+    assert.deepEqual(
+      acceptNoteParts(
+        "Accepting marks attributes A: and B as evidenced. More.",
+      ),
+      {
+        favour: "",
+        caution: "Accepting marks attributes A: and B as evidenced. More.",
+      },
+    );
+    assert.deepEqual(acceptNoteParts("  Something\n else.  "), {
+      favour: "",
+      caution: "Something else.",
+    });
+    assert.deepEqual(acceptNoteParts(""), { favour: "", caution: "" });
+  });
 });
 
 describe("the step's counts, pill and line", () => {
@@ -1953,6 +2030,73 @@ describe("an attribute's elements", () => {
     ] as const) {
       assert.equal(verdict(over), "UNSETTLED", name);
     }
+  });
+
+  it("support in part also stands where the elements are half shown, as the server decides it", () => {
+    // Found on the product owner's own check, 14 November 2026: the server sends support
+    // in part where each element is half shown and the rest may be another request's
+    // evidence (evidence_assurance.py, _defers). The page counted only whole elements
+    // (shown beside not borne on), so such a result read "This result could not be read
+    // as it was sent" and waited on a judgment nobody owed.
+    const made = (elements: unknown[]) =>
+      only(parsed([entry({ attributes: [{ ...IN_PART, elements }] })]))
+        .attributes[0];
+    const halves = made([
+      element("condition", "Approved", "PARTLY_MET"),
+      element("pass", "Before the grant", "PARTLY_MET"),
+    ]);
+    assert.equal(halves?.verdict, "PARTLY_SUPPORTED");
+    assert.equal(halves?.understood, true);
+    assert.equal(
+      made([
+        element("condition", "Approved", "PARTLY_MET"),
+        element("pass", "Before the grant", "NOT_ADDRESSED"),
+      ])?.verdict,
+      "PARTLY_SUPPORTED",
+    );
+    assert.equal(
+      made([
+        element("condition", "Approved", "MET"),
+        element("pass", "Before the grant", "PARTLY_MET"),
+      ])?.verdict,
+      "PARTLY_SUPPORTED",
+    );
+    // Still never beside an element the files bear on and do not show, or contradict.
+    for (const bad of ["NOT_MET", "CONTRADICTED", "CANNOT_TELL"] as const) {
+      assert.equal(
+        made([
+          element("condition", "Approved", "PARTLY_MET"),
+          element("pass", "Before the grant", bad),
+        ])?.verdict,
+        "UNSETTLED",
+        bad,
+      );
+    }
+    // A half-shown element never evidences its attribute: only a whole one does.
+    const row = assuranceRow({
+      requirementId: POLICY,
+      files: [POLICY_FILE],
+      assurance: parsed([
+        entry({
+          attributes: [
+            {
+              ...IN_PART,
+              elements: [
+                element("condition", "Approved", "PARTLY_MET"),
+                element("pass", "Before the grant", "PARTLY_MET"),
+              ],
+            },
+          ],
+        }),
+      ]),
+      attributes: lettered,
+      span,
+    });
+    assert.ok(row !== null);
+    assert.deepEqual(
+      row.elementFacts.map((fact) => [fact.implementation, fact.design]),
+      [[[], []]],
+    );
   });
 
   it("combines elements across the control's requests: evidenced only when every one is shown from an instance by an accepted request", () => {
@@ -2854,9 +2998,22 @@ describe("the screen's own files", () => {
     "apps/web/app/workspace/evidence-assurance/route.ts",
     "utf8",
   );
+  // A finished check as "Needs attention" (docs/evidence-assurance.md, section 10.12,
+  // the mockup the product owner chose on 14 November 2026) draws an attribute in these
+  // files. Where a test below pinned the layout it replaces, the old expectation, the
+  // new one and the contract's part are recorded with it.
+  const digest = readFileSync("apps/web/src/check-digest.tsx", "utf8");
+  const digestCss = readFileSync("apps/web/app/check-digest.css", "utf8");
 
   it("opens an attribute and the not-asked fold within the motion budget, and not at all under reduced motion", () => {
-    assert.match(css, /\.de-attr-body \{[^}]*animation: tar-open 200ms ease;/);
+    // Superseded by section 10.12 ("One attribute at a time"). Old: an opened attribute
+    // was `.de-attr-body` in design-evidence.css, opening in 200 ms and not at all under
+    // reduced motion. New: it is `.cdg-focus` in check-digest.css. Kept: the same 200 ms,
+    // and none under reduced motion; the not-asked fold is as it was.
+    assert.match(
+      digestCss,
+      /\.cdg-focus \{[^}]*animation: tar-open 200ms ease;/,
+    );
     assert.match(
       css,
       /\.de-unasked-list \{[^}]*animation: tar-open 200ms ease;/,
@@ -2864,11 +3021,13 @@ describe("the screen's own files", () => {
     const reduced = css.slice(
       css.lastIndexOf("@media (prefers-reduced-motion"),
     );
+    assert.match(reduced, /\.de-unasked-list \{\s*animation: none;/);
     assert.match(
-      reduced,
-      /\.de-attr-body,\s*\.de-unasked-list \{\s*animation: none;/,
+      digestCss.slice(digestCss.lastIndexOf("@media (prefers-reduced-motion")),
+      /\.cdg-focus,[^{]*\{\s*animation: none;/,
     );
     assert.equal(/#[0-9a-fA-F]{3,8}\b/.test(css), false);
+    assert.equal(/#[0-9a-fA-F]{3,8}\b/.test(digestCss), false);
   });
 
   it("runs a check and reads a file again through the list's action pattern, with no page reload", () => {
@@ -2903,9 +3062,31 @@ describe("the screen's own files", () => {
   });
 
   it("lists an opened attribute's elements, what a request shows in part, and the elements still not shown under the coverage", () => {
-    assert.match(view, /className="de-elements"/);
-    assert.match(view, /line\.inPart !== null/);
-    assert.match(view, /Left to other requests/);
+    // Superseded by section 10.12 ("One attribute at a time") and item 13 of the fixes
+    // of 14 November 2026. Old: the opened attribute listed its elements
+    // (`className="de-elements"`) and, apart from them, what the request shows in part
+    // and leaves to other requests, in the list's own file. New: check-digest.tsx draws
+    // an element shown, shown in part or found against as a row of the attribute's
+    // table in its own result's words; says what is left to other requests under the
+    // table; and lists the elements in full (`className="cdg-elements"`) behind "More
+    // about this attribute". Kept: every element is listed with its result in words,
+    // and what is left to other requests is said.
+    assert.match(digest, /className="cdg-elements"/);
+    assert.match(digest, /<strong>\{item\.result\}\.<\/strong> \{item\.text\}/);
+    assert.match(digest, /label: element\.result,/);
+    assert.match(
+      digest,
+      /line\.inPart !== null \? "This request shows" : "Its elements"/,
+    );
+    assert.match(
+      digest,
+      /export const DIGEST_LEFT = "Left to other requests";/,
+    );
+    assert.match(
+      digest,
+      /const left = \(line\.inPart\?\.leaves \?\? \[\]\)\.filter\(/,
+    );
+    assert.match(digest, /\{left\.map\(\(each\) => \(/);
     assert.match(view, /className="dq-cov-missing"/);
     assert.match(view, /Still not shown:/);
   });

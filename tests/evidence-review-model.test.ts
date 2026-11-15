@@ -1705,11 +1705,28 @@ describe("the screen's own files, for the review", () => {
     "apps/web/src/evidence-assurance-model.ts",
     "utf8",
   );
+  // A finished check as "Needs attention" (docs/evidence-assurance.md, section 10.12,
+  // the mockup the product owner chose on 14 November 2026; it replaces the layout of
+  // 10.11, whose first build was never committed): the row's screen for a finished
+  // check is in these files. Where a test below pinned the committed layout it replaces,
+  // the old expectation, the new one and the contract's item are recorded with it; what
+  // each one protects is kept.
+  const digest = readFileSync("apps/web/src/check-digest.tsx", "utf8");
+  const digestModel = readFileSync(
+    "apps/web/src/check-digest-model.ts",
+    "utf8",
+  );
+  const digestCss = readFileSync("apps/web/app/check-digest.css", "utf8");
   /** A component's source: from its declaration to the next top-level one. */
   const component = (source: string, name: string) => {
-    const from = source.indexOf(`\nfunction ${name}(`);
+    const at = [`\nfunction ${name}(`, `\nexport function ${name}(`].map(
+      (head) => source.indexOf(head),
+    );
+    const from = Math.max(...at);
     assert.ok(from >= 0, name);
-    const next = source.slice(from + 1).search(/\n(?:function |const [A-Z_]+)/);
+    const next = source
+      .slice(from + 1)
+      .search(/\n(?:export )?(?:function |const [A-Z_]+)/);
     return source.slice(from, next < 0 ? undefined : from + 1 + next);
   };
 
@@ -1719,14 +1736,32 @@ describe("the screen's own files, for the review", () => {
       /\{check\.review !== null \? \(\s*<CheckReview ids=\{ids\} review=\{check\.review\} files=\{files\} \/>\s*\) : null\}/,
     );
     assert.equal(list.match(/<CheckReview\b/g)?.length, 1);
-    // Above the attribute list, inside the finished check's block.
-    const reviewed = list.slice(
+    // Superseded by section 10.12, items 1, 3 and 6. Old: the review was read first,
+    // above the attribute list (`<CheckReview` before `<ul className="de-attrs">` inside
+    // the finished check's block). New: its outcome is the verdict, its caveat is on the
+    // quiet line, and the rest of it is what "All details" opens to, after what needs
+    // attention. Kept: it is rendered once, and only where the check has a review.
+    const details = list.slice(
+      list.indexOf("  const details = ("),
       list.indexOf('<div className="de-check is-reviewed">'),
     );
-    assert.ok(
-      reviewed.indexOf("<CheckReview") <
-        reviewed.indexOf('<ul className="de-attrs">'),
+    assert.match(details, /<CheckReview\b/);
+    assert.match(
+      list.slice(list.indexOf('<div className="de-check is-reviewed">')),
+      /<CheckDigestView\s+digest=\{digest\}[\s\S]*?details=\{details\}/,
     );
+    const drawn = component(digest, "CheckDigestView");
+    assert.ok(
+      drawn.indexOf("{DIGEST_ATTENTION}") > 0 &&
+        drawn.indexOf("{DIGEST_ATTENTION}") < drawn.indexOf("{details}"),
+    );
+    // The verdict's outcome is the review's own words, and only where the check has a
+    // review.
+    assert.match(
+      digestModel,
+      /outcome:\s*review === null\s*\? null\s*: \{ label: review\.label, icon: review\.icon, tone: review\.tone \},/,
+    );
+    assert.match(drawn, /\{digest\.outcome\.label\}/);
     // The model gives a review to engine 2 alone.
     assert.match(
       model,
@@ -1739,8 +1774,17 @@ describe("the screen's own files, for the review", () => {
   });
 
   it("the review approves and decides nothing: no action but Copy and opening a passage", () => {
-    const review =
-      component(list, "CheckReview") + component(list, "FollowUpItem");
+    // Superseded in part by section 10.12 ("One attribute at a time"). Old: the review
+    // and its follow-up items (CheckReview, FollowUpItem) held exactly one button, a
+    // follow-up's Copy. New: the review under "All details" holds no button at all, and
+    // the follow-ups are "Ask the owner" on their attribute (check-digest.tsx), whose
+    // two buttons copy the ticked requests and list those folded under one. Kept, over
+    // all of it: nothing here accepts, decides, sends or writes.
+    const asks =
+      component(digest, "AskBox") +
+      component(digest, "AskGroup") +
+      component(digest, "AskRow");
+    const review = component(list, "CheckReview") + asks;
     for (const forbidden of [
       /accept\(/,
       /sufficiency/,
@@ -1756,11 +1800,27 @@ describe("the screen's own files, for the review", () => {
     ]) {
       assert.equal(forbidden.test(review), false, String(forbidden));
     }
-    assert.equal(review.match(/<button\b/g)?.length, 1);
-    assert.match(review, /className="btn btn-ghost btn-sm de-copy"/);
-    // It is headed as a proposal, in the model's words.
+    assert.equal(/<button\b/.test(component(list, "CheckReview")), false);
+    assert.equal(asks.match(/<button\b/g)?.length, 2);
+    assert.match(asks, /className="cdg-link cdg-copy"/);
+    assert.match(asks, /className="cdg-link cdg-similar"/);
+    // Handing the ticked requests to the row's follow-up form is the footer's one
+    // button, and no part of "Ask the owner".
+    assert.equal(/onAsk\b/.test(asks), false);
+    assert.equal(digest.match(/\.onAsk\(/g)?.length, 1);
+    assert.match(digest, /onClick=\{\(\) => asking\.onAsk\(text\)\}/);
+    // It is headed as a proposal, in the model's words, and the verdict says so of every
+    // finished check.
     assert.match(review, /\{REVIEW_TITLE\}/);
     assert.match(review, /\{REVIEW_FOR\}/);
+    assert.match(
+      digest,
+      /export const DIGEST_PROPOSED = "Proposed for your review";/,
+    );
+    assert.match(
+      component(digest, "CheckDigestView"),
+      /className="cdg-proposed">[\s\S]{0,80}\{DIGEST_PROPOSED\}/,
+    );
   });
 
   it("keeps Accept and the findings' decisions where they are", () => {
@@ -1773,7 +1833,46 @@ describe("the screen's own files, for the review", () => {
       /\{assured !== null && assured\.acceptNote !== "" \? \(\s*<p className="de-accept-note">\{assured\.acceptNote\}<\/p>\s*\) : null\}/,
     );
     assert.match(list, /onClick=\{\(\) => void accept\(\)\}/);
-    assert.equal(list.match(/void accept\(\)/g)?.length, 1);
+    // Superseded by section 10.12, item 4. Old: `void accept()` was written once, on the
+    // row's one Accept button. New: twice, and no more: that button, which every row
+    // without a finished check keeps, and "Accept evidence" in the footer of a finished
+    // check, which is handed the same function. Kept: one handler, one write, and Accept
+    // offered under the same conditions (a person who may act, on a row that can be
+    // accepted).
+    assert.equal(list.match(/void accept\(\)/g)?.length, 2);
+    assert.match(
+      list,
+      /accept=\{\s*canAct && row\.canAccept\s*\? \{\s*onAccept: \(\) => void accept\(\),/,
+    );
+    assert.equal(list.match(/async function accept\(\)/g)?.length, 1);
+    assert.equal(list.match(/sufficiency: "ACCEPTED"/g)?.length, 1);
+    assert.match(digest, /onClick=\{accept\.onAccept\}/);
+    assert.equal(digest.match(/onAccept\b/g)?.length, 2);
+    // The warning about accepting is the row's own, handed to the footer whole and
+    // shown there. Restored after the independent review of 14 November 2026. Old
+    // (committed): `<p className="de-accept-note">{assured.acceptNote}</p>`, the whole
+    // note beside Accept; that assertion above still holds for every other row. New
+    // (section 10.12, item 4): on a finished check the footer renders everything in the
+    // note that cautions under no condition, and only the one sentence in its favour
+    // behind "more"; Accept is described by the whole note.
+    assert.match(list, /acceptNote=\{assured\.acceptNote\}/);
+    assert.match(
+      digest,
+      /const \{ favour, caution \} = acceptNoteParts\(warning\);/,
+    );
+    assert.match(
+      digest,
+      /<span id=\{`\$\{id\}-note`\}>\s*\{noteOpen && favour !== "" \? `\$\{favour\} ` : ""\}\s*\{caution\}\s*<\/span>/,
+    );
+    assert.match(
+      digest,
+      /<span id=\{`\$\{id\}-accepting`\} hidden>\s*\{warning === "" \? DIGEST_NOTHING_SENT : warning\}\s*<\/span>/,
+    );
+    // Accept never reads as accepting while something else is being recorded.
+    assert.match(
+      list,
+      /busy: asking === null && action\.busy === `judge-\$\{item\.id\}`,/,
+    );
     assert.match(list, /sufficiency: "ACCEPTED"/);
     assert.match(list, /<FindingRecords\s+findings=\{\[finding\]\}/);
     // The note beside Accept is built from the attributes alone.
@@ -1788,36 +1887,104 @@ describe("the screen's own files, for the review", () => {
   });
 
   it("copies a follow-up's request and says so politely, with no new dependency", () => {
-    const item = component(list, "FollowUpItem");
-    assert.match(item, /navigator\.clipboard\.writeText\(item\.request\)/);
+    // Superseded by section 10.12 ("One attribute at a time"). Old: each follow-up had
+    // its own Copy, which copied that request
+    // (`navigator.clipboard.writeText(item.request)`). New: "Copy" on an attribute's "Ask
+    // the owner" copies every request ticked there, each in full: the model's lines
+    // joined, never the text bounded to the follow-up form (askText), so copying never
+    // copies less than was ticked. Kept: the same clipboard call, the polite status, the
+    // same recovery sentence, and no new dependency.
+    const item = component(digest, "AskBox");
+    assert.match(
+      item,
+      /const text = askLines\(digest, chosen\)\.join\("\\n"\);/,
+    );
+    assert.equal(/askText\(|ASK_LIMIT|\.slice\(/.test(item), false);
+    assert.match(item, /navigator\.clipboard\.writeText\(text\)/);
     assert.match(item, /role="status"/);
     assert.match(item, /\? "Copied"/);
     // Where copying does not work, it says how to recover.
+    assert.match(item, /\? DIGEST_COPY_FAILED/);
     assert.match(
-      item,
-      /Could not copy\. Select the request's text and copy it\./,
+      digest,
+      /DIGEST_COPY_FAILED =\s*"Could not copy\. Select the request's text and copy it\.";/,
     );
     assert.match(item, /catch \{\s*setCopied\("failed"\);/);
-    assert.equal(
-      /from "(?!\.|react|next)/.test(list.replace(/from "react"/g, "")),
-      false,
-    );
+    for (const source of [list, digest]) {
+      assert.equal(
+        /from "(?!\.|react|next)/.test(source.replace(/from "react"/g, "")),
+        false,
+      );
+    }
   });
 
   it("uses the row's one Confirm the file's type for a file read with its type not confirmed", () => {
-    assert.match(list, /\{fileLines\(check\.confirm\)\}/);
+    // Superseded by section 10.12, items 2 and 6. Old: every such file was a line under
+    // the result (`{fileLines(check.confirm)}`), with the row's action on it. New: one
+    // with an action is an item under "Needs attention", drawn with the same action
+    // through the same offer; and every such line is said in full under "All details",
+    // without a second button. Kept: it is the row's one action and one label, never a
+    // second.
+    assert.match(
+      digestModel,
+      /\.\.\.files\("CONFIRM_TYPE", NEED_CONFIRM_TITLE, check\.confirm\),/,
+    );
+    assert.match(
+      list,
+      /act=\{\(own\) => \{\s*const act = offer\(own\);\s*return act === null\s*\? null\s*: actButton\(/,
+    );
+    assert.match(list, /\{fileLines\(check\.confirm, false\)\}/);
+    assert.match(list, /\{fileLines\(check\.leftOut, false\)\}/);
+    assert.match(list, /const act = acts \? offer\(item\.action\) : null;/);
+    assert.equal(digest.includes("Confirm the file's type"), false);
     assert.match(list, /const leftOut = fileLines\(check\.leftOut\);/);
     assert.equal(list.includes("Confirm the file's type"), false);
     assert.equal(model.match(/label: "Confirm the file's type"/g)?.length, 1);
   });
 
   it("shows an attribute's checks under Checked in code, and a consideration's passage as an attribute's", () => {
-    const attribute = component(list, "AttributeCheck");
+    // Superseded by section 10.12 ("One attribute at a time"). Old: the opened attribute
+    // was AttributeCheck in the list's file, which drew its passages itself, and a
+    // comparison's status was a filled pill (`de-state tone-...`). New: it is Attribute
+    // in check-digest.tsx; the first verified passage is quoted in its table and opens
+    // through the row's own link (PassageOpen), the rest are the row's own PassageLine,
+    // handed in; and a status is its words with a mark, coloured and never filled. Kept:
+    // the comparisons under their heading with their status in words, and one
+    // PassageLine for an attribute's passage and a consideration's.
+    const attribute = component(digest, "Attribute");
     assert.match(attribute, /line\.checks\.length > 0/);
     assert.match(attribute, /\{CHECKED_IN_CODE\}/);
-    assert.match(attribute, /className=\{`de-state tone-\$\{item\.tone\}`\}/);
+    assert.match(
+      attribute,
+      /className=\{`cdg-state is-\$\{item\.tone\}`\}>\s*<UiIcon name=\{item\.icon\} size=\{12\} \/>\s*\{item\.result\}/,
+    );
     assert.equal(list.match(/<PassageLine\b/g)?.length, 2);
-    assert.match(attribute, /<PassageLine\b/);
+    assert.match(
+      attribute,
+      /\{further\.map\(\(each\) => passage\(each, row\.letter\)\)\}/,
+    );
+    assert.match(
+      list,
+      /passage=\{\(passage, letter\) => \(\s*<PassageLine\b[\s\S]{0,260}label=\{letter\}/,
+    );
+    // The quoted passage's row opens its file with its annotations through the row's
+    // own preview (product owner, 14 November 2026: one click from a Shown row to the
+    // annotated evidence); a file without annotations shows the same marked passage as
+    // "Open in the file".
+    assert.match(attribute, /onClick=\{\(\) => onEvidence\(evidence\)\}/);
+    assert.match(list, /onEvidence=\{onEvidence\}/);
+    assert.match(
+      list,
+      /citations=\{\[passageCitation\(passage, files, cited\)\]\}/,
+    );
+    assert.match(
+      list,
+      /citations: \[\s*passageCitation\(\s*annotating\.evidence\.passage,/,
+    );
+    // One viewer link, used by both: a passage opens the same way wherever it is.
+    assert.equal(list.match(/<PreviewButton\b/g)?.length, 1);
+    assert.match(component(list, "PassageLine"), /<PassageOpen\b/);
+    assert.equal(/PassageLine|PassageOpen|PreviewButton/.test(digest), false);
     assert.match(component(list, "CheckReview"), /<PassageLine\b/);
     assert.match(component(list, "PassageLine"), /label="Open in the file"/);
   });
@@ -1827,8 +1994,22 @@ describe("the screen's own files, for the review", () => {
     assert.equal(/<details[^>]*\bopen\b/.test(review), false);
     assert.match(review, /\{CONSIDERATIONS_TITLE\}/);
     assert.match(review, /\{FILES_TITLE\}/);
-    assert.match(review, /\{FOLLOW_UP_TITLE\}/);
+    // Superseded by section 10.12 ("One attribute at a time"). Old: the review listed
+    // the follow-ups under `{FOLLOW_UP_TITLE}`. New: they are "Ask the owner" on their
+    // attribute (the wizard's own summary keeps its heading, asserted below).
+    assert.equal(/FOLLOW_UP_TITLE/.test(list), false);
+    assert.match(digest, /export const DIGEST_ASKS = "Ask the owner";/);
+    assert.match(component(digest, "AskBox"), /\{DIGEST_ASKS\}/);
     assert.match(review, /\{RESOLVED_TITLE\}/);
+    // "All details" is closed until it is asked for, and no attribute is open.
+    assert.match(
+      component(digest, "CheckDigestView"),
+      /const \[detailsOpen, setDetailsOpen\] = useState\(false\);/,
+    );
+    assert.match(
+      component(digest, "CheckDigestView"),
+      /const \[openKey, setOpenKey\] = useState<string \| null>\(null\);/,
+    );
     assert.match(css, /\.de-fold-body \{[^}]*animation: tar-open 200ms ease;/);
     assert.match(
       css,
@@ -1845,8 +2026,10 @@ describe("the screen's own files, for the review", () => {
       /\.de-fold > summary:focus-visible \{[^}]*outline: 2px solid var\(--accent\);/,
     );
     assert.match(css, /\.de-fold > summary \{[^}]*min-height: 24px;/);
-    // "Copy" and "Copied" take the same room.
-    assert.match(css, /button\.de-copy \{[^}]*min-width: 5\.5rem;/);
+    // "Copy" and "Copied" take the same room. Superseded by section 10.12: the button
+    // was `button.de-copy` (5.5rem) in the list's sheet; it is `button.cdg-copy`, a
+    // quiet link, in check-digest.css.
+    assert.match(digestCss, /button\.cdg-copy \{[^}]*min-width: 3\.4rem;/);
   });
 
   it("uses the tokens only, and never the accent as text", () => {

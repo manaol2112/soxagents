@@ -33,6 +33,7 @@ import "./agent-avatar.css";
 import "./attribute-list.css";
 import "./design-requests.css";
 import "./design-evidence.css";
+import "./check-digest.css";
 import "./evidence-wizard.css";
 import "./design-workpaper.css";
 import "./evidence-annotations.css";

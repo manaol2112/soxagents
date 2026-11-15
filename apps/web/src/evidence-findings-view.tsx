@@ -123,6 +123,11 @@ function whereOf(citation: EvidenceCitation): string {
  * The findings on record for a file (increment 2): each with its status, what it rests
  * on, the question proposed, and the decisions its status allows. A person accepts,
  * edits, dismisses, resolves; the findings ticked go into the follow-up below.
+ *
+ * `compact` (an attribute of a finished check shown alone, docs/evidence-assurance.md,
+ * section 10.12): each finding is its title, its status in words and the same decisions,
+ * with what it says and rests on behind "Details". The decisions and what they send are
+ * the ones below, drawn once.
  */
 export function FindingRecords({
   findings,
@@ -132,6 +137,7 @@ export function FindingRecords({
   onPick,
   onShow,
   focused,
+  compact = false,
 }: {
   findings: EvidenceFinding[];
   canAct: boolean;
@@ -140,8 +146,74 @@ export function FindingRecords({
   onPick: (id: string, on: boolean) => void;
   onShow: (citation: EvidenceCitation | null) => void;
   focused: EvidenceCitation | null;
+  compact?: boolean;
 }) {
+  const id = useId();
   const [opened, setOpened] = useState<string | null>(null);
+  if (compact) {
+    return (
+      <ul className="ei-findings is-compact">
+        {findings.map((finding, at) => {
+          const isOpen = opened === finding.id;
+          const note = latestNote(finding);
+          const moreId = `${id}-more-${at}`;
+          return (
+            <li
+              key={finding.id}
+              className={`is-${toneOf(finding)}${finding.stale ? " is-stale" : ""}`}
+            >
+              <div className="ei-brief">
+                <span className="ei-brief-text">
+                  <span className="ei-brief-kind">Finding</span>
+                  <span
+                    className={`pill ${FINDING_STATUS_TONES[finding.status]}`}
+                  >
+                    {FINDING_STATUS_LABELS[finding.status]}
+                  </span>
+                  <strong>{finding.title}</strong>
+                  {note !== "" ? (
+                    <em className="ei-finding-note">{note}</em>
+                  ) : null}
+                </span>
+                {canAct && SENDABLE_STATUSES.includes(finding.status) ? (
+                  <label className="ei-brief-pick">
+                    <input
+                      type="checkbox"
+                      checked={picked.has(finding.id)}
+                      onChange={(event) =>
+                        onPick(finding.id, event.target.checked)
+                      }
+                    />
+                    <span>Include in the follow-up</span>
+                  </label>
+                ) : null}
+                <button
+                  type="button"
+                  className="ei-brief-more"
+                  aria-expanded={isOpen}
+                  aria-controls={moreId}
+                  onClick={() => {
+                    setOpened(isOpen ? null : finding.id);
+                    onShow(finding.citation);
+                  }}
+                >
+                  <UiIcon name="chevron" size={12} />
+                  Details
+                  <span className="sr-only"> of the finding</span>
+                </button>
+              </div>
+              <FindingDetail
+                finding={finding}
+                canAct={canAct}
+                action={action}
+                brief={{ id: moreId, open: isOpen }}
+              />
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
   const changes = changesOf(findings);
   const moved = [
     changes.answered > 0 ? `${changes.answered} answered` : "",
@@ -239,10 +311,14 @@ function FindingDetail({
   finding,
   canAct,
   action,
+  brief = null,
 }: {
   finding: EvidenceFinding;
   canAct: boolean;
   action: ReturnType<typeof useFindingsAction>;
+  /** The compact finding: its decisions are always shown, and what it says and rests on
+   * (with its history) only while its "Details" is open. Null: all of it, as before. */
+  brief?: { id: string; open: boolean } | null;
 }) {
   const id = useId();
   const [deciding, setDeciding] = useState<FindingDecision | null>(null);
@@ -250,6 +326,9 @@ function FindingDetail({
   const [question, setQuestion] = useState(finding.question);
   const [history, setHistory] = useState(false);
   const decisions = canAct ? decisionsFor(finding.status) : [];
+  // The decision that leads. In the compact finding it is outlined, not filled: the
+  // view it sits in has its own one primary action (section 10.12).
+  const lead = brief !== null ? "btn btn-secondary btn-sm" : "btn btn-sm";
   const decide = async (decision: FindingDecision) => {
     const ok = await action.run(`finding-${finding.id}`, {
       intent: "decide",
@@ -264,16 +343,25 @@ function FindingDetail({
       setNote("");
     }
   };
-  return (
-    <div className="ei-finding-more">
-      {finding.question !== "" && deciding !== "EDIT" ? (
-        <p className="ei-finding-question">
-          <strong>Proposed question:</strong> {finding.question}
-          {finding.expected !== "" ? (
-            <small>Would settle it: {finding.expected}</small>
-          ) : null}
-        </p>
-      ) : null}
+  // The question the finding proposes, and what would settle it: what accepting the
+  // finding approves.
+  const asked =
+    finding.question !== "" && deciding !== "EDIT" ? (
+      <p className="ei-finding-question">
+        <strong>Proposed question:</strong> {finding.question}
+        {finding.expected !== "" ? (
+          <small>Would settle it: {finding.expected}</small>
+        ) : null}
+      </p>
+    ) : null;
+  // What the finding says and rests on.
+  const said = (
+    <>
+      {brief !== null ? (
+        <p className="ei-brief-said">{finding.observation}</p>
+      ) : (
+        asked
+      )}
       <p className="ei-finding-source">
         {FINDING_SOURCE_LABELS[finding.source]} ·{" "}
         {FINDING_KIND_LABELS[finding.kind]}
@@ -283,6 +371,9 @@ function FindingDetail({
         {attributeLabel(finding) !== "" ? ` · ${attributeLabel(finding)}` : ""}
         {finding.planRevision !== null
           ? ` · plan revision ${finding.planRevision}`
+          : ""}
+        {brief !== null
+          ? ` · ${finding.citation !== null ? whereOf(finding.citation) : "Not located in the file"}`
           : ""}
       </p>
       {finding.citation !== null ? (
@@ -297,6 +388,11 @@ function FindingDetail({
           : {finding.decisionNote}
         </p>
       ) : null}
+    </>
+  );
+  // The decisions its status allows, and the few words one needs.
+  const acts = (
+    <>
       {deciding === null ? (
         decisions.length > 0 ? (
           <div className="ei-decide-buttons">
@@ -309,7 +405,7 @@ function FindingDetail({
                   decision === "ACCEPT" ||
                   decision === "RESOLVE" ||
                   decision === "REOPEN"
-                    ? "btn btn-sm"
+                    ? lead
                     : "btn-ghost btn-sm"
                 }
                 disabled={action.pending}
@@ -372,11 +468,7 @@ function FindingDetail({
             </label>
           )}
           <div className="ei-decide-buttons">
-            <button
-              type="submit"
-              className="btn btn-sm"
-              disabled={action.pending}
-            >
+            <button type="submit" className={lead} disabled={action.pending}>
               {deciding === "EDIT" ? "Save the question" : "Record"}
             </button>
             <button
@@ -394,6 +486,11 @@ function FindingDetail({
           {action.problem}
         </p>
       ) : null}
+    </>
+  );
+  // What happened to it, on request.
+  const past = (
+    <>
       {finding.events.length > 1 ? (
         <button
           type="button"
@@ -420,6 +517,34 @@ function FindingDetail({
           ))}
         </ol>
       ) : null}
+    </>
+  );
+  if (brief !== null) {
+    // The question and the decisions first: opening "Details" moves nothing a person is
+    // about to press. Behind it are the observation, the source, the quote and the
+    // history.
+    // The disclosure's region is there while closed too, so its button always names it.
+    return (
+      <div className="ei-finding-more is-brief">
+        {/* Always in view, over the decisions: Accept approves this question. */}
+        {asked}
+        {acts}
+        <div id={brief.id} className="ei-brief-body" hidden={!brief.open}>
+          {brief.open ? (
+            <>
+              {said}
+              {past}
+            </>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="ei-finding-more">
+      {said}
+      {acts}
+      {past}
     </div>
   );
 }

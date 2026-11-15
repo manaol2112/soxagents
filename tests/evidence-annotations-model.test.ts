@@ -10,6 +10,7 @@ import {
   annotatedCopyName,
   annotationCitations,
   annotationFields,
+  annotationFor,
   annotationName,
   annotationProblem,
   annotationReadPath,
@@ -45,6 +46,7 @@ import {
   pageMarks,
   parseAnnotations,
   positionWords,
+  quoteKey,
   REVIEW_WORDS,
   rectsOf,
   resizeBox,
@@ -823,6 +825,150 @@ describe("where the callout goes", () => {
         "sheet",
       );
     }
+  });
+});
+
+describe("the annotation a row's passage opens on", () => {
+  // "View" on a row of a finished check's attribute (docs/evidence-assurance.md, section
+  // 10.12) opens the file on the annotation that marks the row's passage. It only
+  // chooses what is put in view.
+  const numberFor = (
+    quote: string,
+    attributeId: string,
+    set = read(),
+  ): number | null =>
+    annotationFor(set, { attributeId, quote })?.number ?? null;
+
+  it("compares quotes with case, spacing and punctuation set aside", () => {
+    assert.equal(
+      quoteKey("  Account Disabled On 09/30/2026 11:59:00 PM PT. "),
+      "account disabled on 09 30 2026 11 59 00 pm pt",
+    );
+    assert.equal(
+      quoteKey("account   disabled\non: 09-30-2026, 11.59.00 pm (PT)"),
+      quoteKey("Account Disabled On 09/30/2026 11:59:00 PM PT"),
+    );
+    assert.equal(quoteKey(" · — … "), "");
+  });
+
+  it("opens on the annotation whose quote is the row's passage", () => {
+    assert.equal(
+      numberFor("Account Disabled On 09/30/2026 11:59:00 PM PT", A),
+      5,
+    );
+    // However the passage was typed.
+    assert.equal(
+      numberFor("account disabled on: 09/30/2026  11:59:00 pm pt.", A),
+      5,
+    );
+    // The quote decides, even for an annotation that names another attribute or none.
+    assert.equal(
+      numberFor("Last Successful Signon 09/30/2026 04:47:31 PM PT", A),
+      6,
+    );
+    assert.equal(numberFor("Workday · acme_prod (Production)", C), 1);
+  });
+
+  it("among annotations with the same words, takes one that names the attribute, else the first", () => {
+    const twice = read({
+      ...ANSWER,
+      annotations: [
+        sent(1, {
+          quote: "Status: Disabled",
+          attribute_ids: [C],
+          codes: ["C"],
+        }),
+        sent(2, {
+          quote: "Status: Disabled",
+          attribute_ids: [A],
+          codes: ["A"],
+        }),
+        sent(3, {
+          quote: "Status: Disabled",
+          attribute_ids: [A],
+          codes: ["A"],
+        }),
+      ],
+    });
+    assert.equal(numberFor("status disabled", A, twice), 2);
+    assert.equal(numberFor("status disabled", C, twice), 1);
+    assert.equal(numberFor("status disabled", D, twice), 1);
+  });
+
+  it("takes a quote that holds the passage, or is held by it, where none is the same", () => {
+    // The passage is a part of the annotation's quote.
+    assert.equal(numberFor("Terminated (Effective 09/30/2026)", C), 3);
+    // The annotation's quote is a part of the passage.
+    assert.equal(
+      numberFor(
+        "Security: Account Disabled Yes, Account Expiration Date (empty)",
+        A,
+      ),
+      4,
+    );
+    // Whole words only: "able" is not "Disabled".
+    assert.equal(numberFor("able", B), null);
+  });
+
+  it("without a matching quote, takes the first annotation naming the attribute: what shows it before what identifies or sources it", () => {
+    // A: 2 identifies, 4 and 5 show. The first that shows it.
+    assert.equal(numberFor("", A), 4);
+    assert.equal(numberFor("words that are in no annotation", A), 4);
+    // C: 3 identifies, 5 shows.
+    assert.equal(numberFor("", C), 5);
+    assert.equal(numberFor("", D), 6);
+    // An exception counts as showing: the first listed of the two kinds.
+    const excepted = read({
+      ...ANSWER,
+      annotations: [
+        sent(1, { kind: "IDENTIFIES" }),
+        sent(2, { kind: "EXCEPTION" }),
+        sent(3, { kind: "SHOWS" }),
+      ],
+    });
+    assert.equal(numberFor("", A, excepted), 2);
+    const shown = read({
+      ...ANSWER,
+      annotations: [
+        sent(1, { kind: "SOURCE" }),
+        sent(2, { kind: "SHOWS" }),
+        sent(3, { kind: "EXCEPTION" }),
+      ],
+    });
+    assert.equal(numberFor("", A, shown), 2);
+    // Without either, the first listed that names the attribute at all.
+    const quiet = read({
+      ...ANSWER,
+      annotations: [
+        sent(1, { kind: "SOURCE", attribute_ids: [C], codes: ["C"] }),
+        sent(2, { kind: "SOURCE" }),
+        sent(3, { kind: "IDENTIFIES" }),
+      ],
+    });
+    assert.equal(numberFor("", A, quiet), 2);
+  });
+
+  it("selects nothing where the file has no annotation for it", () => {
+    // B has no annotation, and nothing has these words.
+    assert.equal(numberFor("", B), null);
+    assert.equal(numberFor("Nothing like this is annotated", B), null);
+    assert.equal(numberFor("", ""), null);
+    assert.equal(
+      numberFor(
+        "Account Disabled Yes",
+        A,
+        read({ ...ANSWER, annotations: [] }),
+      ),
+      null,
+    );
+  });
+
+  it("only chooses: the set and its annotations are left as they were", () => {
+    const set = read();
+    const before = JSON.stringify(set);
+    const found = annotationFor(set, { attributeId: A, quote: "" });
+    assert.equal(JSON.stringify(set), before);
+    assert.equal(found, at(set, 4));
   });
 });
 
