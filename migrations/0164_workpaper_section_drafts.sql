@@ -1,5 +1,5 @@
 -- Working copies of a workpaper's sections (docs/design-workpaper.md, section 3.4; asked
--- for by the product owner on 16 November 2026: "I want to automatically save the updates
+-- for by the product owner on 15 November 2026: "I want to automatically save the updates
 -- that the user has typed in or edited").
 --
 -- What a person types into a section's editor is kept automatically as a working copy; a
