@@ -4018,8 +4018,11 @@ def _requirements(connection: psycopg.Connection[Any], plan_id: UUID) -> list[Re
                 accepted_by=None if not accepted or r[34] is None else str(r[34]),
                 accepted_at=r[35] if accepted else None,
                 to_accept=listed and (not accepted or r[26] is not None),
-                # Its own evidence is on file and the owner was not asked for it.
-                in_hand=str(r[15]) in ("PLANNED", "REQUESTED")
+                # Its own evidence is on file and the owner was not asked for it. An item
+                # that waits for an earlier one counts too: its evidence came in before it
+                # was ever asked for (product owner, 14 November 2026: a file linked to it
+                # left it reading "To send").
+                in_hand=str(r[15]) in ("PLANNED", "AWAITING_DEPENDENCY", "REQUESTED")
                 and (bool(r[31]) or bool(r[32]))
                 and not bool(r[38]),
             )

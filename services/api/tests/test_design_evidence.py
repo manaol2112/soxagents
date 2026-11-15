@@ -269,6 +269,37 @@ def test_when_every_item_is_in_hand_nothing_is_sent(migrated: Database) -> None:
     assert other.count("outbound_messages") == 0 and other.count("mailbox_messages") == 0
 
 
+def test_an_item_waiting_for_an_earlier_one_is_in_hand_once_its_evidence_is(
+    migrated: Database,
+) -> None:
+    """Before (the product owner's finding, 14 November 2026): an item that waits for an
+    earlier one, with no request yet, had its own evidence linked by a person and still
+    read "To send", because only planned and requested items counted as in hand. Now its
+    evidence is in hand and nothing needs sending for it; the item itself is unchanged."""
+    case = _Case(migrated, "waits")
+    earlier, waiting = case.items[0], case.items[1]
+    file_id = case.add_for(earlier, "access policy.txt")
+    with connect(migrated.url) as connection:
+        # As the planner leaves an item that waits for an earlier step: no request yet.
+        connection.execute(
+            "UPDATE evidence_requirements SET status = 'AWAITING_DEPENDENCY', "
+            "depends_on = %s, pbc_request_id = NULL WHERE id = %s",
+            (UUID(earlier["id"]), UUID(waiting["id"])),
+        )
+    before = case.item(waiting["id"])
+    assert (before["status"], before["in_hand"]) == ("AWAITING_DEPENDENCY", False)
+    linked = case.client.post(
+        f"{case.base}/controls/{case.control}/evidence-requirements/{waiting['id']}/files",
+        json={"file_id": file_id, "reason": "The policy also shows this item.",
+              "version": before["version"]},
+    )  # fmt: skip
+    assert linked.status_code == 200, linked.text
+    after = case.item(waiting["id"])
+    assert after["in_hand"] is True
+    assert after["status"] == "AWAITING_DEPENDENCY" and after["request_id"] is None
+    assert [f["name"] for f in after["files"]] == ["access policy.txt"]
+
+
 def test_a_file_that_serves_no_item_leaves_the_request_to_go_out(migrated: Database) -> None:
     """Nothing is in hand when the file on the request serves none of its items (the
     reader's model found it covers none): the request stays a draft for all of them.
