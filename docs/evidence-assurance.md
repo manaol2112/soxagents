@@ -1210,6 +1210,100 @@ reachable; copying never silently copies less than was ticked; a short line is n
 at an abbreviation, an initial or a list number; every caveat of either engine is on the
 first screen.
 
+### 10.13 Tickmarks: a person's disposition of an attribute (14 November 2026)
+
+Asked for by the product owner on the attribute view of 10.12: "it's not a good use case
+where I don't have the option to provide the evidence. The only option I have is to create
+a follow-up. The user should be able to close this by providing ... additional evidence,
+add a tickmark, or link an existing evidence"; and, on what a tickmark is for: "it's okay
+for the evidence to be missing ... There will be cases that evidence won't be available so
+I dont want those to be blocker". A set of four dispositions was proposed and the owner
+said to proceed, with a reason from the person and no second approval (the independent
+reviewer sees every disposition at sign-off).
+
+**What it is.** The check proposes; a person concludes. On a request whose check is
+finished, a person who may decide evidence (TASK_UPDATE) records, for one attribute, one
+of:
+
+| Disposition | When | Effect |
+| --- | --- | --- |
+| `SHOWN_ON_REVIEW` "Shown, on my review" | The evidence shows it and the check did not find it. | The attribute no longer waits on the person. It reads "Shown, auditor's judgment", never the plain "Shown". Needs an annotation a person made, confirmed or edited on a file in force on the request, naming the attribute (docs/evidence-annotations.md). |
+| `NOT_APPLICABLE` "Not applicable to this instance" | The attribute does not apply to what was inspected. | No longer waits. Never counted as shown. |
+| `NOT_AVAILABLE` "Evidence not available, accepted" | The evidence cannot be produced. | No longer waits. Never counted as shown; stays on the first screen and in the workpaper as an accepted limitation. May say what was relied on instead. |
+| `EXCEPTION` "Exception" | The evidence shows the control did not work. | Closes nothing: the attribute keeps waiting, marked as an exception to evaluate through the existing findings and deficiency paths. A person can never tick an exception away. |
+
+A reason is required for each (at least 10 characters, at most 1000, cleaned as other
+person text is); `NOT_AVAILABLE` may add what was relied on instead (at most 600).
+
+**Rules.**
+- One standing disposition per request and attribute. Recording another replaces it (the
+  earlier one is kept, marked replaced); a person reopens one with a reason, and it then
+  no longer stands. Nothing is ever deleted.
+- A disposition never changes what the check found: the run, its result, its findings and
+  its follow-ups stay as they are and stay shown beside the disposition.
+- A disposition is refused where the request has no finished, current check (queued,
+  working, held, failed, out of date), where the attribute is not approved on the control,
+  or (for `SHOWN_ON_REVIEW`, `NOT_APPLICABLE`, `NOT_AVAILABLE`) where the current check
+  finds the records contradict the attribute (an issue resting on a failed comparison or a
+  contradiction): only `EXCEPTION` is offered there.
+- When a later check of the request finishes: where it finds the attribute supported, the
+  disposition is no longer needed and is marked superseded by the check (kept in the
+  history); where it finds a contradiction, a `SHOWN_ON_REVIEW`, `NOT_APPLICABLE` or
+  `NOT_AVAILABLE` disposition no longer stands (marked overtaken, with the reason) and
+  the attribute waits on the person again; otherwise the disposition stands.
+- A `SHOWN_ON_REVIEW` whose annotation is removed, or whose file is no longer in force on
+  the request, no longer stands.
+- Accepting a request's evidence, the D&I conclusion and its sign-off are not changed by
+  this increment. A disposition never marks an attribute as evidenced by an instance's
+  records: where coverage is shown, it is a state of its own ("on the auditor's judgment").
+
+**Records (migration 0162).** `attribute_dispositions`: id, organization_id, project_id,
+engagement_control_id, requirement_id, attribute_id, kind, reason, relied_on,
+annotation_id (null unless `SHOWN_ON_REVIEW`), assessment_id (the run current when it was
+recorded), recorded_by, recorded_at, ended_at, ended_by (null where the check ended it),
+ended_as (`REPLACED`, `REOPENED`, `SUPERSEDED_BY_CHECK`, `OVERTAKEN_BY_CHECK`,
+`ANNOTATION_GONE`), ended_reason, version. One row with `ended_at IS NULL` per requirement
+and attribute. Every act is an audit event with the person as actor
+(`evidence.attribute_disposition_recorded`, `.reopened`); what a check ends is one event
+without a person (`.ended_by_check`).
+
+**API.** Under `/organizations/{o}/projects/{p}/controls/{c}/evidence-assurance/{requirement_id}/attributes/{attribute_id}`:
+`POST /disposition` `{kind, reason, relied_on?, annotation_id?}` and
+`POST /disposition/reopen` `{version, reason}`; both answer the request's entry as `rerun`
+does. `GET .../evidence-assurance` gives each attribute of a request `disposition` (null,
+or `{id, kind, reason, relied_on, annotation_id, recorded_by_name, recorded_at, version}`)
+and `disposition_history` (ended ones, newest first, at most 10). 409 with one plain
+sentence for each refusal. Archived and completed engagements are read-only as for every
+write.
+
+**The workpaper (docs/design-workpaper.md).** An attribute with a standing disposition on
+any current check reads by it where the checks do not show it themselves: states
+`SHOWN_ON_REVIEW` ("Shown, auditor's judgment"), `NOT_APPLICABLE`, `NOT_AVAILABLE`
+("Evidence not available, accepted"); the tickmark is `REVIEWED` (legend: "On the auditor's
+review, with the reason recorded") for the first and `NONE` for the others, never `AGREED`
+or `COMPARED`. An exception shown by a check still wins over every disposition. Each
+disposition is a matter for the reviewer (`DISPOSITION`, noted, with the person, the date
+and the reason), and an `EXCEPTION` disposition is an open matter.
+
+**The screen (10.12).**
+- The attribute view gains "Add evidence" (Upload a file: the evidence wizard on this
+  request; Use a file the control holds: the existing picker; both lead to a new check and
+  its annotations as any added file does) and "Tickmark" (the four dispositions, the
+  reason, and for "Shown, on my review" the annotation: pick one of the person's own on
+  this attribute, or add one in the existing annotation viewer and come back).
+- On the first screen an attribute with a standing disposition other than `EXCEPTION`
+  leaves "Needs attention" and is on the quiet line in its own words ("B accepted without
+  evidence", "D not applicable", "A shown, your judgment"), and the verdict says each
+  count apart, never inside "shown". `EXCEPTION` stays in "Needs attention", marked.
+- The attribute view shows the standing disposition with who, when, the reason and
+  "Reopen", above what the check found; ended ones under "History".
+
+**Tests.** Server: each kind recorded and read back; each refusal; replace and reopen;
+what a later check does to each kind (supported, contradiction, neither); the annotation
+rule; authorization and the audit events; the workpaper's states, tickmark and matters;
+that nothing of the run, its findings or acceptance changes. Web: the model (attention,
+quiet line, verdict counts, what is offered for each state) and the forms.
+
 ## 9. Status
 
 | Increment | State |
@@ -1224,5 +1318,6 @@ first screen.
 | Checking again with the current engine, for a request an earlier engine checked (10.10) | built 14 November 2026 (`upgrade_engine`, route `/upgrade`, no migration; the row's action and menu item with a confirmation; `test_assurance_upgrade.py` in the fast and critical tiers, `tests/evidence-upgrade-model.test.ts`); independently reviewed and tightened the same day; used once by the product owner on the development data |
 | The check's result, simplified (10.11) | first build shown and refused as too heavy, 14 November 2026; never committed; replaced by 10.12 |
 | The check's result as "Needs attention", one attribute at a time (10.12) | in progress, 14 November 2026 |
+| Tickmarks: a person's disposition of an attribute; adding evidence from the attribute view (10.13) | in progress, 14 November 2026 |
 | Prompt caching of the file text across the two readings (models.py) | planned, after the chain is measured |
 | Interim and roll-forward evidence | planned |
