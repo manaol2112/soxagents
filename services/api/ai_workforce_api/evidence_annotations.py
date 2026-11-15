@@ -46,7 +46,7 @@ from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from ai_workforce_api import assurance_facts
+from ai_workforce_api import assurance_facts, attribute_dispositions
 from ai_workforce_api.assurance_facts import CheckOutcome, Fact, FactKind, compare_values
 from ai_workforce_api.authorization import (
     Action,
@@ -1727,6 +1727,9 @@ def edit(
         {"kind": row.kind, "origin": row.origin, "version": row.version + 1,
          "status_before": row.status, "before": before, "after": after},
     )  # fmt: skip
+    # A "Shown, on my review" resting on it no longer stands once it no longer names the
+    # attribute (docs/evidence-assurance.md, section 10.13).
+    attribute_dispositions.end_for_annotation(cursor, row.id, person)
 
 
 def remove(
@@ -1744,6 +1747,9 @@ def remove(
         {"kind": row.kind, "origin": row.origin, "version": row.version + 1,
          "status_before": row.status},
     )  # fmt: skip
+    # A "Shown, on my review" resting on it no longer stands (section 10.13 of
+    # docs/evidence-assurance.md): it is kept, and ended with this removal.
+    attribute_dispositions.end_for_annotation(cursor, row.id, person)
 
 
 def add(cursor: psycopg.Cursor[Any], scope: _Scope, body: AddBody, person: UUID) -> UUID:

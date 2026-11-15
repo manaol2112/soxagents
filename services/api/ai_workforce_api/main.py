@@ -22,6 +22,7 @@ from ai_workforce_api.actions import register_actions
 from ai_workforce_api.agent_runs import register_agent_runs
 from ai_workforce_api.agents import register_agents
 from ai_workforce_api.approvals import register_approvals
+from ai_workforce_api.attribute_dispositions import register_attribute_dispositions
 from ai_workforce_api.auth import register_auth
 from ai_workforce_api.authorization import register_authorization
 from ai_workforce_api.clients import register_clients
@@ -234,6 +235,7 @@ def create_app(
     register_evidence_mapping(app, resolved, model_provider)
     register_evidence_findings(app, resolved)
     register_evidence_assurance(app, resolved, drafts)
+    register_attribute_dispositions(app, resolved)
     register_evidence_annotations(app, resolved)
     register_evidence_wizard(app, resolved, drafts)
     register_walkthrough_instances(app, resolved)

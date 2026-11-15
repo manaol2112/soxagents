@@ -70,7 +70,7 @@ from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError
 
-from ai_workforce_api import assurance_facts
+from ai_workforce_api import assurance_facts, attribute_dispositions
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.after_commit import after_commit, committed
 from ai_workforce_api.assurance_context import ControlContext, ControlSide, load_control_side
@@ -4048,6 +4048,13 @@ def _insert(
             control_id=control_id, requirement_id=request.requirement_id, run_id=run_id,
             review=earlier[8] if isinstance(earlier[8], dict) else None,
         )  # fmt: skip
+        # A finished check ends the dispositions its result no longer leaves standing
+        # (section 10.13); a copy finishes as it is recorded.
+        attribute_dispositions.end_by_check(
+            cursor, organization_id=control.organization_id, project_id=project_id,
+            control_id=control_id, requirement_id=request.requirement_id, run_id=run_id,
+            outcome=outcome, in_force=[file.file_id for file in request.files],
+        )  # fmt: skip
         _audit(
             cursor, control.organization_id, project_id, actor, None, "evidence.assessed",
             request.requirement_id,
@@ -5367,6 +5374,13 @@ def _assess(
             control_id=control_id, requirement_id=requirement_id, run_id=run_id, review=kept,
             agent_instance=tester_instance,
         )  # fmt: skip
+        # A finished check ends the dispositions its result no longer leaves standing
+        # (section 10.13), in the transaction that records the outcome and its findings.
+        attribute_dispositions.end_by_check(
+            cursor, organization_id=control.organization_id, project_id=project_id,
+            control_id=control_id, requirement_id=requirement_id, run_id=run_id,
+            outcome=outcome, in_force=[file.file_id for file in request.files],
+        )  # fmt: skip
         _audit(
             cursor, control.organization_id, project_id, requester, tester_instance,
             "evidence.assessed", requirement_id,
@@ -5485,6 +5499,13 @@ class AttributeBody(BaseModel):
     assessment: Assessment | None = None
     # Engine 2: the comparisons named for the attribute's elements, made in code.
     checks: list[CheckBody] = Field(default_factory=list)
+    # A person's disposition of the attribute on this request (section 10.13): the one
+    # that stands, or null; and the ended ones, newest first, at most 10. It changes
+    # nothing above: what the check found stays as it is beside it.
+    disposition: attribute_dispositions.DispositionBody | None = None
+    disposition_history: list[attribute_dispositions.EndedDispositionBody] = Field(
+        default_factory=list
+    )
 
 
 class CompletenessBody(BaseModel):
@@ -5699,6 +5720,8 @@ def read_assurance(
     by_print = {finding.fingerprint: finding for finding in findings}
     # Read only for a finished run of engine 2 (an earlier engine's has no context).
     contexts = _Contexts(connection, project_id, control_id)
+    # A person's dispositions of the attributes (section 10.13), read once for the control.
+    dispositions = attribute_dispositions.load(connection, control_id, only_requirement)
     entries: list[RequestBody] = []
     summary = SummaryBody()
     for request in requests:
@@ -5834,6 +5857,10 @@ def read_assurance(
                             for check in item.get("checks") or []
                             if isinstance(check, dict)
                         ],
+                        disposition=dispositions.standing(request.requirement_id, attribute_id),
+                        disposition_history=dispositions.history(
+                            request.requirement_id, attribute_id
+                        ),
                     )
                 )
             summary.supported += sum(1 for a in shown if a.verdict == "SUPPORTED")

@@ -26,6 +26,7 @@ from uuid import UUID
 import pytest
 
 from ai_workforce_api import design_workpaper as view
+from ai_workforce_api.attribute_dispositions import Disposition
 from ai_workforce_api.design_conclusions import DesignConclusionBody, SignoffRecord
 from ai_workforce_api.design_workpaper import (
     MAX_EVIDENCE,
@@ -1262,3 +1263,320 @@ def test_the_words_written_here_never_say_the_client() -> None:
     # A stored record that cannot be read as an attribute's outcome is refused, not guessed.
     with pytest.raises(ValueError):
         StoredOutcome.model_validate({"attribute_id": str(A), "verdict": "PASSED"})
+
+
+# --- A person's dispositions (docs/evidence-assurance.md, section 10.13) -----------------
+
+RECORDED_AT = datetime(2026, 11, 14, 9, 30, tzinfo=UTC)
+REASON = "The ticket system was retired in 2026"
+NOT_SHOWN_B = "Both readings find the evidence does not show attribute B."
+OPEN_C = "The two readings do not agree. Your judgment is needed."
+
+
+def _disposed(
+    kind: str,
+    attribute: UUID,
+    requirement: UUID = R1,
+    *,
+    annotation: UUID | None = None,
+    **over: Any,
+) -> Disposition:
+    """A disposition a person recorded, standing unless said otherwise."""
+    values: dict[str, Any] = {
+        "id": UUID(int=900 + attribute.int + requirement.int * 10),
+        "requirement_id": requirement,
+        "attribute_id": attribute,
+        "kind": kind,
+        "reason": REASON,
+        "relied_on": "",
+        "annotation_id": annotation,
+        "assessment_id": RUN1,
+        "recorded_by_name": "Dana Lee",
+        "recorded_at": RECORDED_AT,
+        "version": 1,
+    }
+    return Disposition(**(values | over))
+
+
+def _gap(attribute: UUID = B) -> StoredOutcome:
+    """An attribute a check finds not demonstrated."""
+    return _item(
+        attribute, verdict="ISSUE", assessment="NOT_DEMONSTRATED", result="NOT_MET",
+        element="NOT_MET", files=(), summary=NOT_SHOWN_B,
+    )  # fmt: skip
+
+
+def _open(attribute: UUID = C) -> StoredOutcome:
+    """An attribute a check leaves to a person."""
+    return _item(
+        attribute, verdict="UNSETTLED", assessment="INDETERMINATE", result=None, element=None,
+        files=(), summary=OPEN_C,
+    )  # fmt: skip
+
+
+def _read(
+    code: str,
+    checks: dict[UUID, CheckRecord],
+    dispositions: list[Disposition],
+    annotations: list[AnnotationRecord] | None = None,
+) -> view.AttributeBody:
+    shown, _left = attributes_of(
+        ATTRIBUTES, REQUESTS, checks, annotations or [], _index(checks=checks), None, dispositions
+    )
+    return next(attribute for attribute in shown if attribute.code == code)
+
+
+def test_an_attribute_reads_by_a_persons_disposition_where_the_checks_do_not_show_it() -> None:
+    checks = {R1: _check(_item(A), _gap())}
+    assert _read("B", checks, []).state == "NOT_SHOWN"
+    accepted = _read("B", checks, [_disposed("NOT_AVAILABLE", B, relied_on="The HR leaver report")])
+    assert (accepted.state, accepted.state_words, accepted.tickmark) == (
+        "NOT_AVAILABLE", "Evidence not available, accepted", "NONE",
+    )  # fmt: skip
+    # Who, when and the person's own reason; and, beside it, what the check found.
+    assert accepted.basis == (
+        f"Recorded by Dana Lee on 14 November 2026: {REASON}. Relied on instead: The HR "
+        f"leaver report. The check found: {NOT_SHOWN_B}"
+    )
+    assert (accepted.marks, accepted.refs) == ({}, [])
+    aside = _read("B", checks, [_disposed("NOT_APPLICABLE", B)])
+    assert (aside.state, aside.state_words, aside.tickmark) == (
+        "NOT_APPLICABLE", "Not applicable to this instance", "NONE",
+    )  # fmt: skip
+    assert aside.basis == (
+        f"Recorded by Dana Lee on 14 November 2026: {REASON}. The check found: {NOT_SHOWN_B}"
+    )
+    # An exception a person records closes nothing: the attribute reads as the check
+    # left it.
+    excepted = _read("B", checks, [_disposed("EXCEPTION", B)])
+    assert (excepted.state, excepted.basis, excepted.tickmark) == (
+        "NOT_SHOWN", NOT_SHOWN_B, "NONE",
+    )  # fmt: skip
+    # Another attribute of the same check is as it was.
+    assert _read("A", checks, [_disposed("NOT_AVAILABLE", B)]) == _read("A", checks, [])
+    # A disposition on a request whose check has no word on the attribute is read too.
+    unasked = _read("D", checks, [_disposed("NOT_APPLICABLE", D)])
+    assert (unasked.state, unasked.tickmark) == ("NOT_APPLICABLE", "NONE")
+    assert unasked.basis == f"Recorded by Dana Lee on 14 November 2026: {REASON}."
+    # The states and their words are the contract's; none is the plain "Shown".
+    assert view.DISPOSITION_WORDS == {
+        "SHOWN_ON_REVIEW": "Shown, auditor's judgment",
+        "NOT_APPLICABLE": "Not applicable to this instance",
+        "NOT_AVAILABLE": "Evidence not available, accepted",
+    }
+    assert "Shown" not in view.DISPOSITION_WORDS.values()
+    assert set(view.DISPOSITION_WORDS) == set(view._DISPOSITION_PRECEDENCE)
+    assert not set(view.DISPOSITION_WORDS) & set(STATE_WORDS)
+
+
+def test_shown_on_review_carries_the_reviewed_mark_from_the_persons_annotation() -> None:
+    checks = {R1: _check(_item(A), _gap())}
+    mine = _annotation(3, "SHOWS", B, file=F2, status="CONFIRMED", origin="PERSON", run=None)
+    annotations = [_annotation(1, "IDENTIFIES", B, file=F2), mine]
+    on_review = _disposed("SHOWN_ON_REVIEW", B, annotation=mine.id)
+    found = _read("B", checks, [on_review], annotations)
+    assert (found.state, found.state_words) == ("SHOWN_ON_REVIEW", "Shown, auditor's judgment")
+    # Never agreed or compared: the person's reading is not the system's own record.
+    assert found.tickmark == "REVIEWED"
+    # The file is marked by the person's review, never as shown by a check, and is
+    # referenced with the annotations on it that stand and name the attribute.
+    assert found.marks == {"E2": "REVIEWED"}
+    [ref] = found.refs
+    assert (ref.ref, ref.numbers) == ("E2", [1, 3]) and mine.id in ref.annotation_ids
+    # A passage of a current check on the same file outranks it; what only identifies
+    # does not.
+    rank = view._MARK_RANK
+    assert rank["SHOWS"] < rank["REVIEWED"] < rank["IDENTIFIES"] < rank["SOURCE"]
+    # The legend names the mark only where an attribute carries it, before the exception's.
+    assert [t.mark for t in legend(False, True)] == ["AGREED", "COMPARED", "REVIEWED", "EXCEPTION"]
+    assert [t.mark for t in legend(True, True)] == [
+        "AGREED", "COMPARED", "INSPECTED", "REVIEWED", "EXCEPTION",
+    ]  # fmt: skip
+    assert legend(False) == legend(False, False) and legend(True) == list(TICKMARKS)
+    assert view.REVIEWED_TICKMARK.meaning == "On the auditor's review, with the reason recorded."
+    assert view.REVIEWED_TICKMARK.symbol not in {t.symbol for t in TICKMARKS}
+
+    # It stands only while its annotation does: no longer listed (removed), still the
+    # agent's unreviewed proposal, or no longer naming the attribute, it is not read.
+    for listed in (
+        [],
+        [_annotation(3, "SHOWS", B, file=F2)],
+        [_annotation(3, "SHOWS", A, file=F2, status="CONFIRMED", origin="PERSON", run=None)],
+    ):
+        back = _read("B", checks, [on_review], listed)
+        assert (back.state, back.tickmark, back.marks, back.refs) == ("NOT_SHOWN", "NONE", {}, [])
+    # On a file that is no longer in force on any request, the annotation does not stand.
+    elsewhere = _annotation(
+        3, "SHOWS", B, file=UUID(int=39), status="CONFIRMED", origin="PERSON", run=None
+    )
+    lost = _read(
+        "B", checks, [_disposed("SHOWN_ON_REVIEW", B, annotation=elsewhere.id)], [elsewhere]
+    )
+    assert (lost.state, lost.tickmark) == ("NOT_SHOWN", "NONE")
+
+
+def _on_first_request(item: StoredOutcome) -> StoredOutcome:
+    """The same finding with its passages on a file of the first request."""
+    passages = [view.StoredPassage(file_id=F1)]
+    return item.model_copy(
+        update={
+            "passages": passages,
+            "elements": [e.model_copy(update={"passages": passages}) for e in item.elements],
+        }
+    )
+
+
+def test_an_exception_a_check_shows_wins_over_every_disposition() -> None:
+    exception = _item(
+        C, verdict="ISSUE", assessment="CONTRADICTED", result="NOT_MET", files=(F3,),
+        element="NOT_MET", deviation=True, summary="The records show attribute C is not met.",
+    )  # fmt: skip
+    mine = _annotation(3, "SHOWS", C, file=F2, status="EDITED", run=None, origin="PERSON")
+    for kind in ("SHOWN_ON_REVIEW", "NOT_APPLICABLE", "NOT_AVAILABLE", "EXCEPTION"):
+        disposed = _disposed(kind, C, annotation=mine.id if kind == "SHOWN_ON_REVIEW" else None)
+        # On another request of the control.
+        apart = {
+            R1: _check(_open()),
+            R2: _check(exception, requirement=R2, run=RUN2, files=(F3, F1)),
+        }
+        found = _read("C", apart, [disposed], [mine])
+        assert (found.state, found.state_words, found.tickmark) == (
+            "EXCEPTION", "Exception shown", "EXCEPTION",
+        )  # fmt: skip
+        assert found.basis == "The records show attribute C is not met."
+        assert found.marks["E3"] == "EXCEPTION"
+        # On the very request the disposition is on (never recorded there, and a later
+        # check overtakes it: held here as well).
+        same = {R1: _check(_on_first_request(exception))}
+        again = _read("C", same, [disposed], [mine])
+        assert (again.state, again.tickmark) == ("EXCEPTION", "EXCEPTION")
+
+
+def test_a_disposition_never_stands_against_what_the_checks_show_or_leave_open() -> None:
+    shows = "Both readings find this instance shows attribute C."
+    # The check of its own request shows the attribute: it stays "Shown", by the check.
+    own = {R1: _check(_item(C, summary=shows))}
+    kept = _read("C", own, [_disposed("NOT_APPLICABLE", C)])
+    assert (kept.state, kept.state_words, kept.basis, kept.tickmark) == (
+        "SHOWN", "Shown", shows, "AGREED",
+    )  # fmt: skip
+    # Another request shows it: "Shown" by that check, and never agreed or compared while
+    # the check the disposition stands in for left it open.
+    other = {
+        R1: _check(_open()),
+        R2: _check(_item(C, summary=shows, files=(F3,)), requirement=R2, run=RUN2, files=(F3, F1)),
+    }
+    assert _read("C", other, []).state == "NOT_CONCLUDED"
+    by_check = _read("C", other, [_disposed("NOT_AVAILABLE", C)])
+    assert (by_check.state, by_check.basis, by_check.tickmark) == ("SHOWN", shows, "NONE")
+    # Another request's check leaves it open, and nobody disposed of that: it still waits.
+    both_open = {
+        R1: _check(_open()),
+        R2: _check(_open(), requirement=R2, run=RUN2, files=(F3, F1)),
+    }
+    waits = _read("C", both_open, [_disposed("NOT_APPLICABLE", C)])
+    assert (waits.state, waits.state_words, waits.basis) == (
+        "NOT_CONCLUDED", "Not concluded", OPEN_C,
+    )  # fmt: skip
+    # Disposed of on both: it reads by the more cautious of the two.
+    mine = _annotation(
+        3, "SHOWS", C, file=F3, requirement=R2, status="CONFIRMED", origin="PERSON", run=None
+    )
+    on_review = _disposed("SHOWN_ON_REVIEW", C, R2, annotation=mine.id)
+    settled = _read("C", both_open, [on_review, _disposed("NOT_AVAILABLE", C)], [mine])
+    assert (settled.state, settled.tickmark) == ("NOT_AVAILABLE", "NONE")
+    assert settled.marks == {"E3": "REVIEWED"}
+    milder = _read("C", both_open, [on_review, _disposed("NOT_APPLICABLE", C)], [mine])
+    assert (milder.state, milder.tickmark) == ("NOT_APPLICABLE", "NONE")
+    # A gap another request's check finds does not outrank a person's disposition: as an
+    # attribute one request shows stays "Shown" beside another that does not.
+    gap = {
+        R1: _check(_open()),
+        R2: _check(_gap(C), requirement=R2, run=RUN2, files=(F3, F1)),
+    }
+    assert _read("C", gap, [_disposed("NOT_APPLICABLE", C)]).state == "NOT_APPLICABLE"
+    # An exception a person recorded takes "agreed" away, whatever a check shows.
+    assert _read("C", own, [_disposed("EXCEPTION", C)]).tickmark == "NONE"
+    assert _read("C", own, []).tickmark == "AGREED"
+
+
+@pytest.mark.parametrize("status", ["OUT_OF_DATE", "FAILED", "QUEUED", "CHECKING", "HELD"])
+def test_a_disposition_on_a_check_that_is_not_current_is_not_read(status: str) -> None:
+    checks = {R1: _check(_gap(), status=status)}
+    disposed = [_disposed("NOT_AVAILABLE", B), _disposed("EXCEPTION", A)]
+    found = _read("B", checks, disposed)
+    assert (found.state, found.tickmark) == ("NOT_TESTED", "NONE")
+    assert view.dispositions_applying(disposed, checks, []) == {}
+    assert view.dispositions_applying(disposed, {}, []) == {}
+    # One that has ended is never read, whatever is passed.
+    ended = _disposed("NOT_AVAILABLE", B, ended_at=RECORDED_AT, ended_as="REOPENED")
+    assert view.dispositions_applying([ended], {R1: _check(_gap())}, []) == {}
+
+
+def test_each_disposition_is_a_matter_and_an_exception_recorded_is_open() -> None:
+    checks = {R1: _check(_item(A), _gap(), _open())}
+    evidence = _index(checks=checks)
+    mine = _annotation(3, "SHOWS", C, file=F2, status="CONFIRMED", origin="PERSON", run=None)
+    disposed = [
+        _disposed("EXCEPTION", A, reason="The approval is dated after the grant."),
+        _disposed("NOT_AVAILABLE", B, relied_on="The HR leaver report"),
+        _disposed("SHOWN_ON_REVIEW", C, annotation=mine.id, recorded_by_name=""),
+    ]
+    shown, left = attributes_of(ATTRIBUTES, REQUESTS, checks, [mine], evidence, None, disposed)
+    stand = annotations_standing([mine], REQUESTS, checks)
+    recorded = view.disposition_matters(
+        ATTRIBUTES, view.dispositions_applying(disposed, checks, stand), stand, evidence
+    )
+    assert [(m.kind, m.state, m.refs) for m in recorded] == [
+        ("DISPOSITION", "OPEN", []), ("DISPOSITION", "NOTED", []), ("DISPOSITION", "NOTED", ["E2"]),
+    ]  # fmt: skip
+    assert [m.text for m in recorded] == [
+        "Attribute A: an exception recorded by Dana Lee on 14 November 2026, still to be "
+        "evaluated. Reason: The approval is dated after the grant.",
+        "Attribute B: “Evidence not available, accepted”, recorded by Dana Lee on "
+        f"14 November 2026. Reason: {REASON}. Relied on instead: The HR leaver report.",
+        "Attribute C: “Shown, auditor's judgment”, recorded by a person on "
+        f"14 November 2026. Reason: {REASON}.",
+    ]
+    findings = [FindingRecord(UUID(int=70), "Attribute B not shown: ticket REQ-1041.txt", F1)]
+    matters = matters_of(REQUESTS, checks, ATTRIBUTES, left, findings, evidence, 0, recorded)
+    # The exception a person recorded waits, straight after the findings. What a person
+    # disposed of no longer waits as "not concluded": it is noted, with the person.
+    assert [(m.kind, m.state) for m in matters] == [
+        ("FINDING", "OPEN"), ("DISPOSITION", "OPEN"), ("DISPOSITION", "NOTED"),
+        ("DISPOSITION", "NOTED"), ("NOTE", "NOTED"),
+    ]  # fmt: skip
+    assert matters[-1].text == SEPARATE_NOTE
+    # Without the dispositions the check's own open attribute is the matter, as before.
+    _plain, readings = attributes_of(ATTRIBUTES, REQUESTS, checks, [mine], evidence, None)
+    before = matters_of(REQUESTS, checks, ATTRIBUTES, readings, findings, evidence)
+    assert [(m.kind, m.state) for m in before] == [
+        ("FINDING", "OPEN"), ("UNSETTLED", "OPEN"), ("NOTE", "NOTED"),
+    ]  # fmt: skip
+    assert before[1].text == f"Attribute C is not concluded. {OPEN_C}"
+    # The attribute a person marked as an exception keeps what the check found, with no
+    # mark of agreement beside it.
+    by_code = {attribute.code: attribute for attribute in shown}
+    assert (by_code["A"].state, by_code["A"].tickmark) == ("SHOWN", "NONE")
+    assert (by_code["B"].state, by_code["C"].state) == ("NOT_AVAILABLE", "SHOWN_ON_REVIEW")
+    # Where a check of another request still leaves it open, that still waits.
+    two = {**checks, R2: _check(_open(), requirement=R2, run=RUN2, files=(F3, F1))}
+    _two, left_two = attributes_of(ATTRIBUTES, REQUESTS, two, [mine], evidence, None, disposed)
+    still = matters_of(REQUESTS, two, ATTRIBUTES, left_two, [], evidence, 0, recorded)
+    assert [(m.kind, m.state) for m in still][:2] == [
+        ("DISPOSITION", "OPEN"), ("UNSETTLED", "OPEN"),
+    ]  # fmt: skip
+    assert still[1].text == f"Attribute C is not concluded. {OPEN_C}"
+
+
+def test_the_words_written_for_a_disposition_never_say_the_client() -> None:
+    written = [
+        *view.DISPOSITION_WORDS.values(), view.REVIEWED_TICKMARK.meaning,
+        view.disposition_basis(_disposed("NOT_AVAILABLE", B, relied_on="A report"), NOT_SHOWN_B),
+    ]  # fmt: skip
+    assert all("client" not in text.lower() for text in written)
+    # A long reason is kept whole, and the sentence stays bounded.
+    long = view.disposition_basis(
+        _disposed("NOT_AVAILABLE", B, reason="r" * 1000, relied_on="o" * 600), "c" * 600
+    )
+    assert "r" * 1000 in long and "o" * 600 in long and len(long) <= view.DISPOSITION_LIMIT

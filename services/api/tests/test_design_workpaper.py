@@ -16,6 +16,11 @@ evidence.
   their request's check, never by the run that first proposed them. What the run's review
   says is not yet reliable is a matter and takes the tickmarks away; a report whose
   parameters are shown is a procedure, and only then is its mark in the legend.
+- A person's dispositions (docs/evidence-assurance.md, section 10.13) are read where the
+  checks do not show the attribute themselves: their own states and words, the REVIEWED
+  mark for "Shown, auditor's judgment" from the person's annotation, a matter for each
+  with the person, the date and the reason, an exception recorded as an open matter; and
+  nothing of them where the request's check is no longer current.
 """
 
 import json
@@ -26,6 +31,16 @@ from fastapi.testclient import TestClient
 from support import Database
 from test_assurance_engine2 import _all_met, _engine_2, _fact, _late, _said
 from test_assurance_forward_only import _as_engine_1
+from test_attribute_dispositions import (
+    REASON,
+    RELIED_ON,
+    _annotate,
+    _first_check,
+    _ids,
+    _record,
+    _reopen,
+    _rows,
+)
 from test_evidence_analysis import _Provider
 from test_evidence_annotations import TICKET_REFERENCE, _first_run, _second_plan
 from test_evidence_assurance import (
@@ -767,3 +782,115 @@ def test_a_second_run_keeps_what_it_still_cites_and_its_review_is_said(
     assert not [m for m in stale["matters"] if m["kind"] == "COMPLETENESS"]
     assert [t["mark"] for t in stale["tickmarks"]] == ["AGREED", "COMPARED", "EXCEPTION"]
     assert stale["matters"][0]["kind"] == "UNSETTLED"
+
+
+def test_a_persons_dispositions_are_read_where_the_checks_do_not_show_the_attribute(
+    migrated: Database,
+) -> None:
+    bench = _Bench(migrated, "dw-disposed")
+    # A and E are shown by the ticket; B, C and D are not shown.
+    ticket, first = _first_check(bench, B="ABSENT", C="ABSENT", D="ABSENT")
+    ids = _ids(first)
+    owner_name = bench.name(bench.team["owner_id"])
+    # A person's own annotation on the ticket, naming C: by itself it changes no state.
+    mine = _annotate(bench, ticket, ids["C"])
+    checked = _by_code(_view(bench))
+    assert {code: a["state"] for code, a in checked.items()} == {
+        "A": "SHOWN", "B": "NOT_SHOWN", "C": "NOT_SHOWN", "D": "NOT_SHOWN", "E": "SHOWN",
+    }  # fmt: skip
+    assert checked["E"]["tickmark"] == "AGREED" and checked["C"]["marks"] == {}
+    assert [t["mark"] for t in _view(bench)["tickmarks"]] == ["AGREED", "COMPARED", "EXCEPTION"]
+    assert not [m for m in _view(bench)["matters"] if m["kind"] == "DISPOSITION"]
+
+    # A person concludes: B's evidence cannot be produced, C is shown on their own reading
+    # of the ticket, D and E are exceptions to evaluate.
+    for code, kind, more in (
+        ("B", "NOT_AVAILABLE", {"relied_on": RELIED_ON}),
+        ("C", "SHOWN_ON_REVIEW", {"annotation_id": mine}),
+        ("D", "EXCEPTION", {}),
+        ("E", "EXCEPTION", {}),
+    ):
+        done = _record(bench, ids[code], kind, None, **more)
+        assert done.status_code == 200, done.text
+    [(recorded_at,)] = bench.rows(
+        "SELECT recorded_at FROM attribute_dispositions WHERE attribute_id = %s", UUID(ids["B"])
+    )
+    by = f"by {owner_name} on {view._day(recorded_at)}"
+
+    # Reading the workpaper writes nothing.
+    before, rows_before = _snapshot(bench), _rows(bench)
+    body = _view(bench)
+    assert _snapshot(bench) == before and _rows(bench) == rows_before
+    found = _by_code(body)
+    # What the check shows itself is as it was.
+    assert found["A"] == checked["A"]
+    # Accepted without evidence: its own state, never counted as shown, no mark.
+    assert (found["B"]["state"], found["B"]["state_words"], found["B"]["tickmark"]) == (
+        "NOT_AVAILABLE", "Evidence not available, accepted", "NONE",
+    )  # fmt: skip
+    assert found["B"]["basis"] == (
+        f"Recorded {by}: {REASON} Relied on instead: {RELIED_ON} "
+        f"The check found: {checked['B']['basis']}"
+    )
+    assert (found["B"]["refs"], found["B"]["marks"]) == (
+        checked["B"]["refs"],
+        checked["B"]["marks"],
+    )
+    # Shown on the auditor's judgment: never the plain "Shown", never agreed or compared,
+    # with the person's annotation as its reference.
+    assert (found["C"]["state"], found["C"]["state_words"], found["C"]["tickmark"]) == (
+        "SHOWN_ON_REVIEW", "Shown, auditor's judgment", "REVIEWED",
+    )  # fmt: skip
+    assert found["C"]["marks"] == {"E1": "REVIEWED"}
+    [ref] = found["C"]["refs"]
+    assert ref["ref"] == "E1" and mine in ref["annotation_ids"] and len(ref["numbers"]) >= 1
+    # An exception a person recorded closes nothing: D reads as the check left it, and E,
+    # which the check shows, keeps its state with no mark of agreement beside it.
+    assert (found["D"]["state"], found["D"]["basis"]) == ("NOT_SHOWN", checked["D"]["basis"])
+    assert (found["E"]["state"], found["E"]["tickmark"]) == ("SHOWN", "NONE")
+    # The legend names the auditor's review only now that an attribute carries it.
+    assert [t["mark"] for t in body["tickmarks"]] == [
+        "AGREED", "COMPARED", "REVIEWED", "EXCEPTION",
+    ]  # fmt: skip
+    reviewed = next(t for t in body["tickmarks"] if t["mark"] == "REVIEWED")
+    assert reviewed["meaning"] == "On the auditor's review, with the reason recorded."
+    # Each disposition is a matter for the reviewer; an exception recorded waits.
+    matters = [m for m in body["matters"] if m["kind"] == "DISPOSITION"]
+    assert [(m["state"], m["refs"]) for m in matters] == [
+        ("OPEN", []), ("OPEN", []), ("NOTED", []), ("NOTED", ["E1"]),
+    ]  # fmt: skip
+    assert [m["text"] for m in matters] == [
+        f"Attribute D: an exception recorded {by}, still to be evaluated. Reason: {REASON}",
+        f"Attribute E: an exception recorded {by}, still to be evaluated. Reason: {REASON}",
+        f"Attribute B: “Evidence not available, accepted”, recorded {by}. "
+        f"Reason: {REASON} Relied on instead: {RELIED_ON}",
+        f"Attribute C: “Shown, auditor's judgment”, recorded {by}. Reason: {REASON}",
+    ]
+    assert body["matters"][-1]["text"] == SEPARATE_NOTE
+    # The check's own findings are still matters: nothing of the check was closed.
+    assert len([m for m in body["matters"] if m["kind"] == "FINDING"]) == 3
+
+    # Reopened: the attribute reads as the check left it again.
+    version = next(
+        a["disposition"]["version"] for a in bench.entry()["attributes"] if a["code"] == "C"
+    )
+    assert _reopen(bench, ids["C"], version).status_code == 200
+    again = _view(bench)
+    assert _by_code(again)["C"] == checked["C"]
+    assert [t["mark"] for t in again["tickmarks"]] == ["AGREED", "COMPARED", "EXCEPTION"]
+    assert len([m for m in again["matters"] if m["kind"] == "DISPOSITION"]) == 3
+
+    # The request's check goes out of date: nothing of it is used, and neither is a
+    # disposition recorded on it.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "DELETE FROM evidence_requirement_attributes WHERE requirement_id = %s "
+            "AND attribute_id = %s",
+            (UUID(bench.item_id), UUID(ids["A"])),
+        )
+    assert bench.entry()["status"] == "OUT_OF_DATE"
+    stale = _view(bench)
+    assert {a["state"] for a in stale["attributes"]} == {"NOT_TESTED"}
+    assert {a["tickmark"] for a in stale["attributes"]} == {"NONE"}
+    assert not [m for m in stale["matters"] if m["kind"] == "DISPOSITION"]
+    assert [r["ended_at"] is None for r in _rows(bench)] == [True, False, True, True]

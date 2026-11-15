@@ -25,6 +25,13 @@ Rules held here, whatever the records hold:
   the records show it was done.
 - A conclusion is signed only where the D&I conclusion's own sign-off record stands
   (design_conclusions). Nothing here signs, prepares or decides.
+- A person's disposition of an attribute (docs/evidence-assurance.md, section 10.13) is
+  read only on a request whose check is current, and only where the checks do not show
+  the attribute themselves: an exception a check shows wins over every disposition, what
+  another request's check leaves open still waits, and an attribute a check shows stays
+  "Shown". An attribute that reads by a disposition is never marked as agreed or compared,
+  never counted as shown by the records, and every disposition is a matter for the
+  reviewer with the person, the date and the reason.
 
 The first part is pure (no database): the records as plain values in, the response's
 parts out. The loader then reads each kind of record once for the control.
@@ -48,6 +55,7 @@ from ai_workforce_api import assurance_facts, design_conclusions, workpaper_serv
 from ai_workforce_api import evidence_assurance as assurance
 from ai_workforce_api.assurance_facts import OutcomeStatus
 from ai_workforce_api.assurance_review import Assessment, _reliability, assessment_of
+from ai_workforce_api.attribute_dispositions import CLOSING, Disposition, standing_for
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -77,15 +85,20 @@ logger = logging.getLogger(__name__)
 
 # --- The vocabulary of the response (docs/design-workpaper.md, section 2) --------------
 
+# The last three are a person's disposition of the attribute (docs/evidence-assurance.md,
+# section 10.13), read only where the checks do not show the attribute themselves.
 AttributeState = Literal[
-    "EXCEPTION", "SHOWN", "SHOWN_IN_PART", "NOT_SHOWN", "NOT_CONCLUDED", "NOT_TESTED"
+    "EXCEPTION", "SHOWN", "SHOWN_IN_PART", "NOT_SHOWN", "NOT_CONCLUDED", "NOT_TESTED",
+    "SHOWN_ON_REVIEW", "NOT_APPLICABLE", "NOT_AVAILABLE",
 ]  # fmt: skip
-Mark = Literal["EXCEPTION", "SHOWS", "IDENTIFIES", "SOURCE"]
-Tickmark = Literal["COMPARED", "AGREED", "EXCEPTION", "NONE"]
-LegendMark = Literal["AGREED", "COMPARED", "INSPECTED", "EXCEPTION"]
+# REVIEWED: the file holds the person's annotation a "Shown, auditor's judgment" rests on.
+Mark = Literal["EXCEPTION", "SHOWS", "REVIEWED", "IDENTIFIES", "SOURCE"]
+Tickmark = Literal["COMPARED", "AGREED", "REVIEWED", "EXCEPTION", "NONE"]
+LegendMark = Literal["AGREED", "COMPARED", "INSPECTED", "REVIEWED", "EXCEPTION"]
 MatterState = Literal["OPEN", "NOTED"]
 MatterKind = Literal[
-    "FINDING", "FOLLOW_UP", "CONSIDERATION", "UNSETTLED", "FILE", "COMPLETENESS", "NOTE"
+    "FINDING", "FOLLOW_UP", "CONSIDERATION", "UNSETTLED", "FILE", "COMPLETENESS",
+    "DISPOSITION", "NOTE",
 ]  # fmt: skip
 SectionSource = Literal["RECORDS", "AGENT", "PERSON"]
 WorkpaperStatus = Literal["DRAFT", "PREPARED"]
@@ -100,6 +113,9 @@ MAX_REFS = 8
 MAX_CHECKS = 6
 MAX_FINDINGS = 60
 SENTENCE_LIMIT = 600
+# A sentence that carries a person's own reason for a disposition (at most 1,000
+# characters) and what was relied on instead (600).
+DISPOSITION_LIMIT = 2000
 NAME_LIMIT = 200
 CELL_LIMIT = 1000
 
@@ -134,7 +150,22 @@ _FROM_ASSESSMENT: dict[Assessment, AttributeState] = {
     "NOT_DEMONSTRATED": "NOT_SHOWN",
     "INDETERMINATE": "NOT_CONCLUDED",
 }
-_MARK_RANK: dict[Mark, int] = {"EXCEPTION": 0, "SHOWS": 1, "IDENTIFIES": 2, "SOURCE": 3}
+# A person's disposition as the attribute's state, in words. Never the plain "Shown".
+DISPOSITION_WORDS: dict[str, str] = {
+    "SHOWN_ON_REVIEW": "Shown, auditor's judgment",
+    "NOT_APPLICABLE": "Not applicable to this instance",
+    "NOT_AVAILABLE": "Evidence not available, accepted",
+}
+# Where an attribute has dispositions of several kinds on its requests, it reads by the
+# most cautious: an accepted limitation, then not applicable, then the person's own
+# reading of the evidence.
+_DISPOSITION_PRECEDENCE: tuple[str, ...] = ("NOT_AVAILABLE", "NOT_APPLICABLE", "SHOWN_ON_REVIEW")
+# The checks' states a disposition never stands against: an exception a check shows, what
+# a check of another request leaves open, and an attribute the checks show themselves.
+_OVER_A_DISPOSITION: frozenset[str] = frozenset({"EXCEPTION", "NOT_CONCLUDED", "SHOWN"})
+_MARK_RANK: dict[Mark, int] = {
+    "EXCEPTION": 0, "SHOWS": 1, "REVIEWED": 2, "IDENTIFIES": 3, "SOURCE": 4,
+}  # fmt: skip
 VERDICT_WORDS: dict[str, str] = {"EFFECTIVE": "Effective", "NOT_EFFECTIVE": "Not effective"}
 NOT_CONCLUDED_WORDS = "Not concluded yet"
 SEPARATE_NOTE = (
@@ -303,6 +334,13 @@ TICKMARKS: tuple[TickmarkBody, ...] = (
     ),
     TickmarkBody(mark="INSPECTED", symbol="◊", meaning="Report parameters inspected."),
     TickmarkBody(mark="EXCEPTION", symbol="✗", meaning="Exception shown."),
+)
+# The mark of an attribute that reads "Shown, auditor's judgment". Its legend entry is
+# given only where an attribute of the same response carries it (`legend`).
+REVIEWED_TICKMARK = TickmarkBody(
+    mark="REVIEWED",
+    symbol="†",
+    meaning="On the auditor's review, with the reason recorded.",
 )
 
 
@@ -703,13 +741,16 @@ def marks_of(
     standing_annotations: Sequence[AnnotationRecord],
     requests: Sequence[RequestRecord],
     evidence: Sequence[EvidenceBody],
+    reviewed: Sequence[AnnotationRecord] = (),
 ) -> dict[str, Mark]:
     """Per file of the index, the strongest thing it does for the attribute. The record of
     an exception and a passage that shows it come only from the current checks' own
     passages, never from an annotation alone. What identifies the right system, person or
     date, and where the file comes from, come from the annotations that stand
     (`annotations_standing`); one that names no attribute (a file's source) bears on the
-    attributes its request asks for."""
+    attributes its request asks for. `reviewed` are the person's annotations a standing
+    "Shown, auditor's judgment" of the attribute rests on (`reviewed_annotations`): their
+    files are marked REVIEWED, never as shown by a check."""
     asks = {request.requirement_id: request.asks for request in requests}
     best: dict[UUID, Mark] = {}
 
@@ -723,6 +764,8 @@ def marks_of(
             give(file_id, "EXCEPTION")
         for file_id in reading.shows:
             give(file_id, "SHOWS")
+    for annotation in reviewed:
+        give(annotation.file_id, "REVIEWED")
     for annotation in standing_annotations:
         if annotation.kind not in ("IDENTIFIES", "SOURCE"):
             continue
@@ -741,12 +784,15 @@ def attribute_refs(
     readings: Sequence[Reading],
     standing_annotations: Sequence[AnnotationRecord],
     evidence: Sequence[EvidenceBody],
+    reviewed: Sequence[AnnotationRecord] = (),
 ) -> list[AttributeRefBody]:
     """The files the attribute's verified passages are in, each with the annotations on
     it that stand and name the attribute, numbered as the annotation viewer numbers them
     (the list of the file on the request its entry is under). A proposal of a check that
-    is no longer current is never cited."""
+    is no longer current is never cited. The files of the person's annotations a standing
+    "Shown, auditor's judgment" rests on (`reviewed`) are listed too."""
     files = {file_id for reading in readings for file_id in (*reading.shows, *reading.exceptions)}
+    files.update(annotation.file_id for annotation in reviewed)
     found: list[AttributeRefBody] = []
     for entry in evidence:
         if entry.file_id not in files:
@@ -811,6 +857,125 @@ def attribute_notes(section: Section | None, code: str, text: str) -> str:
     return ""
 
 
+# --- A person's dispositions (docs/evidence-assurance.md, section 10.13) -----------------
+
+
+def dispositions_applying(
+    dispositions: Sequence[Disposition],
+    checks: Mapping[UUID, CheckRecord],
+    standing_annotations: Sequence[AnnotationRecord],
+) -> dict[UUID, list[Disposition]]:
+    """The standing dispositions that are read, by attribute. Only one on a request whose
+    check is current: a check that is out of date, failed, queued, running, held or never
+    made gives nothing, and neither does a disposition recorded on it. A "Shown, on my
+    review" only while the annotation it rests on stands (`annotations_standing`), a
+    person made, confirmed or edited it, and it names the attribute."""
+    resting = {
+        (annotation.id, attribute_id)
+        for annotation in standing_annotations
+        if annotation.status in ("CONFIRMED", "EDITED")
+        for attribute_id in annotation.attribute_ids
+    }
+    found: dict[UUID, list[Disposition]] = {}
+    for disposition in dispositions:
+        check = checks.get(disposition.requirement_id)
+        if check is None or not check.current or disposition.ended_at is not None:
+            continue
+        if (
+            disposition.kind == "SHOWN_ON_REVIEW"
+            and (disposition.annotation_id, disposition.attribute_id) not in resting
+        ):
+            continue
+        found.setdefault(disposition.attribute_id, []).append(disposition)
+    return found
+
+
+def reviewed_annotations(
+    dispositions: Sequence[Disposition], standing_annotations: Sequence[AnnotationRecord]
+) -> list[AnnotationRecord]:
+    """The person's annotations that an attribute's "Shown, on my review" dispositions
+    (of `dispositions_applying`) rest on."""
+    wanted = {d.annotation_id for d in dispositions if d.kind == "SHOWN_ON_REVIEW"}
+    return [annotation for annotation in standing_annotations if annotation.id in wanted]
+
+
+def read_by(closing: Sequence[Disposition]) -> Disposition:
+    """Of an attribute's dispositions that close it, the one it reads by: the most
+    cautious kind, and of one kind the earliest recorded."""
+    return min(
+        closing,
+        key=lambda d: (_DISPOSITION_PRECEDENCE.index(d.kind), d.recorded_at, str(d.id)),
+    )
+
+
+def _day(when: datetime) -> str:
+    return f"{when.day} {when:%B %Y}"
+
+
+def _closed(text: str) -> str:
+    """A person's text ended as a sentence."""
+    text = text.strip()
+    return text if not text or text[-1] in ".!?" else f"{text}."
+
+
+def _recorded(disposition: Disposition) -> str:
+    """Who recorded a disposition and when: "by Dana Lee on 14 November 2026"."""
+    name = clean_line(disposition.recorded_by_name, 120).strip() or "a person"
+    return f"by {name} on {_day(disposition.recorded_at)}"
+
+
+def disposition_basis(disposition: Disposition, found: str = "") -> str:
+    """The sentence of an attribute that reads by a person's disposition: who recorded it
+    and when, the person's own reason, what was relied on instead, and beside it what the
+    check of that request itself found (`found`, the check's own sentence), which a
+    disposition never changes."""
+    parts = [f"Recorded {_recorded(disposition)}: {_closed(disposition.reason)}"]
+    if disposition.relied_on:
+        parts.append(f"Relied on instead: {_closed(disposition.relied_on)}")
+    if found:
+        parts.append(f"The check found: {_closed(found)}")
+    return _sentence(" ".join(parts), DISPOSITION_LIMIT)
+
+
+def disposition_matters(
+    attributes: Sequence[AttributeRecord],
+    applying: Mapping[UUID, Sequence[Disposition]],
+    standing_annotations: Sequence[AnnotationRecord],
+    evidence: Sequence[EvidenceBody],
+) -> list[MatterBody]:
+    """Each disposition that is read, as a matter for the reviewer, with the person, the
+    date and the reason: noted, but for an exception a person recorded, which closes
+    nothing and stays open until it is evaluated."""
+    files = {annotation.id: annotation.file_id for annotation in standing_annotations}
+    found: list[MatterBody] = []
+    for attribute in attributes:
+        for disposition in applying.get(attribute.id, ()):
+            if disposition.kind == "EXCEPTION":
+                text = (
+                    f"Attribute {attribute.code}: an exception recorded "
+                    f"{_recorded(disposition)}, still to be evaluated. "
+                    f"Reason: {_closed(disposition.reason)}"
+                )
+            else:
+                text = (
+                    f"Attribute {attribute.code}: "
+                    f"“{DISPOSITION_WORDS[disposition.kind]}”, recorded "
+                    f"{_recorded(disposition)}. Reason: {_closed(disposition.reason)}"
+                )
+                if disposition.relied_on:
+                    text += f" Relied on instead: {_closed(disposition.relied_on)}"
+            on = files.get(disposition.annotation_id) if disposition.annotation_id else None
+            found.append(
+                MatterBody(
+                    state="OPEN" if disposition.kind == "EXCEPTION" else "NOTED",
+                    kind="DISPOSITION",
+                    text=_sentence(text, DISPOSITION_LIMIT),
+                    refs=_refs([] if on is None else [on], evidence),
+                )
+            )
+    return found
+
+
 def attributes_of(
     attributes: Sequence[AttributeRecord],
     requests: Sequence[RequestRecord],
@@ -818,9 +983,18 @@ def attributes_of(
     annotations: Sequence[AnnotationRecord],
     evidence: Sequence[EvidenceBody],
     section: Section | None,
+    dispositions: Sequence[Disposition] = (),
 ) -> tuple[list[AttributeBody], dict[UUID, list[Reading]]]:
     """Each approved attribute with what the current checks find across the control's D&I
-    requests, in the list's order; and the checks' words on each, for the matters."""
+    requests, in the list's order; and the checks' words on each, for the matters.
+
+    A person's disposition (`dispositions`: those standing on the control) stands in for
+    the check of its own request, unless that check shows the attribute or an exception.
+    Across requests the most cautious reading still stands: an exception on any check,
+    then what a check of another request leaves open, then shown by a check; only then
+    does the attribute read by the disposition, in its own state and words, with the mark
+    REVIEWED for "Shown, auditor's judgment" and none for the others. The checks' words
+    given back for the matters leave out what a disposition stands in for."""
     by_attribute: dict[UUID, list[Reading]] = {}
     for request in requests:
         check = checks.get(request.requirement_id)
@@ -836,12 +1010,50 @@ def attributes_of(
         for attribute_id in request.asks
     }
     stand = annotations_standing(annotations, requests, checks)
+    applying = dispositions_applying(dispositions, checks, stand)
+    left_to_checks = dict(by_attribute)
     found: list[AttributeBody] = []
     for attribute in attributes:
         readings = by_attribute.get(attribute.id, [])
-        state, basis = standing(readings)
+        mine = applying.get(attribute.id, [])
+        closing = [d for d in mine if d.kind in CLOSING]
+        closed_on = {d.requirement_id for d in closing}
+        # What the checks still say for themselves: a disposition stands in for the check
+        # of its own request, never for one that shows the attribute or an exception.
+        left = [
+            reading
+            for reading in readings
+            if reading.requirement_id not in closed_on or reading.state in ("EXCEPTION", "SHOWN")
+        ]
+        if closing:
+            left_to_checks[attribute.id] = left
+        state, basis = standing(left)
         if state == "NOT_TESTED" and attribute.id in stale:
             basis = ONLY_OUT_OF_DATE
+        words = STATE_WORDS[state]
+        tickmark: Tickmark
+        if closing and state not in _OVER_A_DISPOSITION:
+            by = read_by(closing)
+            stood_in = next(
+                (
+                    reading.basis
+                    for reading in readings
+                    if reading.requirement_id == by.requirement_id and reading not in left
+                ),
+                "",
+            )
+            state = cast(AttributeState, by.kind)
+            words = DISPOSITION_WORDS[by.kind]
+            basis = disposition_basis(by, stood_in)
+            # Never agreed or compared: the person's reading is not the system's record.
+            tickmark = "REVIEWED" if by.kind == "SHOWN_ON_REVIEW" else "NONE"
+        else:
+            # Over every check of the attribute, also one a disposition stands in for: a
+            # check left open or a comparison that failed still takes the mark away, and
+            # so does an exception a person recorded.
+            tickmark = tickmark_of(state, readings)
+            if tickmark in ("AGREED", "COMPARED") and any(d.kind == "EXCEPTION" for d in mine):
+                tickmark = "NONE"
         # The sentence of a comparison that failed is never listed under "shown".
         said = _distinct(
             sentence
@@ -850,22 +1062,23 @@ def attributes_of(
                 reading.checks if state == "SHOWN" else (*reading.checks, *reading.failed_checks)
             )
         )
+        reviewed = reviewed_annotations(mine, stand)
         found.append(
             AttributeBody(
                 id=attribute.id,
                 code=attribute.code,
                 text=attribute.text,
                 state=state,
-                state_words=STATE_WORDS[state],
+                state_words=words,
                 basis=basis,
-                tickmark=tickmark_of(state, readings),
-                refs=attribute_refs(attribute.id, readings, stand, evidence),
-                marks=marks_of(attribute.id, readings, stand, requests, evidence),
+                tickmark=tickmark,
+                refs=attribute_refs(attribute.id, readings, stand, evidence, reviewed),
+                marks=marks_of(attribute.id, readings, stand, requests, evidence, reviewed),
                 checks=list(said)[:MAX_CHECKS],
                 notes=attribute_notes(section, attribute.code, attribute.text),
             )
         )
-    return found, by_attribute
+    return found, left_to_checks
 
 
 # --- The walkthrough and the reports ----------------------------------------------------
@@ -1110,10 +1323,16 @@ def reports_inspected(
     return [names[file_id] for file_id in found]
 
 
-def legend(inspected: bool) -> list[TickmarkBody]:
+def legend(inspected: bool, reviewed: bool = False) -> list[TickmarkBody]:
     """The tickmark legend. The entry for a report's parameters is given only where a
-    procedure of the same response says they were inspected."""
-    return [mark for mark in TICKMARKS if inspected or mark.mark != "INSPECTED"]
+    procedure of the same response says they were inspected, and the entry for the
+    auditor's own review only where an attribute of the same response carries that mark
+    (`reviewed`), before the exception's."""
+    found = [mark for mark in TICKMARKS if inspected or mark.mark != "INSPECTED"]
+    if reviewed:
+        at = next((i for i, mark in enumerate(found) if mark.mark == "EXCEPTION"), len(found))
+        found.insert(at, REVIEWED_TICKMARK)
+    return found
 
 
 def procedures_of(
@@ -1212,16 +1431,20 @@ def matters_of(
     findings: Sequence[FindingRecord],
     evidence: Sequence[EvidenceBody],
     more_files: int = 0,
+    dispositions: Sequence[MatterBody] = (),
 ) -> list[MatterBody]:
     """What a reviewer should see first, from the records. First, a check that is out of
-    date. Then what waits on a person: open findings, attributes a check leaves to a
-    person, an attribute one request shows and another that asks for it does not, files
-    left out, what each current check's review says is incomplete or not yet reliable,
-    and the checks' follow-ups. Then what is noted (files left out by purpose,
-    considerations), and one note that operating effectiveness is tested separately. At
-    most MAX_MATTERS: where there are more, the last line before the note counts them."""
+    date. Then what waits on a person: open findings, an exception a person recorded,
+    attributes a check leaves to a person, an attribute one request shows and another
+    that asks for it does not, files left out, what each current check's review says is
+    incomplete or not yet reliable, and the checks' follow-ups. Then what is noted (each
+    disposition a person recorded, files left out by purpose, considerations), and one
+    note that operating effectiveness is tested separately. At most MAX_MATTERS: where
+    there are more, the last line before the note counts them. `readings` are the checks'
+    words left to the checks (`attributes_of`), and `dispositions` the matters of the
+    dispositions that are read (`disposition_matters`)."""
     waiting: list[MatterBody] = []
-    noted: list[MatterBody] = []
+    noted: list[MatterBody] = [matter for matter in dispositions if matter.state == "NOTED"]
     names = {file.file_id: file.file_name for request in requests for file in request.files}
     titles = {request.requirement_id: clean_line(request.title, 120) for request in requests}
     stale = [
@@ -1258,6 +1481,7 @@ def matters_of(
                 refs=_refs([finding.file_id] if finding.file_id else [], evidence),
             )
         )
+    waiting.extend(matter for matter in dispositions if matter.state == "OPEN")
     for attribute in attributes:
         mine = readings.get(attribute.id, [])
         left = next((r for r in mine if r.open), None)
@@ -1786,8 +2010,21 @@ def read_design_workpaper(
     attributes = [AttributeRecord(a[0], a[1], a[2]) for a in approved]
     evidence, more = evidence_index(requests, checks, annotations)
     walkthrough = walkthrough_of(_section(content, "walkthrough-of-one-instance"), evidence)
+    # A person's dispositions of the attributes (docs/evidence-assurance.md, section
+    # 10.13): those standing on the control, read once.
+    dispositions = list(standing_for(connection, control_id).values())
     shown, readings = attributes_of(
-        attributes, requests, checks, annotations, evidence, _section(content, "design-attributes")
+        attributes,
+        requests,
+        checks,
+        annotations,
+        evidence,
+        _section(content, "design-attributes"),
+        dispositions,
+    )
+    stand = annotations_standing(annotations, requests, checks)
+    recorded = disposition_matters(
+        attributes, dispositions_applying(dispositions, checks, stand), stand, evidence
     )
     header = _section(content, "control")
     understanding = _text_section(content, _ACTIVITY_ROLES)
@@ -1842,11 +2079,16 @@ def read_design_workpaper(
         walkthrough=walkthrough,
         attributes=shown,
         reports=reports_of(_section(content, "information-produced-by-the-entity"), evidence),
-        matters=matters_of(requests, checks, attributes, readings, findings, evidence, more),
+        matters=matters_of(
+            requests, checks, attributes, readings, findings, evidence, more, recorded
+        ),
         conclusion=conclusion_of(
             _text_section(content, ("design-conclusion",), "conclusion"), conclusion
         ),
-        tickmarks=legend(bool(reports_inspected(requests, checks))),
+        tickmarks=legend(
+            bool(reports_inspected(requests, checks)),
+            any(attribute.tickmark == "REVIEWED" for attribute in shown),
+        ),
         can_edit=can_edit_sections(
             may_update=may_update,
             engagement_open=row.project_status not in CLOSED,
@@ -1896,6 +2138,9 @@ __all__ = [
     "attributes_of",
     "can_edit_sections",
     "conclusion_of",
+    "disposition_basis",
+    "disposition_matters",
+    "dispositions_applying",
     "evidence_index",
     "first_date",
     "legend",
